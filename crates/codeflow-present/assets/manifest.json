@@ -15,8 +15,8 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-NHWO5GPS.js",
-      "present.style": "/app/assets/app-OTNPDC7I.css"
+      "present.app": "/app/assets/app-NDJRN6EN.js",
+      "present.style": "/app/assets/app-RXRYOT2Q.css"
     },
     "inline": {
       "present.prepaint": {
@@ -27,14 +27,14 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-NHWO5GPS.js",
-        "stored_path": "service/app-NHWO5GPS.js.br",
+        "request_path": "/app/assets/app-NDJRN6EN.js",
+        "stored_path": "service/app-NDJRN6EN.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 69876,
-        "encoded_bytes": 21568,
-        "sha256": "c2ecaedaf340811a0a3a357f57186d7650222e4a533f00f404afbbb7b38403d7",
-        "etag": "\"sha256-wuyu2vNAgRoKOjV/VxhtdlAiLkpTPwD0BK+7t7OEA9c=\"",
+        "raw_bytes": 70422,
+        "encoded_bytes": 21735,
+        "sha256": "c138376ec9f260a3cf71339492a4f10100227309af950a752fe4e9325fc2b282",
+        "etag": "\"sha256-wTg3bsnyYKPPcTOUkqTxAQAicwmvlQp1L+TpMl/CsoI=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-PUSCJW6P.js",
@@ -55,14 +55,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-OTNPDC7I.css",
-        "stored_path": "service/app-OTNPDC7I.css.br",
+        "request_path": "/app/assets/app-RXRYOT2Q.css",
+        "stored_path": "service/app-RXRYOT2Q.css.br",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 35144,
-        "encoded_bytes": 6666,
-        "sha256": "5cc31dcdb5f15db462d34a1759abf1a2ff60a94cc21f1873c6b14561edcedf54",
-        "etag": "\"sha256-XMMdzbXxXbRi00oXWavxov9gqUzCHxhzxrFFYe3O31Q=\"",
+        "raw_bytes": 35599,
+        "encoded_bytes": 6712,
+        "sha256": "26c7e63ecd529876374fb8a3dc01668662dd715722d3231a6aa4cfa1f5cf793d",
+        "etag": "\"sha256-JsfmPs1SmHY3T7ij3AFmhmLdcVci0yMaaqTPofXPeT0=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -5243,20 +5243,20 @@
     ],
     "metrics": {
       "asset_count": 119,
-      "raw_corpus_bytes": 4386787,
-      "brotli_corpus_bytes": 1087817,
+      "raw_corpus_bytes": 4387788,
+      "brotli_corpus_bytes": 1088030,
       "largest_raw_chunk_bytes": 667680,
       "largest_brotli_chunk_bytes": 131167
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-cbae31283b538321.js.gz",
+      "stored_path": "export/renderer-4719247a405be85a.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 4354864,
-      "encoded_bytes": 1207879,
-      "sha256": "cbae31283b538321ddd4c4945aa32c938801e620255ed3354ccf511cb48d8e5d"
+      "raw_bytes": 4355361,
+      "encoded_bytes": 1207933,
+      "sha256": "4719247a405be85add2ba0f6b512d983128255e11fe756c5f07c1c97b4d92476"
     }
   },
   "budgets": {
@@ -5266,5 +5266,5 @@
     "largest_brotli_chunk_bytes": 150000,
     "export_gzip_bytes": 1300000
   },
-  "corpus_sha256": "86b401f1b9716f03d585a9a8cd1584117be4c59910e8c4f0f675268a077e9ff9"
+  "corpus_sha256": "43a3f919a89ca5dbd532b9f066307df1f89f73ab13bab58e3e0d566b0cc932cc"
 }
