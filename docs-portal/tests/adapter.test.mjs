@@ -1666,7 +1666,7 @@ test("the adapter emits one bounded non-searchable current-source stub without a
     assert.equal("last_good_source_sha256" in stale, false);
     assert.deepEqual(target.backlinks, []);
     const targetOutput = await readFile(path.join(root, "src/content/docs/reference/target.md"), "utf8");
-    assert.match(targetOutput, /TSK-101 — stale/);
+    assert.match(targetOutput, /TSK-101 \(stale\)/);
     assert.doesNotMatch(targetOutput, /### Inverse links/);
     const landing = await readFile(path.join(root, "src/content/docs/reference/index.md"), "utf8");
     assert.doesNotMatch(landing, /Guide/);
