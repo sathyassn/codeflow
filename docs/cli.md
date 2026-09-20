@@ -1,8 +1,9 @@
 # CodeFlow command line reference
 
-<!-- Reference layer. Every purpose line, flag and argument below is the
-     binary's own `--help` text; re-derive this page from `codeflow <cmd>
-     --help` when the surface changes. -->
+<!-- Reference layer. Every purpose line, flag and argument below is derived
+     from the binary's own `--help` text, with long purposes shortened and
+     arrows written as words; re-derive this page from `codeflow <cmd> --help`
+     when the surface changes. -->
 
 ## Concept
 
@@ -31,7 +32,8 @@ arguments, flags and exit behaviour.
 
 ## Architecture
 
-Purposes are the binary's own short help. Nothing here is a wrapper around a
+Purposes are derived from the binary's own short help, with the long ones
+shortened and arrows written as words. Nothing here is a wrapper around a
 second implementation: the hooks, CI, and the in-session guards all call the
 same functions through this surface.
 
@@ -62,8 +64,8 @@ same functions through this surface.
 
 ## Technical
 
-Every argument, flag and default below is the binary's own `--help` output at
-this head. A required argument is written in angle brackets, an optional one in
+Every argument, flag and default below is derived from the binary's own
+`--help` output at this head, shortened where the help text runs long. A required argument is written in angle brackets, an optional one in
 square brackets.
 
 ### Scaffold
