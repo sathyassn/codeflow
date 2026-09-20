@@ -290,6 +290,33 @@ test("Astro preserves the explicit canonical route in output and links", { skip:
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("the rendered sidebar keeps the landing order when pages nest", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const configPath = path.join(root, "portal.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.layers[0] = { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md", "docs/topics.md", "docs/adoption.md"], prefixes: ["docs/topics"] };
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    await mkdir(path.join(root, "docs/topics"));
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nFirst.\n");
+    await writeFile(path.join(root, "docs/topics.md"), "# Topics\n\nA parent page.\n");
+    await writeFile(path.join(root, "docs/topics/one.md"), "# One\n\nNested beneath Topics.\n");
+    await writeFile(path.join(root, "docs/adoption.md"), "# Adoption\n\nConfigured after the parent.\n");
+    commitFixture(root, "add a parent page with a nested page between configured pages");
+    runLocalAdapter(root);
+    const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const landing = await readFile(path.join(root, "src/content/docs/orient/index.md"), "utf8");
+    assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Product", "Topics", "One", "Adoption"]);
+    const html = await readFile(path.join(root, "dist/orient/index.html"), "utf8");
+    const start = html.indexOf('<nav class="sidebar');
+    assert.notEqual(start, -1);
+    const sidebar = html.slice(start, html.indexOf("</nav>", start));
+    const routes = [...new Set([...sidebar.matchAll(/href="(\/orient\/[^"]*)"/g)].map((match) => match[1]))];
+    assert.deepEqual(routes, ["/orient/", "/orient/product/", "/orient/topics/", "/orient/topics/one/", "/orient/adoption/"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("tool output roots never traverse external symlinks", { skip: process.platform === "win32" }, async () => {
   const { symlink } = await import("node:fs/promises");
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-output-root-"));
@@ -2160,7 +2187,7 @@ test("a layer landing lists its pages in configured reading order", async () => 
   try {
     await configureFixture(root, {
       layers: [
-        { id: "orient", label: "Orient", description: "Purpose first.", paths: ["docs/zulu.md", "docs/alpha.md"], prefixes: ["docs/notes"] },
+        { id: "orient", label: "Orient", description: "Purpose first.", paths: ["docs/zulu.md", "docs/alpha.md"], prefixes: ["docs/notes", "docs/zulu"] },
         { id: "system", label: "System", description: "System", prefixes: ["docs/architecture"] },
         { id: "reference", label: "Reference", description: "Reference", fallback: true },
       ],
@@ -2168,16 +2195,18 @@ test("a layer landing lists its pages in configured reading order", async () => 
     await writeFile(path.join(root, "docs/zulu.md"), "# Zulu\n\nConfigured first.\n");
     await writeFile(path.join(root, "docs/alpha.md"), "# Alpha\n\nConfigured second.\n");
     await mkdir(path.join(root, "docs/notes"));
+    await mkdir(path.join(root, "docs/zulu"));
     await writeFile(path.join(root, "docs/notes/swept.md"), "# Swept\n\nMatched by prefix.\n");
-    commitFixture(root, "add configured and swept sources");
+    await writeFile(path.join(root, "docs/zulu/deep.md"), "# Deep\n\nNested beneath Zulu.\n");
+    commitFixture(root, "add configured, nested and swept sources");
     runAdapter(root);
     const landing = await readFile(path.join(root, "src/content/docs/orient/index.md"), "utf8");
-    assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Zulu", "Alpha", "Swept"]);
+    assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Zulu", "Deep", "Alpha", "Swept"]);
     assert.match(landing, /Purpose first\./);
     assert.match(landing, /Start with \[Zulu\]\(\/orient\/zulu\/\); the sidebar follows the same order/);
     assert.equal(/^- \[/m.test(landing), false);
     const order = async (file) => Number((await readFile(path.join(root, "src/content/docs", file), "utf8")).match(/^sidebar:\n  order: (\d+)$/m)[1]);
-    assert.deepEqual(await Promise.all(["orient/index.md", "orient/zulu.md", "orient/alpha.md", "orient/notes/swept.md"].map(order)), [0, 1, 2, 3]);
+    assert.deepEqual(await Promise.all(["orient/index.md", "orient/zulu.md", "orient/zulu/deep.md", "orient/alpha.md", "orient/notes/swept.md"].map(order)), [0, 1, 2, 3, 4]);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

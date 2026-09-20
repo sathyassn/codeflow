@@ -189,7 +189,7 @@ const previewMetadata = new Map([...ownerById].filter(([, owner]) => !owner.stal
 const sidebarOrder = new Map();
 for (const layer of layers) {
   sidebarOrder.set(layer.id, 0);
-  const layerPages = orderedLayerPages(layer, pages.filter((page) => page.route.startsWith(`${layer.id}/`)));
+  const layerPages = nestedLayerPages(layer, pages.filter((page) => page.route.startsWith(`${layer.id}/`)));
   layerPages.forEach((page, index) => sidebarOrder.set(page.route, index + 1));
   if (recordPointerRoute !== null && layer.id === recordsSwitch.layer) sidebarOrder.set(recordPointerRoute, layerPages.length + 1);
 }
@@ -381,7 +381,7 @@ function provenanceMarker(page) {
 // the prefixes swept in. One line per page, never a bullet list of files.
 function renderLayerLanding(layer, layerPages) {
   const preface = `---\ntitle: ${JSON.stringify(layer.label)}\ndescription: ${JSON.stringify(layer.description)}\nslug: ${JSON.stringify(layer.id)}\n${sidebarFrontmatter(layer.id)}---\n\n${escapeMarkdownInline(layer.description)}\n`;
-  const entries = orderedLayerPages(layer, layerPages).map((page) => ({ title: page.title, route: page.route }));
+  const entries = nestedLayerPages(layer, layerPages).map((page) => ({ title: page.title, route: page.route }));
   if (recordPointerRoute !== null && layer.id === recordsSwitch.layer) entries.push({ title: RECORD_POINTER_TITLE, route: recordPointerRoute });
   if (!entries.length) return `${preface}\nNo current sources in this layer.\n`;
   const first = entries[0];
@@ -390,13 +390,38 @@ function renderLayerLanding(layer, layerPages) {
 
 // Rendered defect: reading order follows the layer configuration, so a
 // configured first page is first even when its route sorts last.
-function orderedLayerPages(layer, layerPages) {
+function rankedLayerPages(layer, layerPages) {
   const rank = new Map((layer.paths ?? []).map((item, index) => [item, index]));
   return [...layerPages].sort((left, right) => {
     const leftRank = rank.has(left.source_path) ? rank.get(left.source_path) : Number.MAX_SAFE_INTEGER;
     const rightRank = rank.has(right.source_path) ? rank.get(right.source_path) : Number.MAX_SAFE_INTEGER;
     return leftRank !== rightRank ? leftRank - rightRank : compareDeterministicText(left.route, right.route);
   });
+}
+
+// Starlight keeps a directory's pages together as one sidebar group placed
+// where its first page falls, so the reading order does the same: a page is
+// followed by the pages beneath its route, then the next configured page.
+// The landing figure, the sidebar order values and the rendered sidebar all
+// read this one sequence.
+function nestedLayerPages(layer, layerPages) {
+  const ranked = rankedLayerPages(layer, layerPages);
+  const rank = new Map(ranked.map((page, index) => [page.route, index]));
+  const nest = (members, depth) => {
+    const groups = new Map();
+    for (const page of members) {
+      const segments = page.route.split("/");
+      const key = segments[depth];
+      if (!groups.has(key)) groups.set(key, { index: null, children: [] });
+      if (segments.length === depth + 1) groups.get(key).index = page;
+      else groups.get(key).children.push(page);
+    }
+    const weight = (group) => Math.min(...[group.index, ...group.children].filter(Boolean).map((page) => rank.get(page.route)));
+    return [...groups.values()]
+      .sort((left, right) => weight(left) - weight(right))
+      .flatMap((group) => [...(group.index === null ? [] : [group.index]), ...nest(group.children, depth + 1)]);
+  };
+  return nest(ranked, 1);
 }
 
 function sidebarFrontmatter(route) {
