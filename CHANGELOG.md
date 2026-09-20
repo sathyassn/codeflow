@@ -41,6 +41,7 @@ publication date._
 - **Committed portal directory links.** Repository guides preserve relative
   links to committed directories as exact-source provider tree URLs while
   retaining visible provenance on unknown providers and fail-closed path rules.
+<!-- codeflow:release-impact patch -->
 - **Locally usable repository guide.** README and the adoption guide document
   the locked install, check, build, preview, and validate path for the derived
   `docs-portal/` guide from a clean checkout on Node 24.18.0, distinguish the
