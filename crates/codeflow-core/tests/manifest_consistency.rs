@@ -544,6 +544,154 @@ fn ci_downloads_verify_pinned_checksums() {
     );
 }
 
+/// The ADR-0018 instruction-only clause (TSK-041 defect 8). ADR-0018 is an
+/// accepted, append-only record ("never edited afterwards except to set
+/// `superseded_by`"), so the clarifying clause cannot land there — its one
+/// home is the AGENTS contract, which `codeflow update` regenerates.
+const INSTRUCTION_ONLY_CLAUSE: &str =
+    "that prohibition is instruction-only — CodeFlow cannot technically prevent it";
+
+/// Authored contract templates that could plausibly host the clause. Exactly
+/// one of them may.
+const CONTRACT_TEMPLATES: [&str; 4] = [
+    "assets/base/AGENTS.md.tmpl",
+    "assets/base/AGENTS.minimal.md.tmpl",
+    "assets/base/CLAUDE.md.tmpl",
+    "assets/base/CLAUDE.minimal.md.tmpl",
+];
+
+/// Normalize wrapped prose so a clause that spans a line break still matches.
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// DEFECT 8 (positive): the clause has exactly one authored home, and the
+/// managed copies (`AGENTS.md`, the managed baseline) carry it because the
+/// managed region is regenerated from that one template.
+#[test]
+fn instruction_only_clause_has_exactly_one_home() {
+    let root = repo_root();
+    let clause = unwrapped(INSTRUCTION_ONLY_CLAUSE);
+
+    let homes: Vec<&str> = CONTRACT_TEMPLATES
+        .into_iter()
+        .filter(|template| {
+            let text = std::fs::read_to_string(root.join(template))
+                .unwrap_or_else(|error| panic!("read {template}: {error}"));
+            unwrapped(&text).contains(&clause)
+        })
+        .collect();
+    assert_eq!(
+        homes,
+        vec!["assets/base/AGENTS.md.tmpl"],
+        "the ADR-0018 instruction-only clause must be stated once, in the \
+         AGENTS template — found in: {homes:?}"
+    );
+
+    for mirror in ["AGENTS.md", ".codeflow/.baseline/AGENTS.md"] {
+        let text = std::fs::read_to_string(root.join(mirror))
+            .unwrap_or_else(|error| panic!("read {mirror}: {error}"));
+        assert!(
+            unwrapped(&text).contains(&clause),
+            "{mirror}: managed region is out of step with the AGENTS template"
+        );
+    }
+}
+
+/// DEFECT 8 (negative): ADR-0018 is untouched. The append-only banner stands,
+/// and neither the clause nor an appended clarifying note was written into it.
+#[test]
+fn adr_0018_is_not_amended_to_carry_the_clause() {
+    let path =
+        repo_root().join("docs/decisions/ADR-0018-interactive-only-cross-model-transport.md");
+    let text = std::fs::read_to_string(&path).expect("ADR-0018 is readable");
+    let flat = unwrapped(&text);
+
+    assert!(
+        flat.contains("ADRs are append-only"),
+        "ADR-0018 lost its append-only banner"
+    );
+    assert!(
+        !flat.contains(&unwrapped(INSTRUCTION_ONLY_CLAUSE)),
+        "the clause was written into append-only ADR-0018; its home is the \
+         AGENTS contract"
+    );
+    for appended in ["Clarifying note", "clarifying note", "## Note"] {
+        assert!(
+            !text.contains(appended),
+            "ADR-0018 gained an appended note ({appended}); the record is \
+             append-only and superseded, never amended"
+        );
+    }
+}
+
+/// The four scaffolded CI templates that put the `codeflow` binary on PATH.
+/// `cargo-dist` installs with `install-path = "CARGO_HOME"`
+/// (`dist-workspace.toml`), so a template that hardcodes `$HOME/.cargo/bin`
+/// silently misses the binary whenever `CARGO_HOME` points elsewhere — the
+/// gate then fails red for the wrong reason, or (worse) a later relaxation
+/// makes a missing binary look like a pass.
+const CI_PERIMETER_TEMPLATES: [&str; 4] = [
+    "assets/base/ci/codeflow-ci.yml",
+    "assets/base/ci/.gitlab-ci.yml",
+    "assets/base/ci/bitbucket-pipelines.yml",
+    "assets/base/ci/ci-generic.sh",
+];
+
+/// The one expanded form every CI template must use to reach cargo's bin dir.
+const CARGO_BIN_EXPANDED: &str = "${CARGO_HOME:-$HOME/.cargo}/bin";
+
+/// Every reference to a cargo bin directory in `text` goes through
+/// [`CARGO_BIN_EXPANDED`]: no bare `$HOME/.cargo/bin`, and no stale
+/// `.codeflow/bin` (no shipped installer writes there).
+fn cargo_bin_is_resolved_through_cargo_home(text: &str) -> bool {
+    let without_expanded = text.replace(CARGO_BIN_EXPANDED, "");
+    !without_expanded.contains("$HOME/.cargo/bin")
+        && !without_expanded.contains(".cargo/bin")
+        && !text.contains(".codeflow/bin")
+}
+
+/// CI-PERIMETER CANARY (TSK-041 defect 1): the scaffolded CI templates must
+/// resolve cargo binaries through `CARGO_HOME`, because that is where the
+/// shipped installer actually puts them.
+#[test]
+fn ci_templates_resolve_cargo_bin_through_cargo_home() {
+    let root = repo_root();
+    for template in CI_PERIMETER_TEMPLATES {
+        let text = std::fs::read_to_string(root.join(template))
+            .unwrap_or_else(|error| panic!("read {template}: {error}"));
+        assert!(
+            text.contains(CARGO_BIN_EXPANDED),
+            "{template}: must put {CARGO_BIN_EXPANDED} on PATH — cargo-dist \
+             installs with install-path = \"CARGO_HOME\""
+        );
+        assert!(
+            cargo_bin_is_resolved_through_cargo_home(&text),
+            "{template}: a cargo bin path bypasses CARGO_HOME — use \
+             {CARGO_BIN_EXPANDED} everywhere, including the install examples"
+        );
+    }
+
+    // NEGATIVE: the canary is not vacuous — it rejects the bare forms it
+    // exists to catch, in both the active and the commented-example position.
+    for bad in [
+        "export PATH=\"$HOME/.cargo/bin:$PATH\"",
+        "echo \"$HOME/.cargo/bin\" >> \"$GITHUB_PATH\"",
+        "#   export PATH=\"$HOME/.codeflow/bin:$PATH\"",
+    ] {
+        assert!(
+            !cargo_bin_is_resolved_through_cargo_home(bad),
+            "canary would not catch the bare form: {bad}"
+        );
+    }
+    assert!(
+        cargo_bin_is_resolved_through_cargo_home(&format!(
+            "export PATH=\"{CARGO_BIN_EXPANDED}:$PATH\""
+        )),
+        "canary must accept the expanded form"
+    );
+}
+
 #[test]
 fn codeql_remains_repository_owned_not_a_scaffolded_workflow() {
     let root = repo_root();

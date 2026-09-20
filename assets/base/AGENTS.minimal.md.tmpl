@@ -30,8 +30,10 @@ tiers scale project-management.
 Installed and load-bearing at this tier: this file and `CLAUDE.md`,
 `.codeflow/policy.json`, `.gitignore`, all five git-hook shims (`pre-commit`,
 `commit-msg`, `pre-push`, `pre-merge-commit`, `reference-transaction`), the
-scaffolded CI workflow, and the in-session guards wired in `.claude/settings.json`
-(`git-guard`, `exec-guard`) and the `.codex/` starter (for interactive Codex).
+scaffolded CI workflow, and the in-session guards — `git-guard`/`exec-guard`
+wired in `.claude/settings.json`, the `.codex/` starter, and `.grok/hooks/`:
+one plane, not three. The four planes are git hooks, in-session guards,
+scaffolded CI, and configured remote branch protection.
 
 ## Git rules
 

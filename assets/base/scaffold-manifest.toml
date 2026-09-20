@@ -64,8 +64,9 @@
 #                  shims (pre-commit, commit-msg, pre-push, pre-merge-commit,
 #                  reference-transaction), the scaffolded CI, the in-session
 #                  git-guard/exec-guard + orient/summary hooks (.claude/settings.json
-#                  + the .codex/ starter), the armed policy.json, and a lean
-#                  agent contract (AGENTS.md + CLAUDE.md). For ANY repo.
+#                  + the .codex/ starter + .grok/hooks/, all one plane), the
+#                  armed policy.json, and a lean agent contract (AGENTS.md +
+#                  CLAUDE.md). For ANY repo.
 #     - standard = + the develop-loop method (cf-* skills, reviewer agents, the
 #                  pipeline) + the traceability spine (product/capabilities/
 #                  architecture/ADRs) + the full contract + harness convenience.

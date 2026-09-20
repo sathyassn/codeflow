@@ -37,9 +37,12 @@ pipelines:
           script:
             # PLACEHOLDER: install the codeflow binary onto PATH, e.g.
             #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
-            #   export PATH="$HOME/.codeflow/bin:$PATH"
+            # The installer honours CARGO_HOME (dist-workspace.toml sets
+            # install-path = "CARGO_HOME"), so the export below resolves the bin
+            # dir through it and falls back only when CARGO_HOME is unset.
             # Until wired, the gate fails RED — a missing binary is an unarmed
             # perimeter, not a pass (do NOT "fix" the red by skipping).
+            - export PATH="${CARGO_HOME:-$HOME/.cargo}/bin:$PATH"
             - command -v codeflow >/dev/null 2>&1 || { echo "codeflow not installed — wire the install step above; failing red (unarmed perimeter)."; exit 1; }
             - codeflow ci
             - codeflow test --strict

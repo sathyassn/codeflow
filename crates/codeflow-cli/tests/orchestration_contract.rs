@@ -1099,3 +1099,189 @@ fn batch_workflow_is_honestly_single_vendor_and_validates_edges() {
     }
     assert!(!source.contains("duo: ['plan-align'"));
 }
+
+// --- TSK-041 scaffold-contract regressions ------------------------------------
+
+/// DEFECT 6: the shipped pipeline example names a current model id. `sonnet`
+/// is the stale value this regression exists to keep out.
+#[test]
+fn pipeline_example_names_the_current_model_id() {
+    for path in [
+        "assets/base/claude/workflows/pipeline.workflow.js",
+        ".claude/workflows/pipeline.workflow.js",
+        ".codeflow/.baseline/.claude/workflows/pipeline.workflow.js",
+    ] {
+        let text = read(path);
+        assert!(
+            text.contains("{ build: 'opus' }"),
+            "{path}: per-stage model example must name opus"
+        );
+        assert!(
+            !text.contains("sonnet"),
+            "{path}: the stale 'sonnet' example is back"
+        );
+    }
+}
+
+/// Subcommands the mechanics row deliberately omits: scaffold entry points a
+/// reader reaches from the tier section, and harness-invoked hook targets no
+/// human types. A new subcommand must be added to the row or listed here.
+const MECHANICS_ROW_EXCLUSIONS: [&str; 6] =
+    ["init", "update", "hook", "delegate", "git-hook", "help"];
+
+/// Every backticked `codeflow`-subcommand token in the mechanics row, reduced
+/// to its leading subcommand word.
+fn mechanics_row_subcommands(agents: &str) -> BTreeSet<String> {
+    let row = agents
+        .lines()
+        .find(|line| line.trim_start().starts_with("| Mechanics |"))
+        .expect("AGENTS template has a Mechanics row");
+    let mut found = BTreeSet::new();
+    let mut rest = row;
+    while let Some(open) = rest.find('`') {
+        let after = &rest[open + 1..];
+        let Some(close) = after.find('`') else { break };
+        let token = &after[..close];
+        if let Some(word) = token.split_whitespace().next() {
+            if word != "codeflow" {
+                found.insert(word.to_string());
+            }
+        }
+        rest = &after[close + 1..];
+    }
+    found
+}
+
+/// DEFECT 7: the mechanics row is checked against the binary's registered
+/// subcommands — `estimate`, `policy` and `ci` were missing from it. Positive:
+/// every registered subcommand is either in the row or deliberately excluded.
+/// Negative: nothing in the row is unregistered or excluded.
+#[test]
+fn mechanics_row_matches_the_registered_subcommands() {
+    let help = std::process::Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .arg("--help")
+        .output()
+        .expect("codeflow --help runs");
+    assert!(help.status.success(), "codeflow --help failed");
+    let help = String::from_utf8(help.stdout).expect("utf-8 help");
+    let commands = help
+        .split("Commands:")
+        .nth(1)
+        .expect("help lists commands")
+        .split("Options:")
+        .next()
+        .expect("commands section ends");
+    let registered: BTreeSet<String> = commands
+        .lines()
+        .filter_map(|line| {
+            let trimmed = line.trim_start();
+            (line.starts_with("  ") && !trimmed.is_empty())
+                .then(|| trimmed.split_whitespace().next())
+                .flatten()
+                .map(str::to_string)
+        })
+        .collect();
+    assert!(
+        registered.contains("estimate") && registered.contains("policy"),
+        "help parse produced no subcommands: {registered:?}"
+    );
+
+    let excluded: BTreeSet<String> = MECHANICS_ROW_EXCLUSIONS
+        .iter()
+        .map(|s| (*s).to_string())
+        .collect();
+    let expected: BTreeSet<String> = registered.difference(&excluded).cloned().collect();
+
+    for template in ["assets/base/AGENTS.md.tmpl", "AGENTS.md"] {
+        let row = mechanics_row_subcommands(&read(template));
+        assert_eq!(
+            row,
+            expected,
+            "{template}: mechanics row disagrees with the registered \
+             subcommands (row-only: {:?}, missing: {:?})",
+            row.difference(&expected).collect::<Vec<_>>(),
+            expected.difference(&row).collect::<Vec<_>>(),
+        );
+    }
+
+    // Keep the exclusion list honest: an entry that is no longer a subcommand
+    // must be removed from it.
+    for name in MECHANICS_ROW_EXCLUSIONS {
+        assert!(
+            registered.contains(name),
+            "MECHANICS_ROW_EXCLUSIONS entry {name} is not a registered subcommand"
+        );
+    }
+}
+/// The four defense-in-depth planes, named in the AGENTS contract. Grok's
+/// hooks are wiring for the existing in-session plane, not a fifth plane.
+const GUARD_PLANES: [&str; 4] = [
+    "git hooks",
+    "in-session guards",
+    "scaffolded CI",
+    "configured remote branch protection",
+];
+
+/// The contract surfaces that inventory the guard planes.
+const PLANE_INVENTORY_FILES: [&str; 4] = [
+    "assets/base/AGENTS.md.tmpl",
+    "assets/base/AGENTS.minimal.md.tmpl",
+    "assets/base/CLAUDE.minimal.md.tmpl",
+    "assets/base/scaffold-manifest.toml",
+];
+
+/// DEFECT 3 (positive): `.grok/hooks/` is inventoried inside the in-session
+/// guard plane, alongside `.claude/settings.json` and the `.codex/` starter.
+#[test]
+fn grok_hooks_join_the_in_session_plane_rather_than_adding_one() {
+    for path in PLANE_INVENTORY_FILES {
+        let text = normalize_whitespace(&read(path));
+        assert!(
+            text.contains(".grok/hooks/"),
+            "{path}: in-session guard inventory omits .grok/hooks/"
+        );
+        // The in-session plane's three wirings are named together, so a reader
+        // cannot mistake Grok for a plane of its own.
+        for sibling in [".claude/settings.json", ".codex/"] {
+            assert!(
+                text.contains(sibling),
+                "{path}: in-session guard inventory omits {sibling}"
+            );
+        }
+    }
+}
+
+/// DEFECT 3 (negative): the plane count stays four. A fifth plane, or a
+/// renamed plane, fails here.
+#[test]
+fn guard_plane_count_stays_four() {
+    let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+    assert!(
+        agents.contains("Four planes provide defense in depth"),
+        "AGENTS template no longer states four planes"
+    );
+    assert!(
+        !agents.contains("Five planes") && !agents.contains("five planes"),
+        "a fifth guard plane appeared in the AGENTS template"
+    );
+    for plane in GUARD_PLANES {
+        assert!(
+            agents.contains(plane),
+            "AGENTS template lost guard plane: {plane}"
+        );
+    }
+    for minimal in [
+        "assets/base/AGENTS.minimal.md.tmpl",
+        "assets/base/CLAUDE.minimal.md.tmpl",
+    ] {
+        let text = normalize_whitespace(&read(minimal));
+        assert!(
+            text.contains("four planes"),
+            "{minimal}: minimal-tier inventory no longer names four planes"
+        );
+        assert!(
+            !text.contains("five planes"),
+            "{minimal}: a fifth guard plane appeared"
+        );
+    }
+}
