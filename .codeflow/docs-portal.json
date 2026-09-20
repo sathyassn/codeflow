@@ -70,7 +70,7 @@
     },
     "scripts/git-snapshot.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "5ffc49032e943cfb30b141ee3caeb585eef1303208328f40ef4a944797e44a8c"
+      "pristine_sha256": "823051b99c14acb261efc3581f7b842b99d94cc29f6141ebba19815f1d93bac7"
     },
     "scripts/install-dependencies.mjs": {
       "ownership": "managed",
@@ -142,7 +142,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "a7b120fcee56f5486a4c61b2aaf93bfdc8cef94490c58f98aca35f5e6582fe15"
+      "pristine_sha256": "68c34078bd7ac5716f5079ec400bfdbea872d0eee5d06fef50dc98fea59af4ed"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
