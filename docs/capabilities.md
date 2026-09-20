@@ -16,23 +16,23 @@
 
 | Capability | Name | Area | Status | Epics | ADRs | Purpose |
 |---|---|---|---|---|---|---|
-| [CAP-001](#cap-001--scaffold-init) | scaffold-init | scaffold | shipped | EPC-001, EPC-005, EPC-009, EPC-011, EPC-012 | ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055 | `codeflow init` lays the discipline layer into any repo at the chosen tier |
-| [CAP-002](#cap-002--scaffold-update) | scaffold-update | scaffold | shipped | EPC-001, EPC-005, EPC-012 | ADR-0011, ADR-0019 | `codeflow update` refreshes managed scaffold files by ownership class |
-| [CAP-003](#cap-003--git-policy-gates) | git-policy-gates | engine | shipped | EPC-001, EPC-011 | ADR-0002, ADR-0006, ADR-0007, ADR-0017 | Git discipline enforced across four planes reading one policy file |
-| [CAP-004](#cap-004--test-gate) | test-gate | engine | shipped | EPC-001 | ADR-0021, ADR-0031 | `codeflow test` runs the configured or detected targets as one verdict |
-| [CAP-005](#cap-005--integrate) | integrate | engine | shipped | EPC-001 | — | `codeflow integrate` is the local rebase to test to fast-forward landing |
-| [CAP-006](#cap-006--recall-registry) | recall-registry | engine | shipped | EPC-001 | ADR-0045 | `codeflow recall` searches project memory over FTS5 and a cross-repo registry |
-| [CAP-007](#cap-007--orient-session-summary) | orient-session-summary | engine | shipped | EPC-001, EPC-004 | ADR-0013, ADR-0044 | Session-start digest and session-end ledger record for Claude and interactive Codex |
-| [CAP-008](#cap-008--remote-protect-doctor) | remote-protect-doctor | engine | shipped | EPC-001, EPC-002, EPC-003 | ADR-0002, ADR-0007, ADR-0025, ADR-0054 | `remote protect` applies branch protection; `doctor` runs fifteen health checks |
-| [CAP-009](#cap-009--cross-vendor-delegation) | cross-vendor-delegation | scaffold | shipped | EPC-002, EPC-011, EPC-012 | ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059 | Consult or delegate a unit of work to another vendor's coding CLI |
+| CAP-001 | scaffold-init | scaffold | shipped | EPC-001, EPC-005, EPC-009, EPC-011, EPC-012 | ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055 | `codeflow init` lays the discipline layer into any repo at the chosen tier |
+| CAP-002 | scaffold-update | scaffold | shipped | EPC-001, EPC-005, EPC-012 | ADR-0011, ADR-0019 | `codeflow update` refreshes managed scaffold files by ownership class |
+| CAP-003 | git-policy-gates | engine | shipped | EPC-001, EPC-011 | ADR-0002, ADR-0006, ADR-0007, ADR-0017 | Git discipline enforced across four planes reading one policy file |
+| CAP-004 | test-gate | engine | shipped | EPC-001 | ADR-0021, ADR-0031 | `codeflow test` runs the configured or detected targets as one verdict |
+| CAP-005 | integrate | engine | shipped | EPC-001 | — | `codeflow integrate` is the local rebase to test to fast-forward landing |
+| CAP-006 | recall-registry | engine | shipped | EPC-001 | ADR-0045 | `codeflow recall` searches project memory over FTS5 and a cross-repo registry |
+| CAP-007 | orient-session-summary | engine | shipped | EPC-001, EPC-004 | ADR-0013, ADR-0044 | Session-start digest and session-end ledger record for Claude and interactive Codex |
+| CAP-008 | remote-protect-doctor | engine | shipped | EPC-001, EPC-002, EPC-003 | ADR-0002, ADR-0007, ADR-0025, ADR-0054 | `remote protect` applies branch protection; `doctor` runs fifteen health checks |
+| CAP-009 | cross-vendor-delegation | scaffold | shipped | EPC-002, EPC-011, EPC-012 | ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059 | Consult or delegate a unit of work to another vendor's coding CLI |
 | [CAP-010](capabilities/CAP-010-duo-model-orchestration.md) | duo-model-orchestration | scaffold | shipped | EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012 | ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060 | `/cf-model-orchestrator` is the host-neutral default for non-trivial repository work |
-| [CAP-011](#cap-011--security-redteam-review) | security-redteam-review | engine | shipped | EPC-003, EPC-012 | ADR-0016 | The mandatory security and red-team stage, bound at three planes |
-| [CAP-012](#cap-012--scaffold-customize) | scaffold-customize | scaffold | shipped | EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012 | ADR-0025, ADR-0044 | `/cf-customize` is the post-init tailoring walk-through over tools and project facts |
+| CAP-011 | security-redteam-review | engine | shipped | EPC-003, EPC-012 | ADR-0016 | The mandatory security and red-team stage, bound at three planes |
+| CAP-012 | scaffold-customize | scaffold | shipped | EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012 | ADR-0025, ADR-0044 | `/cf-customize` is the post-init tailoring walk-through over tools and project facts |
 | [CAP-013](capabilities/CAP-013-model-binding-evaluation.md) | model-binding-evaluation | scaffold | shipped | EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012 | ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060 | `/cf-evaluate-model` qualifies a model, harness, profile, or instruction change |
-| [CAP-014](#cap-014--transport-neutral-delegate-lifecycle) | transport-neutral-delegate-lifecycle | engine | building | EPC-002 | ADR-0036, ADR-0037 | `codeflow delegate init/arm/wait` drives a delegated turn through durable records |
+| CAP-014 | transport-neutral-delegate-lifecycle | engine | building | EPC-002 | ADR-0036, ADR-0037 | `codeflow delegate init/arm/wait` drives a delegated turn through durable records |
 | [CAP-015](capabilities/CAP-015-opt-in-documentation-portal.md) | opt-in-documentation-portal | scaffold | shipped | EPC-005, EPC-007, EPC-013, EPC-014 | ADR-0048, ADR-0058 | `codeflow portal setup` adopts the exact-pinned Starlight and Pagefind guide |
 | [CAP-016](capabilities/CAP-016-interactive-presentation-review.md) | interactive-presentation-review | engine | building | EPC-005, EPC-014 | ADR-0049, ADR-0050, ADR-0052, ADR-0053 | `codeflow present` turns a catalog document into one bounded local review surface |
-| [CAP-017](#cap-017--optional-agentic-estimation) | optional-agentic-estimation | engine | shipped | EPC-006 | ADR-0057 | The optional cf-estimate method plus a read-only allocation checker |
+| CAP-017 | optional-agentic-estimation | engine | shipped | EPC-006 | ADR-0057 | The optional cf-estimate method plus a read-only allocation checker |
 
 Statuses run planned → building → shipped → deprecated; entries are
 deprecated, never deleted. Four capabilities have outgrown a single
