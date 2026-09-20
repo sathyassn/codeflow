@@ -1,7 +1,24 @@
-# Releasing codeflow
+# Releasing CodeFlow
 
-How a codeflow release is cut, and how a project that *consumes* codeflow should
-think about its own versioning. Release state has one operative decision record,
+## Concept
+
+**A release is one deliberate human decision, taken after the evidence for it
+already exists.**
+
+```cf-stage
+work PR | curated notes · impact markers · coupled stamps @accent
+->
+release-state check | the actual proposed merge tree, not conflict absence
+->
+human merge | main advances only on a fresh check
+->
+human dispatch | cargo-dist Release workflow, --ref main, vX.Y.Z @warn
+->
+guarded publish | draft · build · recheck · upload · announce @positive
+caption: cargo-dist is the only publisher; no agent merges, tags, or publishes
+```
+
+Release state has one operative decision record,
 ADR-0062, at the end of a supersession chain: ADR-0012 (git-cliff calculates the
 version) was superseded by ADR-0061 (a maintained candidate PR), which was
 superseded by ADR-0062 (state lives in the normal work PR). Read the earlier two
@@ -12,7 +29,33 @@ approval record for every run of this procedure. Record a link or pasted output
 for each item there; a green job, model agreement, or peer approval is evidence,
 never a substitute for the named human release decision.
 
-## codeflow's own releases
+This page covers how a codeflow release is cut, and how a project that
+*consumes* codeflow should think about its own versioning.
+
+## Architecture
+
+Each stage of the figure has one actor and one gate. Nothing downstream can
+reinterpret an upstream decision.
+
+| Stage | Who acts | Gate it must satisfy |
+|---|---|---|
+| Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact patch\|minor\|major` HTML marker directly before each new pending entry |
+| Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, actual proposed merge tree, pending annotations, coupled stamps, and conventional-marker floor. It checks known contradictions and watched contracts; it does not infer compatibility |
+| Merge | A human | PR CI checks the actual proposed merge tree, not conflict absence; main-push CI repeats the state check without writing. Without strict branch protection a stale clean merge remains possible, so the human merger must require the fresh check |
+| Dispatch | A human with current write, maintain, or admin permission | `--ref main` and the `vX.Y.Z` tag. The actor and rerunning actor must both be GitHub Users with effective permission. `GITHUB_SHA` must still equal current main and be the result of an ordinary PR human-merged into this repository's main. Contributor forks remain valid. No static allowlist or second-human role is implied |
+| Local-artifact authority job | The generated workflow | Source/version/notes, the latest exact-source GitHub Actions main-push results for `release state`, `codeflow gates`, Rust, Windows, secret scan, and security review, plus write-visible host collisions. It then creates or resumes only an exact empty draft |
+| Global-artifact recheck | The generated workflow | Rechecks main after platform builds. Failed or cancelled guards block host and announce |
+| Upload and announce | cargo-dist | Uploads without `--clobber` and announces last |
+| Post-announce verification | cargo-dist's verifier | Compares tag/source and every asset name, size, and SHA-256 digest to the same-run files |
+
+The authority job narrows but cannot atomically close the small
+scheduler/API race before hosting; changed main fails and requires deliberate
+redispatch. Its concurrency group covers the authority job, not the whole
+generated workflow, so operate one deliberate publication at a time;
+no-clobber and partial-attempt checks remain the safety boundary if runs
+overlap.
+
+### codeflow's own releases
 
 Version source of truth: the reviewed impact annotations adjacent to entries in
 the one undated pending CHANGELOG section. The cumulative target is the latest
@@ -27,18 +70,21 @@ One publisher remains:
   installers and is the only tag, release, and artifact publisher. Its
   generated workflow runs only by explicit human dispatch on `main`.
 
-PRs carry one `Release impact` section. `scripts/release.py check-pr` compares
-the declaration with the current target, actual proposed merge tree, pending
-annotations, coupled stamps, and conventional-marker floor. It checks known
-contradictions and watched contracts; it does not infer compatibility. Put one
-`codeflow:release-impact patch|minor|major` HTML marker directly before
-each new pending entry. A withdrawal removes the affected entry/marker and
+A withdrawal removes the affected entry/marker and
 explains in the PR body why the remaining net contract permits the lower target.
 
 Use a plain `revert:` only when the resulting change has no shipped release
 impact. A revert that changes supported behavior or a public contract must use
 the `fix:`, `feat:`, or breaking marker that describes the resulting release,
 with matching PR impact and curated pending notes.
+
+The generated release workflow uses the repository's scoped `GITHUB_TOKEN`; it
+does not provision a PAT or publication credential. Hosted settings can still
+prevent exact-source checks, workflow dispatch, drafts, uploads, or releases.
+Treat a zero-step or permission failure as absent evidence and repair the
+repository setting; never bypass the source and publication guards.
+
+## Technical
 
 ### Cross-build toolchain
 
@@ -80,11 +126,12 @@ npm run check
 npm run check:browser
 ```
 
-`supply-chain` refreshes the committed audit, CycloneDX SBOM, and license
-inventory. `check` proves two clean builds are byte-identical and enforces the
-raw/Brotli/export budgets and integrity manifest. `check:browser` exercises the
-representative accessible renderer and mode/review behavior in a task-owned
-browser, including a dense bounded multi-diagram corpus and long-task envelope.
+| Command | What it proves |
+|---|---|
+| `npm run supply-chain` | Refreshes the committed audit, CycloneDX SBOM, and license inventory |
+| `npm run check` | Proves two clean builds are byte-identical and enforces the raw/Brotli/export budgets and integrity manifest |
+| `npm run check:browser` | Exercises the representative accessible renderer and mode/review behavior in a task-owned browser, including a dense bounded multi-diagram corpus and long-task envelope |
+
 Review the generated diff; do not hand-edit the distribution or its evidence
 files. Release builds consume only the committed assets, and consumer machines
 do not need Node.
@@ -161,28 +208,14 @@ and blocks claiming that platform's release qualification.
    Read-scoped PR/main checks cannot see GitHub draft releases and do not claim
    that they can; draft absence is checked later inside the write-scoped,
    read-only-in-behavior publisher guards.
-2. Refresh against the current target before merge. PR CI checks the actual
-   proposed merge tree, not conflict absence. Main-push CI repeats the state
-   check without writing. Without strict branch protection a stale clean merge
-   remains possible, so the human merger must require the fresh check.
-3. When evidence is complete, a human with current write, maintain, or admin
-   permission explicitly dispatches cargo-dist's generated Release workflow
-   with `--ref main` and the `vX.Y.Z` tag. The actor and rerunning actor
-   must both be GitHub Users with effective permission. `GITHUB_SHA` must
-   still equal current main and be the result of an ordinary PR human-merged
-   into this repository's main. Contributor forks remain valid. No static
-   allowlist or second-human role is implied.
+2. Refresh against the current target before merge.
+3. When evidence is complete, a human explicitly dispatches cargo-dist's
+   generated Release workflow with `--ref main` and the `vX.Y.Z` tag.
 4. The supported local-artifact job checks source/version/notes, the latest
    exact-source GitHub Actions main-push results for `release state`, `codeflow gates`,
    Rust, Windows, secret scan, and security review, plus write-visible host collisions,
    then creates or resumes only an exact empty draft.
    The supported global-artifact job rechecks main after platform builds.
-   Failed or cancelled guards block host and announce. This narrows but cannot
-   atomically close the small scheduler/API race before hosting; changed main
-   fails and requires deliberate redispatch. Its concurrency group covers the
-   authority job, not the whole generated workflow, so operate one deliberate
-   publication at a time; no-clobber and partial-attempt checks remain the
-   safety boundary if runs overlap.
 5. cargo-dist uploads without `--clobber` and announces last. Its
    post-announce verifier compares tag/source and every asset name, size, and
    SHA-256 digest to the same-run files.
@@ -198,57 +231,52 @@ exact tag-only attempt may resume. A draft with assets, mismatched draft, or tag
 with another source needs explicit recovery. A public version is spent forever.
 Material work and withdrawals remain blocked while an attempt is unresolved.
 
-- **Before tagging, re-verify the harness-parity claims** against the
-  currently installed harness versions. These surfaces move fast, and
-  ADR-0008/ADR-0013/ADR-0014 and the parity section of
-  docs/harness-posture.md pin a version that decays:
-  - The PreToolUse payload contract (`git-guard`/`exec-guard`) still matches
-    what Claude Code and an interactive Codex session send.
-  - The Codex `hooks.json` events still fire as documented, and the `cf-guard`
-    permission-profile keys in `.codex/config.toml` still validate. Run
-    `codex --strict-config doctor` from a checkout with the shipped
-    `.codex/config.toml` in place; `--strict-config` errors out on any field
-    the installed Codex no longer recognizes.
-  - The Claude settings/hook schema (`.claude/settings.json`) still matches
-    what the installed Claude Code expects.
-  - The host-neutral duo contract test passes, and both native interactive
-    lanes complete a scoped canary with the task's required MCP tools:
-    Claude Code → Codex through the enabled official plugin or qualified native
-    fallback, and Codex → Claude through task-scoped Herdr (tmux degraded)
-    with the qualified tracked Stop/StopFailure lifecycle.
-    Record versions, exact commands, and observed tool access. Do not accept
-    auth status output in place of a working interactive session.
-  - The current ensemble record names only bindings qualified for this release;
-    every `capability-supported` harness catalog entry still proves the full
-    capability contract without being mistaken for concrete binding
-    qualification.
-    Run `codeflow doctor --check model-bindings` for retained local promotion
-    records and resolve requested/observed, harness-version, or declared
-    settings drift. Confirm the repository's project selection is absent/empty
-    or resolves atomically to exact stable-role binding IDs; a diagnostic pack
-    or parseable harness name is not promotion evidence.
-  - Before the repository is public, confirm no committed CodeQL workflow has
-    entered the scaffold. After it is public, enable GitHub CodeQL default setup
-    for Rust with `security-extended`, verify intended file coverage and zero
-    tool-status errors, and collect five healthy applicable PR runs before
-    considering the check required. Roll back branch-protection requirements
-    before disabling the setup.
-  - `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes
-    locally; CI billing/availability never substitutes for this evidence.
-  - `cargo dist plan --output-format=json` lists all four archives, both
-    installers, and native runner rows. Canary the shell installer on each
-    macOS/Linux architecture and the PowerShell installer on Windows; confirm
-    WSL2 selects the Linux archive and native Windows installs `codeflow.exe`.
+Before tagging, re-verify the harness-parity claims against the currently
+installed harness versions. These surfaces move fast, and ADR-0008/ADR-0013/
+ADR-0014 and the parity section of docs/harness-posture.md pin a version that
+decays:
+
+- The PreToolUse payload contract (`git-guard`/`exec-guard`) still matches
+  what Claude Code and an interactive Codex session send.
+- The Codex `hooks.json` events still fire as documented, and the `cf-guard`
+  permission-profile keys in `.codex/config.toml` still validate. Run
+  `codex --strict-config doctor` from a checkout with the shipped
+  `.codex/config.toml` in place; `--strict-config` errors out on any field
+  the installed Codex no longer recognizes.
+- The Claude settings/hook schema (`.claude/settings.json`) still matches
+  what the installed Claude Code expects.
+- The host-neutral duo contract test passes, and both native interactive
+  lanes complete a scoped canary with the task's required MCP tools:
+  Claude Code → Codex through the enabled official plugin or qualified native
+  fallback, and Codex → Claude through task-scoped Herdr (tmux degraded)
+  with the qualified tracked Stop/StopFailure lifecycle.
+  Record versions, exact commands, and observed tool access. Do not accept
+  auth status output in place of a working interactive session.
+- The current ensemble record names only bindings qualified for this release;
+  every `capability-supported` harness catalog entry still proves the full
+  capability contract without being mistaken for concrete binding
+  qualification.
+  Run `codeflow doctor --check model-bindings` for retained local promotion
+  records and resolve requested/observed, harness-version, or declared
+  settings drift. Confirm the repository's project selection is absent/empty
+  or resolves atomically to exact stable-role binding IDs; a diagnostic pack
+  or parseable harness name is not promotion evidence.
+- Before the repository is public, confirm no committed CodeQL workflow has
+  entered the scaffold. After it is public, enable GitHub CodeQL default setup
+  for Rust with `security-extended`, verify intended file coverage and zero
+  tool-status errors, and collect five healthy applicable PR runs before
+  considering the check required. Roll back branch-protection requirements
+  before disabling the setup.
+- `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes
+  locally; CI billing/availability never substitutes for this evidence.
+- `cargo dist plan --output-format=json` lists all four archives, both
+  installers, and native runner rows. Canary the shell installer on each
+  macOS/Linux architecture and the PowerShell installer on Windows; confirm
+  WSL2 selects the Linux archive and native Windows installs `codeflow.exe`.
 
 Record new verification in a current ADR/release note and update
 docs/harness-posture.md if parity drifted; historical ADR bodies remain
 append-only.
-
-The generated release workflow uses the repository's scoped `GITHUB_TOKEN`; it
-does not provision a PAT or publication credential. Hosted settings can still
-prevent exact-source checks, workflow dispatch, drafts, uploads, or releases.
-Treat a zero-step or permission failure as absent evidence and repair the
-repository setting; never bypass the source and publication guards.
 
 ### Historical bridge into v3
 
@@ -263,7 +291,7 @@ accepts the already-staged `3.0.0` pending section. After that version is
 published, the verified public release, not this bootstrap record, becomes the
 automatic baseline.
 
-## Versioning in a project that consumes codeflow
+### Versioning in a project that consumes codeflow
 
 codeflow gives your repo the *substrate* for clean releases. The commit-msg gate
 enforces Conventional Commits, so your history is SemVer-derivable. It does
