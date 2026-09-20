@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: The test-config contract no longer accepts changed_files coverage rules until the gate has an explicit comparison-base input; aggregate scopes remain supported and are verdict-bearing.
 ---
 
-# ADR-0021 — reject changed-file coverage without a comparison base
+# ADR-0021: reject changed-file coverage without a comparison base
 
 ## Context
 

@@ -10,7 +10,7 @@ architecture_impact: docs/architecture.md — the in-session guard plane gains a
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0008 — harness parity and the exec-guard security stage
+# ADR-0008: harness parity and the exec-guard security stage
 
 ## Context
 

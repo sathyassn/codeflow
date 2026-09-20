@@ -10,7 +10,7 @@ architecture_impact: none
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0011 — update reconciles orphaned managed files
+# ADR-0011: update reconciles orphaned managed files
 
 ## Context
 

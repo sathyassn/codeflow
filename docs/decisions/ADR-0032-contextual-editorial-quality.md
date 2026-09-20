@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: the standard/full scaffold gains one mirrored editorial-review skill, a compact always-loaded principle, duo/reviewer/ship/customize routing, and behavioral evaluation without a prose linter dependency
 ---
 
-# ADR-0032 — contextual editorial quality
+# ADR-0032: contextual editorial quality
 
 ## Context
 

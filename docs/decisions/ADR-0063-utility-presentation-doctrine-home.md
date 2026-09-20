@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture/utility-presentation.md — new graduated area page records the utility presentation system
 ---
 
-# ADR-0063 — one shared utility presentation doctrine with a durable architecture home
+# ADR-0063: one shared utility presentation doctrine with a durable architecture home
 
 ## Context
 

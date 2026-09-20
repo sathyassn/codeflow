@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: scaffold orchestration gains per-task producer/reviewer assignments and explicit host/peer/worker roles; the binary remains model agnostic
 ---
 
-# ADR-0035 — capability-routed duo execution
+# ADR-0035: capability-routed duo execution
 
 ## Context
 

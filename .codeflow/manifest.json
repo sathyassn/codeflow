@@ -1061,7 +1061,7 @@
     "docs/decisions/ADR-0001-stack-choice.md": {
       "src": "docs/decisions/ADR-0001-stack-choice.md.tmpl",
       "ownership": "user-owned",
-      "sha256": "5637d12d294087b1cc482202688281f2733bebd774d9bcf7ceb3ab930a65998c",
+      "sha256": "beb1753fa278e69322c2aca95e6eb76fce05c01465d6884df065ef7f1c0d4e0a",
       "exec": false
     },
     "docs/decisions/template.md": {

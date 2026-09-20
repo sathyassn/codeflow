@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — portal updates replace unchanged runtime files; explicit whole-runtime transfer freezes provenance without weakening derived-evidence validation
 ---
 
-# ADR-0058 — replace portal source merging with explicit runtime ownership
+# ADR-0058: replace portal source merging with explicit runtime ownership
 
 ## Context
 

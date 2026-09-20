@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — multi-task plans gain a non-executable task graph with structurally validated task dependencies, and verification planning gains evidence-triggered property, mutation, and architecture-fitness options
 ---
 
-# ADR-0040 — task graphs and verification strength
+# ADR-0040: task graphs and verification strength
 
 ## Context
 

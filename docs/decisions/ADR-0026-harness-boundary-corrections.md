@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — the runtime-settings plane now names the high-confidence workspace secret globs, raw environment credentials, and destructive operations enforced by each native harness
 ---
 
-# ADR-0026 — harness permission-boundary corrections
+# ADR-0026: harness permission-boundary corrections
 
 ## Context
 

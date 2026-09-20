@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — qualified model evidence gains a user-owned, reference-only project selection layer while the shipped ensemble remains fully managed
 ---
 
-# ADR-0041 — role-based project model selection
+# ADR-0041: role-based project model selection
 
 ## Context
 

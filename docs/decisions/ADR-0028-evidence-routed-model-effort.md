@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — native duo seats use high by default, xhigh on explicit complexity or failure triggers, and bounded native workers without transferring primary ownership
 ---
 
-# ADR-0028 — evidence-routed model effort
+# ADR-0028: evidence-routed model effort
 
 ## Context
 

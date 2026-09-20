@@ -1,6 +1,6 @@
 ---
 id: ADR-0006
-title: pr-based landings — supersede the integrate path on this repo
+title: PR based landings supersede the integrate path on this repo
 date: 2026-07-02
 status: accepted
 superseded_by: null

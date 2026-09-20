@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: none
 ---
 
-# ADR-0022 — replace the unmaintained YAML parser
+# ADR-0022: replace the unmaintained YAML parser
 
 ## Context
 

@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: engine gains the schema-v2 delegate lifecycle (delegate.rs state machine, the delegate CLI, a dual-mode delegate-turn hook, and a Fail-severity delegate-roundtrip doctor check); the binary still never launches a harness
 ---
 
-# ADR-0036 — transport-neutral durable delegate lifecycle
+# ADR-0036: transport-neutral durable delegate lifecycle
 
 ## Context
 

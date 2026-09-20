@@ -7,7 +7,7 @@ superseded_by: ADR-0058
 architecture_impact: docs/architecture.md — an opt-in managed portal starter is embedded once outside the mirrored skills, while validate gains a read-only verifier for its derived evidence manifest
 ---
 
-# ADR-0048 — isolate portal adoption and verify derived evidence
+# ADR-0048: isolate portal adoption and verify derived evidence
 
 ## Context
 

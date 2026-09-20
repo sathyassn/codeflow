@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: none
 ---
 
-# ADR-0047 — narrow plugin-code sandbox carveout
+# ADR-0047: narrow plugin-code sandbox carveout
 
 ## Context
 

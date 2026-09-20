@@ -1,4 +1,4 @@
-# utility presentation — one craft, two surfaces
+# utility presentation: one craft, two surfaces
 
 <!-- HOW layer. Graduated area page for the utility presentation system.
      Sources: ADR-0048, ADR-0049, ADR-0053, ADR-0063. The normative authoring

@@ -10,7 +10,7 @@ architecture_impact: none
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0012 — git-cliff for version + changelog; release-plz removed
+# ADR-0012: git-cliff for version + changelog; release-plz removed
 
 ## Context
 

@@ -1,6 +1,6 @@
 ---
 id: ADR-0010
-title: automated release — release-plz owns version/changelog/tag, cargo-dist owns artifacts
+title: "automated release: release-plz owns version, changelog and tag, cargo-dist owns artifacts"
 date: 2026-07-04
 status: superseded
 superseded_by: ADR-0012
@@ -10,7 +10,7 @@ architecture_impact: none
 <!-- ADRs are append-only: written at the moment of decision, never edited
      afterwards except to set superseded_by. -->
 
-# ADR-0010 — automated release: release-plz proposes, cargo-dist builds
+# ADR-0010: automated release: release-plz proposes, cargo-dist builds
 
 ## Context
 

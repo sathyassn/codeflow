@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: none
 ---
 
-# ADR-0005 — cross-vendor delegation via harness-boundary composition
+# ADR-0005: cross-vendor delegation via harness-boundary composition
 
 ## Context
 

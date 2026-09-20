@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: docs/architecture.md — verification evidence is recorded in deterministic and contextual layers, with stack-specific analyzer selection and a repository-only post-public CodeQL canary
 ---
 
-# ADR-0042 — layered code verification
+# ADR-0042: layered code verification
 
 ## Context
 

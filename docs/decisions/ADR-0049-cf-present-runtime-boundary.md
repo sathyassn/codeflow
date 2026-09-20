@@ -7,7 +7,7 @@ superseded_by: null
 architecture_impact: add the session-scoped presentation renderer, service, browser-isolation, and build boundaries
 ---
 
-# ADR-0049 — bounded cf-present runtime and renderer boundary
+# ADR-0049: bounded cf-present runtime and renderer boundary
 
 ## Context
 
