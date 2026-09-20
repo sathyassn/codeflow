@@ -991,7 +991,11 @@ fn starter_portal_config_points_at_decisions_instead_of_publishing_them() {
         .as_array()
         .expect("records pointers is an array")
         .iter()
-        .map(|pointer| pointer["folder"].as_str().expect("pointer folder is a string"))
+        .map(|pointer| {
+            pointer["folder"]
+                .as_str()
+                .expect("pointer folder is a string")
+        })
         .collect();
     assert_eq!(folders, ["docs/decisions"]);
     for layer in config["layers"].as_array().expect("layers is an array") {
