@@ -666,6 +666,7 @@ permissions. Local checks are required feedback, but remain editable.
 | Destructive command (`rm -rf /`, `mkfs`, fork bomb) | — | exec-guard (block) | — | — |
 | Privilege escalation (`sudo`, `LD_PRELOAD`) | — | exec-guard (warn) | — | — |
 | Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | — |
+| Host attribution injection (`Co-Authored-By`, "Generated with") | settings preset turns it off (`includeCoAuthoredBy`, `attribution`) | git-guard (PR body) | yes (commit-msg) | — |
 | Override-token laundering, `--no-verify` bypass | — | git-guard (structural) | — | — |
 
 Two facts the matrix encodes. **PR-content checks are git-guard/CI by design** —
