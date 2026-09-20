@@ -1,9 +1,48 @@
 # CodeFlow release checklist
 
-The approval record for every CodeFlow release. Commands, rationale, and the
-policy behind each box live in [the release runbook](releasing.md).
+## Concept
 
-## 1. Scope and version
+**The approval record for every CodeFlow release: each box is evidence that
+already exists, not a promise that it will.**
+
+```cf-stage
+scope and version | one cumulative target @accent
+->
+source and security gates | clean checkout · scans · dispositions
+->
+distribution and platform assurance | native canaries · installers
+->
+harness and model qualification | both lanes · current bindings
+->
+publish, canary, rollback | human merge · human dispatch · rollback ready @positive
+caption: five sections in order; record a link or pasted output for every box
+```
+
+Commands, rationale, and the policy behind each box live in
+[the release runbook](releasing.md). Architecture says what each section has to
+establish; Technical is the record itself.
+
+## Architecture
+
+Five sections, each bound to the runbook section that owns its procedure.
+
+| Section | What it must establish | Runbook |
+|---|---|---|
+| 1. Scope and version | One cumulative target that the notes, stamps, tag and proposed merge tree all agree on | [codeflow's own releases](releasing.md#codeflows-own-releases) |
+| 2. Source and security gates | A clean checkout passes every code, secret, dependency, provider-surface and harness-settings check, or carries a documented human-approved disposition | [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication) |
+| 3. Distribution and platform assurance | Every claimed archive, installer and platform has native evidence, and the publication guards fail closed | [cross-build toolchain](releasing.md#cross-build-toolchain), [presentation renderer assets](releasing.md#presentation-renderer-assets), [portal ownership migration](releasing.md#portal-ownership-migration) |
+| 4. Harness and model qualification | The bindings and both interactive lanes are qualified for this release, with routing and review evidence per task | the pre-tagging harness-parity re-verification in [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication) |
+| 5. Publish, canary, and rollback | A human merges, a human dispatches, the public artifacts agree, and a rollback path is named before the announcement | [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication) and [historical bridge into v3](releasing.md#historical-bridge-into-v3) |
+
+A green job, model agreement, or peer approval is evidence for a box, never a
+substitute for the named human release decision.
+
+## Technical
+
+Record a link or pasted output beside each box. The boxes are the durable
+artifact of the run, so they stay a checklist rather than a summary table.
+
+### 1. Scope and version
 
 Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases).
 
@@ -19,7 +58,7 @@ Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases).
 - [ ] Every shipped behavior change links its capability/epic and accepted ADR;
       documentation describes current behavior, not an aspiration.
 
-## 2. Source and security gates
+### 2. Source and security gates
 
 Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication).
 
@@ -36,7 +75,7 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
       path/directory allowlists that could hide a future secret.
 - [ ] The operator-approved publication boundary is complete before visibility
       changes. For a sanitized public repository, retain the original remote as
-      a sealed private archive and publish only selected clean refs—never a
+      a sealed private archive and publish only selected clean refs, never a
       mirror push. For a history rewrite, separately purge retained hosted PR
       refs and caches. Rescan resulting public refs and regenerated exact
       fingerprints rather than reusing pre-rewrite commit IDs.
@@ -71,7 +110,7 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
       secret-store denies, public research access, permission prompts, and the
       host-specific sandbox boundary match the documented contract.
 
-## 3. Distribution and platform assurance
+### 3. Distribution and platform assurance
 
 Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentation renderer assets](releasing.md#presentation-renderer-assets), [portal ownership migration](releasing.md#portal-ownership-migration).
 
@@ -156,7 +195,7 @@ Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentat
       authority/path suite on Windows. Generic consumer CI remains portal-free
       until adoption. Generated output is not published by these checks.
 
-## 4. Harness and model qualification
+### 4. Harness and model qualification
 
 Runbook: the pre-tagging harness-parity re-verification in [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication).
 
@@ -205,7 +244,7 @@ Runbook: the pre-tagging harness-parity re-verification in [same-PR preparation 
 - [ ] Host/peer/worker role canaries reject nested orchestration, usage state is
       observed rather than inferred, and reassignment forces fresh dual approval.
 
-## 5. Publish, canary, and rollback
+### 5. Publish, canary, and rollback
 
 Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication) and [historical bridge into v3](releasing.md#historical-bridge-into-v3).
 
