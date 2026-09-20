@@ -104,7 +104,9 @@ unbypassable security boundary. CI becomes a merge gate only where the remote
 requires its result; remote authority also depends on permissions and bypass
 settings. Report missing planes without relaxing task safety or review.
 Headless task execution remains prohibited (CodeFlow ADR-0018), independently
-of whether a particular harness can run hooks in that mode. See cf-method,
+of whether a particular harness can run hooks in that mode. That prohibition
+is instruction-only: CodeFlow does not technically prevent a harness from
+launching headless task execution. See cf-method,
 "Why the git boundary is remote." The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/

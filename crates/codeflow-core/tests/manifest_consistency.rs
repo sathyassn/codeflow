@@ -544,6 +544,86 @@ fn ci_downloads_verify_pinned_checksums() {
     );
 }
 
+/// The ADR-0018 instruction-only clause (TSK-041 defect 8). ADR-0018 is an
+/// accepted, append-only record ("never edited afterwards except to set
+/// superseded_by"), so the clarifying clause cannot land there — its one home
+/// is the AGENTS contract, which `codeflow update` regenerates.
+const INSTRUCTION_ONLY_CLAUSE: &str = "instruction-only: CodeFlow does not \
+     technically prevent a harness from launching headless task execution";
+
+/// Authored contract templates that could plausibly host the clause. Exactly
+/// one of them may.
+const CONTRACT_TEMPLATES: [&str; 4] = [
+    "assets/base/AGENTS.md.tmpl",
+    "assets/base/AGENTS.minimal.md.tmpl",
+    "assets/base/CLAUDE.md.tmpl",
+    "assets/base/CLAUDE.minimal.md.tmpl",
+];
+
+/// Normalize wrapped prose so a clause that spans a line break still matches.
+fn unwrapped(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// DEFECT 8 (positive): the clause has exactly one authored home, and the
+/// managed copies (`AGENTS.md`, the managed baseline) carry it because the
+/// managed region is regenerated from that one template.
+#[test]
+fn instruction_only_clause_has_exactly_one_home() {
+    let root = repo_root();
+    let clause = unwrapped(INSTRUCTION_ONLY_CLAUSE);
+
+    let homes: Vec<&str> = CONTRACT_TEMPLATES
+        .into_iter()
+        .filter(|template| {
+            let text = std::fs::read_to_string(root.join(template))
+                .unwrap_or_else(|error| panic!("read {template}: {error}"));
+            unwrapped(&text).contains(&clause)
+        })
+        .collect();
+    assert_eq!(
+        homes,
+        vec!["assets/base/AGENTS.md.tmpl"],
+        "the ADR-0018 instruction-only clause must be stated once, in the \
+         AGENTS template — found in: {homes:?}"
+    );
+
+    for mirror in ["AGENTS.md", ".codeflow/.baseline/AGENTS.md"] {
+        let text = std::fs::read_to_string(root.join(mirror))
+            .unwrap_or_else(|error| panic!("read {mirror}: {error}"));
+        assert!(
+            unwrapped(&text).contains(&clause),
+            "{mirror}: managed region is out of step with the AGENTS template"
+        );
+    }
+}
+
+/// DEFECT 8 (negative): ADR-0018 is untouched. The append-only banner stands,
+/// and neither the clause nor an appended clarifying note was written into it.
+#[test]
+fn adr_0018_is_not_amended_to_carry_the_clause() {
+    let path = repo_root().join("docs/decisions/ADR-0018-interactive-only-cross-model-transport.md");
+    let text = std::fs::read_to_string(&path).expect("ADR-0018 is readable");
+    let flat = unwrapped(&text);
+
+    assert!(
+        flat.contains("ADRs are append-only"),
+        "ADR-0018 lost its append-only banner"
+    );
+    assert!(
+        !flat.contains(&unwrapped(INSTRUCTION_ONLY_CLAUSE)),
+        "the clause was written into append-only ADR-0018; its home is the \
+         AGENTS contract"
+    );
+    for appended in ["Clarifying note", "clarifying note", "## Note"] {
+        assert!(
+            !text.contains(appended),
+            "ADR-0018 gained an appended note ({appended}); the record is \
+             append-only and superseded, never amended"
+        );
+    }
+}
+
 /// The four scaffolded CI templates that put the `codeflow` binary on PATH.
 /// `cargo-dist` installs with `install-path = "CARGO_HOME"`
 /// (`dist-workspace.toml`), so a template that hardcodes `$HOME/.cargo/bin`
