@@ -213,9 +213,11 @@ and blocks claiming that platform's release qualification.
    Read-scoped PR/main checks cannot see GitHub draft releases and do not claim
    that they can; draft absence is checked later inside the write-scoped,
    read-only-in-behavior publisher guards.
-2. Refresh against the current target before merge.
+2. Refresh against the current target before merge. What the human merger
+   must require of CI is the Merge row in Architecture.
 3. When evidence is complete, a human explicitly dispatches cargo-dist's
-   generated Release workflow with `--ref main` and the `vX.Y.Z` tag.
+   generated Release workflow with `--ref main` and the `vX.Y.Z` tag. Who may
+   dispatch is the Dispatch row in Architecture.
 4. The supported local-artifact job checks source/version/notes, the latest
    exact-source GitHub Actions main-push results for `release state`, `codeflow gates`,
    Rust, Windows, secret scan, and security review, plus write-visible host collisions,
