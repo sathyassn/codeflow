@@ -2403,19 +2403,19 @@ fn verify_pagefind_entry(
         ));
         return;
     };
-    if !fields
+    if fields
         .get("version")
         .and_then(serde_json::Value::as_str)
-        .is_some_and(|version| !version.trim().is_empty())
+        .is_none_or(|version| version.trim().is_empty())
     {
         report.issues.push(format!(
             "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: expected a non-empty version string"
         ));
     }
-    if !fields
+    if fields
         .get("languages")
         .and_then(serde_json::Value::as_object)
-        .is_some_and(|languages| !languages.is_empty())
+        .is_none_or(serde_json::Map::is_empty)
     {
         report.issues.push(format!(
             "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: expected a non-empty languages object"
