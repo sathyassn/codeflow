@@ -78,7 +78,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "923c444e49d1e20d3f08cbc224f57a1d2f08e29b518e4c2a77e239f96da63756"
+      "pristine_sha256": "a59f966b0046ab712c9cbfca621eca0adf7d828629b54cd8d9f428199a6c6b5e"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -138,7 +138,7 @@
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
-      "pristine_sha256": "acc48812c9a9355202f044185cf0aec6624181eae33503ca3750773c5ff8cde1"
+      "pristine_sha256": "8e6b5216ed0b5f42cb562d1def69e0ce8cd7b8e5c481888378e025365513b0d9"
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
