@@ -1,7 +1,7 @@
-# codeflow — product
+# codeflow: the product
 
 <!-- WHY layer. Human-owned: agents propose changes here, the human accepts.
-     Keep it small and stable — this file should change rarely.
+     Keep it small and stable; this file should change rarely.
      The non-goals below are what planning is checked against. -->
 
 **CodeFlow installs the discipline; the harness does the developing.**
@@ -24,7 +24,7 @@ installs into any repository.
 
 ## Users
 
-Solo, AI-assisted developers first — someone running Claude Code, Codex, or
+Solo, AI-assisted developers first: someone running Claude Code, Codex, or
 another capable host who wants git, secret, and test discipline plus a durable
 why-record without standing up a framework. Cross-harness development is a
 scaffold design center when it composes vendor-native interactive sessions;
@@ -39,7 +39,7 @@ multi-user coordination remains deferred.
   `.codeflow/policy.json` by every enforcement plane.
 - A six-layer knowledge model (product, capabilities, architecture, ADRs, work,
   ledger) maintained inside the ship flow, with `recall` over the record.
-- Graduated weight — minimal / standard / full tiers, where the git-discipline
+- Graduated weight in minimal, standard, and full tiers, where the git-discipline
   enforcement floor is the same at every tier and the tiers scale only the
   project-management on top (ADR-0019); the binary validates every shape, so
   growth is mechanical.

@@ -1,4 +1,4 @@
-# CAP-015 — opt-in-documentation-portal
+# CAP-015: opt-in-documentation-portal
 
 <!-- WHAT layer, graduated from docs/capabilities.md. The registry keeps the
      machine-read yaml block, a summary, and a link here; this file holds the
@@ -7,7 +7,7 @@
 `codeflow portal setup --path <repository-relative-directory>` explicitly
 adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
 portal build requires Node 22.19.0 or newer. The aggregate CI gate runs on Node
-26.4.0 — the presentation renderer's pin — and its full strict target installs, checks, builds, and validates the
+26.4.0, the presentation renderer's pin, and its full strict target installs, checks, builds, and validates the
 dogfood portal; the portal-local `.node-version` and the Windows adapter-test
 lane pin Node 24.18.0.
 The starter is absent from ordinary initialization, materializes offline once at

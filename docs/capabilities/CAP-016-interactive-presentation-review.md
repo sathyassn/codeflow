@@ -1,4 +1,4 @@
-# CAP-016 — interactive-presentation-review
+# CAP-016: interactive-presentation-review
 
 <!-- WHAT layer, graduated from docs/capabilities.md. The registry keeps the
      machine-read yaml block, a summary, and a link here; this file holds the

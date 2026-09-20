@@ -1,4 +1,4 @@
-# Harness posture — autonomy, sandbox, and settings
+# Harness posture: autonomy, sandbox, and settings
 
 <!-- Split out of docs/adoption.md: the runtime posture each harness gets, and
      how far the discipline reaches when the harness is not the one CodeFlow
@@ -9,8 +9,8 @@
 | Harness | What the shipped preset enables | What stays gated |
 |---|---|---|
 | Claude Code | Fail-closed OS sandbox, sandbox-contained Bash, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; unsandboxed retry only when auto-classified for a trusted installed tool that needs host state; auto mode and classifier policy are never taken from the repository |
-| Codex | Guarded workspace permission profile (no legacy `sandbox_mode`), live search, `approval_policy = "never"`, `model_reasoning_effort = "high"`, production `--sandbox danger-full-access`, which turns the OS sandbox off for that process | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own — operations outside the effective sandbox fail instead of asking |
-| Grok Build | Project hooks wired in `.grok/hooks/codeflow.json` — the same `git-guard` and `exec-guard` payload | The hooks load only after the one-time `/hooks-trust` (or `--trust`); the doctor check reports structural wiring, not trust state (ADR-0054) |
+| Codex | Guarded workspace permission profile (no legacy `sandbox_mode`), live search, `approval_policy = "never"`, `model_reasoning_effort = "high"`, production `--sandbox danger-full-access`, which turns the OS sandbox off for that process | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
+| Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload | The hooks load only after the one-time `/hooks-trust` (or `--trust`); the doctor check reports structural wiring, not trust state (ADR-0054) |
 
 These are enabled in runtime settings as well as described in the skills
 (ADR-0025). Approval policy and sandbox authority are separate controls
@@ -110,7 +110,7 @@ distances, so be precise about what a given harness actually gets:
   (`pipeline.workflow.js`) is Claude-Code-only.
 - **A harness codeflow does not specifically integrate** (for example Google's
   Antigravity `agy`) can still receive the git-hook plane + CI because those
-  are harness-agnostic — but does **not** receive the in-session guards, the
+  are harness-agnostic, but it does **not** receive the in-session guards, the
   skills, or (historically verified on `agy` 1.0.15) the `AGENTS.md`
   instructions. Its reliable coverage is the configured, verified hook/CI
   plane, not assumed guidance.
@@ -126,8 +126,8 @@ comes from two layers, and it helps to be precise about which does what.
 
 - **The git-hook plane is harness-agnostic when installed and executed.**
   A Codex `git push --force origin main` against protected `main` is refused by
-  the `pre-push` shim (`codeflow pre-push: BLOCKED — policy rule
-  git.push_to_protected`) exactly as any agent's would be. This needs no Codex
+  the `pre-push` shim, which reports `codeflow pre-push: BLOCKED` against
+  policy rule `git.push_to_protected`, exactly as any agent's would be. This needs no Codex
   configuration, but local hook files and Git configuration remain editable; it
   is not an unbypassable boundary.
   An active prepared-transaction check that cannot read or evaluate its input
@@ -151,7 +151,7 @@ only when that project's `.codex/` layer is trusted. Run `/hooks` inside an
 interactive `codex` session once to trust the CodeFlow hooks. **Historical
 note:** in testing on codex-cli 0.142.5, headless `codex exec` did not run
 project PreToolUse hooks even with `--dangerously-bypass-hook-trust` and the
-layer trusted — so treat the in-session guards as an interactive-session
+layer trusted, so treat the in-session guards as an interactive-session
 safeguard, and rely on the git-hook plane where Git invokes the installed
 hooks. codeflow's own flows no
 longer produce headless runs: ADR-0018 makes cross-model transport
@@ -180,7 +180,7 @@ ADR-0018 prohibits.
 
 ## Verification stamps are historical
 
-These surfaces — hook payload contracts, config schemas — move fast on both
+Hook payload contracts and config schemas move fast on both
 sides, so every stamp below records what was true on its date, not a current
 guarantee. The release checklist ([docs/releasing.md](releasing.md)) re-verifies
 them before each codeflow tag.

@@ -205,7 +205,7 @@ Material work and withdrawals remain blocked while an attempt is unresolved.
   - The PreToolUse payload contract (`git-guard`/`exec-guard`) still matches
     what Claude Code and an interactive Codex session send.
   - The Codex `hooks.json` events still fire as documented, and the `cf-guard`
-    permission-profile keys in `.codex/config.toml` still validate — run
+    permission-profile keys in `.codex/config.toml` still validate. Run
     `codex --strict-config doctor` from a checkout with the shipped
     `.codex/config.toml` in place; `--strict-config` errors out on any field
     the installed Codex no longer recognizes.
@@ -248,7 +248,7 @@ The generated release workflow uses the repository's scoped `GITHUB_TOKEN`; it
 does not provision a PAT or publication credential. Hosted settings can still
 prevent exact-source checks, workflow dispatch, drafts, uploads, or releases.
 Treat a zero-step or permission failure as absent evidence and repair the
-repository setting—never bypass the source and publication guards.
+repository setting; never bypass the source and publication guards.
 
 ### Historical bridge into v3
 
@@ -260,13 +260,13 @@ commit `3c3efdb91009361e18b0fabad699b5e875d4e4dd` and has SHA-256
 The release target and published source agree with each other, not with the
 current tag. The bootstrap records all three facts, does not move the tag, and
 accepts the already-staged `3.0.0` pending section. After that version is
-published, the verified public release—not this bootstrap record—becomes the
+published, the verified public release, not this bootstrap record, becomes the
 automatic baseline.
 
 ## Versioning in a project that consumes codeflow
 
-codeflow gives your repo the *substrate* for clean releases — the commit-msg gate
-enforces Conventional Commits, so your history is SemVer-derivable — but it does
+codeflow gives your repo the *substrate* for clean releases. The commit-msg gate
+enforces Conventional Commits, so your history is SemVer-derivable. It does
 **not** scaffold a release pipeline. Release/version/changelog tooling is
 stack-specific and stays yours to choose. Because your commits are already
 conventional, any of these has clean input:
@@ -279,6 +279,6 @@ conventional, any of these has clean input:
 | Changelog only | `git-cliff` or `conventional-changelog` |
 
 codeflow's job is the discipline; the release mechanism is yours. This split is
-deliberate — release tooling is as stack-specific as a test runner, so codeflow
+deliberate, because release tooling is as stack-specific as a test runner, so codeflow
 records standards and enforces commit hygiene rather than prescribing one
 release tool for every consumer.

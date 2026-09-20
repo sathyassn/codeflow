@@ -1,4 +1,4 @@
-# CAP-010 — duo-model-orchestration
+# CAP-010: duo-model-orchestration
 
 <!-- WHAT layer, graduated from docs/capabilities.md. The registry keeps the
      machine-read yaml block, a summary, and a link here; this file holds the
@@ -42,7 +42,7 @@ fidelity, and directly executes until a matching Claude design route is
 scoped-qualified. Candidate design routes are limited to controlled disposable
 qualification fixtures; scoped-qualified routes execute only exact evidenced
 tuples and never acquire direction or fidelity-approval authority. Another
-family designs only under an explicit task-specific operator override—Claude
+family designs only under an explicit task-specific operator override. Claude
 absence alone is not one. Codex challenges feasibility and fidelity, and both
 approve the exact plan. Review anchors blocking design
 findings in the accepted brief, intent, accessibility target, or observed
@@ -54,7 +54,7 @@ appearance-mode behavior, accessibility, and rendered fidelity
 (ADR-0043, ADR-0051).
 
 Claude Code reaches Codex through the official plugin/app-server. Codex
-App/interactive CLI reaches Claude through Herdr — the named-tab terminal
+App/interactive CLI reaches Claude through Herdr, the named-tab terminal
 host for an interactive peer CLI, with tmux as the degraded host. Grok Build
 reaches Codex through the official `codex` CLI and local app-server daemon,
 and Claude through Herdr plus schema-v2. Grok-hosted lane canaries are in

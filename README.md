@@ -1,7 +1,7 @@
 # codeflow
 
 The AI-development discipline layer you install into any repo: one Rust binary
-(`codeflow`) that scaffolds, enforces, verifies, and remembers — while Claude
+(`codeflow`) that scaffolds, enforces, verifies, and remembers, while Claude
 Code (or any harness) does the developing. Policy lives in one config
 (`.codeflow/policy.json`) and can reach four complementary protection planes.
 Installed files alone do not make those planes effective; verify the relevant
@@ -9,18 +9,18 @@ hooks, harness integration, CI requirements, and remote rules.
 
 ## Why codeflow
 
-- **Integrated, proportional discipline** — codeflow connects a living
+- **Integrated, proportional discipline.** codeflow connects a living
   `docs/capabilities.md` registry, architecture and decision records, shared
   policy, staged workflows, and project recall. Full tier adds durable epics,
   tasks, and specs plus referential checks for work that outlives sessions;
   accepted external trackers and approved plans keep their authority. Trivial
   or conversational work needs no new artifact, and non-trivial work uses only
   the stages its outcome warrants.
-- **Durable, conditional recall** — the ledger and repository records provide
+- **Durable, conditional recall.** The ledger and repository records provide
   cross-session traceability. Session summaries are captured automatically only
   when a supported harness's SessionEnd hook is installed and actually executes;
   without that event, externalize decisions, progress, and evidence as you go.
-- **When not to use it** — a scratch or throwaway repo (`--minimal`, or skip
+- **When not to use it.** A scratch or throwaway repo (`--minimal`, or skip
   it), or a team that wants a full workflow framework rather than guardrails;
   codeflow is deliberately not a harness, agent framework, or runtime model
   router. Its standard/full scaffold does provide a portable Claude+Codex
@@ -109,7 +109,7 @@ path is [docs/model-upgrades.md](docs/model-upgrades.md).
 | `task new` | Allocate the next independent `TSK-NNN` under an epic or with an explicit standalone rationale |
 | `work start <task-id>` | Read-only proof that durable planning is anchored and its parent/spec/dependency graph is ready |
 | `estimate check <forecast.json>` | Read-only check of a project-owned forecast's explicit allocations and pinned evidence; schedules nothing, writes nothing, and makes no estimate itself; `--json` emits the versioned report (ADR-0057) |
-| `delegate` | Durable delegate-turn lifecycle: `init` an owner-only run, `arm` one prompt, `wait` for ready/accepted/terminal — the host launches the harness and delivers the prompt (ADR-0036) |
+| `delegate` | Durable delegate-turn lifecycle: `init` an owner-only run, `arm` one prompt, `wait` for ready/accepted/terminal. The host launches the harness and delivers the prompt (ADR-0036) |
 
 `codeflow test setup` with no options only fills an absent or empty config from
 root stack markers; for templates, explicit targets, replacement, and
@@ -120,7 +120,7 @@ monorepos see
 
 One policy (`.codeflow/policy.json`), four complementary planes: git client
 hooks, in-session PreToolUse guards (`git-guard`, `exec-guard`), CI, and remote
-branch protection. Installed files are not coverage — verify hook execution,
+branch protection. Installed files are not coverage. Verify hook execution,
 harness trust, required CI results, and actual remote rules before claiming a
 plane effective. Protected-branch merges land via a PR **merged by a human**,
 or `codeflow integrate`; an agent never merges into protected. A human can
@@ -130,15 +130,15 @@ detail: [the enforcement matrix](docs/adoption.md#enforcement-planes--who-catche
 
 ## Docs
 
-- [docs/adoption.md](docs/adoption.md) — tiers, install, ownership, the daily flow, the enforcement matrix
-- [docs/harness-posture.md](docs/harness-posture.md) — autonomy, sandbox, and harness settings per harness
-- [docs/model-upgrades.md](docs/model-upgrades.md) — qualifying a new model, harness, or permission profile
-- [docs/architecture.md](docs/architecture.md) — how the binary and scaffold are built
-- [docs/product.md](docs/product.md) — what codeflow is for and its non-goals
-- [docs/capabilities.md](docs/capabilities.md) — the CAP-### registry of what the system does
-- [docs/releasing.md](docs/releasing.md) — the release runbook, and versioning in a project that consumes codeflow
-- [docs/release-checklist.md](docs/release-checklist.md) — evidence required for every release
-- [docs/decisions/](docs/decisions/) — ADRs (the record of why)
+- [docs/adoption.md](docs/adoption.md): tiers, install, ownership, the daily flow, the enforcement matrix
+- [docs/harness-posture.md](docs/harness-posture.md): autonomy, sandbox, and harness settings per harness
+- [docs/model-upgrades.md](docs/model-upgrades.md): qualifying a new model, harness, or permission profile
+- [docs/architecture.md](docs/architecture.md): how the binary and scaffold are built
+- [docs/product.md](docs/product.md): what codeflow is for and its non-goals
+- [docs/capabilities.md](docs/capabilities.md): the CAP-### registry of what the system does
+- [docs/releasing.md](docs/releasing.md): the release runbook, and versioning in a project that consumes codeflow
+- [docs/release-checklist.md](docs/release-checklist.md): evidence required for every release
+- [docs/decisions/](docs/decisions/): ADRs (the record of why)
 
 ### Repository guide
 
@@ -163,7 +163,7 @@ for the check, validate, preview, and cleanup details.
 
 ## Contributing
 
-Contributions are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). In short:
+Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). In short:
 format, tests, clippy, and rustdoc green; conventional commits; no AI
 attribution (codeflow's own hooks enforce it). Please read
 [SECURITY.md](SECURITY.md) before reporting a vulnerability, and be mindful of the

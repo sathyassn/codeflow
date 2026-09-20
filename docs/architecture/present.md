@@ -1,4 +1,4 @@
-# present — bounded review sessions
+# present: bounded review sessions
 
 <!-- HOW layer. Graduated from docs/architecture.md per its own rule: the
      area outgrew the single file; a one-line pointer remains behind.
@@ -8,7 +8,7 @@
 
 A present session is one bounded, owner-private review: an agent authors the
 catalog document, Rust owns every durable byte, and the browser is a
-disposable isolated viewer — never an authority.
+disposable isolated viewer, never an authority.
 
 ```cf-stage
 agent catalog | validated document JSON @accent
@@ -18,7 +18,7 @@ rust service | validation · revisions · feedback · retention · export
 isolated browser | one session · one profile · one single-use bootstrap
 ->
 feedback envelope | append-only, consumed by any harness @positive
-caption: the browser is a viewer — durable authority never leaves rust
+caption: the browser is a viewer, durable authority never leaves rust
 ```
 
 The runtime owns chrome and Comment; agents author only this session's
@@ -36,7 +36,7 @@ durable authority | versioned document · immutable revisions · feedback @accen
 ->
 derived runtime root | bootstrap · ready · launch-recovery controls
 ->
-browser profile | cache only — never durable authority
+browser profile | cache only, never durable authority
 caption: revisions and feedback are the only quota-governed history
 ```
 

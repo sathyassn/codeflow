@@ -1,4 +1,4 @@
-# CAP-013 — model-binding-evaluation
+# CAP-013: model-binding-evaluation
 
 <!-- WHAT layer, graduated from docs/capabilities.md. The registry keeps the
      machine-read yaml block, a summary, and a link here; this file holds the
