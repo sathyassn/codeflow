@@ -368,7 +368,10 @@ html[data-cfp-tabs="on"] .sl-markdown-content .portal-altitude > :is(.sl-heading
    in left-to-right stages, --cf-* tokens only. ASCII fences stay the
    fallback for shapes this grammar cannot express. */
 .sl-markdown-content .portal-stage { margin: 1.5rem 0; max-width: none; }
-.portal-stage-flow { display: flex; align-items: center; gap: 0.875rem; }
+/* A five node stage at 1280 must not squeeze a node below its minimum
+   width: the row wraps instead, and a long label breaks between words
+   rather than mid-token. */
+.portal-stage-flow { display: flex; align-items: center; gap: 0.875rem; flex-wrap: wrap; row-gap: 0.75rem; }
 .portal-stage-group {
   list-style: none;
   display: flex;
@@ -377,8 +380,8 @@ html[data-cfp-tabs="on"] .sl-markdown-content .portal-altitude > :is(.sl-heading
   gap: 0.5rem;
   margin: 0 !important;
   padding: 0;
-  flex: 1 1 0;
-  min-width: 0;
+  flex: 1 1 8rem;
+  min-inline-size: 8rem;
 }
 .sl-markdown-content .portal-stage-node {
   border: 1.5px solid var(--cf-diagram-line);
@@ -395,7 +398,9 @@ html[data-cfp-tabs="on"] .sl-markdown-content .portal-altitude > :is(.sl-heading
   letter-spacing: 0.07em;
   text-transform: uppercase;
   color: var(--cf-text);
-  overflow-wrap: anywhere;
+  overflow-wrap: break-word;
+  word-break: normal;
+  hyphens: none;
 }
 .portal-stage-node .s {
   display: block;
@@ -504,54 +509,66 @@ html[data-cfp-tabs="on"] .sl-markdown-content .portal-altitude > :is(.sl-heading
     position: fixed;
   }
 }
-.portal-journey {
-  counter-reset: portal-step;
-  display: grid;
-  gap: 0;
+/* The home reading path is the stage figure with one linked step per
+   configured layer, so it inherits the stage wrapping and stacking. */
+.portal-reading-path { margin-block: 2.5rem 1rem; }
+.portal-reading-path .portal-stage-node { padding: 0; }
+.portal-reading-path .portal-stage-node > a {
+  display: block;
+  padding: 0.75rem 0.875rem;
+  text-decoration: none;
+  color: inherit;
+}
+.portal-reading-path .portal-stage-node > a:hover .k { color: var(--cf-accent-strong); }
+
+/* A layer landing shows the order to read it in: one numbered line per
+   page, top to bottom, at every width. */
+.sl-markdown-content .portal-reading-order { margin: 1.5rem 0; max-width: none; }
+.portal-reading-order > ol {
   list-style: none;
-  margin: 3rem auto;
-  max-width: 58rem;
+  display: grid;
+  gap: 2px;
+  margin: 0 !important;
   padding: 0;
 }
-.portal-journey li { position: relative; }
-.portal-journey li:not(:last-child)::after {
-  background: var(--cf-border);
-  content: "";
-  height: 2rem;
-  inset-block-end: -1rem;
-  inset-inline-start: 2rem;
-  position: absolute;
-  width: 1px;
-  z-index: 1;
-}
-.portal-journey a {
-  align-items: baseline;
-  border-block-start: 1px solid var(--cf-border);
+.portal-reading-order > ol > li { margin: 0; }
+.portal-reading-order a {
   display: grid;
-  gap: 0.5rem 1rem;
-  grid-template-columns: 2.5rem minmax(8rem, 0.6fr) minmax(14rem, 1.6fr) auto;
-  padding: 1.4rem 0;
+  grid-template-columns: 2.5rem 1fr;
+  align-items: baseline;
+  gap: 0.75rem;
+  border-block-end: 1px solid var(--cf-border);
+  padding: 0.7rem 0.25rem;
   text-decoration: none;
+  color: inherit;
 }
-.portal-journey span {
+.portal-reading-order a:hover { background: var(--cf-surface); }
+.portal-reading-order .n {
   color: var(--cf-accent);
   font-family: var(--cf-font-mono);
+  font-size: var(--cf-fs-micro);
   font-variant-numeric: tabular-nums;
 }
-.portal-journey strong { color: var(--cf-text); font-size: 1.125rem; font-weight: 500; letter-spacing: -0.01em; }
-.portal-journey small { color: var(--cf-text-muted); line-height: 1.5; }
-.portal-journey em {
-  color: var(--cf-text-muted);
+.portal-reading-order .t { color: var(--cf-text); line-height: 1.45; overflow-wrap: break-word; }
+.portal-reading-order a:hover .t { color: var(--cf-accent-strong); }
+.portal-reading-order figcaption {
+  margin-top: 0.75rem;
   font-family: var(--cf-font-mono);
   font-size: var(--cf-fs-micro);
-  font-style: normal;
-  letter-spacing: 0.03em;
-  white-space: nowrap;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  color: var(--cf-text-muted);
 }
-.portal-journey a:hover strong { color: var(--cf-accent-strong); }
-@media (max-width: 42rem) {
-  .portal-journey a { grid-template-columns: 2.5rem 1fr; }
-  .portal-journey small, .portal-journey em { grid-column: 2; }
+
+/* The definition table that replaces a capability's YAML fence. */
+.sl-markdown-content .portal-definition table { margin-block: 0.75rem 1.5rem; }
+.sl-markdown-content .portal-definition td:first-child {
+  font-family: var(--cf-font-mono);
+  font-size: var(--cf-fs-micro);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--cf-text-muted);
+  white-space: nowrap;
 }
 
 a:focus-visible, button:focus-visible { outline: 2px solid var(--cf-focus); outline-offset: 3px; }
