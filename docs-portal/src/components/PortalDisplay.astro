@@ -41,9 +41,9 @@
     <div>
       <div class="lbl">Palette<span class="d">colour family</span></div>
       <div class="pills" data-group="skin">
-        <button type="button" data-value="instrument" data-testid="skin-instrument">Neutral</button>
-        <button type="button" data-value="editorial" data-testid="skin-editorial">Cool</button>
-        <button type="button" data-value="ink" data-testid="skin-ink">Warm</button>
+        <button type="button" data-value="instrument" data-testid="skin-instrument"><span class="sw" aria-hidden="true"><i class="sw-canvas"></i><i class="sw-accent"></i></span>Neutral</button>
+        <button type="button" data-value="editorial" data-testid="skin-editorial"><span class="sw" aria-hidden="true"><i class="sw-canvas"></i><i class="sw-accent"></i></span>Cool</button>
+        <button type="button" data-value="ink" data-testid="skin-ink"><span class="sw" aria-hidden="true"><i class="sw-canvas"></i><i class="sw-accent"></i></span>Warm</button>
       </div>
     </div>
     <div>
@@ -100,6 +100,23 @@
           root.dataset.theme =
             state.appearance === "auto" ? (media.matches ? "dark" : "light") : state.appearance;
         };
+        // Each palette pill shows the canvas and accent of the skin it
+        // selects, read from the live custom properties rather than from a
+        // second hard coded copy of the token table: the root attribute is
+        // moved, the computed value is read, and the attribute is put back
+        // within the same task, so no intermediate state is ever painted.
+        const paintSwatches = () => {
+          const group = panel.querySelector<HTMLElement>('.pills[data-group="skin"]');
+          if (!group) return;
+          const computed = getComputedStyle(root);
+          const current = state.skin;
+          for (const pill of group.querySelectorAll<HTMLButtonElement>("button")) {
+            root.dataset.cfpSkin = pill.dataset.value!;
+            pill.style.setProperty("--pill-canvas", computed.getPropertyValue("--cf-canvas").trim());
+            pill.style.setProperty("--pill-accent", computed.getPropertyValue("--cf-accent").trim());
+          }
+          root.dataset.cfpSkin = current;
+        };
         const apply = () => {
           root.dataset.cfpTypeface = state.typeface;
           root.dataset.cfpScale = state.scale;
@@ -111,6 +128,7 @@
               pill.setAttribute("aria-pressed", String(pill.dataset.value === state[name]));
             }
           }
+          paintSwatches();
         };
         media.addEventListener("change", () => {
           if (state.appearance === "auto") applyAppearance();
