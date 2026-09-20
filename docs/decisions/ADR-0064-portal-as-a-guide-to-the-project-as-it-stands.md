@@ -36,6 +36,11 @@ guide doctrine. Pages that rely on a decision cite it by id and link to the
 repository file. ADR-0048, ADR-0058 and ADR-0063 stand unchanged; SPC-010 is
 withdrawn.
 
+Correction, 2026-09-20 (TSK-051): the starter default is not free of the
+switch. It ships the switch off with one pointer at `docs/decisions`, so a
+scaffolded portal points at the decisions folder instead of publishing it.
+The decision above stands unchanged.
+
 ## Consequences
 
 The adapter gains a pointer page and a records switch and loses the composed

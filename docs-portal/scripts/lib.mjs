@@ -102,7 +102,7 @@ export function validatePageMetadata(frontmatter, sourcePath) {
 
 export function rewriteRepositoryMarkdown(body, {
   sourcePath, sourceRoutes, repositoryFiles = new Map(), repositoryDirectories = new Set(), pinnedSourceUrl = () => null,
-  commit = "", base, strictTargets, mediaReferences, sourceAnchors = new Map(),
+  commit = "", base, strictTargets, mediaReferences, sourceAnchors = new Map(), recordTargets = new Map(), selfRoute = null,
 }) {
   const tree = markdownTree(body);
   const referenceKinds = new Map();
@@ -147,14 +147,22 @@ export function rewriteRepositoryMarkdown(body, {
       return;
     }
     if (node.type !== "text" || ancestors.some((ancestor) => ["link", "linkReference", "definition", "code", "inlineCode", "html"].includes(ancestor.type))) return;
+    // A preview tooltip inside a heading would join the heading text, so the
+    // slugged id and the "On this page" entry would both swallow the page
+    // title and source path it carries. Headings keep the plain link.
+    const inHeading = ancestors.some((ancestor) => ancestor.type === "heading");
     const children = [];
     let cursor = 0;
     for (const match of node.value.matchAll(/\b(?:ADR|EPC|SPC|TSK|CAP)-\d{3,}(?:-\d{3,})?\b/g)) {
       if (!strictId(match[0])) continue;
       if (match.index > cursor) children.push({ type: "text", value: node.value.slice(cursor, match.index) });
       const target = strictTargets.get(match[0]);
-      if (!target) children.push({ type: "text", value: match[0] });
-      else children.push({ type: "html", value: strictIdPreview(match[0], target, `${sha256(sourcePath).slice(0, 10)}-${previewSequence++}`) });
+      const record = target ? null : recordTargets.get(match[0]);
+      if (target && inHeading && target.route === selfRoute) children.push({ type: "text", value: match[0] });
+      else if (target && inHeading) children.push({ type: "html", value: `<a href="${escapeGeneratedHtml(target.route)}">${match[0]}</a>` });
+      else if (target) children.push({ type: "html", value: strictIdPreview(match[0], target, `${sha256(sourcePath).slice(0, 10)}-${previewSequence++}`) });
+      else if (record) children.push({ type: "html", value: recordReferenceLink(match[0], record) });
+      else children.push({ type: "text", value: match[0] });
       cursor = match.index + match[0].length;
     }
     if (!children.length) return;
@@ -253,6 +261,70 @@ export function renderStageFences(markdown, context = "cf-stage") {
     changed = true;
   });
   return changed ? stringifyMarkdown(tree) : markdown;
+}
+
+// Capability registry fences (ADR-0064). The canonical registry declares one
+// YAML block per capability. The guide renders those blocks as structure: a
+// generated summary table at the top of the page and a compact definition
+// table where each fence stood, never a raw code block a reader must parse.
+const CAPABILITY_FIELD_LIMIT = 16;
+const CAPABILITY_VALUE_LIMIT = 1024;
+
+export function capabilityFenceRecords(markdown, sourcePath = "capability registry") {
+  const records = [];
+  for (const node of markdownNodes(markdownTree(markdown), "code")) {
+    const record = capabilityRecord(node, sourcePath);
+    if (record !== null) records.push(record);
+  }
+  return records;
+}
+
+export function renderCapabilityFences(markdown, escapeCell, sourcePath = "capability registry") {
+  const tree = markdownTree(markdown);
+  let changed = false;
+  visitMarkdown(tree, (node, parent, index) => {
+    if (node.type !== "code") return;
+    const record = capabilityRecord(node, sourcePath);
+    if (record === null) return;
+    const rows = record.fields.map(([field, value]) => `| ${escapeCell(field)} | ${escapeCell(value)} |`);
+    parent.children[index] = { type: "html", value: `<div class="portal-definition">\n\n| Field | Value |\n|---|---|\n${rows.join("\n")}\n\n</div>` };
+    changed = true;
+  });
+  return changed ? stringifyMarkdown(tree) : markdown;
+}
+
+// The generated summary replaces the hand written registry table when the
+// source carries one, and otherwise opens the page.
+export function placeCapabilityTable(markdown, generated) {
+  if (generated === null) return markdown;
+  const tree = markdownTree(markdown);
+  const replacement = markdownTree(generated).children;
+  const index = tree.children.findIndex((node) => node.type === "table" && visibleNodeText(node.children?.[0]?.children?.[0] ?? {}).trim().toLowerCase() === "capability");
+  tree.children.splice(index < 0 ? 0 : index, index < 0 ? 0 : 1, ...replacement);
+  return stringifyMarkdown(tree);
+}
+
+function capabilityRecord(node, sourcePath) {
+  if (node.type !== "code" || !/^ya?ml$/i.test(node.lang ?? "")) return null;
+  let parsed;
+  try { parsed = YAML.parse(node.value); } catch { return null; }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
+  const id = parsed.id;
+  if (typeof id !== "string" || !/^CAP-\d{3,}$/.test(id)) return null;
+  const entries = Object.entries(parsed);
+  if (entries.length > CAPABILITY_FIELD_LIMIT) throw new Error(`${sourcePath}: capability ${id} declares more than ${CAPABILITY_FIELD_LIMIT} fields`);
+  const fields = entries.map(([field, value]) => [field, capabilityValueText(value)]);
+  if (fields.some(([field, value]) => field.length > 64 || value.length > CAPABILITY_VALUE_LIMIT)) {
+    throw new Error(`${sourcePath}: capability ${id} declares a field beyond the rendered bounds`);
+  }
+  return { id, fields, lookup: new Map(fields) };
+}
+
+function capabilityValueText(value) {
+  if (Array.isArray(value)) return value.map((item) => capabilityValueText(item)).join(", ");
+  if (value === null || value === undefined) return "none";
+  if (typeof value === "object") return Object.entries(value).map(([key, item]) => `${key}: ${capabilityValueText(item)}`).join("; ");
+  return String(value).replace(/\s+/g, " ").trim();
 }
 
 const ALTITUDE_LAYERS = ["concept", "architecture", "technical"];
@@ -416,6 +488,13 @@ function sourceReferenceNode(node, sourcePath, commit) {
   };
 }
 
+// An id whose record is not a portal source is never a dangling link: it
+// resolves to the repository file at the built commit, or to the pointer page
+// for its folder when the portal has no provider URL to pin.
+function recordReferenceLink(id, record) {
+  return `<a class="portal-record-link" href="${escapeGeneratedHtml(record.href)}" title="${escapeGeneratedHtml(record.title)}">${id}</a>`;
+}
+
 function strictIdPreview(id, target, suffix) {
   const statusText = target.status;
   const status = typeof statusText === "string" && statusText ? `<span>Status: ${escapeGeneratedHtml(statusText)}</span>` : "";
@@ -431,6 +510,24 @@ export function amendmentHeadings(markdown) {
     if (match) headings.push(match[1].trim());
   }
   return headings;
+}
+
+// Record files are found by the id their filename declares, so a template, a
+// README or any other note in the folder is counted by nobody and linked by
+// nobody. The scan reads the committed inventory, never the working tree.
+export function recordFilesFor(pointer, repositoryFiles) {
+  const prefix = pointer.id_prefix;
+  const pattern = prefix === "TSK"
+    ? /^(TSK-\d{3,}(?:-\d{3,})?)(?:-[^/]*)?\.md$/
+    : new RegExp(`^(${prefix}-\\d{3,})(?:-[^/]*)?\\.md$`);
+  const found = new Map();
+  for (const sourcePath of repositoryFiles.keys()) {
+    if (!sourcePath.startsWith(`${pointer.folder}/`)) continue;
+    const match = path.posix.basename(sourcePath).match(pattern);
+    if (!match || !strictId(match[1]) || found.has(match[1])) continue;
+    found.set(match[1], { id: match[1], path: sourcePath });
+  }
+  return [...found.values()].sort((left, right) => compareDeterministicText(left.id, right.id));
 }
 
 export function strictId(value) {
@@ -552,7 +649,7 @@ export function withBase(base, route) {
 
 export function validatePortalConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("portal.config.json: expected an object");
-  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "base"]);
+  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "records", "base"]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`portal.config.json: unknown key ${key}`);
   if (value.schema_version !== 1) throw new Error("portal.config.json: unsupported schema_version");
   boundedString(value.title, "title", 1, 120);
@@ -585,7 +682,47 @@ export function validatePortalConfig(value) {
     if (layer.fallback === true) fallback += 1;
   }
   if (fallback !== 1) throw new Error("portal.config.json: exactly one layer must be the fallback");
+  value.records = validateRecordsSwitch(value.records, value.layers);
   return value;
+}
+
+// The records switch (ADR-0064). Off, the configured pointer folders leave the
+// page set entirely and one generated page points at the folders instead. On,
+// a project takes the lookup form for those sources and steps outside the
+// guide doctrine, so it declares no pointers.
+export const RECORD_ID_PREFIXES = Object.freeze(["ADR", "CAP", "EPC", "SPC", "TSK"]);
+
+export function validateRecordsSwitch(value, layers) {
+  if (value === undefined || value === null) return { enabled: false, layer: null, pointers: [] };
+  if (typeof value !== "object" || Array.isArray(value)) throw new Error("portal.config.json: records must be an object");
+  for (const key of Object.keys(value)) if (!["enabled", "layer", "pointers"].includes(key)) throw new Error(`portal.config.json: unknown records key ${key}`);
+  if (typeof value.enabled !== "boolean") throw new Error("portal.config.json: records.enabled must be boolean");
+  const pointers = value.pointers ?? [];
+  if (!Array.isArray(pointers) || pointers.length > 16) throw new Error("portal.config.json: records.pointers must be 0 to 16 folders");
+  const folders = new Set();
+  for (const pointer of pointers) {
+    if (!pointer || typeof pointer !== "object" || Array.isArray(pointer)) throw new Error("portal.config.json: each records pointer must be an object");
+    for (const key of Object.keys(pointer)) if (!["folder", "id_prefix", "purpose"].includes(key)) throw new Error(`portal.config.json: unknown records pointer key ${key}`);
+    safeRelative(pointer.folder, "records pointer folder");
+    if (!RECORD_ID_PREFIXES.includes(pointer.id_prefix)) throw new Error(`portal.config.json: records pointer id_prefix must be one of ${RECORD_ID_PREFIXES.join(", ")}`);
+    boundedString(pointer.purpose, "records pointer purpose", 1, 200);
+    const key = portablePathKey(pointer.folder, "records pointer folder");
+    if (folders.has(key)) throw new Error(`portal.config.json: duplicate records pointer folder ${pointer.folder}`);
+    folders.add(key);
+  }
+  const layer = value.layer ?? null;
+  if (layer !== null && !layers.some((item) => item.id === layer)) throw new Error(`portal.config.json: records.layer must name a configured layer: ${layer}`);
+  if (pointers.length && value.enabled) throw new Error("portal.config.json: records pointers describe folders the portal does not publish, so they need records.enabled false");
+  if (pointers.length && layer === null) throw new Error("portal.config.json: records pointers need records.layer to place their pointer page");
+  if (!value.enabled) {
+    for (const item of layers) {
+      const owned = [...(item.paths ?? []), ...(item.prefixes ?? [])];
+      if (owned.length && owned.every((entry) => pointers.some((pointer) => entry === pointer.folder || entry.startsWith(`${pointer.folder}/`)))) {
+        throw new Error(`portal.config.json: layer ${item.id} publishes only record folders while records are disabled`);
+      }
+    }
+  }
+  return { enabled: value.enabled, layer, pointers: pointers.map((pointer) => ({ folder: pointer.folder, id_prefix: pointer.id_prefix, purpose: pointer.purpose })) };
 }
 
 export function validRepositoryUrl(value) {

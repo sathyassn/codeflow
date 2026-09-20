@@ -6,7 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
+import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recordFilesFor, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validateRecordsSwitch, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
@@ -290,6 +290,33 @@ test("Astro preserves the explicit canonical route in output and links", { skip:
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+test("the rendered sidebar keeps the landing order when pages nest", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const configPath = path.join(root, "portal.config.json");
+    const config = JSON.parse(await readFile(configPath, "utf8"));
+    config.layers[0] = { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md", "docs/topics.md", "docs/adoption.md"], prefixes: ["docs/topics"] };
+    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
+    await mkdir(path.join(root, "docs/topics"));
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nFirst.\n");
+    await writeFile(path.join(root, "docs/topics.md"), "# Topics\n\nA parent page.\n");
+    await writeFile(path.join(root, "docs/topics/one.md"), "# One\n\nNested beneath Topics.\n");
+    await writeFile(path.join(root, "docs/adoption.md"), "# Adoption\n\nConfigured after the parent.\n");
+    commitFixture(root, "add a parent page with a nested page between configured pages");
+    runLocalAdapter(root);
+    const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
+    assert.equal(result.status, 0, result.stderr || result.stdout);
+    const landing = await readFile(path.join(root, "src/content/docs/orient/index.md"), "utf8");
+    assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Product", "Topics", "One", "Adoption"]);
+    const html = await readFile(path.join(root, "dist/orient/index.html"), "utf8");
+    const start = html.indexOf('<nav class="sidebar');
+    assert.notEqual(start, -1);
+    const sidebar = html.slice(start, html.indexOf("</nav>", start));
+    const routes = [...new Set([...sidebar.matchAll(/href="(\/orient\/[^"]*)"/g)].map((match) => match[1]))];
+    assert.deepEqual(routes, ["/orient/", "/orient/product/", "/orient/topics/", "/orient/topics/one/", "/orient/adoption/"]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
 test("tool output roots never traverse external symlinks", { skip: process.platform === "win32" }, async () => {
   const { symlink } = await import("node:fs/promises");
   const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-output-root-"));
@@ -479,7 +506,7 @@ test("the AST rewrite escapes raw HTML while preserving code and GFM", () => {
   assert.match(rendered, /&lt;script&gt;/);
   assert.match(rendered, /`<tag>&`/);
   assert.match(rendered, /<div>example<\/div>/);
-  assert.match(rendered, /\n\n## <span class="portal-id-preview">/);
+  assert.match(rendered, /\n\n## <a href="\/system\/decision\/">ADR-0048<\/a> outcome/);
   assert.match(rendered, /```\n\nAfter the fence\./);
 });
 
@@ -1666,7 +1693,7 @@ test("the adapter emits one bounded non-searchable current-source stub without a
     assert.equal("last_good_source_sha256" in stale, false);
     assert.deepEqual(target.backlinks, []);
     const targetOutput = await readFile(path.join(root, "src/content/docs/reference/target.md"), "utf8");
-    assert.match(targetOutput, /TSK-101 — stale/);
+    assert.match(targetOutput, /TSK-101 \(stale\)/);
     assert.doesNotMatch(targetOutput, /### Inverse links/);
     const landing = await readFile(path.join(root, "src/content/docs/reference/index.md"), "utf8");
     assert.doesNotMatch(landing, /Guide/);
@@ -1776,6 +1803,16 @@ test("HEAD cleanliness exempts ignored untracked litter and nothing else", async
     await writeFile(path.join(untracked, "docs/draft.md"), "# Draft\n");
     assert.match(runAdapter(untracked, false).stderr, /must match HEAD exactly: docs\/draft\.md/);
   } finally { await rm(untracked, { recursive: true, force: true }); }
+
+  const repositoryExcluded = await portalFixture();
+  try {
+    await writeFile(path.join(repositoryExcluded, "docs/guide.md"), "# Guide\n");
+    commitFixture(repositoryExcluded, "commit a source root before a repository exclude file matches a new source");
+    await writeFile(path.join(repositoryExcluded, ".git/info/exclude"), "docs/draft.md\n");
+    await writeFile(path.join(repositoryExcluded, "docs/draft.md"), "# Draft\n");
+    assert.match(git(repositoryExcluded, ["status", "--porcelain=v1", "--ignored=matching", "--", "docs"]), /^!! docs\/draft\.md$/m);
+    assert.match(runAdapter(repositoryExcluded, false).stderr, /must match HEAD exactly: docs\/draft\.md/);
+  } finally { await rm(repositoryExcluded, { recursive: true, force: true }); }
 
   const userIgnored = await portalFixture();
   try {
@@ -2122,6 +2159,312 @@ test("the AST adapter fails broken documents and repository traversal", async ()
   }
 });
 
+test("the home page renders the configured layers as one reading path figure", async () => {
+  const root = await portalFixture();
+  try {
+    await configureFixture(root, {
+      layers: [
+        { id: "orient", label: "Orient", description: "Purpose and capabilities.", paths: ["docs/product.md"] },
+        { id: "system", label: "System", description: "Architecture in effect.", prefixes: ["docs/architecture"] },
+        { id: "operate", label: "Operate", description: "Running the system.", prefixes: ["docs/operate"] },
+        { id: "reference", label: "Reference", description: "Lookups and evidence.", fallback: true },
+      ],
+    });
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nWhat it is.\n");
+    commitFixture(root, "configure four layers");
+    runAdapter(root);
+    const index = await readFile(path.join(root, "src/content/docs/index.md"), "utf8");
+    assert.deepEqual([...index.matchAll(/<span class="k">([^<]+)<\/span>/g)].map((match) => match[1]), ["Orient", "System", "Operate", "Reference"]);
+    assert.deepEqual([...index.matchAll(/<span class="s">([^<]+)<\/span>/g)].map((match) => match[1]), ["Purpose and capabilities.", "Architecture in effect.", "Running the system.", "Lookups and evidence."]);
+    assert.match(index, /This guide reads in 4 steps, from Orient to Reference/);
+    assert.match(index, /Start with \[Orient\]\(\/orient\/\)/);
+    assert.equal(index.includes("portal-journey"), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("a layer landing lists its pages in configured reading order", async () => {
+  const root = await portalFixture();
+  try {
+    await configureFixture(root, {
+      layers: [
+        { id: "orient", label: "Orient", description: "Purpose first.", paths: ["docs/zulu.md", "docs/alpha.md"], prefixes: ["docs/notes", "docs/zulu"] },
+        { id: "system", label: "System", description: "System", prefixes: ["docs/architecture"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+    });
+    await writeFile(path.join(root, "docs/zulu.md"), "# Zulu\n\nConfigured first.\n");
+    await writeFile(path.join(root, "docs/alpha.md"), "# Alpha\n\nConfigured second.\n");
+    await mkdir(path.join(root, "docs/notes"));
+    await mkdir(path.join(root, "docs/zulu"));
+    await writeFile(path.join(root, "docs/notes/swept.md"), "# Swept\n\nMatched by prefix.\n");
+    await writeFile(path.join(root, "docs/zulu/deep.md"), "# Deep\n\nNested beneath Zulu.\n");
+    commitFixture(root, "add configured, nested and swept sources");
+    runAdapter(root);
+    const landing = await readFile(path.join(root, "src/content/docs/orient/index.md"), "utf8");
+    assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Zulu", "Deep", "Alpha", "Swept"]);
+    assert.match(landing, /Purpose first\./);
+    assert.match(landing, /Start with \[Zulu\]\(\/orient\/zulu\/\); the sidebar follows the same order/);
+    assert.equal(/^- \[/m.test(landing), false);
+    const order = async (file) => Number((await readFile(path.join(root, "src/content/docs", file), "utf8")).match(/^sidebar:\n  order: (\d+)$/m)[1]);
+    assert.deepEqual(await Promise.all(["orient/index.md", "orient/zulu.md", "orient/zulu/deep.md", "orient/alpha.md", "orient/notes/swept.md"].map(order)), [0, 1, 2, 3, 4]);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("capability fences render as generated tables and never as raw YAML", async () => {
+  const root = await portalFixture();
+  try {
+    await writeFile(path.join(root, "docs/capabilities.md"), [
+      "# Capabilities",
+      "",
+      "| Capability | Name | Area | Status | Epics | Purpose |",
+      "|---|---|---|---|---|---|",
+      "| CAP-001 | first | engine | shipped | none | hand written |",
+      "",
+      "## CAP-001: first",
+      "",
+      "```yaml",
+      "id: CAP-001",
+      "name: first",
+      "area: engine",
+      "status: shipped",
+      "verified_by: [\"cargo test one\"]",
+      "```",
+      "",
+      "The first capability.",
+      "",
+      "## CAP-002: second",
+      "",
+      "```yaml",
+      "id: CAP-002",
+      "name: second",
+      "area: scaffold",
+      "status: building",
+      "```",
+      "",
+      "The second capability.",
+      "",
+    ].join("\n"));
+    commitFixture(root, "add a capability registry");
+    runAdapter(root);
+    const page = (await readFile(path.join(root, "src/content/docs/reference/capabilities.md"), "utf8")).replace(/[ \t]+/g, " ").replace(/-+ \|/g, "--- |");
+    assert.match(page, /\| Capability \| Name \| Area \| Status \|/);
+    assert.match(page, /\| CAP-001 \| first \| engine \| shipped \|/);
+    assert.match(page, /\| CAP-002 \| second \| scaffold \| building \|/);
+    assert.equal(page.includes("hand written"), false);
+    assert.equal(page.includes("```yaml"), false);
+    assert.equal(page.match(/portal-definition/g).length, 2);
+    assert.match(page, /\| verified\\_by \| cargo test one \|/);
+    assert.match(page, /^## CAP-001: first$/m);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the records switch drops record sources and points at their folders", async () => {
+  const root = await portalFixture();
+  try {
+    await configureFixture(root, {
+      repository_url: "https://github.com/example/repo",
+      layers: [
+        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+        { id: "system", label: "System", description: "System", prefixes: ["docs/architecture"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+      records: {
+        enabled: false,
+        layer: "system",
+        pointers: [
+          { folder: "docs/decisions", id_prefix: "ADR", purpose: "Accepted decisions." },
+          { folder: "project-management/epics", id_prefix: "EPC", purpose: "Bodies of work." },
+          { folder: "project-management/tasks", id_prefix: "TSK", purpose: "Units of work." },
+          { folder: "project-management/specs", id_prefix: "SPC", purpose: "Planning inputs." },
+        ],
+      },
+    });
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    await mkdir(path.join(root, "project-management/epics"), { recursive: true });
+    await mkdir(path.join(root, "project-management/tasks"), { recursive: true });
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nCites ADR-0001 in prose.\n");
+    await writeFile(path.join(root, "docs/decisions/ADR-0001-first-choice.md"), "---\nid: ADR-0001\n---\n\n# First choice\n\nBody.\n");
+    await writeFile(path.join(root, "docs/decisions/README.md"), "# Decisions\n\nIndex.\n");
+    await writeFile(path.join(root, "project-management/epics/EPC-001.md"), "---\nid: EPC-001\n---\n\n# Epic\n");
+    await writeFile(path.join(root, "project-management/tasks/TSK-001.md"), "---\nid: TSK-001\n---\n\n# Task\n");
+    commitFixture(root, "add record folders beside the guide");
+    runAdapter(root);
+    const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    assert.equal(evidence.pages.some((page) => page.source_path.startsWith("docs/decisions/")), false);
+    assert.equal(evidence.pages.some((page) => page.route.startsWith("records/")), false);
+    const llms = await readFile(path.join(root, "public/llms.txt"), "utf8");
+    assert.equal(llms.includes("ADR-0001"), false);
+    const pointer = await readFile(path.join(root, "src/content/docs/system/records.md"), "utf8");
+    assert.match(pointer, /title: "Where decisions and work records live"/);
+    assert.equal(pointer.match(/^\| `/gm).length, 4);
+    assert.match(pointer, new RegExp("\\| `docs/decisions` \\| Accepted decisions\\\\\\. \\| 1 \\| \\[docs/decisions\\]\\(https://github\\.com/example/repo/tree/[0-9a-f]{40}/docs/decisions\\) \\|"));
+    assert.match(pointer, /\| `project-management\/specs` \| Planning inputs\\\. \| none yet \| `project-management\/specs` \|/);
+    assert.match(pointer, /3 of them sit in 4 repository folders/);
+    assert.match(pointer, /ADR, EPC, TSK, SPC/);
+    const landing = await readFile(path.join(root, "src/content/docs/system/index.md"), "utf8");
+    assert.match(landing, /<span class="t">Where decisions and work records live<\/span><\/a><\/li><\/ol>/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the starter default points at decisions instead of publishing them", async () => {
+  // The same shape as assets/docs-portal/starter/portal.config.json, which the
+  // manifest consistency test pins; this proves what that shape publishes.
+  const root = await portalFixture();
+  try {
+    await configureFixture(root, {
+      layers: [
+        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/overview.md"] },
+        { id: "system", label: "System", description: "System", paths: ["docs/architecture.md"], prefixes: ["docs/architecture"] },
+        { id: "reference", label: "Reference", description: "Reference", fallback: true },
+      ],
+      records: { enabled: false, layer: "system", pointers: [{ folder: "docs/decisions", id_prefix: "ADR", purpose: "Accepted architecture decisions, appended and superseded, never rewritten." }] },
+    });
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nThe shape follows ADR-0001.\n");
+    await writeFile(path.join(root, "docs/architecture.md"), "# Architecture\n\nBody.\n");
+    await writeFile(path.join(root, "docs/decisions/ADR-0001-example.md"), "---\nid: ADR-0001\n---\n\n# Example decision\n");
+    commitFixture(root, "scaffold a project with one decision");
+    runAdapter(root);
+    const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    assert.deepEqual(evidence.pages.map((page) => page.route).sort(), ["orient/product", "system/architecture"]);
+    assert.equal((await readFile(path.join(root, "public/llms.txt"), "utf8")).includes("ADR-0001"), false);
+    const pointer = await readFile(path.join(root, "src/content/docs/system/records.md"), "utf8");
+    assert.match(pointer, /\| `docs\/decisions` \| Accepted architecture decisions, appended and superseded, never rewritten\\\. \| 1 \| `docs\/decisions` \|/);
+    assert.match(pointer, /^sidebar:\n  order: 2$/m);
+    assert.match(await readFile(path.join(root, "src/content/docs/orient/product.md"), "utf8"), /<a class="portal-record-link" href="\/system\/records\/"/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("an id whose record is not a portal source resolves without dangling", async () => {
+  for (const repositoryUrl of ["https://github.com/example/repo", null]) {
+    const root = await portalFixture();
+    try {
+      await configureFixture(root, {
+        repository_url: repositoryUrl,
+        layers: [
+          { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+          { id: "system", label: "System", description: "System", prefixes: ["docs/architecture"] },
+          { id: "reference", label: "Reference", description: "Reference", fallback: true },
+        ],
+        records: {
+          enabled: false,
+          layer: "system",
+          pointers: [{ folder: "docs/decisions", id_prefix: "ADR", purpose: "Accepted decisions." }],
+        },
+      });
+      await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+      await writeFile(path.join(root, "docs/decisions/ADR-0001-first-choice.md"), "---\nid: ADR-0001\n---\n\n# First choice\n");
+      await writeFile(path.join(root, "docs/guide.md"), "---\nadrs: [ADR-0001]\n---\n\n# Guide\n\nThe boundary comes from ADR-0001 and ADR-0404.\n\n## What ADR-0001 settles\n\nDetail.\n");
+      commitFixture(root, "cite a record the guide does not publish");
+      runAdapter(root);
+      const page = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
+      const target = repositoryUrl === null ? "/system/records/" : "https://github.com/example/repo/blob/";
+      assert.match(page, new RegExp(`<a class="portal-record-link" href="${target}[^"]*" title="docs/decisions/ADR-0001-first-choice.md at [0-9a-f]{40}">ADR-0001</a>`));
+      assert.match(page, new RegExp(`\\*\\*decision\\*\\* → \\[ADR-0001\\]\\(${target === "/system/records/" ? "/system/records/" : "https://"}`));
+      assert.equal(page.includes(">ADR-0404</a>"), false);
+      assert.match(page, /ADR-0404/);
+      const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+      const guide = evidence.pages.find((item) => item.source_path === "docs/guide.md");
+      assert.deepEqual(guide.relationships, [{ type: "decision", target: "ADR-0001", source_id: null }]);
+    } finally { await rm(root, { recursive: true, force: true }); }
+  }
+});
+
+test("a heading keeps its id free of the record preview provenance", async () => {
+  const root = await portalFixture();
+  try {
+    await mkdir(path.join(root, "docs/decisions"), { recursive: true });
+    await writeFile(path.join(root, "docs/decisions/ADR-0001-first-choice.md"), "---\nid: ADR-0001\n---\n\n# First choice\n");
+    await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\n## What ADR-0001 settles\n\nThe body cites ADR-0001 too.\n");
+    commitFixture(root, "cite a published record in a heading");
+    runAdapter(root);
+    const page = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
+    const heading = page.split("\n").find((line) => line.startsWith("## "));
+    assert.match(heading, /^## What <a href="\/system\/decisions\/ADR-0001-first-choice\/">ADR-0001<\/a> settles$/);
+    assert.equal(heading.includes("role=\"tooltip\""), false);
+    assert.match(page, /portal-id-preview/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("the provenance line stays one row and proves the full commit", async () => {
+  const linked = await portalFixture();
+  try {
+    await configureFixture(linked, { repository_url: "https://github.com/example/repo" });
+    await writeFile(path.join(linked, "docs/guide.md"), "# Guide\n\nBody.\n");
+    commitFixture(linked, "add a guide with a provider link");
+    runAdapter(linked);
+    const commit = git(linked, ["rev-parse", "HEAD"]).trim();
+    const page = await readFile(path.join(linked, "src/content/docs/reference/guide.md"), "utf8");
+    assert.match(page, new RegExp(`<a href="https://github.com/example/repo/blob/${commit}/docs/guide.md" title="docs/guide.md at ${commit}">`));
+    assert.match(page, new RegExp(`<code>${commit.slice(0, 12)}</code>`));
+    assert.equal(page.includes(`built from <code>${commit}</code>`), false);
+  } finally { await rm(linked, { recursive: true, force: true }); }
+
+  const unlinked = await portalFixture();
+  try {
+    await writeFile(path.join(unlinked, "docs/guide.md"), "# Guide\n\nBody.\n");
+    commitFixture(unlinked, "add a guide without a provider link");
+    runAdapter(unlinked);
+    const commit = git(unlinked, ["rev-parse", "HEAD"]).trim();
+    const page = await readFile(path.join(unlinked, "src/content/docs/reference/guide.md"), "utf8");
+    assert.match(page, new RegExp(`built from <code>${commit}</code>`));
+  } finally { await rm(unlinked, { recursive: true, force: true }); }
+
+  const unsupported = await portalFixture();
+  try {
+    await configureFixture(unsupported, { repository_url: "https://code.example.com/team/repo" });
+    await writeFile(path.join(unsupported, "docs/guide.md"), "# Guide\n\nBody.\n");
+    commitFixture(unsupported, "add a guide on a host without a blob layout");
+    runAdapter(unsupported);
+    const commit = git(unsupported, ["rev-parse", "HEAD"]).trim();
+    const page = await readFile(path.join(unsupported, "src/content/docs/reference/guide.md"), "utf8");
+    const provenance = page.match(/<div class="portal-provenance">.*<\/div>/)[0];
+    assert.equal(provenance.includes("<a "), false);
+    assert.match(provenance, new RegExp(`built from <code>${commit}</code>`));
+  } finally { await rm(unsupported, { recursive: true, force: true }); }
+});
+
+test("stage nodes hold a minimum width, wrap on words, and stack at phone width", async () => {
+  const css = await readFile(path.join(starterRoot, "src/styles/portal.css"), "utf8");
+  assert.match(css, /\.portal-stage-flow \{[^}]*flex-wrap: wrap;/);
+  assert.match(css, /\.portal-stage-group \{[^}]*flex: 1 1 8rem;[^}]*min-inline-size: 8rem;/s);
+  assert.match(css, /\.portal-stage-node \.k \{[^}]*overflow-wrap: break-word;\s*word-break: normal;/s);
+  assert.match(css, /@media \(max-width: 50rem\) \{\s*\.portal-stage-flow \{ flex-direction: column;/);
+  assert.equal(css.includes("overflow-wrap: anywhere"), false);
+});
+
+test("the records switch is closed, bounded and consistent with the layers", () => {
+  const layers = [
+    { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
+    { id: "system", label: "System", description: "System", prefixes: ["docs/architecture"] },
+    { id: "records", label: "Records", description: "Records", prefixes: ["project-management"] },
+    { id: "reference", label: "Reference", description: "Reference", fallback: true },
+  ];
+  const pointer = { folder: "project-management", id_prefix: "TSK", purpose: "Units of work." };
+  assert.deepEqual(validateRecordsSwitch(undefined, layers), { enabled: false, layer: null, pointers: [] });
+  assert.deepEqual(validateRecordsSwitch({ enabled: false, layer: "system", pointers: [pointer] }, layers.slice(0, 2).concat(layers[3])), {
+    enabled: false, layer: "system", pointers: [pointer],
+  });
+  for (const [records, message] of [
+    [{ enabled: "no" }, /records\.enabled must be boolean/],
+    [{ enabled: false, why: true }, /unknown records key why/],
+    [{ enabled: false, layer: "absent", pointers: [pointer] }, /records\.layer must name a configured layer/],
+    [{ enabled: true, layer: "system", pointers: [pointer] }, /records\.enabled false/],
+    [{ enabled: false, pointers: [pointer] }, /records\.layer to place their pointer page/],
+    [{ enabled: false, layer: "system", pointers: [{ ...pointer, id_prefix: "XYZ" }] }, /id_prefix must be one of/],
+    [{ enabled: false, layer: "system", pointers: [pointer, pointer] }, /duplicate records pointer folder/],
+    [{ enabled: false, layer: "system", pointers: [pointer] }, /layer records publishes only record folders/],
+  ]) {
+    assert.throws(() => validateRecordsSwitch(records, layers), message);
+  }
+});
+
+async function configureFixture(root, overrides) {
+  const configPath = path.join(root, "portal.config.json");
+  const config = JSON.parse(await readFile(configPath, "utf8"));
+  await writeFile(configPath, `${JSON.stringify({ ...config, ...overrides }, null, 2)}\n`);
+}
+
 async function portalFixture() {
   return initializedFixture(path.join(os.tmpdir(), "codeflow-portal-adapter-"), async (root) => {
     await mkdir(path.join(root, ".codeflow"));
@@ -2169,6 +2512,7 @@ async function selfContainedPortalFixture() {
       primitive_tokens: null,
       repository_url: null,
       release_version: null,
+      records: { enabled: false, layer: null, pointers: [] },
       layers: [
         { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
         { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },

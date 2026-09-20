@@ -17,6 +17,7 @@ export class GitSnapshot {
     this.repositoryRoot = repositoryRoot;
     this.onCommand = onCommand;
     this.inventory = null;
+    this.ignoreSources = new Map();
   }
 
   resolveHead() {
@@ -141,7 +142,28 @@ export class GitSnapshot {
     if (configured.has(dirty)) return false;
     if (!(this.inventory instanceof Map)) return false;
     if (this.inventory.has(dirty)) return false;
-    return ![...configured].some((item) => item.startsWith(`${dirty}/`));
+    if ([...configured].some((item) => item.startsWith(`${dirty}/`))) return false;
+    return this.#ignoredByCommittedRule(dirty);
+  }
+
+  // Git calls a path ignored whatever the rule's origin: a per-user excludes
+  // file, .git/info/exclude, or a .gitignore the repository commits. Only the
+  // committed rule speaks for the project, so the exemption asks which source
+  // matched and accepts one tracked .gitignore. Any other origin, and any
+  // failure to prove the origin, leaves the path dirty.
+  #ignoredByCommittedRule(dirty) {
+    if (this.ignoreSources.has(dirty)) return this.ignoreSources.get(dirty);
+    let committed = false;
+    try {
+      const fields = new TextDecoder("utf-8", { fatal: true })
+        .decode(this.bytes(["check-ignore", "-v", "-z", "--no-index", "--stdin"], MAX_GIT_STATUS_BYTES, "ignore rule source", `${dirty}\0`))
+        .split("\0");
+      const source = fields[0];
+      committed = fields.length >= 4 && fields[3] === dirty && typeof source === "string" && source.endsWith(".gitignore")
+        && !source.startsWith("/") && this.#inventory().has(safeRelative(source, "ignore rule source"));
+    } catch { committed = false; }
+    this.ignoreSources.set(dirty, committed);
+    return committed;
   }
 
   text(args, maximumBytes, label) {

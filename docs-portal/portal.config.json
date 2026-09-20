@@ -7,13 +7,22 @@
   "release_version": null,
   "primitive_tokens": null,
   "repository_root": "..",
-  "source_roots": ["docs", "project-management"],
-  "exclude": ["docs/verification", "docs/decisions/template.md", "project-management/templates"],
+  "source_roots": ["docs"],
+  "exclude": ["docs/verification"],
   "layers": [
     { "id": "orient", "label": "Orient", "description": "Purpose, capabilities, adoption, and the shortest path into the system.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/harness-posture.md", "docs/model-upgrades.md"], "prefixes": ["docs/capabilities"] },
-    { "id": "system", "label": "System", "description": "Architecture, durable decisions, and operational boundaries.", "paths": ["docs/decisions/README.md", "docs/architecture.md"], "prefixes": ["docs/architecture", "docs/decisions"] },
-    { "id": "records", "label": "Records", "description": "Specs, epics, tasks, and their evidence-linked relationships.", "prefixes": ["project-management"] },
+    { "id": "system", "label": "System", "description": "Architecture, durable decisions, and operational boundaries.", "paths": ["docs/architecture.md"], "prefixes": ["docs/architecture"] },
     { "id": "reference", "label": "Reference", "description": "Supporting guides and technical reference material.", "fallback": true }
   ],
+  "records": {
+    "enabled": false,
+    "layer": "system",
+    "pointers": [
+      { "folder": "docs/decisions", "id_prefix": "ADR", "purpose": "Accepted architecture decisions, appended and superseded, never rewritten." },
+      { "folder": "project-management/epics", "id_prefix": "EPC", "purpose": "Bodies of work that group the tasks shipping one outcome." },
+      { "folder": "project-management/specs", "id_prefix": "SPC", "purpose": "Planning inputs, frozen once the work they specify ships." },
+      { "folder": "project-management/tasks", "id_prefix": "TSK", "purpose": "Single units of durable work with their acceptance criteria." }
+    ]
+  },
   "base": "/"
 }
