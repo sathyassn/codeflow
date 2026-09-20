@@ -1,6 +1,6 @@
 ---
 id: ADR-0015
-title: "duo model orchestration: the Claude and Codex develop flow"
+title: "duo-model orchestration: the Claude and Codex develop flow (cf-model-orchestrator)"
 date: 2026-07-10
 status: accepted
 superseded_by: ADR-0023

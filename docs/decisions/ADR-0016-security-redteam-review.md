@@ -1,6 +1,6 @@
 ---
 id: ADR-0016
-title: "security red team review: dual vendor adversarial stage plus deterministic scanner floor"
+title: "security / red-team review: dual-vendor adversarial stage plus deterministic scanner floor"
 date: 2026-07-10
 status: accepted
 superseded_by: null

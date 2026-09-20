@@ -1061,13 +1061,13 @@
     "docs/decisions/ADR-0001-stack-choice.md": {
       "src": "docs/decisions/ADR-0001-stack-choice.md.tmpl",
       "ownership": "user-owned",
-      "sha256": "beb1753fa278e69322c2aca95e6eb76fce05c01465d6884df065ef7f1c0d4e0a",
+      "sha256": "f78017a1b4fc8e1a382fd9613daf5fddf1ac8d937693c56384136246e7b77add",
       "exec": false
     },
     "docs/decisions/template.md": {
       "src": "docs/decisions/template.md",
       "ownership": "user-owned",
-      "sha256": "06759371e828ebf9e191ed21d13a4023646e9bd23524a7d4bea36cb8abc1c418",
+      "sha256": "9d26f7cd3c5b93c3ba3c58f8135206e73a60779b0823b271c962b8bab74f0be0",
       "exec": false
     },
     "docs/product.md": {

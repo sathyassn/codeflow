@@ -1,6 +1,6 @@
 ---
 id: ADR-0001
-title: stack choice — rust
+title: "stack choice: rust"
 date: 2026-07-17
 status: accepted
 superseded_by: null
@@ -20,7 +20,7 @@ is expensive to reverse once capabilities ship on it.
 The project is built on **rust**.
 
 <!-- TODO: replace this comment with 2-3 honest sentences on why rust
-     fits this project. Written by the adopting team at init time — codeflow
+     fits this project. Written by the adopting team at init time; codeflow
      does not generate rationale. -->
 
 ## Consequences

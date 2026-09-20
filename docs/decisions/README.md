@@ -13,7 +13,7 @@
 | · | [ADR-0004](ADR-0004-composable-pipeline.md) | Composable pipeline workflow, shipped user-owned | none |
 | · | [ADR-0022](ADR-0022-replace-unmaintained-yaml-parser.md) | replace the unmaintained YAML parser | none |
 | Git, merge, and CI policy | [ADR-0002](ADR-0002-sync-push-policy.md) | sync push policy: push_to_protected warns on this repo | ADR-0006 |
-| · | [ADR-0006](ADR-0006-pr-based-landings.md) | PR based landings supersede the integrate path on this repo | none |
+| · | [ADR-0006](ADR-0006-pr-based-landings.md) | PR-based landings: supersede the integrate path on this repo | none |
 | · | [ADR-0007](ADR-0007-agent-human-merge-boundary.md) | agent and human merge boundary: protected branch merge and ref controls | none |
 | · | [ADR-0009](ADR-0009-human-authorization-out-of-band.md) | human authorization is out-of-band; local guards are the honest-agent floor | none |
 | · | [ADR-0017](ADR-0017-codeflow-ci-portable-verification.md) | codeflow ci: CI portable, binary sourced verification | none |
@@ -26,7 +26,7 @@
 | · | [ADR-0062](ADR-0062-same-pr-release-state.md) | keep release state in the normal work PR | none |
 | Security and sandbox boundaries | [ADR-0008](ADR-0008-harness-parity-and-exec-guard.md) | harness parity and the exec-guard security stage | none |
 | · | [ADR-0014](ADR-0014-codex-credential-read-guard.md) | Codex credential read-guard via a named permission profile (cf-guard) | none |
-| · | [ADR-0016](ADR-0016-security-redteam-review.md) | security red team review: dual vendor adversarial stage plus deterministic scanner floor | none |
+| · | [ADR-0016](ADR-0016-security-redteam-review.md) | security / red-team review: dual-vendor adversarial stage plus deterministic scanner floor | none |
 | · | [ADR-0025](ADR-0025-effective-harness-autonomy-and-tool-access.md) | effective harness autonomy with broad tools and guarded side effects | none |
 | · | [ADR-0026](ADR-0026-harness-boundary-corrections.md) | correct harness credential and destructive-action boundaries | none |
 | · | [ADR-0029](ADR-0029-classified-trusted-tool-sandbox-retry.md) | permit classified sandbox retry for trusted installed tools | none |
@@ -38,7 +38,7 @@
 | · | [ADR-0036](ADR-0036-transport-neutral-delegate-lifecycle.md) | make delegate turns a durable transport-neutral lifecycle | none |
 | · | [ADR-0037](ADR-0037-canonical-delegate-prompt-boundary.md) | require a canonical delegate prompt boundary | none |
 | · | [ADR-0059](ADR-0059-qualified-native-transport-fallback.md) | qualify native transport by capabilities instead of plugin exclusivity | none |
-| Duo orchestration and quality | [ADR-0015](ADR-0015-duo-model-orchestration.md) | duo model orchestration: the Claude and Codex develop flow | ADR-0023 |
+| Duo orchestration and quality | [ADR-0015](ADR-0015-duo-model-orchestration.md) | duo-model orchestration: the Claude and Codex develop flow (cf-model-orchestrator) | ADR-0023 |
 | · | [ADR-0024](ADR-0024-stage-aware-duo-and-bounded-parallelism.md) | stage-aware duo default with bounded parallel worktrees | none |
 | · | [ADR-0028](ADR-0028-evidence-routed-model-effort.md) | route model effort by evidence and task demand | none |
 | · | [ADR-0030](ADR-0030-proportionate-design-and-code-quality.md) | make proportionate design and code quality a duo gate | none |
