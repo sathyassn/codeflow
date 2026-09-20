@@ -11,7 +11,7 @@
   "exclude": ["docs/verification"],
   "layers": [
     { "id": "orient", "label": "Orient", "description": "Purpose, capabilities, adoption, and the shortest path into the system.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/harness-posture.md", "docs/model-upgrades.md"], "prefixes": ["docs/capabilities"] },
-    { "id": "system", "label": "System", "description": "How the binary is built, what enforces the rules, and the boundaries each harness and surface runs under.", "paths": ["docs/architecture.md", "docs/architecture/enforcement-planes.md", "docs/harness-posture.md", "docs/architecture/present.md", "docs/architecture/utility-presentation.md"], "prefixes": ["docs/architecture"] },
+    { "id": "system", "label": "System", "description": "How the binary is built, what enforces the rules, and the boundaries each harness and surface runs under.", "paths": ["docs/architecture.md", "docs/architecture/enforcement-planes.md", "docs/architecture/present.md", "docs/architecture/utility-presentation.md", "docs/harness-posture.md"], "prefixes": ["docs/architecture"] },
     { "id": "reference", "label": "Reference", "description": "Supporting guides and technical reference material.", "fallback": true }
   ],
   "records": {
