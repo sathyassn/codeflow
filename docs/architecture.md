@@ -133,7 +133,8 @@ universal floor today (per-stack scanners such as `cargo audit` / `pip-audit` /
 `cf-security-reviewer` dual-vendor red-team layered on top. It is gated by the
 `security_review` (whole-job umbrella) and `dep_audit` (SCA sub-gate) policy keys
 beside `secret_scan`; the advisory blocks when either is `block`. Local planes are
-fast feedback; CI + remote protection are the authoritative perimeter (charter §6.5). The
+fast feedback; CI + remote protection are the authoritative perimeter
+(the v2 charter, `docs/plan/v2/00-charter.md`, §6.5). The
 git client plane carries five shims — `pre-commit`, `commit-msg`,
 `pre-merge-commit` (non-fast-forward merge commits onto protected),
 `reference-transaction` (the harness-agnostic backstop: fast-forward merges,
@@ -229,264 +230,35 @@ Plan/native-harness concerns (ADR-0040, ADR-0046).
 
 ### scaffold — `assets/`
 
-Optional agentic operating/estimation guidance (ADR-0057, CAP-017) is shipped as
-cf-estimate in the standard/full skill mirrors, with short discovery routes in
-the operating contract, planning, customization and orchestration. Detailed
-rubric, records, allocation procedure and examples load on demand. Confirmed
-adoption is project-owned .codeflow/estimate.json; profiles, immutable forecast
-revisions and actuals live under the chosen existing planning authority, with
-project-management/estimates as the full-tier default. None is scaffold-managed.
-The method reads canonical tasks/specs or pinned external authority rather than
-copying their status or dependency graph. Its narrow native allocation checker
-has a separate read-only data boundary; it neither runs the method nor schedules
-work. Minimal receives no method files or automatic planning upgrade.
-
-`cf-model-orchestrator` is the stage-aware harness-neutral default for every
-non-trivial repository task in standard/full scaffolds. Claude Code reaches
-Codex through the official plugin/app-server; Grok reaches Codex through the
-official `codex` CLI and local app-server daemon (Herdr, tmux degraded); Codex
-reaches Claude through Herdr (tmux degraded) plus schema-v2. Primaries default
-to high effort, use proportionate worker effort, and obtain xhigh reasoning
-on trigger without restarting the primary (ADR-0056). Linked checkouts live under `.worktrees/`. Research/analysis, plan/design,
-implementation, review/verification, and substantive-doc modes select only the
-stages the requested outcome needs. Claude-led design, accountable-primary/
-actual-executor/cross-lineage-review assignments, evidence-routed effort, explicit
-host/peer/worker roles, the versioned plan/evidence contract, bounded
-worktree/resource/integration rules, and quality gates live in shared skill
-resources; harness-specific reviewer agents only
-deepen that contract. Quality includes proportionate design and implementation:
-every material new surface maps to a current requirement or evidenced risk,
-each actual executor first-verifies its unit, the responsible primary inspects
-and accepts it, and a lineage different from the actual author's reviews it independently,
-and the directly invoked Claude judgment primary owns the integrated
-design/code quality verdict without claiming independent review of its own
-work (ADR-0030, ADR-0035, ADR-0041). Substantial prose loads the
-mirrored `cf-editorial-review` skill rather than expanding the always-loaded
-contract: truth and policy outrank CodeFlow philosophy, consuming-project voice,
-audience/medium/task, and requested tone; both seats protect technical meaning,
-and the Claude judgment primary owns the final contextual editorial verdict
-(ADR-0032).
-Material product, UX, interaction, or visual-direction work similarly loads the
-mirrored `cf-design` skill. It records a proportionate `DESIGN_INTENT` inside
-Plan vN: cosmetic work may be inapplicable, established-system work may conform,
-new surfaces settle one direction, and materially open novel surfaces compare
-two or three viable directions before settlement. The qualified Claude
-judgment role leads intent and owns real design implementation and fidelity.
-Until a matching Claude design route is scoped-qualified, the Claude primary
-executes; candidate design routes are only for controlled disposable
-qualification fixtures. A scoped-qualified route may execute only exact
-evidenced tuples, and another family designs only under an explicit task-
-specific operator override. Translating settled product/UX/UI direction into
-components, layout, styles, or interactions is design implementation;
-non-design build plumbing, asset transfer, and evidence collection are ordinary
-routed work. Default UI review is Codex Computer Use QA on the app-server
-(Playwright stays the web driver). If another lineage authors the UI under an
-override, Claude QAs independently. Both approve the same plan.
-Language/voice and appearance modes are contextual,
-collapsible intent dimensions governed by project evidence; utility defaults
-cannot become consuming-product authority. Rendered review grades
-evidence-backed drift from the brief, intent, accessibility target, or observed
-behavior; taste alone is not a blocking finding. Concrete model releases stay
-in qualified bindings. After direction selection, refinement stays bounded to
-a named unresolved material choice; external references and assets retain
-proportionate authority, rights/privacy, transformation, and product-use
-evidence; and material feedback binds Plan vN+1 to the exact reviewed version
-without creating a second design database (ADR-0043, ADR-0051).
-Multi-task plans additionally settle one acyclic task graph whose evidence
-guards represent genuine decisions, not repeated quality gates. Durable task
-metadata preserves its structural candidate predecessors, while Plan evidence
-selects guarded branches and a material graph mutation forces Plan vN+1.
-Verification planning may earn property tests, targeted mutation testing, or a
-project-owned architecture fitness check from explicit risk and oracle
-evidence; ordinary work and single-task plans incur no such ceremony. These
-resources are progressive disclosure, and CodeFlow never becomes a task
-scheduler or installs consuming-project test tools for parity (ADR-0040).
-Review attention is consequence-led: substantiated material and systemic
-findings precede cosmetics, evidence confidence stays distinct from severity,
-remediation effort affects sequencing only, security retains its CVSS-aligned
-vocabulary, and out-of-scope material risk is routed without silent scope
-expansion or issue farming (ADR-0034). Execution additionally distinguishes
-materiality from the current critical path: the path is the dependency or
-blocker presently controlling the accepted outcome, not a license to weaken
-quality, testing, security, review, documentation, or recovery. Clear, safe,
-in-scope improvements with bounded validation are normally fixed while context
-is warm. Only genuinely uncertain secondary observations are consolidated for
-one natural cross-lineage checkpoint, where both primary seats choose fix now,
-track once, or drop. A tracked item uses the repository's existing planning
-altitude and a deterministic event such as the next touch of that surface, a
-named dependency landing, a release/quality gate, or symptom recurrence—never
-age alone or vague “later” wording. Blocker navigation uses the same
-critical-path model: technical uncertainty is reproduced and tested with a
-changed hypothesis, while an outcome-preserving reversible strategy may change
-without operator ceremony. Escalation is reserved for a true external
-dependency or a choice that changes intent, public contract, scope/authority,
-risk tolerance, or an irreversible tradeoff; deterministic and safety gates
-are fixed or honored rather than talked around (ADR-0038). A gate is the
-check, not the CI job name: an unfinished runner/memory/billing death is
-missing job evidence, and a completed same-check in a sibling job or local
-run satisfies it (ADR-0017).
-
-Runtime autonomy is an explicit second layer, not a prose assumption. Claude's
-project settings enable a fail-closed sandbox, sandbox-contained Bash autonomy,
-web access, local port binding, asks for common high-risk source-control forms,
-protected-branch hook backstops for grammar gaps, file
-secret denies, and exact raw model/cloud environment-variable denies. A failed
-sandboxed command may request an auto-classified unsandboxed retry only for a
-trusted installed tool requiring host state; arbitrary bypass remains outside
-the contract. The interactive Codex→Claude launch supplies the current
-ensemble's Claude selector and effort, auto mode, and `classifyAllShell`
-through CLI settings because Claude intentionally ignores classifier policy
-from a repository. Codex's project config selects the guarded workspace
-profile, public egress/live search, auto-reviewed escalations, and the current
-primary-seat fallback. Official plugin turns still pass the ensemble-selected
-model and effort explicitly and retain the observed binding.
-`cf-customize` verifies the effective modes, tools, authentication paths, and
-live canaries; the binary neither mutates global settings nor authenticates
-services. Cross-model callers invoke both primaries directly using the concrete
-selectors, default/escalation efforts, and typed internal routes in the current
-ensemble record. The plan records the responsible primary separately from the
-actual binding-or-route executor and observed provenance. A natively proven
-candidate may perform bounded non-design work under primary inspection without
-becoming qualified or economical; scoped-qualified claims cover only their
-evidenced harness/selector/effort/workload tuples. Primaries retain judgment,
-integration, verification, and approvals, and actual authored lineage
-determines independent review (ADR-0025, ADR-0026, ADR-0028, ADR-0039,
-ADR-0060).
-
-`cf-evaluate-model` is the deliberate maintenance path for a new model, harness,
-permission profile, or material instruction revision (ADR-0027). Stable hard
-requirements link canonical source markers to behavioral regression/capability
-cases. A standard-library tool validates that traceability, materializes exact
-overlays into fresh one-commit disposable repositories, removes grader material
-before the subject session starts, keeps case identity and evaluator state
-outside an opaque neutral subject path, recomputes expected-versus-observed
-outcomes, compares a candidate with a pinned baseline, and cleans only an
-explicitly marked run root. Subject trials remain supervised native interactive
-Codex or Claude sessions with their configured tools; no engine model router,
-headless peer runner, CI model call, or general-purpose cleanup command is added.
-
-Fast-changing binding facts are isolated from durable orchestration doctrine
-(ADR-0039, ADR-0041, ADR-0054). Stable role duties stay in the orchestrator and
-quality resources. `current-ensemble.json` owns the managed concrete selectors,
-effort policy, permitted worker classes, escalation triggers, and the standing
-pair versus catalog split. `routing-policy.json` names when an extra family
-must be invoked if available: never as a silent third vote. Interactive Grok Build is a first-class
-host; Claude still produces design in its native session. Hermes remains an
-outer coordinator that normally delegates the whole repository task. A consuming project
-may atomically map a stable role to an approved local binding ID in
-`.codeflow/model-selection.json`; it cannot supply selectors, commands, or
-worker routes. An absent/empty file keeps the managed ensemble. Doctor resolves
-the effective selection and fails closed on malformed, missing, ineligible,
-unsupported, observably drifted, or lineage-collapsing overrides, without
-partially applying the remainder.
-`harnesses.json` is a qualification catalog, not executable provider
-configuration: every entry must prove the universal native-session,
-provenance/tool, scoped-work, bounded-failure, permission, recheck, and git
-capabilities. `packs.json` composes existing eval cases for diagnosis only.
-Scoped internal-route evidence belongs to the repository that owns its catalog;
-consuming projects neither resolve those paths locally nor duplicate an
-evidence database. Route status remains separate from native reachability and
-application and from full binding promotion. Approved full results can produce
-compact user-owned records under
-`~/.codeflow/qualified-bindings/`; doctor checks their structure and observable
-harness/settings drift without launching models or routing work.
-
-Verification is deliberately layered (ADR-0042). Project-owned deterministic
-lanes cover the applicable syntax/style, SCA, source/data flow, taint, secrets,
-and architecture rules; the two primary lineages independently review intent,
-business logic, deep semantics, performance, state/environment behavior, and
-emergent anomalies. A deterministic red result blocks regardless of model
-agreement. CodeFlow itself will use GitHub CodeQL default setup after the
-repository is public, but does not embed a CodeQL workflow in the portable
-scaffold. Consuming projects select CodeQL, Semgrep, Sonar, a language-native
-analyzer, or an explicit residual-risk disposition from their actual stack and
-hosting evidence during customization.
-
-End-to-end and UI evidence also owns explicit runtime boundaries (ADR-0044).
-Each material changed journey records its affected topology and one faithful
-vertical run across the applicable changed frontend, service, state,
-infrastructure, and runtime boundaries; controlled external seams remain
-visible. Concurrent UI tasks receive task-owned isolated browser state,
-non-overlapping listening/application endpoints where applicable, namespaced
-test data, run-scoped artifacts, and verified teardown. The consuming project
-defines allocators, ranges, namespace formats, retention, and commands during
-customization—CodeFlow adds no universal browser daemon or port broker.
-`codeflow status` emits the post-landing inventory for linked worktrees and
-unattached local branches. It proves landing from the locally known target by
-normal ancestry or `git cherry` patch equivalence, marks dirty and unproven
-resources for retention, and never deletes. The owner check remains explicit:
-even a clean landed resource is removable only after confirming no active task
-owns it.
-
 `assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
-`claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the
-engine manages it by three ownership classes (charter §4.3): **fully-managed**
-files (agents, skills, hook shims, CI) refresh by hash and 3-way merge from
-`.codeflow/.baseline/`; **managed-region** files (AGENTS.md markers,
-settings.json codeflow-prefixed keys) touch only their region; and **user-owned**
-files, which split by how `update` treats them — schema-versioned config
-(`policy.json`, `project.toml`) *additively gains* new keys with their defaults,
-reported and never mutating a value you set, while the write-once doc seeds (all
-of `docs/`) are seeded once at init and never touched again — yours to edit and
-own. `scaffold-manifest.toml` is the update contract.
+`claude/` artifacts, policy.json, git-hook shims, docs and pm templates), and
+`assets/docs-portal/` holds the optional portal starter. Each area below is
+owned by an accepted decision; the mirrored skills and the CAP-### registry
+carry the operating detail.
 
-`codeflow present` is the session review CLI for that same utility craft:
-agents author this session's catalog document; the runtime owns chrome and
-Comment. It is not a documentation portal and not a clone of the
-design-exploration board.
+| Area | Owning ADR(s) | Consequence |
+|---|---|---|
+| Ownership classes | v2 charter §4.3 | Fully-managed files (agents, skills, hook shims, CI) refresh by hash and 3-way merge from `.codeflow/.baseline/`; managed-region files (AGENTS.md markers, settings.json codeflow-prefixed keys) touch only their region; schema-versioned user config additively gains new keys with their defaults and never mutates a value you set, while the write-once `docs/` seeds are laid once at init and never touched again. `scaffold-manifest.toml` is the update contract |
+| Duo orchestration (`cf-model-orchestrator`) | ADR-0030, ADR-0035, ADR-0041, ADR-0056, ADR-0060 | The stage-aware, harness-neutral default for every non-trivial task in standard/full; primaries default to high effort and obtain xhigh on trigger without restarting; linked checkouts live under `.worktrees/`; each actual executor first-verifies its unit, the responsible primary accepts it, and a different lineage reviews it independently |
+| Optional estimation (`cf-estimate`) | ADR-0057 | Shipped to standard/full as progressive disclosure (CAP-017); adoption is project-owned `.codeflow/estimate.json`, forecasts and actuals live under the project's existing planning authority, and none of it is scaffold-managed. Minimal receives no method files |
+| Design direction (`cf-design`) | ADR-0043, ADR-0051 | Material product, UX, interaction or visual work records a proportionate `DESIGN_INTENT` inside Plan vN; the qualified Claude judgment role leads intent and owns design implementation and fidelity; refinement after selection stays bounded to one named unresolved choice, and no second design database appears |
+| Editorial quality (`cf-editorial-review`) | ADR-0032 | Substantial prose loads the mirrored skill rather than expanding the always-loaded contract; truth and policy outrank philosophy, voice and requested tone, and the Claude judgment primary owns the final contextual verdict |
+| Task graphs and verification strength | ADR-0040 | A multi-task plan settles one acyclic graph whose guards represent genuine decisions; property tests, targeted mutation testing and architecture fitness checks are earned from risk and oracle evidence, and CodeFlow never becomes a task scheduler |
+| Review materiality | ADR-0034 | Substantiated material and systemic findings precede cosmetics, evidence confidence stays distinct from severity, security keeps its CVSS-aligned vocabulary, and out-of-scope material risk is routed without silent scope expansion |
+| Critical-path stewardship | ADR-0038, ADR-0017 | The current critical path never licenses weaker quality, testing, security, review, documentation or recovery; escalation is reserved for a true external dependency or an intent-level choice; a gate is the check, not the CI job name — a completed same-check in a sibling job or local run satisfies it |
+| Runtime autonomy and settings | ADR-0025, ADR-0026, ADR-0028, ADR-0039, ADR-0060 | Claude's project settings are a fail-closed sandbox with file secret denies and exact raw model/cloud environment denies; a failed sandboxed command may request an auto-classified unsandboxed retry only for a trusted installed tool that needs host state, and arbitrary bypass stays outside the contract. The plan records the responsible primary separately from the actual executor. Detail: [harness-posture.md](harness-posture.md) |
+| Model and harness qualification (`cf-evaluate-model`) | ADR-0027 | A new model, harness, permission profile or material instruction revision is qualified over fresh one-commit disposable repositories in supervised native interactive sessions; no engine model router, headless peer runner, CI model call or general cleanup command is added. Detail: [model-upgrades.md](model-upgrades.md) |
+| Binding facts versus durable doctrine | ADR-0039, ADR-0041, ADR-0054 | `current-ensemble.json`, `routing-policy.json` and `harnesses.json` own the fast-changing selectors, triggers and capability catalog while the orchestrator keeps stable role duties; a consuming project maps a stable role to an approved binding ID in `.codeflow/model-selection.json`, and doctor fails closed on a malformed, missing, ineligible, unsupported, drifted or lineage-collapsing override. Interactive Grok Build is a first-class host; Hermes (an outer coordinator, not a native CodeFlow host) normally delegates the whole repository task |
+| Layered code verification | ADR-0042 | Project-owned deterministic lanes cover the applicable syntax/style, SCA, source and data flow, taint, secret and architecture rules while the two primary lineages review intent and semantics; a deterministic red result blocks regardless of model agreement, and consuming projects choose their own analyzer or record the residual risk |
+| Whole-flow and UI isolation | ADR-0044 | Each material changed journey records one faithful vertical run across its applicable changed boundaries; concurrent UI tasks receive isolated browser state, non-overlapping endpoints, namespaced data, run-scoped artifacts and verified teardown; `codeflow status` reports removable, dirty and unproven resources and never deletes |
+| Session review CLI (`codeflow present`) | ADR-0049, ADR-0050, ADR-0052 | Agents author this session's catalog document and the runtime owns chrome and Comment; it is neither a documentation portal nor a clone of the design-exploration board |
+| Documentation portal bundle | ADR-0048, ADR-0058 | A separate managed bundle, absent until `codeflow portal setup --path <dir>` adopts it and records its root, release, hashes and ownership in `.codeflow/docs-portal.json`; the exact-pinned Node adapter is the sole author of disposable pages, twins, `llms.txt` and evidence from one clean committed snapshot; drift, collisions and edited retirement stop every portal write; `codeflow validate --portal` re-derives the byte claims without executing project code |
+| Utility presentation system | ADR-0053, ADR-0063 | One shared design system — tokens, type roles, altitude grammar, stage grammar — backs both `cf-present` and the portal, with a contract test failing the build on token drift |
 
-The optional documentation portal is a separate managed bundle, not part of
-that default scaffold. One starter source lives under `assets/docs-portal/`
-and is embedded in the binary. `codeflow portal setup --path <dir>` explicitly
-adopts it and records its root, release, hashes, whole-runtime ownership and
-declared generator identity in `.codeflow/docs-portal.json`. Managed setup/update
-replaces unchanged files and repairs missing managed files in one planned
-transaction; drift, collisions and edited retirement stop every portal write.
-Project-owned configuration is never reseeded after adoption. There are no
-pristine runtime copies, source merges or new sidecars. Explicit confirmed
-whole-runtime transfer preserves current edits/deletions and freezes adopted
-release/hash provenance; subsequent updates leave that runtime project-owned.
-The shared strict v1/v2 state parser and held-parent transaction I/O are reused
-by setup, transfer and recovery. Legacy journals recover before full state
-parsing; only authenticated legacy blobs are transactionally removed. Unknown
-or changed baseline content stops both migration and transfer. General scaffold
-merging remains separate (ADR-0058). A non-adopter receives no portal directory,
-Node workspace, lockfile or baseline. The project-owned
-configuration names authoritative source Markdown; the exact-pinned Node adapter
-is the sole author of disposable Starlight content, Pagefind output, Markdown
-twins, `llms.txt`, and a bounded evidence manifest. It accepts only one clean
-committed configuration/runtime/source/media snapshot: source claims come from
-bounded Git blobs, while every configured input and the runtime must match
-committed bytes even when index flags hide worktree changes. The Rust verifier
-independently derives complete source coverage and semantic routes from the
-committed configuration and tree. Generated Markdown, media, and `llms.txt`
-namespaces are replaced in full while bounded project-owned public files
-outside them are read from committed blobs, checked against the worktree, and
-then preserved; active untracked or index-masked public content fails closed.
-Route identity retains exact NFC source-path case and punctuation, while URL
-boundaries encode each path segment and portable case folding is used only to
-reject collisions. Both JavaScript production and Rust verification consume a
-shared authority fixture for bounded configuration/frontmatter semantics, and
-the route contract is qualified through a real Starlight build rather than a
-string-only unit test. It parses GFM
-through a syntax tree and publishes all generated roots transactionally under
-one workflow lease with locale-independent ordering. Commit inventory and blob
-reads are batched and bounded. The locked installer verifies the exact set of
-dependency lifecycle scripts before disabling them; install, build, preview,
-browser, and Git children receive only a small non-secret environment allowlist.
-Git prompts, lazy fetching, replacement objects, fsmonitor, pagers, optional
-locks, and inherited redirection are additionally disabled. A broken current source
-gets only a bounded visible error page at its stable route, outside the active
-graph, search, previews, and current-content indexes; history is never walked
-or republished. `codeflow validate --portal <dir>` is a read-only Rust verifier
-over those byte claims—including portable paths, configured-tree coverage,
-exact source-derived graph edges, bounded raster dimensions, and error-page exclusion—and never executes
-or rewrites installed project code. Evidence remains schema v1: the shared
-Node generator identity is compared against the v2 declaration by Rust, with
-managed release pins and legitimate transferred-fork identities treated
-distinctly. Frozen starter provenance is never confused with current fork
-identity. ADR-0048's unaffected authority/rendering/budget decisions remain in
-force under ADR-0058.
+Two areas outgrew this file and are graduated, with the pointer left behind:
+interactive presentation to [architecture/present.md](architecture/present.md)
+and the shared design system to
+[architecture/utility-presentation.md](architecture/utility-presentation.md).
 
 ### docs — `docs/`
 
