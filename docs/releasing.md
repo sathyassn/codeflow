@@ -86,6 +86,11 @@ repository setting; never bypass the source and publication guards.
 
 ## Technical
 
+The sections below hold the mechanics a release run actually touches: the
+cross-build toolchain, the renderer assets, the portal ownership migration, the
+preparation and publication steps, the historical bridge, and versioning for a
+project that consumes codeflow. Work through the ones your release touches.
+
 ### Cross-build toolchain
 
 Release CI uses native cargo-dist runners for macOS, Linux, and Windows so each

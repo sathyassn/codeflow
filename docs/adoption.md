@@ -73,6 +73,12 @@ in [model and harness upgrades](model-upgrades.md).
 
 ## Technical
 
+The sections below are the operating detail, in the order a project meets them:
+installing the binary, choosing a root, running `init` on a greenfield or
+brownfield repository, what `update` does afterwards, and the daily loop and
+options that follow. Read the section matching the step you are on rather than
+the whole panel.
+
 ### Install the binary
 
 `codeflow` is a single binary. The latest verified published release is

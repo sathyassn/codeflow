@@ -30,9 +30,13 @@ seat is never reduced to critiquing a plan the first already supplied.
 
 ## Architecture
 
+Both seats must plan independently before either sees the other's conclusions.
+That requirement, and what the host then does with the two plans, is the rest
+of this panel.
+
 Both seats independently research, analyze risks, and draft complete plans from
-the same immutable brief before either sees the other's conclusions. This is an anti-anchoring requirement: Codex must not be
-reduced to critiquing a plan Claude has already supplied. After both drafts
+the same immutable brief. This is an anti-anchoring requirement: Codex must not
+be reduced to critiquing a plan Claude has already supplied. After both drafts
 exist, Claude leads design. The host reconciles a versioned plan whose task
 rows name the responsible primary, actual binding-or-route executor, execution
 mode, routing reason and provenance, available usage evidence with freshness or
@@ -71,6 +75,11 @@ CodeFlow host; direct coordination requires both
 native lanes and the full contract. Explicit host/peer/worker roles prevent recursive orchestration.
 
 ## Technical
+
+The sections below are the operating rules this capability enforces once a plan
+exists: how design direction is set, what evidence a routing claim needs, how a
+changed journey is proved, where durable records live, when work may run in
+parallel, and which tests pin the contract.
 
 ### Design direction
 

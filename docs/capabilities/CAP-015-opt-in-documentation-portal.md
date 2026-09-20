@@ -54,6 +54,11 @@ blocks both migration and transfer without deletion.
 
 ## Technical
 
+The sections below are what an adopting repository has to honor: the Node
+version each lane pins, the boundaries the adapter refuses to cross, how the
+build is verified independently of the adapter, and the skill that owns the
+craft.
+
 ### Node lanes
 
 The portal build requires Node 22.19.0 or newer.
