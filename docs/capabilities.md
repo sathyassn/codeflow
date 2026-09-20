@@ -1,8 +1,12 @@
-# codeflow: capabilities
+# CodeFlow capabilities
 
 <!-- WHAT layer: the registry of what the system does. Consult before building
      ("does this exist? what does it touch?"). Updated in the same PR that
      ships the work; the discipline is the ship flow, not a blocking gate.
+     The yaml fence under each capability is the machine-read authority: the
+     portal generates the summary table and each definition table from it, and
+     `status`, `orient` and `validate --docs` parse it. Do not hand-maintain a
+     second registry table.
      `validate --docs` enforces referential integrity (each entry's epics[] and
      adrs[] resolve to real files) and a non-empty verified_by on shipped
      entries; it does not verify that the test tags resolve, and it does not
@@ -12,34 +16,76 @@
      docs/capabilities/CAP-*.md when navigation or merge costs materially
      outweigh a single overview. -->
 
-**Check here before building: every capability has one row, one status, and one home.**
+## Concept
 
-| Capability | Name | Area | Status | Epics | ADRs | Purpose |
-|---|---|---|---|---|---|---|
-| CAP-001 | scaffold-init | scaffold | shipped | EPC-001, EPC-005, EPC-009, EPC-011, EPC-012 | ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055 | `codeflow init` lays the discipline layer into any repo at the chosen tier |
-| CAP-002 | scaffold-update | scaffold | shipped | EPC-001, EPC-005, EPC-012 | ADR-0011, ADR-0019 | `codeflow update` refreshes managed scaffold files by ownership class |
-| CAP-003 | git-policy-gates | engine | shipped | EPC-001, EPC-011 | ADR-0002, ADR-0006, ADR-0007, ADR-0017 | Git discipline enforced across four planes reading one policy file |
-| CAP-004 | test-gate | engine | shipped | EPC-001 | ADR-0021, ADR-0031 | `codeflow test` runs the configured or detected targets as one verdict |
-| CAP-005 | integrate | engine | shipped | EPC-001 | none | `codeflow integrate` is the local rebase to test to fast-forward landing |
-| CAP-006 | recall-registry | engine | shipped | EPC-001 | ADR-0045 | `codeflow recall` searches project memory over FTS5 and a cross-repo registry |
-| CAP-007 | orient-session-summary | engine | shipped | EPC-001, EPC-004 | ADR-0013, ADR-0044 | Session-start digest and session-end ledger record for Claude and interactive Codex |
-| CAP-008 | remote-protect-doctor | engine | shipped | EPC-001, EPC-002, EPC-003 | ADR-0002, ADR-0007, ADR-0025, ADR-0054 | `remote protect` applies branch protection; `doctor` runs fifteen health checks |
-| CAP-009 | cross-vendor-delegation | scaffold | shipped | EPC-002, EPC-011, EPC-012 | ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059 | Consult or delegate a unit of work to another vendor's coding CLI |
-| [CAP-010](capabilities/CAP-010-duo-model-orchestration.md) | duo-model-orchestration | scaffold | shipped | EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012 | ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060 | `/cf-model-orchestrator` is the host-neutral default for non-trivial repository work |
-| CAP-011 | security-redteam-review | engine | shipped | EPC-003, EPC-012 | ADR-0016 | The mandatory security and red-team stage, bound at three planes |
-| CAP-012 | scaffold-customize | scaffold | shipped | EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012 | ADR-0025, ADR-0044 | `/cf-customize` is the post-init tailoring walk-through over tools and project facts |
-| [CAP-013](capabilities/CAP-013-model-binding-evaluation.md) | model-binding-evaluation | scaffold | shipped | EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012 | ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060 | `/cf-evaluate-model` qualifies a model, harness, profile, or instruction change |
-| CAP-014 | transport-neutral-delegate-lifecycle | engine | building | EPC-002 | ADR-0036, ADR-0037 | `codeflow delegate init/arm/wait` drives a delegated turn through durable records |
-| [CAP-015](capabilities/CAP-015-opt-in-documentation-portal.md) | opt-in-documentation-portal | scaffold | shipped | EPC-005, EPC-007, EPC-013, EPC-014 | ADR-0048, ADR-0058 | `codeflow portal setup` adopts the exact-pinned Starlight and Pagefind guide |
-| [CAP-016](capabilities/CAP-016-interactive-presentation-review.md) | interactive-presentation-review | engine | building | EPC-005, EPC-014 | ADR-0049, ADR-0050, ADR-0052, ADR-0053 | `codeflow present` turns a catalog document into one bounded local review surface |
-| CAP-017 | optional-agentic-estimation | engine | shipped | EPC-006 | ADR-0057 | The optional cf-estimate method plus a read-only allocation checker |
+**Check here before building: every capability has one row, one status, and
+one home.**
+
+```cf-stage
+scaffold | init · update · customize · estimate @accent
+->
+enforce | git policy · remote protect · security review
+->
+verify | test gate · integrate
+->
+remember | orient · recall
+->
+delegate | consult · delegate · duo · model qualification
+->
+present | docs portal · review sessions @positive
+caption: six jobs over seventeen capabilities, resolved to ids and status below
+```
+
+The six jobs are the shape of the product: the first four are the install flow
+every tier gets, and the last two are what the method and the optional surfaces
+add on top. Architecture resolves each job into the registry rows; Technical
+holds one definition table and the operating detail per capability, in the same
+six groups.
+
+## Architecture
+
+One registry row per user-meaningful capability, keyed by its `CAP-###` id.
+The portal generates this table from the yaml fences in Technical, so a row can
+never disagree with the entry it summarizes.
+
+| Capability | Name | Area | Status |
+|---|---|---|---|
+| CAP-001 | scaffold-init | scaffold | shipped |
+| CAP-002 | scaffold-update | scaffold | shipped |
+| CAP-003 | git-policy-gates | engine | shipped |
+| CAP-004 | test-gate | engine | shipped |
+| CAP-005 | integrate | engine | shipped |
+| CAP-006 | recall-registry | engine | shipped |
+| CAP-007 | orient-session-summary | engine | shipped |
+| CAP-008 | remote-protect-doctor | engine | shipped |
+| CAP-009 | cross-vendor-delegation | scaffold | shipped |
+| CAP-010 | duo-model-orchestration | scaffold | shipped |
+| CAP-011 | security-redteam-review | engine | shipped |
+| CAP-012 | scaffold-customize | scaffold | shipped |
+| CAP-013 | model-binding-evaluation | scaffold | shipped |
+| CAP-014 | transport-neutral-delegate-lifecycle | engine | building |
+| CAP-015 | opt-in-documentation-portal | scaffold | shipped |
+| CAP-016 | interactive-presentation-review | engine | building |
+| CAP-017 | optional-agentic-estimation | engine | shipped |
 
 Statuses run planned → building → shipped → deprecated; entries are
-deprecated, never deleted. Four capabilities have outgrown a single
-overview and are graduated to `docs/capabilities/`; their registry entry
-keeps the machine-read block, a summary, and the link.
+deprecated, never deleted. Each entry's full field set, including the epics,
+decisions and test tags that prove it, is the definition table beside its
+description in Technical. Two capabilities explain a subsystem large enough to
+carry its own page:
+[duo model orchestration](capabilities/CAP-010-duo-model-orchestration.md) and
+the [opt-in documentation portal](capabilities/CAP-015-opt-in-documentation-portal.md).
+Both keep their registry entry here.
 
-## CAP-001: scaffold-init
+## Technical
+
+One subsection per job. Each capability carries its definition table, generated
+from the yaml fence that is the machine-read authority, then the operating
+detail a reviewer or operator needs.
+
+### scaffold
+
+#### scaffold-init
 
 ```yaml
 id: CAP-001
@@ -89,7 +135,7 @@ remains the ordinary fallback because
 repository-scoped Auto is intentionally ignored (ADR-0025, ADR-0026,
 ADR-0029).
 
-## CAP-002: scaffold-update
+#### scaffold-update
 
 ```yaml
 id: CAP-002
@@ -114,7 +160,84 @@ replacement; state reads fail on non-absence errors, and malformed
 `[scaffold].ignore` values identify their key or index. Never clobbers, never
 silently skips.
 
-## CAP-003: git-policy-gates
+#### scaffold-customize
+
+```yaml
+id: CAP-012
+name: scaffold-customize
+area: scaffold
+status: shipped
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012]
+adrs: [ADR-0025, ADR-0044]
+```
+
+`/cf-customize` is the post-init tailoring walk-through: after `codeflow init`
+(or a `codeflow update` that ships new defaults to decide), it runs a
+flow-aware tool preflight, verifying the tools needed by each flow the
+project actually uses (git and the harness for every flow; the `codex-plugin-cc`
+plugin, codex, and its MCP servers for a Claude-hosted duo; Claude CLI/MCP,
+tmux, and the completion-hook canary for a Codex-hosted duo or reverse consult;
+the stack's test toolchain).
+It then reconciles the consuming project's actual README, manifests, code, and CI
+against its project-owned artifacts (`docs/product.md`,
+`docs/architecture.md`, common instructions/commands in `AGENTS.md`, only
+Claude-specific differences in `CLAUDE.md`, policy levels, and runtime model
+routing). It locates existing human-approved editorial voice guidance and
+examples without inventing a persona, and points agents to the project-owned
+canonical source when one exists. It verifies effective Claude/Codex sandbox,
+network, live-search, and approval posture rather than trusting comments. It
+also canaries the task's
+research, GitHub, stack, coverage/security, browser/UI, design, and
+project-specific MCP tools with brokered authentication and no raw secrets.
+For concurrent browser work it additionally settles the project's resource
+contract: isolated profile/context, ports only where a listener or local
+service needs them, namespaced test data, run-scoped artifacts, and owned
+teardown/release verification. CodeFlow never supplies universal port numbers
+or reuses the operator's browser profile.
+
+Analysis-then-propose: one prioritized report first, then fixes applied
+interactively on a working branch through a PR; it never auto-installs a tool or
+silently changes global harness settings. `codeflow init` prints the next step,
+and doctor keeps a nudge visible while scaffold sentinels remain. Ships as the
+`cf-customize` skill, mirrored across
+`.claude/skills`, `.agents/skills`, and the `assets/base` scaffold source.
+The walk-through maps existing source, build, runtime, data/trust, and work
+authorities before proposing changes. It preserves credible native layouts and
+does not treat an external tracker or foreign tasks directory as reason to
+duplicate status or force a CodeFlow workgraph; pre-init cwd, fixed paths, and
+collisions remain explicit onboarding decisions.
+Release customization discovers the project's existing units, version and
+curated-note sources, single calculator, candidate checks and publication
+authority. It reuses that process or offers a verified opt-in starting process;
+independent package/version domains and calendar schemes remain project-owned.
+The shared release-policy reference routes customization, shipping and review
+without turning CodeFlow scaffold metadata into the consumer's version.
+
+#### optional-agentic-estimation
+
+```yaml
+id: CAP-017
+name: optional-agentic-estimation
+area: engine
+status: shipped
+verified_by: [estimate, estimate_cli, estimate_adoption_e2e, manifest_consistency]
+epics: [EPC-006]
+adrs: [ADR-0057]
+```
+
+SPC-007 defines the optional cf-estimate method: active project-specific offer,
+confirmed adoption or respected decline, evidence-anchored grades, full-delivery
+scenarios and resource-feasible allocations. Standard/full skills are managed;
+profiles, forecasts and outcomes stay project-owned and link existing authority.
+EPC-006 supplies the read-only allocation checker, installed-path tests and
+native diagnostic evidence, including retained failures and a focused consent
+repair. Implementation readiness and predictive usefulness remain separate;
+this registry does not establish calibrated delivery predictions.
+
+### enforce
+
+#### git-policy-gates
 
 ```yaml
 id: CAP-003
@@ -161,114 +284,7 @@ Secret scanning fails closed if libgit2 cannot traverse the complete staged
 diff. Hook stdin read failures remain advisory but print an explicit degraded
 ref-check warning instead of passing silently.
 
-## CAP-004: test-gate
-
-```yaml
-id: CAP-004
-name: test-gate
-area: engine
-status: shipped
-verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
-epics: [EPC-001]
-adrs: [ADR-0021, ADR-0031]
-```
-
-`codeflow test [--mode full|quick|essential] [--strict]` runs the generic test
-engine against configured targets (`.codeflow/test-config.json`) or runtime stack
-detection (`quick` is an alias for `essential`, the lighter mode). No stack
-detected is a loud no-op (exit 0) so the bootstrap/early-setup path stays green;
-`--strict` escalates that no-op to a non-zero exit for scripted/unattended callers
-(CI, the pipeline verify gate) where "ran nothing" must not read as a pass. With a
-stack it is a real gate, wired into pre-push via the `test_gate_on_push` policy and
-re-run in CI. File and aggregate coverage thresholds all contribute to the gate
-verdict; `changed_files` rules are rejected until an explicit comparison base is
-available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
-`codeflow test setup` safely fills absent/empty root-detected configs, lists and
-applies release-embedded templates, and appends explicit targets. Detection is
-root-only; monorepos declare package `cwd` targets explicitly. Populated or
-malformed configs are never auto-replaced, and a malformed configured pre-push
-gate is a violation rather than a skip. Legacy `structural` blocks remain
-loadable but doctor warns that the public gate does not enforce them; setup no
-longer emits dormant rules.
-
-## CAP-005: integrate
-
-```yaml
-id: CAP-005
-name: integrate
-area: engine
-status: shipped
-verified_by: ["cargo test integrate::", "codeflow-cli tests/cli_flow.rs"]
-epics: [EPC-001]
-adrs: []
-```
-
-`codeflow integrate <branch> [--into <target>]` is the sanctioned local
-landing path for protected branches: a flock-guarded rebase → test →
-fast-forward primitive. It rebases the branch onto the target, runs the test
-gate, then advances the target with `git merge --ff-only`, a linear
-fast-forward that adds no merge commit; the target ref moves only when every
-stage succeeds. The sequence runs under a gate-context token the git hooks and
-git-guard verify, so the protected ref advances only through integrate or a
-human-merged PR; a raw `git merge` or manual ref move stays blocked. A human
-retains the local override path (`CODEFLOW_HUMAN_OVERRIDE=1`), an env the
-git-guard never honors for an agent. After landing, clean linked worktrees that
-have the target checked out are reset to the tested tip; dirty worktrees and a
-failed checkout restoration are reported as partial-success warnings.
-
-## CAP-006: recall-registry
-
-```yaml
-id: CAP-006
-name: recall-registry
-area: engine
-status: shipped
-verified_by: ["cargo test recall::", "cargo test registry::", "codeflow-cli tests/recall_remote_cli.rs"]
-epics: [EPC-001]
-adrs: [ADR-0045]
-```
-
-`codeflow recall [--all] "<query>"` searches project memory, meaning ledger events,
-session summaries, ADRs, epics, tasks, frozen specs, and capabilities, via
-bundled SQLite FTS5, with coverage gaps disclosed. The cross-repo view comes from
-`~/.codeflow/registry.json`, a flock'd registry upserted on every command run;
-a lazy view at query time, not a daemon.
-Recursive source discovery skips directory symlinks and obeys depth/count
-budgets. Reversible path encoding supplies index identity, while lossy text is
-reserved for display.
-
-## CAP-007: orient-session-summary
-
-```yaml
-id: CAP-007
-name: orient-session-summary
-area: engine
-status: shipped
-verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-001, EPC-004]
-adrs: [ADR-0013, ADR-0044]
-```
-
-`codeflow orient` generates the session-start digest live (≤30 lines,
-pointers not content): product one-liner, branch/worktree state, work and
-capability counts, recent ADR titles, gate status, paths to read more. The
-`session-summary` SessionEnd hook appends a session record to the ledger,
-recall's zero-ceremony corpus. Both are wired through `.claude/settings.json`;
-the orient digest is also wired for Codex via `.codex/hooks.json` (SessionStart,
-all sources, ADR-0013), so an **interactive** Codex session opens with the same
-digest and re-orients after a compaction (`source=compact`). One handler serves
-both harnesses, with plain-text stdout each injects as session context, so there is
-no per-harness duplication. Headless `codex exec` does not fire project hooks
-(ADR-0008), so this is an interactive-session aid; the `codex_hooks` test pins the
-JSON wiring, while live firing rests on Codex's documented hooks contract.
-
-`codeflow status` also emits a read-only cleanup inventory for linked
-worktrees and unattached local branches. Against the locally known target it
-distinguishes clean ancestry/patch-equivalent resources, dirty work, and
-unproven work; the report performs no mutation and never substitutes for an
-active-owner check (ADR-0044).
-
-## CAP-008: remote-protect-doctor
+#### remote-protect-doctor
 
 ```yaml
 id: CAP-008
@@ -301,7 +317,150 @@ trusted harness capability catalog, compares externally observable harness
 versions and declared settings-source digests, and keeps live model/effort
 unknown unless native evidence proves it (ADR-0039).
 
-## CAP-009: cross-vendor-delegation
+#### security-redteam-review
+
+```yaml
+id: CAP-011
+name: security-redteam-review
+area: engine
+status: shipped
+verified_by: ["cargo test hooks::policy", "codeflow-core tests/manifest_consistency.rs"]
+epics: [EPC-003, EPC-012]
+adrs: [ADR-0016]
+```
+
+The duo develop flow's mandatory security / red-team stage, bound at three
+planes that copy the git-rules model. Deterministic floor: the CI
+`security-review` job runs `osv-scanner` (stack-agnostic SCA over every lockfile
+ecosystem, the universal floor today; per-stack scanners are a future
+extension), gated by the `security_review` (whole-job umbrella) and `dep_audit`
+(SCA sub-gate) policy keys beside `secret_scan`, with the advisory blocking when
+either is `block`. Model layer: the `cf-security-reviewer` agent runs a
+dual-vendor adversarial red-team (Claude defender lens + codex assume-breach
+attacker, ADR-0005) across seven axes mapped to OWASP Top 10:2025 / OWASP LLM
+Top 10:2025 / CWE Top 25 (2025), emitting structured `SecurityFinding` /
+`SecurityVerdict` output; the pipeline `security` stage sets its verdict from the
+severity+confidence block rule. The deterministic floor hard-blocks CI only
+when `security_review` or `dep_audit` is hardened to `block` (the shipped
+default is warn); secrets via gitleaks always block, and a High+ severity
+filter is future work alongside the per-stack scanners. Model-reasoned findings
+warn locally and force bounded rework, with the human merger as the backstop
+for judgment a machine cannot adjudicate (ADR-0007).
+
+### verify
+
+#### test-gate
+
+```yaml
+id: CAP-004
+name: test-gate
+area: engine
+status: shipped
+verified_by: ["cargo test testing::gate", "cargo test testing::config", "codeflow-core tests/integration_testing_setup.rs"]
+epics: [EPC-001]
+adrs: [ADR-0021, ADR-0031]
+```
+
+`codeflow test [--mode full|quick|essential] [--strict]` runs the generic test
+engine against configured targets (`.codeflow/test-config.json`) or runtime stack
+detection (`quick` is an alias for `essential`, the lighter mode). No stack
+detected is a loud no-op (exit 0) so the bootstrap/early-setup path stays green;
+`--strict` escalates that no-op to a non-zero exit for scripted/unattended callers
+(CI, the pipeline verify gate) where "ran nothing" must not read as a pass. With a
+stack it is a real gate, wired into pre-push via the `test_gate_on_push` policy and
+re-run in CI. File and aggregate coverage thresholds all contribute to the gate
+verdict; `changed_files` rules are rejected until an explicit comparison base is
+available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
+`codeflow test setup` safely fills absent/empty root-detected configs, lists and
+applies release-embedded templates, and appends explicit targets. Detection is
+root-only; monorepos declare package `cwd` targets explicitly. Populated or
+malformed configs are never auto-replaced, and a malformed configured pre-push
+gate is a violation rather than a skip. Legacy `structural` blocks remain
+loadable but doctor warns that the public gate does not enforce them; setup no
+longer emits dormant rules.
+
+#### integrate
+
+```yaml
+id: CAP-005
+name: integrate
+area: engine
+status: shipped
+verified_by: ["cargo test integrate::", "codeflow-cli tests/cli_flow.rs"]
+epics: [EPC-001]
+adrs: []
+```
+
+`codeflow integrate <branch> [--into <target>]` is the sanctioned local
+landing path for protected branches: a flock-guarded rebase → test →
+fast-forward primitive. It rebases the branch onto the target, runs the test
+gate, then advances the target with `git merge --ff-only`, a linear
+fast-forward that adds no merge commit; the target ref moves only when every
+stage succeeds. The sequence runs under a gate-context token the git hooks and
+git-guard verify, so the protected ref advances only through integrate or a
+human-merged PR; a raw `git merge` or manual ref move stays blocked. A human
+retains the local override path (`CODEFLOW_HUMAN_OVERRIDE=1`), an env the
+git-guard never honors for an agent. After landing, clean linked worktrees that
+have the target checked out are reset to the tested tip; dirty worktrees and a
+failed checkout restoration are reported as partial-success warnings.
+
+### remember
+
+#### orient-session-summary
+
+```yaml
+id: CAP-007
+name: orient-session-summary
+area: engine
+status: shipped
+verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+epics: [EPC-001, EPC-004]
+adrs: [ADR-0013, ADR-0044]
+```
+
+`codeflow orient` generates the session-start digest live (≤30 lines,
+pointers not content): product one-liner, branch/worktree state, work and
+capability counts, recent ADR titles, gate status, paths to read more. The
+`session-summary` SessionEnd hook appends a session record to the ledger,
+recall's zero-ceremony corpus. Both are wired through `.claude/settings.json`;
+the orient digest is also wired for Codex via `.codex/hooks.json` (SessionStart,
+all sources, ADR-0013), so an **interactive** Codex session opens with the same
+digest and re-orients after a compaction (`source=compact`). One handler serves
+both harnesses, with plain-text stdout each injects as session context, so there is
+no per-harness duplication. Headless `codex exec` does not fire project hooks
+(ADR-0008), so this is an interactive-session aid; the `codex_hooks` test pins the
+JSON wiring, while live firing rests on Codex's documented hooks contract.
+
+`codeflow status` also emits a read-only cleanup inventory for linked
+worktrees and unattached local branches. Against the locally known target it
+distinguishes clean ancestry/patch-equivalent resources, dirty work, and
+unproven work; the report performs no mutation and never substitutes for an
+active-owner check (ADR-0044).
+
+#### recall-registry
+
+```yaml
+id: CAP-006
+name: recall-registry
+area: engine
+status: shipped
+verified_by: ["cargo test recall::", "cargo test registry::", "codeflow-cli tests/recall_remote_cli.rs"]
+epics: [EPC-001]
+adrs: [ADR-0045]
+```
+
+`codeflow recall [--all] "<query>"` searches project memory, meaning ledger events,
+session summaries, ADRs, epics, tasks, frozen specs, and capabilities, via
+bundled SQLite FTS5, with coverage gaps disclosed. The cross-repo view comes from
+`~/.codeflow/registry.json`, a flock'd registry upserted on every command run;
+a lazy view at query time, not a daemon.
+Recursive source discovery skips directory symlinks and obeys depth/count
+budgets. Reversible path encoding supplies index identity, while lossy text is
+reserved for display.
+
+### delegate
+
+#### cross-vendor-delegation
 
 ```yaml
 id: CAP-009
@@ -342,7 +501,7 @@ pre-commit, commit-msg, the test gate, and the independent review pass
 constrain them exactly as they do the orchestrating harness. No engine model
 router is added; the binary owns only the deterministic terminal adapter.
 
-## CAP-010: duo-model-orchestration
+#### duo-model-orchestration
 
 ```yaml
 id: CAP-010
@@ -403,93 +562,9 @@ evidenced product voices, localization honesty, utility/product isolation,
 appearance-mode behavior, accessibility, and rendered fidelity
 (ADR-0043, ADR-0051).
 
-Full detail: [CAP-010: duo-model-orchestration](capabilities/CAP-010-duo-model-orchestration.md).
+Full detail: [duo model orchestration](capabilities/CAP-010-duo-model-orchestration.md).
 
-## CAP-011: security-redteam-review
-
-```yaml
-id: CAP-011
-name: security-redteam-review
-area: engine
-status: shipped
-verified_by: ["cargo test hooks::policy", "codeflow-core tests/manifest_consistency.rs"]
-epics: [EPC-003, EPC-012]
-adrs: [ADR-0016]
-```
-
-The duo develop flow's mandatory security / red-team stage, bound at three
-planes that copy the git-rules model. Deterministic floor: the CI
-`security-review` job runs `osv-scanner` (stack-agnostic SCA over every lockfile
-ecosystem, the universal floor today; per-stack scanners are a future
-extension), gated by the `security_review` (whole-job umbrella) and `dep_audit`
-(SCA sub-gate) policy keys beside `secret_scan`, with the advisory blocking when
-either is `block`. Model layer: the `cf-security-reviewer` agent runs a
-dual-vendor adversarial red-team (Claude defender lens + codex assume-breach
-attacker, ADR-0005) across seven axes mapped to OWASP Top 10:2025 / OWASP LLM
-Top 10:2025 / CWE Top 25 (2025), emitting structured `SecurityFinding` /
-`SecurityVerdict` output; the pipeline `security` stage sets its verdict from the
-severity+confidence block rule. The deterministic floor hard-blocks CI only
-when `security_review` or `dep_audit` is hardened to `block` (the shipped
-default is warn); secrets via gitleaks always block, and a High+ severity
-filter is future work alongside the per-stack scanners. Model-reasoned findings
-warn locally and force bounded rework, with the human merger as the backstop
-for judgment a machine cannot adjudicate (ADR-0007).
-
-## CAP-012: scaffold-customize
-
-```yaml
-id: CAP-012
-name: scaffold-customize
-area: scaffold
-status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012]
-adrs: [ADR-0025, ADR-0044]
-```
-
-`/cf-customize` is the post-init tailoring walk-through: after `codeflow init`
-(or a `codeflow update` that ships new defaults to decide), it runs a
-flow-aware tool preflight, verifying the tools needed by each flow the
-project actually uses (git and the harness for every flow; the `codex-plugin-cc`
-plugin, codex, and its MCP servers for a Claude-hosted duo; Claude CLI/MCP,
-tmux, and the completion-hook canary for a Codex-hosted duo or reverse consult;
-the stack's test toolchain).
-It then reconciles the consuming project's actual README, manifests, code, and CI
-against its project-owned artifacts (`docs/product.md`,
-`docs/architecture.md`, common instructions/commands in `AGENTS.md`, only
-Claude-specific differences in `CLAUDE.md`, policy levels, and runtime model
-routing). It locates existing human-approved editorial voice guidance and
-examples without inventing a persona, and points agents to the project-owned
-canonical source when one exists. It verifies effective Claude/Codex sandbox,
-network, live-search, and approval posture rather than trusting comments. It
-also canaries the task's
-research, GitHub, stack, coverage/security, browser/UI, design, and
-project-specific MCP tools with brokered authentication and no raw secrets.
-For concurrent browser work it additionally settles the project's resource
-contract: isolated profile/context, ports only where a listener or local
-service needs them, namespaced test data, run-scoped artifacts, and owned
-teardown/release verification. CodeFlow never supplies universal port numbers
-or reuses the operator's browser profile.
-
-Analysis-then-propose: one prioritized report first, then fixes applied
-interactively on a working branch through a PR; it never auto-installs a tool or
-silently changes global harness settings. `codeflow init` prints the next step,
-and doctor keeps a nudge visible while scaffold sentinels remain. Ships as the
-`cf-customize` skill, mirrored across
-`.claude/skills`, `.agents/skills`, and the `assets/base` scaffold source.
-The walk-through maps existing source, build, runtime, data/trust, and work
-authorities before proposing changes. It preserves credible native layouts and
-does not treat an external tracker or foreign tasks directory as reason to
-duplicate status or force a CodeFlow workgraph; pre-init cwd, fixed paths, and
-collisions remain explicit onboarding decisions.
-Release customization discovers the project's existing units, version and
-curated-note sources, single calculator, candidate checks and publication
-authority. It reuses that process or offers a verified opt-in starting process;
-independent package/version domains and calendar schemes remain project-owned.
-The shared release-policy reference routes customization, shipping and review
-without turning CodeFlow scaffold metadata into the consumer's version.
-
-## CAP-013: model-binding-evaluation
+#### model-binding-evaluation
 
 ```yaml
 id: CAP-013
@@ -520,9 +595,9 @@ use a finite loopback simulator; its journal stays outside the subject tree and
 setup records both materialized and configured tree digests. This is not a full
 promotion or a real-service authorization test.
 
-Full detail: [CAP-013: model-binding-evaluation](capabilities/CAP-013-model-binding-evaluation.md).
+Full detail: [model and harness upgrades](model-upgrades.md).
 
-## CAP-014: transport-neutral-delegate-lifecycle
+#### transport-neutral-delegate-lifecycle
 
 ```yaml
 id: CAP-014
@@ -585,7 +660,9 @@ host. The reusable sibling-hook rejection procedure, full fake-TUI stress
 matrix, and broader native-platform evidence remain PR2/release gates and are
 not claimed complete.
 
-## CAP-015: opt-in-documentation-portal
+### present
+
+#### opt-in-documentation-portal
 
 ```yaml
 id: CAP-015
@@ -637,9 +714,9 @@ It compares generator evidence with the declared identity, retaining managed
 release pins but accepting a genuinely renamed transferred generator. Matching
 evidence is not runtime attestation or a substitute for rendered qualification.
 
-Full detail: [CAP-015: opt-in-documentation-portal](capabilities/CAP-015-opt-in-documentation-portal.md).
+Full detail: [opt-in documentation portal](capabilities/CAP-015-opt-in-documentation-portal.md).
 
-## CAP-016: interactive-presentation-review
+#### interactive-presentation-review
 
 ```yaml
 id: CAP-016
@@ -662,25 +739,65 @@ catalog; the runtime owns chrome, themes, and the Comment system. The
 design-exploration board is craft reference, not a document to clone. Durable
 docs belong to `cf-docs-portal`.
 
-Full detail: [CAP-016: interactive-presentation-review](capabilities/CAP-016-interactive-presentation-review.md).
+Text feedback retains the selected occurrence and revalidates live ranges before
+pinning. Toolbar capture survives focus changes; leaving Comment releases its
+capture state. Iframe figures use native hit-testing while commenting and regain
+their prior pointer interaction afterward, without overlays on neighboring text.
 
-## CAP-017: optional-agentic-estimation
+The runtime validates the declarative block tree, embeds its deterministic
+renderer, stores immutable revisions and append-only feedback in owner-private
+project-keyed durable state, keeps browser-owned profile/cache and bounded
+runtime controls in a separate derived root, and exposes open/update/list/show/history/feedback/resolve/
+export/close/clear through the CLI. A one-time tokenless file bootstrap opens a
+CodeFlow-owned isolated browser profile against an authenticated loopback-only
+service. Host/Origin/CSP/path/body limits, inert revision-qualified HTML
+sandboxing, strict primitive-token import, crash recovery, bounded retention,
+and identity-scoped cleanup are code boundaries. Event parsing and partial-tail
+repair are self-bounded and operate through one opened handle. Mermaid input is
+capped per diagram and per document; browser enhancement is serialized, yields
+between diagrams, and fails remaining items to escaped source when the eager
+fallback exhausts its cumulative budget. Browser and auxiliary system-tool
+children share one allowlist-only environment. Windows ACL mutation is confined
+to creation for every private file, including append and lease files; existing
+state uses native read-only owner/protected-DACL/trustee/inheritance
+verification. Unix ignores a relative XDG state override and rejects a relative
+home rather than placing state in the worktree. Static export remains self-contained and excludes
+review/authentication/runtime state.
 
-```yaml
-id: CAP-017
-name: optional-agentic-estimation
-area: engine
-status: shipped
-verified_by: [estimate, estimate_cli, estimate_adoption_e2e, manifest_consistency]
-epics: [EPC-006]
-adrs: [ADR-0057]
-```
+Native-path repository identity, per-block and whole-document collection
+cardinality, a project→session→runtime-control lock order, pre-publication
+capacity admission for every durable growth route, and an over-quota-safe
+control path keep quota boundaries deterministic under concurrent creation,
+revision, feedback, and runtime registration. The browser loads a bounded recent
+feedback snapshot, uniquely re-anchors exact selectors across revisions, leaves
+missing/ambiguous selectors visibly orphaned, and exposes the current lifecycle
+version. Resolve accepts only a current delivered event and appends
+addressed/dismissed state. Exact accepted receipt and identical terminal retries
+are zero-growth operations; conflicting reuse and unrelated stale versions fail
+closed. Retention recomputes bounded durable size after every eviction, selected
+cleanup loads only its named session, and bulk cleanup reports isolated partial
+failures without deleting ambiguous state. A selected session that cannot be
+removed reports its exact retained outcome instead of succeeding silently.
+Verified Unix process groups receive bounded graceful shutdown and then an
+identity recheck before forced termination. Unverifiable orphan process
+groups/trees retain recovery state rather than killing an unproven process or
+deleting its profile. Launches are serialized under a session lease and publish
+one exact record per attempt; close, show, and retry consume it. Reused PIDs are
+never signalled: bounded exact-marker discovery and native profile-resource
+proof either complete cleanup or retain an actionable error. Windows checks
+exclusive handles across the actual profile tree rather than assuming a
+POSIX-style lock file. After a retained group/tree exits or an operator verifies
+and terminates it, retrying close completes cleanup. Review input controls expose
+the Rust-owned note, text, selection, and payload bounds before submission.
 
-SPC-007 defines the optional cf-estimate method: active project-specific offer,
-confirmed adoption or respected decline, evidence-anchored grades, full-delivery
-scenarios and resource-feasible allocations. Standard/full skills are managed;
-profiles, forecasts and outcomes stay project-owned and link existing authority.
-EPC-006 supplies the read-only allocation checker, installed-path tests and
-native diagnostic evidence, including retained failures and a focused consent
-repair. Implementation readiness and predictive usefulness remain separate;
-this registry does not establish calibrated delivery predictions.
+The capability remains `building` until TSK-007 records the full native
+macOS/Linux/WSL2/Windows and qualified-browser matrix, adversarial service and
+state evidence, design/accessibility/responsive comparisons, deterministic
+asset/release checks, and fresh native interactive model trials. That matrix
+includes Windows Unicode known-folder/profile paths, creation-time ACL
+hardening plus read-only weakened-ACL rejection, trusted system tools, exact
+process-tree identity and file URLs; Linux/WSL2
+bounded `/proc` identity and group signaling; and a dense multi-diagram browser
+corpus with long-task evidence. Cross-builds alone do not claim native runtime
+support. The runtime's own architecture is
+[present: bounded review sessions](architecture/present.md).
