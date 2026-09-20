@@ -9,7 +9,7 @@
 | Harness | What the shipped preset enables | What stays gated |
 |---|---|---|
 | Claude Code | Fail-closed OS sandbox, sandbox-contained Bash, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; unsandboxed retry only when auto-classified for a trusted installed tool that needs host state; auto mode and classifier policy are never taken from the repository |
-| Codex | Guarded workspace permission profile (no legacy `sandbox_mode`), live search, `approval_policy = "never"`, `model_reasoning_effort = "high"`, production `--sandbox danger-full-access` | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own — operations outside the effective sandbox fail instead of asking |
+| Codex | Guarded workspace permission profile (no legacy `sandbox_mode`), live search, `approval_policy = "never"`, `model_reasoning_effort = "high"`, production `--sandbox danger-full-access`, which turns the OS sandbox off for that process | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own — operations outside the effective sandbox fail instead of asking |
 | Grok Build | Project hooks wired in `.grok/hooks/codeflow.json` — the same `git-guard` and `exec-guard` payload | The hooks load only after the one-time `/hooks-trust` (or `--trust`); the doctor check reports structural wiring, not trust state (ADR-0054) |
 
 These are enabled in runtime settings as well as described in the skills
@@ -79,7 +79,8 @@ shell access as credential-bearing and tighten that task's tool boundary.
   without approval.
 - Codex `auto_review` is configured but is not a human authorization path.
   Production `approval_policy = "never"` plus `--sandbox danger-full-access`
-  does not pause for that subagent. Catastrophic work still stops for the
+  turns the OS sandbox off for that process, and it does not pause for that
+  subagent. Catastrophic work still stops for the
   operator. Use `on-request` and `approvals_reviewer = "user"` only on a
   consult/no-edit lane when policy requires a human decision.
 
