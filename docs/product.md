@@ -48,8 +48,10 @@ ledger | what happened @positive
 caption: the six layer knowledge model, with recall over the whole record
 ```
 
-Each layer is a committed Markdown surface, so the record survives the session
-that produced it. The commitments around it are these:
+The first five layers are committed Markdown with YAML frontmatter. The ledger
+is not: it is the append-only JSONL event log the binary writes, with an FTS5
+cache rebuilt over both. Either way the record survives the session that
+produced it. The commitments around the model are these:
 
 | Commitment | What CodeFlow ships |
 |---|---|
