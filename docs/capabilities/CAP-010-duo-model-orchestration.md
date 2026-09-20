@@ -30,9 +30,8 @@ seat is never reduced to critiquing a plan the first already supplied.
 
 ## Architecture
 
-The plan is the structure. Both seats independently research, analyze risks,
-and draft complete plans from the same immutable brief before either sees the
-other's conclusions. This is an anti-anchoring requirement: Codex must not be
+Both seats independently research, analyze risks, and draft complete plans from
+the same immutable brief before either sees the other's conclusions. This is an anti-anchoring requirement: Codex must not be
 reduced to critiquing a plan Claude has already supplied. After both drafts
 exist, Claude leads design. The host reconciles a versioned plan whose task
 rows name the responsible primary, actual binding-or-route executor, execution
