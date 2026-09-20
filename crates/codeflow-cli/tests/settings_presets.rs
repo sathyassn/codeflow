@@ -47,6 +47,7 @@ fn presets_disable_host_attribution() {
         assert_eq!(preset["includeCoAuthoredBy"], false, "{name}");
         assert_eq!(preset["attribution"]["commit"], "", "{name}");
         assert_eq!(preset["attribution"]["pr"], "", "{name}");
+        assert_eq!(preset["attribution"]["sessionUrl"], false, "{name}");
     }
 }
 
