@@ -14,5 +14,6 @@
     { "id": "system", "label": "System", "description": "Architecture, durable decisions, and operational boundaries.", "paths": ["docs/architecture.md"], "prefixes": ["docs/architecture", "docs/decisions"] },
     { "id": "reference", "label": "Reference", "description": "Supporting guides and technical reference material.", "fallback": true }
   ],
+  "records": { "enabled": false, "layer": null, "pointers": [] },
   "base": "/"
 }
