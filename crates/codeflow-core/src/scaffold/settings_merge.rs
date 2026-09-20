@@ -421,7 +421,9 @@ mod tests {
         assert_eq!(value["attribution"]["commit"], "");
         assert_eq!(value["attribution"]["pr"], "");
         assert_eq!(value["env"]["KEEP"], "1");
-        assert!(report.iter().any(|l| l.contains("added \"includeCoAuthoredBy\"")));
+        assert!(report
+            .iter()
+            .any(|l| l.contains("added \"includeCoAuthoredBy\"")));
         assert!(report.iter().any(|l| l.contains("added \"attribution\"")));
     }
 
