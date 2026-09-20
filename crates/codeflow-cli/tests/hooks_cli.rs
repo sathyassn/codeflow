@@ -1726,8 +1726,7 @@ fn help_text(args: &[&str]) -> String {
 
 /// The four hook events `delegate-turn` actually dispatches on
 /// (`codeflow_core::delegate::handle_hook`).
-const DELEGATE_TURN_EVENTS: [&str; 4] =
-    ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"];
+const DELEGATE_TURN_EVENTS: [&str; 4] = ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"];
 
 /// DEFECT 4: `codeflow hook --help` names every delegate event. The help used
 /// to advertise only `Stop`/`StopFailure`, hiding the schema-v2 lifecycle

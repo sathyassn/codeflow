@@ -1192,7 +1192,8 @@ fn mechanics_row_matches_the_registered_subcommands() {
     for template in ["assets/base/AGENTS.md.tmpl", "AGENTS.md"] {
         let row = mechanics_row_subcommands(&read(template));
         assert_eq!(
-            row, expected,
+            row,
+            expected,
             "{template}: mechanics row disagrees with the registered \
              subcommands (row-only: {:?}, missing: {:?})",
             row.difference(&expected).collect::<Vec<_>>(),
@@ -1281,4 +1282,3 @@ fn guard_plane_count_stays_four() {
         );
     }
 }
-

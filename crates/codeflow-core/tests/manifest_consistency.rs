@@ -602,7 +602,8 @@ fn instruction_only_clause_has_exactly_one_home() {
 /// and neither the clause nor an appended clarifying note was written into it.
 #[test]
 fn adr_0018_is_not_amended_to_carry_the_clause() {
-    let path = repo_root().join("docs/decisions/ADR-0018-interactive-only-cross-model-transport.md");
+    let path =
+        repo_root().join("docs/decisions/ADR-0018-interactive-only-cross-model-transport.md");
     let text = std::fs::read_to_string(&path).expect("ADR-0018 is readable");
     let flat = unwrapped(&text);
 
