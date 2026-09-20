@@ -199,9 +199,9 @@ with another source needs explicit recovery. A public version is spent forever.
 Material work and withdrawals remain blocked while an attempt is unresolved.
 
 - **Before tagging, re-verify the harness-parity claims** against the
-  currently installed harness versions — these surfaces move fast, and
-  ADR-0008/ADR-0013/ADR-0014 and docs/adoption.md's cross-harness section pin
-  a version that decays:
+  currently installed harness versions. These surfaces move fast, and
+  ADR-0008/ADR-0013/ADR-0014 and the parity section of
+  docs/harness-posture.md pin a version that decays:
   - The PreToolUse payload contract (`git-guard`/`exec-guard`) still matches
     what Claude Code and an interactive Codex session send.
   - The Codex `hooks.json` events still fire as documented, and the `cf-guard`
@@ -241,7 +241,8 @@ Material work and withdrawals remain blocked while an attempt is unresolved.
     WSL2 selects the Linux archive and native Windows installs `codeflow.exe`.
 
 Record new verification in a current ADR/release note and update
-docs/adoption.md if anything drifted; historical ADR bodies remain append-only.
+docs/harness-posture.md if parity drifted; historical ADR bodies remain
+append-only.
 
 The generated release workflow uses the repository's scoped `GITHUB_TOKEN`; it
 does not provision a PAT or publication credential. Hosted settings can still
