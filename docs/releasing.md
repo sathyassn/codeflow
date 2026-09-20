@@ -1,10 +1,16 @@
 # Releasing codeflow
 
 How a codeflow release is cut, and how a project that *consumes* codeflow should
-think about its own versioning. Decision record: ADR-0062 (supersedes the
-release-state portions of ADR-0012 and ADR-0061).
+think about its own versioning. Release state has one operative decision record,
+ADR-0062, at the end of a supersession chain: ADR-0012 (git-cliff calculates the
+version) was superseded by ADR-0061 (a maintained candidate PR), which was
+superseded by ADR-0062 (state lives in the normal work PR). Read the earlier two
+as history, never as current procedure.
+
 Use [the release checklist](release-checklist.md) as the evidence-bearing
-approval record for every run of this procedure.
+approval record for every run of this procedure. Record a link or pasted output
+for each item there; a green job, model agreement, or peer approval is evidence,
+never a substitute for the named human release decision.
 
 ## codeflow's own releases
 

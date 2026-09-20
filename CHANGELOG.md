@@ -35,6 +35,8 @@ publication date._
 - **Committed portal directory links.** Repository guides preserve relative
   links to committed directories as exact-source provider tree URLs while
   retaining visible provenance on unknown providers and fail-closed path rules.
+
+<!-- codeflow:release-impact patch -->
 - **Locally usable repository guide.** README and the adoption guide document
   the locked install, check, build, preview, and validate path for the derived
   `docs-portal/` guide from a clean checkout on Node 24.18.0, distinguish the
@@ -976,7 +978,6 @@ set) shares no code with it and is preserved at the `v1-final` tag.
 - cargo-dist release pipeline with prebuilt binaries for macOS (arm64/x64) and
   Linux (x64) and a shell installer.
 
-[Unreleased]: https://github.com/sathyassn/codeflow/compare/v3.0.0...HEAD
-[3.0.0]: https://github.com/sathyassn/codeflow/compare/v2.1.0...v3.0.0
+[3.0.0]: https://github.com/sathyassn/codeflow/compare/v2.1.0...main
 [2.1.0]: https://github.com/sathyassn/codeflow/compare/v2.0.0...v2.1.0
 [2.0.0]: https://github.com/sathyassn/codeflow/releases/tag/v2.0.0
