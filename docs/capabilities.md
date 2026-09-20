@@ -46,7 +46,12 @@ per capability, in the same six groups.
 
 One registry row per user-meaningful capability, keyed by its `CAP-###` id.
 The portal generates this table from the yaml fences in Technical, so a row can
-never disagree with the entry it summarizes.
+never disagree with the entry it summarizes. `Area` is the `area` field of the
+yaml fence, naming the part of the codebase that owns the capability, while the
+six headings in Technical are the reading groups above; the two answer
+different questions, so CAP-017 reading under scaffold with area `engine`, or
+CAP-009, CAP-010, CAP-013 and CAP-015 reading under delegate and present with
+area `scaffold`, is not a contradiction.
 
 | Capability | Name | Area | Status |
 |---|---|---|---|
