@@ -161,4 +161,6 @@ run, 124 on timeout, and 130 when interrupted. `delegate init` and
 | The check failed, or the command could not complete | non-zero, usually 1 |
 | `codeflow update` left conflicts | 2 |
 | `codeflow hook` wants the harness to block the tool call | 2 |
+| `codeflow ci` could not verify in full: no base ref resolved, the commit range could not be enumerated, or `--pr-body-file` was unreadable | 2 |
+| `codeflow portal setup` or `portal transfer` reported conflicts | 2 |
 | An unknown subcommand or an invalid flag | 2 |
