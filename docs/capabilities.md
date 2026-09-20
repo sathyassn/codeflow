@@ -36,11 +36,11 @@ present | docs portal · review sessions @positive
 caption: six jobs over seventeen capabilities, resolved to ids and status below
 ```
 
-The six jobs are the shape of the product: the first four are the install flow
-every tier gets, and the last two are what the method and the optional surfaces
-add on top. Architecture resolves each job into the registry rows; Technical
-holds one definition table and the operating detail per capability, in the same
-six groups.
+The six jobs are categories, not an installation guarantee: a capability's
+category says what it is for, while the tier table on the adoption page says
+which tier actually installs it. Architecture resolves each job into the
+registry rows; Technical holds one definition table and the operating detail
+per capability, in the same six groups.
 
 ## Architecture
 
