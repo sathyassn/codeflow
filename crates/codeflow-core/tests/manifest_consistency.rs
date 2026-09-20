@@ -1113,7 +1113,9 @@ fn present_schema_source_live_and_baseline_copies_are_identical_and_closed() {
 /// present skins (ADR-0053 shared craft): portal `signal` mirrors the present
 /// `instrument` skin and portal `folio` mirrors `ink`, in both modes, plus the
 /// instrument/plex typeface stacks and the shared mono stack. Present's
-/// `styles.css` is canonical; a divergence here is design-system drift.
+/// `styles.css` is canonical; a divergence here is design-system drift. The
+/// starter mirror read here must also equal the live `docs-portal` copy, so a
+/// retune cannot land in one of the two portal files alone.
 #[test]
 fn portal_utility_tokens_match_present_skins() {
     fn block_after(css: &str, marker: &str) -> std::collections::BTreeMap<String, String> {
@@ -1159,6 +1161,9 @@ fn portal_utility_tokens_match_present_skins() {
         root.join("assets/docs-portal/starter/src/styles/utility-tokens.css"),
     )
     .expect("portal utility tokens are readable");
+    let live_portal =
+        std::fs::read_to_string(root.join("docs-portal/src/styles/utility-tokens.css"))
+            .expect("live portal utility tokens are readable");
     let pairs = [
         (
             "portal instrument light vs present instrument light",
@@ -1235,6 +1240,29 @@ fn portal_utility_tokens_match_present_skins() {
             )),
         }
     }
+    // The starter mirror this test reads and the live portal copy must be the
+    // same file: a retune applied to one and not the other would otherwise pass
+    // every check above while the published portal still shipped the old skin.
+    if portal != live_portal {
+        for (label, portal_marker, _present_marker) in pairs {
+            let starter_block = block_after(&portal, portal_marker);
+            let live_block = block_after(&live_portal, portal_marker);
+            for role in ROLES {
+                match (starter_block.get(role), live_block.get(role)) {
+                    (Some(a), Some(b)) if a == b => {}
+                    (a, b) => drift.push(format!(
+                        "{label}: --cf-{role}: starter {a:?} != live portal {b:?}"
+                    )),
+                }
+            }
+        }
+        drift.push(
+            "assets/docs-portal/starter/src/styles/utility-tokens.css and \
+             docs-portal/src/styles/utility-tokens.css are not byte-identical"
+                .to_string(),
+        );
+    }
+
     let portal_mono = block_after(&portal, ":root {");
     let present_mono = block_after(&present, ":root {");
     match (portal_mono.get("font-mono"), present_mono.get("font-mono")) {
