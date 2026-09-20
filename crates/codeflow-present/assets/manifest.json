@@ -16,7 +16,7 @@
   "service": {
     "entrypoints": {
       "present.app": "/app/assets/app-NHWO5GPS.js",
-      "present.style": "/app/assets/app-ZMBSQOWF.css"
+      "present.style": "/app/assets/app-OTNPDC7I.css"
     },
     "inline": {
       "present.prepaint": {
@@ -55,14 +55,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-ZMBSQOWF.css",
-        "stored_path": "service/app-ZMBSQOWF.css.br",
+        "request_path": "/app/assets/app-OTNPDC7I.css",
+        "stored_path": "service/app-OTNPDC7I.css.br",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "br",
         "raw_bytes": 35144,
-        "encoded_bytes": 6682,
-        "sha256": "6f0d81fc6cc2ce21a9e23e696602d9c98be0213491a3e60ba7175991f2fcf727",
-        "etag": "\"sha256-bw2B/GzCziGp4j5pZgLZyYvgITSRo+YLpxdZkfL89yc=\"",
+        "encoded_bytes": 6666,
+        "sha256": "5cc31dcdb5f15db462d34a1759abf1a2ff60a94cc21f1873c6b14561edcedf54",
+        "etag": "\"sha256-XMMdzbXxXbRi00oXWavxov9gqUzCHxhzxrFFYe3O31Q=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -5244,19 +5244,19 @@
     "metrics": {
       "asset_count": 119,
       "raw_corpus_bytes": 4386787,
-      "brotli_corpus_bytes": 1087833,
+      "brotli_corpus_bytes": 1087817,
       "largest_raw_chunk_bytes": 667680,
       "largest_brotli_chunk_bytes": 131167
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-5b8414972282adc2.js.gz",
+      "stored_path": "export/renderer-cbae31283b538321.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
       "raw_bytes": 4354864,
-      "encoded_bytes": 1207875,
-      "sha256": "5b8414972282adc20d869239a938b87b4d10fd39e8b50e32a70f65056110fc50"
+      "encoded_bytes": 1207879,
+      "sha256": "cbae31283b538321ddd4c4945aa32c938801e620255ed3354ccf511cb48d8e5d"
     }
   },
   "budgets": {
@@ -5266,5 +5266,5 @@
     "largest_brotli_chunk_bytes": 150000,
     "export_gzip_bytes": 1300000
   },
-  "corpus_sha256": "90e98d2eceaf149a360ac7ee30177891b5a47fa88a7d277f86b0edb48dc35750"
+  "corpus_sha256": "86b401f1b9716f03d585a9a8cd1584117be4c59910e8c4f0f675268a077e9ff9"
 }
