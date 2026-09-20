@@ -1,8 +1,8 @@
-# codeflow — capabilities
+# codeflow: capabilities
 
 <!-- WHAT layer: the registry of what the system does. Consult before building
      ("does this exist? what does it touch?"). Updated in the same PR that
-     ships the work — the discipline is the ship flow, not a blocking gate.
+     ships the work; the discipline is the ship flow, not a blocking gate.
      `validate --docs` enforces referential integrity (each entry's epics[] and
      adrs[] resolve to real files) and a non-empty verified_by on shipped
      entries; it does not verify that the test tags resolve, and it does not
@@ -12,28 +12,34 @@
      docs/capabilities/CAP-*.md when navigation or merge costs materially
      outweigh a single overview. -->
 
-## CAP-017 — optional-agentic-estimation
+**Check here before building: every capability has one row, one status, and one home.**
 
-```yaml
-id: CAP-017
-name: optional-agentic-estimation
-area: engine
-status: shipped
-verified_by: [estimate, estimate_cli, estimate_adoption_e2e, manifest_consistency]
-epics: [EPC-006]
-adrs: [ADR-0057]
-```
+| Capability | Name | Area | Status | Epics | ADRs | Purpose |
+|---|---|---|---|---|---|---|
+| CAP-001 | scaffold-init | scaffold | shipped | EPC-001, EPC-005, EPC-009, EPC-011, EPC-012 | ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055 | `codeflow init` lays the discipline layer into any repo at the chosen tier |
+| CAP-002 | scaffold-update | scaffold | shipped | EPC-001, EPC-005, EPC-012 | ADR-0011, ADR-0019 | `codeflow update` refreshes managed scaffold files by ownership class |
+| CAP-003 | git-policy-gates | engine | shipped | EPC-001, EPC-011 | ADR-0002, ADR-0006, ADR-0007, ADR-0017 | Git discipline enforced across four planes reading one policy file |
+| CAP-004 | test-gate | engine | shipped | EPC-001 | ADR-0021, ADR-0031 | `codeflow test` runs the configured or detected targets as one verdict |
+| CAP-005 | integrate | engine | shipped | EPC-001 | none | `codeflow integrate` is the local rebase to test to fast-forward landing |
+| CAP-006 | recall-registry | engine | shipped | EPC-001 | ADR-0045 | `codeflow recall` searches project memory over FTS5 and a cross-repo registry |
+| CAP-007 | orient-session-summary | engine | shipped | EPC-001, EPC-004 | ADR-0013, ADR-0044 | Session-start digest and session-end ledger record for Claude and interactive Codex |
+| CAP-008 | remote-protect-doctor | engine | shipped | EPC-001, EPC-002, EPC-003 | ADR-0002, ADR-0007, ADR-0025, ADR-0054 | `remote protect` applies branch protection; `doctor` runs fifteen health checks |
+| CAP-009 | cross-vendor-delegation | scaffold | shipped | EPC-002, EPC-011, EPC-012 | ADR-0005, ADR-0018, ADR-0023, ADR-0036, ADR-0054, ADR-0059 | Consult or delegate a unit of work to another vendor's coding CLI |
+| [CAP-010](capabilities/CAP-010-duo-model-orchestration.md) | duo-model-orchestration | scaffold | shipped | EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012 | ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060 | `/cf-model-orchestrator` is the host-neutral default for non-trivial repository work |
+| CAP-011 | security-redteam-review | engine | shipped | EPC-003, EPC-012 | ADR-0016 | The mandatory security and red-team stage, bound at three planes |
+| CAP-012 | scaffold-customize | scaffold | shipped | EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012 | ADR-0025, ADR-0044 | `/cf-customize` is the post-init tailoring walk-through over tools and project facts |
+| [CAP-013](capabilities/CAP-013-model-binding-evaluation.md) | model-binding-evaluation | scaffold | shipped | EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012 | ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060 | `/cf-evaluate-model` qualifies a model, harness, profile, or instruction change |
+| CAP-014 | transport-neutral-delegate-lifecycle | engine | building | EPC-002 | ADR-0036, ADR-0037 | `codeflow delegate init/arm/wait` drives a delegated turn through durable records |
+| [CAP-015](capabilities/CAP-015-opt-in-documentation-portal.md) | opt-in-documentation-portal | scaffold | shipped | EPC-005, EPC-007, EPC-013, EPC-014 | ADR-0048, ADR-0058 | `codeflow portal setup` adopts the exact-pinned Starlight and Pagefind guide |
+| [CAP-016](capabilities/CAP-016-interactive-presentation-review.md) | interactive-presentation-review | engine | building | EPC-005, EPC-014 | ADR-0049, ADR-0050, ADR-0052, ADR-0053 | `codeflow present` turns a catalog document into one bounded local review surface |
+| CAP-017 | optional-agentic-estimation | engine | shipped | EPC-006 | ADR-0057 | The optional cf-estimate method plus a read-only allocation checker |
 
-SPC-007 defines the optional cf-estimate method: active project-specific offer,
-confirmed adoption or respected decline, evidence-anchored grades, full-delivery
-scenarios and resource-feasible allocations. Standard/full skills are managed;
-profiles, forecasts and outcomes stay project-owned and link existing authority.
-EPC-006 supplies the read-only allocation checker, installed-path tests and
-native diagnostic evidence, including retained failures and a focused consent
-repair. Implementation readiness and predictive usefulness remain separate;
-this registry does not establish calibrated delivery predictions.
+Statuses run planned → building → shipped → deprecated; entries are
+deprecated, never deleted. Four capabilities have outgrown a single
+overview and are graduated to `docs/capabilities/`; their registry entry
+keeps the machine-read block, a summary, and the link.
 
-## CAP-001 — scaffold-init
+## CAP-001: scaffold-init
 
 ```yaml
 id: CAP-001
@@ -83,7 +89,7 @@ remains the ordinary fallback because
 repository-scoped Auto is intentionally ignored (ADR-0025, ADR-0026,
 ADR-0029).
 
-## CAP-002 — scaffold-update
+## CAP-002: scaffold-update
 
 ```yaml
 id: CAP-002
@@ -100,7 +106,7 @@ unmodified files are replaced, user-modified files get a 3-way merge from
 `.codeflow/.baseline/` (conflicts produce `.new` + report), managed regions
 (AGENTS.md markers, settings.json codeflow keys) are surgically updated, and
 user-owned schema-versioned files only gain new keys with defaults. It also
-installs any manifest entry that is in-tier but missing on disk — so a file that
+installs any manifest entry that is in-tier but missing on disk, so a file that
 became in-tier since the last install (e.g. an old `--minimal` repo gaining the
 enforcement floor under ADR-0019) is reconciled into place and recorded, not just
 refreshed. Managed files, baselines, and state use synced same-directory atomic
@@ -108,7 +114,7 @@ replacement; state reads fail on non-absence errors, and malformed
 `[scaffold].ignore` values identify their key or index. Never clobbers, never
 silently skips.
 
-## CAP-003 — git-policy-gates
+## CAP-003: git-policy-gates
 
 ```yaml
 id: CAP-003
@@ -121,18 +127,18 @@ adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017]
 ```
 
 Git discipline enforced across four planes reading one config (the `git`
-section of `.codeflow/policy.json`). Two give fast local feedback — the git
+section of `.codeflow/policy.json`). Two give fast local feedback: the git
 client hooks (pre-commit secret scan + staged-.env, commit-msg
 format/attribution/emoji, pre-merge-commit and reference-transaction
 protected-branch merge/ref rules, pre-push branch naming and protected-branch
 rules) and the Claude `git-guard` PreToolUse hook (in-session immediacy, plus
 the `gh pr merge` and PR-body checks no client hook can see). Two are the
-authoritative perimeter — CI, which re-runs the same checks through the
+authoritative perimeter: CI, which re-runs the same checks through the
 `codeflow ci` binary (the same Rust functions the hooks call, so no inline
 drift, portable across CI hosts via thin GitHub/GitLab/Bitbucket/generic
-wrappers — ADR-0017), and remote branch protection (`codeflow remote protect`).
+wrappers, ADR-0017), and remote branch protection (`codeflow remote protect`).
 Rule *levels* are policy values, user-flippable per repo (`off`/`warn`/`allow`/
-`block`), so a team tunes strictness to its risk tolerance — including the
+`block`), so a team tunes strictness to its risk tolerance, including the
 PR-body structure gate (`git.pr_sections`: required sections present with real
 content, a code-touching range carries the testing sections, and leftover
 template placeholders draw a warn naming their line). The structural
@@ -141,21 +147,21 @@ invalid file fails loud rather than silently reverting to defaults), the schema
 drift-guard pinning the registry to the policy struct, the gate-context token
 that admits a protected-branch advance only through integrate or a PR, and the
 git-guard's refusal to honor override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate
-tokens) set in-session — these preserve the boundary itself and have no off
+tokens) set in-session. These preserve the boundary itself and have no off
 switch. Configurable levels tune how strict a rule is; the invariants keep the
 rules from being routed around. The policy file is
 discoverable and strict from the binary alone: `codeflow policy explain`
 renders every key's type, default, and valid values from a schema registry
 drift-guarded against the policy struct; `codeflow policy show` prints the
 effective values and their source; and a present-but-invalid file fails
-loudly — naming each offending key, its value, and the valid set — at the
+loudly, naming each offending key, its value, and the valid set, at the
 commit-msg hook, `codeflow ci`, and `codeflow validate`, instead of silently
 reverting every key to the built-in defaults.
 Secret scanning fails closed if libgit2 cannot traverse the complete staged
 diff. Hook stdin read failures remain advisory but print an explicit degraded
 ref-check warning instead of passing silently.
 
-## CAP-004 — test-gate
+## CAP-004: test-gate
 
 ```yaml
 id: CAP-004
@@ -185,7 +191,7 @@ gate is a violation rather than a skip. Legacy `structural` blocks remain
 loadable but doctor warns that the public gate does not enforce them; setup no
 longer emits dormant rules.
 
-## CAP-005 — integrate
+## CAP-005: integrate
 
 ```yaml
 id: CAP-005
@@ -200,17 +206,17 @@ adrs: []
 `codeflow integrate <branch> [--into <target>]` is the sanctioned local
 landing path for protected branches: a flock-guarded rebase → test →
 fast-forward primitive. It rebases the branch onto the target, runs the test
-gate, then advances the target with `git merge --ff-only` — a linear
+gate, then advances the target with `git merge --ff-only`, a linear
 fast-forward that adds no merge commit; the target ref moves only when every
 stage succeeds. The sequence runs under a gate-context token the git hooks and
 git-guard verify, so the protected ref advances only through integrate or a
-human-merged PR — a raw `git merge` or manual ref move stays blocked. A human
+human-merged PR; a raw `git merge` or manual ref move stays blocked. A human
 retains the local override path (`CODEFLOW_HUMAN_OVERRIDE=1`), an env the
 git-guard never honors for an agent. After landing, clean linked worktrees that
 have the target checked out are reset to the tested tip; dirty worktrees and a
 failed checkout restoration are reported as partial-success warnings.
 
-## CAP-006 — recall-registry
+## CAP-006: recall-registry
 
 ```yaml
 id: CAP-006
@@ -222,8 +228,8 @@ epics: [EPC-001]
 adrs: [ADR-0045]
 ```
 
-`codeflow recall [--all] "<query>"` searches project memory — ledger events,
-session summaries, ADRs, epics, tasks, frozen specs, and capabilities — via
+`codeflow recall [--all] "<query>"` searches project memory, meaning ledger events,
+session summaries, ADRs, epics, tasks, frozen specs, and capabilities, via
 bundled SQLite FTS5, with coverage gaps disclosed. The cross-repo view comes from
 `~/.codeflow/registry.json`, a flock'd registry upserted on every command run;
 a lazy view at query time, not a daemon.
@@ -231,7 +237,7 @@ Recursive source discovery skips directory symlinks and obeys depth/count
 budgets. Reversible path encoding supplies index identity, while lossy text is
 reserved for display.
 
-## CAP-007 — orient-session-summary
+## CAP-007: orient-session-summary
 
 ```yaml
 id: CAP-007
@@ -246,12 +252,12 @@ adrs: [ADR-0013, ADR-0044]
 `codeflow orient` generates the session-start digest live (≤30 lines,
 pointers not content): product one-liner, branch/worktree state, work and
 capability counts, recent ADR titles, gate status, paths to read more. The
-`session-summary` SessionEnd hook appends a session record to the ledger —
+`session-summary` SessionEnd hook appends a session record to the ledger,
 recall's zero-ceremony corpus. Both are wired through `.claude/settings.json`;
 the orient digest is also wired for Codex via `.codex/hooks.json` (SessionStart,
-all sources — ADR-0013), so an **interactive** Codex session opens with the same
+all sources, ADR-0013), so an **interactive** Codex session opens with the same
 digest and re-orients after a compaction (`source=compact`). One handler serves
-both harnesses — plain-text stdout each injects as session context — so there is
+both harnesses, with plain-text stdout each injects as session context, so there is
 no per-harness duplication. Headless `codex exec` does not fire project hooks
 (ADR-0008), so this is an interactive-session aid; the `codex_hooks` test pins the
 JSON wiring, while live firing rests on Codex's documented hooks contract.
@@ -262,7 +268,7 @@ distinguishes clean ancestry/patch-equivalent resources, dirty work, and
 unproven work; the report performs no mutation and never substitutes for an
 active-owner check (ADR-0044).
 
-## CAP-008 — remote-protect-doctor
+## CAP-008: remote-protect-doctor
 
 ```yaml
 id: CAP-008
@@ -277,7 +283,7 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` runs fifteen health checks — hooks, Claude wiring, Codex wiring, Grok wiring, config,
+`codeflow doctor` runs fifteen health checks: hooks, Claude wiring, Codex wiring, Grok wiring, config,
 permissions, network, delegates, qualified model bindings, delegate round-trip, repo integrity, CI
 perimeter, managed-region
 drift, consuming-project customization, and test config. The Grok check reports
@@ -295,7 +301,7 @@ trusted harness capability catalog, compares externally observable harness
 versions and declared settings-source digests, and keeps live model/effort
 unknown unless native evidence proves it (ADR-0039).
 
-## CAP-009 — cross-vendor-delegation
+## CAP-009: cross-vendor-delegation
 
 ```yaml
 id: CAP-009
@@ -316,7 +322,7 @@ fallback under ADR-0059; from codex
 the interactive `claude` CLI through the schema-v2 lifecycle. When
 `HERDR_ENV=1`, `cf-herdr` hosts that TTY in a named tab (cwd-matched resume,
 no hijack of other panes); tmux is the degraded host. Herdr `idle`/`done` is
-not turn completion — Stop and StopFailure hook completion and schema-v2
+not turn completion; Stop and StopFailure hook completion and schema-v2
 waits remain the signal rather than pane stability. The 2026-08-30 canary exercised named-tab consult hosting. The 2026-09-07
 canary exercised Grok-started schema-v2 armed `send-text` on Herdr (consult
 posture, macOS arm64) and a Grok-started Codex Herdr consult thread. The
@@ -329,14 +335,14 @@ remains byte-compatible until a later major release. Headless task execution
 (`codex exec`, `claude -p`) is prohibited; the earlier headless tier and the
 Antigravity `agy` delegate tier (headless-only) are retired. It ships as the
 `cf-delegate`, `cf-consult`, and `cf-herdr` skills (mirrored to `.agents/skills`), and an
-optional single-vendor `consult` pipeline stage — plus one deterministic
+optional single-vendor `consult` pipeline stage, plus one deterministic
 `delegates` doctor check for both lanes; delegates edit only inside a worktree
 on a feature branch, so
 pre-commit, commit-msg, the test gate, and the independent review pass
 constrain them exactly as they do the orchestrating harness. No engine model
 router is added; the binary owns only the deterministic terminal adapter.
 
-## CAP-010 — duo-model-orchestration
+## CAP-010: duo-model-orchestration
 
 ```yaml
 id: CAP-010
@@ -386,7 +392,7 @@ fidelity, and directly executes until a matching Claude design route is
 scoped-qualified. Candidate design routes are limited to controlled disposable
 qualification fixtures; scoped-qualified routes execute only exact evidenced
 tuples and never acquire direction or fidelity-approval authority. Another
-family designs only under an explicit task-specific operator override—Claude
+family designs only under an explicit task-specific operator override. Claude
 absence alone is not one. Codex challenges feasibility and fidelity, and both
 approve the exact plan. Review anchors blocking design
 findings in the accepted brief, intent, accessibility target, or observed
@@ -397,99 +403,9 @@ evidenced product voices, localization honesty, utility/product isolation,
 appearance-mode behavior, accessibility, and rendered fidelity
 (ADR-0043, ADR-0051).
 
-Claude Code reaches Codex through the official plugin/app-server. Codex
-App/interactive CLI reaches Claude through Herdr (tmux degraded). Grok Build
-reaches Codex through the official `codex` CLI and local app-server daemon,
-and Claude through Herdr plus schema-v2. Grok-hosted lane canaries are in
-`docs/verification/grok-host-duo-canary-2026-09-07.md`; they are not a
-qualified binding. The standing pair remains the quality floor. Extra
-catalog families (today Grok) are named when a routing-policy trigger fires
-and the family is available; unavailable is an evidenced limitation, never a
-silent third vote (ADR-0054). Primaries default to high, use proportionate
-worker effort when useful, and obtain same-family xhigh reasoning on trigger
-mid-session rather than restarting the host
-(ADR-0056). Default UI assignment is Claude execution and implementer check plus Codex
-Computer Use QA on the app-server; if Codex produced the UI, Claude QAs
-independently. Another harness, including Hermes, normally delegates the
-repository task to one native CodeFlow host; direct coordination requires both
-native lanes and the full contract. Explicit host/peer/worker roles prevent recursive orchestration. The
-shared quality and routing resources require reproducible
-evidence, relevant unit/integration/e2e and UI tests, an 80% production-code
-coverage floor where measurable (90% normal target), security review, and
-bounded rework. It also blocks material avoidable complexity: both seats review
-design proportionality, every executor first-verifies the smallest coherent
-implementation, the accountable primary inspects it, a lineage different from
-the actual author's independently reviews it, and the directly
-invoked Claude judgment primary reviews the settled design and actual
-integrated diff for the final quality verdict. Substantial prose additionally
-loads `cf-editorial-review`: both seats protect technical meaning and evidence,
-while the Claude judgment primary owns the final contextual voice and editorial
-verdict. Cross-model
-callers invoke both primary seats directly using the selectors, default and
-escalation effort, triggers, and permitted internal routes in the current
-ensemble record. Primary seats retain their plan, integration and approval
-duties; each owning primary controls its internal routes, and the selected
-Claude primary owns Claude-side judgment. A natively proven candidate may
-execute bounded non-design work under primary review without becoming
-qualified. A scoped-qualified claim is limited to its evidenced tuples and
-remains distinct from full primary promotion or an economy/default claim. Each
-run records actual model versions, applied effort and route,
-requested-versus-observed provenance, and scoped usage evidence rather than
-inferring availability, application, quota, or savings.
+Full detail: [CAP-010: duo-model-orchestration](capabilities/CAP-010-duo-model-orchestration.md).
 
-For a material changed journey, the end-to-end plan maps the affected entry,
-in-project components, persistence/queue, external seam, infrastructure/runtime
-wiring, observable result, and recovery path. One faithful vertical run crosses
-every applicable changed boundary; disconnected unit/integration passes and a
-mocked changed service are not whole-flow proof. Parallel UI tasks allocate
-task-owned isolated browser state, applicable listening/application endpoints,
-namespaced test data, run-scoped artifacts, and teardown evidence without
-attaching to the operator's browser or active desktop. The project supplies its
-own allocator/ranges, namespace, artifact, retention, and cleanup commands
-during customization (ADR-0044).
-
-For multi-task work, both approvals cover one acyclic Plan vN graph. Ordinary
-completion uses bare edges; only genuine pre-approved decisions use observable
-guards. Task frontmatter keeps non-executable structural `depends_on` data.
-`validate --docs` checks canonical identities and filenames, relationship
-shape, parent-or-standalone ownership, spec readiness, stable integration
-targets, completed acceptance criteria, and malformed, dangling,
-self-referential, duplicate, or cyclic topology. Explicit `codeflow work start`
-always checks the assigned CodeFlow task branch's planning anchor. Pre-commit
-and detached CI apply that same read-only merge-base check when full-tier or
-recognizable historical CodeFlow task tracking is active. It proves validated
-planning is present on the declared stable target. Material graph or cross-task
-contract changes force Plan vN+1; in-node implementation detail does not.
-Review-relevant bounded discoveries persist at task closeout; closeout cannot
-retroactively approve a
-material change. Project organization keeps one authoritative work-item home
-and links, rather than mirrors, external planning methods or trackers. A foreign
-tasks folder alone does not activate those durable gates; malformed relevant
-tracking state yields a diagnostic instead of a silent opt-out. New projects
-earn structure from accepted ownership and interface boundaries; existing
-projects retain credible native layouts. Current requirements stay living
-authority while SPC files freeze only warranted change agreements. External
-approval never waives active CodeFlow execution gates.
-Verification planning selects property tests, targeted mutation testing, or
-project-owned architecture fitness checks only when the risk and oracle
-evidence earn them. CodeFlow adds neither a scheduler nor mandatory
-consuming-project tools.
-
-Independent implementation tasks use bounded, host-resource-aware parallelism:
-one owner/branch/worktree per task, a single owner for shared files, serialized
-landing through `codeflow integrate` to `integration/<epic>`, affected gates
-after each landing, and aggregate gates plus review on the combined diff.
-Missing seats degrade legibly to solo; mid-run failure blocks and escalates.
-
-The unattended Claude workflow is explicitly single-vendor and rejects the old
-`duo` preset semantics. Manifest parity tests pin byte mirrors, while
-`orchestration_contract.rs` pins the two-draft anti-anchoring rule, design and
-review roles, hard coverage floor, security lenses, always-loaded reasoning
-duties, host, UI, and reverse-lane contract markers. Runtime adapter behavior
-is exercised by the CAP-009 hook unit and CLI tests. No engine model router is
-added; deterministic gates and the human-merged PR remain authoritative.
-
-## CAP-011 — security-redteam-review
+## CAP-011: security-redteam-review
 
 ```yaml
 id: CAP-011
@@ -504,7 +420,7 @@ adrs: [ADR-0016]
 The duo develop flow's mandatory security / red-team stage, bound at three
 planes that copy the git-rules model. Deterministic floor: the CI
 `security-review` job runs `osv-scanner` (stack-agnostic SCA over every lockfile
-ecosystem — the universal floor today; per-stack scanners are a future
+ecosystem, the universal floor today; per-stack scanners are a future
 extension), gated by the `security_review` (whole-job umbrella) and `dep_audit`
 (SCA sub-gate) policy keys beside `secret_scan`, with the advisory blocking when
 either is `block`. Model layer: the `cf-security-reviewer` agent runs a
@@ -519,7 +435,7 @@ filter is future work alongside the per-stack scanners. Model-reasoned findings
 warn locally and force bounded rework, with the human merger as the backstop
 for judgment a machine cannot adjudicate (ADR-0007).
 
-## CAP-012 — scaffold-customize
+## CAP-012: scaffold-customize
 
 ```yaml
 id: CAP-012
@@ -533,12 +449,12 @@ adrs: [ADR-0025, ADR-0044]
 
 `/cf-customize` is the post-init tailoring walk-through: after `codeflow init`
 (or a `codeflow update` that ships new defaults to decide), it runs a
-flow-aware tool preflight — verifying the tools needed by each flow the
+flow-aware tool preflight, verifying the tools needed by each flow the
 project actually uses (git and the harness for every flow; the `codex-plugin-cc`
 plugin, codex, and its MCP servers for a Claude-hosted duo; Claude CLI/MCP,
 tmux, and the completion-hook canary for a Codex-hosted duo or reverse consult;
-the stack's test toolchain) —
-then reconciles the consuming project's actual README, manifests, code, and CI
+the stack's test toolchain).
+It then reconciles the consuming project's actual README, manifests, code, and CI
 against its project-owned artifacts (`docs/product.md`,
 `docs/architecture.md`, common instructions/commands in `AGENTS.md`, only
 Claude-specific differences in `CLAUDE.md`, policy levels, and runtime model
@@ -573,7 +489,7 @@ independent package/version domains and calendar schemes remain project-owned.
 The shared release-policy reference routes customization, shipping and review
 without turning CodeFlow scaffold metadata into the consumer's version.
 
-## CAP-013 — model-binding-evaluation
+## CAP-013: model-binding-evaluation
 
 ```yaml
 id: CAP-013
@@ -604,112 +520,9 @@ use a finite loopback simulator; its journal stays outside the subject tree and
 setup records both materialized and configured tree digests. This is not a full
 promotion or a real-service authorization test.
 
-The kit separates durable doctrine from fast-changing bindings. A
-source-controlled harness catalog marks a harness `capability-supported` only
-after evidence of native-interactive execution, runtime provenance, configured
-tools, scoped work, bounded failure, recheckable results, an effective
-permission boundary, and the git backstop. Catalog status does not qualify a
-concrete model binding. One current ensemble record owns concrete primary
-selectors, effort policy, typed internal routes, route status, and escalation
-triggers. A new harness or model name is not usable as a standing primary merely
-because it parses; the harness needs catalog evidence and a concrete primary
-binding needs approved native full qualification.
-Standard/full projects may then reference an approved binding ID for an exact
-stable role in `.codeflow/model-selection.json`. The file is reference-only;
-doctor resolves it atomically and fails closed on malformed, ineligible,
-unsupported, drifted, or lineage-collapsing overrides. An absent or empty file
-keeps the managed ensemble.
-Composable diagnostic packs select existing cases without changing graders or
-promotion. Approved full results can emit non-secret local binding records;
-doctor detects record contradictions and observable harness/settings drift
-without launching, inferring, promoting, or routing a model (ADR-0039).
+Full detail: [CAP-013: model-binding-evaluation](capabilities/CAP-013-model-binding-evaluation.md).
 
-A configured candidate is distinct from native availability and applied
-selection: current routing evidence may permit bounded non-design execution
-under owning-primary inspection without establishing scoped quality. A
-scoped-qualified claim covers only exact evidenced harness/selector/effort/
-workload tuples and requires three fresh accepted trials per pre-registered
-case and arm, complete applied provenance, primary integration, cross-family
-review, and no unresolved validity threat. The evidence path belongs to the
-catalog's source repository. This focused status never substitutes for full
-primary-binding promotion; an economical-default recommendation separately
-requires measured all-attempt benefit including coordination and rework
-(ADR-0060).
-
-The hard `CF-OUT-002` contract evaluates contextual editorial quality without
-surface-cue policing. Its cases cover technical semantic preservation,
-operator uncertainty, consuming-project voice, sycophancy/inflation/formatting,
-medium-appropriate emoji, and false positives for legitimate punctuation,
-terms, and lists.
-
-The hard `CF-DES-005` contract keeps language/voice and appearance modes
-contextual and collapsible. Its cases require distinct project-evidenced
-voices, legible titles/actions/states, honest localization claims, applicable
-system/user mode and persistence evidence, and isolation between CodeFlow
-utility defaults and consuming-product design authority.
-
-The hard `CF-DES-006` and `CF-DES-007` contracts keep later exploration and
-asset use bounded and reviewable. Their cases require a named unresolved choice
-before in-direction variants, an explicit stop condition, exact reviewed-
-version provenance for material Plan vN+1 feedback, separation of inspiration
-from user evidence, rights/consent and transformation evidence, refusal of
-unauthorized private-data uploads, and verification in the actual product
-context. Provider catalogs and parallel design databases remain outside the
-portable doctrine (ADR-0051).
-
-The hard `CF-QA-002` contract separates browser headlessness from interactive
-peer-model transport and requires claim-matched behavior, visual, runtime,
-trace, and accessibility evidence. Its regression canary rejects
-screenshot-only verdicts, indiscriminate tracing, Computer Use as the default
-web driver, and helper-model ownership of the Claude primary's design judgment.
-
-The hard `CF-QA-007` contract requires complementary deterministic and
-contextual verification. Applicable syntax/style, SCA, source/data-flow, taint,
-secret, and architecture checks stay distinct from independent intent and
-semantic review; a deterministic red result cannot be waived by model
-consensus, and missing relevant SAST/taint evidence remains visible residual
-risk. `CF-QA-008` adds a bounded-history craftsmanship case so repeated
-dependency and duplication erosion cannot hide behind a passing point diff.
-
-The hard `CF-QA-005` contract evaluates materiality-led review, execution
-focus, and proactive routing. Cases require consequential findings to lead
-cosmetic nits, approve when only non-blocking preferences remain, recognize
-repeated symptoms as a possible systemic cause, keep remediation effort out of
-severity, and preserve CVSS-aligned security severity and separate confidence
-before mapping the result to the general gate. A paired execution fixture
-distinguishes an actionable material blocker from cosmetic bait, then a
-completed critical path from a clear, safe, in-scope improvement: models must
-protect the required gates without reflexively deferring bounded work. Only
-genuinely uncertain observations are consolidated for one natural duo
-checkpoint and, when retained, tracked once with evidence and a deterministic
-revisit event. Other cases escalate or track evidenced out-of-scope risk
-without silently expanding scope or generating one issue per nit.
-
-The paired governance cases separate persistence from assumption. A
-discoverable tool failure must move through a new evidenced hypothesis or an
-accepted-outcome-preserving reversible strategy rather than repeat or ask the
-operator to choose a tactic. Missing product intent or a public contract still
-blocks for a well-framed operator decision. Retry counts alone prove neither
-case.
-
-Canary mode runs selected regressions once while maintaining the corpus. Full
-qualification runs every case three times and is required for promotion. Each
-trial uses a fresh one-commit disposable repository; the materializer removes
-the evaluation skill and expected answers, keeps evaluator state outside the
-subject tree, and gives the subject an opaque path with a neutral repository
-name before rebuilding fixture history. The model runs only in a supervised
-native interactive Codex App/CLI or Claude Code session with the actual
-tools/MCPs being qualified. Results retain model, effort, harness, settings,
-permissions, tools, network and resource budgets; status is recomputed from
-expected versus observed signals and evidence.
-
-Promotion requires no hard regression from the pinned baseline, resolved
-validity and grader findings, complete full-suite evidence, and explicit human
-approval. Token/latency improvements are diagnostics and never compensate for
-lost behavior. The feature adds no CLI subcommand, model runtime, headless peer
-execution, CI model call, or generic cleanup surface (ADR-0027).
-
-## CAP-014 — transport-neutral-delegate-lifecycle
+## CAP-014: transport-neutral-delegate-lifecycle
 
 ```yaml
 id: CAP-014
@@ -724,7 +537,7 @@ adrs: [ADR-0036, ADR-0037]
 `codeflow delegate init|arm|wait` plus the schema-v2 `hook delegate-turn
 --state-dir` mode drive a delegated harness turn through durable, owner-only
 protocol records instead of tmux signalling. The binary never launches a
-harness or delivers a prompt — host delivery stays outside CodeFlow; the
+harness or delivers a prompt; host delivery stays outside CodeFlow, and the
 current event adapter is Claude hooks, and the legacy `--result` mode
 (CAP-009) remains byte-compatible.
 
@@ -733,7 +546,7 @@ must sit outside any Git worktree) and prints the path of the task-scoped
 Claude settings it generates, wiring SessionStart, UserPromptSubmit, Stop,
 and StopFailure back to the hook. The host launches the harness with those
 settings and the caller runs `wait --until ready` (a `startup` SessionStart;
-any other source — resume, clear, compact, fork — poisons the run). `arm`
+any other source, such as resume, clear, compact, or fork, poisons the run). `arm`
 accepts non-empty canonical UTF-8 text with internal LF line endings, no
 terminal line break, and no other control characters, then records one turn as the
 SHA-256 of those exact
@@ -741,8 +554,8 @@ prompt bytes (≤ 1 MiB). The
 host delivers that same file after a bounded input-settle, and acceptance
 requires a session-bound `UserPromptSubmit` whose hook-payload prompt matches
 the digest. `wait --until terminal`
-returns the turn's result record on stdout — Stop with the bounded assistant
-message, or StopFailure with bounded error payloads — after which the host
+returns the turn's result record on stdout: Stop with the bounded assistant
+message, or StopFailure with bounded error payloads. The host then
 consumes it and removes the state directory. Request and acceptance records
 carry digests and identifiers, never the prompt text itself. Raw schema-v2
 hook input is capped at 32 MiB before parsing, in addition to the smaller
@@ -750,13 +563,13 @@ decoded-field limits.
 
 The exit contract is stable: `wait` exits 0 on the observed state (terminal
 completed), 10 on a failed terminal, 11 on a poisoned, unsafe, or invalid
-run, 124 on timeout, and 130 when interrupted — an interrupt after
+run, 124 on timeout, and 130 when interrupted; an interrupt after
 acceptance poisons the run; the hook exits 2 to make the harness block a
 rejected prompt submission or any unreadable/oversized schema-v2 input, and
 exits 1 on other failures; `init`/`arm` exit 0 or 1. Every command must reuse
-the exact state-directory path string given to `init` — run binding
+the exact state-directory path string given to `init`, because run binding
 regenerates the task settings and requires exact equality with the stored
-ones — and every state mutation serializes on a single run lock with bounded
+ones. Every state mutation serializes on a single run lock with bounded
 (one-second) acquisition. `prompt_id` is
 validated and must agree across acceptance and terminal records; a session
 without one takes the recorded pre-2.1.196 compatibility path, limited to a
@@ -772,92 +585,7 @@ host. The reusable sibling-hook rejection procedure, full fake-TUI stress
 matrix, and broader native-platform evidence remain PR2/release gates and are
 not claimed complete.
 
-## CAP-016 — interactive-presentation-review
-
-```yaml
-id: CAP-016
-name: interactive-presentation-review
-area: engine
-status: building
-verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
-epics: [EPC-005, EPC-014]
-adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
-```
-
-`codeflow present` turns a closed versioned JSON+Markdown document into one
-bounded local review surface. The standard/full scaffold supplies the
-cross-harness `cf-present` authoring skill, canonical document/token/history
-schemas, representative assets, and proportional routing: simple answers stay
-in chat; a complex explanation, comparison, plan, decision, evidence set, diff,
-or review uses the utility only when coherent visual inspection or anchored
-feedback materially helps. Agents author **this session's** subject into the
-catalog; the runtime owns chrome, themes, and the Comment system. The
-design-exploration board is craft reference, not a document to clone. Durable
-docs belong to `cf-docs-portal`.
-
-Text feedback retains the selected occurrence and revalidates live ranges before
-pinning. Toolbar capture survives focus changes; leaving Comment releases its
-capture state. Iframe figures use native hit-testing while commenting and regain
-their prior pointer interaction afterward, without overlays on neighboring text.
-
-The runtime validates the declarative block tree, embeds its deterministic
-renderer, stores immutable revisions and append-only feedback in owner-private
-project-keyed durable state, keeps browser-owned profile/cache and bounded
-runtime controls in a separate derived root, and exposes open/update/list/show/history/feedback/resolve/
-export/close/clear through the CLI. A one-time tokenless file bootstrap opens a
-CodeFlow-owned isolated browser profile against an authenticated loopback-only
-service. Host/Origin/CSP/path/body limits, inert revision-qualified HTML
-sandboxing, strict primitive-token import, crash recovery, bounded retention,
-and identity-scoped cleanup are code boundaries. Event parsing and partial-tail
-repair are self-bounded and operate through one opened handle. Mermaid input is
-capped per diagram and per document; browser enhancement is serialized, yields
-between diagrams, and fails remaining items to escaped source when the eager
-fallback exhausts its cumulative budget. Browser and auxiliary system-tool
-children share one allowlist-only environment. Windows ACL mutation is confined
-to creation for every private file, including append and lease files; existing
-state uses native read-only owner/protected-DACL/trustee/inheritance
-verification. Unix ignores a relative XDG state override and rejects a relative
-home rather than placing state in the worktree. Static export remains self-contained and excludes
-review/authentication/runtime state.
-
-Native-path repository identity, per-block and whole-document collection
-cardinality, a project→session→runtime-control lock order, pre-publication
-capacity admission for every durable growth route, and an over-quota-safe
-control path keep quota boundaries deterministic under concurrent creation,
-revision, feedback, and runtime registration. The browser loads a bounded recent
-feedback snapshot, uniquely re-anchors exact selectors across revisions, leaves
-missing/ambiguous selectors visibly orphaned, and exposes the current lifecycle
-version. Resolve accepts only a current delivered event and appends
-addressed/dismissed state. Exact accepted receipt and identical terminal retries
-are zero-growth operations; conflicting reuse and unrelated stale versions fail
-closed. Retention recomputes bounded durable size after every eviction, selected
-cleanup loads only its named session, and bulk cleanup reports isolated partial
-failures without deleting ambiguous state. A selected session that cannot be
-removed reports its exact retained outcome instead of succeeding silently.
-Verified Unix process groups receive bounded graceful shutdown and then an
-identity recheck before forced termination. Unverifiable orphan process
-groups/trees retain recovery state rather than killing an unproven process or
-deleting its profile. Launches are serialized under a session lease and publish
-one exact record per attempt; close, show, and retry consume it. Reused PIDs are
-never signalled: bounded exact-marker discovery and native profile-resource
-proof either complete cleanup or retain an actionable error. Windows checks
-exclusive handles across the actual profile tree rather than assuming a
-POSIX-style lock file. After a retained group/tree exits or an operator verifies
-and terminates it, retrying close completes cleanup. Review input controls expose
-the Rust-owned note, text, selection, and payload bounds before submission.
-
-The capability remains `building` until TSK-007 records the full native
-macOS/Linux/WSL2/Windows and qualified-browser matrix, adversarial service and
-state evidence, design/accessibility/responsive comparisons, deterministic
-asset/release checks, and fresh native interactive model trials. That matrix
-includes Windows Unicode known-folder/profile paths, creation-time ACL
-hardening plus read-only weakened-ACL rejection, trusted system tools, exact
-process-tree identity and file URLs; Linux/WSL2
-bounded `/proc` identity and group signaling; and a dense multi-diagram browser
-corpus with long-task evidence. Cross-builds alone do not claim native runtime
-support.
-
-## CAP-015 — opt-in-documentation-portal
+## CAP-015: opt-in-documentation-portal
 
 ```yaml
 id: CAP-015
@@ -872,7 +600,7 @@ adrs: [ADR-0048, ADR-0058]
 `codeflow portal setup --path <repository-relative-directory>` explicitly
 adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
 portal build requires Node 22.19.0 or newer. The aggregate CI gate runs on Node
-26.4.0, and its full strict target installs, checks, builds, and validates the
+26.4.0, the presentation renderer's pin, and its full strict target installs, checks, builds, and validates the
 dogfood portal; the portal-local `.node-version` and the Windows adapter-test
 lane pin Node 24.18.0.
 The starter is absent from ordinary initialization, materializes offline once at
@@ -909,20 +637,50 @@ It compares generator evidence with the declared identity, retaining managed
 release pins but accepting a genuinely renamed transferred generator. Matching
 evidence is not runtime attestation or a substitute for rendered qualification.
 
-The repository-owned full gate runs the complete locked JavaScript authority
-suite, a real Starlight build, and the Rust verifier locally and on Ubuntu; the
-Windows lane runs the same JavaScript authority/path suite. Shared fixtures pin
-configuration, strict-frontmatter, 40/64-character Git object ID, exact
-case-sensitive route, and URL-boundary behavior across the producer and
-verifier. These dogfood gates do not leak a Node requirement into the generic
-consumer CI scaffold: adopted consumer portals opt into their project test
-configuration.
+Full detail: [CAP-015: opt-in-documentation-portal](capabilities/CAP-015-opt-in-documentation-portal.md).
 
-The mirrored `cf-docs-portal` skill owns proportional adoption, layered
-information design, safe source interpretation, exact dependency operations,
-browser/accessibility evidence, and cleanup. It applies the same utility
-presentation craft as `cf-present` (tokens, altitude, stage grammar) to
-durable source-linked docs for CodeFlow or any consuming project, without a
-session Comment lifecycle. The repository dogfoods the starter under
-`docs-portal/`; a generated local site is evidence and never an implicit
-publish action.
+## CAP-016: interactive-presentation-review
+
+```yaml
+id: CAP-016
+name: interactive-presentation-review
+area: engine
+status: building
+verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
+epics: [EPC-005, EPC-014]
+adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
+```
+
+`codeflow present` turns a closed versioned JSON+Markdown document into one
+bounded local review surface. The standard/full scaffold supplies the
+cross-harness `cf-present` authoring skill, canonical document/token/history
+schemas, representative assets, and proportional routing: simple answers stay
+in chat; a complex explanation, comparison, plan, decision, evidence set, diff,
+or review uses the utility only when coherent visual inspection or anchored
+feedback materially helps. Agents author **this session's** subject into the
+catalog; the runtime owns chrome, themes, and the Comment system. The
+design-exploration board is craft reference, not a document to clone. Durable
+docs belong to `cf-docs-portal`.
+
+Full detail: [CAP-016: interactive-presentation-review](capabilities/CAP-016-interactive-presentation-review.md).
+
+## CAP-017: optional-agentic-estimation
+
+```yaml
+id: CAP-017
+name: optional-agentic-estimation
+area: engine
+status: shipped
+verified_by: [estimate, estimate_cli, estimate_adoption_e2e, manifest_consistency]
+epics: [EPC-006]
+adrs: [ADR-0057]
+```
+
+SPC-007 defines the optional cf-estimate method: active project-specific offer,
+confirmed adoption or respected decline, evidence-anchored grades, full-delivery
+scenarios and resource-feasible allocations. Standard/full skills are managed;
+profiles, forecasts and outcomes stay project-owned and link existing authority.
+EPC-006 supplies the read-only allocation checker, installed-path tests and
+native diagnostic evidence, including retained failures and a focused consent
+repair. Implementation readiness and predictive usefulness remain separate;
+this registry does not establish calibrated delivery predictions.

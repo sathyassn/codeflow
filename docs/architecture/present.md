@@ -1,4 +1,4 @@
-# present — bounded review sessions
+# present: bounded review sessions
 
 <!-- HOW layer. Graduated from docs/architecture.md per its own rule: the
      area outgrew the single file; a one-line pointer remains behind.
@@ -8,7 +8,7 @@
 
 A present session is one bounded, owner-private review: an agent authors the
 catalog document, Rust owns every durable byte, and the browser is a
-disposable isolated viewer — never an authority.
+disposable isolated viewer, never an authority.
 
 ```cf-stage
 agent catalog | validated document JSON @accent
@@ -18,7 +18,7 @@ rust service | validation · revisions · feedback · retention · export
 isolated browser | one session · one profile · one single-use bootstrap
 ->
 feedback envelope | append-only, consumed by any harness @positive
-caption: the browser is a viewer — durable authority never leaves rust
+caption: the browser is a viewer, durable authority never leaves rust
 ```
 
 The runtime owns chrome and Comment; agents author only this session's
@@ -27,23 +27,25 @@ documentation portal.
 
 ## Architecture
 
-Durable authority and derived runtime are separate owner-private roots under
-one canonical lock order — project mutation → session → runtime control
-(ADR-0052) — with closed contracts typed twice: matching Rust types and
-managed JSON Schemas under `.codeflow/schemas/present/`.
+Each active review has one project-keyed owner-private durable authority and a
+separate derived owner-private runtime root, under one canonical lock order:
+project mutation → session → runtime control (ADR-0052).
 
 ```cf-stage
 durable authority | versioned document · immutable revisions · feedback @accent
 ->
 derived runtime root | bootstrap · ready · launch-recovery controls
 ->
-browser profile | cache only — never durable authority
+browser profile | cache only, never durable authority
 caption: revisions and feedback are the only quota-governed history
 ```
 
-Immutable revisions and feedback are the only quota-governed history;
-CodeFlow-owned controls have a separate exact budget, and browser growth is
-mitigated without being misrepresented as a hard CodeFlow quota.
+Immutable revisions and feedback are the only quota-governed history.
+Browser-owned profile/cache data never becomes durable authority, and the
+CodeFlow-owned bootstrap, ready, and launch-recovery controls have a separate
+exact budget. Conservative cache flags, bounded idle lifetime, and
+identity-scoped cleanup mitigate browser growth without misrepresenting it as a
+hard CodeFlow quota.
 
 ## Technical
 
@@ -72,16 +74,9 @@ state is already over its configured bound. Block, diagram, per-collection,
 and whole-document collection cardinalities bound renderer amplification in
 addition to encoded byte limits.
 
-### Authority and runtime separation
+### Session surface and export
 
-Each active review has one project-keyed owner-private durable authority and a
-separate derived owner-private runtime root (ADR-0052). Immutable revisions and
-feedback are the only quota-governed history. Browser-owned profile/cache data
-never becomes durable authority; CodeFlow-owned bootstrap, ready, and launch-
-recovery controls have a separate exact budget and the canonical lock order is
-project mutation → session → runtime control. Conservative cache flags, bounded
-idle lifetime, and identity-scoped cleanup mitigate browser growth without
-misrepresenting it as a hard CodeFlow quota. Each session has one loopback
+Each session has one loopback
 service, one single-use file bootstrap, and one isolated browser profile.
 Host/Origin/cookie/CSP checks protect the review chrome;
 untrusted static HTML is served from a revision-qualified sandbox without
