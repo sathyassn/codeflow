@@ -1707,3 +1707,49 @@ fn task_home_inventory_limit_blocks_both_hook_and_ci() {
     assert!(ci_error.contains("work.tracking_state"), "{ci_error}");
     assert!(ci_error.contains("inventory exceeds 16384"), "{ci_error}");
 }
+
+// --- TSK-041 CLI help-string regressions --------------------------------------
+
+/// Run `codeflow <args>` purely for its help output, with no repo context.
+fn help_text(args: &[&str]) -> String {
+    let output = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(args)
+        .output()
+        .unwrap_or_else(|e| panic!("run codeflow {args:?}: {e}"));
+    assert!(
+        output.status.success(),
+        "codeflow {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).expect("utf-8 help output")
+}
+
+/// The four hook events `delegate-turn` actually dispatches on
+/// (`codeflow_core::delegate::handle_hook`).
+const DELEGATE_TURN_EVENTS: [&str; 4] =
+    ["SessionStart", "UserPromptSubmit", "Stop", "StopFailure"];
+
+/// DEFECT 4: `codeflow hook --help` names every delegate event. The help used
+/// to advertise only `Stop`/`StopFailure`, hiding the schema-v2 lifecycle
+/// events a caller must wire.
+#[test]
+fn hook_help_names_every_delegate_turn_event() {
+    let help = help_text(&["hook", "--help"]);
+    let line = help
+        .lines()
+        .find(|line| line.trim_start().starts_with("- delegate-turn:"))
+        .unwrap_or_else(|| panic!("hook --help has no delegate-turn entry:\n{help}"));
+    for event in DELEGATE_TURN_EVENTS {
+        assert!(
+            line.contains(event),
+            "hook --help delegate-turn entry omits {event}: {line}"
+        );
+    }
+    // NEGATIVE: the assertion is not satisfied by a line that drops one event.
+    let degraded = line.replace("UserPromptSubmit", "");
+    assert!(
+        !DELEGATE_TURN_EVENTS.iter().all(|e| degraded.contains(e)),
+        "the check would pass with an event removed"
+    );
+}
+
