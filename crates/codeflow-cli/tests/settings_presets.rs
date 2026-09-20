@@ -1,5 +1,5 @@
 //! Regression tests for the shipped Claude settings presets
-//! (`assets/base/settings/*.json`) — the scaffold content is the product as
+//! (`assets/base/settings/*.json`): the scaffold content is the product as
 //! much as the code (charter §4.4), so its invariants are tested like code:
 //! every hook command must be a known `codeflow hook` subcommand, the
 //! secret-file deny rules must stay present, and top-level keys are pinned
@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use std::path::PathBuf;
 
 /// The expected preset set, pinned so an addition or removal is a conscious
-/// choice — `preset_files_match_the_shipped_directory` keeps it honest.
+/// choice; `preset_files_match_the_shipped_directory` keeps it honest.
 const PRESET_FILES: [&str; 3] = ["default.json", "acceptEdits.json", "bypass-sandboxed.json"];
 
 /// The known hook subcommands wired by the presets (charter §3.3; the
@@ -72,7 +72,7 @@ fn normalized(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The preset files actually shipped, derived from the directory listing —
+/// The preset files actually shipped, derived from the directory listing,
 /// every invariant test iterates this, so a newly dropped-in preset is
 /// covered the moment it lands, not only once someone remembers a constant.
 fn preset_files() -> Vec<String> {
@@ -142,7 +142,7 @@ fn preset_files_match_the_shipped_directory() {
     pinned.sort_unstable();
     assert_eq!(
         shipped, pinned,
-        "assets/base/settings/*.json diverged from PRESET_FILES — a new or \
+        "assets/base/settings/*.json diverged from PRESET_FILES; a new or \
          removed preset must update the pinned set (and its manifest entry \
          plus the init prompt whitelist) in the same change"
     );
@@ -696,7 +696,7 @@ fn top_level_keys_stay_within_the_pinned_union() {
         for key in keys {
             assert!(
                 allowed.contains(key.as_str()),
-                "{name}: top-level key {key:?} is not in the pinned allowlist {allowed:?} — \
+                "{name}: top-level key {key:?} is not in the pinned allowlist {allowed:?}; \
                  typo, or a deliberate addition that must update TOP_LEVEL_KEYS"
             );
             union.insert(key.clone());
@@ -720,12 +720,13 @@ fn minimal_claude_guidance_matches_the_classified_retry_setting() {
     assert!(!guidance.contains("unsandboxed retry is disabled"));
 }
 
-/// Since Claude Code 2.1.257 `auto` and `bypassPermissions` are honored only
-/// from user settings or the launch flag, and a project value outranks the
-/// user file. A `defaultMode` in the default preset would therefore only ever
-/// pull an operator's chosen mode back to manual prompting, so the default
-/// preset leaves the mode to the operator; the opt-in presets still name
-/// their mode because those values remain valid from project scope.
+/// A project settings file ignores `auto` and `bypassPermissions`, while its
+/// other values apply from project scope and outrank the user file (see
+/// "which mode a session starts in" in the permission-modes reference). A
+/// `defaultMode` in the default preset could therefore only pull an
+/// operator's chosen mode back to manual prompting, so the default preset
+/// leaves the mode alone; `acceptEdits.json` still names its mode because
+/// `acceptEdits` remains valid from project scope.
 #[test]
 fn default_preset_leaves_the_permission_mode_to_the_operator() {
     let value = load("default.json");
@@ -739,9 +740,11 @@ fn default_preset_leaves_the_permission_mode_to_the_operator() {
     );
 }
 
-/// Recursive deletes inside the working tree are ordinary, sandbox-confined
-/// work; only the rooted and home-anchored forms stay behind a prompt, and a
-/// safe branch delete (`-d`) needs none because git refuses an unmerged one.
+/// This preset drops a confirmation layer for in-tree recursive deletes and
+/// for safe branch deletes; the sandbox limits the blast radius but does not
+/// make untracked unique data recoverable. `git branch -d` only refuses a
+/// branch unmerged into its upstream (or HEAD when it has none), so landing
+/// evidence, not this rule, is what gates a branch delete.
 #[test]
 fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
     for name in preset_files() {
@@ -769,5 +772,70 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
                 "{name}: {present} must stay behind a prompt"
             );
         }
+        // A force delete discards commits whatever spelling and option order
+        // it arrives in, so every spelling must still reach a prompt.
+        for forced in [
+            "git branch -D topic",
+            "git branch -d topic --force",
+            "git branch --delete topic --force",
+            "git branch -d topic -f",
+            "git branch -df topic",
+            "git branch -Df topic",
+            "git branch --delete --force topic",
+            "git branch -d --force topic",
+            "git branch --delete -f topic",
+            "git branch -d -f topic",
+            "git branch -f -d topic",
+        ] {
+            assert!(
+                ask_covers(&ask, forced),
+                "{name}: no ask rule covers {forced:?}"
+            );
+        }
+        // Ordinary work stays unprompted, and a branch name that merely looks
+        // like an option must not be read as one.
+        for ordinary in [
+            "git branch -d topic",
+            "git branch --delete topic",
+            "git branch -d topic-force",
+            "rm -rf target",
+            "rm -rf ./build",
+        ] {
+            assert!(
+                !ask_covers(&ask, ordinary),
+                "{name}: an ask rule prompts on {ordinary:?}"
+            );
+        }
+    }
+}
+
+/// Model how Claude Code matches a Bash permission rule against a command: a
+/// rule `Bash(p)` matches when `p`, with `*` standing for any run of
+/// characters, matches the whole command, and a `p` without `*` is exact.
+fn ask_covers(ask: &[String], command: &str) -> bool {
+    ask.iter().any(|rule| {
+        rule.strip_prefix("Bash(")
+            .and_then(|rest| rest.strip_suffix(')'))
+            .is_some_and(|pattern| glob_matches(pattern, command))
+    })
+}
+
+/// Whole-string glob match where `*` spans any run of characters, including
+/// none.
+fn glob_matches(pattern: &str, text: &str) -> bool {
+    let Some((head, rest)) = pattern.split_once('*') else {
+        return pattern == text;
+    };
+    let Some(mut tail) = text.strip_prefix(head) else {
+        return false;
+    };
+    loop {
+        if glob_matches(rest, tail) {
+            return true;
+        }
+        let Some(next) = tail.chars().next() else {
+            return false;
+        };
+        tail = &tail[next.len_utf8()..];
     }
 }
