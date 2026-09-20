@@ -6,11 +6,10 @@ description: Adopt, configure, build, update, transfer, or verify the optional C
 # cf-docs-portal: repository guide utility
 
 Create and maintain a guide to the project as it stands over repository-owned
-documentation: what it is, what it does, how to adopt it, how it is built and
-how it is operated. The portal is a derived utility, never a second source of
+documentation. The portal is a derived utility, never a second source of
 truth. Product behavior, architecture, capabilities, decisions, specs, epics,
-tasks, and code remain in their established files; decisions and work records
-are pointed to as folders, not listed page by page.
+tasks, and code remain in their established files; records are pointed to as
+folders, never listed page by page.
 
 This is a supporting flow inside `cf-model-orchestrator` for non-trivial work.
 
@@ -80,15 +79,12 @@ does not upgrade or repair that runtime. Never transfer merely to clear a failed
 update. Keep valid evidence, dependency review and rendered-quality checks after
 transfer; ownership is not a validation exemption.
 
-Read
-[references/information-architecture.md](references/information-architecture.md)
-before choosing source roots, layers, or more than one portal. It defines the
-single-project and monorepo defaults and the narrow reasons to split.
-Read [references/content-contract.md](references/content-contract.md) before
-changing source interpretation, IDs, relationships, provenance, or stale-page
-behavior. Read [references/operations.md](references/operations.md) before
-installing dependencies, publishing, upgrading, or collecting acceptance
-evidence.
+Read [references/information-architecture.md](references/information-architecture.md)
+before choosing source roots, layers, or more than one portal;
+[references/content-contract.md](references/content-contract.md) before changing
+source interpretation, IDs, relationships, provenance, or stale-page behavior;
+[references/operations.md](references/operations.md) before installing
+dependencies, publishing, upgrading, or collecting acceptance evidence.
 
 ## 3. Build one layered route system
 
@@ -102,11 +98,6 @@ purpose and mental model                         (concept)
 records: decisions, epics, tasks and specs are pointed to as folders
 ```
 
-Every explanatory page carries the `## Concept` / `## Architecture` /
-`## Technical` trio with one figure in Concept, the structure in Architecture
-and the lookups in Technical, each framed by prose. Order the layers so a
-reader moves from what the project is to how it is operated.
-
 Keep navigation predictable and searchable. Prefer plain language, descriptive
 titles, concise prose, and bullets when they improve scanning. Match an
 established project voice when it exists; otherwise use calm, direct,
@@ -115,20 +106,16 @@ personality, gratuitous emoji, and promotional language.
 
 ### Visual craft (utility presentation system, mandatory)
 
-Normative detail:
-[resources/utility-presentation-system.md](resources/utility-presentation-system.md)
-and [references/visual-craft.md](references/visual-craft.md). Page shape example:
+Page shape example:
 [resources/portal-page-shape.example.md](resources/portal-page-shape.example.md).
 
 - **Visuals** only when they clarify relationship, hierarchy, state, or flow.
   Text inside decorated boxes is not a visual explanation.
-- **Explanatory sources** each author the altitude trio; architecture pages
-  add a subject-led stage, full-width labeled structure, not caption
-  micro-boxes; verification fails a trio page that shows more than one panel
-  and an explanatory page with no trio.
-- **Records** (decisions, epics, tasks, specs) are pointed to from one
-  generated pointer page: folder, purpose, count, repository link. They are
-  not portal pages.
+- **Explanatory sources** author the altitude trio with a figure framed by
+  prose in every panel; architecture pages add a subject-led stage, not
+  caption micro-boxes; verification fails a trio page showing more than one
+  panel or an explanatory page with no trio.
+- **Records** are one generated pointer page of folders, never portal pages.
 - **Type roles:** display / prose / label / mono-evidence; themes own faces and
   scale. Do not ship ad-hoc font stacks in content.
 - **Themes:** `signal`/`folio` map to utility skins instrument/ink; readers
