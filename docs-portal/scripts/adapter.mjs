@@ -314,7 +314,7 @@ function renderPage(page, routesById, previews, referencedMedia, anchorsBySource
   const amendments = page.source_path.startsWith("docs/decisions/") ? amendmentHeadings(page.body) : [];
   const relationships = page.relationships.map((relation) => {
     const target = routesById.get(relation.target);
-    const label = target && target.stale ? `${relation.target} — stale` : relation.target;
+    const label = target && target.stale ? `${relation.target} (stale)` : relation.target;
     const href = target ? withBase(base, target.route) : recordTargets.get(relation.target).href;
     return `- ${relation.source_id ? `\`${relation.source_id}\` · ` : ""}**${relation.type.replaceAll("_", " ")}** → [${label}](${href})`;
   }).join("\n");
@@ -346,7 +346,7 @@ function renderPage(page, routesById, previews, referencedMedia, anchorsBySource
   if (relationships) context.push(`### Declared relationships\n\n${relationships}`);
   if (referenced.length) context.push(`### Referenced records\n\n${referenced.map((id) => {
     const owner = routesById.get(id);
-    return `- [${id}${owner.stale ? " — stale" : ""}](${withBase(base, owner.route)})`;
+    return `- [${id}${owner.stale ? " (stale)" : ""}](${withBase(base, owner.route)})`;
   }).join("\n")}`);
   if (backlinks) context.push(`### Inverse links\n\n${backlinks}`);
   const recordContext = context.length ? `\n\n---\n\n${context.join("\n\n")}` : "";

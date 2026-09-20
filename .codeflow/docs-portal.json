@@ -50,7 +50,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "84ea2dc7adb342e075de39bea733064dd2a41006e5e8b0d9acd86b27cafeb882"
+      "pristine_sha256": "9b4f16e6ee69ac4cad55dde012db79e0e15b4868105c3e0fa18d89b2a8271c94"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
