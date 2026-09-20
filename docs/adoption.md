@@ -11,7 +11,7 @@ codeflow init | minimal · standard · full, recorded in project.toml
 ->
 first session | orient digest · /cf-customize
 ->
-gates | hooks · guards · CI · remote, on every commit
+gates | hooks at commit and push · guards in session · CI on the PR · remote at merge
 ->
 codeflow update | refresh managed files by ownership class @positive
 caption: every step is additive and idempotent; a lower tier request undoes nothing

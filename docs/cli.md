@@ -44,7 +44,7 @@ same functions through this surface.
 | `ci` | Verify a commit range + branch name against policy, the portable, binary-sourced CI check | In CI, from the scaffolded workflow |
 | `policy` | Inspect `.codeflow/policy.json` | When you need a key's schema or the effective value and its source |
 | `remote` | Remote provider operations (branch protection) | Once the repository has a remote to protect |
-| `test` | Run the test gate (configured targets or runtime stack detection) | Before push; also run for you by pre-push and CI |
+| `test` | Run the test gate (configured targets or runtime stack detection) | Before push, in full. CI runs it too; pre-push runs only the conditional quick gate described under Verify |
 | `validate` | Validate record frontmatter; `--docs` adds the doc-graph integrity lint | Before push, and for a portal with `--portal` |
 | `integrate` | Land a branch into a target: flock(rebase to test to ff-merge) | Landing locally with no remote, or into an integration branch |
 | `doctor` | Health checks | After init or update, and when something is wired but not working |
@@ -104,6 +104,7 @@ stderr, not the exit code, to tell an advisory failure from a clean pass.
 | Command | Arguments and flags | Notes |
 |---|---|---|
 | `codeflow test` | `--mode <full\|quick\|essential>` (default `full`), `--strict` | `quick` is an alias for `essential`. With no stack detected the run is a loud no-op with exit 0; `--strict` makes that no-op exit non-zero for scripted and unattended callers |
+| pre-push test gate | not a command | The `pre-push` hook runs the `quick` gate only when the `test_gate_on_push` policy key is active and `.codeflow/test-config.json` exists; without that file it skips. This repository sets the key to `warn`, so a failure reports and the push proceeds. It is fast feedback, never the full verification |
 | `codeflow test setup` | `--list-templates`, `--template <NAME>`, `--replace`, `--add-target` | The three actions are mutually exclusive. `--list-templates` lists the templates embedded in this binary, `--template` writes one by name, `--add-target` appends one target interactively. `--replace` requires `--template` and explicitly replaces an existing config. With no flag, safe root-only auto-detection runs |
 | `codeflow validate [PATH]` | `--docs`, `--portal <DIR>` | `PATH` defaults to `project-management/`. `--docs` adds the doc-graph referential-integrity lint. `--portal` verifies a portal evidence manifest without executing project code and conflicts with `PATH`, so pass one or the other |
 | `codeflow integrate <BRANCH>` | `--into <INTO>` (default `main`) | Rebase, test, then fast-forward, under a flock and a gate-context token |
