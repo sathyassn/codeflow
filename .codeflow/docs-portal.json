@@ -30,7 +30,7 @@
     },
     "portal.config.json": {
       "ownership": "user-owned",
-      "pristine_sha256": "0250443cff620eb1774fd770b529fe1285fbffce5e314c5a4a5084e98e89a059"
+      "pristine_sha256": "cad8037727f44aab43b65df4961ca80cfa74e3a46977b46639c9c5953a43f473"
     },
     "public/favicon.svg": {
       "ownership": "managed",
@@ -50,7 +50,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "9b4f16e6ee69ac4cad55dde012db79e0e15b4868105c3e0fa18d89b2a8271c94"
+      "pristine_sha256": "5a8db401b13c87771f8abbe8dec3f7e584ebf45979880ece64c19b0f0a1b3768"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
@@ -142,7 +142,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "041b652367b449c1825c5e59015711145b6af1fdb605eb41a2028970069f39c1"
+      "pristine_sha256": "0e2ecea3e01431d736dbf1b7cba12c7f1c3c9d92b387b49ba18f77cbe64a75a9"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",

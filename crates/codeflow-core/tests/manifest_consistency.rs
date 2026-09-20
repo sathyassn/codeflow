@@ -976,6 +976,39 @@ fn portal_dogfood_runtime_matches_the_shipped_starter() {
 }
 
 #[test]
+fn starter_portal_config_points_at_decisions_instead_of_publishing_them() {
+    // ADR-0064: the guide has no per-record pages. The starter default keeps
+    // the records switch off and names the decisions folder as a pointer, so
+    // a freshly scaffolded portal never renders an ADR as a page.
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(repo_root().join("assets/docs-portal/starter/portal.config.json"))
+            .expect("starter portal config is readable"),
+    )
+    .expect("starter portal config is valid JSON");
+    assert_eq!(config["records"]["enabled"], serde_json::Value::Bool(false));
+    assert_eq!(config["records"]["layer"], "system");
+    let folders: Vec<&str> = config["records"]["pointers"]
+        .as_array()
+        .expect("records pointers is an array")
+        .iter()
+        .map(|pointer| pointer["folder"].as_str().expect("pointer folder is a string"))
+        .collect();
+    assert_eq!(folders, ["docs/decisions"]);
+    for layer in config["layers"].as_array().expect("layers is an array") {
+        for key in ["paths", "prefixes"] {
+            for entry in layer[key].as_array().into_iter().flatten() {
+                let entry = entry.as_str().expect("layer entry is a string");
+                assert!(
+                    !entry.starts_with("docs/decisions"),
+                    "starter layer {} publishes the decisions folder through {entry}",
+                    layer["id"]
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn portal_skill_preserves_explicit_ownership_and_integrity_contracts() {
     let skill = std::fs::read_to_string(
         repo_root().join("assets/base/agents/skills/cf-docs-portal/SKILL.md"),
