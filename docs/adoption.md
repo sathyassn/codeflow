@@ -14,7 +14,7 @@ first session | orient digest · /cf-customize
 gates | hooks at commit and push · guards in session · CI on the PR · remote at merge
 ->
 codeflow update | refresh managed files by ownership class @positive
-caption: every step is additive and idempotent; a lower tier request undoes nothing
+caption: a tier change is additive and idempotent; update merges by ownership class and preserves your edits
 ```
 
 How a project takes on the discipline layer, greenfield or brownfield, what it
@@ -237,7 +237,7 @@ and `codeflow doctor --check test-config` after setup.
 Adopt gradually: start `--minimal` (the full enforcement floor of all the git
 hooks, CI, the in-session guards, and the armed policy, with none of the method
 machinery), run for a while, then re-init `--standard` and later `--full` as the
-work earns the weight. Each step is additive and idempotent, and because the
+work earns the weight. Each tier step is additive and idempotent, and because the
 floor is the same at every tier, the upgrade adds the method on top; existing
 recognizable historical CodeFlow tasks may already keep durable tracking
 active below full. Inspect installed state and the gate result rather than
