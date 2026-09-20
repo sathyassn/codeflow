@@ -46,10 +46,13 @@ Open an issue using the templates. For security issues see
 
 ## Releasing
 
-Releases are conventional-commit driven (git-cliff for the version + changelog,
-cargo-dist for the binaries) and human-gated. See [docs/releasing.md](docs/releasing.md)
-for the runbook — and for how a project that *consumes* codeflow should handle
-its own versioning.
+Release state lives in each work PR (ADR-0062): curated pending CHANGELOG
+notes, one reviewed impact annotation adjacent to each new entry, and the
+coupled version stamps. Conventional markers are tripwires against an
+understated impact, not a second version calculator. cargo-dist is the sole
+tag, release, and artifact publisher, and publication is a deliberate human
+dispatch. See [docs/releasing.md](docs/releasing.md) for the runbook — and for
+how a project that *consumes* codeflow should handle its own versioning.
 
 ## License
 
