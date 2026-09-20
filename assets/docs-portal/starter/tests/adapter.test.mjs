@@ -2439,6 +2439,7 @@ async function selfContainedPortalFixture() {
       primitive_tokens: null,
       repository_url: null,
       release_version: null,
+      records: { enabled: false, layer: null, pointers: [] },
       layers: [
         { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
         { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
