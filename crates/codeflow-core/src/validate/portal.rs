@@ -61,6 +61,13 @@ const PORTAL_CONFIG_KEYS: [&str; 12] = [
     "layers",
     "base",
 ];
+// The records switch is the one optional key (ADR-0064): a portal adopted
+// before it stays valid, and a portal that declares it keeps the pointer
+// folders out of the publishable source inventory.
+const PORTAL_OPTIONAL_CONFIG_KEYS: [&str; 1] = ["records"];
+const PORTAL_RECORDS_KEYS: [&str; 3] = ["enabled", "layer", "pointers"];
+const PORTAL_RECORDS_POINTER_KEYS: [&str; 3] = ["folder", "id_prefix", "purpose"];
+const RECORD_ID_PREFIXES: [&str; 5] = ["ADR", "CAP", "EPC", "SPC", "TSK"];
 const PORTAL_LAYER_KEYS: [&str; 6] = [
     "id",
     "label",
@@ -194,6 +201,19 @@ struct PortalSourceContract {
     source_roots: Vec<String>,
     excludes: Vec<String>,
     layers: Vec<PortalLayerContract>,
+    records: PortalRecordsContract,
+}
+
+#[derive(Clone, Default)]
+struct PortalRecordsContract {
+    enabled: bool,
+    pointers: Vec<PortalRecordPointer>,
+}
+
+#[derive(Clone)]
+struct PortalRecordPointer {
+    folder: String,
+    id_prefix: String,
 }
 
 #[derive(Clone)]
@@ -492,7 +512,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
     let source_contract = authoritative_config
         .as_deref()
         .and_then(|bytes| verify_config_contract(bytes, &evidence, &mut report));
-    let expected_pages = source_contract
+    let expected = source_contract
         .as_ref()
         .and_then(|contract| {
             expected_portal_pages(
@@ -503,6 +523,8 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             )
         })
         .unwrap_or_default();
+    let expected_pages = expected.pages;
+    let pointed_record_ids = expected.record_ids;
     verify_page_inventory(&evidence.pages, &expected_pages, &mut report);
     let source_paths: Vec<&str> = expected_pages.keys().map(String::as_str).collect();
     let source_blobs = match git_batch_blobs(
@@ -785,7 +807,13 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                     page.route, relationship.source_id
                 ));
             }
-            if !strict_id(&relationship.target) || !ids.contains(&relationship.target) {
+            // A target the guide points at instead of publishing is not a
+            // page, so it owns no route; the page links it into the
+            // repository and the verifier proves the record exists there.
+            if !strict_id(&relationship.target)
+                || !(ids.contains(&relationship.target)
+                    || pointed_record_ids.contains(&relationship.target))
+            {
                 report.issues.push(format!(
                     "{} relationship targets missing or invalid ID {}",
                     page.route, relationship.target
@@ -1066,10 +1094,13 @@ fn verify_config_contract(
             .push("portal configuration contract is not an object".into());
         return None;
     };
-    if object.len() != PORTAL_CONFIG_KEYS.len()
-        || object
-            .keys()
-            .any(|key| !PORTAL_CONFIG_KEYS.contains(&key.as_str()))
+    if !PORTAL_CONFIG_KEYS
+        .iter()
+        .all(|key| object.contains_key(*key))
+        || object.keys().any(|key| {
+            !PORTAL_CONFIG_KEYS.contains(&key.as_str())
+                && !PORTAL_OPTIONAL_CONFIG_KEYS.contains(&key.as_str())
+        })
     {
         report
             .issues
@@ -1083,13 +1114,94 @@ fn verify_config_contract(
         configured_path_array(object.get("source_roots"), "source_roots", 1, 32, report)?;
     let excludes = configured_path_array(object.get("exclude"), "exclude", 0, 128, report)?;
     let layers = configured_layers(object.get("layers"), report)?;
+    let records = configured_records(object.get("records"), report)?;
     Some(PortalSourceContract {
         title: object.get("title")?.as_str()?.to_string(),
         description: object.get("description")?.as_str()?.to_string(),
         source_roots,
         excludes,
         layers,
+        records,
     })
+}
+
+// While the switch is off, the pointer folders leave the publishable source
+// inventory entirely, so the verifier derives the same page set the adapter
+// emitted and still knows which ids the guide may cite without a page.
+fn configured_records(
+    value: Option<&serde_json::Value>,
+    report: &mut PortalValidationReport,
+) -> Option<PortalRecordsContract> {
+    let Some(value) = value else {
+        return Some(PortalRecordsContract::default());
+    };
+    let Some(object) = value.as_object() else {
+        report
+            .issues
+            .push("portal configuration records is not an object".into());
+        return None;
+    };
+    if object
+        .keys()
+        .any(|key| !PORTAL_RECORDS_KEYS.contains(&key.as_str()))
+    {
+        report
+            .issues
+            .push("portal configuration records keys are not closed".into());
+        return None;
+    }
+    let Some(enabled) = object.get("enabled").and_then(serde_json::Value::as_bool) else {
+        report
+            .issues
+            .push("portal configuration records.enabled is missing or invalid".into());
+        return None;
+    };
+    let pointer_values = match object.get("pointers") {
+        None | Some(serde_json::Value::Null) => Vec::new(),
+        Some(serde_json::Value::Array(values)) if values.len() <= 16 => values.clone(),
+        Some(_) => {
+            report
+                .issues
+                .push("portal configuration records.pointers is invalid".into());
+            return None;
+        }
+    };
+    let mut pointers = Vec::with_capacity(pointer_values.len());
+    for value in &pointer_values {
+        let valid = value.as_object().is_some_and(|pointer| {
+            pointer.len() == PORTAL_RECORDS_POINTER_KEYS.len()
+                && pointer
+                    .keys()
+                    .all(|key| PORTAL_RECORDS_POINTER_KEYS.contains(&key.as_str()))
+                && pointer
+                    .get("folder")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(safe_path_text)
+                && pointer
+                    .get("id_prefix")
+                    .and_then(serde_json::Value::as_str)
+                    .is_some_and(|prefix| RECORD_ID_PREFIXES.contains(&prefix))
+                && bounded_config_string(pointer.get("purpose"), 1, 200)
+        });
+        if !valid {
+            report
+                .issues
+                .push("portal configuration records pointer is invalid".into());
+            return None;
+        }
+        let pointer = value.as_object()?;
+        pointers.push(PortalRecordPointer {
+            folder: pointer.get("folder")?.as_str()?.to_string(),
+            id_prefix: pointer.get("id_prefix")?.as_str()?.to_string(),
+        });
+    }
+    if enabled && !pointers.is_empty() {
+        report
+            .issues
+            .push("portal configuration declares record pointers while records are enabled".into());
+        return None;
+    }
+    Some(PortalRecordsContract { enabled, pointers })
 }
 
 fn verify_config_metadata(
@@ -1498,7 +1610,7 @@ fn expected_portal_pages(
     commit: &str,
     contract: &PortalSourceContract,
     report: &mut PortalValidationReport,
-) -> Option<BTreeMap<String, String>> {
+) -> Option<ExpectedPortalContent> {
     let records = match git_tree_records(repository, commit) {
         Ok(records) => records,
         Err(error) => {
@@ -1509,7 +1621,60 @@ fn expected_portal_pages(
         }
     };
     let selected = select_publishable_sources(&records, contract, report)?;
-    Some(derive_expected_routes(&selected, contract, report))
+    Some(ExpectedPortalContent {
+        pages: derive_expected_routes(&selected, contract, report),
+        record_ids: pointed_record_ids(&records, contract),
+    })
+}
+
+// Ids the guide points at instead of publishing. A page may cite one and
+// declare a relationship to it; the link resolves to the repository file.
+fn pointed_record_ids(
+    records: &[GitTreeRecord],
+    contract: &PortalSourceContract,
+) -> BTreeSet<String> {
+    let mut ids = BTreeSet::new();
+    if contract.records.enabled {
+        return ids;
+    }
+    for pointer in &contract.records.pointers {
+        let prefix = format!("{}/", pointer.folder);
+        for record in records
+            .iter()
+            .filter(|record| record.path.starts_with(&prefix))
+        {
+            let basename = record.path.rsplit('/').next().unwrap_or_default();
+            if let Some(id) = record_id_from_filename(basename, &pointer.id_prefix) {
+                ids.insert(id);
+            }
+        }
+    }
+    ids
+}
+
+fn record_id_from_filename(basename: &str, id_prefix: &str) -> Option<String> {
+    let stem = basename.strip_suffix(".md")?;
+    let rest = stem.strip_prefix(&format!("{id_prefix}-"))?;
+    let mut segments = rest.split('-');
+    let number = segments.next().filter(|value| digits(value, 3))?;
+    let mut id = format!("{id_prefix}-{number}");
+    if id_prefix == "TSK" {
+        if let Some(subtask) = segments.clone().next().filter(|value| digits(value, 3)) {
+            id.push('-');
+            id.push_str(subtask);
+        }
+    }
+    strict_id(&id).then_some(id)
+}
+
+fn digits(value: &str, minimum: usize) -> bool {
+    value.len() >= minimum && value.chars().all(|character| character.is_ascii_digit())
+}
+
+#[derive(Default)]
+struct ExpectedPortalContent {
+    pages: BTreeMap<String, String>,
+    record_ids: BTreeSet<String>,
 }
 
 #[allow(clippy::case_sensitive_file_extension_comparisons)] // Mirrors the adapter's intentional lowercase `.md` contract exactly.
@@ -1545,6 +1710,7 @@ fn select_publishable_sources(
                 || contract.excludes.iter().any(|excluded| {
                     record.path == *excluded || record.path.starts_with(&format!("{excluded}/"))
                 })
+                || pointed_record_folder(&record.path, contract)
             {
                 continue;
             }
@@ -1579,6 +1745,15 @@ fn select_publishable_sources(
         return Some(BTreeSet::new());
     }
     Some(selected)
+}
+
+fn pointed_record_folder(source_path: &str, contract: &PortalSourceContract) -> bool {
+    !contract.records.enabled
+        && contract
+            .records
+            .pointers
+            .iter()
+            .any(|pointer| source_path.starts_with(&format!("{}/", pointer.folder)))
 }
 
 fn derive_expected_routes(
@@ -2736,8 +2911,15 @@ fn verify_rendered_claims(
             page.route
         ));
     }
+    // The exact commit stays provable from the rendered page. A portal that
+    // links its source may prove it through the source link title and render
+    // one short pin, so the forty character hash no longer wraps onto a
+    // second line at phone width.
+    let commit_is_visible = output
+        .contains(&format!("<code>{}</code>", evidence.repository.commit))
+        || output.contains(&format!(" at {}\"", evidence.repository.commit));
     if !output.contains(&format!("<code>{}</code>", page.source_path))
-        || !output.contains(&format!("<code>{}</code>", evidence.repository.commit))
+        || !commit_is_visible
         || evidence
             .repository
             .release_version
@@ -3847,6 +4029,67 @@ mod tests {
     }
 
     #[test]
+    fn a_disabled_records_switch_points_at_folders_it_does_not_publish() {
+        let contract = PortalSourceContract {
+            title: "Fixture".into(),
+            description: "Fixture contract".into(),
+            source_roots: vec!["docs".into()],
+            excludes: Vec::new(),
+            layers: vec![PortalLayerContract {
+                id: "reference".into(),
+                paths: Vec::new(),
+                prefixes: Vec::new(),
+                fallback: true,
+            }],
+            records: PortalRecordsContract {
+                enabled: false,
+                pointers: vec![PortalRecordPointer {
+                    folder: "docs/decisions".into(),
+                    id_prefix: "ADR".into(),
+                }],
+            },
+        };
+        let blob = |path: &str| GitTreeRecord {
+            path: path.into(),
+            mode: "100644".into(),
+            kind: "blob".into(),
+        };
+        let records = [
+            blob("docs/guide.md"),
+            blob("docs/decisions/ADR-0001-first-choice.md"),
+            blob("docs/decisions/README.md"),
+        ];
+        let mut report = PortalValidationReport::default();
+        let selected = select_publishable_sources(&records, &contract, &mut report).unwrap();
+        assert!(report.is_clean(), "{:?}", report.issues);
+        assert_eq!(selected, BTreeSet::from(["docs/guide.md".to_string()]));
+        assert_eq!(
+            pointed_record_ids(&records, &contract),
+            BTreeSet::from(["ADR-0001".to_string()])
+        );
+
+        let enabled = PortalSourceContract {
+            records: PortalRecordsContract::default(),
+            ..contract
+        };
+        let mut enabled_report = PortalValidationReport::default();
+        assert_eq!(
+            select_publishable_sources(&records, &enabled, &mut enabled_report).unwrap(),
+            BTreeSet::from([
+                "docs/decisions/ADR-0001-first-choice.md".to_string(),
+                "docs/decisions/README.md".to_string(),
+                "docs/guide.md".to_string(),
+            ])
+        );
+        assert!(pointed_record_ids(&records, &enabled).is_empty());
+        assert_eq!(
+            record_id_from_filename("TSK-051-001.md", "TSK"),
+            Some("TSK-051-001".to_string())
+        );
+        assert_eq!(record_id_from_filename("template.md", "ADR"), None);
+    }
+
+    #[test]
     fn configured_tree_inventory_requires_every_source_and_derives_semantic_routes() {
         let temp = tempfile::tempdir().unwrap();
         for directory in ["docs", "apps/web/docs"] {
@@ -3899,12 +4142,13 @@ mod tests {
                     fallback: true,
                 },
             ],
+            records: PortalRecordsContract::default(),
         };
         let mut report = PortalValidationReport::default();
         let expected = expected_portal_pages(temp.path(), &commit, &contract, &mut report).unwrap();
         assert!(report.is_clean(), "{:?}", report.issues);
         assert_eq!(
-            expected,
+            expected.pages,
             BTreeMap::from([
                 ("apps/web/docs/journey.md".into(), "web/journey".into()),
                 ("docs/product.md".into(), "orient/product".into()),
@@ -3912,7 +4156,11 @@ mod tests {
         );
 
         let mut omitted_report = PortalValidationReport::default();
-        verify_page_inventory(&[page("docs/product.md")], &expected, &mut omitted_report);
+        verify_page_inventory(
+            &[page("docs/product.md")],
+            &expected.pages,
+            &mut omitted_report,
+        );
         assert!(omitted_report.issues.iter().any(|issue| {
             issue.contains("apps/web/docs/journey.md") && issue.contains("no evidenced page")
         }));
