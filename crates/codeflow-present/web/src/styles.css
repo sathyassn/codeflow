@@ -74,7 +74,7 @@
 :root[data-cf-mode-resolved="light"] { color-scheme: light; }
 :root[data-cf-mode-resolved="dark"] { color-scheme: dark; }
 
-/* Editorial — the cool slate family (TSK-045 settled tokens) */
+/* Editorial: the cool slate family (TSK-045 settled tokens) */
 :root[data-cf-theme="editorial"][data-cf-mode-resolved="light"] {
   --cf-canvas: #eef2f6;
   --cf-surface: #fafcfe;
