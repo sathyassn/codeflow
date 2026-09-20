@@ -32,6 +32,12 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact patch -->
+- **Claude Code preset prompts.** The shipped preset sets no permission mode
+  in its default file and prompts only for rooted or home-anchored recursive
+  deletes and for force branch deletes in every spelling. Existing
+  installations keep their current entries because `codeflow update` only adds.
+
+<!-- codeflow:release-impact patch -->
 - **Committed portal directory links.** Repository guides preserve relative
   links to committed directories as exact-source provider tree URLs while
   retaining visible provenance on unknown providers and fail-closed path rules.
