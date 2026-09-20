@@ -317,6 +317,8 @@ caption: every step has a plane that catches the mistake it can make
    integrate <branch> --into <target>` is the sanctioned local path, and a human
    can override the git layer for a local merge with `CODEFLOW_HUMAN_OVERRIDE=1`.
 
+### Enforcement planes: who catches what
+
 The four enforcement planes, what each one catches, and the rules behind them
 are on the enforcement planes page in the System layer.
 
