@@ -865,13 +865,16 @@ name: opt-in-documentation-portal
 area: scaffold
 status: shipped
 verified_by: ["codeflow test --mode full --strict", "cargo test scaffold::portal", "cargo test validate::portal", "codeflow-core tests/manifest_consistency.rs", "node --test docs-portal/tests/adapter.test.mjs", "npm run build --prefix docs-portal", "codeflow validate --portal docs-portal", "docs/verification/tsk-009-docs-portal/", "docs/verification/tsk-020-portal-ownership.md"]
-epics: [EPC-005, EPC-007]
+epics: [EPC-005, EPC-007, EPC-013]
 adrs: [ADR-0048, ADR-0058]
 ```
 
 `codeflow portal setup --path <repository-relative-directory>` explicitly
 adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
-portal build requires Node 22.19.0 or newer; the pinned toolchain is Node 26.4.0.
+portal build requires Node 22.19.0 or newer. The aggregate CI gate runs on Node
+26.4.0, and its full strict target installs, checks, builds, and validates the
+dogfood portal; the portal-local `.node-version` and the Windows adapter-test
+lane pin Node 24.18.0.
 The starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
 replace-only updates without pristine runtime copies or source merges. Runtime

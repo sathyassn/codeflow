@@ -89,7 +89,7 @@
     ".agents/skills/cf-docs-portal/references/content-contract.md": {
       "src": "agents/skills/cf-docs-portal/references/content-contract.md",
       "ownership": "managed",
-      "sha256": "4ff50efdae7924dbb3c0a491875a3fb018ac168dc1a552a48c53b55b0983fa2f",
+      "sha256": "773c50d06f35371b70fdcafeec97353a16530379b15b77087913896905a6439b",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/references/information-architecture.md": {
@@ -563,7 +563,7 @@
     ".claude/skills/cf-docs-portal/references/content-contract.md": {
       "src": "agents/skills/cf-docs-portal/references/content-contract.md",
       "ownership": "managed",
-      "sha256": "4ff50efdae7924dbb3c0a491875a3fb018ac168dc1a552a48c53b55b0983fa2f",
+      "sha256": "773c50d06f35371b70fdcafeec97353a16530379b15b77087913896905a6439b",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/references/information-architecture.md": {
