@@ -4,18 +4,27 @@
      Keep it small and stable — this file should change rarely.
      The non-goals below are what planning is checked against. -->
 
-## Purpose
+**CodeFlow installs the discipline; the harness does the developing.**
 
-CodeFlow is the AI-development discipline layer you install into any repo: one
-Rust binary (`codeflow`) plus an embedded scaffold that scaffolds, enforces,
-verifies, and remembers — while Claude Code (or any harness) does the
-developing. It fixes the failure v1 proved by exhaustion: process built as an
-orchestration framework rots faster than it earns its keep. v2 keeps clarity of
-inputs and verification of outputs, and lets the harness supply the middle.
+```cf-stage
+codeflow init | one binary seeds the rules @accent
+->
+git hooks · guards · CI | one policy source, four planes enforce
+->
+Claude Code · Codex · Grok Build | the harness develops inside the rails
+->
+codeflow test · validate | verify the result
+->
+ledger · records · recall | remember why @positive
+caption: scaffold, enforce, verify, remember; the harness supplies the middle
+```
+
+One Rust binary (`codeflow`) carries the scaffold that seeds those rules, and it
+installs into any repository.
 
 ## Users
 
-Solo, AI-assisted developers first—someone running Claude Code, Codex, or
+Solo, AI-assisted developers first — someone running Claude Code, Codex, or
 another capable host who wants git, secret, and test discipline plus a durable
 why-record without standing up a framework. Cross-harness development is a
 scaffold design center when it composes vendor-native interactive sessions;
@@ -32,7 +41,7 @@ multi-user coordination remains deferred.
   ledger) maintained inside the ship flow, with `recall` over the record.
 - Graduated weight — minimal / standard / full tiers, where the git-discipline
   enforcement floor is the same at every tier and the tiers scale only the
-  project-management on top (ADR-0019) — the binary validating every shape so
+  project-management on top (ADR-0019); the binary validates every shape, so
   growth is mechanical.
 - Host-neutral skill contracts for a Claude+Codex duo over every non-trivial
   repository task: stage-aware parallel independent work, capability-routed
@@ -49,7 +58,7 @@ multi-user coordination remains deferred.
 - **Not a runtime harness, agent framework, or model router.** No daemon or
   autorun. Vendor-native sessions, plugins, tools, worktrees, tasks, memory,
   sandbox, and permissions are composed at the process boundary, never
-  reimplemented (charter §1; ADR-0023).
+  reimplemented (the v2 charter §1, `docs/plan/v2/00-charter.md`; ADR-0023).
 - **Not a process-enforcement engine.** No phase ordering, role boundaries, or
   review-before-X sequencing in code; gates exist only where a mistake is
   irreversible or invisible (charter §6.6).
