@@ -161,8 +161,10 @@ locked check and validator, not by a rerun of the full suite.
 
 The branch was rebased onto `integration/EPC-013-release-guides` at
 `aa6b9dd748bccd8f3212f2f628aa68b9da5dae93` (TSK-036 merged); the only
-conflict was two adjacent CHANGELOG bullets, both kept. Rerun on the final
-head `e7faf6e29351c08f6d384e13f48c27406c2dac63` with Node v24.18.0:
+conflict was two adjacent CHANGELOG bullets, both kept. Rerun on the
+content-identical pre-rebase head `e7faf6e29351c08f6d384e13f48c27406c2dac63`
+(product files byte-identical to the integrated head `d418d061e`; the second
+rebase onto the TSK-036 closeout rewrote SHAs only) with Node v24.18.0:
 
 | Step | Result |
 |---|---|
