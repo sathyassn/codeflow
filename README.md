@@ -131,11 +131,12 @@ result. Protected-branch merges land via a PR **merged by a human**,
 or `codeflow integrate`; an agent never merges into protected. A human can
 override the git-hook plane locally with `CODEFLOW_HUMAN_OVERRIDE=1`; git-guard
 never honors that env and blocks agents from setting it. Plane-by-plane
-detail: [the enforcement matrix](docs/adoption.md#enforcement-planes-who-catches-what).
+detail: [the enforcement matrix](docs/architecture/enforcement-planes.md).
 
 ## Docs
 
-- [docs/adoption.md](docs/adoption.md): tiers, install, ownership, the daily flow, the enforcement matrix
+- [docs/adoption.md](docs/adoption.md): tiers, install, ownership, the daily flow
+- [docs/architecture/enforcement-planes.md](docs/architecture/enforcement-planes.md): the enforcement matrix and what each plane catches
 - [docs/harness-posture.md](docs/harness-posture.md): autonomy, sandbox, and harness settings per harness
 - [docs/model-upgrades.md](docs/model-upgrades.md): qualifying a new model, harness, or permission profile
 - [docs/architecture.md](docs/architecture.md): how the binary and scaffold are built
