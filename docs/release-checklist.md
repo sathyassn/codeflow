@@ -1,12 +1,11 @@
 # CodeFlow release checklist
 
-Use this checklist for every CodeFlow release. The detailed commands and
-rationale live in [the release runbook](releasing.md); this page is the compact
-approval record. Record links or pasted output for every checked item. A green
-job, model agreement, or peer approval is evidence, never a substitute for the
-named human release decision.
+The approval record for every CodeFlow release. Commands, rationale, and the
+policy behind each box live in [the release runbook](releasing.md).
 
 ## 1. Scope and version
+
+Runbook: [codeflow's own releases](releasing.md#codeflows-own-releases).
 
 - [ ] The normal work PR contains reviewed pending notes, one adjacent impact
       annotation per new entry, and all warranted coupled stamp changes.
@@ -21,6 +20,8 @@ named human release decision.
       documentation describes current behavior, not an aspiration.
 
 ## 2. Source and security gates
+
+Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication).
 
 - [ ] Format, workspace tests, warning-free clippy, warning-free rustdoc, the
       full CodeFlow test mode, documentation validation, and the 90% line
@@ -71,6 +72,8 @@ named human release decision.
       host-specific sandbox boundary match the documented contract.
 
 ## 3. Distribution and platform assurance
+
+Runbook: [cross-build toolchain](releasing.md#cross-build-toolchain), [presentation renderer assets](releasing.md#presentation-renderer-assets), [portal ownership migration](releasing.md#portal-ownership-migration).
 
 - [ ] The pinned cargo-dist version regenerates the committed release workflow
       without drift.
@@ -155,6 +158,8 @@ named human release decision.
 
 ## 4. Harness and model qualification
 
+Runbook: the pre-tagging harness-parity re-verification in [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication).
+
 - [ ] The host-neutral Claude+Codex contract and evaluator fixtures pass with
       the currently supported model/harness bindings.
 - [ ] Any material orchestration, task-graph, or verification-selection change
@@ -202,6 +207,8 @@ named human release decision.
 
 ## 5. Publish, canary, and rollback
 
+Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-preparation-and-deliberate-publication) and [historical bridge into v3](releasing.md#historical-bridge-into-v3).
+
 - [ ] A human approves and merges the normal work PR after its release-state
       check is fresh. No agent merges or tags it.
 - [ ] A human deliberately dispatches the generated workflow for current
@@ -217,5 +224,6 @@ named human release decision.
       release ownership is named. For CodeQL, rollback removes any required
       check before disabling default setup; findings and the last healthy tool
       status remain linked in the release record.
-- [ ] Downstream Agent OS work begins only from this verified public CodeFlow
-      release; the portal is updated only after the matching Agent OS release.
+- [ ] Downstream work in Agent OS, the companion repository that consumes
+      CodeFlow, begins only from this verified public CodeFlow release; the
+      portal is updated only after the matching Agent OS release.
