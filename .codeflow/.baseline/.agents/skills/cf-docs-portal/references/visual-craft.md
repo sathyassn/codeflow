@@ -42,7 +42,7 @@ or refuse decorative chrome.
 The reader lands in a **docs shell** (nav, crumbs, search)—not a session
 review. Your job is still structural: what do they **see** in the first
 screen of this layer, and does architecture use **layout** (stage, table,
-tree) or only more prose under a heading?
+full-width figure) or only more prose under a heading?
 
 - **Concept** pages orient: one mental model, not a dump of every capability.
 - **Architecture** pages must work if sentences thin out—nodes and edges, not
@@ -91,7 +91,8 @@ architecture-shaped layer contains zero altitude pages; it exercises every
 tabbed route, not the first it finds.
 
 A subject-led labeled figure is a `cf-stage` fence: node lines
-(`NAME | sublabel @accent`, roles `accent` / `positive` / `warn` / `danger`),
+(`NAME | sublabel @accent`, roles `accent` / `positive` / `warn` / `danger` /
+`neutral`),
 a `->` line between stages (nodes inside one stage are parallel), and one
 `caption:` line. The adapter renders it into generated HTML styled by the
 `--cf-*` tokens; invalid grammar fails the page loudly. Keep ASCII `text`

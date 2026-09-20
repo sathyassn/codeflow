@@ -67,9 +67,9 @@ supporting text. It is never the subject's prose re-rendered.**
 | **Technical and records** (references, specs, epics, tasks, evidence) | The lookup form: table, status, code, diff | Tables and evidence blocks | Minimal; lookup, not essay |
 | **Historical decisions** (accepted ADRs) | Their own append-only text | Exempt from the trio; rendered as records | Unchanged |
 
-A present document follows the same ladder as a path: Concept carrier first,
-Architecture view only when a second structural view is needed, Technical
-panes, then one Ask.
+A present document walks the same altitudes as a path: the Concept carrier
+first, an Architecture view only when a second structural view is needed,
+Technical panes, then one Ask (`feedback_prompt`).
 
 ### Supported carriers
 
@@ -78,17 +78,20 @@ not be promised in a source or a document.
 
 | Carrier | Portal (adapter) | Present (runtime blocks) |
 |---------|------------------|--------------------------|
-| Subject-led labeled flow | `cf-stage` fence (nodes `NAME \| sublabel @role`, `->` between stages, one `caption:`; roles accent / positive / warn / danger / neutral; limits 6 stages, 5 nodes per stage) | figure / stage block |
-| Altitude trio | depth-2 `## Concept`, `## Architecture`, `## Technical` rendered as a tablist; at least two of the three | block order as attention order |
-| Full-width figure | fenced `text` block inside a trio panel | figure block |
-| Table | Markdown table | table block |
-| Code, diff, evidence | fenced code | code / diff / status blocks |
-| Media | image with committed source | media block |
-| Callout | not a carrier | callout block, sparingly |
+| Subject-led labeled flow | `cf-stage` fence (nodes `NAME \| sublabel @role`, `->` between stages, one `caption:`; roles accent / positive / warn / danger / neutral; limits 6 stages, 5 nodes per stage) | `html` block: the authored primary stage (utility tokens, labeled nodes, named edges) |
+| Altitude trio | depth-2 `## Concept`, `## Architecture`, `## Technical` rendered as a tablist; at least two of the three | block order as attention order; `tabs` only for true peer views |
+| Full-width figure | fenced `text` block inside a trio panel | `html` block as a static layout standard blocks cannot express |
+| Table | Markdown table | `table` |
+| Hierarchy | **unsupported** in the portal (use a stage or a `text` figure) | `tree` |
+| Code, diff, evidence | fenced code | `code` / `diff` / `status` |
+| Media | image with committed source | `media` |
+| Callout | not a carrier | `callout`, sparingly |
+| Reading and framing | Markdown prose and lists | `narrative` / `bullets` / `comparison` / `decision` / `disclosure` / `feedback_prompt` |
 | Mermaid | **unsupported**: a Mermaid fence renders as plain code | `diagram` block, supporting form only, never the primary carrier |
 
-Unsupported on both surfaces: tree carriers and arbitrary diagram syntaxes.
-In the portal, Mermaid is also unsupported; do not use it as a figure there.
+Unsupported on both surfaces: arbitrary diagram syntaxes beyond the forms
+above. In the portal, hierarchy trees and Mermaid are also unsupported; use a
+stage or a `text` figure there.
 
 ---
 

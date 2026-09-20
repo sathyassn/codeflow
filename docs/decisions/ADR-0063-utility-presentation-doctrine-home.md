@@ -4,7 +4,7 @@ title: one shared utility presentation doctrine with a durable architecture home
 date: 2026-09-19
 status: accepted
 superseded_by: null
-architecture_impact: docs/architecture/utility-presentation.md — new area page records the utility presentation system; docs/architecture.md gains a one-line pointer (added by the orient-sources task in the same epic body)
+architecture_impact: docs/architecture/utility-presentation.md — new graduated area page records the utility presentation system
 ---
 
 # ADR-0063 — one shared utility presentation doctrine with a durable architecture home
@@ -43,6 +43,6 @@ no longer compete for authority.
 ## Architecture impact
 
 `docs/architecture/utility-presentation.md` is added as the graduated area
-page for the utility presentation system; the one-line pointer in
-`docs/architecture.md` lands with the orient-sources task in the same epic
-body, so both reach `main` in one PR.
+page for the utility presentation system. `docs/architecture.md` is owned by
+the orient-sources task in this epic, which adds the graduation pointer before
+the epic body reaches `main`.

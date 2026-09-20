@@ -7,10 +7,10 @@
 
 ## Concept
 
-One design system carries every utility surface CodeFlow renders: agents
-author the subject, the runtime owns chrome, and the same tokens, altitude,
-and stage grammar apply whether the surface is a bounded review session or a
-durable repository guide.
+One design system carries every utility surface CodeFlow renders. Agents
+author the subject and the runtime owns the chrome. The same tokens, altitude
+and stage grammar apply to a bounded review session and to a durable
+repository guide.
 
 ```cf-stage
 subject sources | catalog blocks · repository Markdown @accent

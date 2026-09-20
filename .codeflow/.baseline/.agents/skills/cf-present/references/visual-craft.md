@@ -111,12 +111,6 @@ Delivery is at-least-once by `event_id`. No harness-specific transport.
 
 Short narrative **frames**; it does not replace the carrier.
 
-## Comment chrome (runtime-owned)
-
-Single Comment mode; rail only while armed; humans mark **what is on the
-page**. Author carriers people can point at. Full rules: the present profile
-above.
-
 ## Motion
 
 Meaning at rest. No dependence on animation to teach structure.
