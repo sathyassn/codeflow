@@ -62,11 +62,15 @@ same functions through this surface.
 
 ## Technical
 
+Every argument, flag and default below is the binary's own `--help` output at
+this head. A required argument is written in angle brackets, an optional one in
+square brackets.
+
 ### Scaffold
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow init` | `--minimal`, `--standard`, `--full`, `--yes`, `--force` | `--minimal`: the discipline floor. `--standard` is the default. `--yes` takes sane defaults at standard tier. `--force` overwrites existing files and is never the default |
+| `codeflow init` | `--minimal`, `--standard`, `--full`, `--yes`, `--force` | `--minimal` is the discipline floor, `--standard` the default tier, `--full` adds project-management. `--yes` takes sane defaults at standard tier. `--force` overwrites existing files and is never the default |
 | `codeflow update` | `--diff <FILE>`, `--force` | `--diff` writes the report plus unified diffs of applied changes to a file; `--force` replaces user-modified managed files instead of merging |
 
 `codeflow update` exits 2 when the scaffold report or the adopted portal report
@@ -77,12 +81,12 @@ left `.new` sidecars behind.
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow hook <NAME>` | `--run-id <ID>`, `--result <FILE>`, `--state-dir <DIR>` | `<NAME>` is one of `git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`. The payload is read from stdin |
+| `codeflow hook <NAME>` | `--run-id <ID>`, `--result <FILE>`, `--state-dir <DIR>` | `<NAME>` is one of `git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`. The payload is read from stdin. `--run-id` and `--result` drive the legacy `delegate-turn` mode, `--state-dir` the schema-v2 mode |
 | `codeflow git-hook <STAGE> [ARGS]...` | `<STAGE>` is one of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push` | `[ARGS]` are the arguments git passes through, for example the commit-msg file path or the pre-push remote name and URL |
-| `codeflow ci` | `--base <REF>`, `--head <REF>`, `--branch <NAME>`, `--pr-body <TEXT>`, `--pr-body-file <FILE>` | Base and head are auto-detected from the CI environment when omitted; branch defaults to the CI-provided or current HEAD branch. `--pr-body`/`--pr-body-file` scan for AI attribution, emoji, and the required section structure |
-| `codeflow policy explain` | none | Prints every key's type, default, valid values, and purpose from the schema registry |
-| `codeflow policy show` | none | Prints each key's current value, its source (project file or built-in default), and any invalid values |
-| `codeflow remote protect` | none | Applies protected-branch policy to the remote provider |
+| `codeflow ci` | `--base <REF>`, `--head <REF>`, `--branch <NAME>`, `--pr-body <TEXT>`, `--pr-body-file <FILE>` | Base and head are auto-detected from the CI environment when omitted; branch defaults to the CI-provided or current HEAD branch. `--pr-body` and `--pr-body-file` scan for AI attribution, emoji, and the required section structure |
+| `codeflow policy explain` | no flags | Prints every key's type, default, valid values, and purpose from the schema registry |
+| `codeflow policy show` | no flags | Prints each key's current value, its source (project file or built-in default), and any invalid values |
+| `codeflow remote protect` | `--provider <PROVIDER>` (default `github`), `--dry-run` | Only `github` has an adapter; another provider prints the manual checklist. `--dry-run` prints the intended rules without applying anything |
 
 Hook exit behaviour is the contract the harness reads: `hook` exits 2 to make
 the harness block the tool call, and 1 on other failures. `codeflow ci`
@@ -93,8 +97,8 @@ proceeds when only warnings were raised and reports the count.
 | Command | Arguments and flags | Notes |
 |---|---|---|
 | `codeflow test` | `--mode <full\|quick\|essential>` (default `full`), `--strict` | `quick` is an alias for `essential`. With no stack detected the run is a loud no-op with exit 0; `--strict` makes that no-op exit non-zero for scripted and unattended callers |
-| `codeflow test setup` | see `codeflow test setup --help` | Configures `.codeflow/test-config.json` by root detection, an embedded template, or an appended target; safe auto-detection is the default |
-| `codeflow validate [PATH]` | `--docs`, `--portal <DIR>` | `PATH` defaults to `project-management/`. `--docs` adds the doc-graph referential-integrity lint. `--portal` verifies a portal evidence manifest without executing project code |
+| `codeflow test setup` | `--list-templates`, `--template <NAME>`, `--replace`, `--add-target` | The three actions are mutually exclusive. `--list-templates` lists the templates embedded in this binary, `--template` writes one by name, `--add-target` appends one target interactively. `--replace` requires `--template` and explicitly replaces an existing config. With no flag, safe root-only auto-detection runs |
+| `codeflow validate [PATH]` | `--docs`, `--portal <DIR>` | `PATH` defaults to `project-management/`. `--docs` adds the doc-graph referential-integrity lint. `--portal` verifies a portal evidence manifest without executing project code and conflicts with `PATH`, so pass one or the other |
 | `codeflow integrate <BRANCH>` | `--into <INTO>` (default `main`) | Rebase, test, then fast-forward, under a flock and a gate-context token |
 | `codeflow doctor` | `--check <CHECK>`, `--list` | `--list` prints the available check names; `--check` runs a single named check |
 
@@ -102,19 +106,19 @@ proceeds when only warnings were raised and reports the count.
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow orient` | none | Prints the session-start digest to stdout |
-| `codeflow status` | `--capabilities`, `--delivery` | Default output is counts by status; `--capabilities` shows the full capability table; `--delivery` shows each capability's epics with their open/total task counts and next actionable tasks |
+| `codeflow orient` | no flags | Prints the session-start digest to stdout |
+| `codeflow status` | `--capabilities`, `--delivery` | Default output is counts by status; `--capabilities` shows the full capability table; `--delivery` shows each capability's epics with their open and total task counts and next actionable tasks |
 | `codeflow recall <QUERY>` | `--all`, `--rebuild`, `--limit <LIMIT>` | `--all` searches every repo in the user registry. `--rebuild` drops the index for the searched repos and re-syncs. `--limit` defaults to 20, or `[recall].limit` from `~/.codeflow/config.toml` |
 
 ### Plan
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow epic new` | see `--help` | Allocates the next `EPC-NNN` and scaffolds the epic from the template |
-| `codeflow spec new` | `--for <epic-or-task>` | Allocates the next `SPC-NNN`, scaffolds it, and links the consuming work item |
-| `codeflow task new` | see `--help` | Allocates the next independent `TSK-NNN` and scaffolds it |
+| `codeflow epic new <TITLE>` | no flags | Allocates the next `EPC-NNN` and scaffolds the epic from the template |
+| `codeflow spec new <TITLE> --for <EPC-NNN\|TSK-NNN>` | `--for` is required | Allocates the next `SPC-NNN`, scaffolds it, and links the consuming epic or task |
+| `codeflow task new <TITLE>` | `-e`/`--epic <EPC-NNN>`, `--standalone-reason <REASON>`, `--into <BRANCH>` | `--epic` and `--standalone-reason` are mutually exclusive, and a durable task needs one of them. `--into` names the existing local or remote-tracking non-task branch this task will integrate into |
 | `codeflow work start <TASK_ID>` | `--into <REF>` | Verifies that a durable task was planned and anchored before implementation. `--into` names the non-task branch or ref this task will merge into |
-| `codeflow estimate check` | see `--help` | Checks explicit allocations and pinned evidence without scheduling or writes |
+| `codeflow estimate check <FORECAST_PATH>` | `--json` | `<FORECAST_PATH>` is a forecast JSON file, relative to the current directory or absolute. `--json` emits the versioned JSON report |
 
 ### Delegate and present
 
@@ -123,9 +127,18 @@ proceeds when only warnings were raised and reports the count.
 | `codeflow delegate init` | `--run-id <ID>`, `--state-dir <DIR>` | Creates the owner-only run directory and the task hook settings. `--state-dir` must be an absolute path |
 | `codeflow delegate arm` | `--run-id <ID>`, `--state-dir <DIR>`, `--turn-id <ID>`, `--prompt-file <FILE>` | `--prompt-file` holds the exact prompt bytes the host will deliver |
 | `codeflow delegate wait` | `--run-id <ID>`, `--state-dir <DIR>`, `--until <ready\|accepted\|terminal>`, `--turn-id <ID>`, `--timeout-seconds <N>` | `--turn-id` is required for `accepted` and `terminal` waits |
-| `codeflow portal setup` | `--path <DIR>` | The repository-relative portal workspace directory |
-| `codeflow portal transfer` | `--confirm` | Confirms responsibility for future runtime reconciliation |
-| `codeflow present <SUB>` | `open`, `list`, `show`, `update`, `history`, `feedback`, `resolve`, `close`, `export`, `clear` | `open` takes a validated presentation document; `clear` removes eligible closed session state |
+| `codeflow portal setup` | `--path <DIR>` (required) | The repository-relative portal workspace directory |
+| `codeflow portal transfer` | `--confirm` (required) | Confirms responsibility for future runtime reconciliation |
+| `codeflow present open <DOCUMENT>` | `--no-launch` | `--no-launch` starts the service but does not launch a browser window |
+| `codeflow present list` | no flags | Lists presentation sessions for this project |
+| `codeflow present show <SESSION_ID>` | `--no-launch` | `--no-launch` prints the session endpoint and profile without launching |
+| `codeflow present update <SESSION_ID> <DOCUMENT>` | no flags | Appends a validated immutable revision to an active session |
+| `codeflow present history <SESSION_ID>` | no flags | Prints the append-only feedback history as JSON |
+| `codeflow present feedback <SESSION_ID>` | `--follow` | `--follow` continues until the session closes |
+| `codeflow present resolve <SESSION_ID> <EVENT_ID>` | `--event-version <N>` (required), `--status <addressed\|dismissed>` (required) | `--event-version` is the current event version printed by the review surface or by `history` |
+| `codeflow present close <SESSION_ID>` | no flags | Repeating close is safe |
+| `codeflow present export <SESSION_ID>` | `--out <FILE>` (required), `--theme <editorial\|instrument\|technical>` (default `editorial`), `--mode <system\|light\|dark>` (default `system`) | Exports a deterministic self-contained read-only HTML artifact |
+| `codeflow present clear [SESSION_ID]` | `--older-than <OLDER_THAN>` (default `30d`), `--dry-run` | With no session id it removes every eligible closed session older than the window |
 
 `codeflow delegate wait` has the stable exit contract the host polls: 0 on the
 observed state, 10 on a failed terminal, 11 on a poisoned, unsafe, or invalid
