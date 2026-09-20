@@ -11,7 +11,7 @@
   "exclude": ["docs/verification", "docs/decisions/template.md", "project-management/templates"],
   "layers": [
     { "id": "orient", "label": "Orient", "description": "Purpose, capabilities, adoption, and the shortest path into the system.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/harness-posture.md", "docs/model-upgrades.md"], "prefixes": ["docs/capabilities"] },
-    { "id": "system", "label": "System", "description": "Architecture, durable decisions, and operational boundaries.", "paths": ["docs/architecture.md"], "prefixes": ["docs/architecture", "docs/decisions"] },
+    { "id": "system", "label": "System", "description": "Architecture, durable decisions, and operational boundaries.", "paths": ["docs/decisions/README.md", "docs/architecture.md"], "prefixes": ["docs/architecture", "docs/decisions"] },
     { "id": "records", "label": "Records", "description": "Specs, epics, tasks, and their evidence-linked relationships.", "prefixes": ["project-management"] },
     { "id": "reference", "label": "Reference", "description": "Supporting guides and technical reference material.", "fallback": true }
   ],
