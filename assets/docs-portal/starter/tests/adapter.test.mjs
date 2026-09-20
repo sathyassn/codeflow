@@ -2174,7 +2174,7 @@ test("a layer landing lists its pages in configured reading order", async () => 
     const landing = await readFile(path.join(root, "src/content/docs/orient/index.md"), "utf8");
     assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Zulu", "Alpha", "Swept"]);
     assert.match(landing, /Purpose first\./);
-    assert.match(landing, /Start with \[Zulu\]\(\/orient\/zulu\/\)/);
+    assert.match(landing, /Start with \[Zulu\]\(\/orient\/zulu\/\); the sidebar follows the same order/);
     assert.equal(/^- \[/m.test(landing), false);
     const order = async (file) => Number((await readFile(path.join(root, "src/content/docs", file), "utf8")).match(/^sidebar:\n  order: (\d+)$/m)[1]);
     assert.deepEqual(await Promise.all(["orient/index.md", "orient/zulu.md", "orient/alpha.md", "orient/notes/swept.md"].map(order)), [0, 1, 2, 3]);

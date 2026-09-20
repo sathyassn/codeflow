@@ -385,7 +385,7 @@ function renderLayerLanding(layer, layerPages) {
   if (recordPointerRoute !== null && layer.id === recordsSwitch.layer) entries.push({ title: RECORD_POINTER_TITLE, route: recordPointerRoute });
   if (!entries.length) return `${preface}\nNo current sources in this layer.\n`;
   const first = entries[0];
-  return `${preface}\n${readingOrderFigure(layer, entries)}\n\nStart with [${escapeMarkdownInline(first.title)}](${withBase(base, first.route)}); the sidebar holds the same order.\n`;
+  return `${preface}\n${readingOrderFigure(layer, entries)}\n\nStart with [${escapeMarkdownInline(first.title)}](${withBase(base, first.route)}); the sidebar follows the same order and nests a page's sub-pages beneath it.\n`;
 }
 
 // Rendered defect: reading order follows the layer configuration, so a
