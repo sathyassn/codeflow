@@ -693,8 +693,10 @@ test("primitive-token influence is narrow, closed, and contrast checked", () => 
   assert.throws(() => validatePrimitiveTokens({ schema_version: 1, colors: { light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } } }, "signal"), /exactly schema_version, light, and dark/);
   assert.doesNotThrow(() => validatePrimitiveTokens({ schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } }, "folio"));
   // These passed the old approximate theme surfaces, but not the actual
-  // reader-selectable surface/selected-background combinations.
-  for (const [mode, accent] of [["light", "#737373"], ["dark", "#858585"], ["light", "#636363"]]) {
+  // reader-selectable surface/selected-background combinations. The values
+  // track the retuned ink light surfaces (TSK-038): a grey that clears the
+  // parchment-era surfaces must still fail against the near-white ones.
+  for (const [mode, accent] of [["light", "#737373"], ["dark", "#858585"], ["light", "#7a7a7a"]]) {
     const tokens = { schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" }, [mode]: { accent } };
     assert.throws(() => validatePrimitiveTokens(tokens, "signal"), /contrast/);
   }
