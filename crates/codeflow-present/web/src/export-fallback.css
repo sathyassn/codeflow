@@ -17,6 +17,7 @@
   --cf-diagram-line: #514a44;
 }
 
+:root[data-cf-mode="system"][data-cf-theme="instrument"],
 :root[data-cf-mode="system"][data-cf-theme="technical"] {
   --cf-canvas: #eef2f4;
   --cf-surface: #fafcfd;
@@ -56,6 +57,7 @@
     --cf-diagram-line: #bcb2a6;
   }
 
+  :root[data-cf-mode="system"][data-cf-theme="instrument"],
   :root[data-cf-mode="system"][data-cf-theme="technical"] {
     --cf-canvas: #10181c;
     --cf-surface: #172226;

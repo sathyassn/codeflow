@@ -448,8 +448,30 @@ fn update_export_close_and_clear(
     ));
     let exported = fs::read_to_string(&exported_path).unwrap();
     assert!(exported.contains("Second revision"));
-    assert!(exported.contains("data-cf-theme=\"technical\""));
+    // `technical` is the documented alias of the instrument skin: it stays
+    // accepted and resolves to the same skin the canonical name resolves to.
+    assert!(exported.contains("data-cf-theme=\"instrument\""));
     assert!(exported.contains("data-cf-mode=\"dark\""));
+
+    let alias_path = fixture.project.join("review-instrument.html");
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "export",
+            &running.session_id,
+            "--out",
+            alias_path.to_str().unwrap(),
+            "--theme",
+            "instrument",
+            "--mode",
+            "dark",
+        ],
+    ));
+    let alias = fs::read_to_string(&alias_path).unwrap();
+    assert!(alias.contains("data-cf-theme=\"instrument\""));
+    assert_eq!(alias, exported, "technical and instrument export the same skin");
     for private in [
         running.capability.as_str(),
         running.cookie.as_str(),

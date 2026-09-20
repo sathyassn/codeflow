@@ -17,7 +17,8 @@ const EXPORT_BOOTSTRAP: &str = "(async()=>{const e=document.getElementById('cf-p
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportTheme {
     Editorial,
-    Technical,
+    /// The instrument skin. `technical` is the documented CLI alias for it.
+    Instrument,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -125,7 +126,7 @@ fn enhance_export(
     let marker = "</head>";
     let theme = match theme {
         ExportTheme::Editorial => "editorial",
-        ExportTheme::Technical => "technical",
+        ExportTheme::Instrument => "instrument",
     };
     let (mode, resolved) = match mode {
         ExportMode::System => ("system", "light"),

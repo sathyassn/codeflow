@@ -80,7 +80,7 @@ enum PresentCommand {
         session_id: String,
         #[arg(long, value_name = "FILE")]
         out: PathBuf,
-        #[arg(long, default_value = "editorial", value_parser = ["editorial", "technical"])]
+        #[arg(long, default_value = "editorial", value_parser = ["editorial", "instrument", "technical"])]
         theme: String,
         #[arg(long, default_value = "system", value_parser = ["system", "light", "dark"])]
         mode: String,
@@ -209,7 +209,8 @@ fn export(
 ) -> codeflow_present::Result<()> {
     let theme = match theme {
         "editorial" => ExportTheme::Editorial,
-        "technical" => ExportTheme::Technical,
+        // `technical` is the documented alias kept for the instrument skin.
+        "instrument" | "technical" => ExportTheme::Instrument,
         _ => unreachable!("clap validates export themes"),
     };
     let mode = match mode {
