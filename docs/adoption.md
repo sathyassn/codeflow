@@ -48,7 +48,7 @@ the local floor and CI scaffold, not remote branch protection (ADR-0019).
 |---|---|---|
 | `--minimal` | The complete git-discipline enforcement floor: all five git hooks (`pre-commit`, `commit-msg`, `pre-push`, `pre-merge-commit`, `reference-transaction`), the CI check, the in-session `git-guard`/`exec-guard` + orient/summary hooks (`.claude/settings.json` + the `.codex/` starter), the armed `policy.json`, `.gitignore`, and a lean `AGENTS.md` + `CLAUDE.md` | Any repo: doc-sets, config repos, small tools |
 | `--standard` (default) | + the develop-loop method (cf-* skills, reviewer agents, the pipeline), the six-layer `docs/` spine, the full contract, the test gate, recall capture, and harness integration | Code projects |
-| `--full` | + `project-management/` (epics, tasks, specs) and the `validate --docs` referential lint | Programs whose work outlives sessions |
+| `--full` | + `project-management/` (epics, tasks, specs, templates) and the `validate --docs` referential lint | Programs whose work outlives sessions |
 
 Once the files are on disk, ownership decides what a later `update` may touch.
 Five classes cover every managed path:
