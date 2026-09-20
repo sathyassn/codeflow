@@ -52,21 +52,21 @@ never disagree with the entry it summarizes.
 |---|---|---|---|
 | CAP-001 | scaffold-init | scaffold | shipped |
 | CAP-002 | scaffold-update | scaffold | shipped |
+| CAP-012 | scaffold-customize | scaffold | shipped |
+| CAP-017 | optional-agentic-estimation | engine | shipped |
 | CAP-003 | git-policy-gates | engine | shipped |
+| CAP-008 | remote-protect-doctor | engine | shipped |
+| CAP-011 | security-redteam-review | engine | shipped |
 | CAP-004 | test-gate | engine | shipped |
 | CAP-005 | integrate | engine | shipped |
-| CAP-006 | recall-registry | engine | shipped |
 | CAP-007 | orient-session-summary | engine | shipped |
-| CAP-008 | remote-protect-doctor | engine | shipped |
+| CAP-006 | recall-registry | engine | shipped |
 | CAP-009 | cross-vendor-delegation | scaffold | shipped |
 | CAP-010 | duo-model-orchestration | scaffold | shipped |
-| CAP-011 | security-redteam-review | engine | shipped |
-| CAP-012 | scaffold-customize | scaffold | shipped |
 | CAP-013 | model-binding-evaluation | scaffold | shipped |
 | CAP-014 | transport-neutral-delegate-lifecycle | engine | building |
 | CAP-015 | opt-in-documentation-portal | scaffold | shipped |
 | CAP-016 | interactive-presentation-review | engine | building |
-| CAP-017 | optional-agentic-estimation | engine | shipped |
 
 Statuses run planned → building → shipped → deprecated; entries are
 deprecated, never deleted. Each entry's full field set, including the epics,
