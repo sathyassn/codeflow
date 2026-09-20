@@ -1025,7 +1025,7 @@
     ".gitignore": {
       "src": "gitignore",
       "ownership": "managed-region",
-      "sha256": "8ee1b2fb22540fdf02efed73be0c8182aeb6ba3c31073c568a3ce7f392594234",
+      "sha256": "e623b22f663c47c5aabf9d9faa4e965b70b2de7701de5c7c69772acd844d26c2",
       "exec": false
     },
     ".grok/hooks/codeflow.json": {

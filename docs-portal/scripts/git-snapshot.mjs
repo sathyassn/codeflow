@@ -113,7 +113,8 @@ export class GitSnapshot {
   }
 
   assertClean(paths) {
-    const watched = minimalRoots(paths.map((item) => safeRelative(item, "snapshot path")));
+    const configured = new Set(paths.map((item) => safeRelative(item, "snapshot path")));
+    const watched = minimalRoots([...configured]);
     const pathspecs = watched.map((item) => `:(top,literal)${item}`);
     let remainingBytes = MAX_GIT_STATUS_BYTES;
     // Git status is not atomic across batches. The adapter therefore repeats
@@ -121,12 +122,26 @@ export class GitSnapshot {
     for (const batch of boundedPathspecBatches(pathspecs)) {
       const status = this.text(["status", "--porcelain=v1", "-z", "--untracked-files=all", "--ignored=matching", "--", ...batch], remainingBytes, "repository status");
       remainingBytes -= Buffer.byteLength(status);
-      for (const dirty of parsePorcelainPaths(status)) {
-        if (watched.some((item) => dirty === item || dirty.startsWith(`${item}/`))) {
-          throw new Error(`configured portal input must match HEAD exactly: ${dirty}`);
-        }
+      for (const { code, path: dirty } of parsePorcelainRecords(status)) {
+        if (!watched.some((item) => dirty === item || dirty.startsWith(`${item}/`))) continue;
+        if (this.#exemptLitter(code, dirty, configured)) continue;
+        throw new Error(`configured portal input must match HEAD exactly: ${dirty}`);
       }
     }
+  }
+
+  // Harness and tool litter such as .claude/.cc-writes or __pycache__ may sit
+  // inside a watched root without being portal input. Exempt one only when Git
+  // reports it ignored, which is untracked and matched by the repository's
+  // .gitignore, and it is neither a configured input nor a file committed at
+  // HEAD. A tracked change stays dirty even when a pattern would match it, and
+  // an untracked file the repository does not ignore stays dirty.
+  #exemptLitter(code, dirty, configured) {
+    if (code !== "!!") return false;
+    if (configured.has(dirty)) return false;
+    if (!(this.inventory instanceof Map)) return false;
+    if (this.inventory.has(dirty)) return false;
+    return ![...configured].some((item) => item.startsWith(`${dirty}/`));
   }
 
   text(args, maximumBytes, label) {
@@ -138,6 +153,7 @@ export class GitSnapshot {
     try {
       return execFileSync("git", [
         "-c", "core.fsmonitor=false",
+        "-c", `core.excludesFile=${NULL_DEVICE}`,
         "-c", "core.pager=cat",
         "-c", "pager.status=false",
         "-C", this.repositoryRoot,
@@ -186,21 +202,22 @@ export function boundedPathspecBatches(pathspecs) {
   return batches;
 }
 
-function parsePorcelainPaths(status) {
+function parsePorcelainRecords(status) {
   const records = status.split("\0");
-  const paths = [];
+  const parsed = [];
   for (let index = 0; index < records.length; index += 1) {
     const record = records[index];
     if (!record) continue;
     if (record.length < 4 || record[2] !== " ") throw new Error("Git status returned an invalid porcelain record");
-    paths.push(statusPath(record.slice(3)));
+    const code = record.slice(0, 2);
+    parsed.push({ code, path: statusPath(record.slice(3)) });
     if (["R", "C"].includes(record[0])) {
       index += 1;
       if (!records[index]) throw new Error("Git status rename record is incomplete");
-      paths.push(statusPath(records[index]));
+      parsed.push({ code, path: statusPath(records[index]) });
     }
   }
-  return paths;
+  return parsed;
 }
 
 function statusPath(value) {
@@ -208,10 +225,12 @@ function statusPath(value) {
   return safeRelative(stripped, "Git status path");
 }
 
+const NULL_DEVICE = process.platform === "win32" ? "NUL" : "/dev/null";
+
 export function hardenedGitEnvironment(source = process.env) {
   return {
     ...hardenedChildEnvironment(source),
-    GIT_CONFIG_GLOBAL: process.platform === "win32" ? "NUL" : "/dev/null",
+    GIT_CONFIG_GLOBAL: NULL_DEVICE,
     GIT_CONFIG_NOSYSTEM: "1",
     GIT_NO_LAZY_FETCH: "1",
     GIT_NO_REPLACE_OBJECTS: "1",
