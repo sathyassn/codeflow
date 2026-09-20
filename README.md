@@ -73,12 +73,15 @@ commit and arms branch policy. Standard/full init then points to
 architecture, commands, harness settings, and required tools before the first
 non-trivial task enters `/cf-model-orchestrator`. See
 [docs/adoption.md](docs/adoption.md) for the greenfield/brownfield paths, tiers,
-ownership model, autonomy posture, and daily flow.
+ownership model, and daily flow, and
+[docs/harness-posture.md](docs/harness-posture.md) for the autonomy, sandbox,
+and harness-settings posture.
 
 When a production model, harness, permission profile, or material instruction
 changes, `/cf-evaluate-model` provides a separate native-interactive
 qualification flow over reproducible disposable fixtures. It is not part of
-ordinary task execution and adds no model-running CLI command.
+ordinary task execution and adds no model-running CLI command; the maintenance
+path is [docs/model-upgrades.md](docs/model-upgrades.md).
 
 ## Commands
 
@@ -128,6 +131,8 @@ detail: [the enforcement matrix](docs/adoption.md#enforcement-planes--who-catche
 ## Docs
 
 - [docs/adoption.md](docs/adoption.md) — tiers, install, ownership, the daily flow, the enforcement matrix
+- [docs/harness-posture.md](docs/harness-posture.md) — autonomy, sandbox, and harness settings per harness
+- [docs/model-upgrades.md](docs/model-upgrades.md) — qualifying a new model, harness, or permission profile
 - [docs/architecture.md](docs/architecture.md) — how the binary and scaffold are built
 - [docs/product.md](docs/product.md) — what codeflow is for and its non-goals
 - [docs/capabilities.md](docs/capabilities.md) — the CAP-### registry of what the system does
