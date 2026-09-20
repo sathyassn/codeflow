@@ -1209,3 +1209,76 @@ fn mechanics_row_matches_the_registered_subcommands() {
         );
     }
 }
+/// The four defense-in-depth planes, named in the AGENTS contract. Grok's
+/// hooks are wiring for the existing in-session plane, not a fifth plane.
+const GUARD_PLANES: [&str; 4] = [
+    "git hooks",
+    "in-session guards",
+    "scaffolded CI",
+    "configured remote branch protection",
+];
+
+/// The contract surfaces that inventory the guard planes.
+const PLANE_INVENTORY_FILES: [&str; 4] = [
+    "assets/base/AGENTS.md.tmpl",
+    "assets/base/AGENTS.minimal.md.tmpl",
+    "assets/base/CLAUDE.minimal.md.tmpl",
+    "assets/base/scaffold-manifest.toml",
+];
+
+/// DEFECT 3 (positive): `.grok/hooks/` is inventoried inside the in-session
+/// guard plane, alongside `.claude/settings.json` and the `.codex/` starter.
+#[test]
+fn grok_hooks_join_the_in_session_plane_rather_than_adding_one() {
+    for path in PLANE_INVENTORY_FILES {
+        let text = normalize_whitespace(&read(path));
+        assert!(
+            text.contains(".grok/hooks/"),
+            "{path}: in-session guard inventory omits .grok/hooks/"
+        );
+        // The in-session plane's three wirings are named together, so a reader
+        // cannot mistake Grok for a plane of its own.
+        for sibling in [".claude/settings.json", ".codex/"] {
+            assert!(
+                text.contains(sibling),
+                "{path}: in-session guard inventory omits {sibling}"
+            );
+        }
+    }
+}
+
+/// DEFECT 3 (negative): the plane count stays four. A fifth plane, or a
+/// renamed plane, fails here.
+#[test]
+fn guard_plane_count_stays_four() {
+    let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+    assert!(
+        agents.contains("Four planes provide defense in depth"),
+        "AGENTS template no longer states four planes"
+    );
+    assert!(
+        !agents.contains("Five planes") && !agents.contains("five planes"),
+        "a fifth guard plane appeared in the AGENTS template"
+    );
+    for plane in GUARD_PLANES {
+        assert!(
+            agents.contains(plane),
+            "AGENTS template lost guard plane: {plane}"
+        );
+    }
+    for minimal in [
+        "assets/base/AGENTS.minimal.md.tmpl",
+        "assets/base/CLAUDE.minimal.md.tmpl",
+    ] {
+        let text = normalize_whitespace(&read(minimal));
+        assert!(
+            text.contains("four planes"),
+            "{minimal}: minimal-tier inventory no longer names four planes"
+        );
+        assert!(
+            !text.contains("five planes"),
+            "{minimal}: a fifth guard plane appeared"
+        );
+    }
+}
+

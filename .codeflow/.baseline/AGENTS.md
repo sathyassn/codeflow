@@ -91,8 +91,9 @@ it as non-trivial.
 
 ## Git rules
 
-Four planes provide defense in depth: git hooks, in-session `git-guard`,
-scaffolded CI, and configured remote branch protection. Hooks and CI share
+Four planes provide defense in depth: git hooks; in-session guards wired in
+`.claude/settings.json`, `.codex/`, and `.grok/hooks/`; scaffolded CI; and
+configured remote branch protection. Hooks and CI share
 `.codeflow/policy.json` and the `codeflow ci` checks; remote setup derives its
 supported rules from that policy (CodeFlow ADR-0017). Installed files alone do
 not prove active enforcement: verify hook execution, harness trust and event

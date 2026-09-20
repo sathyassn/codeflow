@@ -31,7 +31,10 @@ Installed and load-bearing at this tier: this file and `CLAUDE.md`,
 `.codeflow/policy.json`, `.gitignore`, all five git-hook shims (`pre-commit`,
 `commit-msg`, `pre-push`, `pre-merge-commit`, `reference-transaction`), the
 scaffolded CI workflow, and the in-session guards wired in `.claude/settings.json`
-(`git-guard`, `exec-guard`) and the `.codex/` starter (for interactive Codex).
+(`git-guard`, `exec-guard`), the `.codex/` starter (for interactive Codex), and
+`.grok/hooks/` (for Grok Build). These share the in-session guard plane within
+the four planes: git hooks, in-session guards, scaffolded CI, and configured
+remote branch protection.
 
 ## Git rules
 
