@@ -40,10 +40,12 @@ are exactly the ones that keep their ask rules. `exec-guard` classifies
 catastrophic paths, not recovery availability. `git branch -d` refuses a
 branch that is not merged into its configured upstream, or into HEAD when it
 has no upstream, so a branch tracking an identical `origin/topic` can be
-deleted before its work reaches main. The worktree doctrine's landing
-evidence, a PR in state MERGED, a tip match, or an empty `git cherry`, remains
-the requirement before a branch is deleted, and this preset change does not
-relax it.
+deleted before its work reaches main. The worktree doctrine still sets the
+requirement before any branch force-delete: PR state `MERGED` with the branch
+tip equal to its recorded head SHA, or `git cherry` against the updated target
+showing no unapplied `+` entry, and the owner confirmed inactive before a
+proven-landed resource is closed. This preset change does not relax any of
+that.
 
 ## Decision
 
@@ -57,16 +59,22 @@ settings, managed settings, a `--settings` file or the launch flag
 project settings. Ask rules still fire in bypass mode, and a `dontAsk` entry
 denies a matching call outright instead of prompting.
 
-Every preset prompts only for the rooted and home-anchored recursive deletes
+Every preset prompts for the rooted and home-anchored recursive deletes
 (`rm -rf /`, `rm -rf /*`, `rm -rf ~*` and the `-fr` spellings) and for force
-deletes of branches in every spelling and option order, including
-`git branch -d <name> --force`, `git branch -d --force <name>` and the
-combined `-df`, `-fd`, `-Df` and `-fD` short forms. A `rm -rf <path>` inside
-the tree and a `git branch -d` are ordinary work. The residual risk is plain:
-an in-tree recursive delete of untracked unique data now proceeds without a
-prompt, and nothing in the preset restores that data. Ordinary deletion stays
-limited to authorized, recoverable work by the operator's own discipline and
-the landing evidence the doctrine requires, not by an ask rule.
+branch deletes, with a boundary worth stating exactly. The prompt covers force
+spelled as `-f` or `--force` in any position, the two-letter clusters `-df`,
+`-fd`, `-Df` and `-fD`, and the quiet-force clusters `-qf` and `-fq`. A force
+flag inside any other aggregated cluster is not covered: these are prefix
+globs, and they cannot enumerate every cluster. What still holds regardless of
+flags is `git-guard`, which blocks deletion of a protected branch. The
+residual is therefore force deletion of an unprotected unmerged branch, which
+the worktree doctrine's landing evidence governs, not an ask rule.
+
+A `rm -rf <path>` inside the tree and a `git branch -d` are ordinary work. The
+residual risk there is plain: an in-tree recursive delete of untracked unique
+data now proceeds without a prompt, and nothing in the preset restores that
+data. Ordinary deletion stays limited to authorized, recoverable work by the
+operator's own discipline, not by an ask rule.
 
 The credential-file denies, the force-push, publish and privilege-escalation
 prompts, the hooks and the sandbox are unchanged. The `~/.config/gh` and
