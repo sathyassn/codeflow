@@ -86,7 +86,7 @@ left `.new` sidecars behind.
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow hook <NAME>` | `--run-id <ID>`, `--result <FILE>`, `--state-dir <DIR>` | `<NAME>` is one of `git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`. The payload is read from stdin. The other four names take no flags. `delegate-turn` requires `--run-id` and exactly one of `--result`, which selects the legacy mode, or `--state-dir`, which selects the schema-v2 mode |
+| `codeflow hook <NAME>` | `--run-id <ID>`, `--result <FILE>`, `--state-dir <DIR>` | `<NAME>` is one of `git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`. The payload is read from stdin. The three flags exist only for `delegate-turn`; the other four names ignore them. `delegate-turn` requires `--run-id` and exactly one of `--result`, which selects the legacy mode, or `--state-dir`, which selects the schema-v2 mode |
 | `codeflow git-hook <STAGE> [ARGS]...` | `<STAGE>` is one of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push` | `[ARGS]` are the arguments git passes through, for example the commit-msg file path or the pre-push remote name and URL |
 | `codeflow ci` | `--base <REF>`, `--head <REF>`, `--branch <NAME>`, `--pr-body <TEXT>`, `--pr-body-file <FILE>` | Base and head are auto-detected from the CI environment when omitted; branch defaults to the CI-provided or current HEAD branch. `--pr-body` and `--pr-body-file` scan for AI attribution, emoji, and the required section structure |
 | `codeflow policy explain` | no flags | Prints every key's type, default, valid values, and purpose from the schema registry |
@@ -102,7 +102,9 @@ looks the same to the harness as an allowed call. `session-orient` prints the
 digest and always exits 0; `session-summary` always exits 0 as well, warning on
 stderr instead, because a failed summary must never fail the session. Read
 stderr, not the exit code, to tell an advisory failure from a clean pass.
-`codeflow ci` proceeds when only warnings were raised and reports the count.
+`delegate-turn` is the exception: it exits 1 when `--run-id` is missing and 2
+when a schema-v2 payload cannot be read. `codeflow ci` proceeds when only
+warnings were raised and reports the count.
 
 ### Verify
 
