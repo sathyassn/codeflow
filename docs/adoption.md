@@ -320,7 +320,8 @@ caption: every step has a plane that catches the mistake it can make
 ### Enforcement planes: who catches what
 
 The four enforcement planes, what each one catches, and the rules behind them
-are on the enforcement planes page in the System layer.
+are on [enforcement planes](architecture/enforcement-planes.md) in the System
+layer.
 
 ### A body of work: the integration branch
 
