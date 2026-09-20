@@ -544,6 +544,73 @@ fn ci_downloads_verify_pinned_checksums() {
     );
 }
 
+/// The four scaffolded CI templates that put the `codeflow` binary on PATH.
+/// `cargo-dist` installs with `install-path = "CARGO_HOME"`
+/// (`dist-workspace.toml`), so a template that hardcodes `$HOME/.cargo/bin`
+/// silently misses the binary whenever `CARGO_HOME` points elsewhere — the
+/// gate then fails red for the wrong reason, or (worse) a later relaxation
+/// makes a missing binary look like a pass.
+const CI_PERIMETER_TEMPLATES: [&str; 4] = [
+    "assets/base/ci/codeflow-ci.yml",
+    "assets/base/ci/.gitlab-ci.yml",
+    "assets/base/ci/bitbucket-pipelines.yml",
+    "assets/base/ci/ci-generic.sh",
+];
+
+/// The one expanded form every CI template must use to reach cargo's bin dir.
+const CARGO_BIN_EXPANDED: &str = "${CARGO_HOME:-$HOME/.cargo}/bin";
+
+/// Every reference to a cargo bin directory in `text` goes through
+/// [`CARGO_BIN_EXPANDED`]: no bare `$HOME/.cargo/bin`, and no stale
+/// `.codeflow/bin` (no shipped installer writes there).
+fn cargo_bin_is_resolved_through_cargo_home(text: &str) -> bool {
+    let without_expanded = text.replace(CARGO_BIN_EXPANDED, "");
+    !without_expanded.contains("$HOME/.cargo/bin")
+        && !without_expanded.contains(".cargo/bin")
+        && !text.contains(".codeflow/bin")
+}
+
+/// CI-PERIMETER CANARY (TSK-041 defect 1): the scaffolded CI templates must
+/// resolve cargo binaries through `CARGO_HOME`, because that is where the
+/// shipped installer actually puts them.
+#[test]
+fn ci_templates_resolve_cargo_bin_through_cargo_home() {
+    let root = repo_root();
+    for template in CI_PERIMETER_TEMPLATES {
+        let text = std::fs::read_to_string(root.join(template))
+            .unwrap_or_else(|error| panic!("read {template}: {error}"));
+        assert!(
+            text.contains(CARGO_BIN_EXPANDED),
+            "{template}: must put {CARGO_BIN_EXPANDED} on PATH — cargo-dist \
+             installs with install-path = \"CARGO_HOME\""
+        );
+        assert!(
+            cargo_bin_is_resolved_through_cargo_home(&text),
+            "{template}: a cargo bin path bypasses CARGO_HOME — use \
+             {CARGO_BIN_EXPANDED} everywhere, including the install examples"
+        );
+    }
+
+    // NEGATIVE: the canary is not vacuous — it rejects the bare forms it
+    // exists to catch, in both the active and the commented-example position.
+    for bad in [
+        "export PATH=\"$HOME/.cargo/bin:$PATH\"",
+        "echo \"$HOME/.cargo/bin\" >> \"$GITHUB_PATH\"",
+        "#   export PATH=\"$HOME/.codeflow/bin:$PATH\"",
+    ] {
+        assert!(
+            !cargo_bin_is_resolved_through_cargo_home(bad),
+            "canary would not catch the bare form: {bad}"
+        );
+    }
+    assert!(
+        cargo_bin_is_resolved_through_cargo_home(&format!(
+            "export PATH=\"{CARGO_BIN_EXPANDED}:$PATH\""
+        )),
+        "canary must accept the expanded form"
+    );
+}
+
 #[test]
 fn codeql_remains_repository_owned_not_a_scaffolded_workflow() {
     let root = repo_root();

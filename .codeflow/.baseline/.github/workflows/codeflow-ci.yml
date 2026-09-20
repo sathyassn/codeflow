@@ -37,7 +37,10 @@ jobs:
         run: |
           # PLACEHOLDER: replace with the release installer once published, e.g.
           #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
-          #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          # The installer honours CARGO_HOME (dist-workspace.toml sets
+          # install-path = "CARGO_HOME"), so resolve the bin dir through it and
+          # fall back to the default only when CARGO_HOME is unset.
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
           echo "::error::codeflow install step is an unwired PLACEHOLDER — the test/validate gates below fail RED until you replace this with the real installer. The perimeter is intentionally not armed."
 
       - name: codeflow test
@@ -154,7 +157,10 @@ jobs:
         run: |
           # PLACEHOLDER: replace with the release installer once published, e.g.
           #   curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
-          #   echo "$HOME/.codeflow/bin" >> "$GITHUB_PATH"
+          # The installer honours CARGO_HOME (dist-workspace.toml sets
+          # install-path = "CARGO_HOME"), so resolve the bin dir through it and
+          # fall back to the default only when CARGO_HOME is unset.
+          echo "${CARGO_HOME:-$HOME/.cargo}/bin" >> "$GITHUB_PATH"
           echo "::error::codeflow install step is an unwired PLACEHOLDER — the commit-standards gate below fails RED until you replace this with the real installer. The perimeter is intentionally not armed."
 
       # One source of truth: `codeflow ci` runs the SAME commit-format,
