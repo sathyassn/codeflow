@@ -50,7 +50,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "1b7083719947bf0fcb39dc4c99b6073620e2fed02ff55f1f656aa1af8ebe562e"
+      "pristine_sha256": "84ea2dc7adb342e075de39bea733064dd2a41006e5e8b0d9acd86b27cafeb882"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
@@ -70,7 +70,7 @@
     },
     "scripts/git-snapshot.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "6484a5782d92a62c6081d6e9d7de3f231a347a514e5cb3667738a8ef4b7a66ad"
+      "pristine_sha256": "e14314a43e6cdea75302a4a35edd0c5b99bcb707e70a7bbd94d6021671b0b1fc"
     },
     "scripts/install-dependencies.mjs": {
       "ownership": "managed",
@@ -78,7 +78,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "26412a03005330a8391d3fe4f361cc420a6ad1ab5e8a6f52a46df156f02dd4f2"
+      "pristine_sha256": "0e8e3c119b7cb5645338f23d6279f20152752637e3da36005cba205d6aafd229"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -134,7 +134,7 @@
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "ae03b697ec67013c74dd6e3f68aeeea9fe5fe9eb2ca1e9a34aff3b9c7b681a7b"
+      "pristine_sha256": "dc846acbdf1b03de19f1753cb752b24fb6101dfa1c366a35379f061ed8bdb41c"
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
@@ -142,7 +142,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "66b6c554a055c782933942791d4bd2a88cb437ccadac6a63be4ec8228d413739"
+      "pristine_sha256": "462e6cd0e2d9f858b74bf0319d6c0f9fa3a41528dde4cbbc1d112caff1f038d5"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
