@@ -1096,3 +1096,27 @@ fn batch_workflow_is_honestly_single_vendor_and_validates_edges() {
     }
     assert!(!source.contains("duo: ['plan-align'"));
 }
+
+// --- TSK-041 scaffold-contract regressions ------------------------------------
+
+/// DEFECT 6: the shipped pipeline example names a current model id. `sonnet`
+/// is the stale value this regression exists to keep out.
+#[test]
+fn pipeline_example_names_the_current_model_id() {
+    for path in [
+        "assets/base/claude/workflows/pipeline.workflow.js",
+        ".claude/workflows/pipeline.workflow.js",
+        ".codeflow/.baseline/.claude/workflows/pipeline.workflow.js",
+    ] {
+        let text = read(path);
+        assert!(
+            text.contains("{ build: 'opus' }"),
+            "{path}: per-stage model example must name opus"
+        );
+        assert!(
+            !text.contains("sonnet"),
+            "{path}: the stale 'sonnet' example is back"
+        );
+    }
+}
+
