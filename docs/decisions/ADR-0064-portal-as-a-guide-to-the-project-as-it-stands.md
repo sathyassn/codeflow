@@ -30,11 +30,16 @@ framed by prose. Decisions, epics, tasks and specs stay in the repository and
 are pointed to from one generated pointer page that names each folder with
 its purpose, its count and its repository link. The guide has no per-record
 pages. The adapter keeps a records switch as a configuration affordance, off
-in CodeFlow's own portal and off in the starter default, which points at the
-decisions folder instead of publishing it; a project that turns it on takes
-the lookup form for those sources and steps outside this guide doctrine. Pages that rely on a decision cite it by id and link to the
+in CodeFlow's own portal and absent from the starter default; a project that
+turns it on takes the lookup form for those sources and steps outside this
+guide doctrine. Pages that rely on a decision cite it by id and link to the
 repository file. ADR-0048, ADR-0058 and ADR-0063 stand unchanged; SPC-010 is
 withdrawn.
+
+Correction, 2026-09-20 (TSK-051): the starter default is not free of the
+switch. It ships the switch off with one pointer at `docs/decisions`, so a
+scaffolded portal points at the decisions folder instead of publishing it.
+The decision above stands unchanged.
 
 ## Consequences
 
