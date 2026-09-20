@@ -10,17 +10,17 @@
 guide already names.**
 
 ```cf-stage
-scaffold | init · update @accent
+scaffold | init · update · epic · spec · task · estimate @accent
 ->
 enforce | hook · git-hook · ci · policy · remote
 ->
-verify | test · validate · integrate · doctor
+verify | test · validate · integrate · doctor · work
 ->
 remember | orient · status · recall
 ->
-plan | epic · spec · task · work · estimate
+delegate | delegate: init · arm · wait
 ->
-delegate and present | delegate · portal · present @positive
+present | portal · present @positive
 caption: the same six jobs the capabilities page uses, read as commands
 ```
 
@@ -72,6 +72,9 @@ square brackets.
 |---|---|---|
 | `codeflow init` | `--minimal`, `--standard`, `--full`, `--yes`, `--force` | `--minimal` is the discipline floor, `--standard` the default tier, `--full` adds project-management. `--yes` takes sane defaults at standard tier. `--force` overwrites existing files and is never the default |
 | `codeflow update` | `--diff <FILE>`, `--force` | `--diff` writes the report plus unified diffs of applied changes to a file; `--force` replaces user-modified managed files instead of merging |
+| `codeflow epic new <TITLE>` | no flags | Allocates the next `EPC-NNN` and scaffolds the epic from the template |
+| `codeflow spec new <TITLE> --for <EPC-NNN\|TSK-NNN>` | `--for` is required | Allocates the next `SPC-NNN`, scaffolds it, and links the consuming epic or task |
+| `codeflow task new <TITLE>` | `-e`/`--epic <EPC-NNN>`, `--standalone-reason <REASON>`, `--into <BRANCH>` | `--epic` and `--standalone-reason` are mutually exclusive, and a durable task needs one of them. `--into` names the existing local or remote-tracking non-task branch this task will integrate into |
 
 `codeflow update` exits 2 when the scaffold report or the adopted portal report
 contains conflicts, so a caller can distinguish a clean refresh from one that
@@ -109,6 +112,8 @@ stderr, not the exit code, to tell an advisory failure from a clean pass.
 | `codeflow validate [PATH]` | `--docs`, `--portal <DIR>` | `PATH` defaults to `project-management/`. `--docs` adds the doc-graph referential-integrity lint. `--portal` verifies a portal evidence manifest without executing project code and conflicts with `PATH`, so pass one or the other |
 | `codeflow integrate <BRANCH>` | `--into <INTO>` (default `main`) | Rebase, test, then fast-forward, under a flock and a gate-context token |
 | `codeflow doctor` | `--check <CHECK>`, `--list` | `--list` prints the available check names; `--check` runs a single named check |
+| `codeflow work start <TASK_ID>` | `--into <REF>` | Verifies that a durable task was planned and anchored before implementation. `--into` names the non-task branch or ref this task will merge into |
+| `codeflow estimate check <FORECAST_PATH>` | `--json` | `<FORECAST_PATH>` is a forecast JSON file, relative to the current directory or absolute. `--json` emits the versioned JSON report |
 
 ### Remember
 
@@ -118,23 +123,23 @@ stderr, not the exit code, to tell an advisory failure from a clean pass.
 | `codeflow status` | `--capabilities`, `--delivery` | Default output is counts by status; `--capabilities` shows the full capability table; `--delivery` shows each capability's epics with their open and total task counts and next actionable tasks |
 | `codeflow recall <QUERY>` | `--all`, `--rebuild`, `--limit <LIMIT>` | `--all` searches every repo in the user registry. `--rebuild` drops the index for the searched repos and re-syncs. `--limit` defaults to 20, or `[recall].limit` from `~/.codeflow/config.toml` |
 
-### Plan
-
-| Command | Arguments and flags | Notes |
-|---|---|---|
-| `codeflow epic new <TITLE>` | no flags | Allocates the next `EPC-NNN` and scaffolds the epic from the template |
-| `codeflow spec new <TITLE> --for <EPC-NNN\|TSK-NNN>` | `--for` is required | Allocates the next `SPC-NNN`, scaffolds it, and links the consuming epic or task |
-| `codeflow task new <TITLE>` | `-e`/`--epic <EPC-NNN>`, `--standalone-reason <REASON>`, `--into <BRANCH>` | `--epic` and `--standalone-reason` are mutually exclusive, and a durable task needs one of them. `--into` names the existing local or remote-tracking non-task branch this task will integrate into |
-| `codeflow work start <TASK_ID>` | `--into <REF>` | Verifies that a durable task was planned and anchored before implementation. `--into` names the non-task branch or ref this task will merge into |
-| `codeflow estimate check <FORECAST_PATH>` | `--json` | `<FORECAST_PATH>` is a forecast JSON file, relative to the current directory or absolute. `--json` emits the versioned JSON report |
-
-### Delegate and present
+### Delegate
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
 | `codeflow delegate init` | `--run-id <ID>` (required), `--state-dir <DIR>` (required) | Creates the owner-only run directory and the task hook settings. `--state-dir` must be an absolute path |
 | `codeflow delegate arm` | `--run-id <ID>` (required), `--state-dir <DIR>` (required), `--turn-id <ID>` (required), `--prompt-file <FILE>` (required) | `--prompt-file` holds the exact prompt bytes the host will deliver |
 | `codeflow delegate wait` | `--run-id <ID>` (required), `--state-dir <DIR>` (required), `--until <ready\|accepted\|terminal>` (required), `--timeout-seconds <N>` (required), `--turn-id <ID>` | There is no default timeout, so `--timeout-seconds` is always passed. `--turn-id` is required for `accepted` and `terminal` waits and ignored for `ready` |
+
+`codeflow delegate wait` has the stable exit contract the host polls: 0 on the
+observed state, 10 on a failed terminal, 11 on a poisoned, unsafe, or invalid
+run, 124 on timeout, and 130 when interrupted. `delegate init` and
+`delegate arm` exit 0 or 1.
+
+### Present
+
+| Command | Arguments and flags | Notes |
+|---|---|---|
 | `codeflow portal setup` | `--path <DIR>` (required) | The repository-relative portal workspace directory |
 | `codeflow portal transfer` | `--confirm` (required) | Confirms responsibility for future runtime reconciliation |
 | `codeflow present open <DOCUMENT>` | `--no-launch` | `--no-launch` starts the service but does not launch a browser window |
@@ -148,10 +153,6 @@ stderr, not the exit code, to tell an advisory failure from a clean pass.
 | `codeflow present export <SESSION_ID>` | `--out <FILE>` (required), `--theme <editorial\|instrument\|technical>` (default `editorial`), `--mode <system\|light\|dark>` (default `system`) | Exports a deterministic self-contained read-only HTML artifact |
 | `codeflow present clear [SESSION_ID]` | `--older-than <OLDER_THAN>` (default `30d`), `--dry-run` | With no session id it removes every eligible closed session older than the window |
 
-`codeflow delegate wait` has the stable exit contract the host polls: 0 on the
-observed state, 10 on a failed terminal, 11 on a poisoned, unsafe, or invalid
-run, 124 on timeout, and 130 when interrupted. `delegate init` and
-`delegate arm` exit 0 or 1.
 
 ### General exit behaviour
 
