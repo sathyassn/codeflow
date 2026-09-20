@@ -32,15 +32,9 @@ The latest verified published release is v2.1.0: macOS arm64/x64 and Linux x64
 archives with a shell installer, and no Windows archive or PowerShell
 installer. The workspace on `main` is the pending 3.0.0 source, whose release
 targets add Windows x64 and a PowerShell installer; no 3.0.0 assets exist until
-a release is published. The anonymous installer works once codeflow's releases
-are public; for private or early access use the `gh release download` path in
-the adoption guide or the checkout build below:
+a release is published.
 
-```sh
-curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
-```
-
-Or build the pending source from a checkout, with a Rust toolchain:
+Build the pending source from a checkout, with a Rust toolchain:
 
 ```sh
 cargo install --path crates/codeflow-cli
@@ -51,6 +45,16 @@ On native Windows, build with Cargo: the PowerShell installer is a pending
 WSL2 uses the Linux installer and is the
 preferred Windows route for Linux-native tooling or Claude sandboxing. See the
 platform-assurance section in the adoption guide before high-blast-radius work.
+
+### Once codeflow's releases are public
+
+The anonymous installer works only then. Until then use the checkout build
+above, or the `gh release download` path in the adoption guide for private or
+early access.
+
+```sh
+curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
+```
 
 See [docs/adoption.md](docs/adoption.md) for the full install and adoption guide.
 
@@ -103,58 +107,28 @@ ordinary task execution and adds no model-running CLI command.
 | `estimate check <forecast.json>` | Read-only check of a project-owned forecast's explicit allocations and pinned evidence; schedules nothing, writes nothing, and makes no estimate itself; `--json` emits the versioned report (ADR-0057) |
 | `delegate` | Durable delegate-turn lifecycle: `init` an owner-only run, `arm` one prompt, `wait` for ready/accepted/terminal — the host launches the harness and delivers the prompt (ADR-0036) |
 
-`codeflow test setup` with no options detects only stack markers at the project
-root and fills an absent or empty config; it never replaces a populated or
-malformed config. Use `--list-templates`, `--template <name>`, or `--add-target` for
-explicit setup. Template replacement requires the deliberate
-`--template <name> --replace` combination. Monorepos should apply
-`monorepo-multi-target.json` or append one target per package with its `cwd`;
-auto-detection does not recursively guess package boundaries or commands.
+`codeflow test setup` with no options only fills an absent or empty config from
+root stack markers; for templates, explicit targets, replacement, and
+monorepos see
+[configure test targets](docs/adoption.md#configure-test-targets).
 
 ## Enforcement planes
 
-One policy, four available planes (charter §6.5;
-[ADR-0007](docs/decisions/ADR-0007-agent-human-merge-boundary.md),
-[ADR-0008](docs/decisions/ADR-0008-harness-parity-and-exec-guard.md)). Minimal
-init scaffolds local hooks, in-session settings, and CI while preserving an
-existing hook manager; it does not configure remote branch protection. Verify
-hook execution, harness trust and event support, required CI results, and actual
-remote rules, permissions, and bypasses before claiming effective coverage:
-
-- **Git client hooks** — harness-agnostic, five shims: `pre-commit` (secret
-  scan, protected-branch commit), `commit-msg` (conventional format, no AI
-  attribution, no emoji), `pre-merge-commit` (non-fast-forward merge commits
-  onto protected), `reference-transaction` (the backstop for fast-forward
-  merges, `reset --hard`, and `branch -D` on protected; git ≥ 2.28), and
-  `pre-push` (branch naming, protected push/force/delete, test gate).
-- **In-session PreToolUse guards** — `git-guard` (git policy, plus the checks
-  git hooks cannot see: `gh pr merge` into a protected base, AI attribution /
-  emoji in `gh pr create` bodies) and `exec-guard` (destructive commands block,
-  privilege escalation warns). Wired for Claude via `.claude/settings.json` and,
-  through a byte-compatible payload, for an interactive Codex session via
-  `.codex/hooks.json` (ADR-0008). Codex-driven work receives the git-hook plane
-  where those hooks are installed and executed; the in-session guards are an
-  interactive-Codex bonus (headless `codex exec` is not a sanctioned peer
-  transport). The scaffolded
-  Claude and Codex settings also enable fail-closed workspace autonomy, public
-  research/tool access, live search, and guarded escalation; see ADR-0025.
-- **CI** — re-runs the gates; PR-content checks are CI-plane by design (a git
-  hook never sees a PR). CI becomes a merge gate when the remote requires its
-  result.
-- **Remote branch protection** — the configured server-side backstop. Where the
-  provider and permissions support it, `codeflow remote protect` applies the
-  supported rules; inspect the actual rules and bypass access.
-
-Protected-branch merges land via a PR **merged by a human**, or `codeflow
-integrate`; an agent never merges into protected. A human can override the git
-layer for a local merge with `CODEFLOW_HUMAN_OVERRIDE=1` — an env the git-guard
-never honors and blocks agents from setting in-session.
+One policy (`.codeflow/policy.json`), four complementary planes: git client
+hooks, in-session PreToolUse guards (`git-guard`, `exec-guard`), CI, and remote
+branch protection. Installed files are not coverage — verify hook execution,
+harness trust, required CI results, and actual remote rules before claiming a
+plane effective. Protected-branch merges land via a PR **merged by a human**,
+or `codeflow integrate`; an agent never merges into protected. Plane-by-plane
+detail: [the enforcement matrix](docs/adoption.md#enforcement-planes--who-catches-what).
 
 ## Docs
 
 - [docs/adoption.md](docs/adoption.md) — tiers, install, ownership, the daily flow, the enforcement matrix
 - [docs/architecture.md](docs/architecture.md) — how the binary and scaffold are built
 - [docs/product.md](docs/product.md) — what codeflow is for and its non-goals
+- [docs/capabilities.md](docs/capabilities.md) — the CAP-### registry of what the system does
+- [docs/releasing.md](docs/releasing.md) — the release runbook, and versioning in a project that consumes codeflow
 - [docs/release-checklist.md](docs/release-checklist.md) — evidence required for every release
 - [docs/decisions/](docs/decisions/) — ADRs (the record of why)
 
