@@ -88,9 +88,16 @@ left `.new` sidecars behind.
 | `codeflow policy show` | no flags | Prints each key's current value, its source (project file or built-in default), and any invalid values |
 | `codeflow remote protect` | `--provider <PROVIDER>` (default `github`), `--dry-run` | Only `github` has an adapter; another provider prints the manual checklist. `--dry-run` prints the intended rules without applying anything |
 
-Hook exit behaviour is the contract the harness reads: `hook` exits 2 to make
-the harness block the tool call, and 1 on other failures. `codeflow ci`
-proceeds when only warnings were raised and reports the count.
+Each hook name under `codeflow hook` carries its own exit contract, and exit 0
+does not by itself mean enforcement succeeded. `git-guard` exits 0 to allow the
+tool call and 2 to make the harness block it. `exec-guard` exits 0 to allow,
+including when it only warns, and 2 to block. Both exit 0 on a payload they
+cannot read, after printing a warning to stderr, so an unrecognized payload
+looks the same to the harness as an allowed call. `session-orient` prints the
+digest and always exits 0; `session-summary` always exits 0 as well, warning on
+stderr instead, because a failed summary must never fail the session. Read
+stderr, not the exit code, to tell an advisory failure from a clean pass.
+`codeflow ci` proceeds when only warnings were raised and reports the count.
 
 ### Verify
 
