@@ -48,10 +48,11 @@ ledger | what happened @positive
 caption: the six layer knowledge model, with recall over the whole record
 ```
 
-The first five layers are committed Markdown with YAML frontmatter. The ledger
-is not: it is the append-only JSONL event log the binary writes, with an FTS5
-cache rebuilt over both. Either way the record survives the session that
-produced it. The commitments around the model are these:
+The first five layers are committed Markdown. The structured records carry YAML
+frontmatter; the capability registry carries YAML fences instead, one per
+capability. The ledger is neither: it is the append-only JSONL event log the
+binary writes, with an FTS5 cache rebuilt over both. Either way the record
+survives the session that produced it. The commitments around the model are these:
 
 | Commitment | What CodeFlow ships |
 |---|---|
