@@ -64,6 +64,9 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
+      # 26.4.0 is the presentation renderer's pin, owned by
+      # crates/codeflow-present/web/package.json; the aggregate gate builds
+      # both Node workspaces, so the higher of the two pins runs here.
       - uses: actions/setup-node@v4
         with:
           node-version: 26.4.0
@@ -134,6 +137,8 @@ jobs:
       - name: cargo clippy --workspace --all-targets -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      # 24.18.0 is the documentation portal's pin, owned by
+      # docs-portal/.node-version; this job runs only the portal suite.
       - uses: actions/setup-node@v4
         with:
           node-version: 24.18.0
