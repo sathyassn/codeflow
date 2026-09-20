@@ -1789,3 +1789,23 @@ fn doctor_help_equals_the_check_registry() {
     }
 }
 
+/// DEFECT 9: the `git-hook` help names the path the install code writes the
+/// shims to — compared against the constant that code uses, not a literal.
+#[test]
+fn git_hook_help_matches_the_install_path_constant() {
+    let installed = codeflow_core::scaffold::detect::CODEFLOW_HOOKS_PATH;
+    let help = help_text(&["--help"]);
+    let line = help
+        .lines()
+        .find(|line| line.trim_start().starts_with("git-hook"))
+        .unwrap_or_else(|| panic!("codeflow --help has no git-hook row:\n{help}"));
+    assert!(
+        line.contains(installed),
+        "git-hook help must name {installed}, got: {line}"
+    );
+    // NEGATIVE: the old, wrong path must not reappear.
+    assert!(
+        !line.contains(".git/hooks"),
+        "git-hook help names .git/hooks, which the install code does not use"
+    );
+}

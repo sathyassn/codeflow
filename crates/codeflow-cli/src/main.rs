@@ -52,7 +52,7 @@ enum Command {
     Hook(cmd::hook::HookArgs),
     /// Transport-neutral lifecycle for interactive delegate turns.
     Delegate(cmd::delegate::DelegateArgs),
-    /// Git client hook target — the .git/hooks shims exec this.
+    #[command(about = git_hook_help())]
     GitHook(cmd::git_hook::GitHookArgs),
     /// Print the session-start digest (pointers, not content).
     Orient,
@@ -103,6 +103,18 @@ fn doctor_help_for(names: &[&str]) -> String {
 fn doctor_help() -> &'static str {
     static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
     HELP.get_or_init(|| doctor_help_for(&codeflow_core::doctor::check_names()))
+}
+
+/// `git-hook`'s about-line, derived from the same path constant the install
+/// code writes to, so the help can never name a path nothing installs at.
+fn git_hook_help() -> &'static str {
+    static HELP: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    HELP.get_or_init(|| {
+        format!(
+            "Git client hook target — the {}/ shims exec this",
+            scaffold::detect::CODEFLOW_HOOKS_PATH
+        )
+    })
 }
 
 fn main() -> anyhow::Result<()> {
@@ -221,5 +233,20 @@ mod tests {
                 "doctor help omits registered check {name}"
             );
         }
+    }
+
+    /// DEFECT 9: the `git-hook` about-line names the path the install code
+    /// actually writes the shims to.
+    #[test]
+    fn git_hook_help_names_the_installed_shim_path() {
+        let installed = scaffold::detect::CODEFLOW_HOOKS_PATH;
+        assert!(
+            git_hook_help().contains(installed),
+            "git-hook help does not name {installed}"
+        );
+        assert!(
+            !git_hook_help().contains(".git/hooks"),
+            "git-hook help still names the path codeflow does not install to"
+        );
     }
 }
