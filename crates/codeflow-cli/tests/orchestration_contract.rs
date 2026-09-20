@@ -480,17 +480,20 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
         "README must list the grok doctor check"
     );
     assert!(
-        architecture.contains("15 checks — hooks, claude, codex, grok, config"),
+        architecture.contains("15 checks: hooks, claude, codex, grok, config"),
         "architecture must list the grok doctor check"
     );
+    let cap_010 = normalize_whitespace(&read(
+        "docs/capabilities/CAP-010-duo-model-orchestration.md",
+    ));
     assert!(
-        normalize_whitespace(&capabilities).contains(
+        cap_010.contains(
             "use proportionate worker effort when useful, and obtain same-family xhigh reasoning on trigger mid-session rather than restarting the host"
         ),
         "CAP-010 must preserve proportionate workers and mid-session escalation without host restart"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("named when a routing-policy trigger fires"),
+        cap_010.contains("named when a routing-policy trigger fires"),
         "CAP-010 must pin extra-family invoke-when-available"
     );
     assert!(
