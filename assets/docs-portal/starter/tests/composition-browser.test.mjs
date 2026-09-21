@@ -86,6 +86,58 @@ test("the gate reads a real build and names every source that is not composed", 
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
+// A carrier is one thing the reader sees, with something in it. The rows a
+// stage renders are its own internals, and an empty figure, table or list is a
+// shape with nothing in it, so neither can answer for the carrier an altitude
+// calls for. The rule reads the DOM, so the fixtures are authored as markup.
+test("a hollow carrier, or one inside another carrier, does not count", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const stage = '<figure class="portal-stage"><div class="portal-stage-flow"><ul class="portal-stage-group"><li class="portal-stage-node"><span class="k">first</span></li></ul><table><tbody><tr><td>inside</td></tr></tbody></table></div><figcaption>a stage</figcaption></figure>';
+  const panel = (name, body) => `<section class="portal-altitude" data-altitude="${name}" id="portal-panel-${name}">${body}</section>`;
+  const document = (concept, architecture, technical) =>
+    `<h1>Composed page</h1><div class="portal-provenance">source</div><button data-testid="portal-display-btn">Display</button>` +
+    `<div class="sl-markdown-content">${panel("concept", concept)}${panel("architecture", architecture)}${panel("technical", technical)}</div>`;
+  const chrome = { headings: 1, provenance: true, displayControls: 1, commentChrome: 0 };
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    const page = await browser.newPage();
+    const observe = async (html) => {
+      await page.setContent(html);
+      return { route: "reference/checklist", ...await observePortalPage(page), ...chrome, pointerColumns: [], pointerRows: 0 };
+    };
+    const declared = { route: "reference/checklist", source: "docs/checklist.md", pageClass: "explanatory", carriers: { technical: "list" } };
+
+    const hollow = await observe(document(
+      "<figure><figcaption></figcaption></figure><p>prose</p>",
+      "<table><thead><tr><th>Part</th></tr></thead><tbody></tbody></table>",
+      `${stage}<ul><li></li></ul>`,
+    ));
+    assert.deepEqual(hollow.panelCarriers, {
+      concept: { figure: 0, stage: 0, table: 0, list: 0, pre: 0 },
+      architecture: { figure: 0, stage: 0, table: 0, list: 0, pre: 0 },
+      technical: { figure: 1, stage: 1, table: 0, list: 0, pre: 0 },
+    });
+    assert.deepEqual(pageClassFailures([declared], [hollow]), [
+      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, list 0, pre 0)",
+      "docs/checklist.md (explanatory page at reference/checklist) lacks a stage or a table inside the architecture panel: the architecture panel carries no stage or table (figure 0, stage 0, table 0, list 0, pre 0)",
+      "docs/checklist.md (explanatory page at reference/checklist) lacks a table inside the technical panel: the technical panel carries no list, which the configuration declares for it (figure 1, stage 1, table 0, list 0, pre 0)",
+    ]);
+
+    // The same page, authored: a figure with something in it, a table with a
+    // row, and the checklist the declaration is for.
+    const authored = await observe(document(
+      '<figure><img src="diagram.svg" alt="the shape"><figcaption>a figure</figcaption></figure>',
+      "<table><thead><tr><th>Part</th></tr></thead><tbody><tr><td>First</td></tr></tbody></table>",
+      "<ul><li>Cut the release branch</li><li>Run the gate</li></ul>",
+    ));
+    assert.deepEqual(authored.panelCarriers, {
+      concept: { figure: 1, stage: 0, table: 0, list: 0, pre: 0 },
+      architecture: { figure: 0, stage: 0, table: 1, list: 0, pre: 0 },
+      technical: { figure: 0, stage: 0, table: 0, list: 1, pre: 0 },
+    });
+    assert.deepEqual(pageClassFailures([declared], [authored]), []);
+  } finally { await browser.close(); }
+});
+
 // Presence in the document is not reach: the trio is a tablist a reader can
 // operate, so each way it can come apart is broken on a real build and the
 // check is required to name it.

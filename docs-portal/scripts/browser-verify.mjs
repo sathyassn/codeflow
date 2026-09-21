@@ -366,7 +366,23 @@ export function observePortalPage(page) {
     const shown = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
     const panel = (name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`);
     const selector = { figure: "figure", stage: ".portal-stage", table: "table", list: "ul, ol", pre: "pre" };
-    const carried = (element) => Object.fromEntries(carriers.map((carrier) => [carrier, element.querySelectorAll(selector[carrier]).length]));
+    // A carrier is what the reader sees as one thing. The rows and lists a
+    // stage renders inside itself are its own internals, not further carriers,
+    // so only a carrier with no carrier above it counts, and the stage counts
+    // once. A carrier with nothing in it is not a carrier either: an empty
+    // figure, a table with no body row, a list with no item carry nothing.
+    const filled = (element, carrier) => {
+      const text = (node) => node.textContent.trim().length > 0;
+      if (carrier === "table") return [...element.querySelectorAll("tbody tr")].some(text);
+      if (carrier === "list") return [...element.querySelectorAll("li")].some(text);
+      if (carrier === "figure" || carrier === "stage") return element.querySelector("img, svg, pre, table, .portal-stage") !== null || text(element);
+      return text(element);
+    };
+    const own = (element) => (element.parentElement?.closest("figure, .portal-stage") ?? null) === null;
+    const carried = (element) => Object.fromEntries(carriers.map((carrier) => [
+      carrier,
+      [...element.querySelectorAll(selector[carrier])].filter((node) => own(node) && filled(node, carrier)).length,
+    ]));
     // The folder table is the table whose headers are the folder columns, not
     // whichever table the page happens to render first, so a pointer page that
     // also carries an unrelated table still reads correctly.
