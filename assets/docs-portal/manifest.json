@@ -38,6 +38,8 @@
     { "path": "src/styles/utility-tokens.css", "ownership": "managed" },
     { "path": "tests/adapter.test.mjs", "ownership": "managed" },
     { "path": "tests/browser-keyboard.test.mjs", "ownership": "managed" },
+    { "path": "tests/composition-browser.test.mjs", "ownership": "managed" },
+    { "path": "tests/composition.test.mjs", "ownership": "managed" },
     { "path": "tests/fixtures/authority-contract.json", "ownership": "managed" },
     { "path": "tests/fixtures/route-contract.json", "ownership": "managed" },
     { "path": "tests/page-shapes.mjs", "ownership": "managed" },

@@ -10,7 +10,8 @@ const root = process.cwd();
 await withSignalAwareChildLifecycle(async (lifecycle) => {
   await withWorkflowLease(root, async () => {
     await assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]);
-    if (workflow === "check") await run(lifecycle, process.execPath, ["--test", "tests/adapter.test.mjs"]);
+      // The suites that need a browser engine run under `browser:verify`.
+    if (workflow === "check") await run(lifecycle, process.execPath, ["--test", "tests/adapter.test.mjs", "tests/composition.test.mjs"]);
     if (workflow !== "preview") await run(lifecycle, process.execPath, ["scripts/adapter.mjs"]);
     await run(lifecycle, process.execPath, [path.join("node_modules", "astro", "bin", "astro.mjs"), workflow]);
     if (workflow === "build") await run(lifecycle, process.execPath, ["scripts/evidence.mjs"]);
