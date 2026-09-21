@@ -75,11 +75,13 @@ and any option placed before the delete flag, as in
 
 The layer that does not depend on option order is `git-guard`, which blocks
 deletion of a protected branch whether the delete flag stands alone or sits
-inside a short option cluster; this change fixes the cluster case, which the
-guard previously missed. The ask layer covers the listed force forms for any
-branch. The residual is therefore force deletion of an unprotected unmerged
-branch through an uncovered option order, which the worktree doctrine's
-landing evidence governs, not an ask rule.
+inside a short option cluster, and which reads the branch name with each
+command's own option arity, so a protected name is still found behind a
+consumed option value or after a `--`. This change fixes the cluster case and
+the operand case, both of which the guard previously missed. The ask layer
+covers the listed force forms for any branch. The residual is therefore force
+deletion of an unprotected unmerged branch through an uncovered option order,
+which the worktree doctrine's landing evidence governs, not an ask rule.
 
 A `rm -rf <path>` inside the tree and a `git branch -d` are ordinary work. The
 residual risk there is plain: an in-tree recursive delete of untracked unique
