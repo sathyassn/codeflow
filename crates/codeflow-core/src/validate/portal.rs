@@ -2601,30 +2601,85 @@ fn verify_pagefind_entry(
     // shape a half-written search build takes: the entry file exists and names
     // the language, but nothing can be loaded for it.
     for (language, record) in languages {
-        let Some(record) = record.as_object().filter(|record| !record.is_empty()) else {
-            report.issues.push(format!(
-                "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no index record"
-            ));
-            continue;
-        };
-        if record
-            .get("hash")
-            .and_then(serde_json::Value::as_str)
-            .is_none_or(|hash| hash.trim().is_empty())
-        {
-            report.issues.push(format!(
-                "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no non-empty hash string"
-            ));
-        }
-        if record
-            .get("page_count")
-            .is_none_or(|count| !count.is_number())
-        {
-            report.issues.push(format!(
-                "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no numeric page_count"
-            ));
-        }
+        verify_pagefind_language(language, record, artifacts, report);
     }
+}
+
+/// Refuse one language record that names no loadable index.
+fn verify_pagefind_language(
+    language: &str,
+    record: &serde_json::Value,
+    artifacts: &BTreeSet<String>,
+    report: &mut PortalValidationReport,
+) {
+    let Some(record) = record.as_object().filter(|record| !record.is_empty()) else {
+        report.issues.push(format!(
+            "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no index record"
+        ));
+        return;
+    };
+    let hash = record
+        .get("hash")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|hash| !hash.is_empty());
+    if hash.is_none() {
+        report.issues.push(format!(
+            "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no non-empty hash string"
+        ));
+    }
+    if record
+        .get("page_count")
+        .is_none_or(|count| !count.is_number())
+    {
+        report.issues.push(format!(
+            "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no numeric page_count"
+        ));
+    }
+    // A well formed entry still leaves the search box loading nothing when the
+    // files it names were never written. The index the hash points at, and the
+    // runtime the record names, are held to the built inventory, which the dist
+    // walk already bounded and proved regular.
+    if let Some(hash) = hash {
+        require_pagefind_artifact(
+            artifacts,
+            &format!("pagefind.{hash}.pf_meta"),
+            language,
+            report,
+        );
+    }
+    if let Some(wasm) = record
+        .get("wasm")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|wasm| !wasm.is_empty())
+    {
+        require_pagefind_artifact(
+            artifacts,
+            &format!("wasm.{wasm}.pagefind"),
+            language,
+            report,
+        );
+    }
+}
+
+/// Refuse a Pagefind artifact the entry names but the build never wrote.
+///
+/// The refusal names the file rather than the language alone, so the operator
+/// can see at once whether the index or its runtime is the missing half.
+fn require_pagefind_artifact(
+    artifacts: &BTreeSet<String>,
+    file: &str,
+    language: &str,
+    report: &mut PortalValidationReport,
+) {
+    let path = format!("dist/pagefind/{file}");
+    if artifacts.contains(&path) {
+        return;
+    }
+    report.issues.push(format!(
+        "Pagefind search index entry names a file the build did not write {PAGEFIND_ENTRY_PATH}: language {language} needs {path}"
+    ));
 }
 
 fn verify_snippets(
@@ -5283,12 +5338,28 @@ mod tests {
     }
 
     fn pagefind_entry_report(contents: &str) -> PortalValidationReport {
+        pagefind_entry_report_with(
+            contents,
+            &[
+                "dist/pagefind/pagefind.en_71666de4f7.pf_meta",
+                "dist/pagefind/wasm.en.pagefind",
+            ],
+        )
+    }
+
+    /// The entry plus the index files a real build writes beside it, which the
+    /// caller claims in the built inventory and the check holds it to.
+    fn pagefind_entry_report_with(contents: &str, written: &[&str]) -> PortalValidationReport {
         let portal = tempfile::tempdir().unwrap();
         let entry = portal.path().join(PAGEFIND_ENTRY_PATH);
         std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
         std::fs::write(&entry, contents).unwrap();
+        let mut artifacts = BTreeSet::from([PAGEFIND_ENTRY_PATH.to_string()]);
+        for relative in written {
+            std::fs::write(portal.path().join(relative), relative).unwrap();
+            artifacts.insert((*relative).to_string());
+        }
         let mut report = PortalValidationReport::default();
-        let artifacts = BTreeSet::from([PAGEFIND_ENTRY_PATH.to_string()]);
         verify_pagefind_entry(portal.path(), &artifacts, &mut report);
         report
     }
@@ -5379,6 +5450,44 @@ mod tests {
                 report.issues
             );
         }
+    }
+
+    #[test]
+    fn a_pagefind_index_the_entry_names_but_the_build_omits_is_refused_by_name() {
+        let entry = r#"{"version":"1.5.2","languages":{"en":{"hash":"en_71666de4f7","wasm":"en","page_count":165}}}"#;
+        for (written, expected) in [
+            (
+                vec!["dist/pagefind/wasm.en.pagefind"],
+                "needs dist/pagefind/pagefind.en_71666de4f7.pf_meta",
+            ),
+            (
+                vec!["dist/pagefind/pagefind.en_71666de4f7.pf_meta"],
+                "needs dist/pagefind/wasm.en.pagefind",
+            ),
+            (vec![], "needs dist/pagefind/pagefind.en_71666de4f7.pf_meta"),
+        ] {
+            let report = pagefind_entry_report_with(entry, &written);
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.contains(expected) && issue.contains(PAGEFIND_ENTRY_PATH)),
+                "{written:?}: {:?}",
+                report.issues
+            );
+        }
+        // A hash no file answers to is the dangling case: the build wrote its
+        // index, and the entry points somewhere else.
+        let report = pagefind_entry_report(
+            r#"{"version":"1.5.2","languages":{"en":{"hash":"en_0000000000","wasm":"en","page_count":165}}}"#,
+        );
+        assert!(
+            report.issues.iter().any(|issue| issue
+                .contains("needs dist/pagefind/pagefind.en_0000000000.pf_meta")
+                && issue.contains(PAGEFIND_ENTRY_PATH)),
+            "{:?}",
+            report.issues
+        );
     }
 
     #[test]
