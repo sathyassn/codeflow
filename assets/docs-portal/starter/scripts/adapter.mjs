@@ -458,7 +458,11 @@ function readingPathFigure(definitions) {
     const role = index === 0 ? "accent" : "neutral";
     return `<ul class="portal-stage-group"><li class="portal-stage-node" data-role="${role}"><a href="${escapeHtml(withBase(base, layer.id))}"><span class="k">${escapeHtml(layer.label)}</span><span class="s">${escapeHtml(layer.description)}</span></a></li></ul>`;
   }).join(`<div class="portal-stage-arrow" aria-hidden="true"></div>`);
-  return `<figure class="portal-stage portal-reading-path"><div class="portal-stage-flow">${steps}</div><figcaption>The reading path this portal is configured for</figcaption></figure>`;
+  // The splash landing has no sidebar, so this figure is the whole of its
+  // navigation. It carries the landmark and the name that says so, which costs
+  // the page nothing visually and gives a screen reader the same entry the
+  // sidebar gives every other page.
+  return `<nav class="portal-reading-path-nav" aria-label="Reading path"><figure class="portal-stage portal-reading-path"><div class="portal-stage-flow">${steps}</div><figcaption>The reading path this portal is configured for</figcaption></figure></nav>`;
 }
 
 // One generated page for the records the guide does not publish: the folder,

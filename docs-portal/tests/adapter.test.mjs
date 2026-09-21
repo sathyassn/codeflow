@@ -2172,6 +2172,9 @@ test("the home page renders the configured layers as one reading path figure", a
     assert.deepEqual([...index.matchAll(/<span class="s">([^<]+)<\/span>/g)].map((match) => match[1]), ["Purpose and capabilities.", "Architecture in effect.", "Running the system.", "Lookups and evidence."]);
     assert.match(index, /This guide reads in 4 steps, from Orient to Reference/);
     assert.match(index, /Start with \[Orient\]\(\/orient\/\)/);
+    // The landing has no sidebar, so its reading path is its navigation
+    // landmark and carries the name a screen reader announces.
+    assert.match(index, /<nav class="portal-reading-path-nav" aria-label="Reading path"><figure class="portal-stage portal-reading-path">/);
     assert.equal(index.includes("portal-journey"), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
