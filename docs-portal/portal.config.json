@@ -8,11 +8,11 @@
   "primitive_tokens": null,
   "repository_root": "..",
   "source_roots": ["docs"],
-  "exclude": ["docs/verification"],
+  "exclude": ["docs/verification", "docs/plan"],
   "layers": [
-    { "id": "orient", "label": "Orient", "description": "Purpose, capabilities, adoption, and the shortest path into the system.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/harness-posture.md", "docs/model-upgrades.md"], "prefixes": ["docs/capabilities"] },
+    { "id": "orient", "label": "Orient", "description": "What CodeFlow is, what it does, and how a repository adopts it.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md"], "prefixes": ["docs/capabilities"] },
     { "id": "system", "label": "System", "description": "How the binary is built, what enforces the rules, and the boundaries each harness and surface runs under.", "paths": ["docs/architecture.md", "docs/architecture/enforcement-planes.md", "docs/architecture/present.md", "docs/architecture/utility-presentation.md", "docs/harness-posture.md"], "prefixes": ["docs/architecture"] },
-    { "id": "reference", "label": "Reference", "description": "Supporting guides and technical reference material.", "fallback": true }
+    { "id": "reference", "label": "Reference", "description": "Operating CodeFlow: model and harness upgrades, the release runbook and checklist, and the command surface.", "paths": ["docs/model-upgrades.md", "docs/releasing.md", "docs/release-checklist.md", "docs/cli.md"], "fallback": true }
   ],
   "records": {
     "enabled": false,
