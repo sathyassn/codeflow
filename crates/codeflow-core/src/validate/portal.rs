@@ -64,7 +64,15 @@ const PORTAL_CONFIG_KEYS: [&str; 12] = [
 // The records switch is the one optional key (ADR-0064): a portal adopted
 // before it stays valid, and a portal that declares it keeps the pointer
 // folders out of the publishable source inventory.
-const PORTAL_OPTIONAL_CONFIG_KEYS: [&str; 1] = ["records"];
+// The page carriers table is the second optional key: a page whose subject is
+// its own carrier declares that per source, and the portal composition gate
+// holds it to the carrier it declared. The panels and the alternates each one
+// accepts are closed here too, so a configuration can never widen what the
+// gate accepts.
+const PORTAL_OPTIONAL_CONFIG_KEYS: [&str; 2] = ["records", "page_carriers"];
+const PORTAL_PAGE_CARRIER_KEYS: [&str; 2] = ["source", "technical"];
+const PORTAL_TECHNICAL_CARRIERS: [&str; 1] = ["list"];
+const MAX_PORTAL_PAGE_CARRIERS: usize = 64;
 const PORTAL_RECORDS_KEYS: [&str; 3] = ["enabled", "layer", "pointers"];
 const PORTAL_RECORDS_POINTER_KEYS: [&str; 3] = ["folder", "id_prefix", "purpose"];
 const RECORD_ID_PREFIXES: [&str; 5] = ["ADR", "CAP", "EPC", "SPC", "TSK"];
@@ -1115,6 +1123,7 @@ fn verify_config_contract(
     let excludes = configured_path_array(object.get("exclude"), "exclude", 0, 128, report)?;
     let layers = configured_layers(object.get("layers"), report)?;
     let records = configured_records(object.get("records"), report)?;
+    configured_page_carriers(object.get("page_carriers"), report)?;
     Some(PortalSourceContract {
         title: object.get("title")?.as_str()?.to_string(),
         description: object.get("description")?.as_str()?.to_string(),
@@ -1128,6 +1137,79 @@ fn verify_config_contract(
 // While the switch is off, the pointer folders leave the publishable source
 // inventory entirely, so the verifier derives the same page set the adapter
 // emitted and still knows which ids the guide may cite without a page.
+/// Refuse a page carrier declaration that is not the closed shape.
+///
+/// Every refusal names the table rather than the page, because the operator
+/// edits one entry in `portal.config.json` and a malformed entry would
+/// otherwise reach the composition gate as a silent exemption.
+fn configured_page_carriers(
+    value: Option<&serde_json::Value>,
+    report: &mut PortalValidationReport,
+) -> Option<()> {
+    let Some(value) = value else {
+        return Some(());
+    };
+    let Some(entries) = value
+        .as_array()
+        .filter(|entries| entries.len() <= MAX_PORTAL_PAGE_CARRIERS)
+    else {
+        report.issues.push(format!(
+            "portal configuration page_carriers is not an array of at most {MAX_PORTAL_PAGE_CARRIERS} entries"
+        ));
+        return None;
+    };
+    let mut sources = BTreeSet::new();
+    for entry in entries {
+        let Some(entry) = entry.as_object() else {
+            report
+                .issues
+                .push("portal configuration page_carriers entry is not an object".into());
+            return None;
+        };
+        if entry
+            .keys()
+            .any(|key| !PORTAL_PAGE_CARRIER_KEYS.contains(&key.as_str()))
+        {
+            report
+                .issues
+                .push("portal configuration page_carriers keys are not closed".into());
+            return None;
+        }
+        let Some(source) = entry
+            .get("source")
+            .and_then(serde_json::Value::as_str)
+            .filter(|source| safe_path_text(source))
+        else {
+            report.issues.push(
+                "portal configuration page_carriers entry has no portable relative source".into(),
+            );
+            return None;
+        };
+        if !sources.insert(portable_key(source)) {
+            report.issues.push(format!(
+                "portal configuration page_carriers declares {source} more than once"
+            ));
+            return None;
+        }
+        let Some(technical) = entry.get("technical") else {
+            report.issues.push(format!(
+                "portal configuration page_carriers entry {source} declares no panel carrier"
+            ));
+            return None;
+        };
+        if !technical
+            .as_str()
+            .is_some_and(|carrier| PORTAL_TECHNICAL_CARRIERS.contains(&carrier))
+        {
+            report.issues.push(format!(
+                "portal configuration page_carriers entry {source} declares an unknown technical carrier"
+            ));
+            return None;
+        }
+    }
+    Some(())
+}
+
 fn configured_records(
     value: Option<&serde_json::Value>,
     report: &mut PortalValidationReport,
@@ -4896,8 +4978,9 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn rust_configuration_contract_is_closed_and_covers_route_affecting_fields() {
+    /// The smallest configuration the Rust contract accepts, and the empty
+    /// evidence it is read against.
+    fn closed_contract_fixture() -> (serde_json::Value, Evidence) {
         let valid = serde_json::json!({
             "schema_version": 1,
             "title": "Guide",
@@ -4937,6 +5020,12 @@ mod tests {
             },
             artifacts: Vec::new(),
         };
+        (valid, evidence)
+    }
+
+    #[test]
+    fn rust_configuration_contract_is_closed_and_covers_route_affecting_fields() {
+        let (valid, evidence) = closed_contract_fixture();
         let mut report = PortalValidationReport::default();
         let contract =
             verify_config_contract(&serde_json::to_vec(&valid).unwrap(), &evidence, &mut report)
@@ -4976,6 +5065,63 @@ mod tests {
             )
             .is_none());
             assert!(!report.is_clean(), "mutation {mutation} was accepted");
+        }
+    }
+
+    #[test]
+    fn a_page_carrier_outside_its_closed_table_is_refused() {
+        let (valid, evidence) = closed_contract_fixture();
+        // A page whose subject is its own carrier declares that per source.
+        let mut declared = valid.clone();
+        declared["page_carriers"] =
+            serde_json::json!([{ "source": "docs/release-checklist.md", "technical": "list" }]);
+        let mut report = PortalValidationReport::default();
+        assert!(verify_config_contract(
+            &serde_json::to_vec(&declared).unwrap(),
+            &evidence,
+            &mut report
+        )
+        .is_some());
+        assert!(report.is_clean(), "{:?}", report.issues);
+
+        // Everything else that would reach the composition gate as an
+        // exemption is refused before it gets there.
+        for (mutation, carriers) in [
+            (
+                "unknown carrier",
+                serde_json::json!([{ "source": "docs/a.md", "technical": "table" }]),
+            ),
+            (
+                "unknown key",
+                serde_json::json!([{ "source": "docs/a.md", "concept": "list" }]),
+            ),
+            ("no panel", serde_json::json!([{ "source": "docs/a.md" }])),
+            (
+                "unsafe source",
+                serde_json::json!([{ "source": "../a.md", "technical": "list" }]),
+            ),
+            (
+                "duplicate source",
+                serde_json::json!([
+                    { "source": "docs/a.md", "technical": "list" },
+                    { "source": "docs/a.md", "technical": "list" },
+                ]),
+            ),
+            ("not an array", serde_json::json!({ "source": "docs/a.md" })),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["page_carriers"] = carriers;
+            let mut report = PortalValidationReport::default();
+            assert!(
+                verify_config_contract(
+                    &serde_json::to_vec(&invalid).unwrap(),
+                    &evidence,
+                    &mut report
+                )
+                .is_none(),
+                "{mutation} was accepted"
+            );
+            assert!(!report.is_clean(), "{mutation} reported nothing");
         }
     }
 
