@@ -17,11 +17,11 @@ codeflow update | refresh managed files by ownership class @positive
 caption: a tier change is additive and idempotent; update merges by ownership class and preserves your edits
 ```
 
-How a project takes on the discipline layer, greenfield or brownfield, what it
-gets at each tier, what codeflow owns versus what stays yours, and the daily
-loop. Architecture below is the tier and ownership structure; Technical is the
-commands, the files, and what `update` does to each of them. Every claim here
-reflects current behavior; nothing aspirational.
+Adoption is one command at one of three tiers, and the tier decides only how
+much method comes with the floor, never how strictly the floor is enforced. A
+project can start at minimal on an existing repository and move up later without
+undoing anything. Architecture below is the tier and ownership structure;
+Technical is the commands, the files, and what `update` does to each of them.
 
 ## Architecture
 
@@ -74,8 +74,9 @@ in [model and harness upgrades](model-upgrades.md).
 ## Technical
 
 The sections below are the operating detail, in the order a project meets them:
-installing the binary, choosing a root, running `init` on a greenfield or
-brownfield repository, what `update` does afterwards, and the daily loop and
+installing the binary, choosing a root and deciding where durable work lives,
+running `init` on a greenfield repository and configuring its test targets, the
+same on a brownfield one, what `update` does afterwards, and the daily loop and
 options that follow. Read the section matching the step you are on rather than
 the whole panel.
 
@@ -91,7 +92,7 @@ PowerShell installer, but no 3.0.0 assets exist until a release is published.
 
 | Path | Use it when |
 |---|---|
-| The anonymous installer one-liner | codeflow's releases are public. While the repo is private, use one of the two below; both authenticate as a collaborator |
+| The anonymous installer one-liner | Once codeflow's releases are public. While the repository is private it will not resolve, so use one of the two rows below; both authenticate as a collaborator |
 | `cargo install --path crates/codeflow-cli` | You want the pending 3.0.0 source from a checkout and have a Rust toolchain |
 | `gh release download` of one platform archive | You are pinning a version or scripting the install |
 
@@ -205,8 +206,8 @@ every file written and closes with the next step. From there:
 **Bootstrap grace.** codeflow needs exactly one commit before its gates guard
 the repo, its own scaffold commit, and that is a sanctioned path (it arms
 `policy_armed` and passes the hooks via the gate-context token), so you never
-hit a policy wall on the way to your first PR (the v2 charter,
-`docs/plan/v2/00-charter.md`, §16 AC #1). The secret scan is the one rule that
+hit a policy wall on the way to your first PR (the v2 charter, in the repository at
+`docs/plan/v2/00-charter.md`, which this guide does not publish, §16 AC #1). The secret scan is the one rule that
 is never graced (charter §6.3).
 
 ### Configure test targets
@@ -323,12 +324,6 @@ caption: every step has a plane that catches the mistake it can make
    integrate <branch> --into <target>` is the sanctioned local path, and a human
    can override the git layer for a local merge with `CODEFLOW_HUMAN_OVERRIDE=1`.
 
-### Enforcement planes: who catches what
-
-The four enforcement planes, what each one catches, and the rules behind them
-are on [enforcement planes](architecture/enforcement-planes.md) in the System
-layer.
-
 ### A body of work: the integration branch
 
 The loop above lands one standalone task per PR onto `main`. When the work is a
@@ -431,7 +426,7 @@ method. Transport remains interactive-only, with preferred lanes and qualified
 native fallback (ADR-0059). One-time setup: authenticate Codex manually, enable
 `codex@openai-codex` in Claude Code, and install the Claude CLI with Herdr for the reverse lane.
 Herdr is the named-tab terminal host that runs an interactive peer CLI in its
-own tab, with tmux as the documented degraded host. Codeflow
+own tab, with tmux as the documented degraded host. CodeFlow
 never automates auth. `codeflow doctor` reports inspectable prerequisites;
 retain a scoped interactive canary in each direction.
 
@@ -567,3 +562,9 @@ Close sessions when review ends and dry-run retention cleanup before removal.
 The utility never attaches to the operator's browser or replaces ordinary chat
 for a short answer. Read `cf-present` for the exact routing, authoring,
 feedback, evidence, and cleanup contract.
+
+### Enforcement planes: who catches what
+
+The four enforcement planes, what each one catches, and the rules behind them
+are on [enforcement planes](architecture/enforcement-planes.md) in the System
+layer.
