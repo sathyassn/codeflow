@@ -31,7 +31,8 @@ change touches; Technical is the run itself.
 ## Architecture
 
 The maintenance boundary is the point in the figure a change is allowed to
-reach. A model-family upgrade stays right of the doctrine; a genuinely new
+reach. Each row names what to update, what evidence to regenerate, and what the
+change does not license. A model-family upgrade stays right of the doctrine; a genuinely new
 harness has to earn the guarantees CodeFlow depends on before it reaches a
 binding at all.
 
@@ -74,9 +75,9 @@ promotes anything automatically.
 
 ## Technical
 
-The qualification run, the kit's contracts, and the files and commands each
-step touches. Run `/cf-evaluate-model` from the orchestrated maintenance flow
-(ADR-0027); each step below produces the evidence the next one depends on.
+Below are the qualification run, the kit's contracts, and the files and commands
+each step touches. Run `/cf-evaluate-model` from the orchestrated maintenance
+flow (ADR-0027); each step produces the evidence the next one depends on.
 
 ### The qualification run
 
@@ -91,31 +92,18 @@ step touches. Run `/cf-evaluate-model` from the orchestrated maintenance flow
 | 7 | Promote the binding | Explicit human approval, then a compact non-secret record under `~/.codeflow/qualified-bindings/` and an updated `current-ensemble.json` | Human approval |
 | 8 | Re-check drift | `codeflow doctor --check model-bindings` reports requested-versus-observed contradictions and observable harness/settings drift, without inferring live model state | `codeflow doctor` |
 
-Diagnostic packs help isolate failures but never qualify a binding. Use the
-skill's marker- and run-ID-gated cleanup for fixtures; never use it against the
-consuming project itself.
-
-Canary mode runs selected regressions once while maintaining the corpus. Full
-qualification runs every case three times and is required for promotion. Each
-trial uses a fresh one-commit disposable repository; the materializer removes
-the evaluation skill and expected answers, keeps evaluator state outside the
-subject tree, and gives the subject an opaque path with a neutral repository
-name before rebuilding fixture history. The model runs only in a supervised
-native interactive Codex App/CLI or Claude Code session with the actual
-tools/MCPs being qualified. Results retain model, effort, harness, settings,
-permissions, tools, network and resource budgets; status is recomputed from
-expected versus observed signals and evidence.
-
-Promotion requires no hard regression from the pinned baseline, resolved
-validity and grader findings, complete full-suite evidence, and explicit human
-approval. Token/latency improvements are diagnostics and never compensate for
-lost behavior. The feature adds no CLI subcommand, model runtime, headless peer
+Canary mode maintains the corpus; only a full run qualifies. A full run
+rebuilds fixture history after the materializer strips the skill and the
+expected answers, and retains network and resource budgets alongside the rest of
+the run conditions. Promotion additionally requires resolved validity and grader
+findings and complete full-suite evidence. Use the skill's marker- and
+run-ID-gated cleanup for fixtures; never use it against the consuming project
+itself. The feature adds no CLI subcommand, model runtime, headless peer
 execution, CI model call, or generic cleanup surface (ADR-0027).
 
 ### Catalog, ensemble, and scoped routes
 
-The kit separates durable doctrine from fast-changing bindings. A
-source-controlled harness catalog marks a harness `capability-supported` only
+A source-controlled harness catalog marks a harness `capability-supported` only
 after evidence of native-interactive execution, runtime provenance, configured
 tools, scoped work, bounded failure, recheckable results, an effective
 permission boundary, and the git backstop. Catalog status does not qualify a
@@ -130,7 +118,7 @@ doctor resolves it atomically and fails closed on malformed, ineligible,
 unsupported, drifted, or lineage-collapsing overrides. An absent or empty file
 keeps the managed ensemble.
 Composable diagnostic packs select existing cases without changing graders or
-promotion. Approved full results can emit non-secret local binding records;
+promotion; they help isolate failures but never qualify a binding. Approved full results can emit non-secret local binding records;
 doctor detects record contradictions and observable harness/settings drift
 without launching, inferring, promoting, or routing a model (ADR-0039).
 
