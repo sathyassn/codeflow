@@ -5,7 +5,6 @@ import { chmod, cp, link, lstat, mkdtemp, mkdir, readFile, readdir, rename, rm, 
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
-import { fileURLToPath } from "node:url";
 import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDirectoryPaths, compareDeterministicText, decorateAltitude, excerptFor, extractPageRelationships, headingAnchors, localRouteFor, parseMarkdown, pinnedSourceUrl, recordFilesFor, recoverUnavailableIds, referencedIds, renderStageFences, rewriteRepositoryMarkdown, safeRelative, sha256, stripLeadingTitleHeading, titleFor, validateBase, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, validateRecordsSwitch, validRepositoryUrl, withBase } from "../scripts/lib.mjs";
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
@@ -15,9 +14,8 @@ import { assertReviewedInstallScripts, REVIEWED_IGNORED_LIFECYCLE_SCRIPTS } from
 import { stopChild } from "../scripts/child-lifecycle.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { GENERATOR, assertGeneratorIdentity } from "../scripts/generator.mjs";
+import { adapterPath, buildFixture, commitFixture, configureFixture, git, initializedFixture, portalFixture, runAdapter, runLocalAdapter, selfContainedPortalFixture, starterRoot } from "./portal-fixture.mjs";
 
-const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
-const starterRoot = fileURLToPath(new URL("..", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
 
 test("failed fixture initialization removes its owned root and preserves siblings", async () => {
@@ -235,8 +233,6 @@ test("browser surface discovery scans beyond the first 64 pages", async () => {
     assert.deepEqual(await discoverSurfaceRoutes(pages, root), {
       deepLink: "reference/page-68",
       strictPreview: "reference/page-69",
-      altitudeTabs: ["reference/page-66", "reference/page-67"],
-      layerSamples: { reference: ["reference/page-0", "reference/page-69"] },
     });
     pages[69].output_markdown_sha256 = "0".repeat(64);
     await assert.rejects(discoverSurfaceRoutes(pages, root), /hash mismatch/);
@@ -274,8 +270,7 @@ test("Astro preserves the explicit canonical route in output and links", { skip:
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
     commitFixture(root, "add exact route source");
     runLocalAdapter(root);
-    const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
+    buildFixture(root);
     const route = "reference/Mixed Case + café";
     assert.equal((await readFile(path.join(root, `src/content/docs/${route}.md`), "utf8")).split("\n").includes(`slug: ${JSON.stringify(route)}`), true);
     assert.match(await readFile(path.join(root, "public/llms.txt"), "utf8"), /\.\/markdown\/reference\/Mixed%20Case%20%2B%20caf%C3%A9\.md/);
@@ -304,8 +299,7 @@ test("the rendered sidebar keeps the landing order when pages nest", { skip: pro
     await writeFile(path.join(root, "docs/adoption.md"), "# Adoption\n\nConfigured after the parent.\n");
     commitFixture(root, "add a parent page with a nested page between configured pages");
     runLocalAdapter(root);
-    const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
-    assert.equal(result.status, 0, result.stderr || result.stdout);
+    buildFixture(root);
     const landing = await readFile(path.join(root, "src/content/docs/orient/index.md"), "utf8");
     assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Product", "Topics", "One", "Adoption"]);
     const html = await readFile(path.join(root, "dist/orient/index.html"), "utf8");
@@ -362,7 +356,7 @@ test("Astro independently rejects remote and encoded base paths", { timeout: 120
       const config = JSON.parse(await readFile(configPath, "utf8"));
       config.base = base;
       await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-      const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
+      const result = buildFixture(root, false);
       assert.notEqual(result.status, 0, base);
       assert.match(`${result.stderr}\n${result.stdout}`, /base:/, base);
     } finally { await rm(root, { recursive: true, force: true }); }
@@ -2178,6 +2172,9 @@ test("the home page renders the configured layers as one reading path figure", a
     assert.deepEqual([...index.matchAll(/<span class="s">([^<]+)<\/span>/g)].map((match) => match[1]), ["Purpose and capabilities.", "Architecture in effect.", "Running the system.", "Lookups and evidence."]);
     assert.match(index, /This guide reads in 4 steps, from Orient to Reference/);
     assert.match(index, /Start with \[Orient\]\(\/orient\/\)/);
+    // The landing has no sidebar, so its reading path is its navigation
+    // landmark and carries the name a screen reader announces.
+    assert.match(index, /<nav class="portal-reading-path-nav" aria-label="Reading path"><figure class="portal-stage portal-reading-path">/);
     assert.equal(index.includes("portal-journey"), false);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -2458,115 +2455,6 @@ test("the records switch is closed, bounded and consistent with the layers", () 
     assert.throws(() => validateRecordsSwitch(records, layers), message);
   }
 });
-
-async function configureFixture(root, overrides) {
-  const configPath = path.join(root, "portal.config.json");
-  const config = JSON.parse(await readFile(configPath, "utf8"));
-  await writeFile(configPath, `${JSON.stringify({ ...config, ...overrides }, null, 2)}\n`);
-}
-
-async function portalFixture() {
-  return initializedFixture(path.join(os.tmpdir(), "codeflow-portal-adapter-"), async (root) => {
-    await mkdir(path.join(root, ".codeflow"));
-    await mkdir(path.join(root, "docs"));
-    await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
-    await writeFile(path.join(root, "portal.config.json"), `${JSON.stringify({
-      schema_version: 1,
-      title: "Fixture",
-      description: "Adapter fixture",
-      theme: "signal",
-      repository_url: null,
-      repository_root: ".",
-      release_version: null,
-      primitive_tokens: null,
-      source_roots: ["docs"],
-      exclude: [],
-      layers: [
-        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
-        { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
-        { id: "reference", label: "Reference", description: "Reference", fallback: true },
-      ],
-      base: "/",
-    }, null, 2)}\n`);
-    git(root, ["init", "-q"]);
-    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
-    git(root, ["config", "user.name", "CodeFlow portal tests"]);
-    commitFixture(root, "initialize fixture");
-  });
-}
-
-async function selfContainedPortalFixture() {
-  return initializedFixture(path.join(starterRoot, ".portal-test-runtime-"), async (root) => {
-    for (const item of [".gitignore", ".node-version", "astro.config.mjs", "package.json", "package-lock.json", "portal.config.json", "scripts", "src", "public", "tsconfig.json"]) {
-      await cp(path.join(starterRoot, item), path.join(root, item), { recursive: true });
-    }
-    await mkdir(path.join(root, ".codeflow"));
-    await mkdir(path.join(root, "docs"));
-    await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
-    const configPath = path.join(root, "portal.config.json");
-    const config = JSON.parse(await readFile(configPath, "utf8"));
-    Object.assign(config, {
-      repository_root: ".",
-      source_roots: ["docs"],
-      exclude: [],
-      primitive_tokens: null,
-      repository_url: null,
-      release_version: null,
-      records: { enabled: false, layer: null, pointers: [] },
-      layers: [
-        { id: "orient", label: "Orient", description: "Orientation", paths: ["docs/product.md"] },
-        { id: "system", label: "System", description: "System", prefixes: ["docs/decisions"] },
-        { id: "reference", label: "Reference", description: "Reference", fallback: true },
-      ],
-      base: "/",
-    });
-    await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
-    await writeFile(path.join(root, "docs/seed.md"), "# Seed\n");
-    git(root, ["init", "-q"]);
-    git(root, ["config", "user.email", "portal-tests@codeflow.invalid"]);
-    git(root, ["config", "user.name", "CodeFlow portal tests"]);
-    commitFixture(root, "initialize self-contained fixture");
-  });
-}
-
-async function initializedFixture(prefix, initialize) {
-  const root = await mkdtemp(prefix);
-  try {
-    await initialize(root);
-    return root;
-  } catch (error) {
-    try { await rm(root, { recursive: true, force: true }); }
-    catch (cleanupError) {
-      throw new AggregateError([error, cleanupError], "Fixture initialization and owned-root cleanup failed");
-    }
-    throw error;
-  }
-}
-
-function commitFixture(root, message, allowEmpty = false) {
-  git(root, ["add", "-A"]);
-  git(root, ["commit", "-q", ...(allowEmpty ? ["--allow-empty"] : []), "-m", message]);
-}
-
-function git(root, args) {
-  const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
-  assert.equal(result.status, 0, result.stderr);
-  return result.stdout;
-}
-
-function runAdapter(root, expectSuccess = true) {
-  const result = spawnSync(process.execPath, [adapterPath], { cwd: root, encoding: "utf8" });
-  if (expectSuccess) assert.equal(result.status, 0, result.stderr);
-  else assert.notEqual(result.status, 0, result.stdout);
-  return result;
-}
-
-function runLocalAdapter(root, expectSuccess = true) {
-  const result = spawnSync(process.execPath, [path.join(root, "scripts/adapter.mjs")], { cwd: root, encoding: "utf8" });
-  if (expectSuccess) assert.equal(result.status, 0, result.stderr);
-  else assert.notEqual(result.status, 0, result.stdout);
-  return result;
-}
 
 async function waitUntil(predicate, timeoutMs = 5_000) {
   const deadline = Date.now() + timeoutMs;

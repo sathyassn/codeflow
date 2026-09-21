@@ -8,6 +8,7 @@ import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import YAML from "yaml";
+import { PANEL_CARRIER_ALTERNATES } from "./page-classes.mjs";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -649,7 +650,7 @@ export function withBase(base, route) {
 
 export function validatePortalConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("portal.config.json: expected an object");
-  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "records", "base"]);
+  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "records", "page_carriers", "base"]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`portal.config.json: unknown key ${key}`);
   if (value.schema_version !== 1) throw new Error("portal.config.json: unsupported schema_version");
   boundedString(value.title, "title", 1, 120);
@@ -683,6 +684,33 @@ export function validatePortalConfig(value) {
   }
   if (fallback !== 1) throw new Error("portal.config.json: exactly one layer must be the fallback");
   value.records = validateRecordsSwitch(value.records, value.layers);
+  value.page_carriers = validatePageCarriers(value.page_carriers);
+  return value;
+}
+
+// A page whose subject is its own carrier declares that here, per source. The
+// panels, and the alternates each one accepts, are the composition gate's own
+// table, so a configuration can never invent a carrier the rules do not know
+// or quietly let a page off the carrier its altitude calls for.
+function validatePageCarriers(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 64) throw new Error("portal.config.json: page_carriers must be an array of at most 64 entries");
+  const panels = Object.keys(PANEL_CARRIER_ALTERNATES);
+  const sources = new Set();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("portal.config.json: each page_carriers entry must be an object");
+    const allowed = new Set(["source", ...panels]);
+    for (const key of Object.keys(entry)) if (!allowed.has(key)) throw new Error(`portal.config.json: unknown page_carriers key ${key}`);
+    safeRelative(entry.source, "page_carriers source");
+    if (sources.has(entry.source)) throw new Error(`portal.config.json: duplicate page_carriers entry ${entry.source}`);
+    sources.add(entry.source);
+    const declared = panels.filter((panel) => entry[panel] !== undefined);
+    if (declared.length === 0) throw new Error(`portal.config.json: page_carriers entry ${entry.source} declares no panel carrier`);
+    for (const panel of declared) {
+      const alternates = Object.keys(PANEL_CARRIER_ALTERNATES[panel]);
+      if (!alternates.includes(entry[panel])) throw new Error(`portal.config.json: ${entry.source} ${panel} carrier must be one of ${alternates.join(", ")}`);
+    }
+  }
   return value;
 }
 

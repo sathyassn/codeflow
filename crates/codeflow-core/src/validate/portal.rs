@@ -64,7 +64,15 @@ const PORTAL_CONFIG_KEYS: [&str; 12] = [
 // The records switch is the one optional key (ADR-0064): a portal adopted
 // before it stays valid, and a portal that declares it keeps the pointer
 // folders out of the publishable source inventory.
-const PORTAL_OPTIONAL_CONFIG_KEYS: [&str; 1] = ["records"];
+// The page carriers table is the second optional key: a page whose subject is
+// its own carrier declares that per source, and the portal composition gate
+// holds it to the carrier it declared. The panels and the alternates each one
+// accepts are closed here too, so a configuration can never widen what the
+// gate accepts.
+const PORTAL_OPTIONAL_CONFIG_KEYS: [&str; 2] = ["records", "page_carriers"];
+const PORTAL_PAGE_CARRIER_KEYS: [&str; 2] = ["source", "technical"];
+const PORTAL_TECHNICAL_CARRIERS: [&str; 1] = ["list"];
+const MAX_PORTAL_PAGE_CARRIERS: usize = 64;
 const PORTAL_RECORDS_KEYS: [&str; 3] = ["enabled", "layer", "pointers"];
 const PORTAL_RECORDS_POINTER_KEYS: [&str; 3] = ["folder", "id_prefix", "purpose"];
 const RECORD_ID_PREFIXES: [&str; 5] = ["ADR", "CAP", "EPC", "SPC", "TSK"];
@@ -1115,6 +1123,7 @@ fn verify_config_contract(
     let excludes = configured_path_array(object.get("exclude"), "exclude", 0, 128, report)?;
     let layers = configured_layers(object.get("layers"), report)?;
     let records = configured_records(object.get("records"), report)?;
+    configured_page_carriers(object.get("page_carriers"), report)?;
     Some(PortalSourceContract {
         title: object.get("title")?.as_str()?.to_string(),
         description: object.get("description")?.as_str()?.to_string(),
@@ -1128,6 +1137,79 @@ fn verify_config_contract(
 // While the switch is off, the pointer folders leave the publishable source
 // inventory entirely, so the verifier derives the same page set the adapter
 // emitted and still knows which ids the guide may cite without a page.
+/// Refuse a page carrier declaration that is not the closed shape.
+///
+/// Every refusal names the table rather than the page, because the operator
+/// edits one entry in `portal.config.json` and a malformed entry would
+/// otherwise reach the composition gate as a silent exemption.
+fn configured_page_carriers(
+    value: Option<&serde_json::Value>,
+    report: &mut PortalValidationReport,
+) -> Option<()> {
+    let Some(value) = value else {
+        return Some(());
+    };
+    let Some(entries) = value
+        .as_array()
+        .filter(|entries| entries.len() <= MAX_PORTAL_PAGE_CARRIERS)
+    else {
+        report.issues.push(format!(
+            "portal configuration page_carriers is not an array of at most {MAX_PORTAL_PAGE_CARRIERS} entries"
+        ));
+        return None;
+    };
+    let mut sources = BTreeSet::new();
+    for entry in entries {
+        let Some(entry) = entry.as_object() else {
+            report
+                .issues
+                .push("portal configuration page_carriers entry is not an object".into());
+            return None;
+        };
+        if entry
+            .keys()
+            .any(|key| !PORTAL_PAGE_CARRIER_KEYS.contains(&key.as_str()))
+        {
+            report
+                .issues
+                .push("portal configuration page_carriers keys are not closed".into());
+            return None;
+        }
+        let Some(source) = entry
+            .get("source")
+            .and_then(serde_json::Value::as_str)
+            .filter(|source| safe_path_text(source))
+        else {
+            report.issues.push(
+                "portal configuration page_carriers entry has no portable relative source".into(),
+            );
+            return None;
+        };
+        if !sources.insert(portable_key(source)) {
+            report.issues.push(format!(
+                "portal configuration page_carriers declares {source} more than once"
+            ));
+            return None;
+        }
+        let Some(technical) = entry.get("technical") else {
+            report.issues.push(format!(
+                "portal configuration page_carriers entry {source} declares no panel carrier"
+            ));
+            return None;
+        };
+        if !technical
+            .as_str()
+            .is_some_and(|carrier| PORTAL_TECHNICAL_CARRIERS.contains(&carrier))
+        {
+            report.issues.push(format!(
+                "portal configuration page_carriers entry {source} declares an unknown technical carrier"
+            ));
+            return None;
+        }
+    }
+    Some(())
+}
+
 fn configured_records(
     value: Option<&serde_json::Value>,
     report: &mut PortalValidationReport,
@@ -2587,15 +2669,99 @@ fn verify_pagefind_entry(
             "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: expected a non-empty version string"
         ));
     }
-    if fields
+    let Some(languages) = fields
         .get("languages")
         .and_then(serde_json::Value::as_object)
-        .is_none_or(serde_json::Map::is_empty)
-    {
+        .filter(|languages| !languages.is_empty())
+    else {
         report.issues.push(format!(
             "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: expected a non-empty languages object"
         ));
+        return;
+    };
+    // A language whose record is null, empty, or missing its index hash is the
+    // shape a half-written search build takes: the entry file exists and names
+    // the language, but nothing can be loaded for it.
+    for (language, record) in languages {
+        verify_pagefind_language(language, record, artifacts, report);
     }
+}
+
+/// Refuse one language record that names no loadable index.
+fn verify_pagefind_language(
+    language: &str,
+    record: &serde_json::Value,
+    artifacts: &BTreeSet<String>,
+    report: &mut PortalValidationReport,
+) {
+    let Some(record) = record.as_object().filter(|record| !record.is_empty()) else {
+        report.issues.push(format!(
+            "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no index record"
+        ));
+        return;
+    };
+    let hash = record
+        .get("hash")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|hash| !hash.is_empty());
+    if hash.is_none() {
+        report.issues.push(format!(
+            "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no non-empty hash string"
+        ));
+    }
+    if record
+        .get("page_count")
+        .is_none_or(|count| !count.is_number())
+    {
+        report.issues.push(format!(
+            "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no numeric page_count"
+        ));
+    }
+    // A well formed entry still leaves the search box loading nothing when the
+    // files it names were never written. The index the hash points at, and the
+    // runtime the record names, are held to the built inventory, which the dist
+    // walk already bounded and proved regular.
+    if let Some(hash) = hash {
+        require_pagefind_artifact(
+            artifacts,
+            &format!("pagefind.{hash}.pf_meta"),
+            language,
+            report,
+        );
+    }
+    if let Some(wasm) = record
+        .get("wasm")
+        .and_then(serde_json::Value::as_str)
+        .map(str::trim)
+        .filter(|wasm| !wasm.is_empty())
+    {
+        require_pagefind_artifact(
+            artifacts,
+            &format!("wasm.{wasm}.pagefind"),
+            language,
+            report,
+        );
+    }
+}
+
+/// Refuse a Pagefind artifact the entry names but the build never wrote.
+///
+/// The refusal names the file rather than the language alone, so the operator
+/// can see at once whether the index or its runtime is the missing half.
+fn require_pagefind_artifact(
+    artifacts: &BTreeSet<String>,
+    file: &str,
+    language: &str,
+    report: &mut PortalValidationReport,
+) {
+    let path = format!("dist/pagefind/{file}");
+    if artifacts.contains(&path) {
+        return;
+    }
+    report.issues.push(format!(
+        "Pagefind search index entry names a file the build did not write {PAGEFIND_ENTRY_PATH}: language {language} needs {path}"
+    ));
 }
 
 fn verify_snippets(
@@ -4812,8 +4978,9 @@ mod tests {
         }));
     }
 
-    #[test]
-    fn rust_configuration_contract_is_closed_and_covers_route_affecting_fields() {
+    /// The smallest configuration the Rust contract accepts, and the empty
+    /// evidence it is read against.
+    fn closed_contract_fixture() -> (serde_json::Value, Evidence) {
         let valid = serde_json::json!({
             "schema_version": 1,
             "title": "Guide",
@@ -4853,6 +5020,12 @@ mod tests {
             },
             artifacts: Vec::new(),
         };
+        (valid, evidence)
+    }
+
+    #[test]
+    fn rust_configuration_contract_is_closed_and_covers_route_affecting_fields() {
+        let (valid, evidence) = closed_contract_fixture();
         let mut report = PortalValidationReport::default();
         let contract =
             verify_config_contract(&serde_json::to_vec(&valid).unwrap(), &evidence, &mut report)
@@ -4892,6 +5065,63 @@ mod tests {
             )
             .is_none());
             assert!(!report.is_clean(), "mutation {mutation} was accepted");
+        }
+    }
+
+    #[test]
+    fn a_page_carrier_outside_its_closed_table_is_refused() {
+        let (valid, evidence) = closed_contract_fixture();
+        // A page whose subject is its own carrier declares that per source.
+        let mut declared = valid.clone();
+        declared["page_carriers"] =
+            serde_json::json!([{ "source": "docs/release-checklist.md", "technical": "list" }]);
+        let mut report = PortalValidationReport::default();
+        assert!(verify_config_contract(
+            &serde_json::to_vec(&declared).unwrap(),
+            &evidence,
+            &mut report
+        )
+        .is_some());
+        assert!(report.is_clean(), "{:?}", report.issues);
+
+        // Everything else that would reach the composition gate as an
+        // exemption is refused before it gets there.
+        for (mutation, carriers) in [
+            (
+                "unknown carrier",
+                serde_json::json!([{ "source": "docs/a.md", "technical": "table" }]),
+            ),
+            (
+                "unknown key",
+                serde_json::json!([{ "source": "docs/a.md", "concept": "list" }]),
+            ),
+            ("no panel", serde_json::json!([{ "source": "docs/a.md" }])),
+            (
+                "unsafe source",
+                serde_json::json!([{ "source": "../a.md", "technical": "list" }]),
+            ),
+            (
+                "duplicate source",
+                serde_json::json!([
+                    { "source": "docs/a.md", "technical": "list" },
+                    { "source": "docs/a.md", "technical": "list" },
+                ]),
+            ),
+            ("not an array", serde_json::json!({ "source": "docs/a.md" })),
+        ] {
+            let mut invalid = valid.clone();
+            invalid["page_carriers"] = carriers;
+            let mut report = PortalValidationReport::default();
+            assert!(
+                verify_config_contract(
+                    &serde_json::to_vec(&invalid).unwrap(),
+                    &evidence,
+                    &mut report
+                )
+                .is_none(),
+                "{mutation} was accepted"
+            );
+            assert!(!report.is_clean(), "{mutation} reported nothing");
         }
     }
 
@@ -5254,12 +5484,28 @@ mod tests {
     }
 
     fn pagefind_entry_report(contents: &str) -> PortalValidationReport {
+        pagefind_entry_report_with(
+            contents,
+            &[
+                "dist/pagefind/pagefind.en_71666de4f7.pf_meta",
+                "dist/pagefind/wasm.en.pagefind",
+            ],
+        )
+    }
+
+    /// The entry plus the index files a real build writes beside it, which the
+    /// caller claims in the built inventory and the check holds it to.
+    fn pagefind_entry_report_with(contents: &str, written: &[&str]) -> PortalValidationReport {
         let portal = tempfile::tempdir().unwrap();
         let entry = portal.path().join(PAGEFIND_ENTRY_PATH);
         std::fs::create_dir_all(entry.parent().unwrap()).unwrap();
         std::fs::write(&entry, contents).unwrap();
+        let mut artifacts = BTreeSet::from([PAGEFIND_ENTRY_PATH.to_string()]);
+        for relative in written {
+            std::fs::write(portal.path().join(relative), relative).unwrap();
+            artifacts.insert((*relative).to_string());
+        }
         let mut report = PortalValidationReport::default();
-        let artifacts = BTreeSet::from([PAGEFIND_ENTRY_PATH.to_string()]);
         verify_pagefind_entry(portal.path(), &artifacts, &mut report);
         report
     }
@@ -5306,6 +5552,88 @@ mod tests {
                 report.issues
             );
         }
+    }
+
+    #[test]
+    fn a_pagefind_language_without_a_loadable_index_is_refused_by_name() {
+        for (contents, expected) in [
+            (
+                r#"{"version":"1.5.2","languages":{"en":null}}"#,
+                "language en has no index record",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{}}}"#,
+                "language en has no index record",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":"en_71666de4f7"}}"#,
+                "language en has no index record",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{"wasm":"en","page_count":165}}}"#,
+                "language en has no non-empty hash string",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{"hash":"  ","page_count":165}}}"#,
+                "language en has no non-empty hash string",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{"hash":"en_71666de4f7"}}}"#,
+                "language en has no numeric page_count",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{"hash":"en_71666de4f7","page_count":"165"}}}"#,
+                "language en has no numeric page_count",
+            ),
+        ] {
+            let report = pagefind_entry_report(contents);
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.contains(expected) && issue.contains(PAGEFIND_ENTRY_PATH)),
+                "{contents}: {:?}",
+                report.issues
+            );
+        }
+    }
+
+    #[test]
+    fn a_pagefind_index_the_entry_names_but_the_build_omits_is_refused_by_name() {
+        let entry = r#"{"version":"1.5.2","languages":{"en":{"hash":"en_71666de4f7","wasm":"en","page_count":165}}}"#;
+        for (written, expected) in [
+            (
+                vec!["dist/pagefind/wasm.en.pagefind"],
+                "needs dist/pagefind/pagefind.en_71666de4f7.pf_meta",
+            ),
+            (
+                vec!["dist/pagefind/pagefind.en_71666de4f7.pf_meta"],
+                "needs dist/pagefind/wasm.en.pagefind",
+            ),
+            (vec![], "needs dist/pagefind/pagefind.en_71666de4f7.pf_meta"),
+        ] {
+            let report = pagefind_entry_report_with(entry, &written);
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.contains(expected) && issue.contains(PAGEFIND_ENTRY_PATH)),
+                "{written:?}: {:?}",
+                report.issues
+            );
+        }
+        // A hash no file answers to is the dangling case: the build wrote its
+        // index, and the entry points somewhere else.
+        let report = pagefind_entry_report(
+            r#"{"version":"1.5.2","languages":{"en":{"hash":"en_0000000000","wasm":"en","page_count":165}}}"#,
+        );
+        assert!(
+            report.issues.iter().any(|issue| issue
+                .contains("needs dist/pagefind/pagefind.en_0000000000.pf_meta")
+                && issue.contains(PAGEFIND_ENTRY_PATH)),
+            "{:?}",
+            report.issues
+        );
     }
 
     #[test]

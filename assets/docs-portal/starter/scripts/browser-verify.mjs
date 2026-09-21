@@ -10,7 +10,8 @@ import { chromium, firefox, webkit } from "@playwright/test";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertGeneratorIdentity } from "./generator.mjs";
 import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
-import { pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
+import { PORTAL_ACCENT_BACKGROUNDS, pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
+import { ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
 
@@ -23,6 +24,14 @@ const MAX_RUNTIME_DIAGNOSTICS = 128;
 const MAX_RUNTIME_DIAGNOSTIC_BYTES = 4 * 1024;
 const runId = process.env.PORTAL_BROWSER_RUN ?? "local";
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId)) throw new Error("PORTAL_BROWSER_RUN is invalid");
+// The skins the utility tokens actually define, read from the token contract
+// rather than repeated here, and the Display panels Starlight renders on a
+// guide page: the header panel and the mobile menu panel. Both palette pill
+// groups are verified, so a swatch that is correct in one panel cannot cover
+// the other. The splash landing has no mobile menu and so no second panel,
+// which is why this check runs on a generated page and not on the landing.
+const PORTAL_SKINS = Object.freeze(Object.keys(PORTAL_ACCENT_BACKGROUNDS));
+export const PALETTE_PILL_GROUPS = 2;
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
   await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, () => verifyPortal(lifecycle)));
@@ -43,6 +52,13 @@ async function verifyPortal(lifecycle) {
   }
   const beforeArtifacts = await collectBuiltArtifacts(path.join(root, "dist"));
   assertArtifactClaims(generated.artifacts, beforeArtifacts, "before browser verification");
+  // The page classes are settled before a browser starts: every eligible
+  // source is named here, so a page the run never reaches fails as a missing
+  // observation instead of passing unseen.
+  assertNoRecordRoutes(config, generated.pages, beforeArtifacts.map((artifact) => artifact.path));
+  assertNoStaleSources(generated.pages);
+  const assignments = classifyPortalPages(config, generated.pages);
+  assertDeclaredCarriers(config, assignments);
   const surfaces = await discoverSurfaceRoutes(generated.pages, root);
 
   const outputRelative = safeRelative(`.portal/browser-evidence/${runId}`, "browser evidence path");
@@ -72,7 +88,7 @@ async function verifyPortal(lifecycle) {
     await waitForServer(siteRoot, server, () => serverOutput.toString("utf8"));
     for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
       lifecycle.throwIfInterrupted();
-      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, lifecycle }));
+      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, lifecycle }));
     }
   } catch (error) {
     lifecycle.throwIfInterrupted();
@@ -118,7 +134,7 @@ async function verifyPortal(lifecycle) {
   console.log(`portal browser verification passed: ${outputRelative}/results.json`);
 }
 
-async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, lifecycle }) {
+async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, lifecycle }) {
   const profile = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-${runId}-${name}-`));
   const trace = path.join(output, `${name}-trace.zip`);
   const runtime = { console: [], page: [], request: [], remote: [] };
@@ -176,6 +192,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     if (await page.locator("html").getAttribute("data-theme") !== "light") throw new Error(`${name}: light preference did not persist`);
     await assertBeforePaintTheme(page, name, "light");
     await assertDisplaySettings(page, name);
+    await assertPaletteSwatches(page, name, origin, config, assignments[0]);
 
     for (const layer of config.layers) {
       await visit(page, routeUrl(origin, config.base, layer.id));
@@ -184,8 +201,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     }
 
     await assertDeepLink(page, name, origin, config.base, surfaces.deepLink);
-    const altitudeResult = await assertAltitudeTabs(page, name, origin, config, surfaces.altitudeTabs);
-    const chromeResult = await assertUtilityChrome(page, name, origin, config, surfaces);
+    const compositionResult = await assertPortalComposition(page, name, origin, config, assignments);
     const previewResult = await assertStrictIdPreview(page, name, origin, config, surfaces.strictPreview);
     await assertSourceLink(page, name, origin, config, generated);
     await visit(page, siteRoot);
@@ -211,7 +227,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     return {
       engine: name,
       status: "passed",
-      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search-slash-hit-and-follow", "system-and-mode-persistence-before-paint", "display-settings-persist", "layer-journey", "deep-link", altitudeResult, chromeResult, previewResult, "source-link", "keyboard-traversal-and-focus", "skins-light-dark", "target-size", "responsive", "console", "network-isolation"],
+      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search-slash-hit-and-follow", "system-and-mode-persistence-before-paint", "display-settings-persist", "palette-pill-swatches-from-live-tokens", "layer-journey", "deep-link", compositionResult, previewResult, "source-link", "keyboard-traversal-and-focus", "skins-light-dark", "target-size", "responsive", "console", "network-isolation"],
     };
   } catch (error) {
     lifecycle.throwIfInterrupted();
@@ -315,65 +331,211 @@ async function assertDisplaySettings(page, engine) {
   if (await accentOf() !== before.accent) throw new Error(`${engine}: clearing display settings did not restore the configured theme`);
 }
 
-function architectureShapedLayers(config) {
-  return config.layers.filter((layer) =>
-    layer.id === "system"
-    || /\barchitecture\b/i.test(`${layer.label} ${layer.description}`)
-    || [...(layer.paths ?? []), ...(layer.prefixes ?? [])].some((item) => /architecture/i.test(item)));
-}
-
-async function assertAltitudeTabs(page, engine, origin, config, routes) {
-  // An architecture-shaped layer with no altitude page is the failure this
-  // check exists to catch: one hero page with the rest left as a plain shell.
-  for (const layer of architectureShapedLayers(config)) {
-    if (!routes.some((route) => route.startsWith(`${layer.id}/`))) {
-      throw new Error(`${engine}: architecture-shaped layer "${layer.id}" has zero altitude pages — author the Concept/Architecture/Technical trio in its sources`);
+// Every eligible source is visited and measured against the rules its page
+// class declares. Failures are collected rather than thrown one at a time, so
+// the report names every offending source in one run and a compliant page
+// never stands in for a noncompliant one.
+async function assertPortalComposition(page, engine, origin, config, assignments) {
+  const observations = [];
+  const interactionFailures = [];
+  for (const assignment of assignments) {
+    await visit(page, routeUrl(origin, config.base, assignment.route));
+    observations.push({ route: assignment.route, ...await observePortalPage(page) });
+    // A page whose class declares the trio is held to its tablist. Skipping a
+    // page that renders no tabs would let the chrome disappear silently, which
+    // is the one failure the panels themselves cannot show.
+    if (assignment.pageClass !== PAGE_CLASSES.explanatory.id) continue;
+    try {
+      await assertAltitudeInteraction(page, engine, origin, config, assignment.route);
+    } catch (error) {
+      interactionFailures.push(`${assignment.source} (at ${assignment.route}): ${error.message}`);
     }
   }
-  if (!routes.length) return "altitude-tabs-not-applicable";
-  for (const route of routes) {
-    await visit(page, routeUrl(origin, config.base, route));
-    const tabs = page.locator('.portal-altitude-tabs [role="tab"]');
-    const count = await tabs.count();
-    if (count < 2) throw new Error(`${engine}: ${route}: altitude tablist is missing its tabs`);
-    const panelIds = [];
-    for (let index = 0; index < count; index += 1) panelIds.push(await tabs.nth(index).getAttribute("aria-controls"));
-    const visiblePanels = async () => {
-      let visible = 0;
-      for (const id of panelIds) if (await page.locator(`#${id}`).isVisible()) visible += 1;
-      return visible;
-    };
-    if (await visiblePanels() !== 1) throw new Error(`${engine}: ${route} shows ${await visiblePanels()} panels at once — tabs must hide inactive layers`);
-    await assertA11y(page, engine, `initial altitude panel on ${route}`);
-    await tabs.nth(1).click();
-    if (await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error(`${engine}: ${route}: first altitude panel is still visible while the second tab is selected`);
-    if (!await page.locator(`#${panelIds[1]}`).isVisible() || await visiblePanels() !== 1) throw new Error(`${engine}: ${route}: selected altitude tab did not reveal exactly its own panel`);
-    const anchor = await tabs.nth(1).getAttribute("data-anchor");
-    if (await page.evaluate(() => decodeURIComponent(location.hash.slice(1))) !== anchor) throw new Error(`${engine}: ${route}: selected altitude tab is not recorded in the URL`);
-    await tabs.nth(1).focus();
-    await page.keyboard.press("ArrowLeft");
-    if (await tabs.nth(0).getAttribute("aria-selected") !== "true" || !await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error(`${engine}: ${route}: arrow keys do not move the altitude selection`);
-    await page.keyboard.press("End");
-    if (await tabs.nth(count - 1).getAttribute("aria-selected") !== "true") throw new Error(`${engine}: ${route}: End does not select the last altitude tab`);
-    await visit(page, `${routeUrl(origin, config.base, route)}#${encodeURIComponent(anchor)}`);
-    if (!await page.locator(`#${panelIds[1]}`).isVisible() || await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error(`${engine}: ${route}: loading #${anchor} did not show that panel only`);
-    await assertA11y(page, engine, `altitude tabs on ${route}`);
+  try {
+    return `${engine}:${assertPageClassCoverage(assignments, observations, interactionFailures)}`;
+  } catch (error) {
+    throw new Error(`${engine}: ${error.message}`);
   }
-  return `altitude-tabs-hide-inactive:${routes.length}`;
 }
 
-async function assertUtilityChrome(page, engine, origin, config, surfaces) {
-  // Every page class carries the utility chrome — not only the hero page.
-  const routes = new Set([...Object.values(surfaces.layerSamples).flat(), ...surfaces.altitudeTabs]);
-  for (const route of routes) {
-    await visit(page, routeUrl(origin, config.base, route));
-    if (await page.locator("h1:visible").count() !== 1) throw new Error(`${engine}: ${route} must show exactly one h1`);
-    if (!await page.locator(".portal-provenance").first().isVisible()) throw new Error(`${engine}: ${route} lacks the visible provenance line`);
-    if (!await page.locator('[data-testid="portal-display-btn"]').first().isVisible()) throw new Error(`${engine}: ${route} lacks the Display control`);
-    const commentChrome = await page.evaluate(() => ["[data-testid=comment-btn]", ".cf-float", ".cf-dock", ".cf-hint", ".cf-composer"].map((selector) => document.querySelector(selector)).filter(Boolean).length);
-    if (commentChrome !== 0) throw new Error(`${engine}: ${route} carries present Comment chrome`);
+// One structural read per page: the same observation the declared class rules
+// are written against, taken from the rendered document rather than from the
+// Markdown the adapter wrote.
+export function observePortalPage(page) {
+  return page.evaluate(({ panels, carriers, columns }) => {
+    const shown = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
+    const panel = (name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`);
+    const selector = { figure: "figure", stage: ".portal-stage", table: "table", list: "ul, ol", pre: "pre" };
+    // A carrier is what the reader sees as one thing. The rows and lists a
+    // stage renders inside itself are its own internals, not further carriers,
+    // so only a carrier with no carrier above it counts, and the stage counts
+    // once. A carrier with nothing in it is not a carrier either: an empty
+    // figure, a table with no body row, a list with no item carry nothing.
+    const filled = (element, carrier) => {
+      const text = (node) => node.textContent.trim().length > 0;
+      if (carrier === "table") return [...element.querySelectorAll("tbody tr")].some(text);
+      if (carrier === "list") return [...element.querySelectorAll("li")].some(text);
+      if (carrier === "figure" || carrier === "stage") return element.querySelector("img, svg, pre, table, .portal-stage") !== null || text(element);
+      return text(element);
+    };
+    const own = (element) => (element.parentElement?.closest("figure, .portal-stage") ?? null) === null;
+    const carried = (element) => Object.fromEntries(carriers.map((carrier) => [
+      carrier,
+      [...element.querySelectorAll(selector[carrier])].filter((node) => own(node) && filled(node, carrier)).length,
+    ]));
+    // The folder table is the table whose headers are the folder columns, not
+    // whichever table the page happens to render first, so a pointer page that
+    // also carries an unrelated table still reads correctly.
+    const tables = [...document.querySelectorAll(".sl-markdown-content table")];
+    const headersOf = (table) => [...table.querySelectorAll("thead th")].map((cell) => cell.textContent.trim());
+    const folderTable = tables.find((table) => headersOf(table).join("\u0000") === columns.join("\u0000")) ?? null;
+    return {
+      headings: [...document.querySelectorAll("h1")].filter(shown).length,
+      provenance: [...document.querySelectorAll(".portal-provenance")].some(shown),
+      displayControls: [...document.querySelectorAll('[data-testid="portal-display-btn"]')].filter(shown).length,
+      commentChrome: document.querySelectorAll("[data-testid=comment-btn], .cf-float, .cf-dock, .cf-hint, .cf-composer").length,
+      altitudePanels: panels.filter((name) => panel(name) !== null),
+      panelCarriers: Object.fromEntries(panels.map((name) => [name, panel(name) === null ? null : carried(panel(name))])),
+      pointerColumns: folderTable === null ? [] : headersOf(folderTable),
+      pointerRows: folderTable?.querySelectorAll("tbody tr").length ?? 0,
+    };
+  }, { panels: ALTITUDE_PANELS, carriers: CARRIER_ELEMENTS, columns: RECORD_POINTER_COLUMNS });
+}
+
+// The trio is a real tablist or it is not the trio: three tabs, each naming the
+// panel it controls, and each opening that panel alone. Exercising every tab is
+// what proves a panel can be reached, which presence in the document does not.
+export async function assertAltitudeTablist(page) {
+  const tabs = page.locator('.portal-altitude-tabs [role="tab"]');
+  const count = await tabs.count();
+  if (count !== ALTITUDE_PANELS.length) throw new Error(`altitude tablist offers ${count} tab(s), the trio needs ${ALTITUDE_PANELS.length}`);
+  const controlled = [];
+  for (let index = 0; index < count; index += 1) controlled.push(await tabs.nth(index).getAttribute("aria-controls"));
+  const trio = await page.evaluate((panels) => panels.map((name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`)?.id ?? null), ALTITUDE_PANELS);
+  const missing = ALTITUDE_PANELS.filter((name, index) => trio[index] === null);
+  if (missing.length) throw new Error(`the tablist has no panel to control for ${missing.join(", ")}`);
+  if (controlled.join(",") !== trio.join(",")) throw new Error(`tabs control ${controlled.map((id) => id ?? "nothing").join(", ")}, the trio panels are ${trio.join(", ")}`);
+  const visiblePanels = async () => {
+    let visible = 0;
+    for (const id of trio) if (await page.locator(`#${id}`).isVisible()) visible += 1;
+    return visible;
+  };
+  for (let index = 0; index < count; index += 1) {
+    await tabs.nth(index).click();
+    if (!await page.locator(`#${trio[index]}`).isVisible()) throw new Error(`selecting the ${ALTITUDE_PANELS[index]} tab did not open its panel`);
+    if (await visiblePanels() !== 1) throw new Error(`selecting the ${ALTITUDE_PANELS[index]} tab left ${await visiblePanels()} panels open`);
   }
-  return `utility-chrome:${routes.size}`;
+  return trio;
+}
+
+async function assertAltitudeInteraction(page, engine, origin, config, route) {
+  const tabs = page.locator('.portal-altitude-tabs [role="tab"]');
+  const panelIds = [];
+  for (const id of await page.evaluate((panels) => panels.map((name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`)?.id ?? null), ALTITUDE_PANELS)) panelIds.push(id);
+  const visiblePanels = async () => {
+    let visible = 0;
+    for (const id of panelIds) if (id !== null && await page.locator(`#${id}`).isVisible()) visible += 1;
+    return visible;
+  };
+  if (await visiblePanels() !== 1) throw new Error(`shows ${await visiblePanels()} panels at once, tabs must hide inactive layers`);
+  await assertA11y(page, engine, `initial altitude panel on ${route}`);
+  await assertAltitudeTablist(page);
+  const count = await tabs.count();
+  await tabs.nth(1).click();
+  if (await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error("first altitude panel is still visible while the second tab is selected");
+  if (!await page.locator(`#${panelIds[1]}`).isVisible() || await visiblePanels() !== 1) throw new Error("selected altitude tab did not reveal exactly its own panel");
+  const anchor = await tabs.nth(1).getAttribute("data-anchor");
+  if (await page.evaluate(() => decodeURIComponent(location.hash.slice(1))) !== anchor) throw new Error("selected altitude tab is not recorded in the URL");
+  await tabs.nth(1).focus();
+  await page.keyboard.press("ArrowLeft");
+  if (await tabs.nth(0).getAttribute("aria-selected") !== "true" || !await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error("arrow keys do not move the altitude selection");
+  await page.keyboard.press("End");
+  if (await tabs.nth(count - 1).getAttribute("aria-selected") !== "true") throw new Error("End does not select the last altitude tab");
+  await visit(page, `${routeUrl(origin, config.base, route)}#${encodeURIComponent(anchor)}`);
+  if (!await page.locator(`#${panelIds[1]}`).isVisible() || await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error(`loading #${anchor} did not show that panel only`);
+  await assertA11y(page, engine, `altitude tabs on ${route}`);
+}
+
+// Each palette pill previews the skin it selects. The check opens each Display
+// panel and reads the colour the swatch elements actually paint, compared with
+// the colour the live stylesheet computes for that skin, so a missing swatch, a
+// hard coded colour, or one copy of the current skin painted onto every pill
+// fails instead of looking plausible.
+async function assertPaletteSwatches(page, engine, origin, config, assignment) {
+  if (assignment === undefined) throw new Error(`${engine}: no generated page can prove the Display panels`);
+  await visit(page, routeUrl(origin, config.base, assignment.route));
+  // The panel paints its swatches in the same call that marks the selected
+  // pill, so waiting for that mark proves the component ran without waiting on
+  // the swatches this check is about.
+  await page.locator('.pills[data-group="skin"] button[aria-pressed]').first().waitFor({ state: "attached" });
+  const tokens = await page.evaluate((skins) => {
+    const root = document.documentElement;
+    const computed = getComputedStyle(root);
+    // The tokens are hex and the swatches paint in the browser's own colour
+    // space, so each token is resolved through the page before comparison.
+    const probe = document.createElement("span");
+    probe.setAttribute("aria-hidden", "true");
+    probe.style.display = "none";
+    document.body.append(probe);
+    const painted = (value) => {
+      probe.style.backgroundColor = "";
+      probe.style.backgroundColor = value;
+      return getComputedStyle(probe).backgroundColor;
+    };
+    const selected = root.dataset.cfpSkin;
+    const table = {};
+    for (const skin of skins) {
+      root.dataset.cfpSkin = skin;
+      table[skin] = { canvas: painted(computed.getPropertyValue("--cf-canvas").trim()), accent: painted(computed.getPropertyValue("--cf-accent").trim()) };
+    }
+    if (selected === undefined) delete root.dataset.cfpSkin; else root.dataset.cfpSkin = selected;
+    probe.remove();
+    return table;
+  }, PORTAL_SKINS);
+  const buttons = page.locator('[data-testid="portal-display-btn"]');
+  const panels = page.locator('[data-testid="portal-display-panel"]');
+  const groups = [];
+  for (let index = 0; index < await panels.count(); index += 1) {
+    // A reader opens one panel at a time, and the component closes the others,
+    // so each panel is opened, read and closed in turn.
+    if (await buttons.nth(index).isVisible() && await panels.nth(index).isHidden()) await buttons.nth(index).click();
+    groups.push(await panels.nth(index).evaluate((panel) => [...panel.querySelectorAll('.pills[data-group="skin"] button')].map((pill) => {
+      const swatch = (name) => {
+        const element = pill.querySelector(`.${name}`);
+        return element === null ? "" : getComputedStyle(element).backgroundColor;
+      };
+      return { skin: pill.dataset.value, canvas: swatch("sw-canvas"), accent: swatch("sw-accent") };
+    })));
+    await page.keyboard.press("Escape");
+  }
+  const failures = paletteSwatchFailures({ tokens, groups }, PALETTE_PILL_GROUPS);
+  if (failures.length) throw new Error(`${engine}: ${assignment.route}: palette pills do not show the live palette they select\n  ${failures.join("\n  ")}`);
+}
+
+export function paletteSwatchFailures(observation, expectedGroups) {
+  const skins = Object.keys(observation.tokens);
+  const failures = [];
+  if (observation.groups.length !== expectedGroups) {
+    failures.push(`expected ${expectedGroups} palette pill group(s), the page renders ${observation.groups.length}`);
+  }
+  observation.groups.forEach((pills, index) => {
+    const label = `display panel ${index + 1}`;
+    const offered = pills.map((pill) => pill.skin);
+    if (offered.join(",") !== skins.join(",")) failures.push(`${label} offers ${offered.join(", ") || "no palette"}, the tokens define ${skins.join(", ")}`);
+    for (const pill of pills) {
+      const token = observation.tokens[pill.skin];
+      if (token === undefined) continue;
+      for (const role of ["canvas", "accent"]) {
+        if (!pill[role]) failures.push(`${label}: the ${pill.skin} pill carries no ${role} swatch`);
+        else if (pill[role] !== token[role]) failures.push(`${label}: the ${pill.skin} ${role} swatch is ${pill[role]}, the live token is ${token[role]}`);
+      }
+    }
+    for (const role of ["canvas", "accent"]) {
+      const distinct = new Set(pills.map((pill) => pill[role]));
+      if (pills.length > 1 && distinct.size === 1) failures.push(`${label}: every ${role} swatch is ${[...distinct][0]}, so the pills do not preview the palette they select`);
+    }
+  });
+  return failures;
 }
 
 async function assertDeepLink(page, engine, origin, base, route) {
@@ -386,6 +548,21 @@ async function assertDeepLink(page, engine, origin, base, route) {
   if (!await page.evaluate((id) => decodeURIComponent(location.hash.slice(1)) === id, targetId)) throw new Error(`${engine}: deep-link fragment did not persist`);
 }
 
+// A cited id usually sits in an altitude panel that is shut when the page
+// loads, so reach it the way a reader does: select that panel's tab and wait
+// for the tablist to report the change. A trigger outside any panel is already
+// where the reader can see it and needs nothing.
+export async function revealAltitudePanel(page, target) {
+  const panelId = await target.evaluate((element) => element.closest(".portal-altitude")?.id ?? null);
+  if (panelId === null) return null;
+  const tab = page.locator(`.portal-altitude-tabs [role="tab"][aria-controls="${panelId}"]`).first();
+  if (await tab.count() === 0) return null;
+  if (await tab.getAttribute("aria-selected") !== "true") await tab.click();
+  await page.locator(`.portal-altitude-tabs [role="tab"][aria-controls="${panelId}"][aria-selected="true"]`).first().waitFor({ state: "attached" });
+  await page.locator(`#${panelId}`).waitFor({ state: "visible" });
+  return panelId;
+}
+
 async function assertStrictIdPreview(page, engine, origin, config, route) {
   if (route === null) return "strict-id-preview-not-applicable";
   const sourceUrl = routeUrl(origin, config.base, route);
@@ -395,6 +572,7 @@ async function assertStrictIdPreview(page, engine, origin, config, route) {
   const href = await trigger.getAttribute("href");
   if (!href || new URL(href, page.url()).origin !== origin) throw new Error(`${engine}: strict-ID trigger is not an ordinary local link`);
   const targetUrl = new URL(href, page.url()).toString();
+  await revealAltitudePanel(page, trigger);
   await trigger.hover();
   await tooltip.waitFor({ state: "visible" });
   await focusTargetByKeyboard(page, trigger, engine);
@@ -404,6 +582,7 @@ async function assertStrictIdPreview(page, engine, origin, config, route) {
   await visit(page, sourceUrl);
   const touchTrigger = page.locator(".portal-id-preview > a").first();
   const touchTooltip = touchTrigger.locator("xpath=following-sibling::*[@role='tooltip']");
+  await revealAltitudePanel(page, touchTrigger);
   await focusTargetByKeyboard(page, touchTrigger, engine);
   await page.keyboard.press("Escape");
   await touchTooltip.waitFor({ state: "hidden" });
@@ -431,26 +610,132 @@ async function assertSourceLink(page, engine, origin, config, generated) {
   if (!links.includes(expected)) throw new Error(`${engine}: committed source link is absent or provider-incompatible`);
 }
 
+// The page owns its appearance and its skin. The Display panel stores
+// `starlight-theme` and `cf-portal-skin` and reapplies every attribute from
+// that stored state, and Starlight's own pre-paint script reads the same
+// preference back, so writing `data-theme` on its own leaves the attribute and
+// the preference disagreeing and lets the next apply undo it. Set the state the
+// way a reader sets it, and where a page does not expose the control write the
+// same preferences the control writes.
+export async function applyDisplayState(page, skin, mode) {
+  const skinPill = page.locator(`[data-testid="skin-${skin}"]`).first();
+  const appearancePill = page.locator(`[data-testid="appearance-${mode}"]`).first();
+  if (await skinPill.count() > 0 && await appearancePill.count() > 0) {
+    if (await page.locator('[data-testid="portal-display-panel"]').first().isHidden()) {
+      await page.locator('[data-testid="portal-display-btn"]').first().click();
+    }
+    await skinPill.click();
+    await appearancePill.click();
+    await page.keyboard.press("Escape");
+    return "control";
+  }
+  await page.evaluate(({ skin, mode }) => {
+    try {
+      localStorage.setItem("starlight-theme", mode);
+      localStorage.setItem("cf-portal-skin", skin);
+    } catch {
+      /* storage unavailable: the attributes still apply for this page view */
+    }
+    document.documentElement.dataset.cfpSkin = skin;
+    document.documentElement.dataset.theme = mode;
+  }, { skin, mode });
+  return "preference";
+}
+
+// The muted text token is read once per skin and mode inside a single task,
+// with nothing painted in between, so the wait below has a value to wait for
+// that comes from the page rather than from a second copy of the token table.
+async function appearanceTokenReference(page, engine) {
+  const reference = await page.evaluate((skins) => {
+    const root = document.documentElement;
+    const before = { skin: root.dataset.cfpSkin, theme: root.dataset.theme };
+    const style = getComputedStyle(root);
+    const table = {};
+    for (const skin of skins) {
+      table[skin] = {};
+      for (const mode of ["light", "dark"]) {
+        root.dataset.cfpSkin = skin;
+        root.dataset.theme = mode;
+        table[skin][mode] = style.getPropertyValue("--cf-text-muted").trim();
+      }
+    }
+    if (before.skin === undefined) delete root.dataset.cfpSkin;
+    else root.dataset.cfpSkin = before.skin;
+    if (before.theme === undefined) delete root.dataset.theme;
+    else root.dataset.theme = before.theme;
+    return table;
+  }, PORTAL_SKINS);
+  for (const skin of PORTAL_SKINS) {
+    for (const mode of ["light", "dark"]) {
+      if (!reference[skin][mode]) throw new Error(`${engine}: ${skin}/${mode} declares no muted text token to settle on`);
+    }
+  }
+  return reference;
+}
+
+// No sleep: a scan starts only once the root has resolved the mode it was
+// asked for, measured on a token that mode owns.
+async function settleDisplayState(page, engine, skin, mode, expectedMuted) {
+  try {
+    await page.waitForFunction(({ skin, mode, expectedMuted }) => {
+      const root = document.documentElement;
+      if (root.dataset.cfpSkin !== skin || root.dataset.theme !== mode) return false;
+      let stored = mode;
+      try {
+        stored = localStorage.getItem("starlight-theme");
+      } catch {
+        /* storage unavailable: the attributes above carry the state instead */
+      }
+      if (stored !== mode) return false;
+      return getComputedStyle(root).getPropertyValue("--cf-text-muted").trim() === expectedMuted;
+    }, { skin, mode, expectedMuted });
+  } catch {
+    const observed = await page.evaluate(() => {
+      const root = document.documentElement;
+      let stored = "unavailable";
+      try {
+        stored = localStorage.getItem("starlight-theme");
+      } catch {
+        /* storage unavailable: reported as such */
+      }
+      return { skin: root.dataset.cfpSkin, theme: root.dataset.theme, stored, muted: getComputedStyle(root).getPropertyValue("--cf-text-muted").trim() };
+    });
+    throw new Error(`${engine}: ${skin}/${mode} did not settle before the scan: expected muted ${expectedMuted}, observed ${JSON.stringify(observed)}`);
+  }
+}
+
 async function assertThemeMatrix(page, engine, output) {
   await page.setViewportSize({ width: 1440, height: 900 });
+  const reference = await appearanceTokenReference(page, engine);
   const accents = { light: new Set(), dark: new Set() };
-  for (const skin of ["instrument", "editorial", "ink"]) {
+  for (const skin of PORTAL_SKINS) {
     for (const mode of ["light", "dark"]) {
-      const tokens = await page.evaluate(async ({ skin, mode }) => {
-        document.documentElement.dataset.cfpSkin = skin;
-        document.documentElement.dataset.theme = mode;
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await applyDisplayState(page, skin, mode);
+      await settleDisplayState(page, engine, skin, mode, reference[skin][mode]);
+      const tokens = await page.evaluate(() => {
         const style = getComputedStyle(document.documentElement);
         return { font: style.getPropertyValue("--cf-font-sans").trim(), accent: style.getPropertyValue("--cf-accent").trim() };
-      }, { skin, mode });
+      });
       if (!tokens.font || !tokens.accent) throw new Error(`${engine}: ${skin}/${mode} utility tokens are absent`);
       accents[mode].add(tokens.accent);
       await assertA11y(page, engine, `${skin}/${mode}`);
       await page.screenshot({ path: path.join(output, `${engine}-${skin}-${mode}.png`), fullPage: true });
     }
   }
-  if (accents.light.size !== 3 || accents.dark.size !== 3) throw new Error(`${engine}: the three utility skins do not produce three distinct palettes per mode`);
-  await page.evaluate((skin) => { document.documentElement.dataset.cfpSkin = skin; document.documentElement.dataset.theme = "light"; }, await page.evaluate(() => document.documentElement.dataset.portalTheme === "folio" ? "ink" : "instrument"));
+  if (accents.light.size !== PORTAL_SKINS.length || accents.dark.size !== PORTAL_SKINS.length) throw new Error(`${engine}: the ${PORTAL_SKINS.length} utility skins do not produce a distinct palette each per mode`);
+  // The matrix hands the page back the way a reader left it: the display keys
+  // return to the configured default and the light appearance the checks before
+  // this one chose is restored, both in storage and on the root.
+  await page.evaluate(() => {
+    try {
+      for (const key of ["cf-portal-skin", "cf-portal-typeface", "cf-portal-scale"]) localStorage.removeItem(key);
+      localStorage.setItem("starlight-theme", "light");
+    } catch {
+      /* storage unavailable: the reload below restores the configured defaults */
+    }
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  if (await page.locator("html").getAttribute("data-theme") !== "light") throw new Error(`${engine}: the theme matrix did not restore the light appearance a reader had chosen`);
 }
 
 async function assertKeyboardPath(page, engine) {
@@ -512,10 +797,9 @@ export async function discoverSurfaceRoutes(pages, portalRoot = root) {
   let remaining = 256 * 1024 * 1024;
   let deepLink = null;
   let strictPreview = null;
-  // Quality is not a hero-page property: every altitude page is exercised, so
-  // the whole corpus is scanned rather than stopping at the first match.
-  const altitudeTabs = [];
-  const layerSamples = new Map();
+  // The composition gate visits every eligible source in its own pass, so this
+  // scan only selects the one page each single-surface check needs. Every page
+  // is still read here, because its committed output hash is verified.
   for (const page of active) {
     const relative = safeRelative(page.output_markdown, "generated page output");
     const maximum = Math.min(8 * 1024 * 1024, remaining);
@@ -525,12 +809,8 @@ export async function discoverSurfaceRoutes(pages, portalRoot = root) {
     const text = bytes.toString("utf8");
     if (deepLink === null && /^#{2,3}\s+\S/m.test(text)) deepLink = page.route;
     if (strictPreview === null && text.includes("portal-id-preview")) strictPreview = page.route;
-    if (text.includes('class="portal-altitude-tabs"')) altitudeTabs.push(page.route);
-    const layer = page.route.split("/")[0];
-    if (!layerSamples.has(layer)) layerSamples.set(layer, [page.route]);
-    else layerSamples.get(layer)[1] = page.route;
   }
-  return { deepLink, strictPreview, altitudeTabs, layerSamples: Object.fromEntries(layerSamples) };
+  return { deepLink, strictPreview };
 }
 
 export function assertArtifactClaims(claimed, actual, phase) {
