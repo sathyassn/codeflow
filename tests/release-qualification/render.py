@@ -330,7 +330,7 @@ def refresh_evidence(evidence, out, args, counts, verdict_line, rows) -> None:
         "",
         "## CLI qualification on sample projects",
         "",
-        f"The candidate at `{args.commit}` was built and qualified against generated "
+        f"The candidate at `{args.commit}` was built and exercised against generated "
         "greenfield (Rust and Node) and brownfield sample repositories at the minimal, "
         "standard and full tiers. The installed binary's SHA-256 was "
         f"`{args.binary_sha}` and it reported `{args.binary_version}`.",

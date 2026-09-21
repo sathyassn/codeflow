@@ -40,11 +40,13 @@ REPO="$DEFAULT_REPO"
 BINARY=""
 OUT=""
 EVIDENCE=""
-WORK=""
+WORK_PARENT_OPT=""
 TARGET_DIR=""
 NODE_BIN=""
 HERDR_WORKSPACE="w2"
-BLOCKED_ON=""
+BLOCKED_ON="the delegate canary and the pipeline run, which need a live Claude \
+session, and the positive present resolve, which only the browser review \
+surface can produce"
 NO_SESSION_REASON=""
 NO_SESSION_OWNER=""
 SKIP_CANARY=0
@@ -57,7 +59,7 @@ while [ $# -gt 0 ]; do
     --binary) BINARY=$2; shift 2 ;;
     --out) OUT=$2; shift 2 ;;
     --evidence) EVIDENCE=$2; shift 2 ;;
-    --work-dir) WORK=$2; shift 2 ;;
+    --work-dir) WORK_PARENT_OPT=$2; shift 2 ;;
     --target-dir) TARGET_DIR=$2; shift 2 ;;
     --node) NODE_BIN=$2; shift 2 ;;
     --herdr-workspace) HERDR_WORKSPACE=$2; shift 2 ;;
@@ -76,21 +78,19 @@ REPO=$(CDPATH= cd -- "$REPO" && pwd)
 COMMIT=$(git -C "$REPO" rev-parse "$COMMIT")
 [ -n "$OUT" ] || OUT="$REPO/docs/verification/releases/v3.0.0-cli-qualification.md"
 [ -n "$EVIDENCE" ] || EVIDENCE="$REPO/docs/verification/releases/v3.0.0.md"
-# --work-dir names a parent the run may write inside, never a directory the run
-# may delete. The run creates one child it alone owns, and teardown removes only
-# that child, so a caller's existing directory and its contents always survive.
-WORK_PARENT=${WORK:-${TMPDIR:-/tmp}}
-mkdir -p "$WORK_PARENT"
-WORK_PARENT=$(CDPATH= cd -- "$WORK_PARENT" && pwd)
-WORK="$WORK_PARENT/cfqual-$$-$(date -u '+%Y%m%dT%H%M%SZ')"
-mkdir "$WORK" || { printf 'could not create an owned work directory at %s\n' "$WORK" >&2; exit 1; }
-WORK_OWNED=1
-
 # ---------------------------------------------------------------------------
-# Teardown
+# Cleanup state and handler, armed before anything is allocated
+#
+# Everything the run may have to release is declared and the handler installed
+# before the first resource exists, so a failure at any point after this line,
+# including during the build or the render, still finalizes. Nothing parsed
+# from the command line is reset here.
 # ---------------------------------------------------------------------------
 
-TEARDOWN_LOG="$WORK/teardown.log"
+WORK=""
+WORK_PARENT=""
+WORK_OWNED=0
+TEARDOWN_LOG=""
 HERDR_TAB=""
 HERDR_PANE=""
 HERDR_AGENT=""
@@ -98,8 +98,9 @@ PRESENT_HOME=""
 PRESENT_REPO=""
 BUILD_TREE=""
 BUILD_TREE_CREATED=0
-BINARY=""
 CLEANUP_FAILURES=0
+TORN_DOWN=0
+WORK_REMOVED=0
 # The rendered record carries this line until the work directory's removal has
 # actually been verified, after which it is replaced in place.
 WORK_REMOVAL_MARK="work directory removal: not yet attempted"
@@ -111,8 +112,31 @@ cleanup_failed() {
   printf 'CLEANUP FAILURE: %s\n' "$1"
 }
 
+# The session ids this run owns, listed from inside the repository that opened
+# them, one per line. A listing that cannot be read is a cleanup failure, not
+# an empty result: silence must never be reported as proof that none remain.
+PRESENT_LIST_OK=0
+present_session_ids() {
+  PRESENT_LIST_OK=0
+  _raw=$( (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present list 2>/dev/null) ) || return 1
+  printf '%s' "$_raw" | python3 -c 'import json,sys
+raw = sys.stdin.read()
+try:
+    sessions = json.loads(raw)
+    if not isinstance(sessions, list):
+        raise ValueError("not a list")
+    for s in sessions:
+        print(s["id"])
+except Exception:
+    sys.exit(3)' || return 1
+  PRESENT_LIST_OK=1
+  return 0
+}
+
 teardown() {
-  : >"$TEARDOWN_LOG"
+  [ "$TORN_DOWN" = 0 ] || return 0
+  TORN_DOWN=1
+  if [ -n "$TEARDOWN_LOG" ]; then : >"$TEARDOWN_LOG"; fi
   {
     printf 'teardown at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
 
@@ -121,15 +145,22 @@ teardown() {
     # sample repository that opened them, not from the run root.
     if [ -n "$PRESENT_HOME" ] && [ -d "$PRESENT_HOME" ] && [ -d "$PRESENT_REPO" ] &&
       [ -n "$BINARY" ] && [ -x "$BINARY" ]; then
-      for _s in $(present_session_ids); do
-        (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present close "$_s" 2>&1) || true
-        (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present clear --older-than 0d "$_s" 2>&1) || true
-      done
-      _left=$(present_session_ids | tr '\n' ' ' | sed 's/ *$//')
-      if [ -n "$_left" ]; then
-        cleanup_failed "presentation session(s) still listed: $_left"
+      _ids=$(present_session_ids)
+      if [ "$PRESENT_LIST_OK" != 1 ]; then
+        cleanup_failed "presentation sessions could not be listed in $PRESENT_REPO; any still running were not released"
       else
-        printf 'presentation sessions: none listed by `present list` in %s\n' "$PRESENT_REPO"
+        for _s in $_ids; do
+          (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present close "$_s" 2>&1) || true
+          (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present clear --older-than 0d "$_s" 2>&1) || true
+        done
+        _left=$(present_session_ids | tr '\n' ' ' | sed 's/ *$//')
+        if [ "$PRESENT_LIST_OK" != 1 ]; then
+          cleanup_failed "presentation sessions could not be re-listed after closing them"
+        elif [ -n "$_left" ]; then
+          cleanup_failed "presentation session(s) still listed: $_left"
+        else
+          printf 'presentation sessions: `present list` read cleanly in %s and returned none\n' "$PRESENT_REPO"
+        fi
       fi
     else
       printf 'presentation sessions: none opened by this run\n'
@@ -165,41 +196,36 @@ teardown() {
     # the caller named is never touched.
     if [ "$KEEP" = 1 ]; then
       printf 'work directory kept by --keep: %s\n' "$WORK"
-    else
+    elif [ "$WORK_OWNED" = 1 ]; then
       printf '%s\n' "$WORK_REMOVAL_MARK"
+    else
+      printf 'work directory: never created\n'
     fi
-    printf 'parent named by --work-dir, never removed: %s\n' "$WORK_PARENT"
+    printf 'parent named by --work-dir, never written to except the run child: %s\n' \
+      "${WORK_PARENT:-none resolved}"
 
     if [ "$CLEANUP_FAILURES" = 0 ]; then
       printf 'resources released so far: every one this run created\n'
     else
       printf 'teardown incomplete: %s resource(s) above were not released\n' "$CLEANUP_FAILURES"
     fi
-  } >>"$TEARDOWN_LOG" 2>&1
-  TORN_DOWN=1
-  cat "$TEARDOWN_LOG" >&2
-}
-
-# The session ids this run owns, listed from inside the repository that opened
-# them. Printed one per line, empty when there are none.
-present_session_ids() {
-  (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present list 2>/dev/null) |
-    python3 -c 'import json,sys
-try:
-    for s in json.load(sys.stdin):
-        print(s["id"])
-except Exception:
-    pass' 2>/dev/null
+  } >>"${TEARDOWN_LOG:-/dev/stderr}" 2>&1
+  [ -n "$TEARDOWN_LOG" ] && [ -f "$TEARDOWN_LOG" ] && cat "$TEARDOWN_LOG" >&2
+  return 0
 }
 
 # remove_work - delete only the child this run created, prove it is gone, and
 # replace the pending line in the rendered record with the verified outcome.
-# It runs after rendering, because the record is rendered out of this directory.
+# It runs after rendering, because the record is rendered out of this directory,
+# and again from the exit handler for any path that never reached the render.
 remove_work() {
+  [ "$WORK_REMOVED" = 0 ] || return 0
   if [ "$KEEP" = 1 ]; then
+    WORK_REMOVED=1
     return 0
   fi
-  [ "${WORK_OWNED:-0}" = 1 ] || return 0
+  [ "$WORK_OWNED" = 1 ] || { WORK_REMOVED=1; return 0; }
+  WORK_REMOVED=1
   rm -rf "$WORK" 2>/dev/null || true
   if [ -d "$WORK" ]; then
     cleanup_failed "work directory still present: $WORK"
@@ -207,27 +233,52 @@ remove_work() {
   else
     _line="work directory removed and verified gone: $WORK"
   fi
-  python3 -c 'import io,sys
+  if [ -f "$OUT" ]; then
+    python3 -c 'import io,sys
 path, mark, line = sys.argv[1], sys.argv[2], sys.argv[3]
 text = io.open(path, encoding="utf-8").read()
 io.open(path, "w", encoding="utf-8").write(text.replace(mark, line))' \
-    "$OUT" "$WORK_REMOVAL_MARK" "$_line"
+      "$OUT" "$WORK_REMOVAL_MARK" "$_line" 2>/dev/null || true
+  fi
   printf '%s\n' "$_line" >&2
 }
 
-# An abnormal exit still tears down, and says where the evidence is instead of
-# writing a matrix that would describe an incomplete run.
-TORN_DOWN=0
+# Every exit path finalizes every owned resource: a build failure, a render
+# failure, a signal, or an ordinary finish. Both steps are idempotent, so the
+# normal path may call them itself and the handler then does nothing.
+finalize() {
+  teardown
+  remove_work
+}
+
 on_exit() {
   _exit=$?
   if [ "$TORN_DOWN" = 0 ]; then
-    printf '\nqualification stopped early (exit %s); transcript: %s\n' "$_exit" "$TRANSCRIPT" >&2
-    teardown
+    printf '\nqualification stopped early (exit %s); transcript: %s\n' \
+      "$_exit" "${TRANSCRIPT:-not yet created}" >&2
   fi
+  finalize
 }
 trap on_exit EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
+
+# ---------------------------------------------------------------------------
+# Allocation, after the handler above is armed
+#
+# --work-dir names a parent the run may write inside, never a directory the run
+# may delete. The run creates one child it alone owns with exclusive mkdir, and
+# writes every file it needs inside that child, so no caller-owned file or
+# symlink target in the parent is ever read, written or removed.
+# ---------------------------------------------------------------------------
+
+WORK_PARENT=${WORK_PARENT_OPT:-${TMPDIR:-/tmp}}
+mkdir -p "$WORK_PARENT"
+WORK_PARENT=$(CDPATH= cd -- "$WORK_PARENT" && pwd)
+WORK="$WORK_PARENT/cfqual-$$-$(date -u '+%Y%m%dT%H%M%SZ')"
+mkdir "$WORK" || { printf 'could not create an owned work directory at %s\n' "$WORK" >&2; exit 1; }
+WORK_OWNED=1
+TEARDOWN_LOG="$WORK/teardown.log"
 
 RESULTS="$WORK/results.tsv"
 TRANSCRIPT="$WORK/transcript.log"
@@ -256,8 +307,12 @@ printf 'codeflow qualification\n  repo:    %s\n  commit:  %s\n  work:    %s\n\n'
 # Build the candidate binary from the named commit
 # ---------------------------------------------------------------------------
 
+# With --binary the supplied executable is the one hashed and invoked, and no
+# Cargo build runs; without it the candidate is built from its own checkout.
 BUILD_TREE="$WORK/candidate"
-if [ -z "$BINARY" ]; then
+if [ -n "$BINARY" ]; then
+  printf 'using the supplied binary; no build will run\n' >&2
+elif [ -z "$BINARY" ]; then
   [ -n "$TARGET_DIR" ] || TARGET_DIR="$WORK/cargo-target"
   mkdir -p "$TARGET_DIR"
   printf 'building %s (this takes a few minutes)\n' "$COMMIT" >&2
@@ -530,7 +585,13 @@ qualify_three_way() {
   _conflict_status=$CF_STATUS
   _conflict_out=$CF_OUT
   if cmp -s "$_live" "$WORK/$SAMPLE-$TIER.conflict-local"; then _untouched=yes; else _untouched=no; fi
-  if [ -f "$DIR/$_dest.new" ]; then _sidecar=written; else _sidecar=absent; fi
+  if [ ! -f "$DIR/$_dest.new" ]; then
+    _sidecar=absent
+  elif cmp -s "$DIR/$_dest.new" "$_shipped"; then
+    _sidecar="holds the shipped bytes"
+  else
+    _sidecar="present but its bytes are not the shipped version"
+  fi
   {
     printf 'base, the same aged version:\n'; cat "$WORK/$SAMPLE-$TIER.conflict-base"
     printf '\nlocal, which rewrites the very line the new version restores:\n'
@@ -539,7 +600,8 @@ qualify_three_way() {
     printf '\nsidecar %s\n' "$_sidecar"
     printf '\nlocal file after update, unchanged=%s\n' "$_untouched"
   } >"$DIFFS/$SAMPLE-$TIER-update-conflict.diff"
-  if [ "$_conflict_status" = 2 ] && [ "$_untouched" = yes ] && [ "$_sidecar" = written ]; then
+  if [ "$_conflict_status" = 2 ] && [ "$_untouched" = yes ] &&
+    [ "$_sidecar" = "holds the shipped bytes" ]; then
     _s=$RESULT_PASSED
   else
     _s=$RESULT_FAILED
@@ -552,10 +614,12 @@ qualify_three_way() {
   # that documented flag while it is being used for real.
   rm -f "$DIR/$_dest.new"
   cf update --force
-  if cmp -s "$_live" "$_shipped"; then _s=$RESULT_PASSED; else _s=$RESULT_FAILED; fi
+  _force_status=$CF_STATUS
+  if cmp -s "$_live" "$_shipped"; then _restored=yes; else _restored=no; fi
+  if [ "$_force_status" = 0 ] && [ "$_restored" = yes ]; then _s=$RESULT_PASSED; else _s=$RESULT_FAILED; fi
   record "$SAMPLE" "$TIER" "update --force" "replace a user-modified managed file" \
     "$_s" "exit 0 and the shipped bytes back on disk" \
-    "exit $CF_STATUS, restored to the shipped bytes=$(cmp -s "$_live" "$_shipped" && echo yes || echo no)"
+    "exit $_force_status, restored to the shipped bytes=$_restored"
 }
 
 qualify_read_only() {
@@ -774,17 +838,27 @@ qualify_claude_hooks() {
   # status alone proves nothing. The ledger lives under the git common
   # directory, not under .codeflow, and the command names the file it wrote.
   _ledger_dir="$(git -C "$DIR" rev-parse --path-format=absolute --git-common-dir)/codeflow/ledger"
-  cf_stdin '{"session_id":"qualification-run","reason":"clear","hook_event_name":"SessionEnd"}' hook session-summary
-  _ledger_files=$(find "$_ledger_dir" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')
-  if [ "$CF_STATUS" = 0 ] && printf '%s' "$CF_OUT" | grep -q 'recorded to' &&
-    [ "${_ledger_files:-0}" -ge 1 ]; then
+  # A ledger file count proves nothing about this submission, and the command
+  # exits 0 whether it recorded or only warned. The check submits a session id
+  # unique to this sample and tier, then reads that id back out of the file the
+  # command says it wrote.
+  _sid="qualification-$SAMPLE-$TIER-$$"
+  _entries_before=$(grep -rlF "$_sid" "$_ledger_dir" 2>/dev/null | wc -l | tr -d ' ')
+  cf_stdin "{\"session_id\":\"$_sid\",\"reason\":\"clear\",\"hook_event_name\":\"SessionEnd\"}" hook session-summary
+  _recorded_path=$(printf '%s' "$CF_OUT" | sed -n 's/.*recorded to //p' | head -1)
+  _entry_found=no
+  if [ -n "$_recorded_path" ] && [ -f "$_recorded_path" ] &&
+    grep -qF "$_sid" "$_recorded_path" 2>/dev/null; then
+    _entry_found=yes
+  fi
+  if [ "$CF_STATUS" = 0 ] && [ "$_entries_before" = 0 ] && [ "$_entry_found" = yes ]; then
     _s=$RESULT_PASSED
   else
     _s=$RESULT_FAILED
   fi
   record "$SAMPLE" "$TIER" "hook session-summary" "append the session record to the ledger" \
-    "$_s" "exit 0, the command names the file it recorded, and the ledger holds at least one entry" \
-    "exit $CF_STATUS, $_ledger_files ledger file(s), $(printf '%s' "$CF_OUT" | head -1 | cut -c1-140)"
+    "$_s" "exit 0 and this submission's own session id read back from the file the command names" \
+    "exit $CF_STATUS, entries before $_entries_before, id found in the named file=$_entry_found, $(printf '%s' "$CF_OUT" | head -1 | cut -c1-110)"
 }
 
 qualify_git_hooks() {
@@ -1011,6 +1085,21 @@ qualify_present() {
   # teardown that closes these sessions must run from the same repository.
   PRESENT_REPO="$DIR"
 
+  # The session's current revision, or -1 when it cannot be read.
+  present_revision() {
+    (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present list 2>/dev/null) |
+      python3 -c 'import json,sys
+try:
+    for s in json.load(sys.stdin):
+        if s["id"] == sys.argv[1]:
+            print(s["current_revision"])
+            break
+    else:
+        print(-1)
+except Exception:
+    print(-1)' "$1" 2>/dev/null || printf '%s' -1
+  }
+
   present_run() {
     CF_OUT=$(HOME="$PRESENT_HOME" "$BINARY" present "$@" 2>&1 </dev/null) && CF_STATUS=0 || CF_STATUS=$?
     printf '\n$ codeflow present %s\n[exit %s]\n%s\n' "$*" "$CF_STATUS" "$CF_OUT" >>"$TRANSCRIPT"
@@ -1052,9 +1141,21 @@ print(sessions[0]["id"] if sessions else "")' 2>/dev/null)
     "$(status_for_match 0 "$_sid")" \
     "exit 0, the session endpoint and profile printed and no browser launched" "$(observed_exit)"
 
+  # A new revision, not merely exit 0: the session's current revision is read
+  # before and after, and the update has to move it.
+  _rev_before=$(present_revision "$_sid")
   present_run update "$_sid" "$_doc"
+  _update_status=$CF_STATUS
+  _rev_after=$(present_revision "$_sid")
+  if [ "$_update_status" = 0 ] && [ "$_rev_before" -ge 0 ] 2>/dev/null &&
+    [ "$_rev_after" -gt "$_rev_before" ] 2>/dev/null; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
   record "$SAMPLE" "$TIER" "present update" "append a validated immutable revision" \
-    "$(status_for 0)" "exit 0 and a new revision on the active session" "$(observed_exit)"
+    "$_s" "exit 0 and the session's current revision moved forward" \
+    "exit $_update_status, revision $_rev_before then $_rev_after"
 
   _export="$WORK/$SAMPLE-$TIER-present.html"
   present_run export "$_sid" --out "$_export"
@@ -1307,11 +1408,12 @@ Run the pipeline workflow that this repository already has at
 Arguments: task "add a subtract function beside add, with a unit test", criteria
 ["subtract(4, 1) returns 3", "the existing add test still passes"], stages
 ["build", "verify"]. Work on the branch feat/pipeline-canary; never commit to
-main and never push. When the workflow ends, write one line to
-$PIPELINE_RESULT in the repository root, exactly:
-pipeline terminal state: <the workflow's terminal state>
-If the workflow cannot run at all, write instead:
-pipeline terminal state: unavailable - <the exact reason>
+main and never push. When the workflow returns, write the object it returned,
+verbatim, as a single line of JSON to $PIPELINE_RESULT in the repository root.
+That object is the workflow's own result and carries status, attempts and trail.
+If the workflow cannot run at all, write instead, on one line:
+{"status": "unavailable", "reason": "<the exact reason>"}
+Do not write anything else to that file, and do not hand-write a trail.
 Then stop.
 PROMPT
   printf '%s' "$(cat "$WORK/pipeline-prompt.raw")" >"$WORK/pipeline-prompt.txt"
@@ -1343,45 +1445,72 @@ PROMPT
   # one, and the work it was asked for to be independently verifiable here: the
   # subtract function present with its test, and the sample's own gate green.
   # A workflow that ran and failed is a failure, not an absent capability.
-  _ran=no
-  _succeeded=no
-  case $_state_line in
-    "") _ran=no ;;
-    *unavailable*) _ran=no ;;
-    *) _ran=yes ;;
-  esac
-  case $_state_line in
-    *completed* | *succeeded* | *success* | *passed*) _succeeded=yes ;;
-    *) _succeeded=no ;;
-  esac
-  _subtract=no
-  if grep -rqs 'fn subtract\|function subtract\|const subtract' "$DIR/src" 2>/dev/null; then
-    _subtract=yes
+  # The result file must be the object the workflow itself returns, so its
+  # shape is read rather than its prose. `status` must be exactly `complete`,
+  # the one successful state the driver emits, and `trail` must be the per
+  # stage record the driver builds; only a real run produces both. What the
+  # workflow did is then checked against behaviour this harness verifies for
+  # itself, never against a test the peer wrote.
+  _shape=$(printf '%s' "${_state_line:-}" | python3 -c 'import json,sys
+raw = sys.stdin.read().strip()
+if not raw:
+    print("absent"); raise SystemExit
+try:
+    doc = json.loads(raw)
+except Exception:
+    print("unparsable"); raise SystemExit
+if not isinstance(doc, dict):
+    print("not-an-object"); raise SystemExit
+status = doc.get("status")
+if status == "unavailable":
+    print("unavailable"); raise SystemExit
+trail = doc.get("trail")
+if status != "complete":
+    print("status-" + str(status)); raise SystemExit
+if not isinstance(trail, list) or not trail:
+    print("no-trail"); raise SystemExit
+names = " ".join(str(e.get("stage") or e.get("name") or "") for e in trail if isinstance(e, dict))
+if "build" not in names or "verify" not in names:
+    print("trail-missing-stages"); raise SystemExit
+print("complete")' 2>/dev/null || printf 'unparsable')
+
+  # Behaviour, verified here: a test this harness writes, compiled and run by
+  # the sample's own toolchain. A subtract that returns the wrong value fails
+  # this even if the peer shipped a test that agrees with it.
+  _behaviour=not-checked
+  if [ -f "$DIR/Cargo.toml" ]; then
+    mkdir -p "$DIR/tests"
+    cat >"$DIR/tests/qualification_subtract.rs" <<'PROBE'
+//! Written by the release qualification, not by the session under test.
+#[test]
+fn subtract_four_minus_one_is_three() {
+    assert_eq!(qualification_sample::subtract(4, 1), 3);
+}
+PROBE
+    sh_run "cd '$DIR' && cargo test --test qualification_subtract 2>&1 | tail -5"
+    if [ "$CF_STATUS" = 0 ]; then _behaviour=passed; else _behaviour="failed: $(oneline "$CF_OUT")"; fi
+    rm -f "$DIR/tests/qualification_subtract.rs"
   fi
-  _subtract_test=no
-  if grep -rqs 'subtract' "$DIR/src" 2>/dev/null &&
-    grep -rqs 'test\|assert' "$DIR/src" 2>/dev/null; then
-    _subtract_test=yes
-  fi
+
   cf test --mode full --strict
   _gate=$CF_STATUS
-  _observed="turn exit $_pipeline_terminal; result line $(oneline "${_state_line:-none written}"); subtract=$_subtract; test=$_subtract_test; sample gate exit $_gate"
+  _observed="turn exit $_pipeline_terminal; workflow result $_shape; independent subtract(4, 1) test $_behaviour; sample gate exit $_gate"
 
-  if [ "$_ran" = no ]; then
-    # Nothing executed, so the capability was not exercised at all.
+  if [ "$_shape" = unavailable ] || { [ "$_shape" = absent ] && [ "$_pipeline_terminal" != 0 ]; }; then
+    # The workflow never ran, so the capability was not exercised at all.
     pipeline_unavailable \
       "$_observed; wait output: $(oneline "$_pipeline_out")" \
       "Claude Code Workflow runtime in the canary session"
-  elif [ "$_pipeline_terminal" = 0 ] && [ "$_succeeded" = yes ] &&
-    [ "$_subtract" = yes ] && [ "$_subtract_test" = yes ] && [ "$_gate" = 0 ]; then
+  elif [ "$_pipeline_terminal" = 0 ] && [ "$_shape" = complete ] &&
+    [ "$_behaviour" = passed ] && [ "$_gate" = 0 ]; then
     record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
       "$RESULT_PASSED" \
-      "a terminal turn, a successful workflow state, and the requested subtract function and test verified here with the sample gate green" \
+      "a terminal turn, the workflow's own returned object at status complete with a build and verify trail, this harness's own subtract(4, 1) test green, and the sample gate green" \
       "$_observed"
   else
     record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
       "$RESULT_FAILED" \
-      "a terminal turn, a successful workflow state, and the requested subtract function and test verified here with the sample gate green" \
+      "a terminal turn, the workflow's own returned object at status complete with a build and verify trail, this harness's own subtract(4, 1) test green, and the sample gate green" \
       "$_observed"
   fi
 }
@@ -1522,18 +1651,11 @@ qualify_boundary
 
 END_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
-# The verdict check outlives the work directory, so the results are copied to a
-# second owned child that is removed with it.
-RESULTS_COPY="$WORK_PARENT/cfqual-results-$$.tsv"
-cp "$RESULTS" "$RESULTS_COPY"
-
-teardown
-
 # ---------------------------------------------------------------------------
 # Surfaces the matrix does not reach, reconciled against docs/cli.md
 # ---------------------------------------------------------------------------
 
-UNCOVERED="$WORK_PARENT/cfqual-uncovered-$$.tsv"
+UNCOVERED="$WORK/uncovered.tsv"
 cat >"$UNCOVERED" <<'UNCOV'
 codeflow init --force	overwrites existing files; the qualification proves the non-destructive default, and a destructive flag is not exercised against a sample it would damage
 codeflow test setup --add-target	appends one target interactively and needs a terminal, which this run does not host
@@ -1541,6 +1663,13 @@ codeflow remote protect --provider <other>	only github has an adapter; the dry-r
 codeflow present export --theme, --mode	the export row covers the default editorial theme in system mode; the other five combinations are TSK-007's presentation qualification
 codeflow help <command>	a listing of the same commands this matrix already exercises one by one
 UNCOV
+
+# The verdict the run exits with is computed from the results while they still
+# exist, so nothing has to outlive the directory that holds them and no file is
+# ever written beside the caller's own.
+REQUIRED_UNAVAILABLE=$(awk -F'\t' '$5=="unavailable" && $1!="release boundary"' "$RESULTS" | wc -l | tr -d ' ')
+
+teardown
 
 # ---------------------------------------------------------------------------
 # Render
@@ -1561,27 +1690,21 @@ python3 "$SCRIPT_DIR/render.py" \
   --blocked-on "$BLOCKED_ON" \
   --uncovered "$UNCOVERED"
 
-
 # The work directory is removed only now, after the record has been rendered
 # from it, and the record's teardown line is replaced by the verified outcome.
 remove_work
 
 printf '\nmatrix: %s\n' "$OUT" >&2
-_required_unavailable=$(awk -F'\t' '$5=="unavailable" && $1!="release boundary"' "$RESULTS_COPY" 2>/dev/null | wc -l | tr -d ' ')
 if [ "$FAILURES" -gt 0 ]; then
   printf 'qualification blocked: %s failed check(s)\n' "$FAILURES" >&2
-  rm -f "$RESULTS_COPY" "$UNCOVERED"
   exit 1
 fi
-if [ "${_required_unavailable:-0}" -gt 0 ]; then
-  printf 'qualification blocked: %s required check(s) did not run\n' "$_required_unavailable" >&2
-  rm -f "$RESULTS_COPY" "$UNCOVERED"
+if [ "${REQUIRED_UNAVAILABLE:-0}" -gt 0 ]; then
+  printf 'qualification blocked: %s required check(s) did not run\n' "$REQUIRED_UNAVAILABLE" >&2
   exit 1
 fi
 if [ "$CLEANUP_FAILURES" -gt 0 ]; then
   printf 'teardown incomplete: %s resource(s) were not released\n' "$CLEANUP_FAILURES" >&2
-  rm -f "$RESULTS_COPY" "$UNCOVERED"
   exit 1
 fi
-rm -f "$RESULTS_COPY" "$UNCOVERED"
 printf 'qualification: no failed checks and no required check unavailable\n' >&2
