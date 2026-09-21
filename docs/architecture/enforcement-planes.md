@@ -45,12 +45,17 @@ to arm.
 | Commit / non-ff merge commit on protected | pre-commit / pre-merge-commit | git-guard | yes | yes |
 | FF-merge, `reset --hard`, `branch -D` on protected | reference-transaction | git-guard | none | yes (result unpushable) |
 | Push / force-push / delete to protected | pre-push | git-guard | none | yes |
-| `gh pr merge` into a protected base | none (hooks can't see a PR) | git-guard | none | yes |
+| `gh pr merge` into a protected base | none (hooks cannot see a PR) | git-guard | none | yes |
 | Destructive command (`rm -rf /`, `mkfs`, fork bomb) | none | exec-guard (block) | none | none |
 | Privilege escalation (`sudo`, `LD_PRELOAD`) | none | exec-guard (warn) | none | none |
 | Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | none |
-| Host attribution injection (`Co-Authored-By`, "Generated with") | settings preset turns it off (`includeCoAuthoredBy`, `attribution`) | git-guard (PR body) | yes (commit-msg) | no |
+| Host attribution injection (`Co-Authored-By`, "Generated with") | commit-msg | git-guard (PR body) | yes | none |
 | Override-token laundering, `--no-verify` bypass | none | git-guard (structural) | none | none |
+
+Host attribution has a fourth brake that is not a plane: the shipped Claude
+settings preset turns the host's own injection off at the source
+(`includeCoAuthoredBy`, `attribution`), so the `commit-msg` hook catches only
+what a changed or absent preset lets through.
 
 Two facts the matrix encodes. **PR-content checks are git-guard/CI by design.**
 A git hook never sees `gh pr create` or `gh pr merge`, so attribution and emoji
@@ -144,7 +149,7 @@ lockfile ecosystem and the universal floor today, with the
 such as `cargo audit`, `pip-audit`, `govulncheck` or `semgrep` are an optional
 future extension.
 
-| Gate | Policy key | Behaviour |
+| Gate | Policy key | Behavior |
 |---|---|---|
 | security-review job | `security_review` | whole-job umbrella |
 | SCA sub-gate | `dep_audit` | the `osv-scanner` floor |

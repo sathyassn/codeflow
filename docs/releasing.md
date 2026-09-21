@@ -34,7 +34,7 @@ as history, never as current procedure.
 
 ## Architecture
 
-The figure's last stage expands into five, so the table runs to eight rows.
+The figure's last stage expands into four, so the table runs to eight rows.
 Each row has one actor and one gate, and nothing downstream can reinterpret an
 upstream decision.
 
@@ -133,7 +133,7 @@ npm run check:browser
 
 | Command | What it proves |
 |---|---|
-| `npm run supply-chain` | Refreshes the committed audit, CycloneDX SBOM, and license inventory |
+| `npm run supply-chain` | Refreshes the committed audit, CycloneDX software bill of materials (SBOM), and license inventory |
 | `npm run check` | Proves two clean builds are byte-identical and enforces the raw/Brotli/export budgets and integrity manifest |
 | `npm run check:browser` | Exercises the representative accessible renderer and mode/review behavior in a task-owned browser, including a dense bounded multi-diagram corpus and long-task envelope |
 
@@ -143,9 +143,10 @@ do not need Node.
 
 Repeat the runtime journey on every claimed native platform. Windows evidence
 must cover Unicode known-folder/profile paths, creation-time ACL hardening,
-read-only rejection of weakened owner/protected-DACL/trustee/inheritance state,
-trusted system tools, exact quoted command-line identity, file URLs, and
-process-tree cleanup. All browser and auxiliary tool routes must exclude
+read-only rejection of a weakened owner, protected discretionary access control
+list (DACL), trustee, or inheritance state, trusted system tools, exact quoted
+command-line identity, file URLs, and process-tree cleanup. All browser and
+auxiliary tool routes must exclude
 provider-secret environment canaries through the shared restricted environment. Linux/WSL2
 evidence must cover bounded no-follow `/proc` identity and process-group
 cleanup; macOS must prove its equivalent ownership boundary. Cross-compilation
@@ -253,7 +254,8 @@ decays:
 - The Claude settings/hook schema (`.claude/settings.json`) still matches
   what the installed Claude Code expects.
 - The host-neutral duo contract test passes, and both native interactive
-  lanes complete a scoped canary with the task's required MCP tools:
+  lanes complete a scoped canary with the task's required Model Context
+  Protocol (MCP) tools:
   Claude Code → Codex through the enabled official plugin or qualified native
   fallback, and Codex → Claude through task-scoped Herdr (tmux degraded)
   with the qualified tracked Stop/StopFailure lifecycle.
@@ -298,7 +300,7 @@ accepts the already-staged `3.0.0` pending section. After that version is
 published, the verified public release, not this bootstrap record, becomes the
 automatic baseline.
 
-### Versioning in a project that consumes codeflow
+### Versioning in a project that consumes CodeFlow
 
 CodeFlow gives your repository the substrate for clean releases. The commit-msg gate
 enforces Conventional Commits, so your history is SemVer-derivable. It does

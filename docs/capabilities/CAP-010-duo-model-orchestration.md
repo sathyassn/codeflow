@@ -57,9 +57,9 @@ the host a session starts in decides the transport, not the contract:
 | Grok Build | Reaches Codex through the official `codex` CLI and local app-server daemon, and Claude through Herdr plus schema-v2 |
 
 Grok-hosted lane canaries are in the repository at
-`docs/verification/grok-host-duo-canary-2026-09-07.md`, which this guide does
-not publish; they are not a qualified binding. The standing pair remains the quality floor. Extra
-catalog families (today Grok) are named when a routing-policy trigger fires
+`docs/verification/grok-host-duo-canary-2026-09-07.md`; they are not a qualified
+binding. The standing pair remains the quality floor. Extra catalog families
+(today Grok) are named when a routing-policy trigger fires
 and the family is available; unavailable is an evidenced limitation, never a
 silent third vote (ADR-0054). Primaries default to high, use proportionate
 worker effort when useful, and obtain same-family xhigh reasoning on trigger

@@ -26,7 +26,8 @@ caption: the harness (Claude Code, Codex, Grok Build, …) does the developing
 Each stage is a surface of the same binary, not a separate service. The
 consuming repo is its own first consumer, so `assets/` is as much the product
 as the code: the scaffold content this repository ships is the same content it
-runs under.
+runs under. Architecture below is the crate and dispatch structure; Technical is
+the per-area depth: engine internals, the shipped scaffold, and the docs layer.
 
 ## Architecture
 
@@ -74,11 +75,11 @@ Core modules grouped by responsibility.
 | Scaffold | `scaffold/` | `init`, `update`, the manifest, 3-way merge, and the ownership classes below, sourced from the rust-embed asset provider |
 | Enforcement | `hooks/`, `security/`, `git/`, `delegate.rs`, `integrate.rs`, `remote.rs` | the `git-guard` and `exec-guard` PreToolUse handlers and the git-client hook stages, the dual-mode `delegate-turn` adapter (legacy `--result` record-and-signal plus the schema-v2 lifecycle backed by the transport-neutral `delegate.rs` state machine, ADR-0036), the secret scanner, git conflict detection and CI wait, the flock-guarded `integrate` primitive with its gate-context token, and the GitHub remote-protect adapter |
 | Records and knowledge | `models/`, `ledger/`, `workgraph/`, `validate/`, `capability.rs`, `recall.rs`, `registry.rs` | frontmatter models, the JSONL ledger, the work graph, `validate` and its `--docs` referential-integrity lint, including structural task dependency identity, reference and cycle checks, the capability registry parser, FTS5 recall, and the cross-repo registry |
-| Support | `doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`, `error.rs` | the doctor check table (15 checks: hooks, claude, codex, grok, config, permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, test-config), including bidirectional delegate readiness (Codex auth/MCP, Claude plugin/MCP, and tmux prerequisites; live interactive canaries remain outside the binary) and a sentinel-based consuming-project customization nudge, structured settings merge, generated status views, the test-gate engine, path flock, and pruned error types |
+| Support | `doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`, `error.rs` | the doctor check table (15 checks: hooks, claude, codex, grok, config, permissions, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, test-config), including bidirectional delegate readiness (Codex auth/MCP, Claude plugin/MCP, and tmux prerequisites; live interactive canaries remain outside the binary) and a sentinel-based consuming-project customization nudge, structured settings merge, generated status views, the test-gate engine, path flock, and pruned error types |
 
 The test gate evaluates file and aggregate coverage rules through one verdict.
 
-| Test-gate rule | Behaviour |
+| Test-gate rule | Behavior |
 |---|---|
 | `changed_files` rules | rejected at config load, because standalone test runs have no explicit comparison base (ADR-0021); silently evaluating an empty set is not a supported degradation |
 | child output | stdout and stderr are drained into bounded tail buffers, with truncation recorded on each target result |
@@ -95,7 +96,7 @@ waiter, byte-compatible with the ADR-0023 lanes. The schema-v2 lifecycle
 write-once JSON records in an owner-only state directory outside any Git
 worktree.
 
-| Lifecycle invariant | Behaviour |
+| Lifecycle invariant | Behavior |
 |---|---|
 | binding | `init` generates task-scoped Claude hook settings binding SessionStart/UserPromptSubmit/Stop/StopFailure back to the hook |
 | launch | the host, not the binary, launches the harness and delivers the armed prompt bytes |

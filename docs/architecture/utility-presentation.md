@@ -60,7 +60,7 @@ The runtime controls first, then the contract table that authenticates them.
 
 | Display control | Values | How it applies |
 |---|---|---|
-| Font | Archivo (instrument), Inter (editorial), IBM Plex Sans (ink) | root data attributes read before first paint, on both surfaces |
+| Font | Archivo (instrument), Inter (editorial), IBM Plex Sans (plex); the Palette row below selects the skin separately | root data attributes read before first paint, on both surfaces |
 | Size | Compact 0.94, Default 1.00, Large 1.12 | the type floors below are never crossed |
 | Palette | Neutral, Cool, Warm | each pill carries a canvas swatch and an accent swatch read from the live custom properties of the skin it selects, so the control shows the three families rather than naming them |
 | Appearance | Light, Dark, System | set through the same root data attributes on both surfaces |
