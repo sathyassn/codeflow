@@ -30,14 +30,11 @@ seat is never reduced to critiquing a plan the first already supplied.
 
 ## Architecture
 
-Both seats must plan independently before either sees the other's conclusions.
-That requirement, and what the host then does with the two plans, is the rest
-of this panel.
-
 Both seats independently research, analyze risks, and draft complete plans from
-the same immutable brief. This is an anti-anchoring requirement: Codex must not
-be reduced to critiquing a plan Claude has already supplied. After both drafts
-exist, Claude leads design. The host reconciles a versioned plan whose task
+the same immutable brief, and neither sees the other's conclusions first. This
+is an anti-anchoring requirement: Codex must not be reduced to critiquing a plan
+Claude has already supplied. What the host then does with the two plans is the
+rest of this panel. After both drafts exist, Claude leads design. The host reconciles a versioned plan whose task
 rows name the responsible primary, actual binding-or-route executor, execution
 mode, routing reason and provenance, available usage evidence with freshness or
 an explicitly unknown value, and cross-lineage reviewer.
@@ -59,9 +56,9 @@ the host a session starts in decides the transport, not the contract:
 | Codex App or interactive CLI | Reaches Claude through Herdr, the named-tab terminal host for an interactive peer CLI, with tmux as the degraded host |
 | Grok Build | Reaches Codex through the official `codex` CLI and local app-server daemon, and Claude through Herdr plus schema-v2 |
 
-Grok-hosted lane canaries are in
-`docs/verification/grok-host-duo-canary-2026-09-07.md`; they are not a
-qualified binding. The standing pair remains the quality floor. Extra
+Grok-hosted lane canaries are in the repository at
+`docs/verification/grok-host-duo-canary-2026-09-07.md`, which this guide does
+not publish; they are not a qualified binding. The standing pair remains the quality floor. Extra
 catalog families (today Grok) are named when a routing-policy trigger fires
 and the family is available; unavailable is an evidenced limitation, never a
 silent third vote (ADR-0054). Primaries default to high, use proportionate
@@ -117,7 +114,7 @@ appearance-mode behavior, accessibility, and rendered fidelity
 The shared quality and routing resources require reproducible
 evidence, relevant unit/integration/e2e and UI tests, an 80% production-code
 coverage floor where measurable (90% normal target), security review, and
-bounded rework. It also blocks material avoidable complexity: both seats review
+bounded rework. They also block material avoidable complexity: both seats review
 design proportionality, every executor first-verifies the smallest coherent
 implementation, the accountable primary inspects it, a lineage different from
 the actual author's independently reviews it, and the directly
@@ -190,8 +187,7 @@ Missing seats degrade legibly to solo; mid-run failure blocks and escalates.
 
 ### What pins this contract
 
-The unattended Claude workflow is explicitly single-vendor and rejects the old
-`duo` preset semantics. Three deterministic surfaces hold the rest in place:
+Three deterministic surfaces hold this contract in place:
 
 | Pin | What it holds |
 |---|---|
@@ -199,5 +195,6 @@ The unattended Claude workflow is explicitly single-vendor and rejects the old
 | `orchestration_contract.rs` | The two-draft anti-anchoring rule, design and review roles, hard coverage floor, security lenses, always-loaded reasoning duties, host, UI, and reverse-lane contract markers |
 | The CAP-009 hook unit and CLI tests | Runtime adapter behavior |
 
-No engine model router is
-added; deterministic gates and the human-merged PR remain authoritative.
+The unattended Claude workflow is explicitly single-vendor and rejects the old
+`duo` preset semantics. No engine model router is added; deterministic gates
+and the human-merged PR remain authoritative.
