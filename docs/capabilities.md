@@ -45,9 +45,9 @@ per capability, in the same six groups.
 
 ## Architecture
 
-One registry row per user-meaningful capability, keyed by its `CAP-###` id. In
-the portal the adapter replaces this table with one generated from the yaml
-fences in Technical, so the rendered row cannot disagree with the entry it
+The registry carries one row per user-meaningful capability, keyed by its
+`CAP-###` id. In the portal the adapter replaces this table with one generated
+from the yaml fences in Technical, so the rendered row cannot disagree with the entry it
 summarizes. The copy in the Markdown file is a placeholder the adapter needs;
 keep its rows in fence order.
 
