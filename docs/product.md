@@ -30,9 +30,8 @@ the capabilities page names each piece and its status.
 ## Architecture
 
 Scope is five commitments, and one of them is the knowledge model the other
-four run around. The model is the record
-CodeFlow maintains inside the ship flow, one layer per question a later reader
-asks.
+four run around. The model is the record CodeFlow maintains inside the ship
+flow, one layer per question a later reader asks.
 
 ```cf-stage
 product | why this exists @accent

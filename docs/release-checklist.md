@@ -2,8 +2,8 @@
 
 ## Concept
 
-**The approval record for every CodeFlow release: each box is evidence that
-already exists, not a promise that it will.**
+**The approval record for every CodeFlow release: each box records evidence
+that already exists, not a promise to produce it.**
 
 ```cf-stage
 scope and version | one cumulative target @accent
@@ -24,7 +24,8 @@ establish; Technical is the record itself.
 
 ## Architecture
 
-Five sections, each bound to the runbook section that owns its procedure.
+The five sections are each bound to the runbook section that owns its
+procedure.
 
 | Section | What it must establish | Runbook |
 |---|---|---|
@@ -39,8 +40,8 @@ substitute for the named human release decision.
 
 ## Technical
 
-Record a link or pasted output beside each box. The boxes are the durable
-artifact of the run, so they stay a checklist rather than a summary table.
+The boxes are the durable artifact of the run, so they stay a checklist rather
+than a summary table.
 
 ### 1. Scope and version
 
