@@ -947,11 +947,7 @@ fn check_git(
             }
         }
         "branch" => {
-            if rest
-                .iter()
-                .any(|t| t == "-D" || t == "-d" || t == "--delete")
-                && policy.delete_protected.is_active()
-            {
+            if rest.iter().any(|t| requests_delete(t)) && policy.delete_protected.is_active() {
                 for target in rest
                     .iter()
                     .filter(|t| !t.starts_with('-'))
@@ -1066,7 +1062,7 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
 /// protected ref route to `delete_protected`.
 fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
     let policy = ctx.policy;
-    let deleting = rest.iter().any(|t| t == "-d" || t == "--delete");
+    let deleting = rest.iter().any(|t| requests_delete(t));
     // `--stdin` carries the refs out-of-band; block conservatively.
     if rest.iter().any(|t| t == "--stdin") {
         if policy.local_ref_protection.is_active() && !ctx.integrate_token {
@@ -1406,9 +1402,27 @@ fn pr_merge_target<'a>(rest: &[&'a str]) -> Option<&'a str> {
 /// `true` when `args` skip the client hooks with `--no-verify` (or `-n` on a
 /// `git commit`, where `-n` is that flag; on push/merge `-n` means something
 /// else, so only the long form counts there).
+/// The letters of a short option cluster, if the token is one. Git's option
+/// parser accepts clustered short options (`-Dq`, `-qd`, `-an`) anywhere among
+/// the options, so a guard that compares whole tokens against `-d` or `-n`
+/// misses every cluster. A long option (`--delete`) and a bare `-` are not
+/// clusters.
+fn short_cluster(token: &str) -> Option<&str> {
+    token
+        .strip_prefix('-')
+        .filter(|cluster| !cluster.is_empty() && !cluster.starts_with('-'))
+}
+
+/// A token that asks git to delete a ref: the long `--delete`, or a short
+/// option cluster carrying `d` or `D` wherever it sits among the options.
+fn requests_delete(token: &str) -> bool {
+    token == "--delete" || short_cluster(token).is_some_and(|c| c.contains(['d', 'D']))
+}
+
 fn has_no_verify(sub: &str, args: &[String]) -> bool {
-    args.iter()
-        .any(|a| a == "--no-verify" || (sub == "commit" && a == "-n"))
+    args.iter().any(|a| {
+        a == "--no-verify" || (sub == "commit" && short_cluster(a).is_some_and(|c| c.contains('n')))
+    })
 }
 
 fn maybe_no_verify(
@@ -2053,6 +2067,53 @@ mod tests {
         let p = default_policy();
         let v = evaluate("git branch -D main", &ctx(&p, "feat/x"));
         assert_eq!(v[0].rule, "git.delete_protected");
+    }
+
+    /// Git accepts the delete flag inside a short option cluster, so the guard
+    /// reads the cluster's letters rather than the whole token.
+    #[test]
+    fn test_delete_protected_local_branch_blocked_in_a_short_cluster() {
+        let p = default_policy();
+        for cmd in [
+            "git branch -Dq main",
+            "git branch -qd main",
+            "git branch -dq main",
+            "git branch -Df main",
+            "git branch --delete -q main",
+            "git branch -q -d main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.delete_protected"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_clustered_delete_of_an_unprotected_branch_is_allowed() {
+        let p = default_policy();
+        for cmd in [
+            "git branch -Dq topic",
+            "git branch -qd topic",
+            "git branch -v",
+            "git branch -u origin/topic topic",
+        ] {
+            assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
+        }
+    }
+
+    #[test]
+    fn test_update_ref_clustered_delete_of_protected_blocked() {
+        let p = default_policy();
+        let v = evaluate("git update-ref -dz refs/heads/main", &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.delete_protected"), "{v:?}");
+    }
+
+    #[test]
+    fn test_no_verify_inside_a_short_cluster_blocked() {
+        let p = default_policy();
+        let v = evaluate("git commit -an -m wip", &ctx(&p, "main"));
+        assert!(has_rule(&v, "git.no_verify_bypass"), "{v:?}");
+        let clean = evaluate("git commit -am wip", &ctx(&p, "feat/x"));
+        assert!(!has_rule(&clean, "git.no_verify_bypass"), "{clean:?}");
     }
 
     // -- hard reset / rebase --
