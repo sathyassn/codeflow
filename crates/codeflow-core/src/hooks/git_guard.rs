@@ -1688,31 +1688,31 @@ const PLAIN_OPTIONS: OptionSpec = OptionSpec {
     git_style: false,
 };
 
+/// One option as it was met on the command line, in encounter order.
+#[derive(Clone, Copy)]
+enum Seen<'a> {
+    Short(char),
+    Long(&'a str, Option<&'a str>),
+}
+
 /// The options and operands of one command line. A long option keeps the
 /// value written onto it, so `--delete-branch=false` is distinguishable from
-/// `--delete-branch`.
+/// `--delete-branch`; `sequence` keeps every option in the order it was
+/// written, for flags whose last assignment wins.
 struct ParsedOptions<'a> {
     short: Vec<char>,
     long: Vec<(&'a str, Option<&'a str>)>,
+    sequence: Vec<Seen<'a>>,
     operands: Vec<&'a str>,
 }
 
-impl<'a> ParsedOptions<'a> {
+impl ParsedOptions<'_> {
     fn has_short(&self, letters: &[char]) -> bool {
         self.short.iter().any(|letter| letters.contains(letter))
     }
 
     fn has_long(&self, name: &str) -> bool {
         self.long.iter().any(|(written, _)| *written == name)
-    }
-
-    /// The value written onto the last occurrence of a long option.
-    fn long_value(&self, name: &str) -> Option<&'a str> {
-        self.long
-            .iter()
-            .rev()
-            .find(|(written, _)| *written == name)
-            .and_then(|(_, value)| *value)
     }
 }
 
@@ -1726,6 +1726,7 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
     let mut parsed = ParsedOptions {
         short: Vec::new(),
         long: Vec::new(),
+        sequence: Vec::new(),
         operands: Vec::new(),
     };
     let mut index = 0;
@@ -1751,7 +1752,9 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
                     .extend(args[index..].iter().map(AsRef::as_ref));
                 return parsed;
             }
-            parsed.long.push((canonical.unwrap_or(written), attached));
+            let name = canonical.unwrap_or(written);
+            parsed.long.push((name, attached));
+            parsed.sequence.push(Seen::Long(name, attached));
             if attached.is_none()
                 && canonical.is_some_and(|n| matches!(spec.long_arity(n), Arity::Value))
             {
@@ -1765,6 +1768,7 @@ fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedO
         };
         for (offset, letter) in cluster.char_indices() {
             parsed.short.push(letter);
+            parsed.sequence.push(Seen::Short(letter));
             match spec.short_arity(letter) {
                 Arity::Flag => {}
                 Arity::AttachedValue => break,
@@ -1797,14 +1801,21 @@ fn branch_operands(args: &[String]) -> Vec<&str> {
 /// Does this `gh pr merge` invocation ask to delete the merged branch? The
 /// flag is read as `-d` anywhere, including inside a cluster of boolean
 /// shorthands (`-ds`, `-sd`), as the written long name, and with an attached
-/// `=<bool>`; an explicit false value is not a request. A value that is
-/// neither true nor false reads as a request, which fails toward the block.
+/// `=<bool>`. pflag assigns the flag each time it is written, so the last
+/// assignment in argument order wins: `--delete-branch=false -sd` deletes and
+/// `-sd --delete-branch=false` does not. A value that is neither true nor
+/// false reads as a request, which fails toward the block.
 fn gh_merge_deletes_branch(args: &[&str]) -> bool {
-    let parsed = parse_options(args, &GH_PR_MERGE_OPTIONS);
-    if let Some(value) = parsed.long_value("--delete-branch") {
-        return !matches!(value.to_ascii_lowercase().as_str(), "0" | "f" | "false");
-    }
-    parsed.has_long("--delete-branch") || parsed.has_short(&['d'])
+    parse_options(args, &GH_PR_MERGE_OPTIONS)
+        .sequence
+        .iter()
+        .fold(false, |current, seen| match seen {
+            Seen::Short('d') | Seen::Long("--delete-branch", None) => true,
+            Seen::Long("--delete-branch", Some(value)) => {
+                !matches!(value.to_ascii_lowercase().as_str(), "0" | "f" | "false")
+            }
+            _ => current,
+        })
 }
 
 /// Does this `sed` invocation edit its input in place?
@@ -2767,6 +2778,9 @@ mod tests {
             "gh pr merge 42 -rd",
             "gh pr merge 42 --delete-branch=true",
             "gh pr merge 42 --squash --delete-branch",
+            "gh pr merge 42 --delete-branch=false -sd",
+            "gh pr merge 42 --delete-branch=false -d",
+            "gh pr merge 42 --delete-branch=false --delete-branch",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.pr_merge_delete_branch"), "{cmd}: {v:?}");
@@ -2782,6 +2796,8 @@ mod tests {
         for cmd in [
             "gh pr merge 42 --del",
             "gh pr merge 42 --delete-branch=false",
+            "gh pr merge 42 -d --delete-branch=false",
+            "gh pr merge 42 -sd --delete-branch=false",
             "gh pr merge 42 --squash",
             "gh pr merge 42 -s",
             "gh pr merge 42 -b done-deleting",
