@@ -113,12 +113,13 @@ cleanup_failed() {
 }
 
 # The session ids this run owns, listed from inside the repository that opened
-# them, one per line. A listing that cannot be read is a cleanup failure, not
-# an empty result: silence must never be reported as proof that none remain.
-PRESENT_LIST_OK=0
+# them, one per line. The exit status is the whole signal, because a flag set
+# here would be set in a subshell and never reach the caller. A listing that
+# cannot be read is a cleanup failure, not an empty result: silence must never
+# be reported as proof that none remain. Whatever the commands write to stderr
+# flows into the teardown log, so a failure here can be explained.
 present_session_ids() {
-  PRESENT_LIST_OK=0
-  _raw=$( (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present list 2>/dev/null) ) || return 1
+  _raw=$( (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present list) ) || return 1
   printf '%s' "$_raw" | python3 -c 'import json,sys
 raw = sys.stdin.read()
 try:
@@ -127,10 +128,9 @@ try:
         raise ValueError("not a list")
     for s in sessions:
         print(s["id"])
-except Exception:
-    sys.exit(3)' || return 1
-  PRESENT_LIST_OK=1
-  return 0
+except Exception as error:
+    sys.stderr.write("present list could not be parsed: %s\n" % error)
+    sys.exit(3)'
 }
 
 teardown() {
@@ -145,22 +145,23 @@ teardown() {
     # sample repository that opened them, not from the run root.
     if [ -n "$PRESENT_HOME" ] && [ -d "$PRESENT_HOME" ] && [ -d "$PRESENT_REPO" ] &&
       [ -n "$BINARY" ] && [ -x "$BINARY" ]; then
-      _ids=$(present_session_ids)
-      if [ "$PRESENT_LIST_OK" != 1 ]; then
-        cleanup_failed "presentation sessions could not be listed in $PRESENT_REPO; any still running were not released"
-      else
+      if _ids=$(present_session_ids); then
         for _s in $_ids; do
           (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present close "$_s" 2>&1) || true
           (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present clear --older-than 0d "$_s" 2>&1) || true
         done
-        _left=$(present_session_ids | tr '\n' ' ' | sed 's/ *$//')
-        if [ "$PRESENT_LIST_OK" != 1 ]; then
-          cleanup_failed "presentation sessions could not be re-listed after closing them"
-        elif [ -n "$_left" ]; then
-          cleanup_failed "presentation session(s) still listed: $_left"
+        if _second=$(present_session_ids); then
+          _left=$(printf '%s' "$_second" | tr '\n' ' ' | sed 's/ *$//')
+          if [ -n "$_left" ]; then
+            cleanup_failed "presentation session(s) still listed: $_left"
+          else
+            printf 'presentation sessions: `present list` read cleanly in %s and returned none\n' "$PRESENT_REPO"
+          fi
         else
-          printf 'presentation sessions: `present list` read cleanly in %s and returned none\n' "$PRESENT_REPO"
+          cleanup_failed "presentation sessions could not be re-listed after closing them"
         fi
+      else
+        cleanup_failed "presentation sessions could not be listed in $PRESENT_REPO; any still running were not released"
       fi
     else
       printf 'presentation sessions: none opened by this run\n'
@@ -1469,9 +1470,15 @@ if status != "complete":
     print("status-" + str(status)); raise SystemExit
 if not isinstance(trail, list) or not trail:
     print("no-trail"); raise SystemExit
-names = " ".join(str(e.get("stage") or e.get("name") or "") for e in trail if isinstance(e, dict))
-if "build" not in names or "verify" not in names:
+if not isinstance(doc.get("attempts"), int) or doc["attempts"] < 1:
+    print("no-attempts"); raise SystemExit
+entries = [e for e in trail if isinstance(e, dict)]
+stages = [e.get("stage") for e in entries]
+if "build" not in stages or "verify" not in stages:
     print("trail-missing-stages"); raise SystemExit
+verify = [e for e in entries if e.get("stage") == "verify"]
+if not verify or verify[-1].get("verdict") != "approved":
+    print("verify-not-approved"); raise SystemExit
 print("complete")' 2>/dev/null || printf 'unparsable')
 
   # Behaviour, verified here: a test this harness writes, compiled and run by
@@ -1487,30 +1494,60 @@ fn subtract_four_minus_one_is_three() {
     assert_eq!(qualification_sample::subtract(4, 1), 3);
 }
 PROBE
-    sh_run "cd '$DIR' && cargo test --test qualification_subtract 2>&1 | tail -5"
-    if [ "$CF_STATUS" = 0 ]; then _behaviour=passed; else _behaviour="failed: $(oneline "$CF_OUT")"; fi
+    # cargo's own status, captured before anything truncates its output. A
+    # pipe here would report the exit status of the last stage instead, and a
+    # test binary that exits 101 would read as success.
+    sh_run "cd '$DIR' && cargo test --test qualification_subtract >'$WORK/subtract-probe.log' 2>&1"
+    _sub_status=$CF_STATUS
+    if [ "$_sub_status" = 0 ]; then
+      _behaviour=passed
+    else
+      _behaviour="failed at exit $_sub_status: $(oneline "$(tail -5 "$WORK/subtract-probe.log" 2>/dev/null)")"
+    fi
     rm -f "$DIR/tests/qualification_subtract.rs"
   fi
 
+  _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, this harness's own subtract(4, 1) test green, and the sample gate green"
   cf test --mode full --strict
   _gate=$CF_STATUS
-  _observed="turn exit $_pipeline_terminal; workflow result $_shape; independent subtract(4, 1) test $_behaviour; sample gate exit $_gate"
+  _invoked=$(workflow_invocation_evidence "$_state")
+  _observed="turn exit $_pipeline_terminal; native Workflow invocation $_invoked; workflow result $_shape; independent subtract(4, 1) test $_behaviour; sample gate exit $_gate"
 
-  if [ "$_shape" = unavailable ] || { [ "$_shape" = absent ] && [ "$_pipeline_terminal" != 0 ]; }; then
-    # The workflow never ran, so the capability was not exercised at all.
+  # Whether the capability was exercised is decided by the transcript, not by
+  # the result file. Once the Workflow tool has been invoked, every shortfall
+  # is a failure: an absent or failed result then means the pipeline ran and
+  # did not finish, which is a result, not a missing capability. Only a turn
+  # with no invocation and nothing claimed can be unavailable, and a result
+  # claiming success with no invocation behind it is a fabrication, so it
+  # fails rather than passing.
+  if [ "$_invoked" = yes ]; then
+    if [ "$_pipeline_terminal" = 0 ] && [ "$_shape" = complete ] &&
+      [ "$_behaviour" = passed ] && [ "$_gate" = 0 ]; then
+      _pipeline_verdict=$RESULT_PASSED
+    else
+      _pipeline_verdict=$RESULT_FAILED
+    fi
+  elif [ "$_shape" = complete ]; then
+    _pipeline_verdict=$RESULT_FAILED
+  elif [ "$_shape" = unavailable ] || [ "$_shape" = absent ]; then
+    _pipeline_verdict=unavailable
+  else
+    _pipeline_verdict=$RESULT_FAILED
+  fi
+
+  if [ "$_pipeline_verdict" = unavailable ]; then
     pipeline_unavailable \
       "$_observed; wait output: $(oneline "$_pipeline_out")" \
       "Claude Code Workflow runtime in the canary session"
-  elif [ "$_pipeline_terminal" = 0 ] && [ "$_shape" = complete ] &&
-    [ "$_behaviour" = passed ] && [ "$_gate" = 0 ]; then
+  elif [ "$_pipeline_verdict" = "$RESULT_PASSED" ]; then
     record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
       "$RESULT_PASSED" \
-      "a terminal turn, the workflow's own returned object at status complete with a build and verify trail, this harness's own subtract(4, 1) test green, and the sample gate green" \
+      "$_pipeline_expected" \
       "$_observed"
   else
     record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
       "$RESULT_FAILED" \
-      "a terminal turn, the workflow's own returned object at status complete with a build and verify trail, this harness's own subtract(4, 1) test green, and the sample gate green" \
+      "$_pipeline_expected" \
       "$_observed"
   fi
 }
@@ -1529,9 +1566,45 @@ deliver_turn() {
 
 PIPELINE_RESULT="qualification-pipeline-result.txt"
 
+# Did the session actually invoke the native Workflow tool on the scaffolded
+# pipeline? The turn's own result.json names the Claude Code session, and that
+# session's transcript records every tool call it made. The transcript is
+# written by the harness, not by the session under test, so it is the one piece
+# of evidence here that a peer cannot author. Prints yes, no, or unknown, where
+# unknown means no transcript could be located and is never read as no.
+workflow_invocation_evidence() {
+  _sid=$(python3 -c 'import glob,json,sys
+found = ""
+for path in sorted(glob.glob(sys.argv[1] + "/turns/*/result.json")):
+    try:
+        doc = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        continue
+    if doc.get("session_id"):
+        found = doc["session_id"]
+print(found)' "$1" 2>/dev/null)
+  if [ -z "$_sid" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  _tx=$(find "$HOME/.claude/projects" -maxdepth 2 -name "$_sid.jsonl" 2>/dev/null | head -1)
+  if [ -z "$_tx" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  if grep -q '"name"[[:space:]]*:[[:space:]]*"Workflow"' "$_tx" 2>/dev/null &&
+    grep -q 'pipeline.workflow' "$_tx" 2>/dev/null; then
+    printf 'yes'
+  else
+    printf 'no'
+  fi
+}
+
 pipeline_unavailable() {
   record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
-    "$RESULT_UNAVAILABLE" "a recorded run output and its terminal state" "$1" "$2"
+    "$RESULT_UNAVAILABLE" \
+    "a transcript showing the native Workflow tool invoked on the scaffolded pipeline, and that workflow's own returned object at status complete" \
+    "$1" "$2"
 }
 
 # ---------------------------------------------------------------------------
