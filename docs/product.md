@@ -29,7 +29,8 @@ the capabilities page names each piece and its status.
 
 ## Architecture
 
-Scope is five commitments over one knowledge model. The model is the record
+Scope is five commitments, and one of them is the knowledge model the other
+four run around. The model is the record
 CodeFlow maintains inside the ship flow, one layer per question a later reader
 asks.
 
@@ -51,8 +52,9 @@ caption: the six layer knowledge model, with recall over the whole record
 The first five layers are committed Markdown. The structured records carry YAML
 frontmatter; the capability registry carries YAML fences instead, one per
 capability. The ledger is neither: it is the append-only JSONL event log the
-binary writes, with an FTS5 cache rebuilt over both. Either way the record
-survives the session that produced it. The commitments around the model are these:
+binary writes, with an FTS5 cache rebuilt over both. In every case the record
+survives the session that produced it. All five commitments, including the
+model itself:
 
 | Commitment | What CodeFlow ships |
 |---|---|
@@ -67,7 +69,8 @@ page walks that choice.
 
 ## Technical
 
-Who the scope is drawn for, and the boundaries planning is checked against.
+Below are the audiences the scope is drawn for and the boundaries planning is
+checked against.
 
 ### Users
 
@@ -84,7 +87,7 @@ project will not do, stated so planning can be checked against it.
 
 | Not this | What that rules out |
 |---|---|
-| Not a runtime harness, agent framework, or model router | No daemon or autorun. Vendor-native sessions, plugins, tools, worktrees, tasks, memory, sandbox, and permissions are composed at the process boundary, never reimplemented (the v2 charter §1, `docs/plan/v2/00-charter.md`; ADR-0023) |
+| Not a runtime harness, agent framework, or model router | No daemon or autorun. Vendor-native sessions, plugins, tools, worktrees, tasks, memory, sandbox, and permissions are composed at the process boundary, never reimplemented (the v2 charter §1, in the repository at `docs/plan/v2/00-charter.md`, which this guide does not publish; ADR-0023) |
 | Not a process-enforcement engine | No phase ordering, role boundaries, or review-before-X sequencing in code; gates exist only where a mistake is irreversible or invisible (charter §6.6) |
 | Not a general GUI/TUI product or application shell | The bounded `cf-present` review document defined by SPC-004 is the sole interactive exception: an explicit CLI action may launch an isolated browser window backed by a loopback-only, per-session service that self-terminates. Agents author this session's catalog document; the runtime owns chrome and Comment. It is not a dashboard, remote server, persistent service, consuming-product UI framework, or a clone of the design-exploration board. The opt-in documentation portal is a generated static artifact that applies the same utility craft to durable source-linked docs, not an operated CodeFlow interface |
 | No bespoke memory infrastructure | No embeddings, vector DBs, GraphRAG, or database-as-authority; markdown + JSONL truth with an FTS5 cache (D17) |
