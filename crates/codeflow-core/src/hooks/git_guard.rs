@@ -592,7 +592,7 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
             ));
         }
     }
-    if cmd == "sed" && args.iter().any(|a| a == "-i" || a.starts_with("-i")) {
+    if cmd == "sed" && args.iter().any(|a| requests_in_place(a)) {
         if let Some(p) = arg_integrity_path(args) {
             return Some(hook_integrity_violation(
                 level,
@@ -1417,6 +1417,19 @@ fn short_cluster(token: &str) -> Option<&str> {
 /// option cluster carrying `d` or `D` wherever it sits among the options.
 fn requests_delete(token: &str) -> bool {
     token == "--delete" || short_cluster(token).is_some_and(|c| c.contains(['d', 'D']))
+}
+
+/// A `sed` token that asks for an in-place edit: `--in-place`, with or without
+/// an `=<suffix>`, or a short option cluster carrying `i`. Both GNU and BSD
+/// `sed` attach the backup suffix to the flag (`-i.bak`), and both accept the
+/// flag inside a cluster (`-ni`), so reading the cluster's letters covers the
+/// suffix form and the clustered form at once. `i` is the only short `sed`
+/// option that takes that letter, so a cluster carrying it always means an
+/// in-place edit.
+fn requests_in_place(token: &str) -> bool {
+    token == "--in-place"
+        || token.starts_with("--in-place=")
+        || short_cluster(token).is_some_and(|cluster| cluster.contains('i'))
 }
 
 fn has_no_verify(sub: &str, args: &[String]) -> bool {
@@ -2540,6 +2553,37 @@ mod tests {
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    /// `sed` takes the in-place flag inside a cluster and with an attached
+    /// backup suffix, so the guard reads the cluster's letters rather than the
+    /// whole token.
+    #[test]
+    fn test_integrity_in_place_edit_blocked_in_a_short_cluster() {
+        let p = default_policy();
+        for cmd in [
+            "sed -ni s/block/off/ .codeflow/policy.json",
+            "sed -i.bak s/block/off/ .codeflow/policy.json",
+            "sed -ni.bak s/block/off/ .codeflow/policy.json",
+            "sed -Ei s/block/off/ .codeflow/policy.json",
+            "sed --in-place s/block/off/ .codeflow/policy.json",
+            "sed --in-place=.bak s/block/off/ .codeflow/policy.json",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_integrity_stream_read_with_sed_allowed() {
+        let p = default_policy();
+        for cmd in [
+            "sed -n 1,5p .codeflow/policy.json",
+            "sed -e s/block/off/ .codeflow/policy.json",
+            "sed -Ef /tmp/script.sed .codeflow/policy.json",
+        ] {
+            assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
         }
     }
 

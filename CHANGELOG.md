@@ -38,9 +38,10 @@ publication date._
   `-Df`, `-fD`, `-qf` or `-fq` as the first option after `git branch`; other
   clusters and options placed before the delete flag are outside what prefix
   globs can express. The git-guard hook now recognizes a clustered delete flag
-  such as `-Dq` on a protected branch, which it previously missed. Existing
-  installations keep their permission entries and values, because update
-  merges permission arrays as a union and leaves scalars alone.
+  such as `-Dq` on a protected branch, and a clustered in-place edit flag such
+  as `sed -ni` on a policy or hook file, both of which it previously missed.
+  Existing installations keep their permission entries and values, because
+  update merges permission arrays as a union and leaves scalars alone.
 
 <!-- codeflow:release-impact patch -->
 - **Committed portal directory links.** Repository guides preserve relative
