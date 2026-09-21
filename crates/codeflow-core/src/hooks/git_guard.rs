@@ -936,7 +936,7 @@ fn check_git(
         "reset" => {
             if policy.hard_reset_protected.is_active()
                 && policy.branch_is_protected(branch)
-                && rest.iter().any(|t| t == "--hard")
+                && parse_options(rest, &GIT_RESET_OPTIONS).has_long("--hard")
             {
                 out.push(Violation::new(
                     "git.hard_reset_protected",
@@ -1061,9 +1061,13 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
 /// protected ref route to `delete_protected`.
 fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
     let policy = ctx.policy;
-    let deleting = requests_ref_delete(rest);
+    // One parse feeds every question here, so an option value is never read as
+    // a flag: in `git update-ref -m --stdin <ref> <new>` the `--stdin` is the
+    // reason text, not stdin mode.
+    let parsed = parse_options(rest, &GIT_UPDATE_REF_OPTIONS);
+    let deleting = parsed.has_short(&['d']) || parsed.has_long("--delete");
     // `--stdin` carries the refs out-of-band; block conservatively.
-    if rest.iter().any(|t| t == "--stdin") {
+    if parsed.has_long("--stdin") {
         if policy.local_ref_protection.is_active() && !ctx.integrate_token {
             out.push(Violation::new(
                 "git.local_ref_protection",
@@ -1074,7 +1078,7 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
         }
         return;
     }
-    let Some(refname) = update_ref_name(rest) else {
+    let Some(refname) = parsed.operands.first().copied() else {
         return;
     };
 
@@ -1112,16 +1116,6 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
             ));
         }
     }
-}
-
-/// The ref name argument of `git update-ref`: the first operand, with option
-/// values consumed whether they are attached or separate, so `-dm reason
-/// refs/heads/main` names the ref and not the reason.
-fn update_ref_name(rest: &[String]) -> Option<&str> {
-    parse_options(rest, &GIT_UPDATE_REF_OPTIONS)
-        .operands
-        .first()
-        .copied()
 }
 
 /// When `refname` is `refs/remotes/<remote>/<branch>` and `<branch>` is
@@ -1407,11 +1401,21 @@ enum Arity {
     AttachedValue,
 }
 
-/// One command's option grammar. Anything not listed is a boolean flag, which
-/// is the safe default: an unlisted option never swallows an operand.
+/// Git's own end-of-options terminator (parse-options, Git 2.24), accepted
+/// wherever a bare `--` is and with the same effect.
+const END_OF_OPTIONS: &str = "--end-of-options";
+
+/// One command's option grammar. The long list is the single source for both
+/// arity and abbreviation, so a new option is added in one place. Anything not
+/// listed is a boolean flag, which is the safe default: an unlisted option
+/// never swallows an operand.
 struct OptionSpec {
     short: &'static [(char, Arity)],
     long: &'static [(&'static str, Arity)],
+    /// The command parses with Git's parse-options: it accepts any unambiguous
+    /// prefix of a long option and `--end-of-options` as a terminator. `sed`
+    /// does neither.
+    git_style: bool,
 }
 
 impl OptionSpec {
@@ -1420,6 +1424,25 @@ impl OptionSpec {
             .iter()
             .find(|(candidate, _)| *candidate == letter)
             .map_or(Arity::Flag, |(_, arity)| *arity)
+    }
+
+    /// The canonical long option a written name stands for: itself when known,
+    /// otherwise, for a Git command, the one known option it is an unambiguous
+    /// prefix of. An ambiguous or unknown prefix resolves to nothing, which
+    /// reads as a boolean flag; Git rejects an ambiguous prefix outright.
+    fn resolve_long(&self, written: &str) -> Option<&'static str> {
+        if let Some((exact, _)) = self.long.iter().find(|(name, _)| *name == written) {
+            return Some(exact);
+        }
+        if !self.git_style {
+            return None;
+        }
+        let mut candidates = self
+            .long
+            .iter()
+            .filter(|(name, _)| name.starts_with(written));
+        let (first, _) = candidates.next()?;
+        candidates.next().is_none().then_some(*first)
     }
 
     fn long_arity(&self, name: &str) -> Arity {
@@ -1449,7 +1472,29 @@ const GIT_BRANCH_OPTIONS: OptionSpec = OptionSpec {
         ("--color", Arity::AttachedValue),
         ("--abbrev", Arity::AttachedValue),
         ("--column", Arity::AttachedValue),
+        ("--delete", Arity::Flag),
+        ("--force", Arity::Flag),
+        ("--move", Arity::Flag),
+        ("--copy", Arity::Flag),
+        ("--list", Arity::Flag),
+        ("--all", Arity::Flag),
+        ("--remotes", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--verbose", Arity::Flag),
+        ("--create-reflog", Arity::Flag),
+        ("--unset-upstream", Arity::Flag),
+        ("--edit-description", Arity::Flag),
+        ("--ignore-case", Arity::Flag),
+        ("--show-current", Arity::Flag),
+        ("--omit-empty", Arity::Flag),
+        ("--recurse-submodules", Arity::Flag),
+        ("--no-color", Arity::Flag),
+        ("--no-column", Arity::Flag),
+        ("--no-abbrev", Arity::Flag),
+        ("--no-track", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
     ],
+    git_style: true,
 };
 
 /// `git commit` (git-commit(1)). `-m`/`--message`, `-F`, `-c`, `-C`, `-t` and
@@ -1481,13 +1526,111 @@ const GIT_COMMIT_OPTIONS: OptionSpec = OptionSpec {
         ("--pathspec-from-file", Arity::Value),
         ("--untracked-files", Arity::AttachedValue),
         ("--gpg-sign", Arity::AttachedValue),
+        ("--no-verify", Arity::Flag),
+        ("--verify", Arity::Flag),
+        ("--all", Arity::Flag),
+        ("--patch", Arity::Flag),
+        ("--amend", Arity::Flag),
+        ("--allow-empty", Arity::Flag),
+        ("--allow-empty-message", Arity::Flag),
+        ("--reset-author", Arity::Flag),
+        ("--short", Arity::Flag),
+        ("--branch", Arity::Flag),
+        ("--no-branch", Arity::Flag),
+        ("--porcelain", Arity::Flag),
+        ("--long", Arity::Flag),
+        ("--null", Arity::Flag),
+        ("--signoff", Arity::Flag),
+        ("--no-signoff", Arity::Flag),
+        ("--edit", Arity::Flag),
+        ("--no-edit", Arity::Flag),
+        ("--no-post-rewrite", Arity::Flag),
+        ("--include", Arity::Flag),
+        ("--only", Arity::Flag),
+        ("--pathspec-file-nul", Arity::Flag),
+        ("--verbose", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--dry-run", Arity::Flag),
+        ("--status", Arity::Flag),
+        ("--no-status", Arity::Flag),
+        ("--no-gpg-sign", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
     ],
+    git_style: true,
 };
 
 /// `git update-ref` (git-update-ref(1)): only `-m <reason>` takes a value.
 const GIT_UPDATE_REF_OPTIONS: OptionSpec = OptionSpec {
     short: &[('m', Arity::Value)],
-    long: &[],
+    long: &[
+        ("--stdin", Arity::Flag),
+        ("--no-deref", Arity::Flag),
+        ("--create-reflog", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git reset` (git-reset(1)): the mode options are booleans, and only the
+/// pathspec sources take a value.
+const GIT_RESET_OPTIONS: OptionSpec = OptionSpec {
+    short: &[],
+    long: &[
+        ("--hard", Arity::Flag),
+        ("--soft", Arity::Flag),
+        ("--mixed", Arity::Flag),
+        ("--merge", Arity::Flag),
+        ("--keep", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--no-refresh", Arity::Flag),
+        ("--recurse-submodules", Arity::AttachedValue),
+        ("--pathspec-from-file", Arity::Value),
+        ("--pathspec-file-nul", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git push` (git-push(1)). The destructive options are what the guard reads,
+/// so they resolve through the same abbreviation rule as every other command.
+const GIT_PUSH_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('o', Arity::Value)],
+    long: &[
+        ("--force", Arity::Flag),
+        ("--force-with-lease", Arity::AttachedValue),
+        ("--force-if-includes", Arity::Flag),
+        ("--no-force-if-includes", Arity::Flag),
+        ("--delete", Arity::Flag),
+        ("--mirror", Arity::Flag),
+        ("--all", Arity::Flag),
+        ("--branches", Arity::Flag),
+        ("--tags", Arity::Flag),
+        ("--follow-tags", Arity::Flag),
+        ("--prune", Arity::Flag),
+        ("--atomic", Arity::Flag),
+        ("--dry-run", Arity::Flag),
+        ("--porcelain", Arity::Flag),
+        ("--set-upstream", Arity::Flag),
+        ("--no-verify", Arity::Flag),
+        ("--verify", Arity::Flag),
+        ("--quiet", Arity::Flag),
+        ("--verbose", Arity::Flag),
+        ("--progress", Arity::Flag),
+        ("--no-progress", Arity::Flag),
+        ("--thin", Arity::Flag),
+        ("--no-thin", Arity::Flag),
+        ("--ipv4", Arity::Flag),
+        ("--ipv6", Arity::Flag),
+        ("--signed", Arity::AttachedValue),
+        ("--no-signed", Arity::Flag),
+        ("--repo", Arity::Value),
+        ("--receive-pack", Arity::Value),
+        ("--exec", Arity::Value),
+        ("--push-option", Arity::Value),
+        ("--recurse-submodules", Arity::Value),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
 };
 
 /// `sed`: `-e` a script, `-f` a script file, `-l` a line length; `-i` takes
@@ -1506,6 +1649,7 @@ const SED_OPTIONS: OptionSpec = OptionSpec {
         ("--line-length", Arity::Value),
         ("--in-place", Arity::AttachedValue),
     ],
+    git_style: false,
 };
 
 /// For commands where only the presence of a long flag matters and no option
@@ -1513,6 +1657,7 @@ const SED_OPTIONS: OptionSpec = OptionSpec {
 const PLAIN_OPTIONS: OptionSpec = OptionSpec {
     short: &[],
     long: &[],
+    git_style: false,
 };
 
 /// The options and operands of one command line.
@@ -1559,9 +1704,16 @@ fn parse_options<'a>(args: &'a [String], spec: &OptionSpec) -> ParsedOptions<'a>
                 Some((name, _)) => (name, true),
                 None => (body, false),
             };
-            let full = &token[..name.len() + 2];
-            parsed.long.push(full);
-            if !attached && matches!(spec.long_arity(full), Arity::Value) {
+            let written = &token[..name.len() + 2];
+            let canonical = spec.resolve_long(written);
+            if canonical == Some(END_OF_OPTIONS) {
+                parsed
+                    .operands
+                    .extend(args[index..].iter().map(String::as_str));
+                return parsed;
+            }
+            parsed.long.push(canonical.unwrap_or(written));
+            if !attached && canonical.is_some_and(|n| matches!(spec.long_arity(n), Arity::Value)) {
                 index += 1;
             }
             continue;
@@ -1599,12 +1751,6 @@ fn requests_branch_delete(args: &[String]) -> bool {
 /// spelled.
 fn branch_operands(args: &[String]) -> Vec<&str> {
     parse_options(args, &GIT_BRANCH_OPTIONS).operands
-}
-
-/// The same delete question for `git update-ref`.
-fn requests_ref_delete(args: &[String]) -> bool {
-    let parsed = parse_options(args, &GIT_UPDATE_REF_OPTIONS);
-    parsed.has_short(&['d']) || parsed.has_long("--delete")
 }
 
 /// Does this `sed` invocation edit its input in place?
@@ -1808,9 +1954,6 @@ struct PushIntent {
     mirror: bool,
 }
 
-/// Push flags that consume the following token.
-const PUSH_VALUE_FLAGS: &[&str] = &["-o", "--push-option", "--receive-pack", "--exec", "--repo"];
-
 fn parse_push(rest: &[String], current_branch: &str) -> PushIntent {
     let mut force = false;
     let mut delete_mode = false;
@@ -1818,38 +1961,28 @@ fn parse_push(rest: &[String], current_branch: &str) -> PushIntent {
     let mut mirror = false;
     let mut positional: Vec<&str> = Vec::new();
 
-    let mut idx = 0;
-    while idx < rest.len() {
-        let t = rest[idx].as_str();
-        if PUSH_VALUE_FLAGS.contains(&t) {
-            idx += 2;
-            continue;
-        }
-        if t == "--force" || t.starts_with("--force-with-lease") {
-            force = true;
-        } else if t == "--delete" {
-            delete_mode = true;
-        } else if t == "--all" || t == "--branches" {
-            all = true;
-        } else if t == "--mirror" {
-            mirror = true;
-            force = true; // a mirror force-updates refs to match local
-        } else if t.starts_with("--") {
-            // other long flag, no value consumed
-        } else if let Some(cluster) = t.strip_prefix('-') {
-            if !cluster.is_empty() && cluster.chars().all(char::is_alphanumeric) {
-                if cluster.contains('f') {
-                    force = true;
-                }
-                if cluster.contains('d') {
-                    delete_mode = true;
-                }
+    // Read the options the way git does, so an abbreviated `--forc` or
+    // `--del` is the option it stands for and a value is never read as a flag.
+    let parsed = parse_options(rest, &GIT_PUSH_OPTIONS);
+    for name in &parsed.long {
+        match *name {
+            "--force" | "--force-with-lease" => force = true,
+            "--delete" => delete_mode = true,
+            "--all" | "--branches" => all = true,
+            "--mirror" => {
+                mirror = true;
+                force = true; // a mirror force-updates refs to match local
             }
-        } else {
-            positional.push(t);
+            _ => {}
         }
-        idx += 1;
     }
+    if parsed.has_short(&['f']) {
+        force = true;
+    }
+    if parsed.has_short(&['d']) {
+        delete_mode = true;
+    }
+    positional.extend(parsed.operands.iter().copied());
 
     let mut updates = Vec::new();
     let mut deletions = Vec::new();
@@ -2898,6 +3031,98 @@ mod tests {
         // The script file is named `--`, so `-i.bak` is still an edit.
         let v = evaluate("sed -f -- -i.bak .codeflow/policy.json", &ctx(&p, "feat/x"));
         assert!(has_rule(&v, "git.hook_integrity"), "{v:?}");
+    }
+
+    /// Git accepts `--end-of-options` wherever it accepts `--`, and it is read
+    /// only when it arrives as an option: as the value of `-m` it is message
+    /// text, so a later `-n` is still the real bypass.
+    #[test]
+    fn test_end_of_options_terminates_like_a_bare_dashdash() {
+        let p = default_policy();
+        for cmd in [
+            "git branch -D --end-of-options -u main",
+            "git branch --delete --end-of-options main",
+            "git update-ref -d --end-of-options refs/heads/main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.delete_protected"), "{cmd}: {v:?}");
+        }
+        let v = evaluate("git commit -m --end-of-options -n", &ctx(&p, "main"));
+        assert!(has_rule(&v, "git.no_verify_bypass"), "{v:?}");
+        let v = evaluate("git commit -m --end-of-options", &ctx(&p, "main"));
+        assert!(has_rule(&v, "git.commit_to_protected"), "{v:?}");
+        assert!(!has_rule(&v, "git.no_verify_bypass"), "{v:?}");
+    }
+
+    /// Git resolves any unambiguous prefix of a long option, so the guard has
+    /// to resolve one too before it decides what a command does.
+    #[test]
+    fn test_abbreviated_long_options_resolve_like_git() {
+        let p = default_policy();
+        for cmd in [
+            "git branch --del main",
+            "git branch --forc --del main",
+            "git branch -D --set-upstream-t origin/dev main",
+            "git push --del origin main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.delete_protected"), "{cmd}: {v:?}");
+        }
+        let v = evaluate("git commit --no-ver", &ctx(&p, "main"));
+        assert!(has_rule(&v, "git.no_verify_bypass"), "{v:?}");
+        let v = evaluate("git reset --har", &ctx(&p, "main"));
+        assert!(has_rule(&v, "git.hard_reset_protected"), "{v:?}");
+        // An ambiguous prefix is not an option: git rejects the command, and
+        // the guard reads it as a plain flag rather than guessing.
+        let v = evaluate("git commit --n -m wip", &ctx(&p, "main"));
+        assert!(!has_rule(&v, "git.no_verify_bypass"), "{v:?}");
+    }
+
+    /// The resolver itself, including the commands that do not abbreviate.
+    #[test]
+    fn test_long_option_resolution_table() {
+        assert_eq!(
+            GIT_BRANCH_OPTIONS.resolve_long("--delete"),
+            Some("--delete")
+        );
+        assert_eq!(GIT_BRANCH_OPTIONS.resolve_long("--del"), Some("--delete"));
+        assert_eq!(GIT_BRANCH_OPTIONS.resolve_long("--forc"), Some("--force"));
+        assert_eq!(
+            GIT_BRANCH_OPTIONS.resolve_long("--set-upstream-t"),
+            Some("--set-upstream-to")
+        );
+        assert_eq!(GIT_BRANCH_OPTIONS.resolve_long("--no-"), None);
+        assert_eq!(GIT_BRANCH_OPTIONS.resolve_long("--nonsense"), None);
+        assert_eq!(GIT_COMMIT_OPTIONS.resolve_long("--mess"), Some("--message"));
+        assert_eq!(
+            GIT_COMMIT_OPTIONS.resolve_long("--no-ver"),
+            Some("--no-verify")
+        );
+        assert_eq!(GIT_COMMIT_OPTIONS.resolve_long("--n"), None);
+        assert_eq!(GIT_PUSH_OPTIONS.resolve_long("--mirr"), Some("--mirror"));
+        assert_eq!(GIT_PUSH_OPTIONS.resolve_long("--forc"), None);
+        // `sed` is not parse-options: only the written name counts.
+        assert_eq!(SED_OPTIONS.resolve_long("--in-place"), Some("--in-place"));
+        assert_eq!(SED_OPTIONS.resolve_long("--in-pl"), None);
+    }
+
+    /// `--stdin` is stdin mode only when it arrives as an option; as the `-m`
+    /// reason it is text, and the ref after it is the operand.
+    #[test]
+    fn test_update_ref_stdin_is_read_from_the_parsed_options() {
+        let p = default_policy();
+        let v = evaluate(
+            "git update-ref -m --stdin refs/heads/topic HEAD",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(v.is_empty(), "{v:?}");
+        let v = evaluate("git update-ref --stdin", &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.local_ref_protection"), "{v:?}");
+        let v = evaluate(
+            "git update-ref -m --stdin refs/heads/main HEAD",
+            &ctx(&p, "feat/x"),
+        );
+        assert!(has_rule(&v, "git.local_ref_protection"), "{v:?}");
     }
 
     /// Operands are read with option arity, so a protected name is found
