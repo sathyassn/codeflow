@@ -35,10 +35,12 @@ publication date._
 - **Claude Code preset prompts.** The shipped preset sets no permission mode
   in its default file and prompts for rooted or home-anchored recursive
   deletes and for force branch deletes spelled `-f`, `--force`, `-df`, `-fd`,
-  `-Df`, `-fD`, `-qf` or `-fq`; a force flag inside any other aggregated
-  cluster is outside what prefix globs can express. Existing installations
-  keep their permission entries and values, because update merges permission
-  arrays as a union and leaves scalars alone.
+  `-Df`, `-fD`, `-qf` or `-fq` as the first option after `git branch`; other
+  clusters and options placed before the delete flag are outside what prefix
+  globs can express. The git-guard hook now recognizes a clustered delete flag
+  such as `-Dq` on a protected branch, which it previously missed. Existing
+  installations keep their permission entries and values, because update
+  merges permission arrays as a union and leaves scalars alone.
 
 <!-- codeflow:release-impact patch -->
 - **Committed portal directory links.** Repository guides preserve relative

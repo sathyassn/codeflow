@@ -61,14 +61,23 @@ denies a matching call outright instead of prompting.
 
 Every preset prompts for the rooted and home-anchored recursive deletes
 (`rm -rf /`, `rm -rf /*`, `rm -rf ~*` and the `-fr` spellings) and for force
-branch deletes, with a boundary worth stating exactly. The prompt covers force
-spelled as `-f` or `--force` in any position, the two-letter clusters `-df`,
-`-fd`, `-Df` and `-fD`, and the quiet-force clusters `-qf` and `-fq`. A force
-flag inside any other aggregated cluster is not covered: these are prefix
-globs, and they cannot enumerate every cluster. What still holds regardless of
-flags is `git-guard`, which blocks deletion of a protected branch. The
-residual is therefore force deletion of an unprotected unmerged branch, which
-the worktree doctrine's landing evidence governs, not an ask rule.
+branch deletes, with a boundary worth stating exactly. Ask rules match the
+command text as written, so they require the delete flag to be the first
+option after `git branch`: `-d`, `--delete`, `-D`, or a cluster beginning with
+`-d`, `-D`, `-f` or `-q`. Within that shape the prompt covers force spelled
+`-f` or `--force` in any position, the two-letter clusters `-df`, `-fd`, `-Df`
+and `-fD`, and the quiet-force clusters `-qf` and `-fq`. Two things fall
+outside it, because prefix globs cannot express them: a force flag inside any
+other aggregated cluster, and any option placed before the delete flag, as in
+`git branch -q -d topic --force`.
+
+The layer that does not depend on option order is `git-guard`, which blocks
+deletion of a protected branch whether the delete flag stands alone or sits
+inside a short option cluster; this change fixes the cluster case, which the
+guard previously missed. The ask layer covers the listed force forms for any
+branch. The residual is therefore force deletion of an unprotected unmerged
+branch through an uncovered option order, which the worktree doctrine's
+landing evidence governs, not an ask rule.
 
 A `rm -rf <path>` inside the tree and a `git branch -d` are ordinary work. The
 residual risk there is plain: an in-tree recursive delete of untracked unique
