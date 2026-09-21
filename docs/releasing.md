@@ -18,24 +18,25 @@ guarded publish | draft · build · recheck · upload · announce @positive
 caption: cargo-dist is the only publisher; no agent merges, tags, or publishes
 ```
 
-Release state has one operative decision record,
-ADR-0062, at the end of a supersession chain: ADR-0012 (git-cliff calculates the
-version) was superseded by ADR-0061 (a maintained candidate PR), which was
-superseded by ADR-0062 (state lives in the normal work PR). Read the earlier two
-as history, never as current procedure.
+This page covers how a CodeFlow release is cut, and how a project that
+*consumes* CodeFlow should think about its own versioning.
 
 Use [the release checklist](release-checklist.md) as the evidence-bearing
 approval record for every run of this procedure. Record a link or pasted output
 for each item there; a green job, model agreement, or peer approval is evidence,
 never a substitute for the named human release decision.
 
-This page covers how a codeflow release is cut, and how a project that
-*consumes* codeflow should think about its own versioning.
+Release state has one operative decision record,
+ADR-0062, at the end of a supersession chain: ADR-0012 (git-cliff calculates the
+version) was superseded by ADR-0061 (a maintained candidate PR), which was
+superseded by ADR-0062 (state lives in the normal work PR). Read the earlier two
+as history, never as current procedure.
 
 ## Architecture
 
-Each stage of the figure has one actor and one gate. Nothing downstream can
-reinterpret an upstream decision.
+The figure's last stage expands into five, so the table runs to eight rows.
+Each row has one actor and one gate, and nothing downstream can reinterpret an
+upstream decision.
 
 | Stage | Who acts | Gate it must satisfy |
 |---|---|---|
@@ -64,14 +65,13 @@ verified public version bumped once by the highest remaining pending impact.
 match. Conventional markers are conservative mismatch tripwires, not another
 calculator.
 
-One publisher remains:
+cargo-dist is the only publisher. It builds four target binaries plus shell and
+PowerShell installers, and it is the only tag, release, and artifact publisher;
+its generated workflow runs only by explicit human dispatch on `main`.
 
-- **cargo-dist** builds four target binaries plus shell and PowerShell
-  installers and is the only tag, release, and artifact publisher. Its
-  generated workflow runs only by explicit human dispatch on `main`.
-
-A withdrawal removes the affected entry/marker and
-explains in the PR body why the remaining net contract permits the lower target.
+Withdrawing a pending entry before release removes that entry and its impact
+marker, and the PR body explains why the remaining net contract permits the
+lower target.
 
 Use a plain `revert:` only when the resulting change has no shipped release
 impact. A revert that changes supported behavior or a public contract must use
@@ -89,7 +89,7 @@ repository setting; never bypass the source and publication guards.
 The sections below hold the mechanics a release run actually touches: the
 cross-build toolchain, the renderer assets, the portal ownership migration, the
 preparation and publication steps, the historical bridge, and versioning for a
-project that consumes codeflow. Work through the ones your release touches.
+project that consumes CodeFlow. Work through the ones your release touches.
 
 ### Cross-build toolchain
 
@@ -213,11 +213,11 @@ and blocks claiming that platform's release qualification.
    Read-scoped PR/main checks cannot see GitHub draft releases and do not claim
    that they can; draft absence is checked later inside the write-scoped,
    read-only-in-behavior publisher guards.
-2. Refresh against the current target before merge. What the human merger
-   must require of CI is the Merge row in Architecture.
+2. Refresh against the current target before merge. The Merge row in
+   Architecture states what the human merger must require of CI.
 3. When evidence is complete, a human explicitly dispatches cargo-dist's
-   generated Release workflow with `--ref main` and the `vX.Y.Z` tag. Who may
-   dispatch is the Dispatch row in Architecture.
+   generated Release workflow with `--ref main` and the `vX.Y.Z` tag. The
+   Dispatch row in Architecture states who may dispatch.
 4. The supported local-artifact job checks source/version/notes, the latest
    exact-source GitHub Actions main-push results for `release state`, `codeflow gates`,
    Rust, Windows, secret scan, and security review, plus write-visible host collisions,
@@ -300,7 +300,7 @@ automatic baseline.
 
 ### Versioning in a project that consumes codeflow
 
-codeflow gives your repo the *substrate* for clean releases. The commit-msg gate
+CodeFlow gives your repository the substrate for clean releases. The commit-msg gate
 enforces Conventional Commits, so your history is SemVer-derivable. It does
 **not** scaffold a release pipeline. Release/version/changelog tooling is
 stack-specific and stays yours to choose. Because your commits are already
@@ -313,7 +313,7 @@ conventional, any of these has clean input:
 | Any language, PR-based automation | `release-please` |
 | Changelog only | `git-cliff` or `conventional-changelog` |
 
-codeflow's job is the discipline; the release mechanism is yours. This split is
-deliberate, because release tooling is as stack-specific as a test runner, so codeflow
-records standards and enforces commit hygiene rather than prescribing one
+CodeFlow's job is the discipline; the release mechanism is yours. This split is
+deliberate, because release tooling is as stack-specific as a test runner, so
+CodeFlow records standards and enforces commit hygiene rather than prescribing one
 release tool for every consumer.
