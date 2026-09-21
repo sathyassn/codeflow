@@ -798,6 +798,39 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
                 "{name}: no ask rule covers {forced:?}"
             );
         }
+        // `gh` parses with pflag, so the delete request arrives as `-d`, as
+        // a cluster of boolean shorthands carrying `d`, or as the written
+        // long name with an optional `=<bool>`. The `=` forms are covered
+        // wholesale, so an explicit `=false` prompts too: a prompt, not a
+        // block. pflag does not abbreviate, so `--del` is not the flag.
+        for merge in [
+            "gh pr merge 42 -d",
+            "gh pr merge -d 42",
+            "gh pr merge 42 --delete-branch",
+            "gh pr merge --delete-branch 42",
+            "gh pr merge 42 -ds",
+            "gh pr merge 42 -sd",
+            "gh pr merge 42 -rd",
+            "gh pr merge 42 --squash -d",
+            "gh pr merge --delete-branch=true",
+            "gh pr merge 42 --delete-branch=true",
+        ] {
+            assert!(
+                ask_covers(&ask, merge),
+                "{name}: no ask rule covers {merge:?}"
+            );
+        }
+        for merge in [
+            "gh pr merge 42",
+            "gh pr merge 42 --squash",
+            "gh pr merge 42 --del",
+            "gh pr merge 42 -s",
+        ] {
+            assert!(
+                !ask_covers(&ask, merge),
+                "{name}: an ask rule prompts on {merge:?}"
+            );
+        }
         // Ordinary work stays unprompted, and a branch name that merely
         // looks like an option must not be read as one. The three force forms
         // below record the boundary rather than claim it away: prefix globs
