@@ -50,7 +50,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "9074b21b95a85f58f48299dde6f90656b6267a311aa967883986dd130986f2b6"
+      "pristine_sha256": "eee734ed726d4d246e2c51a13fc4bab4bf7b6fe3497efd36ca98cc007ae77147"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
@@ -78,7 +78,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "19ec032f9a053774918888a6a6bf57ea52e82764055d9a828c774082e7b35182"
+      "pristine_sha256": "843f662d03471e61bc9659f04aa149f54db715364a22f1935ad1b6aabefa944c"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -102,7 +102,7 @@
     },
     "src/components/PortalDisplay.astro": {
       "ownership": "managed",
-      "pristine_sha256": "da0e5628b067a86beece4a3777ff6104c1ed55ab1ecf132bcc15aa6a522bb6b8"
+      "pristine_sha256": "f9778fe3b59ba17d819d5368ca87de56f85a262374b88b1ca74d52ee78429243"
     },
     "src/content.config.ts": {
       "ownership": "managed",
@@ -146,7 +146,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "963daab4e863d1af102d0b91475dfae3a11d7515958e628cd931a65681ab9238"
+      "pristine_sha256": "6836334d811462055dc5b85b417b5b4b71ed0845dfdeff28ca662015440ce249"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
@@ -163,6 +163,10 @@
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
       "pristine_sha256": "1260843bdef478478c9cf5791571749724142eb9ef9c1cfd32a89c362489528d"
+    },
+    "tests/fixtures/carrier-contract.json": {
+      "ownership": "managed",
+      "pristine_sha256": "6cd55c25fa118a6b63eb747086652f5e24842c908fc7abd09fa6646b50a9c3b3"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",
