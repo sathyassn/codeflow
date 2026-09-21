@@ -772,10 +772,11 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
                 "{name}: {present} must stay behind a prompt"
             );
         }
-        // The ask rules match the command text as written, so they require
-        // the delete flag (`-d`, `--delete`, `-D`, or a cluster starting with
-        // `-d`, `-D`, `-f` or `-q` as listed below) to be the first option
-        // after `git branch`. These are the forms that reach a prompt.
+        // The ask rules match the command text as written, so the first
+        // option after `git branch` must be `-d`, `--delete`, `-D`, or a
+        // cluster that itself begins with `-d`, `-D` or `-f`. The quiet-force
+        // clusters count only after that delete flag, never as the leading
+        // option. These are the forms that reach a prompt.
         for forced in [
             "git branch -D topic",
             "git branch -d topic --force",

@@ -62,13 +62,15 @@ denies a matching call outright instead of prompting.
 Every preset prompts for the rooted and home-anchored recursive deletes
 (`rm -rf /`, `rm -rf /*`, `rm -rf ~*` and the `-fr` spellings) and for force
 branch deletes, with a boundary worth stating exactly. Ask rules match the
-command text as written, so they require the delete flag to be the first
-option after `git branch`: `-d`, `--delete`, `-D`, or a cluster beginning with
-`-d`, `-D`, `-f` or `-q`. Within that shape the prompt covers force spelled
-`-f` or `--force` in any position, the two-letter clusters `-df`, `-fd`, `-Df`
-and `-fD`, and the quiet-force clusters `-qf` and `-fq`. Two things fall
-outside it, because prefix globs cannot express them: a force flag inside any
-other aggregated cluster, and any option placed before the delete flag, as in
+command text as written, so the first option after `git branch` must be `-d`,
+`--delete`, `-D`, or a cluster that itself begins with `-d`, `-D` or `-f`.
+Within that shape the prompt covers force spelled `-f` or `--force` in any
+position and the two-letter clusters `-df`, `-fd`, `-Df` and `-fD`. The
+quiet-force clusters `-qf` and `-fq` are covered only after the delete flag,
+as in `git branch -d topic -qf`, never as the leading option: nothing matches
+`git branch -qf -d topic`. Two things fall outside the shape, because prefix
+globs cannot express them: a force flag inside any other aggregated cluster,
+and any option placed before the delete flag, as in
 `git branch -q -d topic --force`.
 
 The layer that does not depend on option order is `git-guard`, which blocks
