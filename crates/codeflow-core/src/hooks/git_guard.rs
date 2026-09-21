@@ -1324,7 +1324,7 @@ fn check_gh_pr_merge(rest: &[&str], ctx: &GuardContext<'_>, out: &mut Vec<Violat
     // `--delete-branch` moves off the merged branch; when that branch is
     // checked out in a worktree, git has flipped the root repo to core.bare
     // (reproduced twice). Block regardless of the base branch.
-    if rest.contains(&"--delete-branch") {
+    if gh_merge_deletes_branch(rest) {
         out.push(Violation::new(
             "git.pr_merge_delete_branch",
             PolicyLevel::Block,
@@ -1414,7 +1414,8 @@ struct OptionSpec {
     long: &'static [(&'static str, Arity)],
     /// The command parses with Git's parse-options: it accepts any unambiguous
     /// prefix of a long option and `--end-of-options` as a terminator. `sed`
-    /// does neither.
+    /// and the `gh` commands (pflag) do neither: for them only the written
+    /// long name counts.
     git_style: bool,
 }
 
@@ -1633,6 +1634,33 @@ const GIT_PUSH_OPTIONS: OptionSpec = OptionSpec {
     git_style: true,
 };
 
+/// `gh pr merge` (pflag). No prefix abbreviation, so `--del` is not
+/// `--delete-branch`; boolean shorthands cluster (`-ds`, `-sd`), and a boolean
+/// long option takes an attached `=true`/`=false` without consuming the next
+/// token. Only the flags that carry a value are listed as such.
+const GH_PR_MERGE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('b', Arity::Value),
+        ('F', Arity::Value),
+        ('t', Arity::Value),
+    ],
+    long: &[
+        ("--body", Arity::Value),
+        ("--body-file", Arity::Value),
+        ("--subject", Arity::Value),
+        ("--match-head-commit", Arity::Value),
+        ("--author-email", Arity::Value),
+        ("--delete-branch", Arity::Flag),
+        ("--admin", Arity::Flag),
+        ("--auto", Arity::Flag),
+        ("--disable-auto", Arity::Flag),
+        ("--merge", Arity::Flag),
+        ("--rebase", Arity::Flag),
+        ("--squash", Arity::Flag),
+    ],
+    git_style: false,
+};
+
 /// `sed`: `-e` a script, `-f` a script file, `-l` a line length; `-i` takes
 /// the GNU backup suffix only when attached (`-i.bak`), so a separate token
 /// stays an operand.
@@ -1660,20 +1688,31 @@ const PLAIN_OPTIONS: OptionSpec = OptionSpec {
     git_style: false,
 };
 
-/// The options and operands of one command line.
+/// The options and operands of one command line. A long option keeps the
+/// value written onto it, so `--delete-branch=false` is distinguishable from
+/// `--delete-branch`.
 struct ParsedOptions<'a> {
     short: Vec<char>,
-    long: Vec<&'a str>,
+    long: Vec<(&'a str, Option<&'a str>)>,
     operands: Vec<&'a str>,
 }
 
-impl ParsedOptions<'_> {
+impl<'a> ParsedOptions<'a> {
     fn has_short(&self, letters: &[char]) -> bool {
         self.short.iter().any(|letter| letters.contains(letter))
     }
 
     fn has_long(&self, name: &str) -> bool {
-        self.long.contains(&name)
+        self.long.iter().any(|(written, _)| *written == name)
+    }
+
+    /// The value written onto the last occurrence of a long option.
+    fn long_value(&self, name: &str) -> Option<&'a str> {
+        self.long
+            .iter()
+            .rev()
+            .find(|(written, _)| *written == name)
+            .and_then(|(_, value)| *value)
     }
 }
 
@@ -1683,7 +1722,7 @@ impl ParsedOptions<'_> {
 /// read as `--` or `--no-verify` is the value it is. Only a `--` reached as an
 /// option ends the options; every token after it is an operand, including one
 /// that begins with `-`.
-fn parse_options<'a>(args: &'a [String], spec: &OptionSpec) -> ParsedOptions<'a> {
+fn parse_options<'a, S: AsRef<str>>(args: &'a [S], spec: &OptionSpec) -> ParsedOptions<'a> {
     let mut parsed = ParsedOptions {
         short: Vec::new(),
         long: Vec::new(),
@@ -1691,29 +1730,31 @@ fn parse_options<'a>(args: &'a [String], spec: &OptionSpec) -> ParsedOptions<'a>
     };
     let mut index = 0;
     while index < args.len() {
-        let token = args[index].as_str();
+        let token = args[index].as_ref();
         index += 1;
         if let Some(body) = token.strip_prefix("--") {
             if body.is_empty() {
                 parsed
                     .operands
-                    .extend(args[index..].iter().map(String::as_str));
+                    .extend(args[index..].iter().map(AsRef::as_ref));
                 return parsed;
             }
             let (name, attached) = match body.split_once('=') {
-                Some((name, _)) => (name, true),
-                None => (body, false),
+                Some((name, value)) => (name, Some(value)),
+                None => (body, None),
             };
             let written = &token[..name.len() + 2];
             let canonical = spec.resolve_long(written);
             if canonical == Some(END_OF_OPTIONS) {
                 parsed
                     .operands
-                    .extend(args[index..].iter().map(String::as_str));
+                    .extend(args[index..].iter().map(AsRef::as_ref));
                 return parsed;
             }
-            parsed.long.push(canonical.unwrap_or(written));
-            if !attached && canonical.is_some_and(|n| matches!(spec.long_arity(n), Arity::Value)) {
+            parsed.long.push((canonical.unwrap_or(written), attached));
+            if attached.is_none()
+                && canonical.is_some_and(|n| matches!(spec.long_arity(n), Arity::Value))
+            {
                 index += 1;
             }
             continue;
@@ -1751,6 +1792,19 @@ fn requests_branch_delete(args: &[String]) -> bool {
 /// spelled.
 fn branch_operands(args: &[String]) -> Vec<&str> {
     parse_options(args, &GIT_BRANCH_OPTIONS).operands
+}
+
+/// Does this `gh pr merge` invocation ask to delete the merged branch? The
+/// flag is read as `-d` anywhere, including inside a cluster of boolean
+/// shorthands (`-ds`, `-sd`), as the written long name, and with an attached
+/// `=<bool>`; an explicit false value is not a request. A value that is
+/// neither true nor false reads as a request, which fails toward the block.
+fn gh_merge_deletes_branch(args: &[&str]) -> bool {
+    let parsed = parse_options(args, &GH_PR_MERGE_OPTIONS);
+    if let Some(value) = parsed.long_value("--delete-branch") {
+        return !matches!(value.to_ascii_lowercase().as_str(), "0" | "f" | "false");
+    }
+    parsed.has_long("--delete-branch") || parsed.has_short(&['d'])
 }
 
 /// Does this `sed` invocation edit its input in place?
@@ -1964,7 +2018,7 @@ fn parse_push(rest: &[String], current_branch: &str) -> PushIntent {
     // Read the options the way git does, so an abbreviated `--forc` or
     // `--del` is the option it stands for and a value is never read as a flag.
     let parsed = parse_options(rest, &GIT_PUSH_OPTIONS);
-    for name in &parsed.long {
+    for (name, _) in &parsed.long {
         match *name {
             "--force" | "--force-with-lease" => force = true,
             "--delete" => delete_mode = true,
@@ -2695,6 +2749,47 @@ mod tests {
         let v = evaluate("gh pr merge --delete-branch", &ctx(&p, "feat/x"));
         assert_eq!(v[0].rule, "git.pr_merge_delete_branch");
         assert_eq!(v[0].level, PolicyLevel::Block);
+    }
+
+    /// `gh` parses with pflag: `-d` is the registered shorthand for
+    /// `--delete-branch` and boolean shorthands cluster, so the guard reads the
+    /// flag rather than the exact long spelling.
+    #[test]
+    fn test_gh_pr_merge_delete_branch_read_as_a_flag() {
+        let p = default_policy();
+        for cmd in [
+            "gh pr merge 42 -d",
+            "gh pr merge -d 42",
+            "gh pr merge 42 --delete-branch",
+            "gh pr merge 42 -ds",
+            "gh pr merge 42 -sd",
+            "gh pr merge 42 -dm",
+            "gh pr merge 42 -rd",
+            "gh pr merge 42 --delete-branch=true",
+            "gh pr merge 42 --squash --delete-branch",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.pr_merge_delete_branch"), "{cmd}: {v:?}");
+        }
+    }
+
+    /// pflag does not abbreviate, an explicit false is not a request, and a
+    /// value carrying the letter is not the flag.
+    #[test]
+    fn test_gh_pr_merge_without_a_delete_request() {
+        let p = default_policy();
+        let lookup = |_: &str| Some("develop".to_string());
+        for cmd in [
+            "gh pr merge 42 --del",
+            "gh pr merge 42 --delete-branch=false",
+            "gh pr merge 42 --squash",
+            "gh pr merge 42 -s",
+            "gh pr merge 42 -b done-deleting",
+            "gh pr merge 42 --body done-deleting",
+        ] {
+            let v = evaluate(cmd, &ctx_with_lookup(&p, "feat/x", &lookup));
+            assert!(!has_rule(&v, "git.pr_merge_delete_branch"), "{cmd}: {v:?}");
+        }
     }
 
     // -- anti-laundering of override tokens (ADR-0007) --
