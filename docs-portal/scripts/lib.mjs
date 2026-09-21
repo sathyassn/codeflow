@@ -701,9 +701,9 @@ function validatePageCarriers(value) {
     if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("portal.config.json: each page_carriers entry must be an object");
     const allowed = new Set(["source", ...panels]);
     for (const key of Object.keys(entry)) if (!allowed.has(key)) throw new Error(`portal.config.json: unknown page_carriers key ${key}`);
-    safeRelative(entry.source, "page_carriers source");
-    if (sources.has(entry.source)) throw new Error(`portal.config.json: duplicate page_carriers entry ${entry.source}`);
-    sources.add(entry.source);
+    const source = portablePathKey(entry.source, "page_carriers source");
+    if (sources.has(source)) throw new Error(`portal.config.json: duplicate page_carriers entry ${entry.source}`);
+    sources.add(source);
     const declared = panels.filter((panel) => entry[panel] !== undefined);
     if (declared.length === 0) throw new Error(`portal.config.json: page_carriers entry ${entry.source} declares no panel carrier`);
     for (const panel of declared) {

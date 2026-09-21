@@ -689,7 +689,7 @@ test("work-record aliases and base paths produce canonical relationships and lin
   ]) assert.throws(() => validateBase(invalid), invalid);
 });
 
-test("portal configuration is closed, bounded, and deeply typed", () => {
+test("portal configuration is closed, bounded, and deeply typed", async () => {
   const valid = { schema_version: 1, title: "Guide", description: "Repository guide", theme: "signal", repository_url: null, repository_root: "..", release_version: null, primitive_tokens: null, source_roots: ["docs"], exclude: [], layers: [
     { id: "orient", label: "Orient", description: "Start", paths: ["docs/product.md"] },
     { id: "system", label: "System", description: "Architecture", prefixes: ["docs/decisions"] },
@@ -705,6 +705,16 @@ test("portal configuration is closed, bounded, and deeply typed", () => {
   assert.throws(() => validatePortalConfig({ ...valid, source_roots: "docs" }), /source_roots/);
   assert.throws(() => validatePortalConfig({ ...valid, repository_url: "https://user:secret@example.com/repo" }), /credentials/);
   assert.throws(() => validatePortalConfig({ ...valid, layers: valid.layers.map((layer) => ({ ...layer, fallback: true })) }), /exactly one/);
+  // A case-insensitive file system makes two sources that differ only by case
+  // the same page, so the shared contract the Rust verifier also reads keeps
+  // both refusals identical.
+  const carriers = JSON.parse(await readFile(new URL("./fixtures/carrier-contract.json", import.meta.url), "utf8"));
+  for (const page_carriers of carriers.page_carriers.accepted) {
+    assert.doesNotThrow(() => validatePortalConfig({ ...valid, page_carriers }), JSON.stringify(page_carriers));
+  }
+  for (const { name, carriers: page_carriers } of carriers.page_carriers.rejected) {
+    assert.throws(() => validatePortalConfig({ ...valid, page_carriers }), /duplicate page_carriers entry/, name);
+  }
 });
 
 test("primitive-token influence is narrow, closed, and contrast checked", () => {

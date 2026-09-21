@@ -4015,6 +4015,30 @@ mod tests {
         error: String,
     }
 
+    #[derive(serde::Deserialize)]
+    struct CarrierContract {
+        page_carriers: CarrierCases,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct CarrierCases {
+        accepted: Vec<serde_json::Value>,
+        rejected: Vec<CarrierCase>,
+    }
+
+    #[derive(serde::Deserialize)]
+    struct CarrierCase {
+        name: String,
+        carriers: serde_json::Value,
+    }
+
+    fn carrier_contract() -> CarrierContract {
+        serde_json::from_str(include_str!(
+            "../../../../assets/docs-portal/starter/tests/fixtures/carrier-contract.json"
+        ))
+        .expect("shared carrier contract must be valid")
+    }
+
     fn authority_contract() -> AuthorityContract {
         serde_json::from_str(include_str!(
             "../../../../assets/docs-portal/starter/tests/fixtures/authority-contract.json"
@@ -5100,13 +5124,6 @@ mod tests {
                 "unsafe source",
                 serde_json::json!([{ "source": "../a.md", "technical": "list" }]),
             ),
-            (
-                "duplicate source",
-                serde_json::json!([
-                    { "source": "docs/a.md", "technical": "list" },
-                    { "source": "docs/a.md", "technical": "list" },
-                ]),
-            ),
             ("not an array", serde_json::json!({ "source": "docs/a.md" })),
         ] {
             let mut invalid = valid.clone();
@@ -5122,6 +5139,42 @@ mod tests {
                 "{mutation} was accepted"
             );
             assert!(!report.is_clean(), "{mutation} reported nothing");
+        }
+
+        // A case-insensitive file system makes two sources that differ only by
+        // case the same page. The contract is shared with the JavaScript
+        // authority suite so neither side can drift into accepting an alias.
+        let contract = carrier_contract();
+        for carriers in contract.page_carriers.accepted {
+            let mut accepted = valid.clone();
+            accepted["page_carriers"] = carriers.clone();
+            let mut report = PortalValidationReport::default();
+            assert!(
+                verify_config_contract(
+                    &serde_json::to_vec(&accepted).unwrap(),
+                    &evidence,
+                    &mut report
+                )
+                .is_some(),
+                "distinct carriers were refused: {carriers}"
+            );
+            assert!(report.is_clean(), "{:?}", report.issues);
+        }
+        for case in contract.page_carriers.rejected {
+            let mut invalid = valid.clone();
+            invalid["page_carriers"] = case.carriers;
+            let mut report = PortalValidationReport::default();
+            let name = case.name;
+            assert!(
+                verify_config_contract(
+                    &serde_json::to_vec(&invalid).unwrap(),
+                    &evidence,
+                    &mut report
+                )
+                .is_none(),
+                "{name} was accepted"
+            );
+            assert!(!report.is_clean(), "{name} reported nothing");
         }
     }
 

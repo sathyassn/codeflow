@@ -1,0 +1,44 @@
+{
+  "page_carriers": {
+    "accepted": [
+      [
+        { "source": "docs/alpha.md", "technical": "list" },
+        { "source": "docs/beta.md", "technical": "list" }
+      ],
+      [
+        { "source": "docs/alpha.md", "technical": "list" },
+        { "source": "docs/nested/alpha.md", "technical": "list" }
+      ]
+    ],
+    "rejected": [
+      {
+        "name": "the same source declared twice",
+        "carriers": [
+          { "source": "docs/alpha.md", "technical": "list" },
+          { "source": "docs/alpha.md", "technical": "list" }
+        ]
+      },
+      {
+        "name": "a file name that differs only by case",
+        "carriers": [
+          { "source": "docs/alpha.md", "technical": "list" },
+          { "source": "docs/Alpha.md", "technical": "list" }
+        ]
+      },
+      {
+        "name": "a folder that differs only by case",
+        "carriers": [
+          { "source": "docs/alpha.md", "technical": "list" },
+          { "source": "Docs/alpha.md", "technical": "list" }
+        ]
+      },
+      {
+        "name": "an extension that differs only by case",
+        "carriers": [
+          { "source": "docs/alpha.md", "technical": "list" },
+          { "source": "docs/alpha.MD", "technical": "list" }
+        ]
+      }
+    ]
+  }
+}
