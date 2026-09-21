@@ -470,6 +470,21 @@ async function assertDeepLink(page, engine, origin, base, route) {
   if (!await page.evaluate((id) => decodeURIComponent(location.hash.slice(1)) === id, targetId)) throw new Error(`${engine}: deep-link fragment did not persist`);
 }
 
+// A cited id usually sits in an altitude panel that is shut when the page
+// loads, so reach it the way a reader does: select that panel's tab and wait
+// for the tablist to report the change. A trigger outside any panel is already
+// where the reader can see it and needs nothing.
+export async function revealAltitudePanel(page, target) {
+  const panelId = await target.evaluate((element) => element.closest(".portal-altitude")?.id ?? null);
+  if (panelId === null) return null;
+  const tab = page.locator(`.portal-altitude-tabs [role="tab"][aria-controls="${panelId}"]`).first();
+  if (await tab.count() === 0) return null;
+  if (await tab.getAttribute("aria-selected") !== "true") await tab.click();
+  await page.locator(`.portal-altitude-tabs [role="tab"][aria-controls="${panelId}"][aria-selected="true"]`).first().waitFor({ state: "attached" });
+  await page.locator(`#${panelId}`).waitFor({ state: "visible" });
+  return panelId;
+}
+
 async function assertStrictIdPreview(page, engine, origin, config, route) {
   if (route === null) return "strict-id-preview-not-applicable";
   const sourceUrl = routeUrl(origin, config.base, route);
@@ -479,6 +494,7 @@ async function assertStrictIdPreview(page, engine, origin, config, route) {
   const href = await trigger.getAttribute("href");
   if (!href || new URL(href, page.url()).origin !== origin) throw new Error(`${engine}: strict-ID trigger is not an ordinary local link`);
   const targetUrl = new URL(href, page.url()).toString();
+  await revealAltitudePanel(page, trigger);
   await trigger.hover();
   await tooltip.waitFor({ state: "visible" });
   await focusTargetByKeyboard(page, trigger, engine);
@@ -488,6 +504,7 @@ async function assertStrictIdPreview(page, engine, origin, config, route) {
   await visit(page, sourceUrl);
   const touchTrigger = page.locator(".portal-id-preview > a").first();
   const touchTooltip = touchTrigger.locator("xpath=following-sibling::*[@role='tooltip']");
+  await revealAltitudePanel(page, touchTrigger);
   await focusTargetByKeyboard(page, touchTrigger, engine);
   await page.keyboard.press("Escape");
   await touchTooltip.waitFor({ state: "hidden" });
