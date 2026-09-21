@@ -2587,14 +2587,43 @@ fn verify_pagefind_entry(
             "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: expected a non-empty version string"
         ));
     }
-    if fields
+    let Some(languages) = fields
         .get("languages")
         .and_then(serde_json::Value::as_object)
-        .is_none_or(serde_json::Map::is_empty)
-    {
+        .filter(|languages| !languages.is_empty())
+    else {
         report.issues.push(format!(
             "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: expected a non-empty languages object"
         ));
+        return;
+    };
+    // A language whose record is null, empty, or missing its index hash is the
+    // shape a half-written search build takes: the entry file exists and names
+    // the language, but nothing can be loaded for it.
+    for (language, record) in languages {
+        let Some(record) = record.as_object().filter(|record| !record.is_empty()) else {
+            report.issues.push(format!(
+                "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no index record"
+            ));
+            continue;
+        };
+        if record
+            .get("hash")
+            .and_then(serde_json::Value::as_str)
+            .is_none_or(|hash| hash.trim().is_empty())
+        {
+            report.issues.push(format!(
+                "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no non-empty hash string"
+            ));
+        }
+        if record
+            .get("page_count")
+            .is_none_or(|count| !count.is_number())
+        {
+            report.issues.push(format!(
+                "Pagefind search index entry is malformed {PAGEFIND_ENTRY_PATH}: language {language} has no numeric page_count"
+            ));
+        }
     }
 }
 
@@ -5302,6 +5331,50 @@ mod tests {
                         || issue.contains("Pagefind search index entry is not valid JSON"))
                         && issue.contains(PAGEFIND_ENTRY_PATH)
                 }),
+                "{contents}: {:?}",
+                report.issues
+            );
+        }
+    }
+
+    #[test]
+    fn a_pagefind_language_without_a_loadable_index_is_refused_by_name() {
+        for (contents, expected) in [
+            (
+                r#"{"version":"1.5.2","languages":{"en":null}}"#,
+                "language en has no index record",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{}}}"#,
+                "language en has no index record",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":"en_71666de4f7"}}"#,
+                "language en has no index record",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{"wasm":"en","page_count":165}}}"#,
+                "language en has no non-empty hash string",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{"hash":"  ","page_count":165}}}"#,
+                "language en has no non-empty hash string",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{"hash":"en_71666de4f7"}}}"#,
+                "language en has no numeric page_count",
+            ),
+            (
+                r#"{"version":"1.5.2","languages":{"en":{"hash":"en_71666de4f7","page_count":"165"}}}"#,
+                "language en has no numeric page_count",
+            ),
+        ] {
+            let report = pagefind_entry_report(contents);
+            assert!(
+                report
+                    .issues
+                    .iter()
+                    .any(|issue| issue.contains(expected) && issue.contains(PAGEFIND_ENTRY_PATH)),
                 "{contents}: {:?}",
                 report.issues
             );
