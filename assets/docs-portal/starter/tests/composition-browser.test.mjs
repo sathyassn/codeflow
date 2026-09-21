@@ -1,12 +1,13 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { chromium } from "@playwright/test";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { collectBuiltArtifacts } from "../scripts/publication.mjs";
-import { observePortalPage, revealAltitudePanel } from "../scripts/browser-verify.mjs";
+import { applyDisplayState, observePortalPage, revealAltitudePanel } from "../scripts/browser-verify.mjs";
 import { RECORD_POINTER_COLUMNS, assertNoRecordRoutes, assertPageClassCoverage, classifyPortalPages, pageClassFailures } from "../scripts/page-classes.mjs";
 import { COMPOSED_PAGE, MISSING_CONCEPT_PAGE, MISSING_TECHNICAL_PAGE, PROSE_TRIO_PAGE, SHELL_PAGE } from "./page-shapes.mjs";
 import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture } from "./portal-fixture.mjs";
@@ -109,4 +110,49 @@ test("a strict-ID preview inside a shut panel is reached by opening that panel",
       assert.equal(await revealAltitudePanel(page, page.locator("h1").first()), null);
     } finally { await browser.close(); }
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// A theme the page has not stored is a theme its own appearance owner can undo,
+// and a scan that lands in between reads one mode's text on the other mode's
+// canvas. Both paths through the helper are held to the same postcondition.
+test("setting the display state leaves the preference and the attribute agreeing", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const directory = await mkdtemp(path.join(tmpdir(), "portal-display-"));
+  try {
+    // A built page carries its component behaviour in an ES module bundle,
+    // which a file URL will not load, so the panel here carries the two writes
+    // the component makes on a pill click and nothing else.
+    await writeFile(path.join(directory, "control.html"), `<!doctype html><html data-theme="light" data-cfp-skin="instrument"><body>
+<button type="button" data-testid="portal-display-btn">Display</button>
+<div data-testid="portal-display-panel" hidden>
+<div class="pills" data-group="skin"><button type="button" data-value="ink" data-testid="skin-ink">Warm</button></div>
+<div class="pills" data-group="appearance"><button type="button" data-value="dark" data-testid="appearance-dark">Dark</button></div>
+</div>
+<script>
+const root = document.documentElement;
+const panel = document.querySelector('[data-testid="portal-display-panel"]');
+document.querySelector('[data-testid="portal-display-btn"]').addEventListener("click", () => { panel.hidden = !panel.hidden; });
+panel.addEventListener("click", (event) => {
+  const pill = event.target.closest(".pills button");
+  if (!pill) return;
+  if (pill.closest(".pills").dataset.group === "appearance") { localStorage.setItem("starlight-theme", pill.dataset.value); root.dataset.theme = pill.dataset.value; }
+  else { localStorage.setItem("cf-portal-skin", pill.dataset.value); root.dataset.cfpSkin = pill.dataset.value; }
+});
+</script></body></html>`);
+    await writeFile(path.join(directory, "bare.html"), `<!doctype html><html data-theme="light" data-cfp-skin="instrument"><body><h1>A surface with no Display control</h1></body></html>`);
+    const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+    try {
+      const page = await browser.newPage();
+      for (const [file, expected] of [["control.html", "control"], ["bare.html", "preference"]]) {
+        await page.goto(pathToFileURL(path.join(directory, file)).href);
+        await page.evaluate(() => localStorage.clear());
+        assert.equal(await applyDisplayState(page, "ink", "dark"), expected, `${file} took the wrong path`);
+        assert.deepEqual(await page.evaluate(() => ({
+          theme: document.documentElement.dataset.theme,
+          skin: document.documentElement.dataset.cfpSkin,
+          appearance: localStorage.getItem("starlight-theme"),
+          palette: localStorage.getItem("cf-portal-skin"),
+        })), { theme: "dark", skin: "ink", appearance: "dark", palette: "ink" }, `${file} left the preference and the attribute disagreeing`);
+      }
+    } finally { await browser.close(); }
+  } finally { await rm(directory, { recursive: true, force: true }); }
 });

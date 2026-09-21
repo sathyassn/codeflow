@@ -532,18 +532,112 @@ async function assertSourceLink(page, engine, origin, config, generated) {
   if (!links.includes(expected)) throw new Error(`${engine}: committed source link is absent or provider-incompatible`);
 }
 
+// The page owns its appearance and its skin. The Display panel stores
+// `starlight-theme` and `cf-portal-skin` and reapplies every attribute from
+// that stored state, and Starlight's own pre-paint script reads the same
+// preference back, so writing `data-theme` on its own leaves the attribute and
+// the preference disagreeing and lets the next apply undo it. Set the state the
+// way a reader sets it, and where a page does not expose the control write the
+// same preferences the control writes.
+export async function applyDisplayState(page, skin, mode) {
+  const skinPill = page.locator(`[data-testid="skin-${skin}"]`).first();
+  const appearancePill = page.locator(`[data-testid="appearance-${mode}"]`).first();
+  if (await skinPill.count() > 0 && await appearancePill.count() > 0) {
+    if (await page.locator('[data-testid="portal-display-panel"]').first().isHidden()) {
+      await page.locator('[data-testid="portal-display-btn"]').first().click();
+    }
+    await skinPill.click();
+    await appearancePill.click();
+    await page.keyboard.press("Escape");
+    return "control";
+  }
+  await page.evaluate(({ skin, mode }) => {
+    try {
+      localStorage.setItem("starlight-theme", mode);
+      localStorage.setItem("cf-portal-skin", skin);
+    } catch {
+      /* storage unavailable: the attributes still apply for this page view */
+    }
+    document.documentElement.dataset.cfpSkin = skin;
+    document.documentElement.dataset.theme = mode;
+  }, { skin, mode });
+  return "preference";
+}
+
+// The muted text token is read once per skin and mode inside a single task,
+// with nothing painted in between, so the wait below has a value to wait for
+// that comes from the page rather than from a second copy of the token table.
+async function appearanceTokenReference(page, engine) {
+  const reference = await page.evaluate((skins) => {
+    const root = document.documentElement;
+    const before = { skin: root.dataset.cfpSkin, theme: root.dataset.theme };
+    const style = getComputedStyle(root);
+    const table = {};
+    for (const skin of skins) {
+      table[skin] = {};
+      for (const mode of ["light", "dark"]) {
+        root.dataset.cfpSkin = skin;
+        root.dataset.theme = mode;
+        table[skin][mode] = style.getPropertyValue("--cf-text-muted").trim();
+      }
+    }
+    if (before.skin === undefined) delete root.dataset.cfpSkin;
+    else root.dataset.cfpSkin = before.skin;
+    if (before.theme === undefined) delete root.dataset.theme;
+    else root.dataset.theme = before.theme;
+    return table;
+  }, PORTAL_SKINS);
+  for (const skin of PORTAL_SKINS) {
+    for (const mode of ["light", "dark"]) {
+      if (!reference[skin][mode]) throw new Error(`${engine}: ${skin}/${mode} declares no muted text token to settle on`);
+    }
+  }
+  return reference;
+}
+
+// No sleep: a scan starts only once the root has resolved the mode it was
+// asked for, measured on a token that mode owns.
+async function settleDisplayState(page, engine, skin, mode, expectedMuted) {
+  try {
+    await page.waitForFunction(({ skin, mode, expectedMuted }) => {
+      const root = document.documentElement;
+      if (root.dataset.cfpSkin !== skin || root.dataset.theme !== mode) return false;
+      let stored = mode;
+      try {
+        stored = localStorage.getItem("starlight-theme");
+      } catch {
+        /* storage unavailable: the attributes above carry the state instead */
+      }
+      if (stored !== mode) return false;
+      return getComputedStyle(root).getPropertyValue("--cf-text-muted").trim() === expectedMuted;
+    }, { skin, mode, expectedMuted });
+  } catch {
+    const observed = await page.evaluate(() => {
+      const root = document.documentElement;
+      let stored = "unavailable";
+      try {
+        stored = localStorage.getItem("starlight-theme");
+      } catch {
+        /* storage unavailable: reported as such */
+      }
+      return { skin: root.dataset.cfpSkin, theme: root.dataset.theme, stored, muted: getComputedStyle(root).getPropertyValue("--cf-text-muted").trim() };
+    });
+    throw new Error(`${engine}: ${skin}/${mode} did not settle before the scan: expected muted ${expectedMuted}, observed ${JSON.stringify(observed)}`);
+  }
+}
+
 async function assertThemeMatrix(page, engine, output) {
   await page.setViewportSize({ width: 1440, height: 900 });
+  const reference = await appearanceTokenReference(page, engine);
   const accents = { light: new Set(), dark: new Set() };
   for (const skin of PORTAL_SKINS) {
     for (const mode of ["light", "dark"]) {
-      const tokens = await page.evaluate(async ({ skin, mode }) => {
-        document.documentElement.dataset.cfpSkin = skin;
-        document.documentElement.dataset.theme = mode;
-        await new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+      await applyDisplayState(page, skin, mode);
+      await settleDisplayState(page, engine, skin, mode, reference[skin][mode]);
+      const tokens = await page.evaluate(() => {
         const style = getComputedStyle(document.documentElement);
         return { font: style.getPropertyValue("--cf-font-sans").trim(), accent: style.getPropertyValue("--cf-accent").trim() };
-      }, { skin, mode });
+      });
       if (!tokens.font || !tokens.accent) throw new Error(`${engine}: ${skin}/${mode} utility tokens are absent`);
       accents[mode].add(tokens.accent);
       await assertA11y(page, engine, `${skin}/${mode}`);
@@ -551,7 +645,19 @@ async function assertThemeMatrix(page, engine, output) {
     }
   }
   if (accents.light.size !== PORTAL_SKINS.length || accents.dark.size !== PORTAL_SKINS.length) throw new Error(`${engine}: the ${PORTAL_SKINS.length} utility skins do not produce a distinct palette each per mode`);
-  await page.evaluate((skin) => { document.documentElement.dataset.cfpSkin = skin; document.documentElement.dataset.theme = "light"; }, await page.evaluate(() => document.documentElement.dataset.portalTheme === "folio" ? "ink" : "instrument"));
+  // The matrix hands the page back the way a reader left it: the display keys
+  // return to the configured default and the light appearance the checks before
+  // this one chose is restored, both in storage and on the root.
+  await page.evaluate(() => {
+    try {
+      for (const key of ["cf-portal-skin", "cf-portal-typeface", "cf-portal-scale"]) localStorage.removeItem(key);
+      localStorage.setItem("starlight-theme", "light");
+    } catch {
+      /* storage unavailable: the reload below restores the configured defaults */
+    }
+  });
+  await page.reload({ waitUntil: "networkidle" });
+  if (await page.locator("html").getAttribute("data-theme") !== "light") throw new Error(`${engine}: the theme matrix did not restore the light appearance a reader had chosen`);
 }
 
 async function assertKeyboardPath(page, engine) {

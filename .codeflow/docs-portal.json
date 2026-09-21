@@ -54,7 +54,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "f79780751dabec015b25c766d730c340390e0a2106f811243974cf1b740e191b"
+      "pristine_sha256": "972d1e90b46cb4719ade0e1ba41a712f4cedd9af8ca604125293faa44a61885f"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -154,7 +154,7 @@
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "9810824b49b54d9f517f5480246b4f54fcbb5521edbbdf7b3e48c0507a0fb6dc"
+      "pristine_sha256": "dc64624815eb41f3e68bd02bfe795f5b9f8d8601e7c86763c71c7fda6be972fc"
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
