@@ -7,8 +7,7 @@
 
 ## Concept
 
-**One binary, twenty two subcommands, and every one of them does a job the
-guide already names.**
+**One binary and twenty-two subcommands, grouped by the job each one does.**
 
 ```cf-stage
 scaffold | init · update · epic · spec · task · estimate @accent
@@ -25,48 +24,50 @@ present | portal · present @positive
 caption: the same six jobs the capabilities page uses, read as commands
 ```
 
-`codeflow help <command>` prints the same surface this page lists, and
+`codeflow help <command>` lists the same commands this page lists, and
 `codeflow <command> --help` prints the flags. Architecture is the one-line
 purpose of each subcommand and when you reach for it; Technical is the exact
-arguments, flags and exit behaviour.
+arguments, flags and exit behavior.
 
 ## Architecture
 
-Purposes are derived from the binary's own short help, with the long ones
-shortened and arrows written as words. Nothing here is a wrapper around a
-second implementation: the hooks, CI, and the in-session guards all call the
-same functions through this surface.
+Rows are grouped by the six jobs above, then by the order `codeflow --help`
+prints them within each job. Purposes are derived from the binary's own short
+help, with the long ones shortened and arrows written as words. Nothing here is
+a wrapper around a second implementation: the hooks, CI, and the in-session
+guards all call the same functions through this surface.
 
-| Subcommand | Purpose | When |
-|---|---|---|
-| `init` | Scaffold this project (idempotent, non-destructive, offline) | Once per repository, run from the intended project root |
-| `update` | Refresh managed scaffold files (3-way merge; never clobbers) | After upgrading the binary, per repository |
-| `hook` | Claude-layer hooks, wired by the settings presets (charter §3.3) | Never by hand: the settings presets invoke it |
-| `git-hook` | Git client hook target, the `.codeflow/git-hooks/` shims exec this | Never by hand: the installed shims invoke it |
-| `ci` | Verify a commit range + branch name against policy, the portable, binary-sourced CI check | In CI, from the scaffolded workflow |
-| `policy` | Inspect `.codeflow/policy.json` | When you need a key's schema or the effective value and its source |
-| `remote` | Remote provider operations (branch protection) | Once the repository has a remote to protect |
-| `test` | Run the test gate (configured targets or runtime stack detection) | Before push, in full. CI runs it too; pre-push runs only the conditional quick gate described under Verify |
-| `validate` | Validate record frontmatter; `--docs` adds the doc-graph integrity lint | Before push, and for a portal with `--portal` |
-| `integrate` | Land a branch into a target: flock(rebase to test to ff-merge) | Landing locally with no remote, or into an integration branch |
-| `doctor` | Health checks | After init or update, and when something is wired but not working |
-| `orient` | Print the session-start digest (pointers, not content) | At session start; the SessionStart hook runs it for you |
-| `status` | Generated status view: branch, worktrees, in-flight work, capabilities | When you need the current shape of the repository |
-| `recall` | Search project memory: ledger, session summaries, ADRs, epics, capabilities | When you need why something was decided |
-| `epic` | Create an epic: allocate the next EPC-NNN and scaffold it from the template | Full tier, planning a body of work |
-| `spec` | Create a spec: allocate the next SPC-NNN and link its consuming work item | Full tier, when a change agreement needs freezing |
-| `task` | Create an epic-linked or reasoned standalone task | Full tier, planning a unit of work |
-| `work` | Durable-work lifecycle checks | Before implementing a durable task |
-| `estimate` | Check explicit forecast allocations and pinned evidence without writes | Only where the optional cf-estimate method was adopted |
-| `delegate` | Transport-neutral lifecycle for interactive delegate turns | From a host driving a peer harness turn |
-| `portal` | Adopt or reconcile the opt-in documentation portal | Adopting or transferring the documentation portal |
-| `present` | Review this session on the utility presentation surface (catalog JSON, Comment) | When a bounded review surface materially helps |
+| Job | Subcommand | Purpose | When |
+|---|---|---|---|
+| Scaffold | `init` | Scaffold this project (idempotent, non-destructive, offline) | Once per repository, run from the intended project root |
+| Scaffold | `update` | Refresh managed scaffold files (3-way merge; never clobbers) | After upgrading the binary, per repository |
+| Scaffold | `epic` | Create an epic: allocate the next EPC-NNN and scaffold it from the template | Full tier, planning a body of work |
+| Scaffold | `spec` | Create a spec: allocate the next SPC-NNN and link its consuming work item | Full tier, when a change agreement needs freezing |
+| Scaffold | `task` | Create an epic-linked or reasoned standalone task | Full tier, planning a unit of work |
+| Scaffold | `estimate` | Check explicit forecast allocations and pinned evidence without writes | Only where the optional cf-estimate method was adopted |
+| Enforce | `hook` | Claude-layer hooks, wired by the settings presets (charter §3.3) | Never by hand: the settings presets invoke it |
+| Enforce | `git-hook` | Git client hook target, the `.codeflow/git-hooks/` shims exec this | Never by hand: the installed shims invoke it |
+| Enforce | `ci` | Verify a commit range + branch name against policy, the portable, binary-sourced CI check | In CI, from the scaffolded workflow |
+| Enforce | `policy` | Inspect `.codeflow/policy.json` | When you need a key's schema or the effective value and its source |
+| Enforce | `remote` | Remote provider operations (branch protection) | Once the repository has a remote to protect |
+| Verify | `test` | Run the test gate (configured targets or runtime stack detection) | Before push, in full. CI runs it too; pre-push runs only the conditional quick gate described under Verify |
+| Verify | `validate` | Validate record frontmatter; `--docs` adds the doc-graph integrity lint | Before push, and for a portal with `--portal` |
+| Verify | `integrate` | Land a branch into a target: flock(rebase to test to ff-merge) | Landing locally with no remote, or into an integration branch |
+| Verify | `doctor` | Health checks | After init or update, and when something is wired but not working |
+| Verify | `work` | Durable-work lifecycle checks | Before implementing a durable task |
+| Remember | `orient` | Print the session-start digest (pointers, not content) | At session start; the SessionStart hook runs it for you |
+| Remember | `status` | Generated status view: branch, worktrees, in-flight work, capabilities | When you need the current shape of the repository |
+| Remember | `recall` | Search project memory: ledger, session summaries, ADRs, epics, capabilities | When you need why something was decided |
+| Delegate | `delegate` | Transport-neutral lifecycle for interactive delegate turns | From a host driving a peer harness turn |
+| Present | `portal` | Adopt or reconcile the opt-in documentation portal | Adopting or transferring the documentation portal |
+| Present | `present` | Review this session on the utility presentation surface (catalog JSON, Comment) | When a bounded review surface materially helps |
 
 ## Technical
 
 Every argument, flag and default below is derived from the binary's own
-`--help` output at this head, shortened where the help text runs long. A required argument is written in angle brackets, an optional one in
-square brackets.
+`--help` output at this head, shortened where the help text runs long. A
+required argument is written in angle brackets, an optional one in square
+brackets.
 
 ### Scaffold
 
@@ -157,8 +158,7 @@ run, 124 on timeout, and 130 when interrupted. `delegate init` and
 | `codeflow present export <SESSION_ID>` | `--out <FILE>` (required), `--theme <editorial\|instrument\|technical>` (default `editorial`), `--mode <system\|light\|dark>` (default `system`) | Exports a deterministic self-contained read-only HTML artifact |
 | `codeflow present clear [SESSION_ID]` | `--older-than <OLDER_THAN>` (default `30d`), `--dry-run` | With no session id it removes every eligible closed session older than the window |
 
-
-### General exit behaviour
+### General exit behavior
 
 | Result | Exit |
 |---|---|
