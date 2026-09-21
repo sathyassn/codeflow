@@ -167,8 +167,8 @@ predecessors without mutating repository state.
 
 CodeFlow is the natural authority for finite repo-local gated work. Keep the
 team's external tracker authoritative for its own portfolio/product items when
-work is multi-team, cross-repo, assignment/roadmap/SLA driven, or already owned
-by an established method. Active full or recognizable historical CodeFlow task
+work is multi-team, cross-repo, driven by assignment, roadmap or service-level
+agreement (SLA), or already owned by an established method. Active full or recognizable historical CodeFlow task
 tracking still requires distinct repository-execution records and planning
 anchors: an external ticket or approved spec cannot satisfy or waive
 `work start`, pre-commit, or CI. Link opaque IDs or URLs in epic/task template
@@ -195,9 +195,9 @@ every file written and closes with the next step. From there:
 1. Run `/cf-customize`. It verifies the installed harness settings and tools,
    then walks the **consuming project's** `docs/product.md`,
    `docs/architecture.md`, `AGENTS.md`, Claude-specific differences in
-   `CLAUDE.md`, README/manifests, CI commands, policy, and required MCPs. Review
-   and commit those project facts; CodeFlow never invents them or silently
-   changes global harness settings.
+   `CLAUDE.md`, README/manifests, CI commands, policy, and required Model
+   Context Protocol (MCP) servers. Review and commit those project facts;
+   CodeFlow never invents them or silently changes global harness settings.
 2. Start your first feature on a `feat/*` branch, in a worktree.
 3. Build with tests; commit small (`type(scope): description`, with description ≤ 50
    chars, subject line ≤ 72, a body of only `-` bullets when one is needed).
@@ -206,9 +206,9 @@ every file written and closes with the next step. From there:
 **Bootstrap grace.** codeflow needs exactly one commit before its gates guard
 the repo, its own scaffold commit, and that is a sanctioned path (it arms
 `policy_armed` and passes the hooks via the gate-context token), so you never
-hit a policy wall on the way to your first PR (the v2 charter, in the repository at
-`docs/plan/v2/00-charter.md`, which this guide does not publish, §16 AC #1). The secret scan is the one rule that
-is never graced (charter §6.3).
+hit a policy wall on the way to your first PR (the v2 charter, in the repository
+at `docs/plan/v2/00-charter.md`, §16 AC #1). The secret scan is the one rule
+that is never graced (charter §6.3).
 
 ### Configure test targets
 
@@ -402,13 +402,14 @@ whole-repository score targets, or turn architectural taste into a gate.
 
 ### Selecting deterministic code analysis
 
-CodeFlow does not impose one SAST service on every stack. During
-`/cf-customize`, `cf-stack` inventories languages, trust boundaries, hosting,
-existing tools, and CI constraints, then records the smallest maintained lane
-that provides relevant source/data-flow or taint evidence. CodeQL default setup
-is a low-maintenance choice for an eligible GitHub-hosted repository and a
-supported language; Semgrep, Sonar, or a language-native analyzer may fit other
-stacks or governance requirements. SCA and secret scanning remain separate
+CodeFlow does not impose one static application security testing (SAST) service
+on every stack. During `/cf-customize`, `cf-stack` inventories languages, trust
+boundaries, hosting, existing tools, and CI constraints, then records the
+smallest maintained lane that provides relevant source/data-flow or taint
+evidence. CodeQL default setup is a low-maintenance choice for an eligible
+GitHub-hosted repository and a supported language; Semgrep, Sonar, or a
+language-native analyzer may fit other stacks or governance requirements.
+Software composition analysis (SCA) and secret scanning remain separate
 evidence and do not substitute for SAST.
 
 Verify the chosen analyzer rather than merely installing it: record applicable
@@ -470,8 +471,12 @@ records one adopted root. Repeated setup and ordinary `codeflow update` replace
 unchanged managed files and repair missing managed files, but stop all portal
 writes on local runtime edits or unknown collisions. There is no source merge,
 sidecar or pristine runtime directory. `portal.config.json` is project-owned:
-after first adoption, even its absence is preserved and reported. Configure source roots there rather
-than copying authoritative prose into the portal. Generated content and search
+after first adoption, even its absence is preserved and reported. Configure
+source roots there rather than copying authoritative prose into the portal. Its
+`records.enabled` key names who owns the record folders, not whether they are
+visible: left `false`, the configured folders stay out of the page set and one
+generated pointer page names them; set `true`, the project publishes those
+folders itself as ordinary pages and declares no pointers. Generated content and search
 output remain disposable, and local generation never publishes a site.
 
 Use supported config/token settings and unclaimed asset paths for ordinary

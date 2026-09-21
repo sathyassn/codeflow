@@ -41,6 +41,7 @@
     { "path": "tests/composition-browser.test.mjs", "ownership": "managed" },
     { "path": "tests/composition.test.mjs", "ownership": "managed" },
     { "path": "tests/fixtures/authority-contract.json", "ownership": "managed" },
+    { "path": "tests/fixtures/carrier-contract.json", "ownership": "managed" },
     { "path": "tests/fixtures/route-contract.json", "ownership": "managed" },
     { "path": "tests/page-shapes.mjs", "ownership": "managed" },
     { "path": "tests/portal-fixture.mjs", "ownership": "managed" },

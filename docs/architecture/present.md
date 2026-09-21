@@ -62,11 +62,11 @@ true.
 | Engine surface | interactive presentation is a separate bounded engine surface, `codeflow-present` (ADR-0049, ADR-0050, ADR-0052) |
 | Schemas | the closed versioned document, primitive-token, and public-history contracts are represented by matching Rust types and managed JSON Schemas installed under `.codeflow/schemas/present/` |
 | Rust ownership | validation, immutable revisions, append-only feedback, retention, export, and the per-session loopback service |
-| Embedded distribution | one content-addressed Preact/Shiki/Mermaid bundle built reproducibly from its exact lockfile, SBOM, license inventory, integrity manifest, audit, and size budgets; consumer builds and runtime use require no Node toolchain |
+| Embedded distribution | one content-addressed Preact/Shiki/Mermaid bundle built reproducibly from its exact lockfile, software bill of materials (SBOM), license inventory, integrity manifest, audit, and size budgets; consumer builds and runtime use require no Node toolchain |
 
 ### State, quotas, and bounded growth
 
-| Rule | Behaviour |
+| Rule | Behavior |
 |---|---|
 | State keys | repository state keys hash the canonical path's native OS representation, not a lossy display string |
 | Serialization | one project mutation lease serializes every durable growth path before the per-session lock |
@@ -89,7 +89,7 @@ true.
 
 Every state read and recovery path is self-bounded.
 
-| Bound | Behaviour |
+| Bound | Behavior |
 |---|---|
 | Ledger replay | a single replay rejects duplicate receipts and deliveries, delivery before receipt, resolution before delivery, and every post-terminal transition |
 | Idempotence | exact receipt, delivery, and identical terminal retries append nothing, while conflicts remain loud |
@@ -108,7 +108,7 @@ Platform boundaries are native and fail closed.
 
 | Platform | Boundary |
 |---|---|
-| Windows | discovers trusted system and known-folder paths without `PATH` lookup, rejects reparse traversal, parses process identity with Windows command-line rules, emits UTF-8 from Windows PowerShell, passes a protected owner-only descriptor at creation for every private file including append and lease files, and verifies owner, protected DACL, trustees, and inheritance whenever existing state is opened |
+| Windows | discovers trusted system and known-folder paths without `PATH` lookup, rejects reparse traversal, parses process identity with Windows command-line rules, emits UTF-8 from Windows PowerShell, passes a protected owner-only descriptor at creation for every private file including append and lease files, and verifies owner, protected discretionary access control list (DACL), trustees, and inheritance whenever existing state is opened |
 | Linux and WSL2 | reads bounded, no-follow `/proc` identity and terminates only the proven process group |
 | macOS | uses delimiter-aware identity and the same ownership rule |
 | Unix generally | state-root inputs must be absolute |
@@ -116,7 +116,7 @@ Platform boundaries are native and fail closed.
 Every browser or auxiliary system-tool child starts from one allowlist-only
 environment, so provider-secret environment variables are not inherited.
 
-| Lifecycle rule | Behaviour |
+| Lifecycle rule | Behavior |
 |---|---|
 | Launch lease | a session lease serializes each browser launch from exact per-attempt recovery publication through durable registration; close, show, and later launch consume interrupted evidence |
 | Lost PID | if a recorded PID disappears or is reused, the native adapter searches for the exact instance and profile marker |
@@ -130,7 +130,7 @@ path, ACL, process-tree, browser, and cleanup evidence remains a release gate.
 
 ### Review-surface anchoring and resolve
 
-| Rule | Behaviour |
+| Rule | Behavior |
 |---|---|
 | Snapshot | the current review surface loads a bounded recent feedback snapshot |
 | Same-revision selectors | retain their exact offsets |

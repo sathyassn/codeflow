@@ -73,7 +73,8 @@ Each lane names the Node version it runs on, and only the starter is a floor.
 
 The source-authority adapter generates disposable pages, Markdown
 twins, `llms.txt`, search output, and a versioned evidence manifest from one
-clean committed snapshot. Its pinned GFM pipeline, bounded no-follow reads,
+clean committed snapshot. Its pinned GitHub Flavored Markdown (GFM) pipeline,
+bounded no-follow reads,
 literal bounded Git pathspec batches, committed-blob authority,
 configured-tree source coverage, semantic source-root-relative routes,
 reserved generated-public namespaces, locale-independent ordering, workflow
@@ -106,6 +107,7 @@ nothing. It independently checks eleven claims:
 | Raster dimension | Each raster asset matches its declared size |
 | Output coverage | Nothing was published that the manifest does not list |
 | Twin and `llms.txt` | The Markdown twins and the index agree with the pages |
+
 It compares generator evidence with the declared identity, retaining managed
 release pins but accepting a genuinely renamed transferred generator. Matching
 evidence is not runtime attestation or a substitute for rendered qualification.

@@ -1,4 +1,4 @@
-# codeflow: decision map
+# CodeFlow decision map
 
 <!-- A map of the ADR record, authored from each decision's frontmatter (id,
      title, status, superseded_by). It summarises no ADR: the decisions remain

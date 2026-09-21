@@ -265,7 +265,7 @@ await publishOwnedCorpus(portalRoot, [
   { live: "src/content/docs", files: contentFiles },
   { live: "public", files: publicFiles, preserveUnknown: false },
 ]);
-console.log(`portal: adapted ${pages.length} source page(s) across ${layers.length} layer(s)`);
+console.log(`portal: adapted ${counted(pages.length, "source page")} across ${counted(layers.length, "layer")}`);
 
 function chooseLayer(sourcePath, definitions) {
   return definitions.find((layer) => (layer.paths ?? []).includes(sourcePath) || (layer.prefixes ?? []).some((prefix) => sourcePath === prefix || sourcePath.startsWith(`${prefix}/`))) ?? definitions.find((layer) => layer.fallback);
@@ -424,6 +424,12 @@ function nestedLayerPages(layer, layerPages) {
   return nest(ranked, 1);
 }
 
+// Reader-facing captions say "1 page" and "5 pages", never the build-log
+// "page(s)" shorthand.
+function counted(count, noun) {
+  return `${count} ${count === 1 ? noun : `${noun}s`}`;
+}
+
 function sidebarFrontmatter(route) {
   if (!sidebarOrder.has(route)) throw new Error(`no sidebar order for route ${route}`);
   return `sidebar:\n  order: ${sidebarOrder.get(route)}\n`;
@@ -431,7 +437,7 @@ function sidebarFrontmatter(route) {
 
 function readingOrderFigure(layer, entries) {
   const items = entries.map((entry, index) => `<li><a href="${escapeHtml(withBase(base, entry.route))}"><span class="n">${String(index + 1).padStart(2, "0")}</span><span class="t">${escapeHtml(entry.title)}</span></a></li>`).join("");
-  return `<figure class="portal-reading-order"><ol>${items}</ol><figcaption>${escapeHtml(`Reading order for ${layer.label}: ${entries.length} page(s)`)}</figcaption></figure>`;
+  return `<figure class="portal-reading-order"><ol>${items}</ol><figcaption>${escapeHtml(`Reading order for ${layer.label}: ${counted(entries.length, "page")}`)}</figcaption></figure>`;
 }
 
 function escapeMarkdownCell(value) {

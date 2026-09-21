@@ -89,9 +89,9 @@ path is [docs/model-upgrades.md](docs/model-upgrades.md).
 |---|---|
 | `init` | Scaffold this project (idempotent, non-destructive, offline) |
 | `update` | Refresh managed scaffold files (3-way merge; never clobbers) |
-| `portal setup --path <dir>` | Adopt or reconcile the offline documentation-portal starter (same utility craft as present; durable docs; no Comment) |
+| `portal setup --path <dir>` | Adopt or reconcile the offline documentation-portal starter (same utility craft as present; durable docs, with no per-session review comments) |
 | `portal transfer --confirm` | Take responsibility for the adopted runtime while preserving edits and intentional deletions |
-| `present` | Open, revise, review, export, close, and clear a this-session catalog review (runtime owns chrome and Comment; not a docs portal) |
+| `present` | Open, revise, review, export, close, and clear a this-session review document; the runtime owns the surrounding interface and the review-comment system (not a docs portal) |
 | `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`) |
 | `git-hook` | Git client hook target the `.codeflow/git-hooks` shims exec (wired via `core.hooksPath`) |
 | `orient` | Print the session-start digest (pointers, not content) |
@@ -100,7 +100,7 @@ path is [docs/model-upgrades.md](docs/model-upgrades.md).
 | `ci` | Portable, binary-sourced CI check: verify a commit range + branch name against policy (auto-detects the platform's range); exit 2 on a violation or invalid policy |
 | `status` | Generated view: branch, worktrees, in-flight work, capabilities; `--delivery` shows the capability-delivery rollup |
 | `integrate` | Land a branch into a target: flock(rebase → test → ff-merge) |
-| `doctor` | Health checks (15): hooks, claude, codex, grok, config, permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, test-config |
+| `doctor` | Health checks (15): hooks, claude, codex, grok, config, permissions, network, delegates, model-bindings, delegate-roundtrip, repo-integrity, ci-perimeter, managed-drift, customization, test-config |
 | `policy` | Inspect `.codeflow/policy.json`: `explain` renders every key's type, default, and valid values from the binary; `show` prints the effective values, their source, and flags invalid ones |
 | `recall` | Search project memory: ledger, session summaries, ADRs, epics/tasks/specs, capabilities |
 | `remote` | Remote provider operations (branch protection) |
@@ -142,7 +142,7 @@ detail: [the enforcement matrix](docs/architecture/enforcement-planes.md).
 - [docs/architecture.md](docs/architecture.md): how the binary and scaffold are built
 - [docs/product.md](docs/product.md): what codeflow is for and its non-goals
 - [docs/capabilities.md](docs/capabilities.md): the CAP-### registry of what the system does
-- [docs/releasing.md](docs/releasing.md): the release runbook, and versioning in a project that consumes codeflow
+- [docs/releasing.md](docs/releasing.md): the release runbook, and versioning in a project that consumes CodeFlow
 - [docs/release-checklist.md](docs/release-checklist.md): evidence required for every release
 - [docs/decisions/](docs/decisions/): ADRs (the record of why)
 

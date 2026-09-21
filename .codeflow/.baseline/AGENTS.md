@@ -104,7 +104,7 @@ merges only where the remote requires its result; remote authority also depends
 on permissions and bypass settings. Report missing planes without relaxing task
 safety or review. Headless task execution stays prohibited (CodeFlow ADR-0018)
 whether or not a harness runs hooks in that mode; that prohibition is
-instruction-only — CodeFlow cannot technically prevent it. See cf-method,
+instruction-only, and CodeFlow cannot technically prevent it. See cf-method,
 "Why the git boundary is remote." The rules, compressed:
 
 - **Branches:** `{prefix}/{kebab-name}`. Prefixes: `feat/ fix/ docs/ refactor/

@@ -186,9 +186,9 @@ adrs: [ADR-0025, ADR-0044]
 (or a `codeflow update` that ships new defaults to decide), it runs a
 flow-aware tool preflight, verifying the tools needed by each flow the
 project actually uses (git and the harness for every flow; the `codex-plugin-cc`
-plugin, codex, and its MCP servers for a Claude-hosted duo; Claude CLI/MCP,
-tmux, and the completion-hook canary for a Codex-hosted duo or reverse consult;
-the stack's test toolchain).
+plugin, codex, and its Model Context Protocol (MCP) servers for a Claude-hosted
+duo; Claude CLI/MCP, tmux, and the completion-hook canary for a Codex-hosted
+duo or reverse consult; the stack's test toolchain).
 It then reconciles the consuming project's actual README, manifests, code, and CI
 against its project-owned artifacts (`docs/product.md`,
 `docs/architecture.md`, common instructions/commands in `AGENTS.md`, only
@@ -310,7 +310,7 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
 `codeflow doctor` runs fifteen health checks: hooks, Claude wiring, Codex wiring, Grok wiring, config,
-permissions, network, delegates, qualified model bindings, delegate round-trip, repo integrity, CI
+permissions, network, delegates, model-bindings, delegate round-trip, repo integrity, CI
 perimeter, managed-region
 drift, consuming-project customization, and test config. The Grok check reports
 structural `.grok/hooks` wiring and the one-time `/hooks-trust` step; it does
@@ -341,11 +341,11 @@ adrs: [ADR-0016]
 
 The duo develop flow's mandatory security / red-team stage, bound at three
 planes that copy the git-rules model. Deterministic floor: the CI
-`security-review` job runs `osv-scanner` (stack-agnostic SCA over every lockfile
-ecosystem, the universal floor today; per-stack scanners are a future
-extension), gated by the `security_review` (whole-job umbrella) and `dep_audit`
-(SCA sub-gate) policy keys beside `secret_scan`, with the advisory blocking when
-either is `block`. Model layer: the `cf-security-reviewer` agent runs a
+`security-review` job runs `osv-scanner` (stack-agnostic software composition
+analysis, or SCA, over every lockfile ecosystem, the universal floor today;
+per-stack scanners are a future extension), gated by the `security_review`
+(whole-job umbrella) and `dep_audit` (SCA sub-gate) policy keys beside
+`secret_scan`, with the advisory blocking when either is `block`. Model layer: the `cf-security-reviewer` agent runs a
 dual-vendor adversarial red-team (Claude defender lens + codex assume-breach
 attacker, ADR-0005) across seven axes mapped to OWASP Top 10:2025 / OWASP LLM
 Top 10:2025 / CWE Top 25 (2025), emitting structured `SecurityFinding` /
@@ -701,7 +701,8 @@ generator identity; v1 evidence stays strict in both ownership modes. Legacy
 journals recover before migration, and unknown or changed baseline content
 blocks both migration and transfer without deletion. The source-authority adapter generates disposable pages, Markdown
 twins, `llms.txt`, search output, and a versioned evidence manifest from one
-clean committed snapshot. Its pinned GFM pipeline, bounded no-follow reads,
+clean committed snapshot. Its pinned GitHub Flavored Markdown (GFM) pipeline,
+bounded no-follow reads,
 literal bounded Git pathspec batches, committed-blob authority,
 configured-tree source coverage, semantic source-root-relative routes,
 reserved generated-public namespaces, locale-independent ordering, workflow
@@ -769,9 +770,10 @@ between diagrams, and fails remaining items to escaped source when the eager
 fallback exhausts its cumulative budget. Browser and auxiliary system-tool
 children share one allowlist-only environment. Windows ACL mutation is confined
 to creation for every private file, including append and lease files; existing
-state uses native read-only owner/protected-DACL/trustee/inheritance
-verification. Unix ignores a relative XDG state override and rejects a relative
-home rather than placing state in the worktree. Static export remains self-contained and excludes
+state uses native read-only verification of owner, protected discretionary
+access control list (DACL), trustees, and inheritance. Unix ignores a relative
+XDG state override and rejects a relative home rather than placing state in the
+worktree. Static export remains self-contained and excludes
 review/authentication/runtime state.
 
 Native-path repository identity, per-block and whole-document collection

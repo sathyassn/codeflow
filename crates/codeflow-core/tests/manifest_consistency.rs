@@ -549,7 +549,7 @@ fn ci_downloads_verify_pinned_checksums() {
 /// `superseded_by`"), so the clarifying clause cannot land there — its one
 /// home is the AGENTS contract, which `codeflow update` regenerates.
 const INSTRUCTION_ONLY_CLAUSE: &str =
-    "that prohibition is instruction-only — CodeFlow cannot technically prevent it";
+    "that prohibition is instruction-only, and CodeFlow cannot technically prevent it";
 
 /// Authored contract templates that could plausibly host the clause. Exactly
 /// one of them may.

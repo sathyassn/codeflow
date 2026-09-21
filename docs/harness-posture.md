@@ -44,7 +44,7 @@ scaffold turns on, the right column is what an operator still has to decide.
 The catastrophic classifier is a non-relaxable floor, not a complete endpoint
 security product. Managed organization policy, least-privilege host accounts,
 verified backups, and authenticated human approval remain necessary at higher
-blast radii. Per-platform behaviour, the exact configuration keys, and the
+blast radii. Per-platform behavior, the exact configuration keys, and the
 credential rules are in Technical.
 
 ## Technical
