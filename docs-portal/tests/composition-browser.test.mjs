@@ -71,11 +71,11 @@ test("the gate reads a real build and names every source that is not composed", 
     }
     assert.deepEqual(failures, [
       "docs/adoption.md (explanatory page at orient/adoption) lacks the altitude trio concept, architecture, technical: missing technical; present concept, architecture",
-      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, pre 0)",
-      "docs/handbook.md (explanatory page at reference/handbook) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, pre 0)",
+      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, list 0, pre 0)",
+      "docs/handbook.md (explanatory page at reference/handbook) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, list 0, pre 0)",
       "docs/releasing.md (explanatory page at reference/releasing) lacks the altitude trio concept, architecture, technical: missing concept, architecture, technical; present none",
-      "docs/runbook.md (explanatory page at reference/runbook) lacks a table inside the technical panel: the technical panel carries no table (figure 0, stage 0, table 0, pre 0)",
-      "docs/architecture/planes.md (explanatory page at system/architecture/planes) lacks a stage or a table inside the architecture panel: the architecture panel carries no stage or table (figure 0, stage 0, table 0, pre 0)",
+      "docs/runbook.md (explanatory page at reference/runbook) lacks a table inside the technical panel: the technical panel carries no table (figure 0, stage 0, table 0, list 0, pre 0)",
+      "docs/architecture/planes.md (explanatory page at system/architecture/planes) lacks a stage or a table inside the architecture panel: the architecture panel carries no stage or table (figure 0, stage 0, table 0, list 0, pre 0)",
       "docs/architecture/present.md (explanatory page at system/architecture/present) lacks the altitude trio concept, architecture, technical: missing concept; present architecture, technical",
     ]);
     assert.throws(() => assertPageClassCoverage(assignments, observations), /7 failure\(s\) across 10 eligible source\(s\)/);

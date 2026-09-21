@@ -11,7 +11,7 @@ export const ALTITUDE_PANELS = Object.freeze(["concept", "architecture", "techni
 
 // The elements a panel can carry, counted inside the panel that owns them so
 // that a carrier in a neighbouring panel never answers for a missing one.
-export const CARRIER_ELEMENTS = Object.freeze(["figure", "stage", "table", "pre"]);
+export const CARRIER_ELEMENTS = Object.freeze(["figure", "stage", "table", "list", "pre"]);
 
 // What each panel of the trio must carry. The doctrine asks for a figure in
 // Concept and a stage on architecture pages; a panel of prose alone is the
@@ -23,11 +23,14 @@ export const PANEL_CARRIERS = Object.freeze({
   technical: Object.freeze({ demand: "a table", accepts: Object.freeze(["table"]) }),
 });
 
-// The release checklist's Technical panel is a disposition list: the checklist
-// is itself the carrier and a table would only restate it. The exemption is
-// recorded per page, so the rule stays strict for every other page and the
-// exception is visible to a reviewer.
-export const TECHNICAL_TABLE_EXEMPT_ROUTES = Object.freeze(["reference/release-checklist"]);
+// A page whose subject is itself a carrier declares that in the portal
+// configuration, per source, and is then held to the carrier it declared: a
+// checklist's Technical panel is a disposition list, and a table would only
+// restate it. No route is written into this file, and no page is let off a
+// carrier; the alternates a panel accepts are enumerated here.
+export const PANEL_CARRIER_ALTERNATES = Object.freeze({
+  technical: Object.freeze({ list: Object.freeze(["list"]) }),
+});
 
 // The generated record pointer page (ADR-0064) is one table of folders. The
 // records themselves are repository files, never portal pages.
@@ -60,17 +63,19 @@ const UTILITY_CHROME = Object.freeze([
 // left to the trio rule above, which already names it, so a missing panel is
 // reported once rather than twice.
 function panelCarrierRequirement(panel) {
-  const { demand, accepts } = PANEL_CARRIERS[panel];
   return Object.freeze({
     id: `${panel}-carrier`,
-    demand: `${demand} inside the ${panel} panel`,
-    unmet: (observation) => {
-      if (panel === "technical" && TECHNICAL_TABLE_EXEMPT_ROUTES.includes(observation.route)) return null;
+    demand: `${PANEL_CARRIERS[panel].demand} inside the ${panel} panel`,
+    unmet: (observation, assignment) => {
       const counts = observation.panelCarriers?.[panel];
       if (!counts) return null;
+      const declared = assignment?.carriers?.[panel];
+      const accepts = declared === undefined ? PANEL_CARRIERS[panel].accepts : PANEL_CARRIER_ALTERNATES[panel][declared];
       if (accepts.some((element) => counts[element] > 0)) return null;
+      const wanted = accepts.join(" or ");
       const inventory = CARRIER_ELEMENTS.map((element) => `${element} ${counts[element] ?? 0}`).join(", ");
-      return `the ${panel} panel carries no ${demand.replace("a ", "").replace(" or a ", " or ")} (${inventory})`;
+      const source = declared === undefined ? "" : ", which the configuration declares for it";
+      return `the ${panel} panel carries no ${wanted}${source} (${inventory})`;
     },
   });
 }
@@ -132,14 +137,59 @@ export function recordPointerRoute(config) {
 // class. A stale stub is excluded because its source never built, which the
 // build already reports as its own failure.
 export function classifyPortalPages(config, pages) {
+  const declared = new Map((config?.page_carriers ?? []).map((entry) => [entry.source, entry]));
   const assignments = [];
   for (const page of pages) {
+    // A stale page is not eligible here because it never built. The gate
+    // refuses the run for it separately, through assertNoStaleSources, so a
+    // source can never leave the eligible set quietly.
     if (!page || page.stale !== false || typeof page.route !== "string" || typeof page.source_path !== "string") continue;
-    assignments.push({ route: page.route, source: page.source_path, pageClass: PAGE_CLASSES.explanatory.id });
+    const carriers = declared.get(page.source_path);
+    const assignment = { route: page.route, source: page.source_path, pageClass: PAGE_CLASSES.explanatory.id };
+    if (carriers !== undefined) {
+      assignment.carriers = Object.fromEntries(Object.keys(PANEL_CARRIER_ALTERNATES).filter((panel) => carriers[panel] !== undefined).map((panel) => [panel, carriers[panel]]));
+    }
+    assignments.push(assignment);
   }
   const pointer = recordPointerRoute(config);
   if (pointer !== null) assignments.push({ route: pointer, source: RECORD_POINTER_SOURCE, pageClass: PAGE_CLASSES.recordPointer.id });
   return assignments.sort((left, right) => (left.route < right.route ? -1 : left.route > right.route ? 1 : 0));
+}
+
+// A source the adapter could not build leaves a stale stub behind and drops
+// out of the eligible set. That is exactly the silence this gate exists to
+// break, so the run refuses it and names the source and the reason the adapter
+// recorded.
+// A carrier declared for a source that the build never produced is a silent
+// exemption waiting to happen, so the declaration is held to the eligible set.
+export function declaredCarrierFailures(config, assignments) {
+  const sources = new Set(assignments.map((assignment) => assignment.source));
+  return (config?.page_carriers ?? [])
+    .filter((entry) => !sources.has(entry.source))
+    .map((entry) => `portal.config.json page_carriers declares a carrier for ${entry.source}, which this build did not publish`);
+}
+
+export function assertDeclaredCarriers(config, assignments) {
+  const failures = declaredCarrierFailures(config, assignments);
+  if (failures.length === 0) return `declared-carriers:${(config?.page_carriers ?? []).length}`;
+  throw new Error(`portal composition gate: ${failures.length} declared carrier(s) match no published page\n  ${failures.join("\n  ")}`);
+}
+
+export function staleSourceFailures(pages) {
+  const failures = [];
+  for (const page of pages ?? []) {
+    if (!page || page.stale !== true) continue;
+    const source = typeof page.source_path === "string" ? page.source_path : "an unnamed source";
+    const reason = typeof page.stale_reason === "string" && page.stale_reason.trim() ? page.stale_reason.trim() : "the adapter recorded no reason";
+    failures.push(`${source} did not build and is a stale stub at ${page.route ?? "no route"}: ${reason}`);
+  }
+  return failures;
+}
+
+export function assertNoStaleSources(pages) {
+  const failures = staleSourceFailures(pages);
+  if (failures.length === 0) return `no-stale-sources:${(pages ?? []).length}`;
+  throw new Error(`portal composition gate: ${failures.length} source(s) did not build, so the eligible set is incomplete\n  ${failures.join("\n  ")}`);
 }
 
 // One line per unmet requirement, each naming the offending source. Every
@@ -158,7 +208,7 @@ export function pageClassFailures(assignments, observations) {
       continue;
     }
     for (const requirement of pageClass.requirements) {
-      const reason = requirement.unmet(observation);
+      const reason = requirement.unmet(observation, assignment);
       if (reason !== null) failures.push(`${where} lacks ${requirement.demand}: ${reason}`);
     }
   }

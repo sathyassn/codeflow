@@ -11,7 +11,7 @@ import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertGeneratorIdentity } from "./generator.mjs";
 import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { PORTAL_ACCENT_BACKGROUNDS, pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
-import { ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, assertNoRecordRoutes, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
+import { ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
 
@@ -56,7 +56,9 @@ async function verifyPortal(lifecycle) {
   // source is named here, so a page the run never reaches fails as a missing
   // observation instead of passing unseen.
   assertNoRecordRoutes(config, generated.pages, beforeArtifacts.map((artifact) => artifact.path));
+  assertNoStaleSources(generated.pages);
   const assignments = classifyPortalPages(config, generated.pages);
+  assertDeclaredCarriers(config, assignments);
   const surfaces = await discoverSurfaceRoutes(generated.pages, root);
 
   const outputRelative = safeRelative(`.portal/browser-evidence/${runId}`, "browser evidence path");
@@ -363,7 +365,7 @@ export function observePortalPage(page) {
   return page.evaluate(({ panels, carriers, columns }) => {
     const shown = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
     const panel = (name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`);
-    const selector = { figure: "figure", stage: ".portal-stage", table: "table", pre: "pre" };
+    const selector = { figure: "figure", stage: ".portal-stage", table: "table", list: "ul, ol", pre: "pre" };
     const carried = (element) => Object.fromEntries(carriers.map((carrier) => [carrier, element.querySelectorAll(selector[carrier]).length]));
     // The folder table is the table whose headers are the folder columns, not
     // whichever table the page happens to render first, so a pointer page that

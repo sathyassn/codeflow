@@ -24,5 +24,8 @@
       { "folder": "project-management/tasks", "id_prefix": "TSK", "purpose": "Single units of durable work with their acceptance criteria." }
     ]
   },
+  "page_carriers": [
+    { "source": "docs/release-checklist.md", "technical": "list" }
+  ],
   "base": "/"
 }

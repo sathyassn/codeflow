@@ -54,7 +54,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "4ba056bc99adb7e43eed88338757f1eec079f35a919e05c4ce06e8354c92b895"
+      "pristine_sha256": "ed630612a49ed63bb66e1a0d4ea43ec73d62bb12b7ad9657141acaf45b4a45d0"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -78,7 +78,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "0e8e3c119b7cb5645338f23d6279f20152752637e3da36005cba205d6aafd229"
+      "pristine_sha256": "19ec032f9a053774918888a6a6bf57ea52e82764055d9a828c774082e7b35182"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -86,7 +86,7 @@
     },
     "scripts/page-classes.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "47f38fcf1c615e947005594d400f991e3c47596048237a773aa8a6b15a80eac7"
+      "pristine_sha256": "baee7c9476096e730c041e9510d77d1c546794de8d746e94c285b1659b798c10"
     },
     "scripts/process-environment.mjs": {
       "ownership": "managed",
@@ -154,11 +154,11 @@
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "d8023691a47b971f6708ad6bdc6719998345860e1c8746cd29adfc69ad79a85e"
+      "pristine_sha256": "8dbbbd4bacc7f1e30dac1090a883c1f4f54d83ebefa2ca898fc5aabb95fc0270"
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "fe693908571e95941227f4a17f8b26c2dd703ef26717d0e6370bc9a1092c766e"
+      "pristine_sha256": "53e12f4538e7e693feec09f027a591f692fa0ed8316be04dd9bf9bdef79c36c8"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
