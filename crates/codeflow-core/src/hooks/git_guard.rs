@@ -592,7 +592,7 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
             ));
         }
     }
-    if cmd == "sed" && args.iter().any(|a| requests_in_place(a)) {
+    if cmd == "sed" && requests_in_place(args) {
         if let Some(p) = arg_integrity_path(args) {
             return Some(hook_integrity_violation(
                 level,
@@ -947,7 +947,7 @@ fn check_git(
             }
         }
         "branch" => {
-            if rest.iter().any(|t| requests_delete(t)) && policy.delete_protected.is_active() {
+            if requests_branch_delete(rest) && policy.delete_protected.is_active() {
                 for target in rest
                     .iter()
                     .filter(|t| !t.starts_with('-'))
@@ -1062,7 +1062,7 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
 /// protected ref route to `delete_protected`.
 fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
     let policy = ctx.policy;
-    let deleting = rest.iter().any(|t| requests_delete(t));
+    let deleting = requests_ref_delete(rest);
     // `--stdin` carries the refs out-of-band; block conservatively.
     if rest.iter().any(|t| t == "--stdin") {
         if policy.local_ref_protection.is_active() && !ctx.integrate_token {
@@ -1402,40 +1402,91 @@ fn pr_merge_target<'a>(rest: &[&'a str]) -> Option<&'a str> {
 /// `true` when `args` skip the client hooks with `--no-verify` (or `-n` on a
 /// `git commit`, where `-n` is that flag; on push/merge `-n` means something
 /// else, so only the long form counts there).
-/// The letters of a short option cluster, if the token is one. Git's option
-/// parser accepts clustered short options (`-Dq`, `-qd`, `-an`) anywhere among
-/// the options, so a guard that compares whole tokens against `-d` or `-n`
-/// misses every cluster. A long option (`--delete`) and a bare `-` are not
-/// clusters.
+/// Short options that consume a value, per command. A letter listed here ends
+/// its cluster: whatever follows it inside the token is the value, not another
+/// flag, and an empty remainder means the value is the next token. Reading a
+/// cluster without this would turn `git branch -uorigin/dev main` into a
+/// delete (`d` inside the branch name) and `sed -e's/input/output/'` into an
+/// in-place edit (`i` inside the script).
+const BRANCH_VALUE_OPTIONS: &str = "umM";
+const COMMIT_VALUE_OPTIONS: &str = "mCcF";
+const UPDATE_REF_VALUE_OPTIONS: &str = "m";
+/// `sed`: `e` (script), `f` (script file), `l` (line length), and `i`, whose
+/// attached remainder is the GNU backup suffix (`-i.bak`) while BSD takes the
+/// extension as a separate token. Listing `i` here covers both: the cluster
+/// ends at `i`, and an empty remainder consumes the next token.
+const SED_VALUE_OPTIONS: &str = "efli";
+
+/// The arguments before a `--` end-of-options marker.
+fn options_before_end(args: &[String]) -> &[String] {
+    let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
+    &args[..end]
+}
+
+/// The letters of a short option cluster, if the token is one. A long option
+/// (`--delete`) and a bare `-` are not clusters.
 fn short_cluster(token: &str) -> Option<&str> {
     token
         .strip_prefix('-')
         .filter(|cluster| !cluster.is_empty() && !cluster.starts_with('-'))
 }
 
-/// A token that asks git to delete a ref: the long `--delete`, or a short
-/// option cluster carrying `d` or `D` wherever it sits among the options.
-fn requests_delete(token: &str) -> bool {
-    token == "--delete" || short_cluster(token).is_some_and(|c| c.contains(['d', 'D']))
+/// Every short option letter that is genuinely a flag in this argument list,
+/// given the letters that consume a value. Scanning stops inside a cluster at
+/// the first value-taking letter, and a value-taking letter with nothing
+/// attached consumes the following token.
+fn short_flags(args: &[String], takes_value: &str) -> Vec<char> {
+    let mut flags = Vec::new();
+    let mut skip_value = false;
+    for arg in options_before_end(args) {
+        if skip_value {
+            skip_value = false;
+            continue;
+        }
+        let Some(cluster) = short_cluster(arg) else {
+            continue;
+        };
+        for (index, letter) in cluster.char_indices() {
+            flags.push(letter);
+            if takes_value.contains(letter) {
+                skip_value = cluster[index + letter.len_utf8()..].is_empty();
+                break;
+            }
+        }
+    }
+    flags
 }
 
-/// A `sed` token that asks for an in-place edit: `--in-place`, with or without
-/// an `=<suffix>`, or a short option cluster carrying `i`. Both GNU and BSD
-/// `sed` attach the backup suffix to the flag (`-i.bak`), and both accept the
-/// flag inside a cluster (`-ni`), so reading the cluster's letters covers the
-/// suffix form and the clustered form at once. `i` is the only short `sed`
-/// option that takes that letter, so a cluster carrying it always means an
-/// in-place edit.
-fn requests_in_place(token: &str) -> bool {
-    token == "--in-place"
-        || token.starts_with("--in-place=")
-        || short_cluster(token).is_some_and(|cluster| cluster.contains('i'))
+/// A long option, with or without an attached `=<value>`.
+fn has_long_option(args: &[String], name: &str) -> bool {
+    options_before_end(args)
+        .iter()
+        .any(|a| a == name || a.starts_with(&format!("{name}=")))
+}
+
+/// Does this `git branch` invocation ask to delete a branch? The delete flag
+/// is recognized standalone, inside a cluster, and as the long form.
+fn requests_branch_delete(args: &[String]) -> bool {
+    has_long_option(args, "--delete")
+        || short_flags(args, BRANCH_VALUE_OPTIONS)
+            .iter()
+            .any(|letter| matches!(letter, 'd' | 'D'))
+}
+
+/// The same question for `git update-ref`, whose only value-taking short
+/// option is the `-m` reason.
+fn requests_ref_delete(args: &[String]) -> bool {
+    has_long_option(args, "--delete") || short_flags(args, UPDATE_REF_VALUE_OPTIONS).contains(&'d')
+}
+
+/// Does this `sed` invocation edit its input in place?
+fn requests_in_place(args: &[String]) -> bool {
+    has_long_option(args, "--in-place") || short_flags(args, SED_VALUE_OPTIONS).contains(&'i')
 }
 
 fn has_no_verify(sub: &str, args: &[String]) -> bool {
-    args.iter().any(|a| {
-        a == "--no-verify" || (sub == "commit" && short_cluster(a).is_some_and(|c| c.contains('n')))
-    })
+    options_before_end(args).iter().any(|a| a == "--no-verify")
+        || (sub == "commit" && short_flags(args, COMMIT_VALUE_OPTIONS).contains(&'n'))
 }
 
 fn maybe_no_verify(
@@ -2100,6 +2151,25 @@ mod tests {
         }
     }
 
+    /// Harmless `git branch` options aimed at a PROTECTED branch: if the
+    /// cluster reader mistook an attached option value for flags, these would
+    /// raise a delete violation. An unprotected target could not show that.
+    #[test]
+    fn test_harmless_branch_options_on_a_protected_branch_are_not_deletes() {
+        let p = default_policy();
+        for cmd in [
+            "git branch -v main",
+            "git branch -uorigin/dev main",
+            "git branch -u origin/dev main",
+            "git branch --set-upstream-to=origin/dev main",
+            "git branch -m main main2",
+            "git branch --contains main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.delete_protected"), "{cmd}: {v:?}");
+        }
+    }
+
     #[test]
     fn test_clustered_delete_of_an_unprotected_branch_is_allowed() {
         let p = default_policy();
@@ -2107,7 +2177,6 @@ mod tests {
             "git branch -Dq topic",
             "git branch -qd topic",
             "git branch -v",
-            "git branch -u origin/topic topic",
         ] {
             assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
         }
@@ -2123,10 +2192,33 @@ mod tests {
     #[test]
     fn test_no_verify_inside_a_short_cluster_blocked() {
         let p = default_policy();
-        let v = evaluate("git commit -an -m wip", &ctx(&p, "main"));
-        assert!(has_rule(&v, "git.no_verify_bypass"), "{v:?}");
-        let clean = evaluate("git commit -am wip", &ctx(&p, "feat/x"));
-        assert!(!has_rule(&clean, "git.no_verify_bypass"), "{clean:?}");
+        for cmd in [
+            "git commit -an -m wip",
+            "git commit -n -m wip",
+            "git commit --no-verify",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "main"));
+            assert!(has_rule(&v, "git.no_verify_bypass"), "{cmd}: {v:?}");
+        }
+    }
+
+    /// Commit options that merely carry a value, on a PROTECTED branch where
+    /// the no-verify rule can fire. Each must still raise the protected-commit
+    /// rule, so the command is reaching the guard, and must not raise the
+    /// bypass rule from an `n` inside an option value.
+    #[test]
+    fn test_commit_option_values_are_not_read_as_no_verify() {
+        let p = default_policy();
+        for cmd in [
+            "git commit -mone",
+            "git commit -m one -a",
+            "git commit -am wip",
+            "git commit -C HEAD",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "main"));
+            assert!(has_rule(&v, "git.commit_to_protected"), "{cmd}: {v:?}");
+            assert!(!has_rule(&v, "git.no_verify_bypass"), "{cmd}: {v:?}");
+        }
     }
 
     // -- hard reset / rebase --
@@ -2575,16 +2667,47 @@ mod tests {
         }
     }
 
+    /// Read-only `sed` over an integrity path, including scripts and script
+    /// files whose value carries an `i`. A whole-cluster scan would read the
+    /// value as flags and block the read.
     #[test]
     fn test_integrity_stream_read_with_sed_allowed() {
         let p = default_policy();
         for cmd in [
             "sed -n 1,5p .codeflow/policy.json",
             "sed -e s/block/off/ .codeflow/policy.json",
+            "sed -es/input/output/ .codeflow/policy.json",
+            "sed -f script.sed .codeflow/policy.json",
+            "sed -n -e p .codeflow/policy.json",
             "sed -Ef /tmp/script.sed .codeflow/policy.json",
         ] {
             assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty(), "{cmd}");
         }
+    }
+
+    /// The option readers themselves, so a misread cluster is visible as a
+    /// letter set rather than only as a missing violation.
+    #[test]
+    fn test_short_flag_scanning_stops_at_a_value_taking_letter() {
+        let table: [(&str, &str, &[char]); 10] = [
+            ("-Dq main", BRANCH_VALUE_OPTIONS, &['D', 'q']),
+            ("-qd main", BRANCH_VALUE_OPTIONS, &['q', 'd']),
+            ("-uorigin/dev main", BRANCH_VALUE_OPTIONS, &['u']),
+            ("-u origin/dev main", BRANCH_VALUE_OPTIONS, &['u']),
+            ("-m main main2", BRANCH_VALUE_OPTIONS, &['m']),
+            ("-an -m wip", COMMIT_VALUE_OPTIONS, &['a', 'n', 'm']),
+            ("-mone", COMMIT_VALUE_OPTIONS, &['m']),
+            ("-am wip", COMMIT_VALUE_OPTIONS, &['a', 'm']),
+            ("-es/input/output/ file", SED_VALUE_OPTIONS, &['e']),
+            ("-ni.bak file", SED_VALUE_OPTIONS, &['n', 'i']),
+        ];
+        for (line, spec, expected) in table {
+            let args: Vec<String> = line.split_whitespace().map(str::to_string).collect();
+            assert_eq!(short_flags(&args, spec), expected.to_vec(), "{line}");
+        }
+        // `--` ends the options: a later `-d` is an operand, not a flag.
+        let args: Vec<String> = "-v -- -d".split_whitespace().map(str::to_string).collect();
+        assert_eq!(short_flags(&args, BRANCH_VALUE_OPTIONS), vec!['v']);
     }
 
     #[test]
