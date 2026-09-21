@@ -948,9 +948,8 @@ fn check_git(
         }
         "branch" => {
             if requests_branch_delete(rest) && policy.delete_protected.is_active() {
-                for target in rest
-                    .iter()
-                    .filter(|t| !t.starts_with('-'))
+                for target in branch_operands(rest)
+                    .into_iter()
                     .filter(|t| policy.branch_is_protected(t))
                 {
                     out.push(Violation::new(
@@ -1115,21 +1114,14 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
     }
 }
 
-/// The ref name argument of `git update-ref` — the first non-flag token, past
-/// `-m <reason>` (which consumes a value) and the boolean flags.
+/// The ref name argument of `git update-ref`: the first operand, with option
+/// values consumed whether they are attached or separate, so `-dm reason
+/// refs/heads/main` names the ref and not the reason.
 fn update_ref_name(rest: &[String]) -> Option<&str> {
-    let mut idx = 0;
-    while idx < rest.len() {
-        let t = rest[idx].as_str();
-        if t == "-m" {
-            idx += 2;
-        } else if t.starts_with('-') {
-            idx += 1;
-        } else {
-            return Some(t);
-        }
-    }
-    None
+    parse_options(rest, &GIT_UPDATE_REF_OPTIONS)
+        .operands
+        .first()
+        .copied()
 }
 
 /// When `refname` is `refs/remotes/<remote>/<branch>` and `<branch>` is
@@ -1402,91 +1394,236 @@ fn pr_merge_target<'a>(rest: &[&'a str]) -> Option<&'a str> {
 /// `true` when `args` skip the client hooks with `--no-verify` (or `-n` on a
 /// `git commit`, where `-n` is that flag; on push/merge `-n` means something
 /// else, so only the long form counts there).
-/// Short options that consume a value, per command. A letter listed here ends
-/// its cluster: whatever follows it inside the token is the value, not another
-/// flag, and an empty remainder means the value is the next token. Reading a
-/// cluster without this would turn `git branch -uorigin/dev main` into a
-/// delete (`d` inside the branch name) and `sed -e's/input/output/'` into an
-/// in-place edit (`i` inside the script).
-const BRANCH_VALUE_OPTIONS: &str = "umM";
-const COMMIT_VALUE_OPTIONS: &str = "mCcF";
-const UPDATE_REF_VALUE_OPTIONS: &str = "m";
-/// `sed`: `e` (script), `f` (script file), `l` (line length), and `i`, whose
-/// attached remainder is the GNU backup suffix (`-i.bak`) while BSD takes the
-/// extension as a separate token. Listing `i` here covers both: the cluster
-/// ends at `i`, and an empty remainder consumes the next token.
-const SED_VALUE_OPTIONS: &str = "efli";
-
-/// The arguments before a `--` end-of-options marker.
-fn options_before_end(args: &[String]) -> &[String] {
-    let end = args.iter().position(|a| a == "--").unwrap_or(args.len());
-    &args[..end]
+/// How an option consumes its value.
+#[derive(Clone, Copy)]
+enum Arity {
+    /// A boolean flag, taking nothing.
+    Flag,
+    /// A value is required: attached (`-mmsg`, `--message=msg`) or the next
+    /// token, whatever that token looks like.
+    Value,
+    /// A value only when attached (`-uno`, `-i.bak`, `--color=always`); a
+    /// separate token is an operand, not the value.
+    AttachedValue,
 }
 
-/// The letters of a short option cluster, if the token is one. A long option
-/// (`--delete`) and a bare `-` are not clusters.
-fn short_cluster(token: &str) -> Option<&str> {
-    token
-        .strip_prefix('-')
-        .filter(|cluster| !cluster.is_empty() && !cluster.starts_with('-'))
+/// One command's option grammar. Anything not listed is a boolean flag, which
+/// is the safe default: an unlisted option never swallows an operand.
+struct OptionSpec {
+    short: &'static [(char, Arity)],
+    long: &'static [(&'static str, Arity)],
 }
 
-/// Every short option letter that is genuinely a flag in this argument list,
-/// given the letters that consume a value. Scanning stops inside a cluster at
-/// the first value-taking letter, and a value-taking letter with nothing
-/// attached consumes the following token.
-fn short_flags(args: &[String], takes_value: &str) -> Vec<char> {
-    let mut flags = Vec::new();
-    let mut skip_value = false;
-    for arg in options_before_end(args) {
-        if skip_value {
-            skip_value = false;
+impl OptionSpec {
+    fn short_arity(&self, letter: char) -> Arity {
+        self.short
+            .iter()
+            .find(|(candidate, _)| *candidate == letter)
+            .map_or(Arity::Flag, |(_, arity)| *arity)
+    }
+
+    fn long_arity(&self, name: &str) -> Arity {
+        self.long
+            .iter()
+            .find(|(candidate, _)| *candidate == name)
+            .map_or(Arity::Flag, |(_, arity)| *arity)
+    }
+}
+
+/// `git branch` (git-branch(1)). `-u`/`--set-upstream-to` name an upstream and
+/// the filter, sort and format options take a value; `-t`/`--track` and the
+/// display options take one only when attached. `-m`, `-M`, `-c` and `-C` are
+/// rename and copy actions whose branch names are operands, not values.
+const GIT_BRANCH_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('u', Arity::Value), ('t', Arity::AttachedValue)],
+    long: &[
+        ("--set-upstream-to", Arity::Value),
+        ("--contains", Arity::Value),
+        ("--no-contains", Arity::Value),
+        ("--merged", Arity::Value),
+        ("--no-merged", Arity::Value),
+        ("--points-at", Arity::Value),
+        ("--sort", Arity::Value),
+        ("--format", Arity::Value),
+        ("--track", Arity::AttachedValue),
+        ("--color", Arity::AttachedValue),
+        ("--abbrev", Arity::AttachedValue),
+        ("--column", Arity::AttachedValue),
+    ],
+};
+
+/// `git commit` (git-commit(1)). `-m`/`--message`, `-F`, `-c`, `-C`, `-t` and
+/// the metadata options take a value, so their content is never read as
+/// options: `git commit --message -n` is a message, not a hook bypass.
+/// `-u`/`--untracked-files` and `-S`/`--gpg-sign` take an attached mode only.
+const GIT_COMMIT_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('m', Arity::Value),
+        ('F', Arity::Value),
+        ('c', Arity::Value),
+        ('C', Arity::Value),
+        ('t', Arity::Value),
+        ('u', Arity::AttachedValue),
+        ('S', Arity::AttachedValue),
+    ],
+    long: &[
+        ("--message", Arity::Value),
+        ("--file", Arity::Value),
+        ("--reedit-message", Arity::Value),
+        ("--reuse-message", Arity::Value),
+        ("--template", Arity::Value),
+        ("--fixup", Arity::Value),
+        ("--squash", Arity::Value),
+        ("--author", Arity::Value),
+        ("--date", Arity::Value),
+        ("--cleanup", Arity::Value),
+        ("--trailer", Arity::Value),
+        ("--pathspec-from-file", Arity::Value),
+        ("--untracked-files", Arity::AttachedValue),
+        ("--gpg-sign", Arity::AttachedValue),
+    ],
+};
+
+/// `git update-ref` (git-update-ref(1)): only `-m <reason>` takes a value.
+const GIT_UPDATE_REF_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('m', Arity::Value)],
+    long: &[],
+};
+
+/// `sed`: `-e` a script, `-f` a script file, `-l` a line length; `-i` takes
+/// the GNU backup suffix only when attached (`-i.bak`), so a separate token
+/// stays an operand.
+const SED_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('e', Arity::Value),
+        ('f', Arity::Value),
+        ('l', Arity::Value),
+        ('i', Arity::AttachedValue),
+    ],
+    long: &[
+        ("--expression", Arity::Value),
+        ("--file", Arity::Value),
+        ("--line-length", Arity::Value),
+        ("--in-place", Arity::AttachedValue),
+    ],
+};
+
+/// For commands where only the presence of a long flag matters and no option
+/// arity is modelled.
+const PLAIN_OPTIONS: OptionSpec = OptionSpec {
+    short: &[],
+    long: &[],
+};
+
+/// The options and operands of one command line.
+struct ParsedOptions<'a> {
+    short: Vec<char>,
+    long: Vec<&'a str>,
+    operands: Vec<&'a str>,
+}
+
+impl ParsedOptions<'_> {
+    fn has_short(&self, letters: &[char]) -> bool {
+        self.short.iter().any(|letter| letters.contains(letter))
+    }
+
+    fn has_long(&self, name: &str) -> bool {
+        self.long.contains(&name)
+    }
+}
+
+/// Walk the arguments once, in order, the way the command's own parser does.
+/// An option that requires a value takes it first, attached or from the next
+/// token, before anything later is interpreted, so a value that happens to
+/// read as `--` or `--no-verify` is the value it is. Only a `--` reached as an
+/// option ends the options; every token after it is an operand, including one
+/// that begins with `-`.
+fn parse_options<'a>(args: &'a [String], spec: &OptionSpec) -> ParsedOptions<'a> {
+    let mut parsed = ParsedOptions {
+        short: Vec::new(),
+        long: Vec::new(),
+        operands: Vec::new(),
+    };
+    let mut index = 0;
+    while index < args.len() {
+        let token = args[index].as_str();
+        index += 1;
+        if let Some(body) = token.strip_prefix("--") {
+            if body.is_empty() {
+                parsed
+                    .operands
+                    .extend(args[index..].iter().map(String::as_str));
+                return parsed;
+            }
+            let (name, attached) = match body.split_once('=') {
+                Some((name, _)) => (name, true),
+                None => (body, false),
+            };
+            let full = &token[..name.len() + 2];
+            parsed.long.push(full);
+            if !attached && matches!(spec.long_arity(full), Arity::Value) {
+                index += 1;
+            }
             continue;
         }
-        let Some(cluster) = short_cluster(arg) else {
+        let Some(cluster) = token.strip_prefix('-').filter(|rest| !rest.is_empty()) else {
+            parsed.operands.push(token);
             continue;
         };
-        for (index, letter) in cluster.char_indices() {
-            flags.push(letter);
-            if takes_value.contains(letter) {
-                skip_value = cluster[index + letter.len_utf8()..].is_empty();
-                break;
+        for (offset, letter) in cluster.char_indices() {
+            parsed.short.push(letter);
+            match spec.short_arity(letter) {
+                Arity::Flag => {}
+                Arity::AttachedValue => break,
+                Arity::Value => {
+                    if cluster[offset + letter.len_utf8()..].is_empty() {
+                        index += 1;
+                    }
+                    break;
+                }
             }
         }
     }
-    flags
-}
-
-/// A long option, with or without an attached `=<value>`.
-fn has_long_option(args: &[String], name: &str) -> bool {
-    options_before_end(args)
-        .iter()
-        .any(|a| a == name || a.starts_with(&format!("{name}=")))
+    parsed
 }
 
 /// Does this `git branch` invocation ask to delete a branch? The delete flag
 /// is recognized standalone, inside a cluster, and as the long form.
 fn requests_branch_delete(args: &[String]) -> bool {
-    has_long_option(args, "--delete")
-        || short_flags(args, BRANCH_VALUE_OPTIONS)
-            .iter()
-            .any(|letter| matches!(letter, 'd' | 'D'))
+    let parsed = parse_options(args, &GIT_BRANCH_OPTIONS);
+    parsed.has_short(&['d', 'D']) || parsed.has_long("--delete")
 }
 
-/// The same question for `git update-ref`, whose only value-taking short
-/// option is the `-m` reason.
+/// The branch names a `git branch` invocation operates on: the operands, with
+/// option values consumed and everything after `--` kept, however it is
+/// spelled.
+fn branch_operands(args: &[String]) -> Vec<&str> {
+    parse_options(args, &GIT_BRANCH_OPTIONS).operands
+}
+
+/// The same delete question for `git update-ref`.
 fn requests_ref_delete(args: &[String]) -> bool {
-    has_long_option(args, "--delete") || short_flags(args, UPDATE_REF_VALUE_OPTIONS).contains(&'d')
+    let parsed = parse_options(args, &GIT_UPDATE_REF_OPTIONS);
+    parsed.has_short(&['d']) || parsed.has_long("--delete")
 }
 
 /// Does this `sed` invocation edit its input in place?
 fn requests_in_place(args: &[String]) -> bool {
-    has_long_option(args, "--in-place") || short_flags(args, SED_VALUE_OPTIONS).contains(&'i')
+    let parsed = parse_options(args, &SED_OPTIONS);
+    parsed.has_short(&['i']) || parsed.has_long("--in-place")
 }
 
 fn has_no_verify(sub: &str, args: &[String]) -> bool {
-    options_before_end(args).iter().any(|a| a == "--no-verify")
-        || (sub == "commit" && short_flags(args, COMMIT_VALUE_OPTIONS).contains(&'n'))
+    let commit = sub == "commit";
+    let parsed = parse_options(
+        args,
+        if commit {
+            &GIT_COMMIT_OPTIONS
+        } else {
+            &PLAIN_OPTIONS
+        },
+    );
+    parsed.has_long("--no-verify") || (commit && parsed.has_short(&['n']))
 }
 
 fn maybe_no_verify(
@@ -2194,7 +2331,9 @@ mod tests {
         let p = default_policy();
         for cmd in [
             "git commit -an -m wip",
+            "git commit -anm wip",
             "git commit -n -m wip",
+            "git commit -n",
             "git commit --no-verify",
         ] {
             let v = evaluate(cmd, &ctx(&p, "main"));
@@ -2214,6 +2353,10 @@ mod tests {
             "git commit -m one -a",
             "git commit -am wip",
             "git commit -C HEAD",
+            "git commit -uno",
+            "git commit -tplan.txt",
+            "git commit --message -n",
+            "git commit --untracked-files=no -m wip",
         ] {
             let v = evaluate(cmd, &ctx(&p, "main"));
             assert!(has_rule(&v, "git.commit_to_protected"), "{cmd}: {v:?}");
@@ -2685,29 +2828,92 @@ mod tests {
         }
     }
 
-    /// The option readers themselves, so a misread cluster is visible as a
-    /// letter set rather than only as a missing violation.
+    /// The option reader itself, so a misread cluster or a swallowed operand
+    /// is visible directly rather than only as a missing violation. Each row
+    /// is a command line, its spec, the short letters that are really flags,
+    /// and the operands left over.
     #[test]
-    fn test_short_flag_scanning_stops_at_a_value_taking_letter() {
-        let table: [(&str, &str, &[char]); 10] = [
-            ("-Dq main", BRANCH_VALUE_OPTIONS, &['D', 'q']),
-            ("-qd main", BRANCH_VALUE_OPTIONS, &['q', 'd']),
-            ("-uorigin/dev main", BRANCH_VALUE_OPTIONS, &['u']),
-            ("-u origin/dev main", BRANCH_VALUE_OPTIONS, &['u']),
-            ("-m main main2", BRANCH_VALUE_OPTIONS, &['m']),
-            ("-an -m wip", COMMIT_VALUE_OPTIONS, &['a', 'n', 'm']),
-            ("-mone", COMMIT_VALUE_OPTIONS, &['m']),
-            ("-am wip", COMMIT_VALUE_OPTIONS, &['a', 'm']),
-            ("-es/input/output/ file", SED_VALUE_OPTIONS, &['e']),
-            ("-ni.bak file", SED_VALUE_OPTIONS, &['n', 'i']),
+    fn test_option_parsing_follows_each_command_arity() {
+        let table: [(&str, &OptionSpec, &[char], &[&str]); 16] = [
+            // git branch: delete clusters, and options whose value is attached
+            // or separate.
+            ("-Dq main", &GIT_BRANCH_OPTIONS, &['D', 'q'], &["main"]),
+            ("-qd main", &GIT_BRANCH_OPTIONS, &['q', 'd'], &["main"]),
+            ("-uorigin/dev main", &GIT_BRANCH_OPTIONS, &['u'], &["main"]),
+            ("-u origin/dev main", &GIT_BRANCH_OPTIONS, &['u'], &["main"]),
+            // -m and -M rename: the names are operands, not option values.
+            (
+                "-m main main2",
+                &GIT_BRANCH_OPTIONS,
+                &['m'],
+                &["main", "main2"],
+            ),
+            (
+                "-M main main2",
+                &GIT_BRANCH_OPTIONS,
+                &['M'],
+                &["main", "main2"],
+            ),
+            // `--` ends the options and every later token is an operand, even
+            // one that reads like an option.
+            ("-d -- -weird", &GIT_BRANCH_OPTIONS, &['d'], &["-weird"]),
+            ("-d -- main", &GIT_BRANCH_OPTIONS, &['d'], &["main"]),
+            // git commit: values consumed before anything later is read.
+            ("-an -m wip", &GIT_COMMIT_OPTIONS, &['a', 'n', 'm'], &[]),
+            ("-mone", &GIT_COMMIT_OPTIONS, &['m'], &[]),
+            ("-anm wip", &GIT_COMMIT_OPTIONS, &['a', 'n', 'm'], &[]),
+            ("-uno", &GIT_COMMIT_OPTIONS, &['u'], &[]),
+            ("-tplan.txt", &GIT_COMMIT_OPTIONS, &['t'], &[]),
+            // git update-ref: the reason is a value, the ref is the operand.
+            (
+                "-dm reason refs/heads/main",
+                &GIT_UPDATE_REF_OPTIONS,
+                &['d', 'm'],
+                &["refs/heads/main"],
+            ),
+            // sed: a script is a value, an attached suffix is not an operand.
+            ("-es/input/output/ file", &SED_OPTIONS, &['e'], &["file"]),
+            ("-ni.bak file", &SED_OPTIONS, &['n', 'i'], &["file"]),
         ];
-        for (line, spec, expected) in table {
+        for (line, spec, flags, operands) in table {
             let args: Vec<String> = line.split_whitespace().map(str::to_string).collect();
-            assert_eq!(short_flags(&args, spec), expected.to_vec(), "{line}");
+            let parsed = parse_options(&args, spec);
+            assert_eq!(parsed.short, flags.to_vec(), "flags of {line}");
+            assert_eq!(parsed.operands, operands.to_vec(), "operands of {line}");
         }
-        // `--` ends the options: a later `-d` is an operand, not a flag.
-        let args: Vec<String> = "-v -- -d".split_whitespace().map(str::to_string).collect();
-        assert_eq!(short_flags(&args, BRANCH_VALUE_OPTIONS), vec!['v']);
+    }
+
+    /// A required value is taken before anything after it is interpreted, so
+    /// a value that reads like `--` or like another option is the value.
+    #[test]
+    fn test_a_required_value_is_consumed_before_the_rest_is_read() {
+        let p = default_policy();
+        // `--` is the message here, so the later `-n` is the real bypass.
+        let v = evaluate("git commit -m -- -n", &ctx(&p, "main"));
+        assert!(has_rule(&v, "git.no_verify_bypass"), "{v:?}");
+        // Here `--no-verify` is the message text, not a bypass.
+        let v = evaluate("git commit -m --no-verify", &ctx(&p, "main"));
+        assert!(has_rule(&v, "git.commit_to_protected"), "{v:?}");
+        assert!(!has_rule(&v, "git.no_verify_bypass"), "{v:?}");
+        // The script file is named `--`, so `-i.bak` is still an edit.
+        let v = evaluate("sed -f -- -i.bak .codeflow/policy.json", &ctx(&p, "feat/x"));
+        assert!(has_rule(&v, "git.hook_integrity"), "{v:?}");
+    }
+
+    /// Operands are read with option arity, so a protected name is found
+    /// behind a consumed value and after an end-of-options marker.
+    #[test]
+    fn test_protected_operands_survive_option_values_and_end_of_options() {
+        let p = default_policy();
+        for cmd in [
+            "git update-ref -dm reason refs/heads/main",
+            "git update-ref -d -m reason refs/heads/main",
+            "git branch -d -- main",
+            "git branch -D -- main",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.delete_protected"), "{cmd}: {v:?}");
+        }
     }
 
     #[test]
