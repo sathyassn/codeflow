@@ -86,7 +86,7 @@ flow (ADR-0027); each step produces the evidence the next one depends on.
 | 1 | Validate requirement and case traceability | Stable hard requirement IDs resolved against canonical source markers | The skill's standard-library tool |
 | 2 | Materialize fresh disposable fixtures | A fresh one-commit repository per trial, grader material removed, evaluator state outside the subject tree, an opaque neutral subject path | The materializer |
 | 3 | Exercise the candidate natively | A supervised native interactive Codex App/CLI or Claude Code session with the actual tools and MCPs being qualified | The maintainer running the session |
-| 4 | Run the full suite | Every case run three times; canary mode runs selected regressions only and never qualifies | `/cf-evaluate-model` |
+| 4 | Run the full suite | Every case runs three times; canary mode runs each selected regression once and never qualifies | `/cf-evaluate-model` |
 | 5 | Grade the retained evidence independently | Status recomputed from expected versus observed signals, with model, effort, harness, settings, permissions, tools, and budgets retained | The grader |
 | 6 | Compare with the pinned baseline | No hard semantic regression; token and latency deltas are diagnostics that never compensate for lost behavior | The evaluator |
 | 7 | Promote the binding | Explicit human approval, then a compact non-secret record under `~/.codeflow/qualified-bindings/` and an updated `current-ensemble.json` | Human approval |
