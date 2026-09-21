@@ -772,8 +772,10 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
                 "{name}: {present} must stay behind a prompt"
             );
         }
-        // A force delete discards commits whatever spelling and option order
-        // it arrives in, so every spelling must still reach a prompt.
+        // The ask rules match the command text as written, so they require
+        // the delete flag (`-d`, `--delete`, `-D`, or a cluster starting with
+        // `-d`, `-D`, `-f` or `-q` as listed below) to be the first option
+        // after `git branch`. These are the forms that reach a prompt.
         for forced in [
             "git branch -D topic",
             "git branch -d topic --force",
@@ -795,16 +797,20 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
                 "{name}: no ask rule covers {forced:?}"
             );
         }
-        // Ordinary work stays unprompted, and a branch name that merely looks
-        // like an option must not be read as one. `-vqf` records the stated
-        // boundary rather than a claim of coverage: prefix globs cannot
-        // enumerate every aggregated cluster that hides `f`, and git-guard,
-        // not this rule, is what still blocks a protected branch.
+        // Ordinary work stays unprompted, and a branch name that merely
+        // looks like an option must not be read as one. The three force forms
+        // below record the boundary rather than claim it away: prefix globs
+        // cannot enumerate every aggregated cluster, and they cannot match an
+        // option placed before the delete flag. `git-guard` is what still
+        // blocks a protected branch, whether the delete flag stands alone or
+        // sits inside a cluster.
         for ordinary in [
             "git branch -d topic",
             "git branch --delete topic",
             "git branch -d topic-force",
             "git branch -d topic -vqf",
+            "git branch -q -d topic --force",
+            "git branch -qf -d topic",
             "rm -rf target",
             "rm -rf ./build",
         ] {
@@ -824,7 +830,7 @@ fn ask_arrays_prompt_only_for_unrecoverable_deletes() {
 ///
 /// This models a single normalized command only. It is not the Bash
 /// permission evaluator: it does not split compound commands, and it knows
-/// nothing of deny precedence or of allow rules overriding ask rules.
+/// nothing of deny precedence or of ask precedence over allow rules.
 fn ask_covers(ask: &[String], command: &str) -> bool {
     ask.iter().any(|rule| {
         rule.strip_prefix("Bash(")
