@@ -25,9 +25,11 @@ const MAX_RUNTIME_DIAGNOSTIC_BYTES = 4 * 1024;
 const runId = process.env.PORTAL_BROWSER_RUN ?? "local";
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId)) throw new Error("PORTAL_BROWSER_RUN is invalid");
 // The skins the utility tokens actually define, read from the token contract
-// rather than repeated here, and the Display panels Starlight renders per page
-// (the header panel and the mobile menu panel). Both palette pill groups are
-// verified, so a swatch that is correct in one panel cannot cover the other.
+// rather than repeated here, and the Display panels Starlight renders on a
+// guide page: the header panel and the mobile menu panel. Both palette pill
+// groups are verified, so a swatch that is correct in one panel cannot cover
+// the other. The splash landing has no mobile menu and so no second panel,
+// which is why this check runs on a generated page and not on the landing.
 const PORTAL_SKINS = Object.freeze(Object.keys(PORTAL_ACCENT_BACKGROUNDS));
 export const PALETTE_PILL_GROUPS = 2;
 
@@ -188,7 +190,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     if (await page.locator("html").getAttribute("data-theme") !== "light") throw new Error(`${name}: light preference did not persist`);
     await assertBeforePaintTheme(page, name, "light");
     await assertDisplaySettings(page, name);
-    await assertPaletteSwatches(page, name);
+    await assertPaletteSwatches(page, name, origin, config, assignments[0]);
 
     for (const layer of config.layers) {
       await visit(page, routeUrl(origin, config.base, layer.id));
@@ -404,7 +406,13 @@ async function assertAltitudeInteraction(page, engine, origin, config, route) {
 // from the pills and compared with the tokens the live stylesheet computes for
 // that skin, so a hard coded colour, or one copy of the current skin painted
 // onto every pill, fails instead of looking plausible.
-async function assertPaletteSwatches(page, engine) {
+async function assertPaletteSwatches(page, engine, origin, config, assignment) {
+  if (assignment === undefined) throw new Error(`${engine}: no generated page can prove the Display panels`);
+  await visit(page, routeUrl(origin, config.base, assignment.route));
+  // The panel paints its swatches in the same call that marks the selected
+  // pill, so waiting for that mark proves the component ran without waiting on
+  // the swatches this check is about.
+  await page.locator('.pills[data-group="skin"] button[aria-pressed]').first().waitFor({ state: "attached" });
   const observation = await page.evaluate((skins) => {
     const root = document.documentElement;
     const computed = getComputedStyle(root);
@@ -423,7 +431,7 @@ async function assertPaletteSwatches(page, engine) {
     return { tokens, groups };
   }, PORTAL_SKINS);
   const failures = paletteSwatchFailures(observation, PALETTE_PILL_GROUPS);
-  if (failures.length) throw new Error(`${engine}: palette pills do not show the live palette they select\n  ${failures.join("\n  ")}`);
+  if (failures.length) throw new Error(`${engine}: ${assignment.route}: palette pills do not show the live palette they select\n  ${failures.join("\n  ")}`);
 }
 
 export function paletteSwatchFailures(observation, expectedGroups) {
