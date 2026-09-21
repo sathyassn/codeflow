@@ -21,6 +21,7 @@
     { "path": "scripts/install-dependencies.mjs", "ownership": "managed" },
     { "path": "scripts/lib.mjs", "ownership": "managed" },
     { "path": "scripts/limits.mjs", "ownership": "managed" },
+    { "path": "scripts/page-classes.mjs", "ownership": "managed" },
     { "path": "scripts/process-environment.mjs", "ownership": "managed" },
     { "path": "scripts/publication.mjs", "ownership": "managed" },
     { "path": "scripts/workflow.mjs", "ownership": "managed" },
