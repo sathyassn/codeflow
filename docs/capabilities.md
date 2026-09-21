@@ -5,8 +5,9 @@
      ships the work; the discipline is the ship flow, not a blocking gate.
      The yaml fence under each capability is the machine-read authority: the
      portal generates the summary table and each definition table from it, and
-     `status`, `orient` and `validate --docs` parse it. Do not hand-maintain a
-     second registry table.
+     `status`, `orient` and `validate --docs` parse it. The four-column table
+     in Architecture is a placeholder the adapter replaces at render time and
+     must stay in fence order. Do not add any other registry table.
      `validate --docs` enforces referential integrity (each entry's epics[] and
      adrs[] resolve to real files) and a non-empty verified_by on shipped
      entries; it does not verify that the test tags resolve, and it does not
@@ -44,14 +45,18 @@ per capability, in the same six groups.
 
 ## Architecture
 
-One registry row per user-meaningful capability, keyed by its `CAP-###` id.
-The portal generates this table from the yaml fences in Technical, so a row can
-never disagree with the entry it summarizes. `Area` is the `area` field of the
-yaml fence, naming the part of the codebase that owns the capability, while the
-six headings in Technical are the reading groups above; the two answer
-different questions, so CAP-017 reading under scaffold with area `engine`, or
-CAP-009, CAP-010, CAP-013 and CAP-015 reading under delegate and present with
-area `scaffold`, is not a contradiction.
+One registry row per user-meaningful capability, keyed by its `CAP-###` id. In
+the portal the adapter replaces this table with one generated from the yaml
+fences in Technical, so the rendered row cannot disagree with the entry it
+summarizes. The copy in the Markdown file is a placeholder the adapter needs;
+keep its rows in fence order.
+
+`Area` is the `area` field of the yaml fence, naming the part of the codebase
+that owns the capability. The six headings in Technical are the reading groups
+instead, so the two answer different questions. Five rows read under one word
+and carry another: CAP-017 reads under Scaffold with area `engine`, and
+CAP-009, CAP-010, CAP-013 and CAP-015 read under Delegate and Present with area
+`scaffold`.
 
 | Capability | Name | Area | Status |
 |---|---|---|---|
@@ -84,11 +89,11 @@ Both keep their registry entry here.
 
 ## Technical
 
-One subsection per job. Each capability carries its definition table, generated
-from the yaml fence that is the machine-read authority, then the operating
-detail a reviewer or operator needs.
+There is one subsection per job below. Each capability carries its definition
+table, generated from the yaml fence that is the machine-read authority, then
+the operating detail a reviewer or operator needs.
 
-### scaffold
+### Scaffold
 
 #### scaffold-init
 
@@ -240,7 +245,7 @@ native diagnostic evidence, including retained failures and a focused consent
 repair. Implementation readiness and predictive usefulness remain separate;
 this registry does not establish calibrated delivery predictions.
 
-### enforce
+### Enforce
 
 #### git-policy-gates
 
@@ -352,7 +357,7 @@ filter is future work alongside the per-stack scanners. Model-reasoned findings
 warn locally and force bounded rework, with the human merger as the backstop
 for judgment a machine cannot adjudicate (ADR-0007).
 
-### verify
+### Verify
 
 #### test-gate
 
@@ -409,7 +414,7 @@ git-guard never honors for an agent. After landing, clean linked worktrees that
 have the target checked out are reset to the tested tip; dirty worktrees and a
 failed checkout restoration are reported as partial-success warnings.
 
-### remember
+### Remember
 
 #### orient-session-summary
 
@@ -463,7 +468,7 @@ Recursive source discovery skips directory symlinks and obeys depth/count
 budgets. Reversible path encoding supplies index identity, while lossy text is
 reserved for display.
 
-### delegate
+### Delegate
 
 #### cross-vendor-delegation
 
@@ -665,7 +670,7 @@ host. The reusable sibling-hook rejection procedure, full fake-TUI stress
 matrix, and broader native-platform evidence remain PR2/release gates and are
 not claimed complete.
 
-### present
+### Present
 
 #### opt-in-documentation-portal
 
