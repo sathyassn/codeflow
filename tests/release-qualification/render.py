@@ -17,6 +17,12 @@ FIELDS = ("sample", "tier", "command", "check", "status", "expected", "observed"
 STATUSES = ("passed", "failed", "unavailable")
 TIERS = ("minimal", "standard", "full")
 
+# Rows recorded under this sample are gates that belong to other owners and are
+# deliberately outside this run. Every other unavailable row is a check this
+# qualification was required to make, and an unmet required check blocks the
+# verdict however many other rows passed.
+BOUNDARY_SAMPLE = "release boundary"
+
 BEGIN = "<!-- cli-qualification:begin -->"
 END = "<!-- cli-qualification:end -->"
 
@@ -123,11 +129,28 @@ def main() -> int:
     parser.add_argument("--work-dir", required=True)
     parser.add_argument("--teardown", required=True)
     parser.add_argument("--diffs", required=True)
+    parser.add_argument(
+        "--uncovered",
+        default="",
+        help="file of tab-separated surface and reason rows the matrix does not cover",
+    )
+    parser.add_argument(
+        "--blocked-on",
+        default="",
+        help="what a blocked verdict is blocked on, stated in the record verbatim",
+    )
     args = parser.parse_args()
 
     rows = parse_rows(pathlib.Path(args.results))
     counts = {status: sum(1 for row in rows if row["status"] == status) for status in STATUSES}
-    verdict = "blocked" if counts["failed"] else "qualified"
+    required_unavailable = [
+        row
+        for row in rows
+        if row["status"] == "unavailable" and row["sample"] != BOUNDARY_SAMPLE
+    ]
+    blocked = bool(counts["failed"]) or bool(required_unavailable)
+    verdict = "blocked" if blocked else "qualified"
+    verdict_line = verdict_sentence(counts, blocked, args.blocked_on)
 
     out = pathlib.Path(args.out)
     lines: list[str] = []
@@ -153,16 +176,14 @@ def main() -> int:
     lines.append(f"| Finished (UTC) | {args.finished} |")
     lines.append(f"| Disposable root | `{args.work_dir}` |")
     lines.append("")
-    lines.append(
-        f"Verdict: **{verdict}** - {counts['passed']} passed, "
-        f"{counts['failed']} failed, {counts['unavailable']} unavailable."
-    )
-    if counts["failed"]:
+    lines.append(verdict_line)
+    if blocked:
         lines.append("")
         lines.append(
-            "A failed check blocks qualification. Every failure is listed in the "
-            "Failures section below and must be judged by the responsible primary "
-            "before this record can carry a qualified verdict."
+            "A failed check and a required check that did not run both block "
+            "qualification. Counting passed rows states what ran; it does not "
+            "state a verdict. Rows under the release boundary heading are gates "
+            "that belong to other owners and do not block this one."
         )
     lines.append("")
 
@@ -228,6 +249,23 @@ def main() -> int:
         lines.extend(matrix_table(group))
         lines.append("")
 
+    if args.uncovered:
+        lines.append("## What this matrix does not cover")
+        lines.append("")
+        lines.append(
+            "Reconciled against the command inventory in `docs/cli.md`. Everything "
+            "not listed here carries at least one row above."
+        )
+        lines.append("")
+        lines.append("| Surface | Why it is not covered here |")
+        lines.append("|---|---|")
+        for item in pathlib.Path(args.uncovered).read_text(encoding="utf-8").splitlines():
+            if not item.strip():
+                continue
+            surface, _, why = item.partition("\t")
+            lines.append(f"| `{plain(surface.strip())}` | {plain(why.strip())} |")
+        lines.append("")
+
     lines.extend(diff_section(pathlib.Path(args.diffs)))
 
     lines.append("## Teardown")
@@ -245,8 +283,25 @@ def main() -> int:
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
-    refresh_evidence(pathlib.Path(args.evidence), out, args, counts, verdict, rows)
+    refresh_evidence(pathlib.Path(args.evidence), out, args, counts, verdict_line, rows)
     return 0
+
+
+def verdict_sentence(counts: dict[str, int], blocked: bool, blocked_on: str) -> str:
+    """One sentence, reused verbatim wherever this result is stated.
+
+    A run with no failures is not qualified while a check the qualification was
+    required to make did not happen; counting rows and stating a verdict are
+    two different claims, so the sentence carries both.
+    """
+    tally = (
+        f"matrix {counts['passed']} passed, {counts['failed']} failed, "
+        f"{counts['unavailable']} unavailable"
+    )
+    if not blocked:
+        return f"Verdict: {tally}; qualification passed."
+    reason = blocked_on or "the required checks named below"
+    return f"Verdict: {tally}; qualification blocked on {reason}."
 
 
 def unavailable_sentence(rows: list[dict[str, str]]) -> str:
@@ -267,7 +322,7 @@ def unavailable_sentence(rows: list[dict[str, str]]) -> str:
     )
 
 
-def refresh_evidence(evidence, out, args, counts, verdict, rows) -> None:
+def refresh_evidence(evidence, out, args, counts, verdict_line, rows) -> None:
     """Rewrite the delimited qualification block inside the release record."""
     relative = out.name
     block = [
@@ -280,17 +335,16 @@ def refresh_evidence(evidence, out, args, counts, verdict, rows) -> None:
         "standard and full tiers. The installed binary's SHA-256 was "
         f"`{args.binary_sha}` and it reported `{args.binary_version}`.",
         "",
-        f"Verdict: **{verdict}** - {counts['passed']} passed, {counts['failed']} failed, "
-        f"{counts['unavailable']} unavailable. Every check carries expected versus "
-        "observed, and each unavailable names its owner. The full matrix, the "
-        "before/after diffs it cites, and the teardown output are in "
-        f"[`{relative}`]({relative}).",
+        f"{verdict_line} Every check carries expected versus observed, and each "
+        "unavailable names its owner. The full matrix, the before/after diffs it "
+        f"cites, and the teardown output are in [`{relative}`]({relative}).",
         "",
         unavailable_sentence(rows),
         "",
-        "A failed check blocks qualification; this section states the verdict the "
-        "matrix produced and never infers a native-platform or hosted-publication "
-        "result, which stay with their own owners.",
+        "A failed check and a required check that did not run both block "
+        "qualification. This section states the verdict the matrix produced and "
+        "never infers a native-platform or hosted-publication result, which stay "
+        "with their own owners.",
         "",
         END,
     ]

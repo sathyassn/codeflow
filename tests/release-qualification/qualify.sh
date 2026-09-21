@@ -22,6 +22,7 @@
 #   --target-dir <DIR>  Cargo target directory for the build.
 #   --node <DIR>        bin/ directory of the portal's pinned Node (24.18.0).
 #   --herdr-workspace   Herdr workspace id for the delegate canary (default: w2).
+#   --blocked-on        What a blocked verdict is blocked on, recorded verbatim.
 #   --no-session-reason Why no live session could be started, recorded verbatim.
 #   --no-session-owner  Who owns that gate; required with --no-session-reason.
 #   --skip-canary       Record the delegate canary unavailable without running it.
@@ -43,6 +44,7 @@ WORK=""
 TARGET_DIR=""
 NODE_BIN=""
 HERDR_WORKSPACE="w2"
+BLOCKED_ON=""
 NO_SESSION_REASON=""
 NO_SESSION_OWNER=""
 SKIP_CANARY=0
@@ -59,6 +61,7 @@ while [ $# -gt 0 ]; do
     --target-dir) TARGET_DIR=$2; shift 2 ;;
     --node) NODE_BIN=$2; shift 2 ;;
     --herdr-workspace) HERDR_WORKSPACE=$2; shift 2 ;;
+    --blocked-on) BLOCKED_ON=$2; shift 2 ;;
     --no-session-reason) NO_SESSION_REASON=$2; shift 2 ;;
     --no-session-owner) NO_SESSION_OWNER=$2; shift 2 ;;
     --skip-canary) SKIP_CANARY=1; shift ;;
@@ -73,9 +76,158 @@ REPO=$(CDPATH= cd -- "$REPO" && pwd)
 COMMIT=$(git -C "$REPO" rev-parse "$COMMIT")
 [ -n "$OUT" ] || OUT="$REPO/docs/verification/releases/v3.0.0-cli-qualification.md"
 [ -n "$EVIDENCE" ] || EVIDENCE="$REPO/docs/verification/releases/v3.0.0.md"
-[ -n "$WORK" ] || WORK=$(mktemp -d "${TMPDIR:-/tmp}/codeflow-qualification.XXXXXX")
-mkdir -p "$WORK"
-WORK=$(CDPATH= cd -- "$WORK" && pwd)
+# --work-dir names a parent the run may write inside, never a directory the run
+# may delete. The run creates one child it alone owns, and teardown removes only
+# that child, so a caller's existing directory and its contents always survive.
+WORK_PARENT=${WORK:-${TMPDIR:-/tmp}}
+mkdir -p "$WORK_PARENT"
+WORK_PARENT=$(CDPATH= cd -- "$WORK_PARENT" && pwd)
+WORK="$WORK_PARENT/cfqual-$$-$(date -u '+%Y%m%dT%H%M%SZ')"
+mkdir "$WORK" || { printf 'could not create an owned work directory at %s\n' "$WORK" >&2; exit 1; }
+WORK_OWNED=1
+
+# ---------------------------------------------------------------------------
+# Teardown
+# ---------------------------------------------------------------------------
+
+TEARDOWN_LOG="$WORK/teardown.log"
+HERDR_TAB=""
+HERDR_PANE=""
+HERDR_AGENT=""
+PRESENT_HOME=""
+PRESENT_REPO=""
+BUILD_TREE=""
+BUILD_TREE_CREATED=0
+BINARY=""
+CLEANUP_FAILURES=0
+# The rendered record carries this line until the work directory's removal has
+# actually been verified, after which it is replaced in place.
+WORK_REMOVAL_MARK="work directory removal: not yet attempted"
+
+# cleanup_failed <what> - record a resource that could not be released, so the
+# record never reports a teardown that did not happen.
+cleanup_failed() {
+  CLEANUP_FAILURES=$((CLEANUP_FAILURES + 1))
+  printf 'CLEANUP FAILURE: %s\n' "$1"
+}
+
+teardown() {
+  : >"$TEARDOWN_LOG"
+  {
+    printf 'teardown at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+
+    # Presentation sessions and their service processes. Session discovery
+    # resolves a project from the working directory, so these run inside the
+    # sample repository that opened them, not from the run root.
+    if [ -n "$PRESENT_HOME" ] && [ -d "$PRESENT_HOME" ] && [ -d "$PRESENT_REPO" ] &&
+      [ -n "$BINARY" ] && [ -x "$BINARY" ]; then
+      for _s in $(present_session_ids); do
+        (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present close "$_s" 2>&1) || true
+        (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present clear --older-than 0d "$_s" 2>&1) || true
+      done
+      _left=$(present_session_ids | tr '\n' ' ' | sed 's/ *$//')
+      if [ -n "$_left" ]; then
+        cleanup_failed "presentation session(s) still listed: $_left"
+      else
+        printf 'presentation sessions: none listed by `present list` in %s\n' "$PRESENT_REPO"
+      fi
+    else
+      printf 'presentation sessions: none opened by this run\n'
+    fi
+
+    # The Herdr tab this run created, and only that one.
+    if [ -n "$HERDR_AGENT" ]; then
+      herdr agent stop "$HERDR_AGENT" 2>&1 || true
+    fi
+    if [ -n "$HERDR_TAB" ]; then
+      if herdr tab close "$HERDR_TAB" 2>&1; then
+        printf 'herdr tab closed: %s\n' "$HERDR_TAB"
+      else
+        cleanup_failed "herdr tab $HERDR_TAB did not close"
+      fi
+    else
+      printf 'herdr: no tab created by this run\n'
+    fi
+
+    # The build worktree.
+    if [ "$BUILD_TREE_CREATED" = 1 ]; then
+      git -C "$REPO" worktree remove --force "$BUILD_TREE" >/dev/null 2>&1 || true
+      if [ -e "$BUILD_TREE" ]; then
+        cleanup_failed "build worktree still present: $BUILD_TREE"
+      else
+        printf 'build worktree removed: %s\n' "$BUILD_TREE"
+      fi
+    fi
+
+    # The work directory holds the results the record is rendered from, so its
+    # removal happens after rendering and its verified outcome replaces the
+    # line below. Only the child this run created is ever removed; the parent
+    # the caller named is never touched.
+    if [ "$KEEP" = 1 ]; then
+      printf 'work directory kept by --keep: %s\n' "$WORK"
+    else
+      printf '%s\n' "$WORK_REMOVAL_MARK"
+    fi
+    printf 'parent named by --work-dir, never removed: %s\n' "$WORK_PARENT"
+
+    if [ "$CLEANUP_FAILURES" = 0 ]; then
+      printf 'resources released so far: every one this run created\n'
+    else
+      printf 'teardown incomplete: %s resource(s) above were not released\n' "$CLEANUP_FAILURES"
+    fi
+  } >>"$TEARDOWN_LOG" 2>&1
+  TORN_DOWN=1
+  cat "$TEARDOWN_LOG" >&2
+}
+
+# The session ids this run owns, listed from inside the repository that opened
+# them. Printed one per line, empty when there are none.
+present_session_ids() {
+  (cd "$PRESENT_REPO" && HOME="$PRESENT_HOME" "$BINARY" present list 2>/dev/null) |
+    python3 -c 'import json,sys
+try:
+    for s in json.load(sys.stdin):
+        print(s["id"])
+except Exception:
+    pass' 2>/dev/null
+}
+
+# remove_work - delete only the child this run created, prove it is gone, and
+# replace the pending line in the rendered record with the verified outcome.
+# It runs after rendering, because the record is rendered out of this directory.
+remove_work() {
+  if [ "$KEEP" = 1 ]; then
+    return 0
+  fi
+  [ "${WORK_OWNED:-0}" = 1 ] || return 0
+  rm -rf "$WORK" 2>/dev/null || true
+  if [ -d "$WORK" ]; then
+    cleanup_failed "work directory still present: $WORK"
+    _line="work directory removal FAILED, still present: $WORK"
+  else
+    _line="work directory removed and verified gone: $WORK"
+  fi
+  python3 -c 'import io,sys
+path, mark, line = sys.argv[1], sys.argv[2], sys.argv[3]
+text = io.open(path, encoding="utf-8").read()
+io.open(path, "w", encoding="utf-8").write(text.replace(mark, line))' \
+    "$OUT" "$WORK_REMOVAL_MARK" "$_line"
+  printf '%s\n' "$_line" >&2
+}
+
+# An abnormal exit still tears down, and says where the evidence is instead of
+# writing a matrix that would describe an incomplete run.
+TORN_DOWN=0
+on_exit() {
+  _exit=$?
+  if [ "$TORN_DOWN" = 0 ]; then
+    printf '\nqualification stopped early (exit %s); transcript: %s\n' "$_exit" "$TRANSCRIPT" >&2
+    teardown
+  fi
+}
+trap on_exit EXIT
+trap 'exit 130' INT
+trap 'exit 143' TERM
 
 RESULTS="$WORK/results.tsv"
 TRANSCRIPT="$WORK/transcript.log"
@@ -105,7 +257,6 @@ printf 'codeflow qualification\n  repo:    %s\n  commit:  %s\n  work:    %s\n\n'
 # ---------------------------------------------------------------------------
 
 BUILD_TREE="$WORK/candidate"
-BUILD_TREE_CREATED=0
 if [ -z "$BINARY" ]; then
   [ -n "$TARGET_DIR" ] || TARGET_DIR="$WORK/cargo-target"
   mkdir -p "$TARGET_DIR"
@@ -125,74 +276,41 @@ BINARY=$(CDPATH= cd -- "$(dirname -- "$BINARY")" && pwd)/$(basename -- "$BINARY"
 
 BINARY_SHA=$(shasum -a 256 "$BINARY" | awk '{print $1}')
 BINARY_VERSION=$("$BINARY" --version 2>/dev/null | head -1)
-printf '  binary:  %s\n  sha256:  %s\n  version: %s\n\n' \
-  "$BINARY" "$BINARY_SHA" "$BINARY_VERSION" >&2
 
-# ---------------------------------------------------------------------------
-# Teardown
-# ---------------------------------------------------------------------------
+# Every subprocess must reach the candidate and nothing else. The installed git
+# hook shims resolve `codeflow` through PATH (assets/base/git-hooks/pre-commit),
+# so without this the real commit probes would be enforced by whatever codeflow
+# happens to be installed on the machine, and the recorded digest would not
+# describe the binary that did the enforcing.
+BIN_DIR=$(dirname -- "$BINARY")
+DECOY_DIR="$WORK/decoy-bin"
+DECOY_SENTINEL="$WORK/decoy-was-invoked"
+mkdir -p "$DECOY_DIR"
+cat >"$DECOY_DIR/codeflow" <<DECOY
+#!/bin/sh
+# A stand-in for any other codeflow on this machine. It sits behind the
+# candidate on PATH, so it runs only if the candidate was not found first.
+printf 'decoy invoked: %s\n' "\$*" >>"$DECOY_SENTINEL"
+exit 0
+DECOY
+chmod 0755 "$DECOY_DIR/codeflow"
+PATH="$BIN_DIR:$DECOY_DIR:$PATH"
+export PATH
 
-TEARDOWN_LOG="$WORK/teardown.log"
-HERDR_TAB=""
-HERDR_PANE=""
-HERDR_AGENT=""
+# Assets a sample may need come from the candidate's own checkout when the run
+# built one, so a different revision supplies its own; with --binary there is no
+# checkout and the invoking repository is used, which the record states.
+if [ "$BUILD_TREE_CREATED" = 1 ]; then
+  ASSET_ROOT="$BUILD_TREE"
+  ASSET_ORIGIN="the candidate checkout at $COMMIT"
+else
+  ASSET_ROOT="$REPO"
+  ASSET_ORIGIN="the invoking checkout, because --binary supplied a prebuilt binary"
+fi
 
-teardown() {
-  : >"$TEARDOWN_LOG"
-  {
-    printf 'teardown at %s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
+printf '  binary:  %s\n  sha256:  %s\n  version: %s\n  assets:  %s\n\n' \
+  "$BINARY" "$BINARY_SHA" "$BINARY_VERSION" "$ASSET_ORIGIN" >&2
 
-    # Presentation sessions and their service processes.
-    if [ -d "$PRESENT_HOME" ]; then
-      for _s in $(HOME="$PRESENT_HOME" "$BINARY" present list 2>/dev/null |
-        python3 -c 'import json,sys
-try:
-    print(" ".join(s["id"] for s in json.load(sys.stdin)))
-except Exception:
-    pass' 2>/dev/null); do
-        HOME="$PRESENT_HOME" "$BINARY" present close "$_s" 2>&1 || true
-        HOME="$PRESENT_HOME" "$BINARY" present clear --older-than 0d "$_s" 2>&1 || true
-      done
-      printf 'present sessions remaining: %s\n' \
-        "$(HOME="$PRESENT_HOME" "$BINARY" present list 2>/dev/null | tr -d '[:space:]')"
-    fi
-
-    # The Herdr tab this run created, and only that one.
-    if [ -n "$HERDR_AGENT" ]; then
-      herdr agent stop "$HERDR_AGENT" 2>&1 || true
-    fi
-    if [ -n "$HERDR_TAB" ]; then
-      herdr tab close "$HERDR_TAB" 2>&1 || true
-      printf 'herdr tab closed: %s\n' "$HERDR_TAB"
-    fi
-
-    # The build worktree.
-    if [ "$BUILD_TREE_CREATED" = 1 ]; then
-      git -C "$REPO" worktree remove --force "$BUILD_TREE" 2>&1 || true
-      printf 'build worktree removed: %s\n' "$BUILD_TREE"
-    fi
-
-    if [ "$KEEP" = 1 ]; then
-      printf 'work directory kept by --keep: %s\n' "$WORK"
-    else
-      printf 'work directory: %s\n' "$WORK"
-    fi
-  } >>"$TEARDOWN_LOG" 2>&1
-  TORN_DOWN=1
-  cat "$TEARDOWN_LOG" >&2
-}
-
-# An abnormal exit still tears down, and says where the evidence is instead of
-# writing a matrix that would describe an incomplete run.
-TORN_DOWN=0
-on_exit() {
-  _exit=$?
-  if [ "$TORN_DOWN" = 0 ]; then
-    printf '\nqualification stopped early (exit %s); transcript: %s\n' "$_exit" "$TRANSCRIPT" >&2
-    teardown
-  fi
-}
-trap on_exit EXIT
 
 # ---------------------------------------------------------------------------
 # The per-sample, per-tier qualification
@@ -209,6 +327,27 @@ land_scaffold() {
   git -C "$DIR" add -A
   git -C "$DIR" commit -q -m "chore: scaffold codeflow $TIER tier"
   cf integrate chore/codeflow-scaffold --into main
+}
+
+# Proof that a subprocess, including an installed git hook shim, reaches the
+# candidate. The decoy sits behind it on PATH, so it answers only if the
+# candidate does not.
+qualify_binding() {
+  sh_run "command -v codeflow"
+  _resolved=$CF_OUT
+  if [ -x "$_resolved" ]; then
+    _resolved_sha=$(shasum -a 256 "$_resolved" | awk '{print $1}')
+  else
+    _resolved_sha=none
+  fi
+  if [ "$_resolved" = "$BINARY" ] && [ "$_resolved_sha" = "$BINARY_SHA" ]; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
+  record "$SAMPLE" "$TIER" "candidate binding" "PATH resolves codeflow to the candidate" \
+    "$_s" "command -v codeflow is the built candidate, digest $BINARY_SHA" \
+    "resolved $_resolved, digest $_resolved_sha"
 }
 
 qualify_init() {
@@ -288,31 +427,135 @@ qualify_update() {
   record "$SAMPLE" "$TIER" "update" "refresh managed files" \
     "$(status_for 0)" "exit 0 and a reconciliation report" "$(observed_exit)"
 
-  # Idempotency proved by the working tree, not by the report.
-  sh_run "git -C '$DIR' status --porcelain"
-  _before_dirty=$CF_OUT
+  # Idempotence is proved by the content of the tree, not by porcelain status:
+  # a file that was already dirty can change its bytes without changing its
+  # status letter. The update's own exit status is kept separately, so the
+  # comparison cannot overwrite it.
+  _before_digest=$(tree_digest "$DIR")
   cf update
-  sh_run "git -C '$DIR' status --porcelain"
-  printf 'before:\n%s\nafter:\n%s\n' "$_before_dirty" "$CF_OUT" >"$DIFFS/$SAMPLE-$TIER-update-idempotency.diff"
-  if [ "$_before_dirty" = "$CF_OUT" ]; then _s=$RESULT_PASSED; else _s=$RESULT_FAILED; fi
-  record "$SAMPLE" "$TIER" "update" "a second consecutive update produces no diff" \
-    "$_s" "identical git status before and after the second update" \
-    "before/after status identical=$([ "$_before_dirty" = "$CF_OUT" ] && echo yes || echo no) (diff in $SAMPLE-$TIER-update-idempotency.diff)"
+  _second_status=$CF_STATUS
+  _second_out=$CF_OUT
+  _after_digest=$(tree_digest "$DIR")
+  printf 'digest before second update: %s\ndigest after second update:  %s\nsecond update exit: %s\n' \
+    "$_before_digest" "$_after_digest" "$_second_status" \
+    >"$DIFFS/$SAMPLE-$TIER-update-idempotency.diff"
+  if [ "$_second_status" = 0 ] && [ "$_before_digest" = "$_after_digest" ]; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
+  record "$SAMPLE" "$TIER" "update" "a second consecutive update changes no file" \
+    "$_s" "exit 0 and an identical content digest over every file in the tree" \
+    "exit $_second_status, digest before $_before_digest, after $_after_digest"
 
-  # 3-way merge: a deliberate user edit inside a managed file must survive.
-  _marker="Qualification edit: this line is owner-authored and must survive update."
-  printf '\n%s\n' "$_marker" >>"$DIR/CLAUDE.md"
-  cp "$DIR/CLAUDE.md" "$WORK/$SAMPLE-$TIER.claude-before"
+  _diff_report="$WORK/$SAMPLE-$TIER-update-report.txt"
+  cf update --diff "$_diff_report"
+  if [ "$CF_STATUS" = 0 ] && [ -s "$_diff_report" ]; then _s=$RESULT_PASSED; else _s=$RESULT_FAILED; fi
+  record "$SAMPLE" "$TIER" "update --diff" "write the report and applied diffs to a file" \
+    "$_s" "exit 0 and a non-empty report at the named path" \
+    "exit $CF_STATUS, $([ -f "$_diff_report" ] && wc -c <"$_diff_report" | tr -d ' ' || echo 0) bytes written"
+
+  qualify_three_way
+
+  git -C "$DIR" checkout -q main
+}
+
+# The genuine three-way merge.
+#
+# Within one binary the shipped text and the recorded baseline are the same, so
+# a user edit alone takes the KeptUserModified path and never reaches the merge.
+# To exercise the merge the baseline is aged: it is rewritten as an older
+# shipped version, which makes base, local and incoming three distinct inputs.
+# The target is a managed (whole-file) artifact, not a managed-region one.
+qualify_three_way() {
+  _dest=".codeflow/git-hooks/pre-commit"
+  _base="$DIR/.codeflow/.baseline/$_dest"
+  _live="$DIR/$_dest"
+  if [ ! -f "$_live" ] || [ ! -f "$_base" ]; then
+    record "$SAMPLE" "$TIER" "update" "3-way merge keeps a local change and takes the shipped one" \
+      "$RESULT_FAILED" "a managed artifact with a recorded baseline to merge" \
+      "no managed artifact at $_dest with a baseline at $_base"
+    return
+  fi
+
+  # The shipped text, as this binary renders it; the live file is unmodified here.
+  cp "$_live" "$WORK/$SAMPLE-$TIER.shipped"
+  _shipped="$WORK/$SAMPLE-$TIER.shipped"
+  _shipped_line=$(sed -n '2p' "$_shipped")
+
+  # base: an older shipped version that lacks line 2.
+  sed '2d' "$_shipped" >"$_base"
+  # local: that older version plus an owner-authored line, so the user's file
+  # does NOT already contain the change the new version brings. Only a real
+  # merge can end with both, which is what the assertion below reads.
+  _marker="# qualification: owner-authored line that must survive the merge"
+  cp "$_base" "$_live"
+  printf '%s\n' "$_marker" >>"$_live"
+  # The evidence is captured before the update, because a clean merge rewrites
+  # the baseline to the shipped text and the aged base would be gone.
+  cp "$_base" "$WORK/$SAMPLE-$TIER.aged-base"
+  cp "$_live" "$WORK/$SAMPLE-$TIER.local-before"
+
   cf update
   _merge_status=$CF_STATUS
-  sh_run "diff '$WORK/$SAMPLE-$TIER.claude-before' '$DIR/CLAUDE.md'"
-  printf '%s\n' "$CF_OUT" >"$DIFFS/$SAMPLE-$TIER-update-3way.diff"
-  if grep -qF "$_marker" "$DIR/CLAUDE.md"; then _s=$RESULT_PASSED; else _s=$RESULT_FAILED; fi
-  record "$SAMPLE" "$TIER" "update" "3-way merge never clobbers a user edit" \
-    "$_s" "the owner-authored line is still in CLAUDE.md after update" \
-    "marker present=$(grep -cF "$_marker" "$DIR/CLAUDE.md" || true), update exit $_merge_status (diff in $SAMPLE-$TIER-update-3way.diff)"
-  git -C "$DIR" checkout -q -- CLAUDE.md 2>/dev/null || true
-  git -C "$DIR" checkout -q main
+  {
+    printf 'base, an older shipped version with line 2 removed:\n'
+    cat "$WORK/$SAMPLE-$TIER.aged-base"
+    printf '\nlocal, that older version plus one owner-authored line:\n'
+    cat "$WORK/$SAMPLE-$TIER.local-before"
+    printf '\nincoming brings back line 2: %s\n' "$_shipped_line"
+    printf '\nresult after update (exit %s):\n' "$_merge_status"; cat "$_live"
+  } >"$DIFFS/$SAMPLE-$TIER-update-3way.diff"
+
+  _kept=$(grep -cF "$_marker" "$_live" || true)
+  _took=$(grep -cF "$_shipped_line" "$_live" || true)
+  if [ "$_merge_status" = 0 ] && [ "$_kept" -ge 1 ] && [ "$_took" -ge 1 ]; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
+  record "$SAMPLE" "$TIER" "update" "3-way merge keeps a local change and takes the shipped one" \
+    "$_s" "exit 0, the owner-authored line kept and the line only the new version carries now present" \
+    "exit $_merge_status, owner line present=$_kept, incoming-only line present=$_took"
+
+  # The conflict: local and incoming both change the same line, so the merge
+  # cannot resolve it. The documented result is exit 2, the file untouched and
+  # the shipped version written beside it.
+  sed '2d' "$_shipped" >"$_base"
+  cp "$_base" "$WORK/$SAMPLE-$TIER.conflict-base"
+  sed '2s/.*/# qualification conflicting local rewrite of this line/' "$_shipped" >"$_live"
+  cp "$_live" "$WORK/$SAMPLE-$TIER.conflict-local"
+  rm -f "$DIR/$_dest.new"
+  cf update
+  _conflict_status=$CF_STATUS
+  _conflict_out=$CF_OUT
+  if cmp -s "$_live" "$WORK/$SAMPLE-$TIER.conflict-local"; then _untouched=yes; else _untouched=no; fi
+  if [ -f "$DIR/$_dest.new" ]; then _sidecar=written; else _sidecar=absent; fi
+  {
+    printf 'base, the same aged version:\n'; cat "$WORK/$SAMPLE-$TIER.conflict-base"
+    printf '\nlocal, which rewrites the very line the new version restores:\n'
+    cat "$WORK/$SAMPLE-$TIER.conflict-local"
+    printf '\nupdate exit %s\n%s\n' "$_conflict_status" "$_conflict_out"
+    printf '\nsidecar %s\n' "$_sidecar"
+    printf '\nlocal file after update, unchanged=%s\n' "$_untouched"
+  } >"$DIFFS/$SAMPLE-$TIER-update-conflict.diff"
+  if [ "$_conflict_status" = 2 ] && [ "$_untouched" = yes ] && [ "$_sidecar" = written ]; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
+  record "$SAMPLE" "$TIER" "update" "rejecting: a conflicting change is never clobbered" \
+    "$_s" "exit 2, the local file untouched and the shipped version written to the .new sidecar" \
+    "exit $_conflict_status, local untouched=$_untouched, sidecar $_sidecar"
+
+  # Restore the managed artifact, which --force is documented to do, and record
+  # that documented flag while it is being used for real.
+  rm -f "$DIR/$_dest.new"
+  cf update --force
+  if cmp -s "$_live" "$_shipped"; then _s=$RESULT_PASSED; else _s=$RESULT_FAILED; fi
+  record "$SAMPLE" "$TIER" "update --force" "replace a user-modified managed file" \
+    "$_s" "exit 0 and the shipped bytes back on disk" \
+    "exit $CF_STATUS, restored to the shipped bytes=$(cmp -s "$_live" "$_shipped" && echo yes || echo no)"
 }
 
 qualify_read_only() {
@@ -327,6 +570,10 @@ qualify_read_only() {
   cf status --capabilities
   record "$SAMPLE" "$TIER" "status --capabilities" "capability rollup" \
     "$(status_for 0)" "exit 0" "$(observed_exit)"
+
+  cf status --delivery
+  record "$SAMPLE" "$TIER" "status --delivery" "epics with open and total task counts" \
+    "$(status_for 0)" "exit 0 and the delivery view" "$(observed_exit)"
 
   cf policy explain
   record "$SAMPLE" "$TIER" "policy explain" "full key schema from the binary" \
@@ -348,6 +595,14 @@ qualify_read_only() {
   record "$SAMPLE" "$TIER" "recall" "search project memory" \
     "$(status_for 0)" "exit 0 and an index summary" "$(observed_exit)"
 
+  cf recall scaffold --limit 3
+  record "$SAMPLE" "$TIER" "recall --limit" "bound the number of hits" \
+    "$(status_for 0)" "exit 0 with at most the requested number of hits" "$(observed_exit)"
+
+  cf validate project-management
+  record "$SAMPLE" "$TIER" "validate <PATH>" "validate an explicitly named path" \
+    "$(status_for 0)" "exit 0 over the named record directory" "$(observed_exit)"
+
   cf remote protect --dry-run
   record "$SAMPLE" "$TIER" "remote protect --dry-run" "intended rules, nothing applied" \
     "$(status_for_match 0 'dry-run')" "exit 0, the intended rules and status dry-run" "$(observed_exit)"
@@ -357,12 +612,32 @@ qualify_read_only() {
   cf ci --base "$_base" --head HEAD
   record "$SAMPLE" "$TIER" "ci" "range and branch check over the seeded history" \
     "$(status_for_match 0 'clean')" "exit 0, the resolved range clean" "$(observed_exit)"
+
+  printf '## Summary\n\nA qualification sample.\n\n## Changes\n\n- one change\n\n## Testing\n\n- the sample gate\n' \
+    >"$WORK/pr-body-ok.md"
+  cf ci --base "$_base" --head HEAD --pr-body-file "$WORK/pr-body-ok.md"
+  record "$SAMPLE" "$TIER" "ci --pr-body-file" "positive: a conforming PR body" \
+    "$(status_for 0)" "exit 0 with the body accepted" "$(observed_exit)"
+
+  printf '## Summary\n\nGenerated with Claude Code\n\n## Changes\n\n- one change\n\n## Testing\n\n- the sample gate\n' \
+    >"$WORK/pr-body-attr.md"
+  cf ci --base "$_base" --head HEAD --pr-body-file "$WORK/pr-body-attr.md"
+  record "$SAMPLE" "$TIER" "ci --pr-body-file" "rejecting: AI attribution in the PR body" \
+    "$(status_for_match 1 'ai_attribution')" \
+    "a non-zero exit naming the AI attribution rule" "$(observed_exit)"
 }
 
 qualify_doctor() {
   cf doctor
   record "$SAMPLE" "$TIER" "doctor" "all checks" \
     "$(status_for 0)" "exit 0; warnings allowed, failures are not" "$(observed_exit "$(printf '%s' "$CF_OUT" | awk '{print $1}' | sort | uniq -c | tr '\n' ' ')")"
+
+  cf doctor --list
+  _listed=$(printf '%s' "$CF_OUT" | grep -c . || true)
+  if [ "$CF_STATUS" = 0 ] && [ "${_listed:-0}" -ge 1 ]; then _s=$RESULT_PASSED; else _s=$RESULT_FAILED; fi
+  record "$SAMPLE" "$TIER" "doctor --list" "name the available checks" \
+    "$_s" "exit 0 and one line per available check" \
+    "exit $CF_STATUS, $_listed check name(s) listed"
 
   for _c in $("$BINARY" doctor --list); do
     cf doctor --check "$_c"
@@ -413,7 +688,7 @@ qualify_estimate() {
   # The sources come from the repository's own managed skill rather than a
   # copy kept here: the forecast pins them by digest, and a fourth copy of a
   # managed asset is exactly the drift this project's mirror test forbids.
-  _sources="$REPO/assets/base/agents/skills/cf-estimate"
+  _sources="$ASSET_ROOT/assets/base/agents/skills/cf-estimate"
   _added=0
   if [ ! -f "$DIR/.agents/skills/cf-estimate/examples/brief.md" ]; then
     mkdir -p "$DIR/.agents/skills/cf-estimate"
@@ -436,8 +711,14 @@ qualify_estimate() {
 
 qualify_claude_hooks() {
   cf_stdin '{"tool_name":"Bash","tool_input":{"command":"git status --short"}}' hook git-guard
+  if [ "$CF_STATUS" = 0 ] && [ -z "$(printf '%s' "$CF_OUT" | tr -d '[:space:]')" ]; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
   record "$SAMPLE" "$TIER" "hook git-guard" "positive: a read-only git command passes" \
-    "$(status_for 0)" "exit 0, no output" "$(observed_exit "no violation")"
+    "$_s" "exit 0 and nothing written to stdout or stderr" \
+    "exit $CF_STATUS, output $(printf '%s' "${CF_OUT:-<empty>}" | head -1 | cut -c1-120)"
 
   cf_stdin '{"tool_name":"Bash","tool_input":{"command":"git push --force origin main"}}' hook git-guard
   record "$SAMPLE" "$TIER" "hook git-guard" "rejecting: force-push to a protected branch" \
@@ -445,21 +726,65 @@ qualify_claude_hooks() {
     "exit 2 naming policy rule git.force_push_protected" "$(observed_exit)"
 
   cf_stdin '{"tool_name":"Bash","tool_input":{"command":"ls -la"}}' hook exec-guard
+  if [ "$CF_STATUS" = 0 ] && [ -z "$(printf '%s' "$CF_OUT" | tr -d '[:space:]')" ]; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
   record "$SAMPLE" "$TIER" "hook exec-guard" "positive: an ordinary command passes" \
-    "$(status_for 0)" "exit 0, no output" "$(observed_exit "no violation")"
+    "$_s" "exit 0 and nothing written to stdout or stderr" \
+    "exit $CF_STATUS, output $(printf '%s' "${CF_OUT:-<empty>}" | head -1 | cut -c1-120)"
 
   cf_stdin '{"tool_name":"Bash","tool_input":{"command":"sudo rm -rf /"}}' hook exec-guard
   record "$SAMPLE" "$TIER" "hook exec-guard" "rejecting: a dangerous command" \
     "$(status_for_match 2 'security.dangerous_commands')" \
     "exit 2 naming policy rule security.dangerous_commands" "$(observed_exit)"
 
+  # delegate-turn carries its own exit contract. docs/cli.md summarises it as
+  # exit 1 without --run-id and exit 2 when a schema-v2 payload cannot be read;
+  # the binary is narrower, returning 2 only when the failing payload is a
+  # prompt submission and 1 for any other failure, so all three are recorded.
+  _dt_state="$WORK/$SAMPLE-$TIER-delegate-turn"
+  rm -rf "$_dt_state"
+  "$BINARY" delegate init --run-id qualification --state-dir "$_dt_state" >/dev/null 2>&1
+  printf 'corrupt' >"$_dt_state/settings.json"
+
+  cf_stdin '{"hook_event_name":"SessionStart","source":"startup"}' hook delegate-turn
+  record "$SAMPLE" "$TIER" "hook delegate-turn" "rejecting: no run id supplied" \
+    "$(status_for 1)" "exit 1 because --run-id is required" "$(observed_exit)"
+
+  cf_stdin '{"hook_event_name":"SessionStart","source":"startup"}' hook delegate-turn \
+    --run-id qualification --state-dir "$_dt_state"
+  record "$SAMPLE" "$TIER" "hook delegate-turn" "rejecting: an unreadable run, not a prompt" \
+    "$(status_for 1)" \
+    "exit 1, the advisory failure, because the payload is not a prompt submission" "$(observed_exit)"
+
+  cf_stdin '{"hook_event_name":"UserPromptSubmit","prompt":"qualification"}' hook delegate-turn \
+    --run-id qualification --state-dir "$_dt_state"
+  record "$SAMPLE" "$TIER" "hook delegate-turn" "rejecting: an unreadable run under a prompt submission" \
+    "$(status_for 2)" \
+    "exit 2, which makes the harness block the turn rather than run it blind" "$(observed_exit)"
+  rm -rf "$_dt_state"
+
   cf_stdin '{"hook_event_name":"SessionStart","source":"startup"}' hook session-orient
   record "$SAMPLE" "$TIER" "hook session-orient" "emit the orient digest" \
     "$(status_for 0)" "exit 0 and the digest on stdout" "$(observed_exit "$(printf '%s' "$CF_OUT" | head -1)")"
 
+  # session-summary exits 0 whether it recorded or only warned, so the exit
+  # status alone proves nothing. The ledger lives under the git common
+  # directory, not under .codeflow, and the command names the file it wrote.
+  _ledger_dir="$(git -C "$DIR" rev-parse --path-format=absolute --git-common-dir)/codeflow/ledger"
   cf_stdin '{"session_id":"qualification-run","reason":"clear","hook_event_name":"SessionEnd"}' hook session-summary
+  _ledger_files=$(find "$_ledger_dir" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')
+  if [ "$CF_STATUS" = 0 ] && printf '%s' "$CF_OUT" | grep -q 'recorded to' &&
+    [ "${_ledger_files:-0}" -ge 1 ]; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
   record "$SAMPLE" "$TIER" "hook session-summary" "append the session record to the ledger" \
-    "$(status_for 0)" "exit 0 and a ledger entry written" "$(observed_exit "ledger files: $(find "$DIR/.codeflow" -name '*.jsonl' 2>/dev/null | wc -l | tr -d ' ')")"
+    "$_s" "exit 0, the command names the file it recorded, and the ledger holds at least one entry" \
+    "exit $CF_STATUS, $_ledger_files ledger file(s), $(printf '%s' "$CF_OUT" | head -1 | cut -c1-140)"
 }
 
 qualify_git_hooks() {
@@ -478,9 +803,15 @@ qualify_git_hooks() {
 
   printf 'feat: add a qualification sample target\n\nCo-Authored-By: Claude <noreply@anthropic.com>\n' >"$WORK/msg-attr.txt"
   cf git-hook commit-msg "$WORK/msg-attr.txt"
+  if [ "$CF_STATUS" = 1 ] && printf '%s' "$CF_OUT" | grep -q 'git.ai_attribution' &&
+    printf '%s' "$CF_OUT" | grep -q 'git.commit_body'; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
   record "$SAMPLE" "$TIER" "git-hook commit-msg" "rejecting: AI attribution" \
-    "$(status_for_match 1 'git.ai_attribution')" \
-    "exit 1 naming policy rule git.ai_attribution" "$(observed_exit)"
+    "$_s" "exit 1 naming both rules the trailer trips, git.ai_attribution and git.commit_body" \
+    "$(observed_exit)"
 
   printf 'export const qualification = 1;\n' >"$DIR/qualification-clean.js"
   git -C "$DIR" add qualification-clean.js
@@ -592,6 +923,26 @@ qualify_portal() {
   cf portal setup --path docs-portal
   record "$SAMPLE" "$TIER" "portal setup" "adopt the documentation portal starter" \
     "$(status_for 0)" "exit 0 and a written portal workspace" "$(observed_exit "$(printf '%s' "$CF_OUT" | tail -1)")"
+
+  # transfer is irreversible for the adopted runtime, so it is exercised on a
+  # throwaway adoption in this sample and only at the minimal tier, and the
+  # refusal without --confirm is checked first.
+  if [ "$TIER" = minimal ]; then
+    cf portal transfer
+    record "$SAMPLE" "$TIER" "portal transfer" "rejecting: no confirmation supplied" \
+      "$(status_for 2)" "a non-zero exit refusing to transfer without --confirm" "$(observed_exit)"
+
+    cf portal transfer --confirm
+    record "$SAMPLE" "$TIER" "portal transfer --confirm" "hand the runtime to the project" \
+      "$(status_for 0)" "exit 0 accepting future runtime reconciliation" "$(observed_exit)"
+
+    # A transferred runtime is no longer reconciled, so the adoption is removed
+    # before the sweep continues and nothing downstream inherits that state.
+    rm -rf "$DIR/docs-portal"
+    cf portal setup --path docs-portal
+    record "$SAMPLE" "$TIER" "portal setup" "re-adopt after a transfer and removal" \
+      "$(status_for 0)" "exit 0 and a freshly written portal workspace" "$(observed_exit)"
+  fi
 }
 
 # The portal build and its evidence validation run once: they install a real
@@ -599,7 +950,7 @@ qualify_portal() {
 qualify_portal_build() {
   _portal="$DIR/docs-portal"
   if [ ! -d "$_portal" ]; then
-    record "$SAMPLE" "$TIER" "portal build" "render the portal from repository sources" \
+    record "$SAMPLE" "$TIER" "npm run build (portal)" "render the portal from repository sources" \
       "$RESULT_UNAVAILABLE" "a built portal and a generated evidence manifest" \
       "no portal workspace at $_portal" "TSK-042 portal composition gate"
     return
@@ -624,7 +975,7 @@ qualify_portal_build() {
   if [ "$_deps_status" != 0 ]; then
     PATH=$_saved_path
     export PATH
-    record "$SAMPLE" "$TIER" "portal build" "render the portal from repository sources" \
+    record "$SAMPLE" "$TIER" "npm run build (portal)" "render the portal from repository sources" \
       "$RESULT_UNAVAILABLE" "exit 0 and a generated evidence manifest" \
       "dependency install failed (exit $_deps_status): $(oneline "$(printf '%s' "$CF_OUT" | tail -3)")" \
       "hosted publication and network-dependent install, TSK-010"
@@ -636,7 +987,7 @@ qualify_portal_build() {
   fi
 
   sh_run "cd '$_portal' && npm run build"
-  record "$SAMPLE" "$TIER" "portal build" "render the portal from repository sources" \
+  record "$SAMPLE" "$TIER" "npm run build (portal)" "render the portal from repository sources" \
     "$(status_for_match 0 'built artifact')" \
     "exit 0 and a recorded artifact count" "$(observed_exit "$(printf '%s' "$CF_OUT" | tail -2 | tr '\n' ' ')")"
   PATH=$_saved_path
@@ -653,8 +1004,12 @@ qualify_portal_build() {
 qualify_present() {
   _doc="$DIR/.claude/skills/cf-present/resources/present-document.example.json"
   if [ ! -f "$_doc" ]; then
-    _doc="$REPO/assets/base/agents/skills/cf-present/resources/present-document.example.json"
+    _doc="$ASSET_ROOT/assets/base/agents/skills/cf-present/resources/present-document.example.json"
   fi
+
+  # Session discovery resolves the project from the working directory, so the
+  # teardown that closes these sessions must run from the same repository.
+  PRESENT_REPO="$DIR"
 
   present_run() {
     CF_OUT=$(HOME="$PRESENT_HOME" "$BINARY" present "$@" 2>&1 </dev/null) && CF_STATUS=0 || CF_STATUS=$?
@@ -666,10 +1021,17 @@ qualify_present() {
     "$(status_for_match 0 'ready')" \
     "exit 0 and a session ready on an owner-private bootstrap" "$(observed_exit)"
 
-  _sid=$(HOME="$PRESENT_HOME" "$BINARY" present list 2>/dev/null |
-    python3 -c 'import json,sys
-sessions = json.load(sys.stdin)
-print(sessions[0]["id"] if sessions else "")')
+  present_run list
+  _sid=$(printf '%s' "$CF_OUT" | python3 -c 'import json,sys
+try:
+    sessions = json.load(sys.stdin)
+except Exception:
+    sessions = []
+print(sessions[0]["id"] if sessions else "")' 2>/dev/null)
+  if [ "$CF_STATUS" = 0 ] && [ -n "$_sid" ]; then _s=$RESULT_PASSED; else _s=$RESULT_FAILED; fi
+  record "$SAMPLE" "$TIER" "present list" "list the sessions for this project" \
+    "$_s" "exit 0 and JSON naming the session just opened" \
+    "exit $CF_STATUS, session id $([ -n "$_sid" ] && echo "$_sid" || echo none)"
   if [ -z "$_sid" ]; then
     record "$SAMPLE" "$TIER" "present feedback" "deliver pending review envelopes" \
       "$RESULT_FAILED" "exit 0 and a JSON-lines envelope stream" "no session to query"
@@ -685,19 +1047,76 @@ print(sessions[0]["id"] if sessions else "")')
   record "$SAMPLE" "$TIER" "present history" "append-only feedback history as JSON" \
     "$(status_for_match 0 'schema_version')" "exit 0 and the session's history document" "$(observed_exit "$(printf '%s' "$CF_OUT" | head -1)")"
 
+  present_run show "$_sid" --no-launch
+  record "$SAMPLE" "$TIER" "present show" "print the endpoint and profile without launching" \
+    "$(status_for_match 0 "$_sid")" \
+    "exit 0, the session endpoint and profile printed and no browser launched" "$(observed_exit)"
+
+  present_run update "$_sid" "$_doc"
+  record "$SAMPLE" "$TIER" "present update" "append a validated immutable revision" \
+    "$(status_for 0)" "exit 0 and a new revision on the active session" "$(observed_exit)"
+
+  _export="$WORK/$SAMPLE-$TIER-present.html"
+  present_run export "$_sid" --out "$_export"
+  if [ "$CF_STATUS" = 0 ] && [ -s "$_export" ] && grep -qi '<html' "$_export"; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
+  record "$SAMPLE" "$TIER" "present export" "a deterministic self-contained HTML artifact" \
+    "$_s" "exit 0 and a non-empty standalone HTML file at the named path" \
+    "exit $CF_STATUS, $([ -f "$_export" ] && wc -c <"$_export" | tr -d ' ' || echo 0) bytes written"
+
   present_run resolve "$_sid" 00000000-0000-0000-0000-000000000000 --event-version 1 --status addressed
   record "$SAMPLE" "$TIER" "present resolve" "rejecting: an event outside the session fails closed" \
     "$(status_for_match 2 'does not belong to session')" \
     "non-zero exit refusing a cross-session transition" "$(observed_exit)"
 
+  # The only supported producer of a feedback envelope is the review surface,
+  # which posts to the session service from a browser. This harness drives the
+  # CLI and hosts no browser, so it cannot create one. The check is covered
+  # where the browser already runs: crates/codeflow-present/web/scripts/
+  # real-browser-check.mjs submits a real review and resolves the delivered
+  # event at its current version, under TSK-007's gate.
   record "$SAMPLE" "$TIER" "present resolve" "positive: resolve a real reviewer envelope" \
     "$RESULT_UNAVAILABLE" "a delivered envelope marked addressed at its current version" \
-    "no envelope exists: the Comment surface is browser-only and this run launched no browser" \
-    "TSK-007 presentation qualification (isolated real-browser journey)"
+    "this harness drives the CLI and hosts no browser, and only the review surface produces an envelope; the same transition is exercised by real-browser-check.mjs, which resolves a delivered event at event-version 2" \
+    "TSK-007 presentation qualification, whose real-browser journey already covers it"
 
   present_run close "$_sid"
+  _close_status=$CF_STATUS
+  # close returns once the session is marked closed; the documented contract
+  # promises nothing about when its service process has exited, and clear
+  # deliberately retains a session whose service is still alive. The wait below
+  # measures that gap instead of assuming it is zero.
+  _wait=0
+  while [ "$_wait" -lt 30 ]; do
+    present_run clear "$_sid" --older-than 0d --dry-run
+    [ "$CF_STATUS" = 0 ] && break
+    _wait=$((_wait + 1))
+    sleep 1
+  done
   record "$SAMPLE" "$TIER" "present close" "close the session and its service" \
-    "$(status_for 0)" "exit 0 and the session marked closed" "$(observed_exit)"
+    "$([ "$_close_status" = 0 ] && printf '%s' "$RESULT_PASSED" || printf '%s' "$RESULT_FAILED")" \
+    "exit 0 and the session marked closed" \
+    "exit $_close_status; its service was still running for $_wait s afterwards"
+
+  record "$SAMPLE" "$TIER" "present clear --dry-run" "name the eligible closed session without removing it" \
+    "$(status_for_match 0 "$_sid")" \
+    "exit 0 naming the closed session and removing nothing" "$(observed_exit)"
+
+  present_run clear "$_sid" --older-than 0d
+  _clear_status=$CF_STATUS
+  present_run list
+  _left=$(printf '%s' "$CF_OUT" | python3 -c 'import json,sys
+try:
+    print(len(json.load(sys.stdin)))
+except Exception:
+    print("unreadable")' 2>/dev/null)
+  if [ "$_clear_status" = 0 ] && [ "$_left" = 0 ]; then _s=$RESULT_PASSED; else _s=$RESULT_FAILED; fi
+  record "$SAMPLE" "$TIER" "present clear" "remove the closed session" \
+    "$_s" "exit 0 and the project listing empty afterwards" \
+    "exit $_clear_status, $_left session(s) still listed"
 }
 
 # ---------------------------------------------------------------------------
@@ -729,9 +1148,25 @@ qualify_delegate() {
 
   cf delegate arm --run-id "$_run" --state-dir "$_state" --turn-id "$_turn" \
     --prompt-file "$WORK/delegate-prompt.txt"
+  _arm_status=$CF_STATUS
+  # The armed request must exist and must hold the exact bytes of the prompt
+  # file, because the host delivers those bytes and the run correlates on them.
+  _request="$_state/turns/$_turn/request.json"
+  _armed_sha=absent
+  _prompt_sha=$(shasum -a 256 "$WORK/delegate-prompt.txt" | awk '{print $1}')
+  if [ -f "$_request" ]; then
+    _armed_sha=$(python3 -c 'import json,sys
+print(json.load(open(sys.argv[1])).get("prompt_sha256", "no-prompt-digest"))' \
+      "$_request" 2>/dev/null || echo unreadable)
+  fi
+  if [ "$_arm_status" = 0 ] && [ "$_armed_sha" = "$_prompt_sha" ]; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
   record "$SAMPLE" "$TIER" "delegate arm" "positive: arm one prompt for a live turn" \
-    "$(status_for 0)" "exit 0 with the exact prompt bytes armed" \
-    "$(observed_exit "armed turn $_turn; request.json $([ -f "$_state/turns/$_turn/request.json" ] && echo written || echo missing)")"
+    "$_s" "exit 0 and a request holding the exact prompt bytes, digest $_prompt_sha" \
+    "exit $_arm_status, request $([ -f "$_request" ] && echo written || echo missing), armed digest $_armed_sha"
 
   # Two documented wait exits need no session at all.
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until ready --timeout-seconds 3
@@ -902,15 +1337,52 @@ PROMPT
   else
     _state_line=""
   fi
-  if [ "$_pipeline_terminal" = 0 ] && [ -n "$_state_line" ] &&
-    ! printf '%s' "$_state_line" | grep -q 'unavailable'; then
-    record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
-      "$RESULT_PASSED" "a recorded run output and its terminal state" \
-      "turn terminal at exit $_pipeline_terminal; $(oneline "$_state_line")"
-  else
+
+  # The session's own sentence is a claim, never the evidence. A pass needs the
+  # turn to have reached a terminal state, the workflow to report a successful
+  # one, and the work it was asked for to be independently verifiable here: the
+  # subtract function present with its test, and the sample's own gate green.
+  # A workflow that ran and failed is a failure, not an absent capability.
+  _ran=no
+  _succeeded=no
+  case $_state_line in
+    "") _ran=no ;;
+    *unavailable*) _ran=no ;;
+    *) _ran=yes ;;
+  esac
+  case $_state_line in
+    *completed* | *succeeded* | *success* | *passed*) _succeeded=yes ;;
+    *) _succeeded=no ;;
+  esac
+  _subtract=no
+  if grep -rqs 'fn subtract\|function subtract\|const subtract' "$DIR/src" 2>/dev/null; then
+    _subtract=yes
+  fi
+  _subtract_test=no
+  if grep -rqs 'subtract' "$DIR/src" 2>/dev/null &&
+    grep -rqs 'test\|assert' "$DIR/src" 2>/dev/null; then
+    _subtract_test=yes
+  fi
+  cf test --mode full --strict
+  _gate=$CF_STATUS
+  _observed="turn exit $_pipeline_terminal; result line $(oneline "${_state_line:-none written}"); subtract=$_subtract; test=$_subtract_test; sample gate exit $_gate"
+
+  if [ "$_ran" = no ]; then
+    # Nothing executed, so the capability was not exercised at all.
     pipeline_unavailable \
-      "turn exit $_pipeline_terminal; result line: $(oneline "${_state_line:-none written}"); wait output: $(oneline "$_pipeline_out")" \
+      "$_observed; wait output: $(oneline "$_pipeline_out")" \
       "Claude Code Workflow runtime in the canary session"
+  elif [ "$_pipeline_terminal" = 0 ] && [ "$_succeeded" = yes ] &&
+    [ "$_subtract" = yes ] && [ "$_subtract_test" = yes ] && [ "$_gate" = 0 ]; then
+    record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
+      "$RESULT_PASSED" \
+      "a terminal turn, a successful workflow state, and the requested subtract function and test verified here with the sample gate green" \
+      "$_observed"
+  else
+    record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
+      "$RESULT_FAILED" \
+      "a terminal turn, a successful workflow state, and the requested subtract function and test verified here with the sample gate green" \
+      "$_observed"
   fi
 }
 
@@ -945,6 +1417,19 @@ pipeline_unavailable() {
 qualify_boundary() {
   SAMPLE="release boundary"
   TIER="host"
+
+  # Every real commit, ref move and push in this run went through the installed
+  # shims, which resolve codeflow through PATH. If any of them had reached a
+  # different binary, the decoy behind the candidate would have logged it.
+  if [ -f "$DECOY_SENTINEL" ]; then
+    _s=$RESULT_FAILED
+    _decoy="invoked $(grep -c . "$DECOY_SENTINEL") time(s): $(head -1 "$DECOY_SENTINEL")"
+  else
+    _s=$RESULT_PASSED
+    _decoy="never invoked; no codeflow but the candidate answered any subprocess"
+  fi
+  record "$SAMPLE" "$TIER" "candidate binding" "no other codeflow on PATH is ever invoked" \
+    "$_s" "the decoy behind the candidate on PATH is never reached" "$_decoy"
   _host="$(uname -s) $(uname -m)"
   for _target in "Linux x86-64" "Linux arm64" "Windows x86-64" "WSL2"; do
     record "$SAMPLE" "$TIER" "every subcommand" "the same matrix on $_target" \
@@ -980,6 +1465,7 @@ run_sample_tier() {
   esac
 
   cd "$DIR"
+  qualify_binding
   qualify_init
   qualify_update
   qualify_read_only
@@ -995,31 +1481,66 @@ run_sample_tier() {
   cd "$WORK"
 }
 
-for _sample in greenfield-rust greenfield-node brownfield; do
-  for _tier in minimal standard full; do
+for _sample in ${SAMPLES:-greenfield-rust greenfield-node brownfield}; do
+  for _tier in ${TIERS_TO_RUN:-minimal standard full}; do
     run_sample_tier "$_sample" "$_tier"
   done
 done
 
-# The once-only lanes reuse samples the sweep already qualified.
-SAMPLE=greenfield-node
-TIER=full
-DIR="$WORK/$SAMPLE-$TIER"
-cd "$DIR"
-qualify_portal_build
+# The once-only lanes reuse samples the sweep already qualified. A narrowed
+# sweep may not have built them, and silently skipping a whole lane would be a
+# gap, so the absence is recorded rather than ignored.
+once_only_lane() {
+  SAMPLE=$1
+  TIER=$2
+  DIR="$WORK/$SAMPLE-$TIER"
+  if [ ! -d "$DIR" ]; then
+    shift 2
+    for _lane in "$@"; do
+      record "$SAMPLE" "$TIER" "$_lane" "the once-only lane for this sample" \
+        "$RESULT_UNAVAILABLE" "the lane run against the $SAMPLE $TIER sample" \
+        "this run did not build that sample, so the lane had nothing to run against" \
+        "this harness invocation, which narrowed the sweep"
+    done
+    return 1
+  fi
+  cd "$DIR"
+  return 0
+}
 
-SAMPLE=greenfield-rust
-TIER=full
-DIR="$WORK/$SAMPLE-$TIER"
-cd "$DIR"
-qualify_present
-qualify_delegate
+if once_only_lane greenfield-node full "npm run build (portal)"; then
+  qualify_portal_build
+fi
+
+if once_only_lane greenfield-rust full "present open" "delegate init" "pipeline workflow"; then
+  qualify_present
+  qualify_delegate
+fi
 cd "$WORK"
 
 qualify_boundary
 
 END_UTC=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
+
+# The verdict check outlives the work directory, so the results are copied to a
+# second owned child that is removed with it.
+RESULTS_COPY="$WORK_PARENT/cfqual-results-$$.tsv"
+cp "$RESULTS" "$RESULTS_COPY"
+
 teardown
+
+# ---------------------------------------------------------------------------
+# Surfaces the matrix does not reach, reconciled against docs/cli.md
+# ---------------------------------------------------------------------------
+
+UNCOVERED="$WORK_PARENT/cfqual-uncovered-$$.tsv"
+cat >"$UNCOVERED" <<'UNCOV'
+codeflow init --force	overwrites existing files; the qualification proves the non-destructive default, and a destructive flag is not exercised against a sample it would damage
+codeflow test setup --add-target	appends one target interactively and needs a terminal, which this run does not host
+codeflow remote protect --provider <other>	only github has an adapter; the dry-run row covers the adapter and another provider only prints a manual checklist
+codeflow present export --theme, --mode	the export row covers the default editorial theme in system mode; the other five combinations are TSK-007's presentation qualification
+codeflow help <command>	a listing of the same commands this matrix already exercises one by one
+UNCOV
 
 # ---------------------------------------------------------------------------
 # Render
@@ -1036,15 +1557,31 @@ python3 "$SCRIPT_DIR/render.py" \
   --finished "$END_UTC" \
   --work-dir "$WORK" \
   --teardown "$TEARDOWN_LOG" \
-  --diffs "$DIFFS"
+  --diffs "$DIFFS" \
+  --blocked-on "$BLOCKED_ON" \
+  --uncovered "$UNCOVERED"
 
-if [ "$KEEP" = 0 ]; then
-  rm -rf "$WORK"
-fi
+
+# The work directory is removed only now, after the record has been rendered
+# from it, and the record's teardown line is replaced by the verified outcome.
+remove_work
 
 printf '\nmatrix: %s\n' "$OUT" >&2
+_required_unavailable=$(awk -F'\t' '$5=="unavailable" && $1!="release boundary"' "$RESULTS_COPY" 2>/dev/null | wc -l | tr -d ' ')
 if [ "$FAILURES" -gt 0 ]; then
   printf 'qualification blocked: %s failed check(s)\n' "$FAILURES" >&2
+  rm -f "$RESULTS_COPY" "$UNCOVERED"
   exit 1
 fi
-printf 'qualification: no failed checks\n' >&2
+if [ "${_required_unavailable:-0}" -gt 0 ]; then
+  printf 'qualification blocked: %s required check(s) did not run\n' "$_required_unavailable" >&2
+  rm -f "$RESULTS_COPY" "$UNCOVERED"
+  exit 1
+fi
+if [ "$CLEANUP_FAILURES" -gt 0 ]; then
+  printf 'teardown incomplete: %s resource(s) were not released\n' "$CLEANUP_FAILURES" >&2
+  rm -f "$RESULTS_COPY" "$UNCOVERED"
+  exit 1
+fi
+rm -f "$RESULTS_COPY" "$UNCOVERED"
+printf 'qualification: no failed checks and no required check unavailable\n' >&2

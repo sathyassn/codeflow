@@ -122,6 +122,22 @@ observed_exit() {
   fi
 }
 
+# tree_digest <dir> - one digest over the content of every file in the sample,
+# excluding .git. Porcelain status cannot see a change inside a file that was
+# already dirty, so idempotence is judged on content instead.
+tree_digest() {
+  (
+    cd "$1" || exit 1
+    find . -name .git -prune -o -type f -print |
+      LC_ALL=C sort |
+      while IFS= read -r _f; do
+        printf '%s  %s\n' "$(shasum -a 256 "$_f" | awk '{print $1}')" "$_f"
+      done |
+      shasum -a 256 |
+      awk '{print $1}'
+  )
+}
+
 # ---------------------------------------------------------------------------
 # Sample construction
 # ---------------------------------------------------------------------------
