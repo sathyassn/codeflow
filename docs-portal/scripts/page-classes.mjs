@@ -9,10 +9,25 @@
 // one tablist, and an explanatory page carries all three, not a subset.
 export const ALTITUDE_PANELS = Object.freeze(["concept", "architecture", "technical"]);
 
-// The carriers the adapter can generate inside a panel: a cf-stage or text
-// figure, a Markdown table, or a fenced block. One of them must open the
-// Concept panel, because a panel of prose alone is the source re-rendered.
-export const CONCEPT_CARRIERS = Object.freeze(["figure", "table", "pre"]);
+// The elements a panel can carry, counted inside the panel that owns them so
+// that a carrier in a neighbouring panel never answers for a missing one.
+export const CARRIER_ELEMENTS = Object.freeze(["figure", "stage", "table", "pre"]);
+
+// What each panel of the trio must carry. The doctrine asks for a figure in
+// Concept and a stage on architecture pages; a panel of prose alone is the
+// source re-rendered, and a fence or an unrelated table is not the carrier the
+// altitude calls for.
+export const PANEL_CARRIERS = Object.freeze({
+  concept: Object.freeze({ demand: "a figure or a stage", accepts: Object.freeze(["figure", "stage"]) }),
+  architecture: Object.freeze({ demand: "a stage or a table", accepts: Object.freeze(["stage", "table"]) }),
+  technical: Object.freeze({ demand: "a table", accepts: Object.freeze(["table"]) }),
+});
+
+// The release checklist's Technical panel is a disposition list: the checklist
+// is itself the carrier and a table would only restate it. The exemption is
+// recorded per page, so the rule stays strict for every other page and the
+// exception is visible to a reviewer.
+export const TECHNICAL_TABLE_EXEMPT_ROUTES = Object.freeze(["reference/release-checklist"]);
 
 // The generated record pointer page (ADR-0064) is one table of folders. The
 // records themselves are repository files, never portal pages.
@@ -41,6 +56,25 @@ const UTILITY_CHROME = Object.freeze([
   }),
 ]);
 
+// One requirement per panel of the trio. A panel the page never rendered is
+// left to the trio rule above, which already names it, so a missing panel is
+// reported once rather than twice.
+function panelCarrierRequirement(panel) {
+  const { demand, accepts } = PANEL_CARRIERS[panel];
+  return Object.freeze({
+    id: `${panel}-carrier`,
+    demand: `${demand} inside the ${panel} panel`,
+    unmet: (observation) => {
+      if (panel === "technical" && TECHNICAL_TABLE_EXEMPT_ROUTES.includes(observation.route)) return null;
+      const counts = observation.panelCarriers?.[panel];
+      if (!counts) return null;
+      if (accepts.some((element) => counts[element] > 0)) return null;
+      const inventory = CARRIER_ELEMENTS.map((element) => `${element} ${counts[element] ?? 0}`).join(", ");
+      return `the ${panel} panel carries no ${demand.replace("a ", "").replace(" or a ", " or ")} (${inventory})`;
+    },
+  });
+}
+
 export const PAGE_CLASSES = Object.freeze({
   explanatory: Object.freeze({
     id: "explanatory",
@@ -62,11 +96,7 @@ export const PAGE_CLASSES = Object.freeze({
           return `missing ${missing.join(", ")}; present ${present}`;
         },
       }),
-      Object.freeze({
-        id: "concept-figure",
-        demand: `a ${CONCEPT_CARRIERS.join(", ")} carrier in the Concept panel`,
-        unmet: (observation) => observation.conceptCarriers > 0 ? null : "the Concept panel carries prose only",
-      }),
+      ...ALTITUDE_PANELS.map(panelCarrierRequirement),
     ]),
   }),
   recordPointer: Object.freeze({

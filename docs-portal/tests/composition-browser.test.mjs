@@ -7,9 +7,9 @@ import { pathToFileURL } from "node:url";
 import { chromium } from "@playwright/test";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { collectBuiltArtifacts } from "../scripts/publication.mjs";
-import { applyDisplayState, observePortalPage, revealAltitudePanel } from "../scripts/browser-verify.mjs";
+import { applyDisplayState, assertAltitudeTablist, observePortalPage, revealAltitudePanel } from "../scripts/browser-verify.mjs";
 import { RECORD_POINTER_COLUMNS, assertNoRecordRoutes, assertPageClassCoverage, classifyPortalPages, pageClassFailures } from "../scripts/page-classes.mjs";
-import { COMPOSED_PAGE, MISSING_CONCEPT_PAGE, MISSING_TECHNICAL_PAGE, PROSE_TRIO_PAGE, SHELL_PAGE } from "./page-shapes.mjs";
+import { COMPOSED_PAGE, MISSING_CONCEPT_PAGE, MISSING_TECHNICAL_PAGE, PROSE_ARCHITECTURE_PAGE, PROSE_CONCEPT_PAGE, PROSE_TECHNICAL_PAGE, SHELL_PAGE, WRONG_PANEL_CARRIER_PAGE } from "./page-shapes.mjs";
 import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture } from "./portal-fixture.mjs";
 
 test("the gate reads a real build and names every source that is not composed", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
@@ -30,8 +30,11 @@ test("the gate reads a real build and names every source that is not composed", 
       "docs/adoption.md": MISSING_TECHNICAL_PAGE,
       "docs/architecture/system.md": COMPOSED_PAGE,
       "docs/architecture/present.md": MISSING_CONCEPT_PAGE,
+      "docs/architecture/planes.md": PROSE_ARCHITECTURE_PAGE,
       "docs/releasing.md": SHELL_PAGE,
-      "docs/checklist.md": PROSE_TRIO_PAGE,
+      "docs/checklist.md": PROSE_CONCEPT_PAGE,
+      "docs/runbook.md": PROSE_TECHNICAL_PAGE,
+      "docs/handbook.md": WRONG_PANEL_CARRIER_PAGE,
     };
     for (const [relative, contents] of Object.entries(sources)) await writeFile(path.join(root, relative), contents);
     await writeFile(path.join(root, "docs/decisions/ADR-0001-first.md"), "# ADR-0001: first\n");
@@ -45,7 +48,8 @@ test("the gate reads a real build and names every source that is not composed", 
     assertNoRecordRoutes(config, pages, artifacts.map((artifact) => artifact.path));
     const assignments = classifyPortalPages(config, pages);
     assert.deepEqual(assignments.map((assignment) => assignment.route), [
-      "orient/adoption", "orient/product", "reference/checklist", "reference/releasing",
+      "orient/adoption", "orient/product", "reference/checklist", "reference/handbook",
+      "reference/releasing", "reference/runbook", "system/architecture/planes",
       "system/architecture/present", "system/architecture/system", "system/records",
     ]);
 
@@ -67,17 +71,51 @@ test("the gate reads a real build and names every source that is not composed", 
     }
     assert.deepEqual(failures, [
       "docs/adoption.md (explanatory page at orient/adoption) lacks the altitude trio concept, architecture, technical: missing technical; present concept, architecture",
-      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure, table, pre carrier in the Concept panel: the Concept panel carries prose only",
+      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, pre 0)",
+      "docs/handbook.md (explanatory page at reference/handbook) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, pre 0)",
       "docs/releasing.md (explanatory page at reference/releasing) lacks the altitude trio concept, architecture, technical: missing concept, architecture, technical; present none",
-      "docs/releasing.md (explanatory page at reference/releasing) lacks a figure, table, pre carrier in the Concept panel: the Concept panel carries prose only",
+      "docs/runbook.md (explanatory page at reference/runbook) lacks a table inside the technical panel: the technical panel carries no table (figure 0, stage 0, table 0, pre 0)",
+      "docs/architecture/planes.md (explanatory page at system/architecture/planes) lacks a stage or a table inside the architecture panel: the architecture panel carries no stage or table (figure 0, stage 0, table 0, pre 0)",
       "docs/architecture/present.md (explanatory page at system/architecture/present) lacks the altitude trio concept, architecture, technical: missing concept; present architecture, technical",
-      "docs/architecture/present.md (explanatory page at system/architecture/present) lacks a figure, table, pre carrier in the Concept panel: the Concept panel carries prose only",
     ]);
-    assert.throws(() => assertPageClassCoverage(assignments, observations), /6 failure\(s\) across 7 eligible source\(s\)/);
+    assert.throws(() => assertPageClassCoverage(assignments, observations), /7 failure\(s\) across 10 eligible source\(s\)/);
 
     const pointer = observations.find((observation) => observation.route === "system/records");
     assert.deepEqual(pointer.pointerColumns, [...RECORD_POINTER_COLUMNS]);
     assert.equal(pointer.pointerRows, 1);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// Presence in the document is not reach: the trio is a tablist a reader can
+// operate, so each way it can come apart is broken on a real build and the
+// check is required to name it.
+test("the altitude tablist is held to three connected tabs that each open their panel", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    await rm(path.join(root, "docs/seed.md"));
+    await writeFile(path.join(root, "docs/product.md"), COMPOSED_PAGE);
+    commitFixture(root, "compose a page that carries the trio");
+    runLocalAdapter(root);
+    buildFixture(root);
+    const built = pathToFileURL(path.join(root, "dist/orient/product/index.html")).href;
+    const tabScript = await readFile(path.join(root, "public/portal-tabs.js"), "utf8");
+    const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+    try {
+      const page = await browser.newPage();
+      const load = async (breakage) => {
+        await page.goto(built);
+        await page.addScriptTag({ content: tabScript });
+        if (breakage) await page.evaluate(breakage);
+      };
+      await load(null);
+      assert.deepEqual(await assertAltitudeTablist(page), ["portal-panel-concept", "portal-panel-architecture", "portal-panel-technical"]);
+      await load(() => document.querySelector(".portal-altitude-tabs").remove());
+      await assert.rejects(assertAltitudeTablist(page), /offers 0 tab\(s\), the trio needs 3/);
+      await load(() => document.querySelector('[role="tab"][aria-controls="portal-panel-technical"]').setAttribute("aria-controls", "portal-panel-elsewhere"));
+      await assert.rejects(assertAltitudeTablist(page), /tabs control .*portal-panel-elsewhere/);
+      await load(() => document.querySelector("#portal-panel-technical").style.setProperty("display", "none", "important"));
+      await assert.rejects(assertAltitudeTablist(page), /selecting the technical tab did not open its panel/);
+    } finally { await browser.close(); }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

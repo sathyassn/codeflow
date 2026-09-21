@@ -11,7 +11,7 @@ import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertGeneratorIdentity } from "./generator.mjs";
 import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { PORTAL_ACCENT_BACKGROUNDS, pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
-import { ALTITUDE_PANELS, assertNoRecordRoutes, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
+import { ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, assertNoRecordRoutes, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
 
@@ -339,7 +339,10 @@ async function assertPortalComposition(page, engine, origin, config, assignments
   for (const assignment of assignments) {
     await visit(page, routeUrl(origin, config.base, assignment.route));
     observations.push({ route: assignment.route, ...await observePortalPage(page) });
-    if (!await page.locator('.portal-altitude-tabs [role="tab"]').count()) continue;
+    // A page whose class declares the trio is held to its tablist. Skipping a
+    // page that renders no tabs would let the chrome disappear silently, which
+    // is the one failure the panels themselves cannot show.
+    if (assignment.pageClass !== PAGE_CLASSES.explanatory.id) continue;
     try {
       await assertAltitudeInteraction(page, engine, origin, config, assignment.route);
     } catch (error) {
@@ -357,36 +360,69 @@ async function assertPortalComposition(page, engine, origin, config, assignments
 // are written against, taken from the rendered document rather than from the
 // Markdown the adapter wrote.
 export function observePortalPage(page) {
-  return page.evaluate((panels) => {
+  return page.evaluate(({ panels, carriers, columns }) => {
     const shown = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
     const panel = (name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`);
-    const firstTable = document.querySelector(".sl-markdown-content table");
+    const selector = { figure: "figure", stage: ".portal-stage", table: "table", pre: "pre" };
+    const carried = (element) => Object.fromEntries(carriers.map((carrier) => [carrier, element.querySelectorAll(selector[carrier]).length]));
+    // The folder table is the table whose headers are the folder columns, not
+    // whichever table the page happens to render first, so a pointer page that
+    // also carries an unrelated table still reads correctly.
+    const tables = [...document.querySelectorAll(".sl-markdown-content table")];
+    const headersOf = (table) => [...table.querySelectorAll("thead th")].map((cell) => cell.textContent.trim());
+    const folderTable = tables.find((table) => headersOf(table).join("\u0000") === columns.join("\u0000")) ?? null;
     return {
       headings: [...document.querySelectorAll("h1")].filter(shown).length,
       provenance: [...document.querySelectorAll(".portal-provenance")].some(shown),
       displayControls: [...document.querySelectorAll('[data-testid="portal-display-btn"]')].filter(shown).length,
       commentChrome: document.querySelectorAll("[data-testid=comment-btn], .cf-float, .cf-dock, .cf-hint, .cf-composer").length,
       altitudePanels: panels.filter((name) => panel(name) !== null),
-      conceptCarriers: panel("concept")?.querySelectorAll("figure, table, pre").length ?? 0,
-      pointerColumns: [...(firstTable?.querySelectorAll("thead th") ?? [])].map((cell) => cell.textContent.trim()),
-      pointerRows: firstTable?.querySelectorAll("tbody tr").length ?? 0,
+      panelCarriers: Object.fromEntries(panels.map((name) => [name, panel(name) === null ? null : carried(panel(name))])),
+      pointerColumns: folderTable === null ? [] : headersOf(folderTable),
+      pointerRows: folderTable?.querySelectorAll("tbody tr").length ?? 0,
     };
-  }, ALTITUDE_PANELS);
+  }, { panels: ALTITUDE_PANELS, carriers: CARRIER_ELEMENTS, columns: RECORD_POINTER_COLUMNS });
+}
+
+// The trio is a real tablist or it is not the trio: three tabs, each naming the
+// panel it controls, and each opening that panel alone. Exercising every tab is
+// what proves a panel can be reached, which presence in the document does not.
+export async function assertAltitudeTablist(page) {
+  const tabs = page.locator('.portal-altitude-tabs [role="tab"]');
+  const count = await tabs.count();
+  if (count !== ALTITUDE_PANELS.length) throw new Error(`altitude tablist offers ${count} tab(s), the trio needs ${ALTITUDE_PANELS.length}`);
+  const controlled = [];
+  for (let index = 0; index < count; index += 1) controlled.push(await tabs.nth(index).getAttribute("aria-controls"));
+  const trio = await page.evaluate((panels) => panels.map((name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`)?.id ?? null), ALTITUDE_PANELS);
+  const missing = ALTITUDE_PANELS.filter((name, index) => trio[index] === null);
+  if (missing.length) throw new Error(`the tablist has no panel to control for ${missing.join(", ")}`);
+  if (controlled.join(",") !== trio.join(",")) throw new Error(`tabs control ${controlled.map((id) => id ?? "nothing").join(", ")}, the trio panels are ${trio.join(", ")}`);
+  const visiblePanels = async () => {
+    let visible = 0;
+    for (const id of trio) if (await page.locator(`#${id}`).isVisible()) visible += 1;
+    return visible;
+  };
+  for (let index = 0; index < count; index += 1) {
+    await tabs.nth(index).click();
+    if (!await page.locator(`#${trio[index]}`).isVisible()) throw new Error(`selecting the ${ALTITUDE_PANELS[index]} tab did not open its panel`);
+    if (await visiblePanels() !== 1) throw new Error(`selecting the ${ALTITUDE_PANELS[index]} tab left ${await visiblePanels()} panels open`);
+  }
+  return trio;
 }
 
 async function assertAltitudeInteraction(page, engine, origin, config, route) {
   const tabs = page.locator('.portal-altitude-tabs [role="tab"]');
-  const count = await tabs.count();
-  if (count < 2) throw new Error("altitude tablist is missing its tabs");
   const panelIds = [];
-  for (let index = 0; index < count; index += 1) panelIds.push(await tabs.nth(index).getAttribute("aria-controls"));
+  for (const id of await page.evaluate((panels) => panels.map((name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`)?.id ?? null), ALTITUDE_PANELS)) panelIds.push(id);
   const visiblePanels = async () => {
     let visible = 0;
-    for (const id of panelIds) if (await page.locator(`#${id}`).isVisible()) visible += 1;
+    for (const id of panelIds) if (id !== null && await page.locator(`#${id}`).isVisible()) visible += 1;
     return visible;
   };
   if (await visiblePanels() !== 1) throw new Error(`shows ${await visiblePanels()} panels at once, tabs must hide inactive layers`);
   await assertA11y(page, engine, `initial altitude panel on ${route}`);
+  await assertAltitudeTablist(page);
+  const count = await tabs.count();
   await tabs.nth(1).click();
   if (await page.locator(`#${panelIds[0]}`).isVisible()) throw new Error("first altitude panel is still visible while the second tab is selected");
   if (!await page.locator(`#${panelIds[1]}`).isVisible() || await visiblePanels() !== 1) throw new Error("selected altitude tab did not reveal exactly its own panel");
@@ -402,10 +438,11 @@ async function assertAltitudeInteraction(page, engine, origin, config, route) {
   await assertA11y(page, engine, `altitude tabs on ${route}`);
 }
 
-// Each palette pill previews the skin it selects. The swatches are read back
-// from the pills and compared with the tokens the live stylesheet computes for
-// that skin, so a hard coded colour, or one copy of the current skin painted
-// onto every pill, fails instead of looking plausible.
+// Each palette pill previews the skin it selects. The check opens each Display
+// panel and reads the colour the swatch elements actually paint, compared with
+// the colour the live stylesheet computes for that skin, so a missing swatch, a
+// hard coded colour, or one copy of the current skin painted onto every pill
+// fails instead of looking plausible.
 async function assertPaletteSwatches(page, engine, origin, config, assignment) {
   if (assignment === undefined) throw new Error(`${engine}: no generated page can prove the Display panels`);
   await visit(page, routeUrl(origin, config.base, assignment.route));
@@ -413,24 +450,47 @@ async function assertPaletteSwatches(page, engine, origin, config, assignment) {
   // pill, so waiting for that mark proves the component ran without waiting on
   // the swatches this check is about.
   await page.locator('.pills[data-group="skin"] button[aria-pressed]').first().waitFor({ state: "attached" });
-  const observation = await page.evaluate((skins) => {
+  const tokens = await page.evaluate((skins) => {
     const root = document.documentElement;
     const computed = getComputedStyle(root);
+    // The tokens are hex and the swatches paint in the browser's own colour
+    // space, so each token is resolved through the page before comparison.
+    const probe = document.createElement("span");
+    probe.setAttribute("aria-hidden", "true");
+    probe.style.display = "none";
+    document.body.append(probe);
+    const painted = (value) => {
+      probe.style.backgroundColor = "";
+      probe.style.backgroundColor = value;
+      return getComputedStyle(probe).backgroundColor;
+    };
     const selected = root.dataset.cfpSkin;
-    const tokens = {};
+    const table = {};
     for (const skin of skins) {
       root.dataset.cfpSkin = skin;
-      tokens[skin] = { canvas: computed.getPropertyValue("--cf-canvas").trim(), accent: computed.getPropertyValue("--cf-accent").trim() };
+      table[skin] = { canvas: painted(computed.getPropertyValue("--cf-canvas").trim()), accent: painted(computed.getPropertyValue("--cf-accent").trim()) };
     }
     if (selected === undefined) delete root.dataset.cfpSkin; else root.dataset.cfpSkin = selected;
-    const groups = [...document.querySelectorAll('.pills[data-group="skin"]')].map((group) => [...group.querySelectorAll("button")].map((pill) => ({
-      skin: pill.dataset.value,
-      canvas: pill.style.getPropertyValue("--pill-canvas").trim(),
-      accent: pill.style.getPropertyValue("--pill-accent").trim(),
-    })));
-    return { tokens, groups };
+    probe.remove();
+    return table;
   }, PORTAL_SKINS);
-  const failures = paletteSwatchFailures(observation, PALETTE_PILL_GROUPS);
+  const buttons = page.locator('[data-testid="portal-display-btn"]');
+  const panels = page.locator('[data-testid="portal-display-panel"]');
+  const groups = [];
+  for (let index = 0; index < await panels.count(); index += 1) {
+    // A reader opens one panel at a time, and the component closes the others,
+    // so each panel is opened, read and closed in turn.
+    if (await buttons.nth(index).isVisible() && await panels.nth(index).isHidden()) await buttons.nth(index).click();
+    groups.push(await panels.nth(index).evaluate((panel) => [...panel.querySelectorAll('.pills[data-group="skin"] button')].map((pill) => {
+      const swatch = (name) => {
+        const element = pill.querySelector(`.${name}`);
+        return element === null ? "" : getComputedStyle(element).backgroundColor;
+      };
+      return { skin: pill.dataset.value, canvas: swatch("sw-canvas"), accent: swatch("sw-accent") };
+    })));
+    await page.keyboard.press("Escape");
+  }
+  const failures = paletteSwatchFailures({ tokens, groups }, PALETTE_PILL_GROUPS);
   if (failures.length) throw new Error(`${engine}: ${assignment.route}: palette pills do not show the live palette they select\n  ${failures.join("\n  ")}`);
 }
 

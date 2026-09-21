@@ -5,24 +5,35 @@ import os from "node:os";
 import path from "node:path";
 import { paletteSwatchFailures, PALETTE_PILL_GROUPS } from "../scripts/browser-verify.mjs";
 import {
-  ALTITUDE_PANELS, CONCEPT_CARRIERS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, RECORD_POINTER_SOURCE,
+  ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, PANEL_CARRIERS, RECORD_POINTER_COLUMNS, RECORD_POINTER_SOURCE, TECHNICAL_TABLE_EXEMPT_ROUTES,
   assertNoRecordRoutes, assertPageClassCoverage, classifyPortalPages, pageClassFailures, recordPointerRoute, recordRouteFailures,
 } from "../scripts/page-classes.mjs";
 import { COMPOSED_PAGE, SHELL_PAGE } from "./page-shapes.mjs";
 import { commitFixture, configureFixture, portalFixture, runAdapter, starterRoot } from "./portal-fixture.mjs";
 
+// What a composed page carries, counted inside each panel that owns it.
+const CARRIED = Object.freeze({
+  concept: Object.freeze({ figure: 1, stage: 1, table: 0, pre: 0 }),
+  architecture: Object.freeze({ figure: 0, stage: 0, table: 1, pre: 0 }),
+  technical: Object.freeze({ figure: 0, stage: 0, table: 2, pre: 1 }),
+});
 const COMPLIANT_OBSERVATION = Object.freeze({
   headings: 1, provenance: true, displayControls: 2, commentChrome: 0,
-  altitudePanels: [...ALTITUDE_PANELS], conceptCarriers: 1, pointerColumns: [], pointerRows: 0,
+  altitudePanels: [...ALTITUDE_PANELS], panelCarriers: CARRIED, pointerColumns: [], pointerRows: 0,
 });
 const POINTER_OBSERVATION = Object.freeze({
   headings: 1, provenance: false, displayControls: 2, commentChrome: 0,
-  altitudePanels: [], conceptCarriers: 0, pointerColumns: [...RECORD_POINTER_COLUMNS], pointerRows: 4,
+  altitudePanels: [], panelCarriers: Object.freeze({ concept: null, architecture: null, technical: null }),
+  pointerColumns: [...RECORD_POINTER_COLUMNS], pointerRows: 4,
 });
+const PROSE_PANEL = Object.freeze({ figure: 0, stage: 0, table: 0, pre: 0 });
 
 test("the page-class rules are declared once and enumerate what each class must show", () => {
   assert.deepEqual(ALTITUDE_PANELS, ["concept", "architecture", "technical"]);
-  assert.deepEqual(CONCEPT_CARRIERS, ["figure", "table", "pre"]);
+  assert.deepEqual(CARRIER_ELEMENTS, ["figure", "stage", "table", "pre"]);
+  assert.deepEqual(Object.keys(PANEL_CARRIERS), [...ALTITUDE_PANELS]);
+  assert.deepEqual(ALTITUDE_PANELS.map((panel) => PANEL_CARRIERS[panel].accepts), [["figure", "stage"], ["stage", "table"], ["table"]]);
+  assert.deepEqual(TECHNICAL_TABLE_EXEMPT_ROUTES, ["reference/release-checklist"]);
   assert.deepEqual(RECORD_POINTER_COLUMNS, ["Folder", "Purpose", "Count", "Repository"]);
   assert.deepEqual(Object.keys(PAGE_CLASSES), ["explanatory", "recordPointer"]);
   assert.deepEqual(Object.values(PAGE_CLASSES).map((pageClass) => [pageClass.id, pageClass.label]), [
@@ -30,7 +41,8 @@ test("the page-class rules are declared once and enumerate what each class must 
     ["record-pointer", "record pointer page"],
   ]);
   assert.deepEqual(PAGE_CLASSES.explanatory.requirements.map((requirement) => requirement.id), [
-    "single-heading", "display-control", "no-present-chrome", "provenance-line", "altitude-trio", "concept-figure",
+    "single-heading", "display-control", "no-present-chrome", "provenance-line", "altitude-trio",
+    "concept-carrier", "architecture-carrier", "technical-carrier",
   ]);
   assert.deepEqual(PAGE_CLASSES.recordPointer.requirements.map((requirement) => requirement.id), [
     "single-heading", "display-control", "no-present-chrome", "folder-table",
@@ -39,7 +51,9 @@ test("the page-class rules are declared once and enumerate what each class must 
     "the altitude trio concept, architecture, technical");
   assert.equal(PAGE_CLASSES.recordPointer.requirements.find((requirement) => requirement.id === "folder-table").demand,
     "one folder table with the columns Folder, Purpose, Count, Repository");
-  for (const frozen of [ALTITUDE_PANELS, CONCEPT_CARRIERS, RECORD_POINTER_COLUMNS, PAGE_CLASSES, PAGE_CLASSES.explanatory, PAGE_CLASSES.explanatory.requirements]) {
+  assert.equal(PAGE_CLASSES.explanatory.requirements.find((requirement) => requirement.id === "technical-carrier").demand,
+    "a table inside the technical panel");
+  for (const frozen of [ALTITUDE_PANELS, CARRIER_ELEMENTS, PANEL_CARRIERS, TECHNICAL_TABLE_EXEMPT_ROUTES, RECORD_POINTER_COLUMNS, PAGE_CLASSES, PAGE_CLASSES.explanatory, PAGE_CLASSES.explanatory.requirements]) {
     assert.equal(Object.isFrozen(frozen), true);
   }
 });
@@ -86,13 +100,13 @@ test("a compliant page cannot mask a noncompliant page and an unvisited route ca
   ];
   const observations = [
     { route: "orient/product", ...COMPLIANT_OBSERVATION },
-    { route: "reference/guide", ...COMPLIANT_OBSERVATION, altitudePanels: ["concept"], conceptCarriers: 0 },
+    { route: "reference/guide", ...COMPLIANT_OBSERVATION, altitudePanels: ["concept"], panelCarriers: { concept: { ...PROSE_PANEL, table: 1 }, architecture: null, technical: null } },
   ];
   const failures = pageClassFailures(assignments, observations);
   assert.equal(failures.filter((failure) => failure.includes("docs/product.md")).length, 0);
   assert.deepEqual(failures, [
     "docs/guide.md (explanatory page at reference/guide) lacks the altitude trio concept, architecture, technical: missing architecture, technical; present concept",
-    "docs/guide.md (explanatory page at reference/guide) lacks a figure, table, pre carrier in the Concept panel: the Concept panel carries prose only",
+    "docs/guide.md (explanatory page at reference/guide) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 1, pre 0)",
     "docs/unvisited.md (explanatory page at reference/unvisited) was not verified: the run collected no observation for this route",
   ]);
   assert.throws(() => assertPageClassCoverage(assignments, observations), (error) => {
@@ -120,7 +134,6 @@ test("the utility chrome rules refuse a bare shell, a second heading and present
     [{ commentChrome: 1 }, "lacks no present Comment chrome: 1 present Comment element(s)"],
     [{ provenance: false }, "lacks the visible source provenance line: no visible provenance line"],
     [{ altitudePanels: [] }, "missing concept, architecture, technical; present none"],
-    [{ conceptCarriers: 0 }, "the Concept panel carries prose only"],
   ];
   for (const [override, expected] of cases) {
     const failures = pageClassFailures([assignment], [{ route: assignment.route, ...COMPLIANT_OBSERVATION, ...override }]);
@@ -129,6 +142,34 @@ test("the utility chrome rules refuse a bare shell, a second heading and present
     assert.equal(failures[0].includes(expected), true, failures[0]);
   }
   assert.deepEqual(pageClassFailures([assignment], [{ route: assignment.route, ...COMPLIANT_OBSERVATION }]), []);
+});
+
+test("each panel is held to the carrier its altitude names, inside the panel that owns it", () => {
+  const assignment = { route: "orient/product", source: "docs/product.md", pageClass: "explanatory" };
+  const shaped = (overrides) => [{ route: assignment.route, ...COMPLIANT_OBSERVATION, panelCarriers: { ...CARRIED, ...overrides } }];
+  const failures = (overrides) => pageClassFailures([assignment], shaped(overrides));
+  const lacking = (demand, panel, inventory) =>
+    `docs/product.md (explanatory page at orient/product) lacks ${demand} inside the ${panel} panel: the ${panel} panel carries no ${demand.replace("a ", "").replace(" or a ", " or ")} (${inventory})`;
+  assert.deepEqual(failures({}), []);
+  // A panel of prose, or of a carrier its altitude does not call for, fails.
+  assert.deepEqual(failures({ concept: { ...PROSE_PANEL, table: 1, pre: 1 } }),
+    [lacking("a figure or a stage", "concept", "figure 0, stage 0, table 1, pre 1")]);
+  assert.deepEqual(failures({ architecture: { ...PROSE_PANEL, figure: 1 } }),
+    [lacking("a stage or a table", "architecture", "figure 1, stage 0, table 0, pre 0")]);
+  assert.deepEqual(failures({ technical: { ...PROSE_PANEL, figure: 1, stage: 1, pre: 2 } }),
+    [lacking("a table", "technical", "figure 1, stage 1, table 0, pre 2")]);
+  // A carrier in the wrong panel answers for that panel only: the stage in
+  // Architecture leaves Concept short.
+  assert.deepEqual(failures({ concept: PROSE_PANEL, architecture: { ...PROSE_PANEL, stage: 2 } }),
+    [lacking("a figure or a stage", "concept", "figure 0, stage 0, table 0, pre 0")]);
+  // A panel the page never rendered is named once, by the trio rule.
+  assert.deepEqual(pageClassFailures([assignment], [{ route: assignment.route, ...COMPLIANT_OBSERVATION, altitudePanels: ["concept", "architecture"], panelCarriers: { ...CARRIED, technical: null } }]),
+    ["docs/product.md (explanatory page at orient/product) lacks the altitude trio concept, architecture, technical: missing technical; present concept, architecture"]);
+  // The release checklist's disposition list is the recorded exception, and it
+  // is granted by page: the same shape anywhere else still fails.
+  const exempt = { route: TECHNICAL_TABLE_EXEMPT_ROUTES[0], source: "docs/release-checklist.md", pageClass: "explanatory" };
+  assert.deepEqual(pageClassFailures([exempt], [{ ...shaped({ technical: PROSE_PANEL })[0], route: exempt.route }]), []);
+  assert.equal(failures({ technical: PROSE_PANEL }).length, 1);
 });
 
 test("the record pointer page is required to carry its folder table", () => {
