@@ -61,12 +61,12 @@ craft.
 
 ### Node lanes
 
-The portal build requires Node 22.19.0 or newer.
+Each lane names the Node version it runs on, and only the starter is a floor.
 
-| Lane | Pinned Node |
+| Lane | Node |
 |---|---|
 | Starter floor | 22.19.0 or newer |
-| Aggregate CI gate, whose full strict target installs, checks, builds, and validates the dogfood portal | 26.4.0, the presentation renderer's pin |
+| Aggregate CI gate | 26.4.0, the presentation renderer's pin; its full strict target installs, checks, builds, and validates the dogfood portal |
 | Portal-local `.node-version` and the Windows adapter-test lane | 24.18.0 |
 
 ### Adapter authority and fail-closed boundaries
@@ -91,10 +91,21 @@ previous generated data are never republished.
 ### Independent verification
 
 `codeflow validate --portal <directory>` executes no project code and writes
-nothing; it independently checks bounded path, hash, complete configured-source
-coverage, exact source-derived identity/relationship, error-page, provenance, version, raster-dimension,
-output-coverage, twin, and
-`llms.txt` claims.
+nothing. It independently checks eleven claims:
+
+| Claim | What it proves |
+|---|---|
+| Bounded path | Every output path stays inside the portal workspace |
+| Hash | Each published byte matches its recorded digest |
+| Complete configured-source coverage | Every configured source produced a page |
+| Exact source-derived identity | Each page's ids come from its own source |
+| Relationship | Each declared relationship resolves to a real target |
+| Error page | A broken source rendered the bounded error page, not silence |
+| Provenance | Each page carries its visible source, commit or release |
+| Version | The evidence schema is the one this binary reads |
+| Raster dimension | Each raster asset matches its declared size |
+| Output coverage | Nothing was published that the manifest does not list |
+| Twin and `llms.txt` | The Markdown twins and the index agree with the pages |
 It compares generator evidence with the declared identity, retaining managed
 release pins but accepting a genuinely renamed transferred generator. Matching
 evidence is not runtime attestation or a substitute for rendered qualification.
