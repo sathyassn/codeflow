@@ -125,7 +125,7 @@
     ".agents/skills/cf-editorial-review/SKILL.md": {
       "src": "agents/skills/cf-editorial-review/SKILL.md",
       "ownership": "managed",
-      "sha256": "e9b179fb37e31de89079b4d33c748d7cf57ffcfe89eb1ab645eee8e26d3a5e72",
+      "sha256": "3e6c3e7a394c3c5a32440b1d4a4022694d75936e0a93f731d0fcfa38515e8d8a",
       "exec": false
     },
     ".agents/skills/cf-editorial-review/agents/openai.yaml": {
@@ -137,7 +137,7 @@
     ".agents/skills/cf-editorial-review/references/editorial-smells.md": {
       "src": "agents/skills/cf-editorial-review/references/editorial-smells.md",
       "ownership": "managed",
-      "sha256": "1a6ab33d0950d4d6e50c72781f5ffe599067093483fcb70ca45dae136b695130",
+      "sha256": "b76067416ed258d258eea7e23dbd913d87f981af0f64678f99c2ec2eec272310",
       "exec": false
     },
     ".agents/skills/cf-estimate/SKILL.md": {
@@ -317,7 +317,7 @@
     ".agents/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "370ecac60042993f24b6639479b997356a75a003d09eaad31115f6e3413d4e52",
+      "sha256": "dc0014e0ddfe9bee5ad86dabb44f1fc7ae0c2ef3596ffd7ccb0fb43003965c68",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
@@ -599,7 +599,7 @@
     ".claude/skills/cf-editorial-review/SKILL.md": {
       "src": "agents/skills/cf-editorial-review/SKILL.md",
       "ownership": "managed",
-      "sha256": "e9b179fb37e31de89079b4d33c748d7cf57ffcfe89eb1ab645eee8e26d3a5e72",
+      "sha256": "3e6c3e7a394c3c5a32440b1d4a4022694d75936e0a93f731d0fcfa38515e8d8a",
       "exec": false
     },
     ".claude/skills/cf-editorial-review/agents/openai.yaml": {
@@ -611,7 +611,7 @@
     ".claude/skills/cf-editorial-review/references/editorial-smells.md": {
       "src": "agents/skills/cf-editorial-review/references/editorial-smells.md",
       "ownership": "managed",
-      "sha256": "1a6ab33d0950d4d6e50c72781f5ffe599067093483fcb70ca45dae136b695130",
+      "sha256": "b76067416ed258d258eea7e23dbd913d87f981af0f64678f99c2ec2eec272310",
       "exec": false
     },
     ".claude/skills/cf-estimate/SKILL.md": {
@@ -791,7 +791,7 @@
     ".claude/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "370ecac60042993f24b6639479b997356a75a003d09eaad31115f6e3413d4e52",
+      "sha256": "dc0014e0ddfe9bee5ad86dabb44f1fc7ae0c2ef3596ffd7ccb0fb43003965c68",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
@@ -1037,7 +1037,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "f714f747afe2db73adf9fb4e5a10afa197bb4e47c9977cdb46c668a435df5ca7",
+      "sha256": "094f39ce6b3c1d630160b2fe4b48ed71fc1bc6de2eb3edb7cdac4e5efd23bcc8",
       "exec": false
     },
     "CLAUDE.md": {
