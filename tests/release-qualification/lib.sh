@@ -130,6 +130,10 @@ observed_exit() {
 # Claude session the canary starts asks a human to trust the folder before it
 # takes any prompt. No agent may answer that question, so the harness waits for
 # the operator instead of recording the whole delegate lane unavailable.
+#
+# Everything here fails closed. A pane the harness cannot read is never read as
+# an answer: the run would otherwise record a failed delegate lane on evidence
+# that only says herdr stopped replying.
 
 # The line Claude Code paints while it waits for that answer.
 TRUST_PROMPT_MATCH='Is this a project you created or one you trust'
@@ -137,30 +141,265 @@ TRUST_PROMPT_MATCH='Is this a project you created or one you trust'
 # How often the pane is re-read while waiting.
 TRUST_POLL_SECONDS=5
 
-# trust_prompt_showing <pane-id> - true while the pane still asks the question.
+# How long one pane read may take. Never longer than the poll interval, so a
+# stuck read cannot stretch the wait past the budget the operator asked for.
+TRUST_READ_TIMEOUT=$TRUST_POLL_SECONDS
+
+# What an inspection of the pane found, returned as an exit status.
+TRUST_SHOWING=0
+TRUST_GONE=1
+TRUST_UNREADABLE=2
+
+# trust_prompt_showing <pane-id> [seconds] - inspect the pane once.
+#
+# Returns TRUST_SHOWING while the pane still asks the question, TRUST_GONE when
+# a readable pane no longer shows it, and TRUST_UNREADABLE when herdr exits
+# non-zero, prints nothing, or does not answer inside the bound. The read's
+# status is kept rather than piped into grep, because `grep -q` on an empty
+# pipe is indistinguishable from a pane that no longer asks.
+#
+# The bound is enforced with perl's alarm over a forked child: macOS ships no
+# timeout(1) and the harness adds no dependency, while perl is in the macOS
+# base system. Output goes to a file rather than through a command
+# substitution, because a pipe would keep the shell waiting on a grandchild
+# that still holds the write end after the read itself was killed. A perl that
+# is not on PATH is reported unreadable rather than read without a bound.
 trust_prompt_showing() {
-  herdr pane read "$1" --source recent --lines 120 2>/dev/null |
-    grep -q "$TRUST_PROMPT_MATCH"
+  _tps_pane=$1
+  _tps_bound=${2:-$TRUST_READ_TIMEOUT}
+  _tps_file=${TMPDIR:-/tmp}/cf-trust-pane.$$
+
+  if ! command -v perl >/dev/null 2>&1; then
+    unset _tps_pane _tps_bound _tps_file
+    return 2
+  fi
+  if ! : >"$_tps_file" 2>/dev/null; then
+    unset _tps_pane _tps_bound _tps_file
+    return 2
+  fi
+
+  # `--source visible` is the screen as it stands. `recent` carries scrollback,
+  # where an answered question is still written, so polling that source would
+  # keep waiting until the budget ran out on every prompt the operator did
+  # answer. The prompt has to be judged gone from the current screen.
+  # perl forks herdr as its child and kills that child when the alarm fires,
+  # exiting 124 itself. The shell therefore never sees a child die by signal,
+  # which is what makes it print "Alarm clock" on the operator's screen. A
+  # child that exits normally passes its status through; one that dies by a
+  # signal is reported as 128 plus the signal number.
+  perl -e '
+    my $bound = shift;
+    my $pid = fork;
+    die "fork: $!" unless defined $pid;
+    if ($pid == 0) { exec @ARGV or exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", $pid; waitpid($pid, 0); exit 124 };
+    alarm $bound;
+    waitpid($pid, 0);
+    alarm 0;
+    exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+  ' "$_tps_bound" herdr pane read "$_tps_pane" --source visible --lines 120 \
+    >"$_tps_file" 2>/dev/null && _tps_read=0 || _tps_read=$?
+
+  if [ "$_tps_read" != 0 ] || [ ! -s "$_tps_file" ]; then
+    _tps_seen=$TRUST_UNREADABLE
+  elif grep -qF -- "$TRUST_PROMPT_MATCH" "$_tps_file"; then
+    _tps_seen=$TRUST_SHOWING
+  else
+    _tps_seen=$TRUST_GONE
+  fi
+  rm -f "$_tps_file"
+
+  # sh has no `local`, so the answer is parked in the function's own positional
+  # parameters and every temporary is dropped before the return.
+  set -- "$_tps_seen"
+  unset _tps_pane _tps_bound _tps_file _tps_read _tps_seen
+  return "$1"
 }
+
+# What a whole wait ended in, returned as an exit status.
+TRUST_WAIT_ANSWERED=0
+TRUST_WAIT_TIMEOUT=1
+TRUST_WAIT_UNREADABLE=2
 
 # wait_for_trust_answer <pane-id> <seconds> - poll until the prompt is gone.
 #
-# Returns 0 as soon as the pane no longer shows it, and 1 when the budget runs
-# out with the question still on screen. The last sleep is shortened to the
-# remaining budget so the wait never overruns the number the operator asked for.
+# Returns TRUST_WAIT_ANSWERED as soon as a readable pane no longer shows the
+# question, TRUST_WAIT_TIMEOUT when the budget ends with the question still on
+# screen, and TRUST_WAIT_UNREADABLE when it ends on a pane that could not be
+# read. An unreadable pane is treated as "still waiting" while budget remains:
+# a pane mid-repaint is common and is not evidence of an answer either way.
+#
+# The budget is measured against a wall-clock deadline, not against the sleeps,
+# so the time a slow read spends cannot be spent twice.
 wait_for_trust_answer() {
-  _pane=$1
-  _budget=$2
-  _waited=0
-  while trust_prompt_showing "$_pane"; do
-    [ "$_waited" -lt "$_budget" ] || return 1
-    _step=$TRUST_POLL_SECONDS
-    _left=$((_budget - _waited))
-    [ "$_step" -le "$_left" ] || _step=$_left
-    sleep "$_step"
-    _waited=$((_waited + _step))
+  _twa_pane=$1
+  _twa_deadline=$(($(date +%s) + $2))
+  _twa_last=$TRUST_UNREADABLE
+
+  while :; do
+    _twa_left=$((_twa_deadline - $(date +%s)))
+    _twa_bound=$TRUST_POLL_SECONDS
+    [ "$_twa_bound" -le "$_twa_left" ] || _twa_bound=$_twa_left
+    [ "$_twa_bound" -ge 1 ] || _twa_bound=1
+    trust_prompt_showing "$_twa_pane" "$_twa_bound" && _twa_last=0 || _twa_last=$?
+
+    if [ "$_twa_last" = "$TRUST_GONE" ]; then
+      set -- "$TRUST_WAIT_ANSWERED"
+      break
+    fi
+    if [ "$(date +%s)" -ge "$_twa_deadline" ]; then
+      if [ "$_twa_last" = "$TRUST_UNREADABLE" ]; then
+        set -- "$TRUST_WAIT_UNREADABLE"
+      else
+        set -- "$TRUST_WAIT_TIMEOUT"
+      fi
+      break
+    fi
+
+    _twa_step=$TRUST_POLL_SECONDS
+    _twa_left=$((_twa_deadline - $(date +%s)))
+    [ "$_twa_step" -le "$_twa_left" ] || _twa_step=$_twa_left
+    if [ "$_twa_step" -gt 0 ]; then sleep "$_twa_step"; fi
   done
-  return 0
+
+  unset _twa_pane _twa_deadline _twa_last _twa_left _twa_bound _twa_step
+  return "$1"
+}
+
+# agent_pane_and_tab - read a `herdr agent get` reply on stdin, print
+# "<pane-id> <tab-id>".
+#
+# `herdr agent get <name>` prints one JSON object, exit 1 when the name is
+# unknown, and on success carries result.agent.pane_id and result.agent.tab_id,
+# so the registered session can be compared against the pane this run created.
+# Any other shape prints nothing, because a reply that cannot be read proves
+# nothing.
+agent_pane_and_tab() {
+  python3 -c 'import json, sys
+try:
+    agent = json.load(sys.stdin)["result"]["agent"]
+    print("%s %s" % (agent["pane_id"], agent["tab_id"]))
+except Exception:
+    pass' 2>/dev/null
+}
+
+# What resolve_trust_prompt decided, and why.
+TRUST_OUTCOME=""
+TRUST_REASON=""
+TRUST_OWNER=""
+
+TRUST_OWNER_OPERATOR="a human operator, who alone may answer the workspace-trust prompt"
+TRUST_OWNER_ENVIRONMENT="operator environment"
+
+# resolve_trust_prompt <pane> <tab> <dir> <budget> <agent> <settings-file>
+#
+# The whole trust branch of the canary, kept here rather than inline in
+# qualify.sh so the self-check can drive it against a stub herdr. Driving it
+# through qualify.sh end to end is not possible: reaching this branch needs the
+# built binary, the scaffolded samples and the rest of the 25-minute matrix.
+#
+# Returns 0 only when a live session is proven on this pane and tab. Otherwise
+# it returns 1 and leaves TRUST_OUTCOME, TRUST_REASON and TRUST_OWNER for the
+# caller to record. TRUST_OUTCOME is one of:
+#
+#   ready       a live session is proven on this pane; the run may continue
+#   disabled    the wait was switched off with --trust-wait-seconds 0
+#   unanswered  the budget ended with the question still on screen
+#   unreadable  the budget ended without a readable pane
+#   unproven    the question cleared but no session could be proven
+resolve_trust_prompt() {
+  _rtp_pane=$1
+  _rtp_tab=$2
+  _rtp_dir=$3
+  _rtp_budget=$4
+  _rtp_agent=$5
+  _rtp_settings=$6
+  TRUST_OUTCOME=""
+  TRUST_REASON=""
+  TRUST_OWNER=""
+
+  if [ "$_rtp_budget" -eq 0 ]; then
+    TRUST_OUTCOME=disabled
+    TRUST_OWNER=$TRUST_OWNER_OPERATOR
+    TRUST_REASON="the wait for an answer was disabled by --trust-wait-seconds 0"
+  else
+    # The operator is watching stdout, not the transcript file, so the ask goes
+    # there and names the tab, the pane and the folder being trusted.
+    printf '\n%s\n' '=================================================================='
+    printf 'ACTION NEEDED: a human must answer the Claude Code trust prompt.\n'
+    printf '  Herdr tab:  %s\n' "$_rtp_tab"
+    printf '  Herdr pane: %s\n' "$_rtp_pane"
+    printf '  sample:     %s\n' "$_rtp_dir"
+    printf '  The session in that tab asks whether this is a project you\n'
+    printf '  created or one you trust. You have %s seconds to answer it;\n' \
+      "$_rtp_budget"
+    printf '  the run continues on its own as soon as the prompt is gone.\n'
+    printf '%s\n\n' '=================================================================='
+
+    wait_for_trust_answer "$_rtp_pane" "$_rtp_budget" && _rtp_wait=0 || _rtp_wait=$?
+    if [ "$_rtp_wait" = "$TRUST_WAIT_TIMEOUT" ]; then
+      TRUST_OUTCOME=unanswered
+      TRUST_OWNER=$TRUST_OWNER_OPERATOR
+      TRUST_REASON="the operator did not answer the trust prompt within $_rtp_budget seconds (--trust-wait-seconds)"
+    elif [ "$_rtp_wait" = "$TRUST_WAIT_UNREADABLE" ]; then
+      TRUST_OUTCOME=unreadable
+      TRUST_OWNER=$TRUST_OWNER_ENVIRONMENT
+      TRUST_REASON="the pane could not be read: for $_rtp_budget seconds herdr pane read $_rtp_pane --source visible returned nothing usable, so whether the prompt was answered is unknown"
+    else
+      resolve_trust_session "$_rtp_pane" "$_rtp_tab" "$_rtp_agent" "$_rtp_settings"
+    fi
+  fi
+
+  unset _rtp_pane _rtp_tab _rtp_dir _rtp_budget _rtp_agent _rtp_settings _rtp_wait
+  [ "$TRUST_OUTCOME" = ready ]
+}
+
+# resolve_trust_session <pane> <tab> <agent> <settings-file> - prove a session.
+#
+# The question cleared, which says nothing about what the human chose: No exits
+# the session. Nothing downstream may assume a session until one is proven on
+# this pane and tab, either because `herdr agent start` now succeeds or because
+# `herdr agent get` names this pane. Matching the agent name alone is not
+# enough: the name is a constant, so a leftover agent from an earlier run would
+# answer for a session that no longer exists.
+resolve_trust_session() {
+  _rts_pane=$1
+  _rts_tab=$2
+  _rts_agent=$3
+  _rts_settings=$4
+  _rts_cmd="herdr agent start $_rts_agent --kind claude --pane $_rts_pane -- --permission-mode bypassPermissions --settings $_rts_settings"
+
+  if _rts_start=$(herdr agent start "$_rts_agent" --kind claude --pane "$_rts_pane" -- \
+    --permission-mode bypassPermissions --settings "$_rts_settings" 2>&1); then
+    _rts_status=0
+  else
+    _rts_status=$?
+  fi
+  printf '\n$ %s\n[exit %s]\n%s\n' "$_rts_cmd" "$_rts_status" "$_rts_start" >>"$TRANSCRIPT"
+
+  if [ "$_rts_status" = 0 ]; then
+    TRUST_OUTCOME=ready
+    TRUST_REASON="the trust prompt was answered and the re-issued agent start registered the session"
+  else
+    _rts_get=$(herdr agent get "$_rts_agent" 2>&1) && _rts_getst=0 || _rts_getst=$?
+    printf '\n$ herdr agent get %s\n[exit %s]\n%s\n' \
+      "$_rts_agent" "$_rts_getst" "$_rts_get" >>"$TRANSCRIPT"
+    _rts_where=""
+    if [ "$_rts_getst" = 0 ]; then
+      _rts_where=$(printf '%s' "$_rts_get" | agent_pane_and_tab)
+    fi
+    if [ -n "$_rts_where" ] && [ "$_rts_where" = "$_rts_pane $_rts_tab" ]; then
+      TRUST_OUTCOME=ready
+      TRUST_REASON="the trust prompt was answered and herdr agent get $_rts_agent reports a session on pane $_rts_pane"
+    else
+      TRUST_OUTCOME=unproven
+      TRUST_OWNER=$TRUST_OWNER_ENVIRONMENT
+      TRUST_REASON="the trust prompt cleared but no live session could be proven on pane $_rts_pane and tab $_rts_tab: agent start replied $(oneline "$_rts_start"), and herdr agent get $_rts_agent replied $(oneline "$_rts_get")"
+    fi
+  fi
+
+  unset _rts_pane _rts_tab _rts_agent _rts_settings _rts_cmd _rts_start \
+    _rts_status _rts_get _rts_getst _rts_where
 }
 
 # tree_digest <dir> - one digest over the content of every file in the sample,
