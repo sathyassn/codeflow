@@ -122,6 +122,47 @@ observed_exit() {
   fi
 }
 
+# ---------------------------------------------------------------------------
+# The workspace-trust prompt
+# ---------------------------------------------------------------------------
+#
+# A freshly scaffolded sample carries its own .claude/settings.json, so the
+# Claude session the canary starts asks a human to trust the folder before it
+# takes any prompt. No agent may answer that question, so the harness waits for
+# the operator instead of recording the whole delegate lane unavailable.
+
+# The line Claude Code paints while it waits for that answer.
+TRUST_PROMPT_MATCH='Is this a project you created or one you trust'
+
+# How often the pane is re-read while waiting.
+TRUST_POLL_SECONDS=5
+
+# trust_prompt_showing <pane-id> - true while the pane still asks the question.
+trust_prompt_showing() {
+  herdr pane read "$1" --source recent --lines 120 2>/dev/null |
+    grep -q "$TRUST_PROMPT_MATCH"
+}
+
+# wait_for_trust_answer <pane-id> <seconds> - poll until the prompt is gone.
+#
+# Returns 0 as soon as the pane no longer shows it, and 1 when the budget runs
+# out with the question still on screen. The last sleep is shortened to the
+# remaining budget so the wait never overruns the number the operator asked for.
+wait_for_trust_answer() {
+  _pane=$1
+  _budget=$2
+  _waited=0
+  while trust_prompt_showing "$_pane"; do
+    [ "$_waited" -lt "$_budget" ] || return 1
+    _step=$TRUST_POLL_SECONDS
+    _left=$((_budget - _waited))
+    [ "$_step" -le "$_left" ] || _step=$_left
+    sleep "$_step"
+    _waited=$((_waited + _step))
+  done
+  return 0
+}
+
 # tree_digest <dir> - one digest over the content of every file in the sample,
 # excluding .git. Porcelain status cannot see a change inside a file that was
 # already dirty, so idempotence is judged on content instead.
