@@ -32,9 +32,22 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact patch -->
+- **Claude Code preset prompts.** The shipped preset sets no permission mode
+  in its default file and prompts for rooted or home-anchored recursive
+  deletes and for force branch deletes spelled `-f`, `--force`, `-df`, `-fd`,
+  `-Df`, `-fD`, `-qf` or `-fq` as the first option after `git branch`; other
+  clusters and options placed before the delete flag are outside what prefix
+  globs can express. The git-guard hook now recognizes a clustered delete flag
+  such as `-Dq` on a protected branch, and a clustered in-place edit flag such
+  as `sed -ni` on a policy or hook file, both of which it previously missed.
+  Existing installations keep their permission entries and values, because
+  update merges permission arrays as a union and leaves scalars alone.
+
+<!-- codeflow:release-impact patch -->
 - **Committed portal directory links.** Repository guides preserve relative
   links to committed directories as exact-source provider tree URLs while
   retaining visible provenance on unknown providers and fail-closed path rules.
+<!-- codeflow:release-impact patch -->
 - **Locally usable repository guide.** README and the adoption guide document
   the locked install, check, build, preview, and validate path for the derived
   `docs-portal/` guide from a clean checkout on Node 24.18.0, distinguish the
