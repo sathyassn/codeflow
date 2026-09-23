@@ -117,15 +117,16 @@ area: engine
 status: shipped
 verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs"]
 epics: [EPC-001, EPC-011, EPC-017]
-adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017]
+adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0067]
 ```
 
 Git discipline enforced across four planes reading one config (the `git`
 section of `.codeflow/policy.json`). Two give fast local feedback — the git
 client hooks (pre-commit secret scan + staged-.env, commit-msg
-format/attribution/emoji, pre-merge-commit and reference-transaction
-protected-branch merge/ref rules, pre-push branch naming and protected-branch
-rules) and the Claude `git-guard` PreToolUse hook (in-session immediacy, plus
+format/attribution/emoji and the ADR-0067 em and en dash check,
+pre-merge-commit and reference-transaction protected-branch merge/ref rules,
+pre-push branch naming and protected-branch rules) and the Claude
+`git-guard` PreToolUse hook (in-session immediacy, plus
 the `gh pr merge` and PR-body checks no client hook can see). Two are the
 authoritative perimeter — CI, which re-runs the same checks through the
 `codeflow ci` binary (the same Rust functions the hooks call, so no inline
