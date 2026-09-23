@@ -1,0 +1,82 @@
+/* CodeFlow figure sheet: frame, legend, caption, table twin and the mark vocabulary of figure-grammar.md.
+   Colours, faces and rules come from --cf-fig-* tokens only. Carried byte for byte by the products. */
+
+/* Frame */
+.cf-fig { container-type: inline-size; margin: 18px 0 14px; padding: 14px 14px 12px; border: 1px solid var(--cf-fig-rule); border-radius: 12px; background: var(--cf-fig-ground); color: var(--cf-fig-line); }
+.cf-fig-kicker { display: block; margin: 0 0 12px; font-family: var(--cf-fig-mono); font-size: max(12.5px, calc(12.5px * var(--cf-ui-scale, 1))); font-weight: 500; line-height: 1.4; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cf-fig-line-mid); }
+.cf-fig-stage { container-type: inline-size; }
+/* Phones: a slimmer frame leaves the narrow composition at 0.9 scale or more in a 331 px column */
+@media (max-width: 599.98px) { .cf-fig { padding: 12px 8px 10px; } }
+.cf-fig-svg { display: block; width: 100%; height: auto; margin: 0 auto; overflow: visible; }
+.cf-fig-svg--wide { display: none; max-width: 720px; }
+.cf-fig-svg--narrow { display: block; max-width: 400px; }
+/* Wide composition only where it renders at 0.9 scale or more, so 14 px labels stay at 12.5 px or larger */
+@container (min-width: 646px) {
+  .cf-fig-svg--wide { display: block; }
+  .cf-fig-svg--narrow { display: none; }
+}
+.cf-legend { display: flex; flex-wrap: wrap; gap: 6px 18px; margin: 14px 0 0; padding: 12px 0 0; border-top: 1px solid var(--cf-fig-rule); list-style: none; font-size: max(13px, calc(13px * var(--cf-ui-scale, 1))); line-height: 1.4; color: var(--cf-fig-line-mid); }
+.cf-legend li { display: inline-flex; align-items: center; gap: 8px; }
+/* Keys for marks drawn only in the wide composition; the figure's content box equals the stage width, so the swap point matches */
+.cf-legend li[data-cf-wide] { display: none; }
+@container (min-width: 646px) { .cf-legend li[data-cf-wide] { display: inline-flex; } }
+.cf-key { flex: none; width: 28px; height: 16px; overflow: visible; }
+.cf-fig-caption { margin: 10px 0 0; max-width: 68ch; font-size: max(13px, calc(13px * var(--cf-ui-scale, 1))); line-height: 1.45; color: var(--cf-fig-line-mid); text-wrap: pretty; }
+.cf-twin { margin: 10px 0 0; border-top: 1px solid var(--cf-fig-rule); }
+.cf-twin > summary { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 2px 4px 2px 0; font-size: max(13.5px, calc(13.5px * var(--cf-ui-scale, 1))); font-weight: 500; color: var(--cf-fig-line-mid); cursor: pointer; list-style: none; border-radius: 4px; }
+.cf-twin > summary::-webkit-details-marker { display: none; }
+.cf-twin > summary::before { content: ""; width: 6px; height: 6px; margin: 0 4px 0 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform var(--cf-dur-select, 0ms) ease-out; }
+.cf-twin[open] > summary::before { transform: rotate(45deg); }
+.cf-twin > summary:hover { color: var(--cf-fig-line); }
+.cf-twin-scroll { overflow-x: auto; margin: 8px 0 2px; }
+.cf-twin table { width: 100%; border-collapse: collapse; font-size: max(15px, calc(15px * var(--cf-ui-scale, 1))); line-height: 1.45; }
+.cf-twin th, .cf-twin td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--cf-fig-rule); text-align: left; vertical-align: top; }
+.cf-twin th { font-size: max(13px, calc(13px * var(--cf-ui-scale, 1))); font-weight: 600; color: var(--cf-fig-line-mid); white-space: nowrap; }
+.cf-twin td code { white-space: nowrap; }
+
+/* Text inside figures: 14 user units; the stage query keeps render size at 12.5 px or larger */
+.cf-t { font-family: var(--cf-fig-font); font-size: 14px; font-weight: 500; fill: var(--cf-fig-line); }
+.cf-t--strong { font-weight: 600; }
+.cf-t--mute { fill: var(--cf-fig-line-mid); font-weight: 500; }
+.cf-t--head { fill: var(--cf-fig-line-mid); font-weight: 600; }
+.cf-t--mono { font-family: var(--cf-fig-mono); font-weight: 400; }
+
+/* Decoration */
+.cf-f-rule { stroke: var(--cf-fig-rule); stroke-width: 1; fill: none; }
+.cf-f-axis { stroke: var(--cf-fig-line-soft); stroke-width: 1.5; fill: none; stroke-linecap: round; }
+.cf-f-axis-head { fill: var(--cf-fig-line-soft); }
+.cf-f-tick { stroke: var(--cf-fig-line-soft); stroke-width: 1.5; stroke-linecap: round; }
+/* Wide invisible stroke that makes a thin edge easy to point at */
+.cf-f-hit { fill: none; stroke: transparent; stroke-width: 16; pointer-events: stroke; }
+
+/* Mark vocabulary: one class per grammar mark; parts such as heads, caps and crosses carry no state of their own */
+.cf-m-done { fill: none; stroke: var(--cf-fig-accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.cf-m-todo { fill: none; stroke: var(--cf-fig-line-mid); stroke-width: 2; stroke-dasharray: 6 4; stroke-linecap: round; }
+.cf-m-blocked { fill: none; stroke: var(--cf-fig-line-soft); stroke-width: 1.5; stroke-dasharray: 2 4; stroke-linecap: butt; }
+.cf-m-human { fill: var(--cf-fig-ground); stroke: var(--cf-fig-line); stroke-width: 2.5; }
+.cf-m-agent { fill: var(--cf-fig-accent); stroke: var(--cf-fig-ground); stroke-width: 2; }
+.cf-m-merge { fill: var(--cf-fig-ground); stroke: var(--cf-fig-accent); stroke-width: 2.5; stroke-linejoin: round; }
+.cf-m-stop { stroke: var(--cf-fig-stop); stroke-width: 3; stroke-linecap: butt; fill: none; }
+.cf-m-cross { stroke: var(--cf-fig-stop); stroke-width: 2; stroke-linecap: butt; fill: none; }
+.cf-m-warn { fill: none; stroke: var(--cf-fig-warn); stroke-width: 2; stroke-dasharray: 5 3; stroke-linecap: butt; }
+.cf-m-layer { fill: var(--cf-fig-fill); stroke: var(--cf-fig-line-soft); stroke-width: 1.5; }
+.cf-m-layer--remote { fill: var(--cf-fig-fill); stroke: var(--cf-fig-line); stroke-width: 2; }
+.cf-m-cap { fill: var(--cf-fig-line); }
+.cf-m-act { fill: var(--cf-fig-accent); stroke: var(--cf-fig-ground); stroke-width: 2.5; }
+.cf-m-cov { fill: var(--cf-fig-line); }
+.cf-m-part { fill: none; stroke: var(--cf-fig-line); stroke-width: 1.4; stroke-dasharray: 2.5 1.8; }
+.cf-m-notrun { stroke: var(--cf-fig-hatch); stroke-width: 1; }
+.cf-m-hatchline { stroke: var(--cf-fig-hatch); stroke-width: 1.5; }
+.cf-m-na { fill: none; stroke: var(--cf-fig-line-soft); stroke-width: 1; stroke-opacity: var(--cf-fig-na-alpha); }
+.cf-m-nc { fill: none; stroke: var(--cf-fig-line-soft); stroke-width: 1.4; }
+.cf-m-nc-cross { fill: none; stroke: var(--cf-fig-stop); stroke-width: 1.4; }
+.cf-m-state { fill: var(--cf-fig-ground); stroke: var(--cf-fig-line); stroke-width: 1.5; }
+.cf-m-node { fill: var(--cf-fig-ground); stroke: var(--cf-fig-line); stroke-width: 1.5; }
+.cf-m-trans { fill: none; stroke: var(--cf-fig-line); stroke-width: 1.75; stroke-linecap: round; stroke-linejoin: round; }
+.cf-m-trans-head { fill: var(--cf-fig-line); }
+.cf-m-return { fill: none; stroke: var(--cf-fig-accent); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; }
+.cf-m-return-head { fill: var(--cf-fig-accent); }
+.cf-m-used { fill: var(--cf-fig-accent); }
+.cf-m-limit { stroke: var(--cf-fig-line); stroke-width: 2; stroke-linecap: butt; }
+.cf-m-optional { fill: none; stroke: var(--cf-fig-line-mid); stroke-width: 1.5; stroke-dasharray: 6 4; }
+.cf-m-denied { fill: none; stroke: var(--cf-fig-line-soft); stroke-width: 1.5; stroke-dasharray: 2 4; }
