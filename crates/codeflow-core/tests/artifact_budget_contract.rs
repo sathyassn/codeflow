@@ -491,6 +491,14 @@ fn agents_byte_efficiency_cannot_delete_semantic_duties() {
             ("secret protection", "**Secrets:** never stage credentials"),
             ("work-start identity", "**Work-start check:**"),
             ("proven cleanup", "**Post-landing cleanup:**"),
+            (
+                "finish line without check-ins",
+                "A task runs to its finish line (build, verify, review, open and follow the PR, report readiness) with no check-ins or offers.",
+            ),
+            (
+                "stop scope",
+                "It stops only at an escalation or gate named below, and only for that action.",
+            ),
             ("materiality", "Find broadly; act by materiality"),
             (
                 "durable implementation quality",
@@ -702,6 +710,241 @@ fn orchestration_byte_efficiency_cannot_delete_semantic_duties() {
                 "evidence-backed exception naming the exact skill",
             ),
         ],
+    );
+}
+
+/// The autonomy reference owns the only full operator-owned list (TSK-075,
+/// ADR-0070). Each surface that decides when to ask points at it with the
+/// clauses below; TSK-076 extends this table to the files it owns.
+const AUTONOMY_REFERENCE: &str = "cf-method/references/autonomy.md";
+const STANDARD_AUTONOMY_POINTER: &str =
+    "Escalate only a gate in `cf-method/references/autonomy.md`, with a recommendation.";
+const CLAUDE_AUTONOMY_POINTER: &str = "Read `.claude/skills/cf-method/references/autonomy.md` for what to settle yourself and what to escalate.";
+const CF_PLAN_AUTONOMY_POINTER: &str =
+    "Ask the operator only what `cf-method/references/autonomy.md` reserves to them.";
+const AUTONOMY_POINTERS: &[(&str, &[&str])] = &[
+    ("AGENTS.md", &[STANDARD_AUTONOMY_POINTER]),
+    ("assets/base/AGENTS.md.tmpl", &[STANDARD_AUTONOMY_POINTER]),
+    (
+        ".codeflow/.baseline/AGENTS.md",
+        &[STANDARD_AUTONOMY_POINTER],
+    ),
+    ("CLAUDE.md", &[CLAUDE_AUTONOMY_POINTER]),
+    ("assets/base/CLAUDE.md.tmpl", &[CLAUDE_AUTONOMY_POINTER]),
+    (".codeflow/.baseline/CLAUDE.md", &[CLAUDE_AUTONOMY_POINTER]),
+    (
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+        &[
+            "A request for a change selects implementation and runs to the readiness report",
+            "both seats approve that exact version or record settled dissent per `autonomy.md`",
+            "`autonomy.md` says which merges the primary takes and which stay with a human",
+        ],
+    ),
+    (
+        "assets/base/agents/skills/cf-plan/SKILL.md",
+        &[CF_PLAN_AUTONOMY_POINTER],
+    ),
+];
+
+/// Operator-owned axes that belong only in the autonomy reference. A sentence
+/// that tells the agent when to ask the operator and names one of them is a
+/// second list that can drift from the owner.
+const OPERATOR_AXES: &[&str] = &[
+    "outcome",
+    "public behavior",
+    "authority",
+    "security",
+    "irreversible",
+    "taste",
+    "scope",
+    "spend",
+];
+
+fn autonomy_pointer_problems(label: &str, text: &str, clauses: &[&str]) -> Vec<String> {
+    let content = normalized(text);
+    let mut problems = Vec::new();
+    if !content.contains(AUTONOMY_REFERENCE) {
+        problems.push(format!("{label}: no pointer to {AUTONOMY_REFERENCE}"));
+    }
+    for clause in clauses {
+        if !content.contains(&normalized(clause)) {
+            problems.push(format!("{label}: lost pointer clause `{clause}`"));
+        }
+    }
+    problems
+}
+
+fn operator_axis_list_problems(label: &str, text: &str) -> Vec<String> {
+    let content = normalized(text);
+    let mut problems = Vec::new();
+    let mut found = false;
+    for (start, _) in content.match_indices("Ask the operator only") {
+        found = true;
+        let rest = &content[start..];
+        let sentence = rest.find(". ").map_or(rest, |end| &rest[..=end]);
+        if !sentence.contains(AUTONOMY_REFERENCE) {
+            problems.push(format!(
+                "{label}: `{sentence}` does not point at the reference"
+            ));
+        }
+        for axis in OPERATOR_AXES {
+            if sentence.contains(axis) {
+                problems.push(format!("{label}: `{sentence}` lists the axis `{axis}`"));
+            }
+        }
+    }
+    if !found {
+        problems.push(format!(
+            "{label}: the clarity gate lost `Ask the operator only`"
+        ));
+    }
+    problems
+}
+
+#[test]
+fn operator_owned_lists_point_at_the_autonomy_reference() {
+    let root = repo_root();
+    let mut problems = Vec::new();
+    for (path, clauses) in AUTONOMY_POINTERS {
+        problems.extend(autonomy_pointer_problems(
+            path,
+            &read_text(&root.join(path)),
+            clauses,
+        ));
+    }
+    problems.extend(operator_axis_list_problems(
+        "cf-plan",
+        &read_text(&root.join("assets/base/agents/skills/cf-plan/SKILL.md")),
+    ));
+    assert!(
+        problems.is_empty(),
+        "operator-owned lists must point at {AUTONOMY_REFERENCE}:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn autonomy_pointer_checks_reject_a_missing_pointer_and_a_second_list() {
+    let old_blocker = "preserves accepted outcome, scope, authority, and quality. Escalate only \
+         an external dependency or operator-owned choice, with a recommendation.";
+    assert_eq!(
+        autonomy_pointer_problems("fixture", old_blocker, &[STANDARD_AUTONOMY_POINTER]).len(),
+        2,
+        "a contract without the pointer must fail"
+    );
+
+    let old_clarity_gate = "Make a reversible implementation choice from evidence. Ask the \
+         operator only when plausible answers would change the outcome, public behavior, \
+         authority, material security boundary, irreversible action, or another decision \
+         they own. Ask the smallest consequential question.";
+    let problems = operator_axis_list_problems("fixture", old_clarity_gate);
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("does not point")),
+        "the old clarity gate has no pointer: {problems:?}"
+    );
+    assert!(
+        problems
+            .iter()
+            .any(|problem| problem.contains("`irreversible`")),
+        "the old clarity gate lists its own axes: {problems:?}"
+    );
+
+    let listed_pointer = "Ask the operator only what `cf-method/references/autonomy.md` \
+         reserves to them, such as taste. Ask the smallest consequential question.";
+    assert!(
+        !operator_axis_list_problems("fixture", listed_pointer).is_empty(),
+        "a pointer that keeps a partial list must fail"
+    );
+
+    let current = format!("Choose from evidence. {CF_PLAN_AUTONOMY_POINTER} Ask the smallest.");
+    assert_eq!(
+        operator_axis_list_problems("fixture", &current),
+        Vec::<String>::new()
+    );
+}
+
+#[test]
+fn autonomy_reference_keeps_its_owned_parts_without_policy_dashes() {
+    let path = repo_root()
+        .join("assets/base/claude/skills/cf-method/references")
+        .join("autonomy.md");
+    assert_contains_all(
+        &path,
+        &[
+            (
+                "finish-line statement",
+                "A task runs from its settled outcome to its finish line",
+            ),
+            ("only listed gates", "Stop only at a gate this reference lists."),
+            (
+                "no offer or progress stop",
+                "Do not stop to offer the next step",
+            ),
+            ("stop holds one action", "A stop holds only that one action"),
+            ("reduced assurance", "Record a missing seat, tool or credit"),
+            ("ladder hard gate", "4  HARD GATE"),
+            ("ladder ask", "3  ASK"),
+            ("ladder notify", "2  NOTIFY AND ACT"),
+            ("ladder act", "1  ACT"),
+            ("ladder caption", "Figure: the four rungs."),
+            ("hard-gate owner", "\"Match the gate to the blast radius\""),
+            ("the only full list", "This is the only full list."),
+            ("spend gate", "spend, including buying credits;"),
+            ("outbound gate", "anything sent outside the conversation"),
+            (
+                "protected integration glob",
+                "including a protected `integration/` glob",
+            ),
+            (
+                "unrestorable delete",
+                "a delete that version control, a backup or a scratch area cannot restore",
+            ),
+            (
+                "trust prompt rule",
+                "answer it yourself for a path inside your task's own authorized project or worktree",
+            ),
+            ("trust prompt identity", "Decide by authorization and path identity"),
+            ("settled dissent record", "`SETTLED_DISSENT`"),
+            (
+                "dissent is never approval",
+                "never recorded as approval",
+            ),
+            (
+                "unsettleable dissent",
+                "safety, security or evidence-adequacy axis is not settleable",
+            ),
+            (
+                "local readiness",
+                "\"ready for your merge on local evidence\" only with a completed green result of every owed check",
+            ),
+            ("missing gate", "An owed check has no completed result anywhere"),
+            (
+                "integration merge",
+                "`integration/` branch that policy does not protect",
+            ),
+            (
+                "classified retry",
+                "take the one classified unsandboxed retry without asking",
+            ),
+            (
+                "bypass is not a sandbox",
+                "that launch is not a sandbox",
+            ),
+            ("seat loss", "the available standing seats approve the reassignment"),
+        ],
+    );
+    let text = read_text(&path);
+    let dashes: Vec<_> = text
+        .lines()
+        .enumerate()
+        .filter(|(_, line)| line.contains(['\u{2013}', '\u{2014}']))
+        .map(|(index, _)| index + 1)
+        .collect();
+    assert!(
+        dashes.is_empty(),
+        "autonomy.md carries em or en dashes on lines {dashes:?}"
     );
 }
 

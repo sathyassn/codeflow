@@ -49,10 +49,6 @@ bypass rights; report missing enforcement without relaxing the rules below.
 The **secret scan** is the
 one gate never relaxed — not even during bootstrap grace.
 
-`codeflow init --standard` adds the *method*, not enforcement components: develop-loop skills,
-reviewer agents, the traceability spine, and project machinery. Enforcement is
-the floor; the tiers scale project-management.
-
 A team may deliberately change specific rules in `.codeflow/policy.json`, but
 first assess their consumers: weakening commit discipline can break a
 commit-driven release process. The consuming project owns its release units,
@@ -124,7 +120,10 @@ to reason from, not a rote checklist.
 - **Work to the outcome.** Know the task's intent and what *done* means before
   acting, then work in small, verifiable steps — a failed check is input to the
   next step, not the end. Iterate until the outcome is verified, or stop and
-  surface a genuine blocker.
+  surface a genuine blocker. A task runs to its finish line (build, verify,
+  review, open and follow the PR, report readiness) with no check-ins or
+  offers. It stops only at an escalation or gate named below, and only for
+  that action.
 - **Ground it in evidence — never assume.** Treat an unclear requirement, API, or
   fact as a stop-and-verify, not a guess. Research non-trivial decisions in the
   project's own code and docs first, then the best current external sources.
