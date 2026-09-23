@@ -18,7 +18,7 @@ A supporting flow inside `cf-model-orchestrator` for non-trivial repository
 work: it changes how a result is reviewed, never the accepted plan, model
 seats, producer/reviewer duties, or evidence requirements. Invoke it at the
 material task checkpoint where an interactive surface helps; batch or
-integration-branch work does not defer required cross-lineage review to the
+integration-branch work never defers required cross-lineage review to the
 end.
 
 ## 1. Decide whether the surface earns its cost
@@ -58,16 +58,16 @@ perceived.
 2. [utility-presentation-system](resources/utility-presentation-system.md):
    system craft, Comment lifecycle, fail-closed anti-patterns
 3. [figure-grammar](resources/figure-grammar.md): families, rules
-4. [design-system](resources/design-system/README.md): reference kit
+4. [design-system kit](resources/design-system/README.md)
 5. [visual-craft](references/visual-craft.md): checklist
 6. [document-authoring](references/document-authoring.md): fields **after**
-   the page walk is settled
+   the page walk settles
 
-**Choose blocks by information shape.** A visual communicates one
+**Choose blocks by information shape.** A visual must communicate one
 relationship in one grammar family under its twelve rules, never decorate
 prose. Give the governing relationship **one primary visual form at rest**,
-short plain prose around it; restyling a chat answer (text cards, bullet
-walls) fails this skill: stay in chat or restructure.
+short plain prose around it; restyling the same chat answer is a failed use
+of this skill (text cards, bullet walls): stay in chat or restructure.
 
 Start from
 [present-document.example.json](resources/present-document.example.json)
@@ -95,8 +95,8 @@ as a **shape** (carrier first), not a form to pad.
 
 - `codeflow present list` / `codeflow present show <session-id>` find and
   inspect this project's sessions. Do not reopen a user-ended review
-  without a fresh invitation; start a new session when the work has materially
-  changed.
+  without a fresh invitation; start a new session when the work changed
+  materially.
 - Use `codeflow present update <session-id> <document.json>` for a meaningful
   content revision. Preserve stable block IDs for conceptually unchanged
   blocks so anchored feedback can be explained across revisions.
