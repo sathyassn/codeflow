@@ -17,6 +17,13 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Written content policy check (ADR-0067).** The commit-msg hook and
+  `codeflow ci` block em and en dashes in new commit messages, pull request
+  bodies and lines a change adds under `docs/`, `project-management/` and the
+  skill trees. Existing lines are left alone. The new `git.policy_characters`
+  key defaults to `block`, including when a policy file omits it.
+
+<!-- codeflow:release-impact minor -->
 - **Responsible-autonomy diagnostics.** The standard/full model-evaluation kit
   adds ten synthetic privacy, authority, recovery, identity and fairness cases,
   plus a bounded loopback effect simulator with tested setup and cleanup. These
@@ -30,6 +37,16 @@ publication date._
   diagnostics without turning CodeFlow metadata into product version authority.
 
 ### Changed
+
+<!-- codeflow:release-impact patch -->
+- **Operating doctrine follow-through.** After opening a pull request,
+  cf-ship polls its required checks at most once a minute for up to thirty
+  minutes, repairs assertion-red checks without being asked, reports
+  infrastructure-incomplete checks as missing evidence, never merges, and
+  sends one readiness report with the printed PR URL. Operator replies carry
+  a figure when the point is a relationship and give only printed or
+  verified links; mannered prose and bare-identifier titles are editorial
+  defects. The evaluation kit adds an `operating-doctrine` pack.
 
 <!-- codeflow:release-impact patch -->
 - **Claude Code preset prompts.** The shipped preset sets no permission mode

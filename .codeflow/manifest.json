@@ -137,7 +137,7 @@
     ".agents/skills/cf-editorial-review/references/editorial-smells.md": {
       "src": "agents/skills/cf-editorial-review/references/editorial-smells.md",
       "ownership": "managed",
-      "sha256": "b76067416ed258d258eea7e23dbd913d87f981af0f64678f99c2ec2eec272310",
+      "sha256": "660f7be14042fb99a8f8f6ff4100bac289dd9a15beb80b3231e7d8124d69e207",
       "exec": false
     },
     ".agents/skills/cf-estimate/SKILL.md": {
@@ -317,7 +317,7 @@
     ".agents/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "2109b14ed9ab31bd4f5e6addfc7d435c084870cb0384cefd8c59234679df914b",
+      "sha256": "46cc9ed92ccc7ca4a5c5100f2c73f4103f8723ef603601e7230167feef3f62d9",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
@@ -347,7 +347,7 @@
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
       "ownership": "managed",
-      "sha256": "c3bf4c9682f49faba2be130c5b9745304d987ca21da441f0317d2a4e211f4b64",
+      "sha256": "dc510d67e7ce4eab8f1e7c0c1ec0b7f8112c455519c59a5bdbd4dd4b5a1f6563",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/routing-policy.json": {
@@ -443,7 +443,7 @@
     ".agents/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "f744405e4482eddbd284384bfc52dd18d102c87498481ef06a2785d12dae5d72",
+      "sha256": "e7d285788a8ab3cb13ad60c41f754ef374d2378e05a7070bb39b7eac627bf9ea",
       "exec": false
     },
     ".agents/skills/cf-ship/references/release-policy.md": {
@@ -611,7 +611,7 @@
     ".claude/skills/cf-editorial-review/references/editorial-smells.md": {
       "src": "agents/skills/cf-editorial-review/references/editorial-smells.md",
       "ownership": "managed",
-      "sha256": "b76067416ed258d258eea7e23dbd913d87f981af0f64678f99c2ec2eec272310",
+      "sha256": "660f7be14042fb99a8f8f6ff4100bac289dd9a15beb80b3231e7d8124d69e207",
       "exec": false
     },
     ".claude/skills/cf-estimate/SKILL.md": {
@@ -791,7 +791,7 @@
     ".claude/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "2109b14ed9ab31bd4f5e6addfc7d435c084870cb0384cefd8c59234679df914b",
+      "sha256": "46cc9ed92ccc7ca4a5c5100f2c73f4103f8723ef603601e7230167feef3f62d9",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
@@ -821,7 +821,7 @@
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
       "ownership": "managed",
-      "sha256": "c3bf4c9682f49faba2be130c5b9745304d987ca21da441f0317d2a4e211f4b64",
+      "sha256": "dc510d67e7ce4eab8f1e7c0c1ec0b7f8112c455519c59a5bdbd4dd4b5a1f6563",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/routing-policy.json": {
@@ -917,7 +917,7 @@
     ".claude/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "f744405e4482eddbd284384bfc52dd18d102c87498481ef06a2785d12dae5d72",
+      "sha256": "e7d285788a8ab3cb13ad60c41f754ef374d2378e05a7070bb39b7eac627bf9ea",
       "exec": false
     },
     ".claude/skills/cf-ship/references/release-policy.md": {
@@ -1037,7 +1037,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "094f39ce6b3c1d630160b2fe4b48ed71fc1bc6de2eb3edb7cdac4e5efd23bcc8",
+      "sha256": "de6d6b7ee0e462b1d67a4d4ee6584ae2d78234db474394600282a47c74423997",
       "exec": false
     },
     "CLAUDE.md": {

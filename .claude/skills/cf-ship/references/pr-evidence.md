@@ -49,7 +49,8 @@ review only with a reasoned unchanged-scope link. Lint with
 Follow the PR until its required checks finish or the budget ends. Run
 `gh pr checks <url> --required` at most once a minute, for at most thirty
 minutes. Exit code 8 means checks are still pending. Do not use `--watch`
-without a ceiling, and do not poll without an end.
+without a ceiling, and do not poll without an end. `--watch` has no timeout
+of its own; run it under `timeout 30m` or poll by hand.
 
 Classify each red or stuck check with the quality contract's redness classes:
 
