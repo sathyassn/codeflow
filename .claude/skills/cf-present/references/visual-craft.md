@@ -18,7 +18,9 @@ If you cannot pass the self-check in *how presentation works*, **do not open**
 the session.
 
 `cf-design` stays product-generic. This skill is **utility present** only.
-Author **this session's** subject. Do not clone the design-exploration board.
+Author **this session's** subject. Do not clone the evidence board
+(`docs/verification/tsk-014-w5/`, whose baselines are the negative controls);
+draw figures to `resources/figure-grammar.md`.
 
 Display chrome (runtime-owned, as the shared doctrine states): Font (Archivo
 for instrument, Inter for editorial, IBM Plex Sans for ink), Size (Compact /

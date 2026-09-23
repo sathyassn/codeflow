@@ -5,7 +5,7 @@
 explains what the human sees and how to choose instruments. Load it **before**
 this page. This file is the **encoding** reference (envelope, fields, limits)—
 not a substitute for judgment about structure. Encode **this session's**
-subject. Do not clone the design-exploration board.
+subject. Do not clone the evidence board (`docs/verification/tsk-014-w5/`).
 
 The machine contract is
 `.codeflow/schemas/present/document-v1.schema.json`. The runtime is

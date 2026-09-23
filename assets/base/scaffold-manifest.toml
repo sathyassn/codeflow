@@ -475,6 +475,18 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/figure-grammar.md"
+dest = ".claude/skills/cf-present/resources/figure-grammar.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/figure-grammar-specimens.md"
+dest = ".claude/skills/cf-present/resources/figure-grammar-specimens.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/resources/present-document.example.json"
 dest = ".claude/skills/cf-present/resources/present-document.example.json"
 ownership = "managed"
@@ -540,6 +552,18 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-docs-portal/resources/utility-presentation-system.md"
 dest = ".claude/skills/cf-docs-portal/resources/utility-presentation-system.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/figure-grammar.md"
+dest = ".claude/skills/cf-docs-portal/resources/figure-grammar.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md"
+dest = ".claude/skills/cf-docs-portal/resources/figure-grammar-specimens.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -898,6 +922,18 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/figure-grammar.md"
+dest = ".agents/skills/cf-present/resources/figure-grammar.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/figure-grammar-specimens.md"
+dest = ".agents/skills/cf-present/resources/figure-grammar-specimens.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/resources/present-document.example.json"
 dest = ".agents/skills/cf-present/resources/present-document.example.json"
 ownership = "managed"
@@ -960,6 +996,18 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-docs-portal/resources/utility-presentation-system.md"
 dest = ".agents/skills/cf-docs-portal/resources/utility-presentation-system.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/figure-grammar.md"
+dest = ".agents/skills/cf-docs-portal/resources/figure-grammar.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md"
+dest = ".agents/skills/cf-docs-portal/resources/figure-grammar-specimens.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

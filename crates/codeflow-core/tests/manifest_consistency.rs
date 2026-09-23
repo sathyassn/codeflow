@@ -1230,6 +1230,197 @@ fn docs_portal_source_live_and_baseline_copies_are_byte_identical() {
     assert_skill_source_live_and_baseline_copies("cf-docs-portal");
 }
 
+/// Collapse whitespace so a needle survives Markdown reflow.
+fn normalized_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Read one figure grammar file, assert its cf-present and cf-docs-portal
+/// copies are byte-identical, and return its whitespace-normalized text.
+fn shared_figure_grammar_file(file: &str) -> String {
+    let skills = repo_root().join("assets/base/agents/skills");
+    let present = std::fs::read(skills.join("cf-present/resources").join(file))
+        .unwrap_or_else(|_| panic!("present {file} is readable"));
+    let portal = std::fs::read(skills.join("cf-docs-portal/resources").join(file))
+        .unwrap_or_else(|_| panic!("portal {file} is readable"));
+    assert_eq!(
+        present, portal,
+        "{file} drifted between cf-present and cf-docs-portal"
+    );
+    normalized_whitespace(&String::from_utf8(present).expect("figure grammar is UTF-8"))
+}
+
+const FIGURE_FAMILIES: [&str; 9] = [
+    "flow",
+    "structure",
+    "layering",
+    "sequence",
+    "state",
+    "coverage",
+    "extent",
+    "derivation",
+    "graph",
+];
+
+/// The figure grammar (ADR-0068) is one doctrine in two skills, with its
+/// specimens in a companion file: each file's copies are byte-identical, the
+/// doctrine names the companion, and neither file draws with a literal colour.
+#[test]
+fn figure_grammar_is_shared_names_its_specimens_and_draws_with_tokens_only() {
+    let grammar = shared_figure_grammar_file("figure-grammar.md");
+    let specimens = shared_figure_grammar_file("figure-grammar-specimens.md");
+    assert!(
+        grammar.contains(&normalized_whitespace(
+            "`figure-grammar-specimens.md` beside this file, also byte-identical in both skills. Load it when authoring a figure"
+        )),
+        "figure grammar must name its specimens file and when to load it"
+    );
+    // A literal colour is `#` followed by exactly three or six hex digits and
+    // then a non-alphanumeric boundary; anchors such as `SKILL.md#4` and ids
+    // such as `#fg-cov-h` are not colours.
+    for (file, text) in [
+        ("figure-grammar.md", &grammar),
+        ("figure-grammar-specimens.md", &specimens),
+    ] {
+        let bytes = text.as_bytes();
+        let literal_colour = bytes.iter().enumerate().any(|(index, byte)| {
+            if *byte != b'#' {
+                return false;
+            }
+            let run = bytes[index + 1..]
+                .iter()
+                .take_while(|b| b.is_ascii_hexdigit())
+                .count();
+            let boundary = bytes
+                .get(index + 1 + run)
+                .is_none_or(|b| !b.is_ascii_alphanumeric());
+            (run == 3 || run == 6) && boundary
+        });
+        assert!(
+            !literal_colour && !text.contains("rgb("),
+            "{file} must draw with --cf-fig-* tokens only, never a literal colour"
+        );
+    }
+}
+
+/// The doctrine keeps the nine families in one table, the twelve rules, the
+/// altitude contract, the evidence board with its baselines as controls, and
+/// the named anti-patterns. A smaller file that drops a family or a rule must
+/// fail here.
+#[test]
+fn figure_grammar_keeps_its_families_rules_altitude_and_evidence() {
+    let grammar = shared_figure_grammar_file("figure-grammar.md");
+    let families_header =
+        "| Family | Relationship it encodes | Geometry | Non-colour channels that carry state | Reader question it answers |";
+    assert!(
+        grammar.contains(families_header),
+        "figure grammar lost the nine-families table header"
+    );
+    for family in FIGURE_FAMILIES {
+        assert!(
+            grammar.contains(&format!("| {family} |")),
+            "figure grammar lost the {family} family row"
+        );
+    }
+    for rule in 1..=12 {
+        assert!(
+            grammar.contains(&format!("| {rule} | ")),
+            "figure grammar lost rule {rule}"
+        );
+    }
+    for (duty, needle) in [
+        ("masked-title test", "Masked-title test: with kicker, title, caption and legend masked"),
+        ("inner mark floor", "Every drawn state mark 9 px or larger on its information-bearing dimension"),
+        ("two-channel measurement", "Every pair of drawn states differs on at least two of"),
+        ("overprint rule", "at a depth of 1 px or more fails; text keeps 8 px clear"),
+        ("narrow variant rule", "Under a 646 px container the narrow composition shows"),
+        ("fidelity rule", "the verifier re-derives the value and compares it exactly"),
+        ("altitude contract", "| Altitude | Reader question | Families that answer it | Prose role |"),
+        ("concept ownership", "Concept owns what the subject is, who it is for and what it is not"),
+        ("how-to rule", "| How-to section | what do I do, in what order, and what tells me it worked | sequence, state or extent |"),
+        ("prose rule", "no em or en dash"),
+        ("evidence board", "`docs/verification/tsk-014-w5/` is the evidence board"),
+        ("negative controls", "are the negative controls a figure must beat"),
+        ("confusable pair", "| Confusable pair |"),
+        ("inner mark anti-pattern", "| Inner mark floor miss |"),
+        ("overprint anti-pattern", "| Overprint |"),
+        ("elongation anti-pattern", "| Elongation by reflow |"),
+        ("declaration schema", "ADR-0068 records the schema"),
+        ("chat rule", "In chat the family choice is the same; the medium changes the marks"),
+    ] {
+        assert!(
+            grammar.contains(&normalized_whitespace(needle)),
+            "figure grammar lost duty: {duty}"
+        );
+    }
+}
+
+/// The specimens companion keeps one numbered specimen per family, each with
+/// its declared figure.
+#[test]
+fn figure_grammar_specimens_keep_one_specimen_per_family() {
+    let specimens = shared_figure_grammar_file("figure-grammar-specimens.md");
+    for (index, family) in FIGURE_FAMILIES.iter().enumerate() {
+        assert!(
+            specimens.contains(&format!("## {}. {family}", index + 1)),
+            "figure grammar specimens lost the {family} specimen heading"
+        );
+        assert!(
+            specimens.contains(&format!("data-cf-figure=\"{family}\"")),
+            "figure grammar specimens lost the {family} specimen figure"
+        );
+    }
+}
+
+/// Both presentation skills, their shared doctrine and their profile references
+/// point at the figure grammar and at the evidence board with its baselines,
+/// never at a bare design-exploration board.
+#[test]
+fn presentation_skills_point_at_the_figure_grammar_and_evidence_board() {
+    let skills = repo_root().join("assets/base/agents/skills");
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let skill_text = std::fs::read_to_string(skills.join(skill).join("SKILL.md"))
+            .expect("skill is readable");
+        assert!(
+            skill_text.contains("resources/figure-grammar.md"),
+            "{skill}/SKILL.md must name the figure grammar in its load order"
+        );
+        assert!(
+            skill_text.contains("docs/verification/tsk-014-w5/"),
+            "{skill}/SKILL.md must point at the evidence board, not a bare design-exploration board"
+        );
+        let doctrine = std::fs::read_to_string(
+            skills
+                .join(skill)
+                .join("resources/utility-presentation-system.md"),
+        )
+        .expect("shared doctrine is readable");
+        assert!(
+            doctrine.contains("`figure-grammar.md`")
+                && doctrine.contains("### Figure grammar")
+                && !doctrine.contains("### Stage and diagram grammar"),
+            "{skill} shared doctrine must point at the figure grammar as the default form"
+        );
+        assert!(
+            doctrine.contains("docs/verification/tsk-014-w5/"),
+            "{skill} shared doctrine must name the evidence board"
+        );
+    }
+    for reference in [
+        "cf-present/references/visual-craft.md",
+        "cf-present/references/document-authoring.md",
+        "cf-present/resources/how-presentation-works.md",
+        "cf-docs-portal/references/visual-craft.md",
+    ] {
+        let text = std::fs::read_to_string(skills.join(reference)).expect("reference is readable");
+        assert!(
+            !text.contains("design-exploration board")
+                && text.contains("docs/verification/tsk-014-w5/"),
+            "{reference} must resolve the board reference to docs/verification/tsk-014-w5/"
+        );
+    }
+}
+
 /// Presentation JSON contracts are public consumer inputs and exported state.
 /// Pin the authored copies to the deployed and three-way-merge baseline files,
 /// and reject an accidentally open or malformed root contract.

@@ -1,6 +1,6 @@
 ---
 name: cf-present
-description: Create, open, revise, and close a structured local CodeFlow review document when a complex explanation, comparison, plan, decision, evidence set, diff, or visual review would materially benefit from one coherent interactive surface and anchored user feedback. Also use when the user explicitly asks for a presentation or review surface. Keep short or linearly explained answers in the native conversation; do not use this skill to build product UI, a durable documentation portal, or arbitrary one-off HTML.
+description: Create, open, revise, and close a structured local CodeFlow review document when a complex explanation, comparison, plan, decision, evidence set, diff, or visual review would materially benefit from one coherent interactive surface and anchored user feedback. Also use when the user asks for a presentation or review surface. Keep short or linearly explained answers in the native conversation; do not use this skill to build product UI, a durable documentation portal, or arbitrary one-off HTML.
 ---
 
 # cf-present — interactive review documents
@@ -11,8 +11,8 @@ page application per response.
 
 Each invocation **reuses the utility design system**. Author **this session's**
 subject into catalog blocks; the runtime owns chrome, themes, and Comment. Do
-not clone the design-exploration board, rebuild Comment UI, or invent a second
-visual language.
+not clone the design-exploration board at `docs/verification/tsk-014-w5/`,
+rebuild Comment UI, or invent a second visual language.
 
 A supporting flow inside `cf-model-orchestrator` for non-trivial repository
 work: it changes how a result is reviewed, never the accepted plan, model
@@ -32,12 +32,12 @@ Use `cf-present` when at least one is true:
   status, and decisions in one revisioned surface;
 - the user asks for the interactive presentation explicitly.
 
-Stay in chat for a short answer, a small list, one simple diagram, or a status
+Stay in chat for a short answer, a small list, one simple figure, or a status
 update that needs no interaction. Do not turn formatting preference into a
 runtime session. Use `cf-design` for a consuming product's design direction
 and `cf-docs-portal` for durable repository documentation; product UI does not
-inherit this utility's themes or components, and portal shares craft, not
-present chrome or Comment.
+inherit this utility's themes or components; portal shares craft, not present
+chrome or Comment.
 
 ## 2. Shape the information before encoding it
 
@@ -57,16 +57,17 @@ perceived.
    — what the human sees, instrument choice
 2. [utility-presentation-system](resources/utility-presentation-system.md)
    — system craft, Comment lifecycle, fail-closed anti-patterns
-3. [visual-craft](references/visual-craft.md) — checklist
-4. [document-authoring](references/document-authoring.md) — fields **after**
+3. [figure-grammar](resources/figure-grammar.md): families, rules
+4. [visual-craft](references/visual-craft.md): checklist
+5. [document-authoring](references/document-authoring.md): fields **after**
    the page walk is settled
 
-**Choose blocks by information shape.** A visual must communicate a
-relationship, sequence, comparison, state, evidence, scale, or actual
-appearance—not decorate prose. Give the governing relationship **one primary
-visual form at rest**, explanation around it; restyling the same chat answer
-is a failed use of this skill (equal-weight text cards and bullet walls
-included)—stay in chat or restructure.
+**Choose blocks by information shape.** A visual must communicate one
+relationship in one grammar family under its twelve rules, never decorate
+prose. Give the governing relationship **one primary visual form at rest**,
+short plain prose around it; restyling the same chat answer is a failed use
+of this skill (text cards, bullet walls included): stay in chat or
+restructure.
 
 Start from
 [present-document.example.json](resources/present-document.example.json)
@@ -147,4 +148,4 @@ or project document. The presentation history is not a second work authority.
 
 Return the session ID, revision, purpose, requested decision, durable outcomes
 promoted, cleanup state, and anything not verified. Keep the chat handoff
-concise; the interactive document carries the detail.
+concise.

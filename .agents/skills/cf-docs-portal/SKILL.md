@@ -15,16 +15,18 @@ This is a supporting flow inside `cf-model-orchestrator` for non-trivial work.
 
 Docs for **this or any consuming repo** reuse the same utility design
 system as `cf-present`: author repository sources; the portal applies
-tokens, altitude, and stage grammar. Do not clone the design-exploration
-board or copy present Comment chrome.
+tokens, altitude and the figure grammar. Do not clone the evidence board
+(`docs/verification/tsk-014-w5/`) or copy present Comment chrome.
 
 **Before theming, layering, or authoring portal pages, load in order:**
 
 1. [resources/utility-presentation-system.md](resources/utility-presentation-system.md)
    is the shared doctrine, byte-identical with `cf-present` (ADR-0063)
-2. [references/visual-craft.md](references/visual-craft.md) is the portal
+2. [resources/figure-grammar.md](resources/figure-grammar.md): families,
+   rules, altitude (ADR-0068)
+3. [references/visual-craft.md](references/visual-craft.md) is the portal
    profile and page composition gate
-3. Other references below as the task requires
+4. Other references as the task requires
 
 Pass the page composition gate in `references/visual-craft.md`. A prose-card
 wall, a marketing layout, or a page that is the source Markdown re-rendered
@@ -32,10 +34,9 @@ fails this skill: the portal composes the sources visually with supporting
 text.
 
 Apply `cf-design` only when the **consuming product** needs experience
-direction, never to utility portal themes. Portal themes, Starlight
-components, and utility tokens are never product brand authority, and
-product DS stays out of the portal. Apply `cf-editorial-review` to
-substantive explanatory copy.
+direction, never to utility portal themes; utility tokens and Starlight
+components are never product brand authority, and product DS stays out of
+the portal. Apply `cf-editorial-review` to substantive copy.
 
 ## 1. Decide whether to adopt
 
@@ -100,21 +101,20 @@ records: decisions, epics, tasks and specs are pointed to as folders
 
 Keep navigation predictable. Prefer plain language, descriptive titles,
 concise prose, and bullets when they improve scanning. Match an
-established project voice when it exists; otherwise use calm, direct,
-third-person documentation language. Avoid cryptic headings, invented
-personality, gratuitous emoji, and promotional language.
+established project voice; otherwise use calm, direct, third-person
+documentation language. Avoid cryptic headings, invented personality,
+gratuitous emoji, and promotional language.
 
 ### Visual craft (utility presentation system, mandatory)
 
-Page shape example:
+Page shape:
 [resources/portal-page-shape.example.md](resources/portal-page-shape.example.md).
 
-- **Visuals** only when they clarify relationship, hierarchy, state, or flow.
-  Text inside decorated boxes is not a visual explanation.
+- **Figures** lead every altitude panel and every how-to section, one grammar
+  family each; text inside boxes is not a figure.
 - **Explanatory sources** author the altitude trio with a figure framed by
-  prose in every panel; architecture pages add a subject-led stage, not
-  caption micro-boxes; verification fails a trio page showing more than one
-  panel or an explanatory page with no trio.
+  short plain prose in every panel; verification fails a trio page showing
+  more than one panel or an explanatory page with no trio.
 - **Records** are one generated pointer page of folders, not portal pages;
   the adapter's records switch stays off.
 - **Type roles:** display / prose / label / mono-evidence; themes own faces and
@@ -147,7 +147,7 @@ The managed installer verifies the lockfile's lifecycle-script inventory and
 runs the locked install with dependency scripts disabled under a non-secret
 environment allowlist. Do not replace it with plain `npm ci` or an ad-hoc
 `npm rebuild`; follow the reviewed-exception process in `references/operations.md`
-if a future pinned dependency genuinely requires a lifecycle script.
+if a pinned dependency genuinely requires a lifecycle script.
 
 The Node adapter alone derives the content graph and evidence manifest. The
 Rust validator executes no project code and writes nothing; it verifies the

@@ -158,8 +158,12 @@ cost, or saving. Transport or background completion is not the peer result.
 Shape deliverables for their audience and medium. Layer concept before detail;
 never cut key information merely to condense. Presentation is contextual and
 proportionate: a simple answer stays simple. Use prose or bullets according to
-the content, and draw an ASCII diagram only when relationships, hierarchy,
-state, timelines, mappings, or a decision become materially clearer. Use a
+the content. In chat the figure families are the same nine the presentation
+skills use (flow, structure, layering, sequence, state, coverage, extent,
+derivation, graph); the medium changes the marks, not the choice. Draw an
+ASCII figure only when a relationship carries the point, then draw the family
+that relationship names, with one idea, every mark explained and one caption
+line. Use a
 diagram whose scope and detail fit the explanation: prefer the least complicated
 form that remains complete, not the physically smallest; complex subjects may
 need a larger, layered, or multi-view diagram, with a brief caption or legend when it

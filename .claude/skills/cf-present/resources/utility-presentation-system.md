@@ -1,9 +1,11 @@
 # Utility presentation system (shared skill resource)
 
 **Status:** normative for every `cf-present` and `cf-docs-portal` invocation.
-This file is byte-identical in both skills; the profile-specific rules live in
-each skill's `references/visual-craft.md`. The durable architecture record is
-`docs/architecture/utility-presentation.md` (ADR-0053, ADR-0063).
+This file is byte-identical in both skills; the figure doctrine it points to is
+`figure-grammar.md` beside it, also byte-identical; the profile-specific rules
+live in each skill's `references/visual-craft.md`. The durable architecture
+record is `docs/architecture/utility-presentation.md` (ADR-0053, ADR-0063,
+ADR-0068).
 **Product name:** CodeFlow **utility presentation system**.
 **Not:** product brand, consuming-app design system, free-form agent HTML, or
 internal exploration codenames.
@@ -23,12 +25,14 @@ an agent **reuses one design system** instead of inventing a page each turn.
 | Explain or review **this session** | `cf-present` | **This** subject's catalog blocks | Chrome, themes, tokens, **Comment system** |
 | Durable docs for **CodeFlow or any consuming project** | `cf-docs-portal` | Repository sources + portal config | Docs shell, search, layers, same craft overlay |
 
-The design-exploration board that settled this system is a **design reference
-only**: use it for tokens, altitude, stage grammar, Comment SM, portal layers,
-and anti-patterns; never re-render its demo subject as a present session, a
-portal page, or product HTML. Each invocation applies the same craft to **new**
-subject matter. Comment is present-only chrome the runtime already owns; the
-portal has **no** Comment lifecycle.
+The evidence board that settled this system is `docs/verification/tsk-014-w5/`:
+its `shared/svg.js` is the mark vocabulary the figure grammar distils, and its
+`baselines/` (plain chat, plain Markdown and plain HTML for every scorable
+surface) are the negative controls every figure must beat. It is **evidence
+only**: never re-render its cases, portal families or comments as a present
+session, a portal page, or product HTML. Each invocation applies the same craft
+to **new** subject matter. Comment is present-only chrome the runtime already
+owns; the portal has **no** Comment lifecycle.
 
 `cf-design` stays product-generic. It does not own this utility.
 
@@ -38,7 +42,7 @@ portal has **no** Comment lifecycle.
 
 | Plane | Owns | Does not own |
 |-------|------|--------------|
-| **Utility presentation system** | Tokens, altitude, stage grammar, themes, type roles, present Comment SM, portal craft overlay | Product brand, consumer UI kits |
+| **Utility presentation system** | Tokens, altitude, figure grammar, themes, type roles, present Comment SM, portal craft overlay | Product brand, consumer UI kits |
 | **cf-present** | Ephemeral review document + Comment lifecycle + feedback envelopes | Durable docs, portal search |
 | **cf-docs-portal** | Source-linked durable guide, layers, twins, evidence | Session Comment, review verdicts |
 | **cf-design** | Generic product/UX craft for **any** consuming surface | Utility tokens, present/portal chrome |
@@ -71,9 +75,9 @@ not portal pages: one pointer page names their folders.
 
 | Class | First screen must show | Required carrier | Prose role |
 |-------|------------------------|------------------|------------|
-| **Orient** (purpose, capabilities, adoption, journeys) | The Concept panel: one governing claim in the display role and one figure | The trio; Concept carries a stage, table or full-width figure, Architecture the structure, Technical the commands, files and tables | One lead above each carrier; the acting sentences below; bullets only where they aid scanning |
-| **Architecture** (system, subsystems, boundaries) | The Concept panel of the trio | The trio plus a subject-led `cf-stage` (or a justified `text` figure) | Frames each panel; never the carrier |
-| **Reference** (operations, CLI, checklists, evidence) | The lookup form: table, status, code, diff | The trio where the page explains; tables and evidence blocks where it looks up | Minimal; lookup, not essay |
+| **Orient** (purpose, capabilities, adoption, journeys) | The Concept panel: one governing claim in the display role and one figure | A figure in every panel, chosen by the altitude contract in `figure-grammar.md`: Concept owns what the subject is, who it is for and what it is not; Architecture the structure; Technical the commands, files and tables | One lead above each figure; the acting sentences below; bullets only where they aid scanning |
+| **Architecture** (system, subsystems, boundaries) | The Concept panel of the trio | The trio with a figure in every panel; Architecture in the structure, layering, derivation or graph family | Frames each panel; never the carrier |
+| **Reference** (operations, CLI, checklists, evidence) | The lookup form: table, status, code, diff | The trio where the page explains; every how-to section carries a sequence, state or extent figure; tables and evidence blocks where it looks up | Minimal; lookup, not essay |
 | **Record pointer** (decisions, epics, tasks, specs) | One table: folder, purpose, count, repository link | The pointer table, generated from configuration; no per-record pages in the guide (the adapter's records switch is off by default) | One sentence: the records live in the repository |
 
 Accepted decisions stay append-only in the repository and are cited by id
@@ -90,7 +94,8 @@ not be promised in a source or a document.
 
 | Carrier | Portal (adapter) | Present (runtime blocks) |
 |---------|------------------|--------------------------|
-| Subject-led labeled flow | `cf-stage` fence (nodes `NAME \| sublabel @role`, `->` between stages, one `caption:`; roles accent / positive / warn / danger / neutral; limits 6 stages, 5 nodes per stage) | `html` block: the authored primary stage (utility tokens, labeled nodes, named edges) |
+| Family figure (the default form, `figure-grammar.md`) | Not yet a rendered carrier: raw HTML is escaped, so author the declaration beside a `cf-stage` (flow family) or a `text` fence until the figure block lands | `html` block carrying the inline SVG drawn to the grammar, its legend, caption and table twin |
+| Subject-led labeled flow | `cf-stage` fence (nodes `NAME \| sublabel @role`, `->` between stages, one `caption:`; roles accent / positive / warn / danger / neutral; limits 6 stages, 5 nodes per stage); the flow family's interim portal form | `html` block: the authored primary stage (utility tokens, labeled nodes, named edges) |
 | Altitude trio | depth-2 `## Concept`, `## Architecture`, `## Technical` rendered as a tablist; at least two of the three | block order as attention order; `tabs` only for true peer views |
 | Full-width figure | fenced `text` block inside a trio panel | `html` block as a static layout standard blocks cannot express |
 | Table | Markdown table | `table` |
@@ -117,11 +122,16 @@ a teaser dump.
 
 ### Altitude grammar
 
-| Altitude | Job | Prefer |
-|----------|-----|--------|
-| **Concept** | Thesis / outcome / decision in ~5s | One primary visual carrier that still works if sentences are removed |
-| **Architecture** | Engineer-legible structure in ~20s | Full-width stage: labeled nodes, named edges, margins |
-| **Technical** | Evidence and gates | Status, tables, code, diff, not decorative wrappers around more prose |
+Figures lead at every altitude and in every how-to section; the full contract
+(reader question, families, prose role per altitude) is `figure-grammar.md`
+section 3.
+
+| Altitude | Job | Figure families |
+|----------|-----|-----------------|
+| **Concept** | What it is, who it is for, what it is not, in ~5s | structure, flow, extent |
+| **Architecture** | How the parts relate and where the boundaries are, in ~20s | structure, layering, derivation, graph |
+| **Technical** | What exactly holds, in what order, how far; evidence and gates | sequence, state, coverage, extent, with status, tables, code and diff for lookup |
+| **How-to section** | What to do, in what order, what proves it worked | sequence, state or extent |
 
 ### Type roles (author roles, not font names)
 
@@ -159,13 +169,26 @@ Optional and purposeful: it may explain a transition, sequence, or causal
 relationship, or give interaction feedback. **Meaning holds at rest**; honour
 reduced motion with an equivalent static explanation. No decorative loops.
 
-### Stage and diagram grammar
+### Figure grammar
 
-- Full-width stage with margins; large labeled nodes; named edges.
-- One governing path at rest; secondary crossings only if they teach.
-- Material state change must change structure or labels, not only a tint.
-- ASCII `text` figures may **support** a stage; they are not a substitute for
-  a subject-led composition when the claim needs a true stage.
+`figure-grammar.md` is the figure doctrine: nine families keyed to the
+relationship they encode (flow, structure, layering, sequence, state,
+coverage, extent, derivation, graph), twelve rules every figure obeys, the
+altitude contract, the mark vocabulary and the declaration schema (ADR-0068).
+Load it before drawing anything; load `figure-grammar-specimens.md`, one drawn
+specimen per family, when authoring a figure. In brief:
+
+- Choose the family by the relationship the reader must see; one figure, one
+  family, one governing idea that survives with its title masked.
+- Every mark keyed; every pair of states separated by two channels that are
+  not hue, measured off the render in light and dark.
+- Text 12.5 px or larger; every inner mark 9 px or larger; narrow recomposes
+  with its own mark set instead of elongating.
+- Facts derived from a named source; no text boxes as the form; no text over
+  text or over a mark; one-sentence caption; `--cf-fig-*` tokens only; a
+  description and a table twin.
+- A labelled stage is one flow-family form, not the default; ASCII `text`
+  figures draw the same families in chat and as the portal's interim form.
 
 ### Anti-patterns (fail closed)
 
@@ -179,11 +202,16 @@ reduced motion with an equivalent static explanation. No decorative loops.
 8. Restyling the same chat answer without a new information structure
 9. Portal as a vision / marketing site or second content authority
 10. A page that is the source Markdown re-rendered (see §2)
+11. A confusable pair: two states told apart by hue alone
+12. An inner mark under the 9 px floor inside a cell that passes
+13. Overprint: text on text or on a mark, with nothing overflowing
+14. Elongation by reflow: a narrow render that grows instead of recomposing
 
 ### Review rubric
 
-- **5s:** governing idea without reading a wall of cards
-- **20s:** engineer can explain the architecture figure
+- **5s:** governing idea with title and caption masked, no wall of cards
+- **20s:** engineer can explain the architecture figure and decode every
+  keyed pair without the legend
 - **Subject-led:** structure survives sentence removal
 - **Portal:** still reads as docs, not a campaign site
 - **Present Comment:** one mode; rail only while armed; harness feedback path works
@@ -209,7 +237,7 @@ own skill and is loaded after this file:
 | Generate | Do not generate |
 |----------|-----------------|
 | Content into catalog blocks / portal sources | Custom CSS, remote fonts, component kits |
-| One primary visual form for the governing idea | Decorative card grids of the same prose |
+| One family figure for the governing idea, with its declaration | Decorative card grids of the same prose |
 | Supporting text that frames a carrier | Portal-only facts or decisions absent from the sources |
 | Evidence-bound claims | Inferred "current" without the manifest |
 
