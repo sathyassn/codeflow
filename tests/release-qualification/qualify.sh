@@ -48,9 +48,7 @@ WORK_PARENT_OPT=""
 TARGET_DIR=""
 NODE_BIN=""
 HERDR_WORKSPACE="w2"
-BLOCKED_ON="the delegate canary and the pipeline run, which need a live Claude \
-session, and the positive present resolve, which only the browser review \
-surface can produce"
+BLOCKED_ON=""
 NO_SESSION_REASON=""
 NO_SESSION_OWNER=""
 SKIP_CANARY=0
