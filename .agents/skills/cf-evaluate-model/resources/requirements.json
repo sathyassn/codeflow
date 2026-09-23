@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-15-responsible-autonomy-v1",
+  "requirements_version": "2026-09-23-operating-doctrine-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -1256,7 +1256,7 @@
     {
       "id": "CF-OUT-002",
       "level": "hard",
-      "statement": "Substantial prose is reviewed in its full project, audience, medium, and task context; preserves technical meaning and credible documented voice; removes unsupported certainty, sycophancy, inflation, and obstructive formatting without fabricating personality or applying lexical, punctuation, list, or emoji blacklists.",
+      "statement": "Substantial prose and every operator-facing reply are reviewed in their full project, audience, medium, and task context; preserve technical meaning and credible documented voice; remove unsupported certainty, sycophancy, inflation, obstructive formatting, and mannered prose (slogans, contrast turns, dramatic fragments, paragraph walls) without fabricating personality. A reply or summary opens with two to four sentences of plain prose before any bullets or table. The only fixed exclusions are the em and en dash in new text that ADR-0067 names; there is otherwise no lexical, punctuation, list, or emoji blacklist, and legitimate punctuation on existing lines is preserved.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
@@ -1274,13 +1274,31 @@
             "There is no universal word, punctuation, formatting, or emoji blacklist",
             "Do not use an AI detector"
           ]
+        },
+        {
+          "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
+          "markers": [
+            "Operator-facing replies follow the written content policy (ADR-0067)",
+            "a summary is two to four sentences before any list",
+            "is a defect in a reply as much as in a document",
+            "Em and en dashes are absent from new text on every policy surface, replies included"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-editorial-review/references/editorial-smells.md",
+          "markers": [
+            "Mannered prose performs instead of informing",
+            "It is a defect in any operator-facing text, a chat reply included",
+            "A reply or summary runs as a paragraph wall",
+            "Do not rewrite merely because text uses an em dash on a line that predates ADR-0067"
+          ]
         }
       ]
     },
     {
       "id": "CF-OUT-003",
       "level": "hard",
-      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use an ASCII diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects.",
+      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use an ASCII diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects. A reply whose point is a flow or relationship carries the figure itself (fenced ASCII in chat), not only the recognition that one would help, and a substantial comparison or review that one surface with anchored feedback would make clearer opens or offers cf-present with the reason.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
@@ -1306,6 +1324,69 @@
             "proportionality in both directions",
             "scope and detail fit the explanation",
             "brief caption or legend when it aids orientation"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
+          "markers": [
+            "the reply carries a figure: fenced ASCII in chat",
+            "open or offer `cf-present` and say why",
+            "A simple answer stays simple: no figure, no headings, no recap"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-OUT-004",
+      "level": "hard",
+      "statement": "When a reply or document tells the operator about a pull request, served portal or presentation page, or file, it carries the exact link the creating or fetching tool printed, or one that was verified; a guessed or rebuilt URL, port, or pull request number is a defect, and an unknown link is stated as unknown.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
+          "markers": [
+            "give the exact link the tool printed or one you verified",
+            "Never guess a URL, port, or pull request number; state an unknown link as unknown"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "It gives the PR URL exactly as `gh pr create` or `gh pr view --json url` printed it, never one built from a number or guessed"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "report readiness with the PR URL the tool printed"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/references/operations.md",
+          "markers": [
+            "report the exact served URL from the tool output; never guess the host or port"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-OUT-005",
+      "level": "hard",
+      "statement": "A title, heading, navigation label, or pull request title names its subject in words. One whose whole text is a stable record identifier or an unexpanded all-caps acronym is rewritten in words while the identifier stays in the body, link, or frontmatter with its links intact and the acronym is expanded from project evidence; an identifier followed by words is not the smell.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/editorial-smells.md",
+          "markers": [
+            "is a bare stable identifier",
+            "or an unexpanded all-caps acronym",
+            "The words name the subject; the identifier stays in the body, the link, or the frontmatter",
+            "An identifier followed by words is fine"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-editorial-review/SKILL.md",
+          "markers": [
+            "name the actual subject or action in words",
+            "a bare record identifier or unexpanded acronym is a smell (ADR-0067)"
           ]
         }
       ]
@@ -2220,7 +2301,7 @@
     {
       "id": "CF-SHIP-001",
       "level": "hard",
-      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches when required checks are evidenced green; an infra-killed duplicate CI job is not a failed check and is not agent merge authority.",
+      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches when required checks are evidenced green; an infra-killed duplicate CI job is not a failed check and is not agent merge authority. After opening a PR the agent follows its required checks at most once a minute for at most thirty minutes without an unbounded watch, repairs an assertion-red check its change caused without waiting to be asked, reports an infrastructure-incomplete job as missing evidence with the tool's reason rather than fixing it as a product defect, never merges, and sends one unprompted readiness report with the printed PR URL, each required check's state, and the next action.",
       "sources": [
         {
           "path": "AGENTS.md",
@@ -2234,6 +2315,31 @@
           "markers": [
             "required *checks* are evidenced",
             "An agent never merges into"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "poll required checks at most once a minute for up to thirty minutes",
+            "fix assertion-red without asking, report infra-incomplete as missing evidence, never merge",
+            "report readiness with the PR URL the tool printed"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "## After opening",
+            "at most once a minute, for at most thirty minutes",
+            "Do not use `--watch` without a ceiling, and do not poll without an end",
+            "Do not wait for the operator to name the job",
+            "Report it as missing evidence with the reason the tool gave, not as a product defect",
+            "Never merge. When every required check is green, or the thirty minutes end, send one readiness report without being asked"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "its required checks were followed within the ship poll budget"
           ]
         }
       ]
