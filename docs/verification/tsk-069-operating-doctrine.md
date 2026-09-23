@@ -4,7 +4,10 @@ This records the integration check for the operating doctrine epic (EPC-017)
 before it goes to `main`. The four tasks landed on
 `integration/EPC-017-operating-doctrine`, a combined review found three
 editorial defects, and those were fixed on the same branch. The head below
-passed every check named in TSK-069.
+passed every check named in TSK-069. A Codex review then found seven more
+defects, fixed on `fix/epc017-codex-review`; the full gate on that branch's
+final head is recorded in the pull request that lands it, and the pull
+request to `main` repeats it for the head that ships.
 
 ```text
 TSK-066 written content policy  (#521) --+
@@ -12,6 +15,7 @@ TSK-065 pull request follow-up  (#523) --+--> integration head --> checks --> PR
 TSK-067 verified links          (#524) --+       e6121491e
 TSK-068 blind evaluation cases  (#527) --+
 combined editorial fixes        (#529) --+
+Codex review fixes              (fix/epc017-codex-review) --> final head
 ```
 
 ## Landings
