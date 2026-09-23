@@ -694,13 +694,19 @@ fn shell_c_argument(args: &[String]) -> Option<&String> {
 /// Text the shell does not execute is not a segment: a comment (an unquoted
 /// `#` that starts a word) and a heredoc body read as data. A body is data
 /// only when every program in the pipeline that reads it is a known data
-/// reader ([`HEREDOC_DATA_READERS`]: `cat > f <<EOF`, `git commit -F - <<EOF`)
-/// and the text it lands in cannot run (`code_context`: set for a
-/// substitution whose output is a command, as in `bash -c "$(cat <<EOF …)"`).
-/// Any other body is read as a script, the conservative default. A data body
-/// with an unquoted delimiter still runs its `$(…)` and backtick
-/// substitutions. Inside `(( … ))` and `$[ … ]` arithmetic, `<<` is a shift
-/// and `#` is not a comment.
+/// reader ([`reads_as_data`]: `cat > f <<EOF`, `git commit -F - <<EOF`), that
+/// pipeline has no group or process substitution and does not continue past
+/// the body, and the text it lands in cannot run (`code_context`: set for a
+/// substitution whose output is a command, as in `bash -c "$(cat <<EOF …)"`,
+/// or whose pipeline turns out to feed a non-reader). Any other body is read
+/// as a script, the conservative default. A data body with an unquoted
+/// delimiter still runs its `$(…)` and backtick substitutions. Inside
+/// `(( … ))` and `$[ … ]` arithmetic, `<<` is a shift and `#` is not a
+/// comment.
+///
+/// Residual (ADR-0009): a data body the same command later runs by another
+/// route, such as a heredoc written to a file that a later segment executes,
+/// or a data substitution stored in a variable that is later `eval`ed.
 #[allow(clippy::too_many_lines)] // one character state machine
 fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_context: bool) {
     if depth > 8 {
@@ -713,6 +719,8 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
     // Open `((` arithmetic commands and `$[` arithmetic expansions.
     let mut arithmetic = 0usize;
     let mut bracket_arithmetic = 0usize;
+    // Open `( … )` subshells and `{ … }` groups.
+    let mut groups = 0usize;
     // Heredocs opened on the current line; their bodies follow its newline.
     let mut heredocs: Vec<Heredoc> = Vec::new();
     let mut line = Line::default();
@@ -730,15 +738,13 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         // Command substitution executes even inside double quotes.
         if c == '$' && chars.get(i + 1) == Some(&'(') {
             let (inner, ni) = capture_balanced(&chars, i + 2);
-            let code = code_context || substitution_output_runs(&cur);
-            split_into_segments(&inner, out, depth + 1, code);
+            line.substitution(inner, &cur, code_context, out, depth);
             i = ni;
             continue;
         }
         if c == '`' {
             let (inner, ni) = capture_backtick(&chars, i + 1);
-            let code = code_context || substitution_output_runs(&cur);
-            split_into_segments(&inner, out, depth + 1, code);
+            line.substitution(inner, &cur, code_context, out, depth);
             i = ni;
             continue;
         }
@@ -796,7 +802,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                         depth,
                     );
                 }
-                line.segments.clear();
+                line.finish(continues, out, depth);
             }
             '(' if chars.get(i + 1) == Some(&'(') => {
                 arithmetic += 1;
@@ -818,7 +824,23 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 cur.push(c);
                 i += 1;
             }
-            ';' | '(' | ')' => {
+            // A group or process substitution in command position belongs to
+            // the pipeline it sits in (`cat <<EOF | { bash; }`, `>(sh)`).
+            '(' => {
+                let in_pipeline = cur.trim().is_empty() || cur.ends_with(['<', '>']);
+                if in_pipeline {
+                    line.grouped.push(line.pipeline);
+                }
+                line.end_segment(out, &mut cur, in_pipeline);
+                groups += 1;
+                i += 1;
+            }
+            ')' => {
+                line.end_segment(out, &mut cur, false);
+                groups = groups.saturating_sub(1);
+                i += 1;
+            }
+            ';' => {
                 line.end_segment(out, &mut cur, false);
                 i += 1;
             }
@@ -830,6 +852,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             '<' if arithmetic == 0 && bracket_arithmetic == 0 && chars.get(i + 1) == Some(&'<') => {
                 if let Some((mut doc, end)) = parse_heredoc_operator(&chars, i) {
                     doc.pipeline = line.pipeline;
+                    doc.in_group = groups > 0;
                     heredocs.push(doc);
                     cur.extend(&chars[i..end]);
                     i = end;
@@ -839,11 +862,17 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
                 }
             }
             '{' if i + 1 >= chars.len() || chars[i + 1].is_whitespace() => {
-                line.end_segment(out, &mut cur, false);
+                let in_pipeline = cur.trim().is_empty();
+                if in_pipeline {
+                    line.grouped.push(line.pipeline);
+                }
+                line.end_segment(out, &mut cur, in_pipeline);
+                groups += 1;
                 i += 1;
             }
             '}' if i == 0 || chars[i - 1].is_whitespace() => {
                 line.end_segment(out, &mut cur, false);
+                groups = groups.saturating_sub(1);
                 i += 1;
             }
             // `&&` is a segment boundary; a `&` that is part of a redirect
@@ -876,6 +905,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         }
     }
     line.end_segment(out, &mut cur, false);
+    line.finish(false, out, depth);
 }
 
 /// The top-level segments of the line being split, each tagged with the
@@ -885,9 +915,60 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
 struct Line {
     pipeline: usize,
     segments: Vec<(usize, String)>,
+    /// Pipelines holding a group or process substitution, whose readers the
+    /// guard does not resolve.
+    grouped: Vec<usize>,
+    /// Heredoc-bearing substitutions split as data, with their pipeline, to
+    /// recheck once the line shows everything that reads their output.
+    data_substitutions: Vec<(usize, String)>,
 }
 
 impl Line {
+    /// Split a `$(…)`/backtick substitution opened after `prefix`. Output that
+    /// can run makes its heredocs scripts; otherwise it is split as data now
+    /// and, if it holds a heredoc, rechecked by [`Line::finish`].
+    fn substitution(
+        &mut self,
+        inner: String,
+        prefix: &str,
+        code_context: bool,
+        out: &mut Vec<String>,
+        depth: usize,
+    ) {
+        let code = code_context || substitution_output_runs(prefix);
+        split_into_segments(&inner, out, depth + 1, code);
+        if !code && inner.contains("<<") {
+            self.data_substitutions.push((self.pipeline, inner));
+        }
+    }
+
+    /// `true` when every program of `pipeline` reads data and none of it is
+    /// unresolved: no group or process substitution, and, when `continues`,
+    /// not the pipeline still open past the line.
+    fn pipeline_reads_data(&self, pipeline: usize, continues: bool) -> bool {
+        let unresolved =
+            self.grouped.contains(&pipeline) || (continues && pipeline == self.pipeline);
+        !unresolved
+            && self
+                .segments
+                .iter()
+                .filter(|(p, _)| *p == pipeline)
+                .all(|(_, segment)| reads_as_data(segment))
+    }
+
+    /// Close the line: re-split as script every data substitution whose
+    /// pipeline turned out to feed a program that is not a data reader
+    /// (`echo "$(cat <<EOF …)" | bash`), then start the next line.
+    fn finish(&mut self, continues: bool, out: &mut Vec<String>, depth: usize) {
+        for (pipeline, inner) in std::mem::take(&mut self.data_substitutions) {
+            if !self.pipeline_reads_data(pipeline, continues) {
+                split_into_segments(&inner, out, depth + 1, true);
+            }
+        }
+        self.segments.clear();
+        self.grouped.clear();
+    }
+
     /// End the current segment. `pipe` keeps the next segment in the same
     /// pipeline (`|`, or a line ending in `|`); any other boundary starts a
     /// new one.
@@ -915,20 +996,44 @@ fn ends_with_pipe(chars: &[char], i: usize) -> bool {
 }
 
 /// Programs that read a heredoc body, or a substitution's output, as data and
-/// never as commands. A body fed to anything else (a shell, `eval`, `ssh`,
-/// `sudo`, `make`, a `$VAR` or a function) is read as a script. The
-/// interpreters run their input in their own language, outside the guard's
-/// model: the documented residual.
+/// never run it. Tools that can execute their input (`awk` `system()`, GNU
+/// `sed e`, `perl`) are left out. `python`/`python3`/`node` run their input
+/// in their own language, outside the guard's model: the documented
+/// interpreter residual.
 const HEREDOC_DATA_READERS: &[&str] = &[
-    "cat", "tee", "echo", "printf", "git", "gh", "sed", "awk", "grep", "sort", "head", "tail",
-    "wc", "tr", "cut", "uniq", "diff", "jq", "base64", "python", "python3", "node", "ruby", "perl",
+    "cat", "tee", "echo", "printf", "grep", "sort", "head", "tail", "wc", "tr", "cut", "uniq",
+    "diff", "jq", "base64", "python", "python3", "node",
 ];
 
-/// `true` when `segment` runs a program from [`HEREDOC_DATA_READERS`].
+/// `true` when `segment` reads its input as data: it runs no program, or one of
+/// [`HEREDOC_DATA_READERS`], `git` in a subcommand that takes a message or
+/// patch on stdin with no `-c`/`--config-env` global (either can make any
+/// subcommand an alias that runs a shell), or `gh` in a subcommand that takes
+/// a body. A body fed to anything else (a shell, `eval`, `ssh`, `sudo`,
+/// `make`, a `$VAR` or a function) is read as a script.
 fn reads_as_data(segment: &str) -> bool {
-    let argv = command_argv(segment);
-    strip_launchers(&argv)
-        .is_some_and(|(program, _)| HEREDOC_DATA_READERS.contains(&basename(program)))
+    let words = command_argv(segment);
+    // A segment of only assignments runs no program and reads nothing.
+    let Some((program, args)) = strip_launchers(&words) else {
+        return true;
+    };
+    match basename(program) {
+        "git" => {
+            !args
+                .iter()
+                .any(|a| a == "-c" || a.starts_with("--config-env"))
+                && git_subcommand(args).is_some_and(|(sub, _)| {
+                    matches!(
+                        sub,
+                        "commit" | "tag" | "notes" | "hash-object" | "apply" | "am"
+                    )
+                })
+        }
+        "gh" => args
+            .first()
+            .is_some_and(|sub| matches!(sub.as_str(), "pr" | "issue" | "api" | "release" | "gist")),
+        name => HEREDOC_DATA_READERS.contains(&name),
+    }
 }
 
 /// `true` when the output of a substitution that opens after `prefix` (the
@@ -939,7 +1044,7 @@ fn reads_as_data(segment: &str) -> bool {
 fn substitution_output_runs(prefix: &str) -> bool {
     let argv = command_argv(prefix);
     match strip_launchers(&argv) {
-        Some((program, _)) => !HEREDOC_DATA_READERS.contains(&basename(program)),
+        Some(_) => !reads_as_data(prefix),
         // No program: command position unless the words are all assignments.
         None => {
             argv.is_empty()
@@ -968,6 +1073,8 @@ struct Heredoc {
     strip_tabs: bool,
     /// The pipeline of the line whose programs read the body.
     pipeline: usize,
+    /// Opened inside a subshell or group, whose output may feed anything.
+    in_group: bool,
 }
 
 /// Parse the `<<`/`<<-` operator at `start` and its delimiter word. Returns
@@ -1019,6 +1126,7 @@ fn parse_heredoc_operator(chars: &[char], start: usize) -> Option<(Heredoc, usiz
             literal,
             strip_tabs,
             pipeline: 0,
+            in_group: false,
         },
         i,
     ))
@@ -1026,8 +1134,8 @@ fn parse_heredoc_operator(chars: &[char], start: usize) -> Option<(Heredoc, usiz
 
 /// Consume the bodies of the heredocs opened on the line that just ended,
 /// starting at `start` (just past its newline), and return where command
-/// text resumes. A body is data only when every segment of its pipeline
-/// reads data, the pipeline does not continue past the body, and the text is
+/// text resumes. A body is data only when its pipeline reads data
+/// ([`Line::pipeline_reads_data`]), it is not inside a group, and the text is
 /// not in a code context; otherwise it is split as a script. A heredoc whose
 /// terminator never appears is left in place, so the rest is still read as
 /// commands: the conservative reading.
@@ -1047,13 +1155,7 @@ fn consume_heredoc_bodies(
         let Some((body, next)) = heredoc_body(chars, i, doc) else {
             return i;
         };
-        let readers_unknown = continues && doc.pipeline == line.pipeline;
-        let readers_read_data = line
-            .segments
-            .iter()
-            .filter(|(pipeline, _)| *pipeline == doc.pipeline)
-            .all(|(_, segment)| reads_as_data(segment));
-        if code_context || readers_unknown || !readers_read_data {
+        if code_context || doc.in_group || !line.pipeline_reads_data(doc.pipeline, continues) {
             split_into_segments(&body, out, depth + 1, false);
         } else if !doc.literal {
             body_substitutions(&body, out, depth + 1);
@@ -4294,7 +4396,9 @@ mod tests {
             "git commit -m \"$(cat <<'EOF'\nfix: x\n\n- never `gh pr merge 12`\nEOF\n)\"",
             "x=$(cat <<'EOF'\n`gh pr merge 12`\nEOF\n)",
             "cat > f <<'EOF' && git add f\nnever `gh pr merge 12`\nEOF",
-            "cat <<'EOF' | sed 's/a/b/' > f\n`gh pr merge 12`\nEOF",
+            "cat <<'EOF' | tee -a f | grep -c x\n`gh pr merge 12`\nEOF",
+            "gh pr create --title t --body-file - <<'EOF'\nnever `gh pr merge 12`\nEOF",
+            "jq -n --arg b \"$(cat <<'EOF'\n`gh pr merge 12`\nEOF\n)\" '$b'",
         ] {
             let v = evaluate(cmd, &ctx(&p, "feat/x"));
             assert!(v.is_empty(), "{cmd}: {v:?}");
@@ -4353,6 +4457,17 @@ mod tests {
             "make -f - <<'EOF'\nall:\n\tgh pr merge 12\nEOF",
             "x=$[1<<2]\ngh pr merge 12\n2]",
             "bash -c 2>/dev/null \"gh pr merge 12\"",
+            "awk '{system($0)}' <<'EOF'\ngh pr merge 12\nEOF",
+            "perl -ne 'system $_' <<'EOF'\ngh pr merge 12\nEOF",
+            "sed e <<'EOF'\ngh pr merge 12\nEOF",
+            "git -c alias.x='!sh' x <<'EOF'\ngh pr merge 12\nEOF",
+            "cat <<'EOF' | git -c alias.x='!sh' x\ngh pr merge 12\nEOF",
+            "cat <<'EOF' | { bash; }\ngh pr merge 12\nEOF",
+            "cat <<'EOF' | (bash)\ngh pr merge 12\nEOF",
+            "(cat <<'EOF'\ngh pr merge 12\nEOF\n) | bash",
+            "cat <<'EOF' > >(sh)\ngh pr merge 12\nEOF",
+            "echo \"$(cat <<'EOF'\ngh pr merge 12\nEOF\n)\" | bash",
+            "printf '%s\\n' \"$(cat <<'EOF'\ngh pr merge 12\nEOF\n)\" | sh",
             "(( x = 1 << 2 ))\ngh pr merge 12\n2",
             "echo $(true)#; gh pr merge 12",
             "(( 1 #)); gh pr merge 12",
