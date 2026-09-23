@@ -149,7 +149,7 @@ jobs:
       - name: docs portal JavaScript authority suite
         run: |
           npm run deps:install --prefix docs-portal
-          node --test docs-portal/tests/adapter.test.mjs docs-portal/tests/composition.test.mjs
+          node --test docs-portal/tests/adapter.test.mjs docs-portal/tests/composition.test.mjs docs-portal/tests/figure-grammar.test.mjs
 
   secret-scan:
     name: secret scan

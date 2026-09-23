@@ -1,0 +1,541 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "change-states",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state is a change in, and what is the only way out of a red check?",
+    "idea": "The only route out of a red check returns to editing; a bypass is forbidden.",
+    "title": "States of a change and the one route out of a red check",
+    "kicker": "Change states",
+    "description": "Editing, committed, pushed, pull request open, then checks green and merged. From pull request open a failing check leads to checks red. From checks red the only route returns to editing to fix the cause, drawn as a heavy dipped arc. A route from checks red to merged, a bypass, is forbidden, drawn dashed with a cross.",
+    "caption": "A red check sends the change back to editing, and no route leads from red to merged.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "State"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Transition"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "The only route out of red"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Forbidden route"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a red check returns to editing; no bypass",
+        "source": "AGENTS.md#git-rules",
+        "derive": "the sentence beginning 'When a gate blocks you, fix the cause'",
+        "check": {
+          "kind": "contains",
+          "text": "When a gate blocks you, fix the cause"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 236,
+      "draw": [
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M97 60H150",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M251 60H304",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M385 60H438",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M525 60H578",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M482 79V170",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M637 79V170",
+          "head": "end",
+          "id": "m6"
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M433 190C300 190 58 236 58 84",
+          "head": "end",
+          "id": "m7"
+        },
+        {
+          "text": "fix the cause",
+          "x": 196,
+          "y": 176
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M531 190H595",
+          "cross": {
+            "cx": 562,
+            "cy": 190,
+            "size": 12
+          },
+          "id": "m8"
+        },
+        {
+          "text": "bypass",
+          "x": 562,
+          "y": 170,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m14"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 20,
+          "y": 42,
+          "w": 76,
+          "h": 36,
+          "rx": 8,
+          "id": "m9"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 152,
+          "y": 42,
+          "w": 98,
+          "h": 36,
+          "rx": 8,
+          "id": "m10"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 306,
+          "y": 42,
+          "w": 78,
+          "h": 36,
+          "rx": 8,
+          "id": "m11"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 440,
+          "y": 42,
+          "w": 84,
+          "h": 36,
+          "rx": 8,
+          "id": "m12"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 580,
+          "y": 42,
+          "w": 114,
+          "h": 36,
+          "rx": 8,
+          "id": "m13"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 435,
+          "y": 172,
+          "w": 94,
+          "h": 36,
+          "rx": 8,
+          "id": "m14"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 597,
+          "y": 172,
+          "w": 80,
+          "h": 36,
+          "rx": 8,
+          "id": "m15"
+        },
+        {
+          "text": "editing",
+          "x": 58,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m9"
+          ]
+        },
+        {
+          "text": "committed",
+          "x": 201,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m10"
+          ]
+        },
+        {
+          "text": "pushed",
+          "x": 345,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m11"
+          ]
+        },
+        {
+          "text": "PR open",
+          "x": 482,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m12"
+          ]
+        },
+        {
+          "text": "checks green",
+          "x": 637,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m13"
+          ]
+        },
+        {
+          "text": "checks red",
+          "x": 482,
+          "y": 195,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "m14"
+          ]
+        },
+        {
+          "text": "merged",
+          "x": 637,
+          "y": 195,
+          "anchor": "middle",
+          "for": [
+            "m15"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 348,
+      "draw": [
+        {
+          "state": "state",
+          "id": "s1",
+          "shape": "rect",
+          "x": 20,
+          "y": 14,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "editing",
+          "x": 80,
+          "y": 37,
+          "anchor": "middle",
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s2",
+          "shape": "rect",
+          "x": 20,
+          "y": 72,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "committed",
+          "x": 80,
+          "y": 95,
+          "anchor": "middle",
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s3",
+          "shape": "rect",
+          "x": 20,
+          "y": 130,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "pushed",
+          "x": 80,
+          "y": 153,
+          "anchor": "middle",
+          "for": [
+            "s3"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s4",
+          "shape": "rect",
+          "x": 20,
+          "y": 188,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "PR open",
+          "x": 80,
+          "y": 211,
+          "anchor": "middle",
+          "for": [
+            "s4"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s5",
+          "shape": "rect",
+          "x": 20,
+          "y": 246,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "checks green",
+          "x": 80,
+          "y": 269,
+          "anchor": "middle",
+          "for": [
+            "s5"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s6",
+          "shape": "rect",
+          "x": 20,
+          "y": 304,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "merged",
+          "x": 80,
+          "y": 327,
+          "anchor": "middle",
+          "for": [
+            "s6"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s7",
+          "shape": "rect",
+          "x": 210,
+          "y": 188,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "checks red",
+          "x": 270,
+          "y": 211,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s7"
+          ]
+        },
+        {
+          "state": "trans",
+          "id": "t0",
+          "shape": "path",
+          "d": "M80 51V71",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "t1",
+          "shape": "path",
+          "d": "M80 109V129",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "t2",
+          "shape": "path",
+          "d": "M80 167V187",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "t3",
+          "shape": "path",
+          "d": "M80 225V245",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "t4",
+          "shape": "path",
+          "d": "M80 283V303",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "t9",
+          "shape": "path",
+          "d": "M141 206H209",
+          "head": "end"
+        },
+        {
+          "state": "return",
+          "id": "rt",
+          "shape": "path",
+          "d": "M331 206C356 206 356 32 142 32",
+          "head": "end"
+        },
+        {
+          "text": "fix the cause",
+          "x": 226,
+          "y": 116,
+          "for": [
+            "rt"
+          ]
+        },
+        {
+          "state": "blocked",
+          "id": "bp",
+          "shape": "path",
+          "d": "M270 225V322H142",
+          "cross": {
+            "cx": 270,
+            "cy": 264,
+            "size": 12
+          }
+        },
+        {
+          "text": "bypass",
+          "x": 284,
+          "y": 269,
+          "style": "mute",
+          "for": [
+            "bp"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "On",
+        "Allowed"
+      ],
+      "rows": [
+        [
+          "editing",
+          "committed",
+          "commit passes hooks",
+          "yes"
+        ],
+        [
+          "committed",
+          "pushed",
+          "push",
+          "yes"
+        ],
+        [
+          "pushed",
+          "PR open",
+          "pull request opened",
+          "yes"
+        ],
+        [
+          "PR open",
+          "checks green",
+          "required checks pass",
+          "yes"
+        ],
+        [
+          "PR open",
+          "checks red",
+          "a required check fails",
+          "yes"
+        ],
+        [
+          "checks green",
+          "merged",
+          "a person merges",
+          "yes"
+        ],
+        [
+          "checks red",
+          "editing",
+          "fix the cause",
+          "the only route"
+        ],
+        [
+          "checks red",
+          "merged",
+          "bypass",
+          "no"
+        ]
+      ]
+    }
+  }
+}

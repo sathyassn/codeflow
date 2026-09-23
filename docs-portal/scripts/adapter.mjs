@@ -7,7 +7,10 @@ import {
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown, placeCapabilityTable,
   pinnedSourceUrl as providerSourceUrl, recordFilesFor, referencedIds, renderCapabilityFences, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
+  asIsRegionStart, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks,
 } from "./lib.mjs";
+import { bindDerivedData, checkFacts, composeFigure, GRAMMAR_VERSION, markdownSections, parseFactSource, renderFigure, validateDeclaration } from "./figure-grammar.mjs";
+import { PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { GENERATOR } from "./generator.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "./limits.mjs";
@@ -32,6 +35,8 @@ const MAX_TOTAL_MEDIA_BYTES = 64 * 1024 * 1024;
 const MAX_MEDIA_FILES = 1_000;
 const MAX_STALE_REASON_BYTES = 512;
 const MAX_STALE_STUB_BYTES = 4 * 1024;
+const MAX_DECLARATION_BYTES = 256 * 1024;
+const MAX_TOTAL_DECLARATION_BYTES = 8 * 1024 * 1024;
 // Canonicalize before comparing paths: Windows runners may expose the same
 // directory through both long and 8.3 names, which are not lexically relative.
 const portalRoot = await realpath(process.cwd());
@@ -65,7 +70,8 @@ const publicRecords = selfContainedRuntime
     return relative !== ".codeflow-generated.json" && !isReservedPublicPath(relative);
   })
   : [];
-const snapshotPaths = [portalConfigRelative, ...runtimeInputs, ...publicRecords.map((record) => record.path), ...config.source_roots, ...(config.primitive_tokens === null ? [] : [config.primitive_tokens])].map((item) => safeRelative(item, "snapshot path"));
+const declarationPaths = [...new Set(config.figures.map((binding) => binding.declaration))].sort(compareDeterministicText);
+const snapshotPaths = [portalConfigRelative, ...runtimeInputs, ...publicRecords.map((record) => record.path), ...config.source_roots, ...(config.primitive_tokens === null ? [] : [config.primitive_tokens]), ...declarationPaths].map((item) => safeRelative(item, "snapshot path"));
 git.assertClean(snapshotPaths);
 const runtimeRecords = git.recordsForInputs([portalConfigRelative, ...runtimeInputs], "portal runtime input");
 const authorityRecords = [...runtimeRecords, ...publicRecords];
@@ -86,6 +92,47 @@ if (config.primitive_tokens !== null) {
   primitiveTokenEvidence = { source_path: config.primitive_tokens, source_sha256: sha256(bytes) };
 }
 const primitiveTokenCss = renderPrimitiveTokenCss(primitiveTokens);
+
+// Figure declarations and the files their facts and derived data read are
+// committed inputs, pinned and tamper-checked like every source.
+const declarationRecords = declarationPaths.map((declarationPath) => git.requireRegular(declarationPath, ["100644"], "figure declaration"));
+const declarationBlobs = git.readBlobs(declarationRecords, { perObjectBytes: MAX_DECLARATION_BYTES, totalBytes: MAX_TOTAL_DECLARATION_BYTES, label: "figure declaration" });
+await assertWorktreeMatchesCommit(declarationRecords, declarationBlobs, MAX_DECLARATION_BYTES, MAX_TOTAL_DECLARATION_BYTES, "figure declaration");
+const declarations = new Map();
+for (const declarationPath of declarationPaths) {
+  let parsed;
+  try { parsed = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(declarationBlobs.get(declarationPath))); }
+  catch (error) { throw new Error(`${declarationPath}: figure declaration is not UTF-8 JSON: ${error.message}`); }
+  declarations.set(declarationPath, validateDeclaration(parsed, declarationPath));
+}
+const figureSourcePaths = [...new Set([...declarations.values()].flatMap(({ figure }) => [
+  ...figure.facts.map((fact) => parseFactSource(fact.source).path),
+  ...(figure.binding === "derived" ? [figure.source.path] : []),
+]))].sort(compareDeterministicText).map((item) => safeRelative(item, "figure input"));
+snapshotPaths.push(...figureSourcePaths);
+git.assertClean(snapshotPaths);
+const figureSourceRecords = figureSourcePaths.map((sourcePath) => git.requireRegular(sourcePath, ["100644", "100755"], "figure fact source"));
+const figureSourceBlobs = git.readBlobs(figureSourceRecords, { perObjectBytes: MAX_SOURCE_BYTES, totalBytes: MAX_TOTAL_SOURCE_BYTES, label: "figure fact source" });
+await assertWorktreeMatchesCommit(figureSourceRecords, figureSourceBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "figure fact source");
+const figureInputRecords = [...declarationRecords, ...figureSourceRecords];
+const figureInputBlobs = new Map([...declarationBlobs, ...figureSourceBlobs]);
+const figures = new Map();
+for (const [declarationPath, declaration] of declarations) {
+  const figure = declaration.figure;
+  const readSource = (sourcePath) => figureSourceBlobs.get(sourcePath) ?? null;
+  const facts = checkFacts(figure, readSource);
+  for (const fact of facts) {
+    if (fact.error !== null) throw new Error(`${declarationPath}: rule 6 (fidelity): fact "${fact.claim}" cannot be derived: ${fact.error}`);
+    if (!fact.matches) throw new Error(`${declarationPath}: rule 6 (fidelity): fact "${fact.claim}" draws ${JSON.stringify(fact.drawn)} but ${fact.source} gives ${JSON.stringify(fact.derived)}`);
+  }
+  let bound = null;
+  try { bound = bindDerivedData(figure, readSource); } catch (error) { throw new Error(`${declarationPath}: derived binding: ${error.message}`); }
+  const { drawnValues } = composeFigure(declaration, bound);
+  figures.set(declarationPath, {
+    declaration, bound, facts, drawnValues, sha256: sha256(declarationBlobs.get(declarationPath)),
+    routes: config.figures.filter((binding) => binding.declaration === declarationPath).map((binding) => binding.route).sort(compareDeterministicText),
+  });
+}
 if (primitiveTokenEvidence !== null) Object.assign(primitiveTokenEvidence, { output_path: ".portal/generated/project-tokens.css", output_sha256: sha256(primitiveTokenCss) });
 
 const excludes = (config.exclude ?? []).map((item) => safeRelative(item, "exclude"));
@@ -145,7 +192,8 @@ for (const sourcePath of sources) {
     if (relationships.length > EVIDENCE_LIMITS.relationshipsPerPage) throw new Error(`${sourcePath}: relationship count exceeds ${EVIDENCE_LIMITS.relationshipsPerPage}`);
     if (sourcePath === CAPABILITY_REGISTRY) capabilityRows.push(...capabilityFenceRecords(body, sourcePath));
     const excerpt = excerptFor(text);
-    pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, unavailable_ids: [], lookup_ids: ids, relationships, backlinks: [], stale: false, searchable: true, excerpt });
+    const pageClass = pageClassFor(config, sourcePath);
+    pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, unavailable_ids: [], lookup_ids: ids, relationships, backlinks: [], stale: false, searchable: true, excerpt, page_class: pageClass.pageClass, class_reason: pageClass.reason, class_note: pageClass.note, derive: pageClass.derive });
   } catch (error) {
     sourceAnchors.delete(sourcePath);
     pages.push(staleStubPage(sourcePath, sourceHash, bytes, error));
@@ -155,6 +203,7 @@ git.assertClean(snapshotPaths);
 await assertWorktreeMatchesCommit(sourceRecords, sourceBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES, "portal source");
 if (primitiveTokenRecord !== null) await assertWorktreeMatchesCommit([primitiveTokenRecord], new Map([[primitiveTokenRecord.path, primitiveTokenBlob]]), MAX_PRIMITIVE_TOKEN_BYTES, MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
 await assertWorktreeMatchesCommit(authorityRecords, authorityBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
+await assertWorktreeMatchesCommit(figureInputRecords, figureInputBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES + MAX_TOTAL_DECLARATION_BYTES, "figure input");
 if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while the portal snapshot was being read");
 
 const ownerById = new Map();
@@ -194,10 +243,44 @@ for (const layer of layers) {
   if (recordPointerRoute !== null && layer.id === recordsSwitch.layer) sidebarOrder.set(recordPointerRoute, layerPages.length + 1);
 }
 
+// A binding names a published route and a place on it that the page's class
+// allows: a panel of an explanatory page, or the head or a section anchor of
+// an illustrated source. Pass-through and derived pages carry no figure.
+const pageByRoute = new Map(pages.map((page) => [page.route, page]));
+for (const binding of config.figures) {
+  const page = pageByRoute.get(binding.route);
+  if (page === undefined) throw new Error(`portal.config.json: figure ${binding.declaration} is bound to ${binding.route}, which is not a published route`);
+  if (page.stale) continue;
+  const where = `portal.config.json: figure ${binding.declaration} on ${binding.route}`;
+  if (page.page_class === PAGE_CLASSES.explanatory.id && binding.panel === undefined) throw new Error(`${where}: an explanatory page binds a figure to an altitude panel`);
+  if (page.page_class === PAGE_CLASSES.illustrated.id && binding.panel !== undefined) throw new Error(`${where}: an illustrated source binds a figure to its head or a section anchor, not a panel`);
+  if (page.page_class === PAGE_CLASSES.passThrough.id || page.page_class === PAGE_CLASSES.derivedLookup.id) throw new Error(`${where}: a ${page.page_class} page carries no figure`);
+  if (binding.anchor !== undefined) {
+    const section = markdownSections(page.body).find((candidate) => candidate.anchor === binding.anchor);
+    if (section === undefined || !sourceAnchors.get(page.source_path)?.has(binding.anchor)) throw new Error(`${where}: anchor #${binding.anchor} names no heading in ${page.source_path}`);
+  }
+}
+for (const page of pages) {
+  if (page.stale || page.page_class !== PAGE_CLASSES.derivedLookup.id) continue;
+  if (page.derive === "capability-registry" && page.source_path !== CAPABILITY_REGISTRY) throw new Error(`portal.config.json: derived-lookup capability-registry names ${page.source_path}, not ${CAPABILITY_REGISTRY}`);
+}
+const asIsLinks = {};
+
 const renderedPages = [];
 const mediaReferences = new Map();
 for (const page of pages) {
-  const rendered = page.stale ? renderStaleStub(page) : renderPage(page, ownerById, previewMetadata, mediaReferences, sourceAnchors);
+  const bindings = page.stale ? [] : config.figures.filter((binding) => binding.route === page.route);
+  const asIs = !page.stale && (page.page_class === PAGE_CLASSES.illustrated.id || page.page_class === PAGE_CLASSES.passThrough.id);
+  const rendered = page.stale ? renderStaleStub(page) : asIs ? renderAsIsPage(page, bindings, ownerById, mediaReferences, sourceAnchors) : renderPage(page, bindings, ownerById, previewMetadata, mediaReferences, sourceAnchors);
+  page.figures = bindings.map((binding) => ({
+    declaration_path: binding.declaration,
+    declaration_sha256: figures.get(binding.declaration).sha256,
+    figure_id: figures.get(binding.declaration).declaration.figure.id,
+    placement: binding.panel !== undefined ? "panel" : binding.anchor !== undefined ? "anchor" : "head",
+    panel: binding.panel ?? null,
+    anchor: binding.anchor ?? null,
+  }));
+  page.lookup = !page.stale && page.page_class === PAGE_CLASSES.derivedLookup.id ? { derive: page.derive, rows: capabilityRows.length } : null;
   const outputMarkdown = `src/content/docs/${page.route}.md`;
   const twin = `public/markdown/${page.route}.md`;
   renderedPages.push({ route: page.route, rendered });
@@ -208,7 +291,9 @@ for (const page of pages) {
   page.snippets = page.stale || !page.excerpt ? [] : [{ start_line: page.excerpt.start, end_line: page.excerpt.end, sha256: sha256(page.excerpt.text) }];
   assertEvidencePageLimits(page, page.source_path);
   page.status = typeof page.frontmatter?.status === "string" ? page.frontmatter.status : null;
-  delete page.frontmatter; delete page.body; delete page.excerpt; delete page.layer; delete page.lookup_ids;
+  page.source_region ??= null;
+  if (page.stale) Object.assign(page, { page_class: null, class_reason: null, class_note: null });
+  delete page.frontmatter; delete page.body; delete page.excerpt; delete page.layer; delete page.lookup_ids; delete page.derive;
 }
 
 const renderedLandings = [];
@@ -242,6 +327,7 @@ await assertWorktreeMatchesCommit(sourceRecords, sourceBlobs, MAX_SOURCE_BYTES, 
 if (primitiveTokenRecord !== null) await assertWorktreeMatchesCommit([primitiveTokenRecord], new Map([[primitiveTokenRecord.path, primitiveTokenBlob]]), MAX_PRIMITIVE_TOKEN_BYTES, MAX_PRIMITIVE_TOKEN_BYTES, "primitive token import");
 await assertWorktreeMatchesCommit(mediaRecords, mediaBlobs, MAX_MEDIA_BYTES, MAX_TOTAL_MEDIA_BYTES, "referenced media");
 await assertWorktreeMatchesCommit(authorityRecords, authorityBlobs, MAX_RUNTIME_FILE_BYTES, MAX_TOTAL_RUNTIME_BYTES, "portal runtime input");
+await assertWorktreeMatchesCommit(figureInputRecords, figureInputBlobs, MAX_SOURCE_BYTES, MAX_TOTAL_SOURCE_BYTES + MAX_TOTAL_DECLARATION_BYTES, "figure input");
 if (git.resolveHead() !== commit) throw new Error("repository HEAD changed while referenced media was being read");
 
 const llms = [`# ${escapeMarkdownInline(config.title)}`, "", escapeMarkdownInline(config.description), "", `Repository commit: ${commit}`, ...(config.release_version === null ? [] : [`Release version: ${config.release_version}`]), "", ...pages.filter((page) => !page.stale).map((page) => `- [${escapeMarkdownInline(page.route)}](./markdown/${page.route.split("/").map(strictUrlSegment).join("/")}.md) — ${escapeMarkdownInline(page.source_path)}`), ""].join("\n");
@@ -252,6 +338,23 @@ const evidence = {
   config_sha256: sha256(configBytes),
   primitive_tokens: primitiveTokenEvidence,
   media: mediaEvidence,
+  figures: [...figures].map(([declarationPath, entry]) => ({
+    declaration_path: declarationPath,
+    declaration_sha256: entry.sha256,
+    grammar_version: GRAMMAR_VERSION,
+    figure_id: entry.declaration.figure.id,
+    family: entry.declaration.figure.family,
+    binding: entry.declaration.figure.binding,
+    routes: entry.routes,
+    facts: entry.facts.map((fact) => ({ claim: fact.claim, source: fact.source, source_sha256: sha256(figureSourceBlobs.get(parseFactSource(fact.source).path)), check: fact.check, drawn: fact.drawn, derived: fact.derived })),
+    derived: entry.bound === null ? null : {
+      source_path: entry.bound.source.path,
+      source_sha256: sha256(figureSourceBlobs.get(entry.bound.source.path)),
+      select: entry.bound.source.select,
+      values: entry.bound.derived,
+      drawn: entry.drawnValues ?? {},
+    },
+  })),
   pages,
   llms: { path: "public/llms.txt", sha256: sha256(llms) },
   artifacts: [],
@@ -261,11 +364,14 @@ assertEvidenceEnvelope(pages, evidenceText);
 const contentFiles = new Map([...renderedPages.map((page) => [`${page.route}.md`, page.rendered]), ...renderedLandings.map((landing) => [landing.path, landing.rendered]), ["index.md", renderedIndex]]);
 const publicFiles = new Map([...committedPublicFiles, ...renderedPages.map((page) => [`markdown/${page.route}.md`, page.rendered]), ...mediaFiles, ["llms.txt", llms]]);
 await publishOwnedCorpus(portalRoot, [
-  { live: ".portal/generated", files: new Map([["evidence.json", evidenceText], ["project-tokens.css", primitiveTokenCss]]) },
+  { live: ".portal/generated", files: new Map([["evidence.json", evidenceText], ["project-tokens.css", primitiveTokenCss], ["as-is-links.json", `${JSON.stringify(asIsLinks, null, 2)}\n`]]) },
   { live: "src/content/docs", files: contentFiles },
   { live: "public", files: publicFiles, preserveUnknown: false },
 ]);
 console.log(`portal: adapted ${counted(pages.length, "source page")} across ${counted(layers.length, "layer")}`);
+const classCounts = [PAGE_CLASSES.explanatory.id, PAGE_CLASSES.illustrated.id, PAGE_CLASSES.passThrough.id, PAGE_CLASSES.derivedLookup.id]
+  .map((id) => `${id} ${pages.filter((page) => page.page_class === id).length}`);
+console.log(`portal: page classes ${classCounts.join(", ")}; ${counted(config.figures.length, "bound figure")} from ${counted(figures.size, "declaration")}`);
 
 function chooseLayer(sourcePath, definitions) {
   return definitions.find((layer) => (layer.paths ?? []).includes(sourcePath) || (layer.prefixes ?? []).some((prefix) => sourcePath === prefix || sourcePath.startsWith(`${prefix}/`))) ?? definitions.find((layer) => layer.fallback);
@@ -321,7 +427,15 @@ function pinnedSourceUrl(sourcePath, target = "file") {
   return providerSourceUrl(config.repository_url, commit, sourcePath, target);
 }
 
-function renderPage(page, routesById, previews, referencedMedia, anchorsBySource) {
+// One bound figure as it lands on a page: the figure, then one line saying it
+// comes from its declaration in the configuration, never from the source.
+function companionBlock(binding, placement, index) {
+  const entry = figures.get(binding.declaration);
+  const figureHtml = renderFigure(entry.declaration, { idPrefix: `cf-fig-${index}`, bound: entry.bound, facts: entry.facts });
+  return `<div class="cf-companion" data-cf-companion="${escapeHtml(binding.declaration)}" data-cf-placement="${placement}" data-cf-declaration-sha256="${entry.sha256}">${figureHtml}<p class="cf-companion-source">Figure declared in <code>${escapeHtml(binding.declaration)}</code>, not part of the page source.</p></div>`;
+}
+
+function recordContextFor(page, routesById) {
   const status = typeof page.frontmatter.status === "string" ? page.frontmatter.status : null;
   const amendments = page.source_path.startsWith("docs/decisions/") ? amendmentHeadings(page.body) : [];
   const relationships = page.relationships.map((relation) => {
@@ -332,6 +446,98 @@ function renderPage(page, routesById, previews, referencedMedia, anchorsBySource
   }).join("\n");
   const backlinks = page.backlinks.map((backlink) => `- **${backlink.type.replaceAll("_", " ")}** ← [${backlink.source_id ?? backlink.source_route}](${withBase(base, backlink.source_route)})`).join("\n");
   const referenced = referencedIds(page.body).filter((id) => routesById.has(id) && !page.ids.includes(id));
+  const context = [];
+  const facts = [];
+  if (status) facts.push(`- **Status:** ${escapeMarkdownInline(status)}`);
+  if (typeof page.frontmatter.date === "string") facts.push(`- **Decision date:** ${escapeMarkdownInline(page.frontmatter.date)}`);
+  if (page.ids.length) facts.push(`- **Identity:** ${page.ids.map((id) => `\`${id}\``).join(", ")}`);
+  if (amendments.length) facts.push(`- **Amendments:** ${amendments.map((item) => `**${escapeMarkdownInline(item)}**`).join(", ")}`);
+  if (facts.length) context.push(`## Record context\n\n${facts.join("\n")}`);
+  if (relationships) context.push(`### Declared relationships\n\n${relationships}`);
+  if (referenced.length) context.push(`### Referenced records\n\n${referenced.map((id) => {
+    const owner = routesById.get(id);
+    return `- [${id}${owner.stale ? " (stale)" : ""}](${withBase(base, owner.route)})`;
+  }).join("\n")}`);
+  if (backlinks) context.push(`### Inverse links\n\n${backlinks}`);
+  return context.length ? `\n\n---\n\n${context.join("\n\n")}` : "";
+}
+
+function pageFrontmatter(page) {
+  return `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(typeof page.frontmatter.description === "string" ? page.frontmatter.description : `Repository source: ${page.source_path}`)}\nslug: ${JSON.stringify(page.route)}\n${sidebarFrontmatter(page.route)}---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Source ${sourceLink(page.source_path)}${builtFromSegment(page.source_path)}${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>${renderedGeneratorVersion}</code></div>${snippetMarker(page)}`;
+}
+
+function snippetMarker(page) {
+  return page.excerpt ? `\n<!-- codeflow-source-snippet sha256=${sha256(page.excerpt.text)} lines=${page.excerpt.start}-${page.excerpt.end} -->` : "";
+}
+
+// An illustrated or pass-through source renders as it is. The generated page
+// carries the source body byte for byte between two markers; each companion
+// figure is one recorded insertion at the page head or after its anchored
+// heading. The evidence names every insertion, so the validator removes them
+// and compares what is left with the committed source.
+function renderAsIsPage(page, bindings, routesById, referencedMedia, anchorsBySource) {
+  const bodyBytes = Buffer.from(page.body, "utf8");
+  const start = Buffer.byteLength(page.body.slice(0, asIsRegionStart(page.body, page.title)), "utf8");
+  const source = bodyBytes.subarray(start).toString("utf8");
+  asIsLinks[markerRoute(page.route)] = resolveAsIsLinks(source, {
+    sourcePath: page.source_path, sourceRoutes, repositoryFiles, repositoryDirectories, pinnedSourceUrl, base, mediaReferences: referencedMedia, sourceAnchors: anchorsBySource,
+  });
+  const sections = markdownSections(page.body);
+  const lineOffsets = [];
+  let cursor = 0;
+  for (const line of page.body.split("\n")) { lineOffsets.push(cursor); cursor += Buffer.byteLength(line, "utf8") + 1; }
+  const placed = bindings.map((binding, index) => {
+    if (binding.anchor === undefined) return { binding, placement: "head", at: 0, index };
+    const section = sections.find((candidate) => candidate.anchor === binding.anchor);
+    const after = Math.min(lineOffsets[section.line + 1] ?? bodyBytes.length, bodyBytes.length);
+    if (after <= start) throw new Error(`portal.config.json: figure ${binding.declaration} anchors #${binding.anchor}, the title heading of ${page.source_path}; bind it without an anchor to place it at the page head`);
+    return { binding, placement: "anchor", at: after - start, index };
+  }).sort((left, right) => left.at - right.at || left.index - right.index);
+  const sourceBytes = bodyBytes.subarray(start);
+  const parts = [];
+  const inserts = [];
+  let consumed = 0;
+  let written = 0;
+  for (const item of placed) {
+    const chunk = sourceBytes.subarray(consumed, item.at);
+    parts.push(chunk);
+    written += chunk.length;
+    consumed = item.at;
+    const block = Buffer.from(`\n<!-- codeflow-companion-begin declaration=${item.binding.declaration} sha256=${figures.get(item.binding.declaration).sha256} -->\n\n${companionBlock(item.binding, item.placement, item.index)}\n\n<!-- codeflow-companion-end -->\n`, "utf8");
+    inserts.push({ offset_bytes: written, block_bytes: block.length, block_sha256: sha256(block), declaration_path: item.binding.declaration, placement: item.placement, anchor: item.binding.anchor ?? null });
+    parts.push(block);
+    written += block.length;
+  }
+  parts.push(sourceBytes.subarray(consumed));
+  const region = Buffer.concat(parts);
+  const beginMarker = `<!-- codeflow-source-begin route=${markerRoute(page.route)} source_sha256=${page.source_sha256} class=${page.page_class} -->`;
+  const endMarker = "<!-- codeflow-source-end -->";
+  const opening = `${pageFrontmatter(page)}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}">\n\n<div class="portal-source" data-cf-source-region data-cf-page-class="${page.page_class}">\n\n${beginMarker}\n`;
+  const closing = `\n${endMarker}\n\n</div>${recordContextFor(page, routesById)}\n\n</div>\n`;
+  const rendered = `${opening}${region.toString("utf8")}${closing}`;
+  const expected = [beginMarker, ...inserts.flatMap((insert) => [`<!-- codeflow-companion-begin declaration=${insert.declaration_path} sha256=${figures.get(insert.declaration_path).sha256} -->`, "<div", "<!-- codeflow-companion-end -->"]), endMarker];
+  const blocks = topLevelHtmlBlocks(rendered.slice(rendered.indexOf(beginMarker)));
+  const markers = blocks.filter((value) => value.startsWith("<!-- codeflow-") || value.startsWith("<div class=\"cf-companion\""));
+  if (markers.length !== expected.length || markers.some((value, index) => !value.startsWith(expected[index]))) {
+    throw new Error(`${page.source_path}: the ${page.page_class} source leaves a block open (an unclosed fence or raw HTML block), so it cannot render unchanged`);
+  }
+  page.source_region = {
+    source_start_bytes: start,
+    output_offset_bytes: Buffer.byteLength(opening, "utf8"),
+    region_bytes: region.length,
+    region_sha256: sha256(region),
+    inserts,
+  };
+  return rendered;
+}
+
+// The route as the source-region marker carries it: URL-encoded segments, so
+// the marker stays one token whatever the source path holds.
+function markerRoute(route) {
+  return route.split("/").map(strictUrlSegment).join("/");
+}
+
+function renderPage(page, bindings, routesById, previews, referencedMedia, anchorsBySource) {
   const sourceMarkdown = renderStageFences(rewriteRepositoryMarkdown(stripLeadingTitleHeading(page.body, page.title), {
     sourcePath: page.source_path,
     sourceRoutes,
@@ -346,24 +552,14 @@ function renderPage(page, routesById, previews, referencedMedia, anchorsBySource
     recordTargets,
     selfRoute: withBase(base, page.route),
   }), page.source_path);
-  const safeBody = decorateAltitude(page.source_path === CAPABILITY_REGISTRY ? renderCapabilityRegistry(sourceMarkdown, page.source_path) : sourceMarkdown);
-  const snippetMarker = page.excerpt ? `\n<!-- codeflow-source-snippet sha256=${sha256(page.excerpt.text)} lines=${page.excerpt.start}-${page.excerpt.end} -->` : "";
-  const context = [];
-  const facts = [];
-  if (status) facts.push(`- **Status:** ${escapeMarkdownInline(status)}`);
-  if (typeof page.frontmatter.date === "string") facts.push(`- **Decision date:** ${escapeMarkdownInline(page.frontmatter.date)}`);
-  if (page.ids.length) facts.push(`- **Identity:** ${page.ids.map((id) => `\`${id}\``).join(", ")}`);
-  if (amendments.length) facts.push(`- **Amendments:** ${amendments.map((item) => `**${escapeMarkdownInline(item)}**`).join(", ")}`);
-  if (facts.length) context.push(`## Record context\n\n${facts.join("\n")}`);
-  if (relationships) context.push(`### Declared relationships\n\n${relationships}`);
-  if (referenced.length) context.push(`### Referenced records\n\n${referenced.map((id) => {
-    const owner = routesById.get(id);
-    return `- [${id}${owner.stale ? " (stale)" : ""}](${withBase(base, owner.route)})`;
-  }).join("\n")}`);
-  if (backlinks) context.push(`### Inverse links\n\n${backlinks}`);
-  const recordContext = context.length ? `\n\n---\n\n${context.join("\n\n")}` : "";
-  const release = config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`;
-  return `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(typeof page.frontmatter.description === "string" ? page.frontmatter.description : `Repository source: ${page.source_path}`)}\nslug: ${JSON.stringify(page.route)}\n${sidebarFrontmatter(page.route)}---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Source ${sourceLink(page.source_path)}${builtFromSegment(page.source_path)}${release} · portal <code>${renderedGeneratorVersion}</code></div>${snippetMarker}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}">\n\n${safeBody}${recordContext}\n\n</div>\n`;
+  const panelBlocks = new Map();
+  bindings.forEach((binding, index) => {
+    if (!panelBlocks.has(binding.panel)) panelBlocks.set(binding.panel, []);
+    panelBlocks.get(binding.panel).push(companionBlock(binding, "panel", index));
+  });
+  const withFigures = insertPanelFigures(sourceMarkdown, panelBlocks, page.source_path);
+  const safeBody = decorateAltitude(page.source_path === CAPABILITY_REGISTRY ? renderCapabilityRegistry(withFigures, page.source_path) : withFigures);
+  return `${pageFrontmatter(page)}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}">\n\n${safeBody}${recordContextFor(page, routesById)}\n\n</div>\n`;
 }
 
 function renderStaleStub(page) {

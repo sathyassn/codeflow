@@ -1,0 +1,397 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "portal-page-derivation",
+    "family": "derivation",
+    "binding": "authored",
+    "question": "Where does a portal page come from, and what proves it is current?",
+    "idea": "The adapter derives the page and the manifest; the validator compares both with the repository.",
+    "title": "A portal page derived from repository sources and checked against them",
+    "kicker": "How a portal page is derived",
+    "description": "Repository Markdown sources, a filled source pin, feed the adapter, a transform diamond. The adapter derives the generated page, an outlined product box, and declares the evidence manifest, a dashed box. The validator, a check ring, compares the manifest against the repository bytes and the output bytes with dashed lines ending in open squares.",
+    "caption": "The adapter is the only thing that derives, and the validator proves the result against repository bytes without running any project code.",
+    "states": [
+      {
+        "name": "source",
+        "mark": "layer-remote",
+        "means": "Source of truth"
+      },
+      {
+        "name": "transform",
+        "mark": "merge",
+        "means": "Transform"
+      },
+      {
+        "name": "product",
+        "mark": "state",
+        "means": "Product"
+      },
+      {
+        "name": "declared",
+        "mark": "optional",
+        "means": "Declared claims"
+      },
+      {
+        "name": "derives",
+        "mark": "trans",
+        "means": "Derives"
+      },
+      {
+        "name": "declares",
+        "mark": "optional",
+        "means": "Declares"
+      },
+      {
+        "name": "compares",
+        "mark": "blocked",
+        "means": "Compares bytes"
+      },
+      {
+        "name": "check",
+        "mark": "human",
+        "means": "Check that fails the build"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the Node adapter alone derives the content graph and the evidence manifest",
+        "source": ".agents/skills/cf-docs-portal/SKILL.md#4-preserve-evidence-and-safety",
+        "derive": "the sentence beginning 'The Node adapter alone'",
+        "check": {
+          "kind": "contains",
+          "text": "The Node adapter alone derives the content graph"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 244,
+      "draw": [
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M176 80H262",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M338 80H424",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "state": "declares",
+          "shape": "path",
+          "d": "M300 108V150H424",
+          "open": "end",
+          "id": "m3"
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M652 150H588",
+          "square": "end",
+          "id": "m4"
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M664 154V206H100V112",
+          "square": "end",
+          "id": "m5"
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M664 130V80H588",
+          "square": "end",
+          "id": "m6"
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 20,
+          "y": 56,
+          "w": 156,
+          "h": 48,
+          "rx": 4,
+          "cap": "end",
+          "id": "m7"
+        },
+        {
+          "text": "repository sources",
+          "x": 98,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "m7"
+          ]
+        },
+        {
+          "state": "transform",
+          "shape": "path",
+          "d": "M300 52L338 80L300 108L262 80Z",
+          "id": "m8"
+        },
+        {
+          "text": "adapter",
+          "x": 300,
+          "y": 36,
+          "anchor": "middle"
+        },
+        {
+          "state": "product",
+          "shape": "rect",
+          "x": 426,
+          "y": 56,
+          "w": 152,
+          "h": 48,
+          "rx": 4,
+          "id": "m9"
+        },
+        {
+          "text": "generated page",
+          "x": 502,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "m9"
+          ]
+        },
+        {
+          "state": "declared",
+          "shape": "rect",
+          "x": 426,
+          "y": 132,
+          "w": 152,
+          "h": 36,
+          "rx": 4,
+          "id": "m10"
+        },
+        {
+          "text": "evidence manifest",
+          "x": 502,
+          "y": 155,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m10"
+          ]
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 664,
+          "cy": 142,
+          "r": 12,
+          "tick": true,
+          "id": "m11"
+        },
+        {
+          "text": "validate",
+          "x": 664,
+          "y": 232,
+          "anchor": "middle",
+          "style": "mono"
+        },
+        {
+          "text": "bytes of the sources at the recorded commit",
+          "x": 376,
+          "y": 232,
+          "anchor": "middle",
+          "style": "mute"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 332,
+      "draw": [
+        {
+          "state": "source",
+          "id": "src",
+          "shape": "rect",
+          "x": 20,
+          "y": 16,
+          "w": 180,
+          "h": 40,
+          "rx": 4,
+          "cap": "end"
+        },
+        {
+          "text": "repository sources",
+          "x": 104,
+          "y": 41,
+          "anchor": "middle",
+          "for": [
+            "src"
+          ]
+        },
+        {
+          "state": "derives",
+          "id": "d1",
+          "shape": "path",
+          "d": "M110 57V81",
+          "head": "end"
+        },
+        {
+          "state": "transform",
+          "id": "tf",
+          "shape": "diamond",
+          "cx": 110,
+          "cy": 104,
+          "r": 20
+        },
+        {
+          "text": "adapter",
+          "x": 82,
+          "y": 109,
+          "anchor": "end",
+          "for": [
+            "tf"
+          ]
+        },
+        {
+          "state": "derives",
+          "id": "d2",
+          "shape": "path",
+          "d": "M110 125V150",
+          "head": "end"
+        },
+        {
+          "state": "product",
+          "id": "pg",
+          "shape": "rect",
+          "x": 20,
+          "y": 152,
+          "w": 150,
+          "h": 44,
+          "rx": 4
+        },
+        {
+          "text": "generated page",
+          "x": 95,
+          "y": 178,
+          "anchor": "middle",
+          "for": [
+            "pg"
+          ]
+        },
+        {
+          "state": "declares",
+          "id": "dc",
+          "shape": "path",
+          "d": "M131 104H265V150",
+          "open": "end"
+        },
+        {
+          "state": "declared",
+          "id": "mf",
+          "shape": "rect",
+          "x": 190,
+          "y": 152,
+          "w": 150,
+          "h": 44,
+          "rx": 4
+        },
+        {
+          "text": "evidence manifest",
+          "x": 265,
+          "y": 178,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "mf"
+          ]
+        },
+        {
+          "state": "compares",
+          "id": "k1",
+          "shape": "path",
+          "d": "M167 262H95V201",
+          "square": "end"
+        },
+        {
+          "state": "compares",
+          "id": "k2",
+          "shape": "path",
+          "d": "M193 262H265V201",
+          "square": "end"
+        },
+        {
+          "state": "compares",
+          "id": "k3",
+          "shape": "path",
+          "d": "M170 270H8V36H19",
+          "square": "end"
+        },
+        {
+          "state": "check",
+          "id": "ck",
+          "shape": "circle",
+          "cx": 180,
+          "cy": 262,
+          "r": 12,
+          "tick": true
+        },
+        {
+          "text": "validate",
+          "x": 180,
+          "y": 296,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "ck"
+          ]
+        },
+        {
+          "text": "sources at the recorded commit",
+          "x": 180,
+          "y": 322,
+          "anchor": "middle",
+          "style": "mute"
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Kind",
+        "Made by",
+        "Checked against"
+      ],
+      "rows": [
+        [
+          "repository sources",
+          "source",
+          "authors",
+          "the recorded commit"
+        ],
+        [
+          "adapter",
+          "transform",
+          "Node, in the portal workspace",
+          "adapter tests"
+        ],
+        [
+          "generated page",
+          "product",
+          "the adapter",
+          "output bytes in the manifest"
+        ],
+        [
+          "evidence manifest",
+          "declared claims",
+          "the adapter",
+          "`codeflow validate --portal`"
+        ]
+      ]
+    }
+  }
+}

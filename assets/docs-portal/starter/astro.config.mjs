@@ -1,7 +1,9 @@
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import rawConfig from "./portal.config.json" with { type: "json" };
 import { validatePortalConfig } from "./scripts/lib.mjs";
+import { asIsMarkdownIntegration } from "./scripts/as-is-markdown.mjs";
 
 const config = validatePortalConfig(rawConfig);
 const base = config.base;
@@ -9,10 +11,13 @@ const base = config.base;
 export default defineConfig({
   base,
   integrations: [
+    // Illustrated and pass-through sources render as they are; this step
+    // resolves their links and keeps their raw HTML inert (as-is-markdown.mjs).
+    asIsMarkdownIntegration({ linksPath: fileURLToPath(new URL("./.portal/generated/as-is-links.json", import.meta.url)) }),
     starlight({
       title: config.title,
       description: config.description,
-      customCss: ["./src/styles/utility-tokens.css", "./src/styles/portal.css", "./.portal/generated/project-tokens.css"],
+      customCss: ["./src/styles/utility-tokens.css", "./src/styles/portal.css", "./src/styles/figure-roles.css", "./src/styles/figure.css", "./.portal/generated/project-tokens.css"],
       components: {
         ThemeSelect: "./src/components/PortalDisplay.astro",
       },

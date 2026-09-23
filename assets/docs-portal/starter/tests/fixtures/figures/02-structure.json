@@ -1,0 +1,391 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "skill-copies",
+    "family": "structure",
+    "binding": "authored",
+    "question": "Where does a skill live, and what keeps the copies honest?",
+    "idea": "One source, four managed copies, and a test that compares bytes.",
+    "title": "Where a skill lives and what keeps its copies identical",
+    "kicker": "One source, four copies",
+    "description": "Three regions. The owner region assets/base holds the skill source. The live region holds two copies, .claude/skills and .agents/skills. The baseline region .codeflow/.baseline holds the same two copies again. Solid arrows run from the source to each live copy and from each live copy to its baseline copy, meaning managed copy. A dashed line with open square ends runs under all regions, meaning the parity test compares every copy with the source byte for byte.",
+    "caption": "Edit the source under assets/base only; the four copies are written by the scaffold and a test fails the build when any copy drifts.",
+    "states": [
+      {
+        "name": "owner",
+        "mark": "layer-remote",
+        "means": "Owner: the edited source"
+      },
+      {
+        "name": "copy",
+        "mark": "denied",
+        "means": "Managed copy, never edited"
+      },
+      {
+        "name": "copies",
+        "mark": "trans",
+        "means": "Copies to"
+      },
+      {
+        "name": "compares",
+        "mark": "optional",
+        "means": "Compared byte for byte"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "four copies per skill source",
+        "source": "crates/codeflow-core/tests/manifest_consistency.rs",
+        "derive": "the copies array in assert_skill_source_live_and_baseline_copies",
+        "check": {
+          "kind": "contains",
+          "text": ".codeflow/.baseline/.claude/skills"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 228,
+      "draw": [
+        {
+          "state": "owner",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 168,
+          "h": 120,
+          "rx": 8,
+          "id": "m1"
+        },
+        {
+          "text": "assets/base",
+          "x": 32,
+          "y": 64,
+          "style": "strong",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "text": "agents/skills/",
+          "x": 32,
+          "y": 106,
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "text": "cf-present/",
+          "x": 32,
+          "y": 126,
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 268,
+          "y": 24,
+          "w": 184,
+          "h": 152,
+          "rx": 8,
+          "id": "m2"
+        },
+        {
+          "state": "copy",
+          "shape": "rect",
+          "x": 520,
+          "y": 24,
+          "w": 184,
+          "h": 152,
+          "rx": 8,
+          "id": "m3"
+        },
+        {
+          "text": "live mirrors",
+          "x": 284,
+          "y": 48,
+          "style": "strong",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "text": ".codeflow/.baseline",
+          "x": 536,
+          "y": 48,
+          "style": "strong",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "text": ".claude/skills",
+          "x": 284,
+          "y": 96,
+          "style": "mono",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "text": ".agents/skills",
+          "x": 284,
+          "y": 148,
+          "style": "mono",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "text": ".claude/skills",
+          "x": 536,
+          "y": 96,
+          "style": "mono",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "text": ".agents/skills",
+          "x": 536,
+          "y": 148,
+          "style": "mono",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M184 92H266",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M184 108C220 108 230 144 266 144",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M452 92H518",
+          "head": "end",
+          "id": "m6"
+        },
+        {
+          "state": "copies",
+          "shape": "path",
+          "d": "M452 144H518",
+          "head": "end",
+          "id": "m7"
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M100 172V200H612V184",
+          "square": "both",
+          "id": "m8"
+        },
+        {
+          "text": "parity test: bytes equal, or the build fails",
+          "x": 356,
+          "y": 222,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m8"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 340,
+      "draw": [
+        {
+          "state": "owner",
+          "id": "r1",
+          "shape": "rect",
+          "x": 16,
+          "y": 26,
+          "w": 328,
+          "h": 62,
+          "rx": 8
+        },
+        {
+          "text": "assets/base",
+          "x": 32,
+          "y": 50,
+          "style": "strong",
+          "for": [
+            "r1"
+          ]
+        },
+        {
+          "text": "agents/skills/cf-present/",
+          "x": 32,
+          "y": 74,
+          "style": "mono",
+          "for": [
+            "r1"
+          ]
+        },
+        {
+          "state": "copy",
+          "id": "r2",
+          "shape": "rect",
+          "x": 16,
+          "y": 122,
+          "w": 328,
+          "h": 72,
+          "rx": 8
+        },
+        {
+          "text": "live mirrors",
+          "x": 32,
+          "y": 146,
+          "style": "strong",
+          "for": [
+            "r2"
+          ]
+        },
+        {
+          "text": ".claude/skills",
+          "x": 32,
+          "y": 176,
+          "style": "mono",
+          "for": [
+            "r2"
+          ]
+        },
+        {
+          "text": ".agents/skills",
+          "x": 190,
+          "y": 176,
+          "style": "mono",
+          "for": [
+            "r2"
+          ]
+        },
+        {
+          "state": "copy",
+          "id": "r3",
+          "shape": "rect",
+          "x": 16,
+          "y": 228,
+          "w": 328,
+          "h": 72,
+          "rx": 8
+        },
+        {
+          "text": ".codeflow/.baseline",
+          "x": 32,
+          "y": 252,
+          "style": "strong",
+          "for": [
+            "r3"
+          ]
+        },
+        {
+          "text": ".claude/skills",
+          "x": 32,
+          "y": 282,
+          "style": "mono",
+          "for": [
+            "r3"
+          ]
+        },
+        {
+          "text": ".agents/skills",
+          "x": 190,
+          "y": 282,
+          "style": "mono",
+          "for": [
+            "r3"
+          ]
+        },
+        {
+          "state": "copies",
+          "id": "c1",
+          "shape": "path",
+          "d": "M120 89V120",
+          "head": "end"
+        },
+        {
+          "state": "copies",
+          "id": "c2",
+          "shape": "path",
+          "d": "M270 89V120",
+          "head": "end"
+        },
+        {
+          "state": "copies",
+          "id": "c3",
+          "shape": "path",
+          "d": "M120 195V226",
+          "head": "end"
+        },
+        {
+          "state": "copies",
+          "id": "c4",
+          "shape": "path",
+          "d": "M270 195V226",
+          "head": "end"
+        },
+        {
+          "state": "compares",
+          "id": "p1",
+          "shape": "path",
+          "d": "M8 40V286",
+          "square": "both"
+        },
+        {
+          "text": "parity test: bytes equal, or the build fails",
+          "x": 180,
+          "y": 330,
+          "anchor": "middle",
+          "style": "mute"
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Region",
+        "Path",
+        "Written by",
+        "Checked by"
+      ],
+      "rows": [
+        [
+          "owner",
+          "`assets/base/agents/skills/`",
+          "the author",
+          "manifest entry"
+        ],
+        [
+          "live",
+          "`.claude/skills/`, `.agents/skills/`",
+          "`codeflow update`",
+          "parity test"
+        ],
+        [
+          "baseline",
+          "`.codeflow/.baseline/.claude/skills/`, `.codeflow/.baseline/.agents/skills/`",
+          "`codeflow update`",
+          "parity test"
+        ]
+      ]
+    }
+  }
+}

@@ -11,6 +11,7 @@ import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertGeneratorIdentity } from "./generator.mjs";
 import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { PORTAL_ACCENT_BACKGROUNDS, pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
+import { canonicalJson, figureRuleFailures, probeFigures, THRESHOLDS } from "./figure-grammar.mjs";
 import { ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
@@ -202,6 +203,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
 
     await assertDeepLink(page, name, origin, config.base, surfaces.deepLink);
     const compositionResult = await assertPortalComposition(page, name, origin, config, assignments);
+    const figureResult = await assertFigureGate(page, name, origin, config, assignments, generated);
     const previewResult = await assertStrictIdPreview(page, name, origin, config, surfaces.strictPreview);
     await assertSourceLink(page, name, origin, config, generated);
     await visit(page, siteRoot);
@@ -227,7 +229,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     return {
       engine: name,
       status: "passed",
-      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search-slash-hit-and-follow", "system-and-mode-persistence-before-paint", "display-settings-persist", "palette-pill-swatches-from-live-tokens", "layer-journey", "deep-link", compositionResult, previewResult, "source-link", "keyboard-traversal-and-focus", "skins-light-dark", "target-size", "responsive", "console", "network-isolation"],
+      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search-slash-hit-and-follow", "system-and-mode-persistence-before-paint", "display-settings-persist", "palette-pill-swatches-from-live-tokens", "layer-journey", "deep-link", compositionResult, figureResult, previewResult, "source-link", "keyboard-traversal-and-focus", "skins-light-dark", "target-size", "responsive", "console", "network-isolation"],
     };
   } catch (error) {
     lifecycle.throwIfInterrupted();
@@ -358,6 +360,66 @@ async function assertPortalComposition(page, engine, origin, config, assignments
   }
 }
 
+// The figure gate: every figure the adapter bound is drawn on its page and
+// holds all twelve rules of the grammar, read off the render at a wide and a
+// narrow width, in light and in dark. Each failure names the page, the place
+// on the page and the rule.
+async function assertFigureGate(page, engine, origin, config, assignments, generated) {
+  const { failures, drawn } = await figureGateFailures(page, (route) => visit(page, routeUrl(origin, config.base, route)), assignments, generated);
+  if (failures.length) throw new Error(`${engine}: figure gate: ${failures.length} failure(s)\n  ${failures.join("\n  ")}`);
+  return `${engine}:figure-gate:${drawn}`;
+}
+
+export async function figureGateFailures(page, visitRoute, assignments, generated) {
+  const failures = [];
+  const recorded = new Map((generated.figures ?? []).map((entry) => [entry.declaration_path, entry]));
+  let drawn = 0;
+  for (const assignment of assignments) {
+    if (!assignment.figures?.length) continue;
+    const observed = {};
+    for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
+      await page.setViewportSize({ width, height: 900 });
+      await visitRoute(assignment.route);
+      await page.evaluate((theme) => {
+        document.documentElement.dataset.theme = theme;
+        for (const panel of document.querySelectorAll(".portal-altitude")) panel.hidden = false;
+      }, mode);
+      observed[label] = await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx });
+      observed[`${label}Places`] = await page.evaluate(() => [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
+        const companion = figure.closest(".cf-companion");
+        return {
+          declaration: companion?.dataset.cfCompanion ?? null,
+          placement: companion?.dataset.cfPlacement ?? null,
+          altitude: figure.closest(".portal-altitude")?.dataset.altitude ?? null,
+        };
+      }));
+    }
+    await page.setViewportSize({ width: 1440, height: 900 });
+    const places = observed.widePlaces;
+    const expected = assignment.figures.map((binding) => binding.declaration).sort();
+    const found = places.map((place) => place.declaration).sort();
+    if (canonicalJson(found) !== canonicalJson(expected)) {
+      failures.push(`${assignment.source} (at ${assignment.route}): the configuration binds ${expected.join(", ") || "no figure"} and the page draws ${found.join(", ") || "none"}`);
+    }
+    places.forEach((place, index) => {
+      drawn += 1;
+      const binding = assignment.figures.find((candidate) => candidate.declaration === place.declaration);
+      const where = `${assignment.source} (at ${assignment.route}, ${place.altitude ? `${place.altitude} panel` : place.placement === "anchor" ? `#${binding?.anchor}` : "page head"}, ${place.declaration ?? "an unbound figure"})`;
+      const entry = recorded.get(place.declaration);
+      if (entry === undefined) failures.push(`${where}: the evidence manifest records no such figure`);
+      const evidence = entry === undefined ? null : {
+        facts: entry.facts.map((fact) => ({ ...fact, matches: canonicalJson(fact.derived) === canonicalJson(fact.drawn) })),
+        data: entry.derived === null ? null : { drawn: entry.derived.drawn, derived: entry.derived.values },
+      };
+      const ruleFailures = figureRuleFailures({
+        wide: observed.wide[index], narrow: observed.narrow[index], wideDark: observed.wideDark[index], narrowDark: observed.narrowDark[index], evidence,
+      });
+      for (const failure of ruleFailures) failures.push(`${where}: rule ${failure.rule} (${failure.name}): ${failure.message}`);
+    });
+  }
+  return { failures, drawn };
+}
+
 // One structural read per page: the same observation the declared class rules
 // are written against, taken from the rendered document rather than from the
 // Markdown the adapter wrote.
@@ -365,7 +427,7 @@ export function observePortalPage(page) {
   return page.evaluate(({ panels, carriers, columns }) => {
     const shown = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
     const panel = (name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`);
-    const selector = { figure: "figure", stage: ".portal-stage", table: "table", list: "ul, ol", pre: "pre" };
+    const selector = { figure: "figure.cf-fig", stage: ".portal-stage", table: "table", list: "ul, ol", pre: "pre" };
     // A carrier is what the reader sees as one thing. The rows and lists a
     // stage renders inside itself are its own internals, not further carriers,
     // so only a carrier with no carrier above it counts, and the stage counts
@@ -375,7 +437,8 @@ export function observePortalPage(page) {
       const text = (node) => node.textContent.trim().length > 0;
       if (carrier === "table") return [...element.querySelectorAll("tbody tr")].some(text);
       if (carrier === "list") return [...element.querySelectorAll("li")].some(text);
-      if (carrier === "figure" || carrier === "stage") return element.querySelector("img, svg, pre, table, .portal-stage") !== null || text(element);
+      if (carrier === "figure") return element.querySelector("svg.cf-fig-svg") !== null;
+      if (carrier === "stage") return element.querySelector("img, svg, pre, table, .portal-stage") !== null || text(element);
       return text(element);
     };
     const own = (element) => (element.parentElement?.closest("figure, .portal-stage") ?? null) === null;
@@ -398,6 +461,10 @@ export function observePortalPage(page) {
       panelCarriers: Object.fromEntries(panels.map((name) => [name, panel(name) === null ? null : carried(panel(name))])),
       pointerColumns: folderTable === null ? [] : headersOf(folderTable),
       pointerRows: folderTable?.querySelectorAll("tbody tr").length ?? 0,
+      sourceRegions: document.querySelectorAll("[data-cf-source-region]").length,
+      companions: [...document.querySelectorAll(".cf-companion")].filter((companion) => companion.querySelector("figure.cf-fig svg.cf-fig-svg") !== null).length,
+      headFigures: document.querySelectorAll('.cf-companion[data-cf-placement="head"] figure.cf-fig').length,
+      tables: tables.filter((table) => table.closest("figure") === null && table.querySelector("tbody tr") !== null).length,
     };
   }, { panels: ALTITUDE_PANELS, carriers: CARRIER_ELEMENTS, columns: RECORD_POINTER_COLUMNS });
 }

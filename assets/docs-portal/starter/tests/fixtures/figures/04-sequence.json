@@ -1,0 +1,446 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "work-start",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "What does an agent ask, and of whom, before its first edit?",
+    "idea": "Three calls and two answers come before the first edit, and one answer can refuse.",
+    "title": "The exchanges that come before the first edit",
+    "kicker": "Before the first edit",
+    "description": "Three lifelines: agent, git, codeflow. Time runs down. The agent calls git worktree list and git answers with the paths and branches. The agent decides identity and intent match, a human decision ring. The agent calls git fetch origin and decides currency. The agent calls codeflow work start TSK-NNN; codeflow answers anchored, or refuses at a stop bar. The first edit follows the answer.",
+    "caption": "The agent asks git where it is and whether it is current, then asks codeflow whether the task is anchored, and edits nothing until the last answer is yes.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Call"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Answer"
+      },
+      {
+        "name": "human",
+        "mark": "human",
+        "means": "Decision the agent makes"
+      },
+      {
+        "name": "stop",
+        "mark": "stop",
+        "means": "Refusal stops the sequence"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "identity, intent-match and currency precede the first mutation",
+        "source": "AGENTS.md#worktree-doctrine",
+        "derive": "the three ordered work-start assertions",
+        "check": {
+          "kind": "count-items"
+        },
+        "value": 3
+      },
+      {
+        "claim": "codeflow work start proves the task is anchored before product edits",
+        "source": "AGENTS.md#planning-and-tracking",
+        "derive": "the sentence beginning 'Before product edits'",
+        "check": {
+          "kind": "contains",
+          "text": "`codeflow work start TSK-NNN`"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 300,
+      "draw": [
+        {
+          "text": "Agent",
+          "x": 120,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "Git",
+          "x": 400,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "codeflow",
+          "x": 640,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 120,
+          "y1": 34,
+          "x2": 120,
+          "y2": 292
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 400,
+          "y1": 34,
+          "x2": 400,
+          "y2": 292
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 640,
+          "y1": 34,
+          "x2": 640,
+          "y2": 292
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M128 60H392",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M128 160H392",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M128 226H632",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M392 86H130",
+          "open": "end",
+          "id": "m4"
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M632 256H130",
+          "open": "end",
+          "id": "m5"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 120,
+          "cy": 124,
+          "r": 9,
+          "id": "m6"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 120,
+          "cy": 190,
+          "r": 9,
+          "id": "m7"
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 600,
+          "y1": 245,
+          "x2": 600,
+          "y2": 267,
+          "id": "m8"
+        },
+        {
+          "text": "git worktree list",
+          "x": 260,
+          "y": 50,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "text": "git fetch origin",
+          "x": 260,
+          "y": 150,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "text": "codeflow work start TSK-NNN",
+          "x": 260,
+          "y": 216,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "text": "paths and branches",
+          "x": 260,
+          "y": 104,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "text": "anchored, or refused",
+          "x": 260,
+          "y": 274,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "text": "identity and intent match",
+          "x": 138,
+          "y": 129,
+          "for": [
+            "m6"
+          ]
+        },
+        {
+          "text": "currency: base is the target tip",
+          "x": 138,
+          "y": 195,
+          "for": [
+            "m7"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 350,
+      "draw": [
+        {
+          "text": "Agent",
+          "x": 20,
+          "y": 18,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 20,
+          "y1": 30,
+          "x2": 20,
+          "y2": 344
+        },
+        {
+          "text": "git worktree list",
+          "x": 36,
+          "y": 48,
+          "style": "mono",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "id": "c1",
+          "shape": "path",
+          "d": "M28 58H206",
+          "head": "end"
+        },
+        {
+          "text": "Git",
+          "x": 216,
+          "y": 63,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "paths and branches",
+          "x": 40,
+          "y": 90,
+          "style": "mute",
+          "for": [
+            "r1"
+          ]
+        },
+        {
+          "state": "return",
+          "id": "r1",
+          "shape": "path",
+          "d": "M206 100H30",
+          "open": "end"
+        },
+        {
+          "state": "human",
+          "id": "h1",
+          "shape": "circle",
+          "cx": 20,
+          "cy": 136,
+          "r": 9
+        },
+        {
+          "text": "identity and intent match",
+          "x": 38,
+          "y": 141,
+          "for": [
+            "h1"
+          ]
+        },
+        {
+          "text": "git fetch origin",
+          "x": 36,
+          "y": 180,
+          "style": "mono",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "trans",
+          "id": "c2",
+          "shape": "path",
+          "d": "M28 190H206",
+          "head": "end"
+        },
+        {
+          "text": "Git",
+          "x": 216,
+          "y": 195,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "human",
+          "id": "h2",
+          "shape": "circle",
+          "cx": 20,
+          "cy": 228,
+          "r": 9
+        },
+        {
+          "text": "currency: base is the target tip",
+          "x": 38,
+          "y": 233,
+          "for": [
+            "h2"
+          ]
+        },
+        {
+          "text": "codeflow work start TSK-NNN",
+          "x": 36,
+          "y": 272,
+          "style": "mono",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "trans",
+          "id": "c3",
+          "shape": "path",
+          "d": "M28 282H262",
+          "head": "end"
+        },
+        {
+          "text": "codeflow",
+          "x": 270,
+          "y": 287,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "anchored, or refused",
+          "x": 40,
+          "y": 316,
+          "style": "mute",
+          "for": [
+            "r2"
+          ]
+        },
+        {
+          "state": "return",
+          "id": "r2",
+          "shape": "path",
+          "d": "M262 326H30",
+          "open": "end"
+        },
+        {
+          "state": "stop",
+          "id": "s1",
+          "shape": "line",
+          "x1": 230,
+          "y1": 315,
+          "x2": 230,
+          "y2": 337
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To",
+        "Outcome"
+      ],
+      "rows": [
+        [
+          "`git worktree list`",
+          "agent",
+          "git",
+          "paths and branches"
+        ],
+        [
+          "identity, intent match",
+          "agent",
+          "agent",
+          "stop on a mismatch"
+        ],
+        [
+          "`git fetch origin`, currency",
+          "agent",
+          "git",
+          "base is the target tip"
+        ],
+        [
+          "`codeflow work start TSK-NNN`",
+          "agent",
+          "codeflow",
+          "anchored, or refused"
+        ],
+        [
+          "first edit",
+          "agent",
+          "worktree",
+          "only after anchored"
+        ]
+      ]
+    }
+  }
+}
