@@ -562,3 +562,44 @@ fn ci_commit_message_policy_character_blocks() {
     assert!(stderr.contains("git.policy_characters"), "{stderr}");
     assert!(stderr.contains("commit message line 3"), "{stderr}");
 }
+
+fn ci_range_output(dir: &Path) -> (Option<i32>, String) {
+    let out = ci_range(dir);
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code(), all)
+}
+
+// Codex EPC-017 review, finding 3: git keeps a `#` line given with `-m`,
+// and a merge message is committed text too; CI scans both as stored.
+#[test]
+fn ci_committed_hash_line_and_merge_message_are_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    std::fs::write(dir.path().join("docs/new.md"), "# New\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    let body = "# one \u{2014} two";
+    git(
+        dir.path(),
+        &["commit", "-m", "docs: add new page", "-m", body],
+    );
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("commit message line 3"), "{all}");
+
+    git(dir.path(), &["reset", "--hard", "main"]);
+    git(dir.path(), &["checkout", "-b", "feat/y"]);
+    std::fs::write(dir.path().join("docs/new.md"), "# New\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add new page"]);
+    git(dir.path(), &["checkout", "feat/x"]);
+    let subject = "Merge branch 'feat/y' \u{2014} tidy";
+    git(dir.path(), &["merge", "--no-ff", "feat/y", "-m", subject]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("commit subject contains an em dash"), "{all}");
+    assert!(all.contains("1 merge(s)"), "{all}");
+}

@@ -207,14 +207,42 @@ fn push_format_violations(
     }
 }
 
+/// Where a commit message comes from. It decides what the policy-character
+/// rule (ADR-0067) scans: the live commit-msg hook reads an editor template
+/// whose `#` lines and scissors section git may still strip, while a message
+/// read back from history is committed content, every byte of it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MessageSource {
+    /// The live commit-msg hook's message file, before git's cleanup.
+    EditorTemplate,
+    /// A message already recorded in history, as `codeflow ci` reads it.
+    Committed,
+}
+
 /// The commit-msg stage: conventional format (whitelisted types), the restored
 /// v1 subject-length budget and body-shape rule (ADR-0020), standard git-trailer
 /// footers with an optional ticket requirement, the no-AI-attribution rule, the
 /// no-emoji rule (charter §6.4, AC #13), and the policy-character rule over the
-/// subject and body (ADR-0067).
+/// subject and body (ADR-0067). The message is the live hook's editor template.
 #[must_use]
 pub fn commit_msg(policy: &GitPolicy, message: &str, is_merge: bool) -> StageReport {
+    commit_msg_from(policy, message, is_merge, MessageSource::EditorTemplate)
+}
+
+/// [`commit_msg`] for a message from `source`. The policy-character rule runs
+/// before the merge exemption: ADR-0067 names commit subjects and bodies with
+/// no merge carve-out, so only the conventional-format rules skip a merge.
+#[must_use]
+pub fn commit_msg_from(
+    policy: &GitPolicy,
+    message: &str,
+    is_merge: bool,
+    source: MessageSource,
+) -> StageReport {
     let mut report = StageReport::default();
+    report
+        .violations
+        .extend(policy_characters_in_message(policy, message, source));
     let cleaned = strip_commit_comments(message);
     let Some(subject) = cleaned.lines().find(|l| !l.trim().is_empty()) else {
         return report; // git rejects empty messages itself
@@ -313,21 +341,36 @@ pub fn commit_msg(policy: &GitPolicy, message: &str, is_merge: bool) -> StageRep
         }
     }
 
-    if policy.policy_characters.is_active() {
-        if let Some(violation) = policy_character_violation(policy, &cleaned) {
-            report.violations.push(violation);
-        }
-    }
-
     report
 }
 
-/// The policy-character rule (ADR-0067) over the whole cleaned message: the
-/// finding says whether the subject or which body line carries the character.
-fn policy_character_violation(policy: &GitPolicy, cleaned: &str) -> Option<Violation> {
-    let (line, c) = standards::find_policy_character(cleaned)?;
+/// The policy-character rule (ADR-0067) over one commit message, `None` when
+/// the rule is off or the message is clean. An editor template is scanned
+/// after git's comment cleanup; a committed message is scanned as stored, so
+/// a retained `#` line or scissors-like text is still examined.
+#[must_use]
+pub fn policy_characters_in_message(
+    policy: &GitPolicy,
+    message: &str,
+    source: MessageSource,
+) -> Option<Violation> {
+    if !policy.policy_characters.is_active() {
+        return None;
+    }
+    match source {
+        MessageSource::EditorTemplate => {
+            policy_character_violation(policy, &strip_commit_comments(message))
+        }
+        MessageSource::Committed => policy_character_violation(policy, message),
+    }
+}
+
+/// The policy-character rule over the scanned text: the finding says whether
+/// the subject or which message line carries the character.
+fn policy_character_violation(policy: &GitPolicy, scanned: &str) -> Option<Violation> {
+    let (line, c) = standards::find_policy_character(scanned)?;
     let name = standards::policy_character_name(c);
-    let subject_line = cleaned
+    let subject_line = scanned
         .lines()
         .position(|l| !l.trim().is_empty())
         .map(|i| i + 1);
@@ -360,8 +403,9 @@ pub fn commit_msg_with_files(
     message: &str,
     changed_files: &[String],
     is_merge: bool,
+    source: MessageSource,
 ) -> StageReport {
-    let mut report = commit_msg(policy, message, is_merge);
+    let mut report = commit_msg_from(policy, message, is_merge, source);
     if policy.breaking_watch_paths.is_empty() {
         return report;
     }
@@ -1104,6 +1148,65 @@ mod tests {
         );
     }
 
+    fn has_policy_character(report: &StageReport) -> bool {
+        report
+            .violations
+            .iter()
+            .any(|v| v.rule == "git.policy_characters")
+    }
+
+    // Codex EPC-017 review, finding 3: a committed message keeps a `#` body
+    // line that git's `-m` path retains, so history is scanned as stored.
+    #[test]
+    fn test_committed_hash_body_line_is_scanned_for_policy_characters() {
+        let msg = "feat: add ranges\n\n# pages 1\u{2014}3\n";
+        let committed =
+            commit_msg_from(&GitPolicy::default(), msg, false, MessageSource::Committed);
+        let v = committed
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.policy_characters")
+            .expect("the retained `#` line is committed content");
+        assert!(v.message.contains("line 3"), "{}", v.message);
+        // The live hook still reads an editor template, where git drops it.
+        assert!(!has_policy_character(&commit_msg(
+            &GitPolicy::default(),
+            msg,
+            false
+        )));
+    }
+
+    #[test]
+    fn test_committed_scissors_like_text_is_scanned_for_policy_characters() {
+        let msg = "feat: add ranges\n\n# ---- >8 ----\n- pages 1\u{2013}3\n";
+        let committed =
+            commit_msg_from(&GitPolicy::default(), msg, false, MessageSource::Committed);
+        assert!(
+            has_policy_character(&committed),
+            "{:?}",
+            committed.violations
+        );
+        // A verbose template's diff preview below the scissors is not message.
+        assert!(!has_policy_character(&commit_msg(
+            &GitPolicy::default(),
+            msg,
+            false
+        )));
+    }
+
+    #[test]
+    fn test_merge_message_is_scanned_for_policy_characters() {
+        let msg = "Merge branch 'feat/x' \u{2014} tidy\n";
+        for source in [MessageSource::EditorTemplate, MessageSource::Committed] {
+            let report = commit_msg_from(&GitPolicy::default(), msg, true, source);
+            // The format exemption still holds; only the character rule fires.
+            assert_eq!(1, report.violations.len(), "{:?}", report.violations);
+            assert!(has_policy_character(&report), "{source:?}");
+        }
+        let clean = commit_msg(&GitPolicy::default(), "Merge branch 'feat/x'\n", true);
+        assert!(clean.violations.is_empty(), "{:?}", clean.violations);
+    }
+
     #[test]
     fn test_commit_msg_levels_from_policy() {
         // warn → still reported, at warn; off → silent (D7: nothing hardcoded).
@@ -1337,7 +1440,13 @@ mod tests {
     #[test]
     fn test_watch_paths_unmarked_touch_warns() {
         let files = vec!["src/api/routes.rs".to_string()];
-        let report = commit_msg_with_files(&watch_policy(), "feat: tweak a route\n", &files, false);
+        let report = commit_msg_with_files(
+            &watch_policy(),
+            "feat: tweak a route\n",
+            &files,
+            false,
+            MessageSource::EditorTemplate,
+        );
         let v = report
             .violations
             .iter()
@@ -1351,7 +1460,13 @@ mod tests {
     fn test_watch_paths_marked_does_not_warn() {
         let files = vec!["src/api/routes.rs".to_string()];
         // A `!` subject marker suppresses the nudge...
-        let bang = commit_msg_with_files(&watch_policy(), "feat!: drop a route\n", &files, false);
+        let bang = commit_msg_with_files(
+            &watch_policy(),
+            "feat!: drop a route\n",
+            &files,
+            false,
+            MessageSource::EditorTemplate,
+        );
         assert!(!bang
             .violations
             .iter()
@@ -1362,6 +1477,7 @@ mod tests {
             "feat: drop a route\n\nBREAKING CHANGE: the /old route is gone\n",
             &files,
             false,
+            MessageSource::EditorTemplate,
         );
         assert!(!footer
             .violations
@@ -1372,8 +1488,13 @@ mod tests {
     #[test]
     fn test_watch_paths_untouched_does_not_warn() {
         let files = vec!["README.md".to_string(), "src/util/log.rs".to_string()];
-        let report =
-            commit_msg_with_files(&watch_policy(), "docs: tidy the readme\n", &files, false);
+        let report = commit_msg_with_files(
+            &watch_policy(),
+            "docs: tidy the readme\n",
+            &files,
+            false,
+            MessageSource::EditorTemplate,
+        );
         assert!(!report
             .violations
             .iter()
@@ -1389,6 +1510,7 @@ mod tests {
             "feat: tweak a route\n",
             &files,
             false,
+            MessageSource::EditorTemplate,
         );
         assert!(!report
             .violations

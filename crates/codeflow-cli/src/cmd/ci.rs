@@ -71,6 +71,9 @@ struct CommitRecord {
     sha: String,
     message: String,
     files: Vec<String>,
+    /// A merge commit gets only the policy-character rule (ADR-0067); the
+    /// conventional-format rules have always skipped merges in CI.
+    is_merge: bool,
 }
 
 /// How the base..head range was resolved, for an honest one-line report.
@@ -253,12 +256,14 @@ fn evaluate_commit_range(
     };
     match enumerate_commits(root, &base_sha, head) {
         Ok(commits) => {
+            let merges = commits.iter().filter(|c| c.is_merge).count();
             println!(
-                "codeflow ci: range {}..{} ({}) — {} non-merge commit(s)",
+                "codeflow ci: range {}..{} ({}) — {} non-merge commit(s), {} merge(s)",
                 short(&base_sha),
                 head,
                 range_source,
-                commits.len()
+                commits.len() - merges,
+                merges
             );
             let mut violations = evaluate_commits(git, &commits);
             let added_lines_ran = if git.policy_characters.is_active() {
@@ -451,12 +456,31 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
 /// Run every commit through the same `git_hook::commit_msg` the commit-msg
 /// hook runs (format, breaking-footer, AI attribution, emoji), tagging each
 /// finding with its commit sha. Reusing that function is what guarantees the
-/// CI checks cannot drift from the hook (ADR-0017).
+/// CI checks cannot drift from the hook (ADR-0017). History is committed
+/// content, so the policy-character rule scans each stored message whole,
+/// merges included (ADR-0067 names no merge exemption).
 fn evaluate_commits(git: &GitPolicy, commits: &[CommitRecord]) -> Vec<TaggedViolation> {
     let mut out = Vec::new();
     for c in commits {
-        let stage = git_hook::commit_msg_with_files(git, &c.message, &c.files, false);
-        for violation in stage.violations {
+        let violations = if c.is_merge {
+            git_hook::policy_characters_in_message(
+                git,
+                &c.message,
+                git_hook::MessageSource::Committed,
+            )
+            .into_iter()
+            .collect()
+        } else {
+            git_hook::commit_msg_with_files(
+                git,
+                &c.message,
+                &c.files,
+                false,
+                git_hook::MessageSource::Committed,
+            )
+            .violations
+        };
+        for violation in violations {
             out.push(TaggedViolation {
                 sha: Some(c.sha.clone()),
                 violation,
@@ -910,14 +934,14 @@ fn rev_parse(root: &Path, rev: &str) -> Option<String> {
     (!sha.is_empty()).then_some(sha)
 }
 
-/// Enumerate the non-merge commits in `base..head`, newest first, as
-/// (sha, full-message) records. Uses a NUL-delimited `git log` so multi-line
-/// bodies parse unambiguously.
+/// Enumerate the commits in `base..head`, newest first, as (sha, stored
+/// message) records flagged merge or not. Uses a NUL-delimited `git log` so
+/// multi-line bodies parse unambiguously.
 fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRecord>, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["log", "--no-merges", "-z", "--format=%H%n%B"])
+        .args(["log", "-z", "--format=%H %P%n%B"])
         .arg(format!("{base}..{head}"))
         .output()
         .map_err(|e| e.to_string())?;
@@ -927,7 +951,7 @@ fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRe
     let mut records = parse_log(&String::from_utf8_lossy(&out.stdout));
     // Populate each commit's touched files for the contract-surface tripwire
     // (ADR-0020); a per-commit call keeps the -z log parse unambiguous.
-    for rec in &mut records {
+    for rec in records.iter_mut().filter(|rec| !rec.is_merge) {
         rec.files = commit_files(root, &rec.sha);
     }
     Ok(records)
@@ -1065,17 +1089,21 @@ fn commit_files(root: &Path, sha: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Parse the NUL-delimited `git log --format=%H%n%B` output into records.
+/// Parse the NUL-delimited `git log --format=%H %P%n%B` output into records;
+/// more than one parent after the sha marks a merge.
 fn parse_log(stdout: &str) -> Vec<CommitRecord> {
     stdout
         .split('\0')
         .filter(|rec| !rec.trim().is_empty())
         .filter_map(|rec| {
-            let (sha, message) = rec.split_once('\n')?;
+            let (header, message) = rec.split_once('\n')?;
+            let mut ids = header.split_whitespace();
+            let sha = ids.next()?.to_string();
             Some(CommitRecord {
-                sha: sha.trim().to_string(),
+                sha,
                 message: message.to_string(),
                 files: Vec::new(),
+                is_merge: ids.count() > 1,
             })
         })
         .collect()
@@ -1099,6 +1127,7 @@ mod tests {
             sha: sha.to_string(),
             message: message.to_string(),
             files: Vec::new(),
+            is_merge: false,
         }
     }
 
@@ -1107,6 +1136,7 @@ mod tests {
             sha: sha.to_string(),
             message: message.to_string(),
             files: files.iter().map(|s| (*s).to_string()).collect(),
+            is_merge: false,
         }
     }
 
@@ -1318,6 +1348,49 @@ mod tests {
     }
 
     // -- policy characters (ADR-0067) ---------------------------------------
+
+    // Codex EPC-017 review, finding 3: CI reads committed history, so a
+    // retained `#` line is scanned, and a merge message is not exempt.
+    #[test]
+    fn committed_hash_line_and_merge_message_are_scanned_in_ci() {
+        let hash_line = commit("aaaa8888", "feat: add ranges\n\n# pages 1\u{2014}3\n");
+        let merge = CommitRecord {
+            is_merge: true,
+            ..commit("bbbb8888", "Merge branch 'feat/x' \u{2014} tidy\n")
+        };
+        let v = evaluate_commits(&git(), &[hash_line, merge]);
+        for sha in ["aaaa8888", "bbbb8888"] {
+            assert!(
+                v.iter().any(|t| t.sha.as_deref() == Some(sha)
+                    && t.violation.rule == "git.policy_characters"),
+                "{sha}: {} finding(s)",
+                v.len()
+            );
+        }
+        // The merge gets only the character rule, never the format rules.
+        assert_eq!(
+            1,
+            v.iter()
+                .filter(|t| t.sha.as_deref() == Some("bbbb8888"))
+                .count()
+        );
+        let clean = CommitRecord {
+            is_merge: true,
+            ..commit("cccc8888", "Merge branch 'feat/x'\n")
+        };
+        assert!(evaluate_commits(&git(), &[clean]).is_empty());
+    }
+
+    #[test]
+    fn parse_log_marks_merges_from_parent_count() {
+        let stdout = "aaaa1111 p1\nfeat: one\n\0bbbb2222 p1 p2\nMerge x\n\0cccc3333 \nroot\n\0";
+        let recs = parse_log(stdout);
+        let merges: Vec<_> = recs.iter().map(|r| (r.sha.as_str(), r.is_merge)).collect();
+        assert_eq!(
+            merges,
+            [("aaaa1111", false), ("bbbb2222", true), ("cccc3333", false)]
+        );
+    }
 
     #[test]
     fn policy_character_in_commit_body_blocks_in_ci() {

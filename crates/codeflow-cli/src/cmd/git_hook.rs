@@ -288,6 +288,7 @@ fn commit_msg(
         &message,
         &staged_files(root),
         merge_in_progress(root),
+        git_hook::MessageSource::EditorTemplate,
     ))
 }
 
