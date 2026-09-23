@@ -16,6 +16,8 @@ const PRESENT_SKILL_FILES: &[&str] = &[
     "references/visual-craft.md",
     "resources/how-presentation-works.md",
     "resources/utility-presentation-system.md",
+    "resources/figure-grammar.md",
+    "resources/figure-grammar-specimens.md",
     "resources/present-document.example.json",
     "assets/review-document.example.json",
     "assets/config.example.toml",

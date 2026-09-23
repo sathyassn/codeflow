@@ -1230,68 +1230,96 @@ fn docs_portal_source_live_and_baseline_copies_are_byte_identical() {
     assert_skill_source_live_and_baseline_copies("cf-docs-portal");
 }
 
+/// Collapse whitespace so a needle survives Markdown reflow.
+fn normalized_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Read one figure grammar file, assert its cf-present and cf-docs-portal
+/// copies are byte-identical, and return its whitespace-normalized text.
+fn shared_figure_grammar_file(file: &str) -> String {
+    let skills = repo_root().join("assets/base/agents/skills");
+    let present = std::fs::read(skills.join("cf-present/resources").join(file))
+        .unwrap_or_else(|_| panic!("present {file} is readable"));
+    let portal = std::fs::read(skills.join("cf-docs-portal/resources").join(file))
+        .unwrap_or_else(|_| panic!("portal {file} is readable"));
+    assert_eq!(
+        present, portal,
+        "{file} drifted between cf-present and cf-docs-portal"
+    );
+    normalized_whitespace(&String::from_utf8(present).expect("figure grammar is UTF-8"))
+}
+
+const FIGURE_FAMILIES: [&str; 9] = [
+    "flow",
+    "structure",
+    "layering",
+    "sequence",
+    "state",
+    "coverage",
+    "extent",
+    "derivation",
+    "graph",
+];
+
 /// The figure grammar (ADR-0068) is one doctrine in two skills, with its
 /// specimens in a companion file: each file's copies are byte-identical, the
-/// doctrine names the companion, and together they keep the nine families in
-/// one table, one specimen per family, the twelve rules, the altitude
-/// contract, the evidence board with its baselines as controls, and the named
-/// anti-patterns. A smaller file that drops a family or a rule must fail here.
+/// doctrine names the companion, and neither file draws with a literal colour.
 #[test]
-fn figure_grammar_is_shared_and_keeps_its_families_rules_and_evidence() {
-    let root = repo_root();
-    let skills = root.join("assets/base/agents/skills");
-    let normalized = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let shared = |file: &str| {
-        let present = std::fs::read(skills.join("cf-present/resources").join(file))
-            .unwrap_or_else(|_| panic!("present {file} is readable"));
-        let portal = std::fs::read(skills.join("cf-docs-portal/resources").join(file))
-            .unwrap_or_else(|_| panic!("portal {file} is readable"));
-        assert_eq!(
-            present, portal,
-            "{file} drifted between cf-present and cf-docs-portal"
-        );
-        normalized(&String::from_utf8(present).expect("figure grammar is UTF-8"))
-    };
-    let grammar = shared("figure-grammar.md");
-    let specimens = shared("figure-grammar-specimens.md");
+fn figure_grammar_is_shared_names_its_specimens_and_draws_with_tokens_only() {
+    let grammar = shared_figure_grammar_file("figure-grammar.md");
+    let specimens = shared_figure_grammar_file("figure-grammar-specimens.md");
     assert!(
-        grammar.contains(&normalized(
+        grammar.contains(&normalized_whitespace(
             "`figure-grammar-specimens.md` beside this file, also byte-identical in both skills. Load it when authoring a figure"
         )),
         "figure grammar must name its specimens file and when to load it"
     );
+    // A literal colour is `#` followed by exactly three or six hex digits and
+    // then a non-alphanumeric boundary; anchors such as `SKILL.md#4` and ids
+    // such as `#fg-cov-h` are not colours.
+    for (file, text) in [
+        ("figure-grammar.md", &grammar),
+        ("figure-grammar-specimens.md", &specimens),
+    ] {
+        let bytes = text.as_bytes();
+        let literal_colour = bytes.iter().enumerate().any(|(index, byte)| {
+            if *byte != b'#' {
+                return false;
+            }
+            let run = bytes[index + 1..]
+                .iter()
+                .take_while(|b| b.is_ascii_hexdigit())
+                .count();
+            let boundary = bytes
+                .get(index + 1 + run)
+                .is_none_or(|b| !b.is_ascii_alphanumeric());
+            (run == 3 || run == 6) && boundary
+        });
+        assert!(
+            !literal_colour && !text.contains("rgb("),
+            "{file} must draw with --cf-fig-* tokens only, never a literal colour"
+        );
+    }
+}
 
+/// The doctrine keeps the nine families in one table, the twelve rules, the
+/// altitude contract, the evidence board with its baselines as controls, and
+/// the named anti-patterns. A smaller file that drops a family or a rule must
+/// fail here.
+#[test]
+fn figure_grammar_keeps_its_families_rules_altitude_and_evidence() {
+    let grammar = shared_figure_grammar_file("figure-grammar.md");
     let families_header =
         "| Family | Relationship it encodes | Geometry | Non-colour channels that carry state | Reader question it answers |";
     assert!(
         grammar.contains(families_header),
         "figure grammar lost the nine-families table header"
     );
-    for (index, family) in [
-        "flow",
-        "structure",
-        "layering",
-        "sequence",
-        "state",
-        "coverage",
-        "extent",
-        "derivation",
-        "graph",
-    ]
-    .iter()
-    .enumerate()
-    {
+    for family in FIGURE_FAMILIES {
         assert!(
             grammar.contains(&format!("| {family} |")),
             "figure grammar lost the {family} family row"
-        );
-        assert!(
-            specimens.contains(&format!("## {}. {family}", index + 1)),
-            "figure grammar specimens lost the {family} specimen heading"
-        );
-        assert!(
-            specimens.contains(&format!("data-cf-figure=\"{family}\"")),
-            "figure grammar specimens lost the {family} specimen figure"
         );
     }
     for rule in 1..=12 {
@@ -1321,34 +1349,25 @@ fn figure_grammar_is_shared_and_keeps_its_families_rules_and_evidence() {
         ("chat rule", "In chat the family choice is the same; the medium changes the marks"),
     ] {
         assert!(
-            grammar.contains(&normalized(needle)),
+            grammar.contains(&normalized_whitespace(needle)),
             "figure grammar lost duty: {duty}"
         );
     }
-    // A literal colour is `#` followed by exactly three or six hex digits and
-    // then a non-alphanumeric boundary; anchors such as `SKILL.md#4` and ids
-    // such as `#fg-cov-h` are not colours.
-    for (file, text) in [
-        ("figure-grammar.md", &grammar),
-        ("figure-grammar-specimens.md", &specimens),
-    ] {
-        let bytes = text.as_bytes();
-        let literal_colour = bytes.iter().enumerate().any(|(index, byte)| {
-            if *byte != b'#' {
-                return false;
-            }
-            let run = bytes[index + 1..]
-                .iter()
-                .take_while(|b| b.is_ascii_hexdigit())
-                .count();
-            let boundary = bytes
-                .get(index + 1 + run)
-                .is_none_or(|b| !b.is_ascii_alphanumeric());
-            (run == 3 || run == 6) && boundary
-        });
+}
+
+/// The specimens companion keeps one numbered specimen per family, each with
+/// its declared figure.
+#[test]
+fn figure_grammar_specimens_keep_one_specimen_per_family() {
+    let specimens = shared_figure_grammar_file("figure-grammar-specimens.md");
+    for (index, family) in FIGURE_FAMILIES.iter().enumerate() {
         assert!(
-            !literal_colour && !text.contains("rgb("),
-            "{file} must draw with --cf-fig-* tokens only, never a literal colour"
+            specimens.contains(&format!("## {}. {family}", index + 1)),
+            "figure grammar specimens lost the {family} specimen heading"
+        );
+        assert!(
+            specimens.contains(&format!("data-cf-figure=\"{family}\"")),
+            "figure grammar specimens lost the {family} specimen figure"
         );
     }
 }
