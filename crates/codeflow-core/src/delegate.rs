@@ -1694,6 +1694,7 @@ mod tests {
             format!("{open}\n{ARMED}\n{close}\n\n"),
             format!("{open}{ARMED}{close}"),
             format!("{open}\n{ARMED}\n\n{close}"),
+            format!("{open}\r\n{ARMED}\r\n{close}"),
             format!("{open}\n{ARMED}\n{close}\n{open}\n{ARMED}\n{close}"),
             format!(
                 "{open}\n{ARMED}\n{close}\n<pasted_content id=\"2\">\n{ARMED}\n</pasted_content id=\"2\">"
