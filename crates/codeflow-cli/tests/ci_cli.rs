@@ -613,6 +613,40 @@ fn ci_genuine_binary_under_a_named_tree_is_not_scanned() {
     assert!(!all.contains("git.policy_characters"), "{all}");
 }
 
+// Codex EPC-017 review round 2, N1: Git quotes a name holding `"`, `\` or a
+// control byte in patch headers. Binary content is classified by blob id,
+// and the quoted name is decoded, so neither shape is misjudged.
+#[cfg(unix)]
+#[test]
+fn ci_quoted_name_binary_passes_and_quoted_name_text_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    let mut blob = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\n".to_vec();
+    blob.extend("\u{2014}\n".as_bytes());
+    std::fs::write(dir.path().join("docs/release\"preview.png"), blob).unwrap();
+    std::fs::write(dir.path().join("docs/tab\there.png"), b"\0\xe2\x80\x93\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add quoted figures"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+
+    std::fs::write(
+        dir.path().join("docs/release\"notes.md"),
+        "# Notes\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add quoted notes"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("docs/release\"notes.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    assert!(!all.contains("preview.png"), "{all}");
+}
+
 // Codex EPC-017 review, finding 3: git keeps a `#` line given with `-m`,
 // and a merge message is committed text too; CI scans both as stored.
 #[test]
