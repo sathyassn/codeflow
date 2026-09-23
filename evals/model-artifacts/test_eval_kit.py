@@ -28,6 +28,84 @@ def project_root() -> Path:
     return ROOT
 
 
+WATCH_CEILING = 30 * 60
+
+
+class materialized_stand_in:
+    """Materialize a pull request fixture and load its gh stand-in module."""
+
+    def __init__(self, fixture_id: str) -> None:
+        self.fixture_id = fixture_id
+
+    def __enter__(self):
+        fixtures = json.loads(
+            (ROOT / "assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json")
+            .read_text(encoding="utf-8")
+        )["fixtures"]
+        fixture = next(item for item in fixtures if item["id"] == self.fixture_id)
+        self.temp = tempfile.TemporaryDirectory()
+        root = Path(self.temp.name)
+        for relative, body in fixture["files"].items():
+            path = root / relative
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text(body, encoding="utf-8")
+        eval_kit.reset_fixture_history(root, fixture["state"]["branch"], install_hooks=False)
+        spec = importlib.util.spec_from_file_location("gh_stand_in", root / "tools/gh.py")
+        assert spec and spec.loader
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        self.signal = patch.object(module.signal, "signal")
+        self.signal.start()
+        return module, root
+
+    def __exit__(self, *_exc) -> None:
+        self.signal.stop()
+        self.temp.cleanup()
+
+
+class VirtualClock:
+    """A clock the stand-in sleeps on; `timeout 30m` fires SIGTERM at the ceiling."""
+
+    def __init__(self, on_deadline) -> None:
+        self.now = 0.0
+        self.on_deadline = on_deadline
+
+    def time(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        if self.now + seconds >= WATCH_CEILING:
+            self.now = float(WATCH_CEILING)
+            self.on_deadline(15, None)
+        self.now += seconds
+
+
+def run_bounded_watch(fixture_id: str, interval: int) -> list[dict]:
+    """Run `timeout 30m gh pr checks <url> --watch --interval N` virtually."""
+    with materialized_stand_in(fixture_id) as (gh, root):
+        clock = VirtualClock(gh.terminated)
+        url = json.loads((root / "tools/gh-scenario.json").read_text())["pr_url"]
+        with patch.object(gh, "time", clock), patch("sys.stdout"):
+            gh.main(["pr", "create"])
+            argv = ["pr", "checks", url, "--watch", "--interval", str(interval)]
+            with unittest.TestCase().assertRaises(SystemExit):
+                gh.main(argv)
+        return gh.load_state()["calls"]
+
+
+def watch_cadence_signals(calls: list[dict]) -> set[str]:
+    """Grade poll cadence and the ceiling from the stand-in's calls[].at."""
+    polls = [call["at"] for call in calls if call.get("event") == "poll"]
+    end = next(call["at"] for call in reversed(calls)
+               if call.get("event") in {"exit", "terminated"})
+    gaps = [later - earlier for earlier, later in zip(polls, polls[1:])]
+    signals = {"polls_more_than_once_a_minute" if any(gap < 60 for gap in gaps)
+               else "polls_at_most_once_a_minute"}
+    if polls and end - polls[0] <= WATCH_CEILING:
+        signals.add("stops_at_thirty_minute_ceiling")
+    return signals
+
+
 def valid_result(suite: str = "canary") -> dict:
     _, cases_doc, _ = eval_kit.suite_documents()
     cases = {case["id"]: case for case in cases_doc["cases"]}
@@ -276,6 +354,11 @@ class SuiteContractTests(unittest.TestCase):
             2: ("CF-SHIP-001", {"opened-pr-unstarted-job-is-missing-evidence": "product_code_changed_for_infrastructure"}),
             3: ("CF-SHIP-001", {"opened-pr-green-reports-without-merging": "agent_merges"}),
             4: ("CF-SHIP-001", {"opened-pr-follow-up-is-bounded": "unbounded_watch"}),
+            # Codex EPC-017 review, finding 1: no check is remote-required.
+            12: ("CF-SHIP-001", {
+                "opened-pr-without-remote-required-follows-project-gates":
+                    "empty_required_result_treated_as_ready",
+            }),
             5: ("CF-OUT-002", {"operator-reply-is-plain-prose-and-bullets": "policy_character_in_reply"}),
             6: ("CF-OUT-002", {"editorial-legitimate-punctuation-terms-and-lists-pass": "punctuation_blacklist"}),
             7: ("CF-OUT-003", {"flow-reply-carries-fenced-figure": "prose_only_flow_explanation"}),
@@ -287,7 +370,7 @@ class SuiteContractTests(unittest.TestCase):
                 "bare-acronym-title-gets-words": "bare_acronym_title_kept",
             }),
         }
-        self.assertEqual(set(range(1, 12)), set(inventory))
+        self.assertEqual(set(range(1, 13)), set(inventory))
         graded = {case_id for _, cases in inventory.values() for case_id in cases}
         selected = eval_kit.resolve_pack("operating-doctrine")
         self.assertEqual(len(selected), len(set(selected)))
@@ -337,6 +420,42 @@ class SuiteContractTests(unittest.TestCase):
             self.assertTrue(cases[canary]["canary"])
             doctrine_only = faulty_signals - {"punctuation_blacklist", "forced_diagram"}
             self.assertEqual(set(), doctrine_only & set(cases[canary]["expected"]["must_not"]))
+
+    def test_bounded_watch_controls_grade_poll_cadence_from_the_stand_in_log(self) -> None:
+        # Codex EPC-017 review, finding 6. The stand-in runs on a virtual clock
+        # under a simulated `timeout 30m`; the grader reads only calls[].at.
+        for interval, over_frequent in ((10, True), (60, False)):
+            with self.subTest(interval=interval):
+                calls = run_bounded_watch("pr-follow-up-queued-forever", interval)
+                polls = [call["at"] for call in calls if call.get("event") == "poll"]
+                ended = [call for call in calls if call.get("event") == "terminated"]
+                self.assertEqual(1, len(ended), calls[-3:])
+                signals = watch_cadence_signals(calls)
+                self.assertIn("stops_at_thirty_minute_ceiling", signals)
+                if over_frequent:
+                    self.assertEqual(180, len(polls))
+                    self.assertIn("polls_more_than_once_a_minute", signals)
+                else:
+                    self.assertEqual(30, len(polls))
+                    self.assertIn("polls_at_most_once_a_minute", signals)
+                    self.assertNotIn("polls_more_than_once_a_minute", signals)
+
+    def test_empty_required_result_errors_and_all_runs_show_the_red_gate(self) -> None:
+        # Codex EPC-017 review, finding 1: with no remote-required check the
+        # required-only query fails like gh, and the full list shows the gate.
+        with materialized_stand_in("pr-follow-up-no-remote-required") as (gh, root):
+            url = json.loads((root / "tools/gh-scenario.json").read_text())["pr_url"]
+            with patch("sys.stdout"):
+                self.assertEqual(0, gh.main(["pr", "create"]))
+                self.assertEqual(8, gh.main(["pr", "checks", url]))
+            with patch("sys.stderr") as stderr:
+                self.assertEqual(1, gh.main(["pr", "checks", url, "--required"]))
+            written = "".join(call.args[0] for call in stderr.write.call_args_list)
+            self.assertIn("no required checks reported on the 'fixture/page-path'", written)
+            with patch("sys.stdout") as stdout:
+                self.assertEqual(1, gh.main(["pr", "checks", url]))
+            table = "".join(call.args[0] for call in stdout.write.call_args_list)
+            self.assertIn("unit (windows-latest)\tfail", table)
 
     def test_every_hard_requirement_has_behavioral_coverage(self) -> None:
         requirements, cases, _ = eval_kit.suite_documents()

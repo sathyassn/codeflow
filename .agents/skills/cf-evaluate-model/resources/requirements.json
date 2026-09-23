@@ -2301,7 +2301,7 @@
     {
       "id": "CF-SHIP-001",
       "level": "hard",
-      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches when required checks are evidenced green; an infra-killed duplicate CI job is not a failed check and is not agent merge authority. After opening a PR the agent follows its required checks at most once a minute for at most thirty minutes without an unbounded watch, repairs an assertion-red check its change caused without waiting to be asked, reports an infrastructure-incomplete job as missing evidence with the tool's reason rather than fixing it as a product defect, never merges, and sends one unprompted readiness report with the printed PR URL, each required check's state, and the next action.",
+      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches when required checks are evidenced green; an infra-killed duplicate CI job is not a failed check and is not agent merge authority. After opening a PR the agent follows its required checks at most once a minute for at most thirty minutes without an unbounded watch (a watch refreshes at a one-minute interval under a thirty-minute timeout); the required checks are the project's gates, so when remote protection marks none required it reads all check runs, matches each gate to its run, and treats an unmatched gate as missing evidence rather than calling an empty required list ready. It repairs an assertion-red check its change caused without waiting to be asked, reports an infrastructure-incomplete job as missing evidence with the tool's reason rather than fixing it as a product defect, never merges, and sends one unprompted readiness report with the printed PR URL, each required check's state, and the next action.",
       "sources": [
         {
           "path": "AGENTS.md",
@@ -2330,7 +2330,12 @@
           "markers": [
             "## After opening",
             "at most once a minute, for at most thirty minutes",
+            "whether or not the host marks them required",
+            "an empty list is not readiness",
+            "Read all check runs with `gh pr checks <url>` on the same cadence",
+            "A gate with no matching run, or whose run you cannot read, is missing evidence",
             "Do not use `--watch` without a ceiling, and do not poll without an end",
+            "`timeout 30m gh pr checks <url> --watch --interval 60`",
             "Do not wait for the operator to name the job",
             "Report it as missing evidence with the reason the tool gave, not as a product defect",
             "Never merge. When every required check is green, or the thirty minutes end, send one readiness report without being asked"
