@@ -1022,10 +1022,13 @@ fn binary_blobs(root: &Path, head: &str, paths: &[&str]) -> Result<BTreeSet<Stri
         .spawn()
         .map_err(|e| e.to_string())?;
     let mut stdin = child.stdin.take().ok_or("git cat-file: no stdin")?;
-    let input: String = queried
-        .iter()
-        .map(|path| format!("{head}:{path}\n"))
-        .collect();
+    let mut input = String::new();
+    for path in &queried {
+        input.push_str(head);
+        input.push(':');
+        input.push_str(path);
+        input.push('\n');
+    }
     let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     writer
