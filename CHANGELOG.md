@@ -22,6 +22,9 @@ publication date._
   bodies and lines a change adds under `docs/`, `project-management/` and the
   skill trees. Existing lines are left alone. The new `git.policy_characters`
   key defaults to `block`, including when a policy file omits it.
+  `codeflow update` adds the key to an existing `policy.json`. Upgrade the
+  `codeflow` on `PATH` before running `codeflow update`: the hooks call that
+  binary, and an older one rejects the new key and blocks every commit.
 
 <!-- codeflow:release-impact minor -->
 - **Responsible-autonomy diagnostics.** The standard/full model-evaluation kit
