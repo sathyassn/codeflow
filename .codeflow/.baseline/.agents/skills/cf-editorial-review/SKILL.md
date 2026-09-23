@@ -54,8 +54,10 @@ misrepresent the author or project.
    and evidence needed at that altitude. Use prose, lists, tables, headings,
    punctuation, and emoji only when they fit the information, documented voice,
    medium, and repository policy. Titles, headings, navigation, and action
-   labels normally name the actual subject or action; a more expressive label
-   must be earned by the product voice and remain understandable in context.
+   labels normally name the actual subject or action in words; a bare record
+   identifier or unexpanded acronym is a smell (ADR-0067), and a more
+   expressive label must be earned by the product voice and remain
+   understandable in context.
    Utility copy does not become product voice, and CodeFlow does not supply a
    personality for either. Keep formatting proportionate: a simple
    answer needs no apparatus, and when relationships, hierarchy, state,
@@ -65,7 +67,8 @@ misrepresent the author or project.
    complex subjects may need a larger, layered, or multi-view diagram. Add a
    brief caption or legend when it aids orientation. A decorative or forced
    diagram, heading, table, or recap is a defect, not polish. There is no
-   universal word, punctuation, formatting, or emoji blacklist.
+   universal word, punctuation, formatting, or emoji blacklist; the only fixed
+   exclusions are the ones project policy names, and ADR-0067 lists them.
 7. **Verify the revision.** Compare original and revision for lost meaning,
    changed certainty, dropped caveats, altered terminology, unsupported new
    claims, accidental policy violations, and visual/verbal mismatch where the

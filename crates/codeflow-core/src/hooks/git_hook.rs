@@ -209,8 +209,9 @@ fn push_format_violations(
 
 /// The commit-msg stage: conventional format (whitelisted types), the restored
 /// v1 subject-length budget and body-shape rule (ADR-0020), standard git-trailer
-/// footers with an optional ticket requirement, the no-AI-attribution rule, and
-/// the no-emoji rule (charter §6.4, AC #13).
+/// footers with an optional ticket requirement, the no-AI-attribution rule, the
+/// no-emoji rule (charter §6.4, AC #13), and the policy-character rule over the
+/// subject and body (ADR-0067).
 #[must_use]
 pub fn commit_msg(policy: &GitPolicy, message: &str, is_merge: bool) -> StageReport {
     let mut report = StageReport::default();
@@ -312,7 +313,35 @@ pub fn commit_msg(policy: &GitPolicy, message: &str, is_merge: bool) -> StageRep
         }
     }
 
+    if policy.policy_characters.is_active() {
+        if let Some(violation) = policy_character_violation(policy, &cleaned) {
+            report.violations.push(violation);
+        }
+    }
+
     report
+}
+
+/// The policy-character rule (ADR-0067) over the whole cleaned message: the
+/// finding says whether the subject or which body line carries the character.
+fn policy_character_violation(policy: &GitPolicy, cleaned: &str) -> Option<Violation> {
+    let (line, c) = standards::find_policy_character(cleaned)?;
+    let name = standards::policy_character_name(c);
+    let subject_line = cleaned
+        .lines()
+        .position(|l| !l.trim().is_empty())
+        .map(|i| i + 1);
+    let place = if subject_line == Some(line) {
+        "commit subject".to_string()
+    } else {
+        format!("commit message line {line}")
+    };
+    Some(Violation::new(
+        "git.policy_characters",
+        policy.policy_characters,
+        format!("{place} contains an {name}"),
+        standards::POLICY_CHARACTER_FIX.to_string(),
+    ))
 }
 
 /// The commit-msg stage plus the file-aware contract-surface tripwire
@@ -1035,6 +1064,47 @@ mod tests {
     }
 
     #[test]
+    fn test_commit_msg_policy_character_in_subject_blocked() {
+        let report = commit_msg(&GitPolicy::default(), "feat: a \u{2014} b\n", false);
+        let v = report
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.policy_characters")
+            .expect("a policy_characters violation");
+        assert_eq!(v.level, PolicyLevel::Block);
+        assert!(v.message.contains("commit subject"), "{}", v.message);
+        assert!(v.message.contains("em dash (U+2014)"), "{}", v.message);
+        assert!(v.remedy.contains("a comma, colon"), "{}", v.remedy);
+    }
+
+    #[test]
+    fn test_commit_msg_policy_character_in_body_blocked() {
+        let msg = "feat: add ranges\n\n- pages 1\u{2013}3\n";
+        let report = commit_msg(&GitPolicy::default(), msg, false);
+        let v = report
+            .violations
+            .iter()
+            .find(|v| v.rule == "git.policy_characters")
+            .expect("a policy_characters violation");
+        assert!(v.message.contains("line 3"), "{}", v.message);
+        assert!(v.message.contains("en dash (U+2013)"), "{}", v.message);
+    }
+
+    #[test]
+    fn test_commit_msg_hyphen_passes_policy_characters() {
+        let msg = "feat: add re-run flag\n\n- pages 1 to 3, a - b\n";
+        let report = commit_msg(&GitPolicy::default(), msg, false);
+        assert!(
+            !report
+                .violations
+                .iter()
+                .any(|v| v.rule == "git.policy_characters"),
+            "{:?}",
+            report.violations
+        );
+    }
+
+    #[test]
     fn test_commit_msg_levels_from_policy() {
         // warn → still reported, at warn; off → silent (D7: nothing hardcoded).
         let warn_policy = GitPolicy {
@@ -1049,9 +1119,10 @@ mod tests {
             commit_body: PolicyLevel::Off,
             ai_attribution: PolicyLevel::Off,
             commit_emoji: PolicyLevel::Off,
+            policy_characters: PolicyLevel::Off,
             ..GitPolicy::default()
         };
-        let msg = "Bad subject \u{1F680}\n\nGenerated with a robot\n";
+        let msg = "Bad subject \u{1F680} \u{2014}\n\nGenerated with a robot\n";
         assert!(commit_msg(&off_policy, msg, false).violations.is_empty());
     }
 

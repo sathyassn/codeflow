@@ -4,8 +4,8 @@
 //! reads every field; this struct is the shared schema, not a promise that all
 //! of it is live everywhere. The git client hooks read the protected-branch set
 //! and its protection levels, the commit-format / attribution / emoji /
-//! branch-naming rules, `secret_scan` (pre-commit), and `test_gate_on_push`
-//! (pre-push); the Claude `git-guard` reads the same plus `pr_merge_to_protected`
+//! policy-character / branch-naming rules, `secret_scan` (pre-commit), and
+//! `test_gate_on_push` (pre-push); the Claude `git-guard` reads the same plus `pr_merge_to_protected`
 //! and `hook_integrity`; remote protection reads the protected-branch set and its
 //! force-push / delete / push intents; and CI reads `dep_audit` and
 //! `security_review` (the umbrella gate for the `security-review` job) and,
@@ -171,6 +171,12 @@ pub struct GitPolicy {
     pub breaking_watch_paths: Vec<String>,
     pub ai_attribution: PolicyLevel,
     pub commit_emoji: PolicyLevel,
+    /// The policy characters of ADR-0067, U+2013 (en dash) and U+2014 (em
+    /// dash), in new text: commit subjects and bodies (commit-msg hook), PR
+    /// bodies, and lines a `codeflow ci` range adds under the written-content
+    /// trees. Level (off/warn/allow/block); default `block`. Existing bytes
+    /// are grandfathered: `codeflow ci` judges added lines, never the tree.
+    pub policy_characters: PolicyLevel,
     /// Structure of the PR/MR body — the section check `codeflow ci` runs when
     /// a PR body is provided (`--pr-body`, `--pr-body-file`, or
     /// `CODEFLOW_PR_BODY`). Level (off/warn/allow/block); default `block`.
@@ -236,6 +242,7 @@ impl Default for GitPolicy {
             breaking_watch_paths: Vec::new(),
             ai_attribution: PolicyLevel::Block,
             commit_emoji: PolicyLevel::Block,
+            policy_characters: PolicyLevel::Block,
             pr_sections: PolicyLevel::Block,
             pr_required_sections: vec!["Summary".into(), "Changes".into()],
             pr_code_sections: vec!["Testing".into()],
@@ -528,6 +535,7 @@ impl GitPolicy {
         self.commit_required_footers = Vec::new();
         self.ai_attribution = PolicyLevel::Off;
         self.commit_emoji = PolicyLevel::Off;
+        self.policy_characters = PolicyLevel::Off;
         self.pr_sections = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
         self.test_gate_on_push = PolicyLevel::Off;
@@ -598,6 +606,7 @@ mod tests {
         assert!(g.breaking_watch_paths.is_empty());
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
         assert_eq!(g.commit_emoji, PolicyLevel::Block);
+        assert_eq!(g.policy_characters, PolicyLevel::Block);
         // PR-body structure gate: the doctrine sections ship block-enforced.
         assert_eq!(g.pr_sections, PolicyLevel::Block);
         assert_eq!(g.pr_required_sections, vec!["Summary", "Changes"]);

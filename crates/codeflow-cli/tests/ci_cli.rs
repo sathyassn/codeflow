@@ -1,7 +1,9 @@
 //! End-to-end tests for the `codeflow ci` PR-body structure gate
 //! (`git.pr_sections`): a lazy PR body fails CI mechanically, docs-only
 //! ranges are exempt from the code sections, template remnants warn, and a
-//! local run without a PR body is untouched.
+//! local run without a PR body is untouched. The policy-character rule
+//! (`git.policy_characters`, ADR-0067) is pinned here too: it judges the PR
+//! body and the lines a range adds, never the bytes a range leaves alone.
 //!
 //! Each test runs the real binary (`CARGO_BIN_EXE_codeflow`) in a tempdir git
 //! repo (the `policy_cli.rs` pattern), pinning the exit-code and message
@@ -418,4 +420,145 @@ fn ci_full_body_on_code_range_is_clean() {
         stdout.contains("PR-body"),
         "the summary names the check that ran: {stdout}"
     );
+}
+
+// -- policy characters (ADR-0067) --------------------------------------------
+
+/// A repo whose `main` already carries `docs/old.md` with an em dash on its
+/// second line (grandfathered bytes), then a `feat/x` branch; the caller adds
+/// the branch commit.
+fn repo_with_grandfathered_dash(dir: &Path) {
+    git(dir, &["init", "-b", "main"]);
+    git(dir, &["config", "user.email", "t@example.com"]);
+    git(dir, &["config", "user.name", "t"]);
+    std::fs::create_dir_all(dir.join("docs")).unwrap();
+    std::fs::write(
+        dir.join("docs/old.md"),
+        "# Old\n\nAn old line \u{2014} kept as is.\n\nClosing line.\n",
+    )
+    .unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "docs: add old page"]);
+    git(dir, &["checkout", "-b", "feat/x"]);
+}
+
+fn ci_range(dir: &Path) -> Output {
+    run_in(
+        dir,
+        &[
+            "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+        ],
+    )
+}
+
+#[test]
+fn ci_grandfathered_policy_character_on_unchanged_line_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    // Edit another line of the same file and add a clean page: the old dash
+    // sits on an unchanged line, so the range adds no policy character.
+    std::fs::write(
+        dir.path().join("docs/old.md"),
+        "# Old\n\nAn old line \u{2014} kept as is.\n\nClosing line, edited.\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("docs/new.md"), "# New\n\nA plain line.\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: edit old page"]);
+    let out = ci_range(dir.path());
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(out.status.code(), Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+    assert!(
+        all.contains("added-lines"),
+        "the summary names the check: {all}"
+    );
+}
+
+#[test]
+fn ci_added_policy_character_blocks_naming_file_and_line() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    std::fs::create_dir_all(dir.path().join("project-management/tasks")).unwrap();
+    std::fs::write(
+        dir.path().join("project-management/tasks/notes.md"),
+        "# Notes\n\nPages 1\u{2013}3 cover it.\n",
+    )
+    .unwrap();
+    // A dash outside the named trees is not judged.
+    std::fs::write(dir.path().join("fixture.txt"), "x \u{2014} y\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add notes"]);
+    let out = ci_range(dir.path());
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("git.policy_characters"), "{stderr}");
+    assert!(
+        stderr.contains("project-management/tasks/notes.md:3 adds an en dash (U+2013)"),
+        "{stderr}"
+    );
+    assert!(stderr.contains("a comma, colon"), "{stderr}");
+    assert!(!stderr.contains("fixture.txt"), "{stderr}");
+    assert!(!stderr.contains("docs/old.md"), "{stderr}");
+}
+
+#[test]
+fn ci_changed_line_keeping_a_policy_character_blocks() {
+    // A changed line is new text: editing the grandfathered line while keeping
+    // its dash makes the range add it.
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    std::fs::write(
+        dir.path().join("docs/old.md"),
+        "# Old\n\nAn old line \u{2014} now edited.\n\nClosing line.\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: edit old line"]);
+    let out = ci_range(dir.path());
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("docs/old.md:3 adds an em dash (U+2014)"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn ci_pr_body_policy_character_blocks() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let body = FULL_BODY.replace("adds a thing", "adds a thing \u{2014} and more");
+    let out = ci_with_body(dir.path(), &body);
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("git.policy_characters"), "{stderr}");
+    assert!(stderr.contains("PR body line 3"), "{stderr}");
+}
+
+#[test]
+fn ci_commit_message_policy_character_blocks() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    std::fs::write(dir.path().join("docs/new.md"), "# New\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(
+        dir.path(),
+        &[
+            "commit",
+            "-m",
+            "docs: add new page",
+            "-m",
+            "- one \u{2014} two",
+        ],
+    );
+    let out = ci_range(dir.path());
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("git.policy_characters"), "{stderr}");
+    assert!(stderr.contains("commit message line 3"), "{stderr}");
 }
