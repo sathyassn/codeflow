@@ -678,6 +678,10 @@ fn orchestration_byte_efficiency_cannot_delete_semantic_duties() {
             ("presentation completeness", "not the physically smallest"),
             ("design settlement", "settle `DESIGN_INTENT` before"),
             ("componentized web", "componentized rather than monolithic"),
+            (
+                "verified links",
+                "give the exact link the tool printed or one you verified. Never guess a URL, port, or pull request number",
+            ),
         ],
     );
 

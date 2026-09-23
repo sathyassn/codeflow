@@ -101,7 +101,7 @@
     ".agents/skills/cf-docs-portal/references/operations.md": {
       "src": "agents/skills/cf-docs-portal/references/operations.md",
       "ownership": "managed",
-      "sha256": "a784b2d93bb72c843205a8ea8451d0d50d2dfdd9f5b598b32c2043cacad7d628",
+      "sha256": "26f79b8b70ceef583e0d08d4a8ee8f8b2a5cd11241de9c10f69717dbd0b11d9e",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/references/visual-craft.md": {
@@ -317,7 +317,7 @@
     ".agents/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "203b0bfc6f41ecb5a53216f0492f6c4b40cb90a506c3f4e2d2ea1f57dc9acbfd",
+      "sha256": "2109b14ed9ab31bd4f5e6addfc7d435c084870cb0384cefd8c59234679df914b",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
@@ -575,7 +575,7 @@
     ".claude/skills/cf-docs-portal/references/operations.md": {
       "src": "agents/skills/cf-docs-portal/references/operations.md",
       "ownership": "managed",
-      "sha256": "a784b2d93bb72c843205a8ea8451d0d50d2dfdd9f5b598b32c2043cacad7d628",
+      "sha256": "26f79b8b70ceef583e0d08d4a8ee8f8b2a5cd11241de9c10f69717dbd0b11d9e",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/references/visual-craft.md": {
@@ -791,7 +791,7 @@
     ".claude/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "203b0bfc6f41ecb5a53216f0492f6c4b40cb90a506c3f4e2d2ea1f57dc9acbfd",
+      "sha256": "2109b14ed9ab31bd4f5e6addfc7d435c084870cb0384cefd8c59234679df914b",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/SKILL.md": {

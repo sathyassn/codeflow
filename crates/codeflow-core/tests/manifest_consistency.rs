@@ -850,6 +850,7 @@ fn portal_skill_preserves_explicit_ownership_and_integrity_contracts() {
         "restore exact reviewed bytes",
         "Empty reserved directories are removed without",
         "Chromium, Firefox and WebKit",
+        "exact served URL from the tool output",
     ] {
         assert!(
             operations.contains(marker),

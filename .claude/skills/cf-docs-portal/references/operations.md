@@ -215,6 +215,9 @@ separate temporary profiles and an ephemeral loopback port, emits bounded
 success and failure evidence under `.portal/browser-evidence/<run>/`, and
 removes profiles and server resources.
 
+When you tell the operator where a dev or preview server runs, report the
+exact served URL from the tool output; never guess the host or port.
+
 Portal-owned Markdown fragments are verified against renderer-produced heading
 anchors in both the producer and the independent Rust validator. Fragments on
 repository files that are not published into the portal remain under the
