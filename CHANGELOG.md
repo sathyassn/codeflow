@@ -278,6 +278,14 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **Delegate turns accept a pasted prompt.** Claude Code submits a long or
+  multi-line pasted prompt inside one `<pasted_content id="N">` envelope, so
+  the delegate-turn hook used to reject it as a digest mismatch. The hook now
+  accepts the prompt when its bytes match exactly or when exactly one
+  envelope with matching ids holds the exact armed bytes; every other shape
+  still fails, and `accepted.json` records which delivery matched.
+
+<!-- codeflow:release-impact patch -->
 - **Git-guard reads data as data.** The in-session git-guard no longer blocks
   reading the hook path (`git config core.hooksPath`, `--get`, `--list`,
   `--show-origin`); it still blocks every write form in every scope, and now
