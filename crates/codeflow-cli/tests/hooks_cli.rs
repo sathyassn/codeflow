@@ -1197,9 +1197,21 @@ fn wired_commit(dir: &Path, args: &[&str], editor: Option<&Path>) -> Output {
     let file = format!("staged-{n}.txt");
     std::fs::write(dir.join(&file), "range 1\u{2014}3\n").unwrap();
     git(dir, &["add", &file]);
+    let out = run_wired_git(dir, args, editor);
+    if !out.status.success() {
+        git(dir, &["reset", "-q", "--", &file]);
+    }
+    out
+}
+
+/// Run `git <args>` with the hook wired, in the C locale so Git writes its
+/// untranslated cut signature.
+#[cfg(unix)]
+fn run_wired_git(dir: &Path, args: &[&str], editor: Option<&Path>) -> Output {
     let mut cmd = Command::new("git");
     cmd.args(args)
         .current_dir(dir)
+        .env("LC_ALL", "C")
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env("CODEFLOW_HOME", isolated_home())
@@ -1212,11 +1224,7 @@ fn wired_commit(dir: &Path, args: &[&str], editor: Option<&Path>) -> Output {
         Some(e) => cmd.env("GIT_EDITOR", e),
         None => cmd.env_remove("GIT_EDITOR"),
     };
-    let out = cmd.output().unwrap();
-    if !out.status.success() {
-        git(dir, &["reset", "-q", "--", &file]);
-    }
-    out
+    cmd.output().unwrap()
 }
 
 #[cfg(unix)]
@@ -1276,7 +1284,7 @@ fn wired_commit_msg_scans_hash_lines_git_keeps_without_editor() {
 
 #[cfg(unix)]
 #[test]
-fn wired_commit_msg_scans_scissors_text_git_keeps_without_editor() {
+fn wired_commit_msg_scans_scissors_text_git_keeps() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
     wire_commit_msg_hook(dir.path());
@@ -1290,14 +1298,76 @@ fn wired_commit_msg_scans_scissors_text_git_keeps_without_editor() {
     let out = wired_commit(dir.path(), &["commit", "-m", loose], None);
     assert_policy_character_block(&out, "-m loose scissors");
 
-    // commit.verbose makes Git truncate at the exact cut line.
+    // Codex round 3, N2: an edited commit with no verbose flag strips the
+    // bare cut line as a comment and keeps the bullet below it.
+    let editor = prepending_editor(dir.path(), "bare-cut", &msg);
+    let out = wired_commit(dir.path(), &["commit"], Some(&editor));
+    assert_policy_character_block(&out, "editor, bare exact cut line");
+
+    // Git truncates here, but commit.verbose is not proof for every hook
+    // run (a direct merge ignores it), so the hook scans conservatively.
     let out = wired_commit(
         dir.path(),
         &["-c", "commit.verbose=true", "commit", "-m", &msg],
         None,
     );
-    let stored = assert_committed(dir.path(), &out, "commit.verbose");
-    assert_eq!("feat: add ranges\n\n", stored);
+    assert_policy_character_block(&out, "-m, commit.verbose");
+}
+
+// Codex round 3, N2: a direct `git merge` cleans up with verbose off even
+// when commit.verbose is set, so a cut line and what follows are kept.
+#[cfg(unix)]
+#[test]
+fn wired_commit_msg_scans_direct_merge_text_despite_commit_verbose() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    git(dir.path(), &["checkout", "-q", "-b", "feat/side"]);
+    std::fs::write(dir.path().join("side.txt"), "side\n").unwrap();
+    git(dir.path(), &["add", "side.txt"]);
+    git(dir.path(), &["commit", "-q", "-m", "feat: side"]);
+    git(dir.path(), &["checkout", "-q", "feat/x"]);
+    std::fs::write(dir.path().join("main.txt"), "main\n").unwrap();
+    git(dir.path(), &["add", "main.txt"]);
+    git(dir.path(), &["commit", "-q", "-m", "feat: main"]);
+    wire_commit_msg_hook(dir.path());
+
+    let cut = "# ------------------------ >8 ------------------------";
+    let msg = format!("Merge feat/side\n\n{cut}\n- pages 1\u{2013}3\n");
+    let out = run_wired_git(
+        dir.path(),
+        &[
+            "-c",
+            "commit.verbose=true",
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "feat/side",
+            "-m",
+            &msg,
+        ],
+        None,
+    );
+    assert_policy_character_block(&out, "direct merge, commit.verbose");
+    git(dir.path(), &["merge", "--abort"]);
+
+    // Control: the same merge without the dash lands with the text kept.
+    let clean = format!("Merge feat/side\n\n{cut}\n- pages 1 to 3\n");
+    let out = run_wired_git(
+        dir.path(),
+        &[
+            "-c",
+            "commit.verbose=true",
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "feat/side",
+            "-m",
+            &clean,
+        ],
+        None,
+    );
+    let stored = assert_committed(dir.path(), &out, "direct merge control");
+    assert!(stored.contains("- pages 1 to 3"), "{stored}");
 }
 
 #[cfg(unix)]
@@ -1326,6 +1396,30 @@ fn wired_commit_msg_scans_hash_lines_an_editor_session_keeps() {
         Some(&editor),
     );
     assert_policy_character_block(&out, "editor, core.commentChar=;");
+}
+
+// Codex round 3, N3: `core.commentString` is used byte for byte. With `# `,
+// Git keeps `#kept` and drops only lines starting `# `.
+#[cfg(unix)]
+#[test]
+fn wired_commit_msg_uses_the_exact_comment_string() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    git(dir.path(), &["config", "core.commentString", "# "]);
+    wire_commit_msg_hook(dir.path());
+
+    let kept = prepending_editor(dir.path(), "hash-kept", "feat: x\n\n#kept \u{2014} line\n");
+    let out = wired_commit(dir.path(), &["commit"], Some(&kept));
+    assert_policy_character_block(&out, "commentString `# `, #kept line");
+
+    let dropped = prepending_editor(
+        dir.path(),
+        "hash-space",
+        "feat: x\n\n# real comment \u{2014} dropped\n",
+    );
+    let out = wired_commit(dir.path(), &["commit"], Some(&dropped));
+    let stored = assert_committed(dir.path(), &out, "commentString `# `, comment");
+    assert_eq!("feat: x\n\n", stored);
 }
 
 #[cfg(unix)]

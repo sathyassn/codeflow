@@ -292,40 +292,45 @@ fn commit_msg(
     ))
 }
 
-/// The cleanup Git will still apply to the commit-msg hook's message file.
+/// What Git will certainly drop from the commit-msg hook's message file.
 /// Git runs the hook before its cleanup and exports `GIT_EDITOR=:` to it when
-/// no editor runs (`-m`, `-F`, `--no-edit`), which is when `#` lines are kept
-/// by default. `commit.cleanup`, `commit.verbose` and the comment prefix come
-/// from Git's effective config, `git -c` included. A command-line `--cleanup`
-/// or `-v` is not visible to a hook; `codeflow ci` scans the stored message.
+/// no editor runs (`-m`, `-F`, `--no-edit`), which keeps `#` lines by
+/// default. `commit.cleanup` and the comment prefix come from Git's effective
+/// config, `git -c` included, read byte for byte. A command-line `--cleanup`,
+/// `-v` or `--no-verbose` is not visible to a hook, so it infers nothing from
+/// them; `codeflow ci` scans the stored message and stays the authority.
 fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
     let editor_used = std::env::var_os("GIT_EDITOR").is_none_or(|e| e != ":");
-    let mode = git_config(root, &["--get", "commit.cleanup"]);
-    let verbose = git_config(root, &["--type=bool-or-int", "--get", "commit.verbose"])
-        .is_some_and(|v| v != "false" && v != "0");
+    let mode = git_config_values(root, &["--get", "commit.cleanup"]).pop();
     // core.commentString and core.commentChar set one value; the last wins.
-    let comment = git_config(root, &["--get-regexp", r"^core\.comment(char|string)$"])
-        .and_then(|all| {
-            all.lines()
-                .last()
-                .and_then(|l| l.split_once(' '))
-                .map(|(_, v)| v.to_string())
-        })
-        .unwrap_or_default();
-    git_hook::GitCleanup::resolve(mode.as_deref(), editor_used, verbose, &comment)
+    let comment = git_config_values(root, &["--get-regexp", r"^core\.comment(char|string)$"])
+        .pop()
+        .map(|entry| {
+            entry
+                .split_once('\n')
+                .map_or(String::new(), |(_, v)| v.to_string())
+        });
+    git_hook::GitCleanup::resolve(mode.as_deref(), editor_used, comment.as_deref())
 }
 
-/// One `git config` read in `root`; `None` when unset or unreadable.
-fn git_config(root: &Path, args: &[&str]) -> Option<String> {
+/// The NUL-separated entries of one `git config -z` read in `root`, exact
+/// bytes, value text unchanged; empty when unset or unreadable.
+fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
     Command::new("git")
         .arg("-C")
         .arg(root)
-        .arg("config")
+        .args(["config", "-z"])
         .args(args)
         .output()
         .ok()
         .filter(|o| o.status.success())
-        .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_terminator('\0')
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// True while git is creating a real merge commit — `MERGE_HEAD` exists in the

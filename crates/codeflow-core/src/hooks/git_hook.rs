@@ -220,72 +220,88 @@ pub enum MessageSource {
     Committed,
 }
 
-/// The part of Git's commit-message cleanup that decides which lines are
-/// recorded: truncation at the verbose or scissors cut line, and removal of
-/// comment lines. Whitespace cleanup never changes which characters remain.
+/// The lines of a pending commit message that Git is certain to drop, so the
+/// live hook can scan everything else. It removes only what the hook can see
+/// Git will remove: comment lines under a strip cleanup, and everything from
+/// Git's own verbose or scissors cut signature down. Anything uncertain is
+/// scanned; `codeflow ci` scans the stored message and stays the authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitCleanup {
-    /// The comment prefix (`core.commentChar` or `core.commentString`).
-    comment: String,
+    /// The exact comment prefix, `None` when Git picks one per process
+    /// (`core.commentChar=auto`), so no line is known to be a comment.
+    comment: Option<String>,
     /// Git drops every line starting with `comment` (the `strip` mode).
     strip_comments: bool,
-    /// Git truncates the message at its exact cut line.
-    cut_at_scissors: bool,
 }
 
-/// Git's cut line after the comment prefix and one space (`wt_status`).
-const CUT_LINE: &str = "------------------------ >8 ------------------------";
+/// The lines `wt_status_append_cut_line` writes (Git 2.53.0 `wt-status.c`
+/// lines 1117 to 1123): the `cut_line` constant (line 42), then the
+/// explanation, each line as the comment prefix, one space, the text. Git
+/// writes them only for a verbose or scissors session, and truncates there.
+/// The explanation is translated under a non-English locale, where this
+/// match fails and the preview is scanned.
+const CUT_SIGNATURE: [&str; 3] = [
+    "------------------------ >8 ------------------------",
+    "Do not modify or remove the line above.",
+    "Everything below it will be ignored.",
+];
 
 impl GitCleanup {
-    /// Resolve the cleanup the way `git commit` and `git merge` do.
-    /// `mode` is `commit.cleanup`; `editor_used` is false when Git told the
-    /// hook no editor runs (`GIT_EDITOR=:`); `verbose` is `commit.verbose`;
-    /// `comment` is the comment prefix, `#` when unset or `auto`.
+    /// Resolve what Git will drop. `mode` is the raw `commit.cleanup` value;
+    /// `editor_used` is false when Git told the hook no editor runs
+    /// (`GIT_EDITOR=:`); `comment` is the raw value of the last
+    /// `core.commentChar` or `core.commentString` setting, `None` when unset.
     ///
-    /// Git's defaults: `strip` with an editor, `whitespace` without one, and
-    /// `scissors` only with an editor. An editor session truncates at the
-    /// exact cut line, since Git writes one only for verbose or scissors
-    /// sessions and truncates in both.
+    /// Git strips comments for `strip`, and for the default mode only with an
+    /// editor (Git 2.53.0 `sequencer.c` `get_cleanup_mode`). Values are used
+    /// byte for byte, as Git uses them; `auto` (any case) leaves the prefix
+    /// unknown. A command-line `--cleanup` is not visible to the hook.
     #[must_use]
-    pub fn resolve(mode: Option<&str>, editor_used: bool, verbose: bool, comment: &str) -> Self {
-        let comment = match comment.trim() {
-            "" | "auto" => "#".to_string(),
-            other => other.to_string(),
+    pub fn resolve(mode: Option<&str>, editor_used: bool, comment: Option<&str>) -> Self {
+        let comment = match comment {
+            None => Some("#".to_string()),
+            Some(value) if value.eq_ignore_ascii_case("auto") || value.is_empty() => None,
+            Some(value) => Some(value.to_string()),
         };
-        let mode = mode.map_or("default", str::trim);
         let strip_comments = match mode {
-            "verbatim" | "whitespace" | "scissors" => false,
-            "strip" => true,
-            _ => editor_used,
+            None | Some("default") => editor_used,
+            Some(mode) => mode == "strip",
         };
-        let scissors_mode = mode == "scissors" && editor_used;
         Self {
             comment,
             strip_comments,
-            cut_at_scissors: editor_used || verbose || scissors_mode,
         }
     }
 
     /// The cleanup of an interactive `git commit` under default settings:
-    /// `#` comment lines and a verbose diff preview are dropped.
+    /// `#` comment lines are dropped, and so is a verbose diff preview below
+    /// Git's cut signature.
     #[must_use]
     pub fn editor_default() -> Self {
-        Self::resolve(None, true, false, "#")
+        Self::resolve(None, true, None)
     }
 
-    /// The lines of `message` that Git records under this cleanup.
+    /// The lines of `message` that Git may record under this cleanup.
     #[must_use]
     pub fn retained(&self, message: &str) -> String {
-        let cut = format!("{} {CUT_LINE}", self.comment);
+        let Some(prefix) = self.comment.as_deref() else {
+            return message.to_string();
+        };
+        let signature: Vec<String> = CUT_SIGNATURE
+            .iter()
+            .map(|text| format!("{prefix} {text}"))
+            .collect();
+        let lines: Vec<&str> = message.split('\n').collect();
         let mut out = Vec::new();
-        for line in message.lines() {
-            if self.cut_at_scissors && line == cut {
+        for (i, line) in lines.iter().enumerate() {
+            let rest = &lines[i..];
+            if rest.len() >= signature.len() && rest.iter().zip(&signature).all(|(l, s)| l == s) {
                 break;
             }
-            if self.strip_comments && line.starts_with(self.comment.as_str()) {
+            if self.strip_comments && line.starts_with(prefix) {
                 continue;
             }
-            out.push(line);
+            out.push(*line);
         }
         out.join("\n")
     }
@@ -1249,35 +1265,50 @@ mod tests {
         assert!(v.message.contains("line 3"), "{}", v.message);
     }
 
-    fn pending(mode: Option<&str>, editor_used: bool, verbose: bool) -> MessageSource {
-        MessageSource::Pending(GitCleanup::resolve(mode, editor_used, verbose, "#"))
+    fn pending(mode: Option<&str>, editor_used: bool) -> MessageSource {
+        MessageSource::Pending(GitCleanup::resolve(mode, editor_used, None))
     }
 
     fn pending_flags(msg: &str, source: &MessageSource) -> bool {
         has_policy_character(&commit_msg_from(&GitPolicy::default(), msg, false, source))
     }
 
+    fn retained(cleanup: &GitCleanup, msg: &str) -> String {
+        cleanup.retained(msg)
+    }
+
+    /// Git's verbose or scissors cut signature under `prefix`.
+    fn signature(prefix: &str) -> String {
+        CUT_SIGNATURE.iter().fold(String::new(), |mut out, text| {
+            out.push_str(prefix);
+            out.push(' ');
+            out.push_str(text);
+            out.push('\n');
+            out
+        })
+    }
+
     // Codex EPC-017 review round 2: Git hands commit-msg the message before
     // its cleanup, and `git commit -m` keeps `#` lines (whitespace mode), so
-    // the live hook scans them; only a stripping editor session drops them.
+    // the live hook scans them; only a stripping cleanup drops them.
     #[test]
     fn test_pending_hash_line_follows_git_cleanup_mode() {
         let msg = "feat: add ranges\n\n# pages 1\u{2014}3\n";
-        assert!(pending_flags(msg, &pending(None, false, false)), "-m");
-        assert!(pending_flags(msg, &pending(Some("verbatim"), true, false)));
-        assert!(pending_flags(
-            msg,
-            &pending(Some("whitespace"), true, false)
-        ));
-        assert!(pending_flags(msg, &pending(Some("scissors"), true, false)));
-        assert!(pending_flags(msg, &pending(Some("scissors"), false, false)));
-        assert!(!pending_flags(msg, &pending(None, true, false)), "editor");
-        assert!(!pending_flags(msg, &pending(Some("strip"), false, false)));
-        assert!(!pending_flags(msg, &pending(Some("default"), true, false)));
+        assert!(pending_flags(msg, &pending(None, false)), "-m");
+        for mode in ["verbatim", "whitespace", "scissors", "unknown"] {
+            assert!(pending_flags(msg, &pending(Some(mode), true)), "{mode}");
+            assert!(pending_flags(msg, &pending(Some(mode), false)), "{mode}");
+        }
+        assert!(!pending_flags(msg, &pending(None, true)), "editor");
+        assert!(!pending_flags(msg, &pending(Some("default"), true)));
+        assert!(!pending_flags(msg, &pending(Some("strip"), false)));
+        assert!(!pending_flags(msg, &pending(Some("strip"), true)));
     }
 
+    // Codex EPC-017 review round 3, N2: editor use or commit.verbose does
+    // not prove Git truncates. Only Git's own cut signature does.
     #[test]
-    fn test_scissors_like_text_is_scanned_unless_git_cuts_there() {
+    fn test_only_gits_cut_signature_ends_the_scanned_message() {
         let loose = "feat: add ranges\n\n# ---- >8 ----\n- pages 1\u{2013}3\n";
         let committed = commit_msg_from(
             &GitPolicy::default(),
@@ -1290,39 +1321,70 @@ mod tests {
             "{:?}",
             committed.violations
         );
-        // Not Git's exact cut line: even a stripping editor session keeps the
-        // text below it, so every mode scans it.
-        assert!(pending_flags(loose, &pending(None, false, false)));
-        assert!(pending_flags(loose, &pending(None, true, false)));
-
-        let exact = format!("feat: add ranges\n\n# {CUT_LINE}\n- pages 1\u{2013}3\n");
-        // `-m` keeps an exact cut line and what follows it...
-        assert!(pending_flags(&exact, &pending(None, false, false)));
-        // ...unless commit.verbose makes Git truncate there.
-        assert!(!pending_flags(&exact, &pending(None, false, true)));
-        // An editor session's verbose diff preview is never message content.
-        assert!(!pending_flags(&exact, &pending(None, true, false)));
-        assert!(!pending_flags(
-            &exact,
-            &pending(Some("verbatim"), true, false)
-        ));
+        let bare = format!(
+            "feat: add ranges\n\n# {}\n- pages 1\u{2013}3\n",
+            CUT_SIGNATURE[0]
+        );
+        for msg in [loose, bare.as_str()] {
+            // A bare cut line is only a comment to a stripping editor
+            // session with no verbose flag; the bullet below it is kept.
+            for editor_used in [false, true] {
+                for mode in [None, Some("whitespace"), Some("verbatim"), Some("strip")] {
+                    let source = pending(mode, editor_used);
+                    assert!(pending_flags(msg, &source), "{mode:?} {editor_used}");
+                }
+            }
+        }
+        // Git's full signature marks the verbose preview, in any mode.
+        let preview = format!(
+            "feat: add ranges\n\n{}diff --git a/x b/x\n+pages 1\u{2013}3\n",
+            signature("#")
+        );
+        for editor_used in [false, true] {
+            for mode in [None, Some("whitespace"), Some("verbatim")] {
+                let source = pending(mode, editor_used);
+                assert!(!pending_flags(&preview, &source), "{mode:?} {editor_used}");
+            }
+        }
+        // The signature must be whole and in the configured prefix.
+        let partial = format!(
+            "feat: add ranges\n\n# {}\n# {}\n- pages 1\u{2013}3\n",
+            CUT_SIGNATURE[0], CUT_SIGNATURE[1]
+        );
+        assert!(pending_flags(&partial, &pending(Some("verbatim"), true)));
+        let other = GitCleanup::resolve(Some("verbatim"), true, Some(";"));
+        assert!(retained(&other, &preview).contains("+pages"));
     }
 
+    // Codex EPC-017 review round 3, N3: the comment prefix is used byte for
+    // byte, and `auto` leaves it unknown, so no line counts as a comment.
     #[test]
-    fn test_pending_cleanup_honors_the_comment_prefix() {
+    fn test_pending_cleanup_uses_the_exact_comment_prefix() {
         let msg = "feat: add ranges\n\n# pages 1\u{2014}3\n; note \u{2014} here\n";
-        let semicolon = MessageSource::Pending(GitCleanup::resolve(None, true, false, ";"));
-        // Git strips `;` lines here and keeps the `#` line.
-        let retained = match &semicolon {
-            MessageSource::Pending(cleanup) => cleanup.retained(msg),
-            MessageSource::Committed => unreachable!(),
-        };
-        assert_eq!("feat: add ranges\n\n# pages 1\u{2014}3", retained);
-        assert!(pending_flags(msg, &semicolon));
-        // `auto` and an unset prefix fall back to `#`.
+        let semicolon = GitCleanup::resolve(None, true, Some(";"));
+        assert_eq!(
+            "feat: add ranges\n\n# pages 1\u{2014}3\n",
+            retained(&semicolon, msg)
+        );
+
+        let hash_space = GitCleanup::resolve(None, true, Some("# "));
+        let spaced = "feat: x\n\n# dropped \u{2014} comment\n#kept \u{2014} line\n";
+        assert_eq!(
+            "feat: x\n\n#kept \u{2014} line\n",
+            retained(&hash_space, spaced)
+        );
+        let cut = format!("feat: x\n\n{}diff\n", signature("# "));
+        assert_eq!("feat: x\n", retained(&hash_space, &cut));
+
+        for auto in ["auto", "AUTO", "Auto"] {
+            let unknown = GitCleanup::resolve(None, true, Some(auto));
+            assert_eq!(msg, retained(&unknown, msg), "{auto}");
+            let preview = format!("feat: x\n\n{}+a\u{2014}b\n", signature("#"));
+            assert_eq!(preview, retained(&unknown, &preview), "{auto}");
+        }
         assert_eq!(
             GitCleanup::editor_default(),
-            GitCleanup::resolve(Some("default"), true, false, "auto")
+            GitCleanup::resolve(Some("default"), true, Some("#"))
         );
     }
 
