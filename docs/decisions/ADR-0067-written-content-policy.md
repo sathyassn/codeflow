@@ -1,7 +1,7 @@
 ---
 id: ADR-0067
 title: "Written content policy for new text"
-status: proposed
+status: accepted
 date: 2026-09-22
 supersedes: []
 superseded_by: []
@@ -52,9 +52,10 @@ never rewritten to comply: accepted records are append-only, and only a new
 record or a dated Note is new text there. A failing check names the
 sanctioned fix: a comma, colon, semicolon, parentheses, or a full stop and a
 new sentence; a hyphen (U+002D) inside a compound word; "to" in a range. The
-hyphen, the minus sign in code and a dash inside a quoted command or fixture
-are not policy characters, and a fixture that must contain one lives outside
-the named trees.
+hyphen and the minus sign in code are not policy characters. There is no
+exemption for quotation: new text that would quote a dash rephrases instead,
+and a test fixture that must contain one writes it as an escape or lives
+outside the named trees.
 
 ### Editorial smell graded by evaluation
 

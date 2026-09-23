@@ -179,9 +179,9 @@ relationship, the reply carries a figure: fenced ASCII in chat, an HTML or SVG
 stage in `cf-present` or the portal. When a substantial comparison, review, or
 decision would be clearer on one surface with anchored feedback, open or offer
 `cf-present` and say why. A simple answer stays simple: no figure, no
-headings, no recap. Write short plain prose, two to four sentences before any
-list, and add bullets or a table only where they carry facts better than a
-sentence. Mannered prose (slogans, contrast turns, rhetorical triplets,
+headings, no recap. Write short plain prose; a summary is two to four
+sentences before any list, while a one-line answer stays one line. Add bullets
+or a table only where they carry facts better than a sentence. Mannered prose (slogans, contrast turns, rhetorical triplets,
 dramatic fragments, stacked hedges, colon reveals, self-narration, paragraph
 walls) is a defect in a reply as much as in a document; no hook sees a reply,
 so evaluation and review judge it. Em and en dashes are absent from new text

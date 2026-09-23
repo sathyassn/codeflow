@@ -317,7 +317,7 @@
     ".agents/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "dc0014e0ddfe9bee5ad86dabb44f1fc7ae0c2ef3596ffd7ccb0fb43003965c68",
+      "sha256": "203b0bfc6f41ecb5a53216f0492f6c4b40cb90a506c3f4e2d2ea1f57dc9acbfd",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
@@ -791,7 +791,7 @@
     ".claude/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "dc0014e0ddfe9bee5ad86dabb44f1fc7ae0c2ef3596ffd7ccb0fb43003965c68",
+      "sha256": "203b0bfc6f41ecb5a53216f0492f6c4b40cb90a506c3f4e2d2ea1f57dc9acbfd",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/SKILL.md": {

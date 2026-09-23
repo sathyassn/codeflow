@@ -1448,6 +1448,31 @@ mod tests {
     }
 
     #[test]
+    fn parse_added_lines_skips_pure_renames_and_binary_files() {
+        let diff = "diff --git a/docs/old.md b/docs/moved.md\n\
+                    similarity index 100%\n\
+                    rename from docs/old.md\n\
+                    rename to docs/moved.md\n\
+                    diff --git a/docs/logo.png b/docs/logo.png\n\
+                    new file mode 100644\n\
+                    index 0000000..1234567\n\
+                    Binary files /dev/null and b/docs/logo.png differ\n\
+                    diff --git a/docs/edit.md b/docs/renamed.md\n\
+                    similarity index 80%\n\
+                    rename from docs/edit.md\n\
+                    rename to docs/renamed.md\n\
+                    --- a/docs/edit.md\n\
+                    +++ b/docs/renamed.md\n\
+                    @@ -2 +2 @@\n\
+                    -before\n\
+                    +after\n";
+        assert_eq!(
+            parse_added_lines(diff),
+            vec![added("docs/renamed.md", 2, "after")]
+        );
+    }
+
+    #[test]
     fn hunk_header_defaults_counts_to_one() {
         assert_eq!(hunk_header("-3 +3,2 @@ ctx"), Some((1, 3, 2)));
         assert_eq!(hunk_header("-10,0 +12 @@"), Some((0, 12, 1)));
