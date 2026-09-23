@@ -134,6 +134,9 @@ struct AcceptedRecord {
     prompt_sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     compatibility: Option<String>,
+    /// How the submitted prompt matched: `exact` or `paste_envelope`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    delivery: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
@@ -476,12 +479,9 @@ fn accept_prompt(
         .request
         .as_ref()
         .ok_or_else(|| DelegateError::unsafe_state("armed request disappeared"))?;
-    let digest = hex_sha256(prompt.as_bytes());
-    if request.prompt_sha256 != digest {
-        return Err(DelegateError::invalid(
-            "submitted prompt does not match the armed prompt digest",
-        ));
-    }
+    let delivery = submitted_delivery(&prompt, &request.prompt_sha256).ok_or_else(|| {
+        DelegateError::invalid("submitted prompt does not match the armed prompt digest")
+    })?;
     let compatibility = payload
         .prompt_id
         .is_none()
@@ -493,13 +493,42 @@ fn accept_prompt(
         event: "UserPromptSubmit".to_string(),
         session_id,
         prompt_id: payload.prompt_id,
-        prompt_sha256: digest,
+        prompt_sha256: request.prompt_sha256.clone(),
         compatibility,
+        delivery: Some(delivery.to_string()),
     };
     install_json(
         &turn_path(state_dir, &state.turn_id, "accepted.json"),
         &accepted,
     )
+}
+
+/// Classify how a submitted prompt matches the armed digest.
+///
+/// The prompt matches `exact` when its bytes are the armed bytes. Claude Code
+/// wraps a long or multi-line paste as one envelope, so it also matches
+/// `paste_envelope` when removing exactly one outer envelope leaves the armed
+/// bytes. The accepted grammar is `<pasted_content id="N">` LF, the inner
+/// bytes, LF, `</pasted_content id="N">`, then at most one LF, where both N are
+/// the same non-empty ASCII digit string. Anything else does not match.
+fn submitted_delivery(prompt: &str, armed_sha256: &str) -> Option<&'static str> {
+    if hex_sha256(prompt.as_bytes()) == armed_sha256 {
+        return Some("exact");
+    }
+    let inner = strip_paste_envelope(prompt)?;
+    (hex_sha256(inner.as_bytes()) == armed_sha256).then_some("paste_envelope")
+}
+
+fn strip_paste_envelope(prompt: &str) -> Option<&str> {
+    let rest = prompt.strip_prefix("<pasted_content id=\"")?;
+    let id_len = rest.find(|character: char| !character.is_ascii_digit())?;
+    if id_len == 0 {
+        return None;
+    }
+    let (id, rest) = rest.split_at(id_len);
+    let body = rest.strip_prefix("\">\n")?;
+    let body = body.strip_suffix('\n').unwrap_or(body);
+    body.strip_suffix(&format!("\n</pasted_content id=\"{id}\">"))
 }
 
 fn record_terminal(
@@ -733,6 +762,10 @@ fn inspect_turns(run_id: &str, state_dir: &Path) -> Result<Vec<TurnState>, Deleg
                 || (record.prompt_id.is_none()
                     && record.compatibility.as_deref() != Some("pre-2.1.196-single-turn"))
                 || (record.prompt_id.is_some() && record.compatibility.is_some())
+                || !matches!(
+                    record.delivery.as_deref(),
+                    None | Some("exact" | "paste_envelope")
+                )
             {
                 return Err(DelegateError::unsafe_state(
                     "accepted record is mis-correlated with its request",
@@ -1599,6 +1632,107 @@ mod tests {
         );
     }
 
+    const ARMED: &str = "Run the pipeline.\n\nThen stop.";
+
+    fn submit(path: &Path, prompt: &str) -> Result<(), DelegateError> {
+        handle_hook(
+            "run-1",
+            path,
+            &serde_json::json!({
+                "hook_event_name": "UserPromptSubmit",
+                "session_id": "s1",
+                "prompt_id": PROMPT_ID,
+                "prompt": prompt
+            })
+            .to_string(),
+        )
+    }
+
+    fn accepted_delivery(path: &Path) -> String {
+        let text = std::fs::read_to_string(path.join("turns/turn-1/accepted.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(value["prompt_sha256"], hex_sha256(ARMED.as_bytes()));
+        value["delivery"].as_str().unwrap().to_string()
+    }
+
+    #[test]
+    fn accepts_exact_prompt_or_one_matching_paste_envelope() {
+        for (submitted, delivery) in [
+            (ARMED.to_string(), "exact"),
+            (
+                format!("<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">"),
+                "paste_envelope",
+            ),
+            (
+                format!("<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">\n"),
+                "paste_envelope",
+            ),
+        ] {
+            let (_temp, path) = state();
+            ready(&path);
+            arm("run-1", &path, "turn-1", ARMED.as_bytes()).unwrap();
+            submit(&path, &submitted).unwrap();
+            assert_eq!(accepted_delivery(&path), delivery, "{submitted:?}");
+            // The exact retry stays idempotent for either delivery form.
+            submit(&path, &submitted).unwrap();
+        }
+    }
+
+    #[test]
+    fn rejects_every_other_paste_envelope_shape() {
+        let open = "<pasted_content id=\"7914\">";
+        let close = "</pasted_content id=\"7914\">";
+        let mut differs = ARMED.to_string();
+        differs.replace_range(0..1, "r");
+        for submitted in [
+            format!("<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7915\">"),
+            format!("<pasted_content id=\"\">\n{ARMED}\n</pasted_content id=\"\">"),
+            format!("<pasted_content id=\"a1\">\n{ARMED}\n</pasted_content id=\"a1\">"),
+            format!("x{open}\n{ARMED}\n{close}"),
+            format!("\n{open}\n{ARMED}\n{close}"),
+            format!("{open}\n{ARMED}\n{close}x"),
+            format!("{open}\n{ARMED}\n{close}\n\n"),
+            format!("{open}{ARMED}{close}"),
+            format!("{open}\n{ARMED}\n\n{close}"),
+            format!("{open}\n{ARMED}\n{close}\n{open}\n{ARMED}\n{close}"),
+            format!(
+                "{open}\n{ARMED}\n{close}\n<pasted_content id=\"2\">\n{ARMED}\n</pasted_content id=\"2\">"
+            ),
+            format!(
+                "{open}\n<pasted_content id=\"2\">\n{ARMED}\n</pasted_content id=\"2\">\n{close}"
+            ),
+            format!("{open}\n{differs}\n{close}"),
+            format!("{open}\n{ARMED} \n{close}"),
+            format!("{open}\nsomething else entirely\n{close}"),
+        ] {
+            let (_temp, path) = state();
+            ready(&path);
+            arm("run-1", &path, "turn-1", ARMED.as_bytes()).unwrap();
+            let error = submit(&path, &submitted).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Invalid, "{submitted:?}");
+            assert!(
+                error.message.contains("does not match the armed prompt digest"),
+                "{submitted:?}"
+            );
+            assert!(!path.join("turns/turn-1/accepted.json").exists());
+        }
+    }
+
+    #[test]
+    fn accepted_delivery_must_be_a_known_form() {
+        let (_temp, path) = state();
+        ready(&path);
+        arm("run-1", &path, "turn-1", ARMED.as_bytes()).unwrap();
+        submit(&path, ARMED).unwrap();
+        rewrite_json(&path.join("turns/turn-1/accepted.json"), |value| {
+            value["delivery"] = serde_json::Value::String("normalized".into());
+        });
+        assert_eq!(
+            inspect_turns("run-1", &path).unwrap_err().kind,
+            ErrorKind::Unsafe
+        );
+    }
+
     #[test]
     fn prompt_id_mismatch_poisons_terminal() {
         let (_temp, path) = state();
@@ -1990,6 +2124,7 @@ mod tests {
                 prompt_id: None,
                 prompt_sha256: hex_sha256(b"other"),
                 compatibility: Some("pre-2.1.196-single-turn".into()),
+                delivery: Some("exact".into()),
             },
         )
         .unwrap();
@@ -2264,6 +2399,7 @@ mod tests {
                 prompt_id: Some(PROMPT_ID.into()),
                 prompt_sha256: hex_sha256(b"hello"),
                 compatibility: None,
+                delivery: None,
             },
         )
         .unwrap();
