@@ -3,7 +3,7 @@
 Use these as diagnostic prompts, not a checklist or blacklist. A pattern is a
 problem only when it weakens this artifact in its actual context. The one
 exception is project policy: the characters and shapes ADR-0067 names are
-defects in new text wherever they appear.
+defects in new text on the surfaces it names.
 
 ## Credibility
 
@@ -75,15 +75,21 @@ rewrite; the rewrite keeps the fact and drops the performance.
 | Dash as drama | a pause marked with U+2014 before the point | a comma, a colon, or a new sentence |
 | Paragraph wall | eight sentences in one block carrying three facts | two sentences, then a three-row table |
 
+The shape alone is not the smell. A list of three facts, a negation that
+draws a real distinction ("missing evidence, not a failed test"), or a colon
+that introduces a list or an explanation stays. The smell is the same shape
+used for effect, where the fact is missing, buried, or replaced by the
+performance.
+
 ## False positives to avoid
 
 Do not rewrite merely because text uses an em dash on a line that predates
 ADR-0067, or a semicolon, colon, heading, bold phrase, technical term,
 transition, list, or occasional emoji. Preserve such choices when they are
 grammatically sound and useful for this audience and medium. Where policy
-forbids it (new text in commit messages, pull request bodies, tracked
-documents, planning records, the skill trees, and operator-facing replies),
-the em or en dash is not a protected choice: replace it on the line being
-written and leave unchanged lines alone. Do not replace an established project
-voice with generic corporate prose, forced informality, or a model's preferred
-cadence.
+forbids it (new text in commit messages, pull request bodies, added lines
+under `docs/`, `project-management/` and the skill trees, and operator-facing
+replies), the em or en dash is not a protected choice: replace it on the line
+being written and leave unchanged lines alone. Do not replace an established
+project voice with generic corporate prose, forced informality, or a model's
+preferred cadence.
