@@ -2843,10 +2843,47 @@ fn operating_doctrine_pack_is_blind_owned_and_keeps_its_canaries() {
     );
 
     // The over-correction canary still carries legitimate punctuation, a list
-    // and domain terms that a correct review preserves.
+    // and domain terms that a correct review preserves, including the em dash
+    // on a line that predates ADR-0067.
     let note = fixture_overlay("editorial-false-positive");
     let note = overlay_file(&note, "editorial-false-positive", "NOTE.md");
-    for kept in [";", ":", "\n- ", "`Retry-After`"] {
+    for kept in [";", ":", "\n- ", "`Retry-After`", "\u{2014}"] {
         assert!(note.contains(kept), "over-correction canary lost {kept:?}");
+    }
+
+    // Every pull request fixture ships the same stand-in, which pins its
+    // scenario on the first call, and carries the grading note.
+    let stand_in_fixtures = [
+        "pr-follow-up-assertion-red",
+        "pr-follow-up-infra-incomplete",
+        "pr-follow-up-green",
+        "pr-follow-up-queued-forever",
+        "pr-printed-url",
+    ];
+    let reference = fixture_overlay(stand_in_fixtures[0]);
+    let reference = overlay_file(&reference, stand_in_fixtures[0], "tools/gh.py").to_string();
+    assert!(
+        reference.contains("scenario_mismatch") && reference.contains("state[\"scenario\"]"),
+        "the stand-in must pin its scenario and log a later edit"
+    );
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    for id in stand_in_fixtures {
+        let overlay = fixture_overlay(id);
+        assert_eq!(
+            overlay_file(&overlay, id, "tools/gh.py"),
+            reference,
+            "{id}: tools/gh.py drifted from the other copies"
+        );
+        let state = fixtures["fixtures"]
+            .as_array()
+            .expect("fixtures")
+            .iter()
+            .find(|fixture| fixture["id"] == id)
+            .expect("fixture")["state"]["grading"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{id}: missing grading note"));
+        for anchor in ["agent_merges", "calls[].at", "scenario_mismatch"] {
+            assert!(state.contains(anchor), "{id}: grading note lost {anchor}");
+        }
     }
 }
