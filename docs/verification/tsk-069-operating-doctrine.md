@@ -53,12 +53,36 @@ ok    managed-drift: no managed-region drift (codeflow blocks match the record)
 
 The one `codeflow ci` warning is `git.breaking_watch_paths` on `c0a798b5`,
 which adds `policy_characters` to `assets/base/policy.json`. Judgment: not a
-breaking change. Version 3.0.0 is unpublished (no `v3` tag), the key reaches
-only new scaffolds, a consumer's own `policy.json` is user-owned and left
-alone, and a binary that knows the check fills a missing key with `block`.
-Copying the new key into a checkout that still runs an older binary would
-fail its schema check; that is an upgrade-order note for the release notes,
-not a break of a published contract.
+break of a published contract, since version 3.0.0 is unpublished (no `v3`
+tag). It does need an upgrade order. Corrected on 2026-09-23 after the Codex
+review below: `codeflow update` adds the key to an existing consumer's
+`policy.json`, because a user-owned JSON policy file gains new default keys
+additively (`scaffold/update.rs`, `scaffold-manifest.toml`). The key does not
+reach only new scaffolds, as this section first said. The hooks run whichever
+`codeflow` is on `PATH`, and a binary built before the key rejects it, so
+updating the scaffold before upgrading that binary blocks every commit. The
+upgrade order is now in `docs/releasing.md`, `docs/adoption.md` and the 3.0.0
+changelog entry.
+
+### Policy key compatibility
+
+Run on 2026-09-23 with the installed `codeflow` 3.0.0 (built 2026-09-13,
+before the key) and the binary built from this branch, on two minimal
+scaffolds: one made by the installed binary (no key) and one by the new build
+(key present). The message was a plain conventional subject, then the same
+subject with an em dash.
+
+| Policy file | Hook binary | Plain message | With an em dash |
+|---|---|---|---|
+| Without the key | installed | exit 0 | exit 0, rule not checked |
+| Without the key | new build | exit 0 | exit 1, `git.policy_characters` |
+| With the key | new build | exit 0 | exit 1, `git.policy_characters` |
+| With the key | installed | exit 1, unknown key | exit 1, unknown key |
+
+The last row's message is `policy error: unknown key git.policy_characters`.
+Running the new build's `codeflow update` on the keyless scaffold reported
+`keys-added .codeflow/policy.json` with `added key git.policy_characters`,
+and the installed binary's hook then failed the plain message with exit 1.
 
 ## Update on a scaffolded sample
 
@@ -80,7 +104,8 @@ and updated with the binary built from `e6121491e`:
 | `cf-evaluate-model/resources/packs.json` | yes |
 
 The sample's `AGENTS.md` carries the written content policy line, and its
-new `policy.json` carries `"policy_characters": "block"`.
+`policy.json` carries `"policy_characters": "block"`: the `1 keys-added`
+above is `update` adding that key to the existing file.
 
 ## Reviews
 
@@ -90,6 +115,7 @@ new `policy.json` carries `"policy_characters": "block"`.
 | Fable, editorial round 1 | all prose in the combined diff | changes requested: three blocking findings |
 | Fable, editorial round 2 | the fixes in #529 | approved |
 | Codex | none | not run: the seat is unavailable until 2026-09-27; recorded as reduced assurance |
+| Codex gpt-6-astra, high, 2026-09-23 | adversarial review of `origin/main...962ec0b6f` | changes requested: one P1 and six P2 findings, fixed on `fix/epc017-codex-review` |
 
 Fable's findings N6 and N8 were left by change control: ADR-0067 is accepted
 and append-only, and the completed task records keep their text; their
@@ -102,4 +128,5 @@ closeouts now point here.
   evidence.
 - Native model trials of the new evaluation cases. The cases grade recorded
   answers; registering them proves nothing about live behaviour.
-- The upgrade-order case above on a real consumer.
+- The upgrade-order case on a real consumer repository; the compatibility
+  table above uses disposable minimal scaffolds.
