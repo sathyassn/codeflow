@@ -38,7 +38,7 @@ figure top to bottom as the chain that keeps the copies honest.
 
 ```cf-stage
 utility-presentation-system.md | shared resource, byte-identical in cf-present and cf-docs-portal @accent
-figure-grammar.md | families, rules, altitude contract, declaration schema, specimens @accent
+figure-grammar.md | families, rules, altitude contract, declaration schema; specimens beside it @accent
 ->
 cf-present visual-craft | composition gate · Comment surface · feedback pipeline
 cf-docs-portal visual-craft | page composition gate · layers · verification matrix
@@ -74,7 +74,7 @@ to the instrument skin and produce the same artifact.
 | Contract | Where | Verified by |
 |---|---|---|
 | Shared doctrine text | `assets/base/agents/skills/{cf-present,cf-docs-portal}/resources/utility-presentation-system.md` | scaffold parity tests; `codeflow doctor --check managed-drift` |
-| Figure grammar | `assets/base/agents/skills/{cf-present,cf-docs-portal}/resources/figure-grammar.md`: nine families, twelve rules, altitude contract, mark vocabulary, declaration field reference, one specimen per family (ADR-0068) | scaffold parity tests; the families table and the evidence-board pointer pinned in `crates/codeflow-core/tests/manifest_consistency.rs` |
+| Figure grammar | `assets/base/agents/skills/{cf-present,cf-docs-portal}/resources/figure-grammar.md`: nine families, twelve rules, altitude contract, mark vocabulary, declaration field reference; `figure-grammar-specimens.md` beside it: one specimen per family, loaded when authoring a figure (ADR-0068) | scaffold parity tests; the families table and the evidence-board pointer pinned in `crates/codeflow-core/tests/manifest_consistency.rs` |
 | Figure declaration | the schema in ADR-0068: id, family, binding, question, idea, caption, states, facts, narrow, twin, source | by inspection and the evaluation kit until the figure runtime and its gate land (EPC-016) |
 | Figure thresholds | text floor 12.5 px (token sheet); mark floor 9 px on the inner mark, narrow break 646 px, elongation ceiling 1.5, clearance 8 px and collision depth 1 px (grammar module); per-figure elongation ceiling with reason (portal configuration) | declared once by the project; the figure gate reads them |
 | Portal carriers | `docs-portal/scripts/lib.mjs` (`cf-stage` parser, altitude trio tablist, full-width `text` fences, tables, media) | adapter tests; `npm run browser:verify` |

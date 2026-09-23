@@ -174,8 +174,9 @@ reduced motion with an equivalent static explanation. No decorative loops.
 `figure-grammar.md` is the figure doctrine: nine families keyed to the
 relationship they encode (flow, structure, layering, sequence, state,
 coverage, extent, derivation, graph), twelve rules every figure obeys, the
-altitude contract, the mark vocabulary, the declaration schema (ADR-0068) and
-one specimen per family. Load it before drawing anything. In brief:
+altitude contract, the mark vocabulary and the declaration schema (ADR-0068).
+Load it before drawing anything; load `figure-grammar-specimens.md`, one drawn
+specimen per family, when authoring a figure. In brief:
 
 - Choose the family by the relationship the reader must see; one figure, one
   family, one governing idea that survives with its title masked.

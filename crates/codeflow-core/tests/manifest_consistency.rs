@@ -1230,9 +1230,10 @@ fn docs_portal_source_live_and_baseline_copies_are_byte_identical() {
     assert_skill_source_live_and_baseline_copies("cf-docs-portal");
 }
 
-/// The figure grammar (ADR-0068) is one doctrine in two skills: the copies are
-/// byte-identical, both skills and the shared doctrine point at it, and it
-/// keeps the nine families in one table, the twelve rules, the altitude
+/// The figure grammar (ADR-0068) is one doctrine in two skills, with its
+/// specimens in a companion file: each file's copies are byte-identical, the
+/// doctrine names the companion, and together they keep the nine families in
+/// one table, one specimen per family, the twelve rules, the altitude
 /// contract, the evidence board with its baselines as controls, and the named
 /// anti-patterns. A smaller file that drops a family or a rule must fail here.
 #[test]
@@ -1240,15 +1241,25 @@ fn figure_grammar_is_shared_and_keeps_its_families_rules_and_evidence() {
     let root = repo_root();
     let skills = root.join("assets/base/agents/skills");
     let normalized = |value: &str| value.split_whitespace().collect::<Vec<_>>().join(" ");
-    let present = std::fs::read(skills.join("cf-present/resources/figure-grammar.md"))
-        .expect("present figure grammar is readable");
-    let portal = std::fs::read(skills.join("cf-docs-portal/resources/figure-grammar.md"))
-        .expect("portal figure grammar is readable");
-    assert_eq!(
-        present, portal,
-        "figure-grammar.md drifted between cf-present and cf-docs-portal"
+    let shared = |file: &str| {
+        let present = std::fs::read(skills.join("cf-present/resources").join(file))
+            .unwrap_or_else(|_| panic!("present {file} is readable"));
+        let portal = std::fs::read(skills.join("cf-docs-portal/resources").join(file))
+            .unwrap_or_else(|_| panic!("portal {file} is readable"));
+        assert_eq!(
+            present, portal,
+            "{file} drifted between cf-present and cf-docs-portal"
+        );
+        normalized(&String::from_utf8(present).expect("figure grammar is UTF-8"))
+    };
+    let grammar = shared("figure-grammar.md");
+    let specimens = shared("figure-grammar-specimens.md");
+    assert!(
+        grammar.contains(&normalized(
+            "`figure-grammar-specimens.md` beside this file, also byte-identical in both skills. Load it when authoring a figure"
+        )),
+        "figure grammar must name its specimens file and when to load it"
     );
-    let grammar = normalized(&String::from_utf8(present).expect("figure grammar is UTF-8"));
 
     let families_header =
         "| Family | Relationship it encodes | Geometry | Non-colour channels that carry state | Reader question it answers |";
@@ -1275,12 +1286,12 @@ fn figure_grammar_is_shared_and_keeps_its_families_rules_and_evidence() {
             "figure grammar lost the {family} family row"
         );
         assert!(
-            grammar.contains(&format!("### 8.{} {family}", index + 1)),
-            "figure grammar lost the {family} specimen heading"
+            specimens.contains(&format!("## {}. {family}", index + 1)),
+            "figure grammar specimens lost the {family} specimen heading"
         );
         assert!(
-            grammar.contains(&format!("data-cf-figure=\"{family}\"")),
-            "figure grammar lost the {family} specimen figure"
+            specimens.contains(&format!("data-cf-figure=\"{family}\"")),
+            "figure grammar specimens lost the {family} specimen figure"
         );
     }
     for rule in 1..=12 {
@@ -1317,24 +1328,29 @@ fn figure_grammar_is_shared_and_keeps_its_families_rules_and_evidence() {
     // A literal colour is `#` followed by exactly three or six hex digits and
     // then a non-alphanumeric boundary; anchors such as `SKILL.md#4` and ids
     // such as `#fg-cov-h` are not colours.
-    let bytes = grammar.as_bytes();
-    let literal_colour = bytes.iter().enumerate().any(|(index, byte)| {
-        if *byte != b'#' {
-            return false;
-        }
-        let run = bytes[index + 1..]
-            .iter()
-            .take_while(|b| b.is_ascii_hexdigit())
-            .count();
-        let boundary = bytes
-            .get(index + 1 + run)
-            .is_none_or(|b| !b.is_ascii_alphanumeric());
-        (run == 3 || run == 6) && boundary
-    });
-    assert!(
-        !literal_colour && !grammar.contains("rgb("),
-        "figure grammar specimens must draw with --cf-fig-* tokens only, never a literal colour"
-    );
+    for (file, text) in [
+        ("figure-grammar.md", &grammar),
+        ("figure-grammar-specimens.md", &specimens),
+    ] {
+        let bytes = text.as_bytes();
+        let literal_colour = bytes.iter().enumerate().any(|(index, byte)| {
+            if *byte != b'#' {
+                return false;
+            }
+            let run = bytes[index + 1..]
+                .iter()
+                .take_while(|b| b.is_ascii_hexdigit())
+                .count();
+            let boundary = bytes
+                .get(index + 1 + run)
+                .is_none_or(|b| !b.is_ascii_alphanumeric());
+            (run == 3 || run == 6) && boundary
+        });
+        assert!(
+            !literal_colour && !text.contains("rgb("),
+            "{file} must draw with --cf-fig-* tokens only, never a literal colour"
+        );
+    }
 }
 
 /// Both presentation skills, their shared doctrine and their profile references

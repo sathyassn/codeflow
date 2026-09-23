@@ -1,7 +1,7 @@
 ---
 id: ADR-0068
 title: "Figure grammar is the default form of a utility figure"
-status: proposed
+status: accepted
 date: 2026-09-22
 supersedes: []
 superseded_by: []
@@ -59,6 +59,11 @@ grammar states:
   section; Concept owns what the subject is, who it is for and what it is
   not; an ordinary how-to section carries a sequence, state or extent figure;
   prose around a figure is short and plain under ADR-0067.
+
+The worked specimens, one drawn figure per family, sit in a companion,
+`resources/figure-grammar-specimens.md`, byte-identical in both skills and
+loaded when authoring a figure, so the doctrine an agent always loads stays
+small.
 
 Thresholds are declared once by the project, never by a figure: the text
 floor by the token sheet (micro 12.5 px); the mark floor (9 px on the
