@@ -573,6 +573,46 @@ fn ci_range_output(dir: &Path) -> (Option<i32>, String) {
     (out.status.code(), all)
 }
 
+// Codex EPC-017 review, finding 4: a `-diff` attribute turned an added
+// Markdown line into a binary-files summary with no hunk, and the check
+// reported success. Text is now decided by content, not by attributes.
+#[test]
+fn ci_diff_attribute_does_not_hide_an_added_policy_character() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    std::fs::write(dir.path().join(".gitattributes"), "docs/*.md -diff\n").unwrap();
+    std::fs::write(
+        dir.path().join("docs/new.md"),
+        "# New\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add new page"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("docs/new.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    assert!(!all.contains("docs/old.md"), "{all}");
+}
+
+#[test]
+fn ci_genuine_binary_under_a_named_tree_is_not_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    // A NUL in the first bytes marks real binary content, whatever bytes
+    // that happen to spell a dash follow it.
+    let mut blob = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\n".to_vec();
+    blob.extend("\u{2014}\n".as_bytes());
+    std::fs::write(dir.path().join("docs/figure.png"), blob).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add figure"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+}
+
 // Codex EPC-017 review, finding 3: git keeps a `#` line given with `-m`,
 // and a merge message is committed text too; CI scans both as stored.
 #[test]

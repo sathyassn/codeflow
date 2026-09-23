@@ -14,8 +14,10 @@
 //! scaffolded wrappers avoid the skip state entirely (full-depth checkout
 //! plus explicit `--base`/`--head`).
 
+use std::collections::BTreeSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use clap::Args;
 use codeflow_core::hooks::policy::{Policy, PolicySource};
@@ -959,7 +961,9 @@ fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRe
 
 /// Lines the range adds under the policy-character trees, diffed from the
 /// merge-base of `base` and `head` (what the PR itself adds). Rename detection
-/// keeps a moved file's unchanged lines grandfathered.
+/// keeps a moved file's unchanged lines grandfathered. `--text` stops a
+/// `-diff` or `binary` attribute from hiding a text addition behind a
+/// binary-files summary; a path is skipped as binary only by its content.
 fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, String> {
     let merge_base = git_stdout(root, &["merge-base", base, head])?;
     let merge_base = merge_base.trim();
@@ -974,6 +978,7 @@ fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, St
         "--no-color",
         "--no-ext-diff",
         "--no-textconv",
+        "--text",
         "--src-prefix=a/",
         "--dst-prefix=b/",
         merge_base,
@@ -981,7 +986,89 @@ fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, St
         "--",
     ];
     args.extend(standards::POLICY_CHARACTER_TREES);
-    Ok(parse_added_lines(&git_stdout(root, &args)?))
+    let lines = parse_added_lines(&git_stdout(root, &args)?);
+    let mut paths: Vec<&str> = lines.iter().map(|added| added.path.as_str()).collect();
+    paths.dedup();
+    let binary = binary_blobs(root, head, &paths)?;
+    Ok(lines
+        .into_iter()
+        .filter(|added| !binary.contains(&added.path))
+        .collect())
+}
+
+/// Git's own binary heuristic, applied to content instead of attributes: a
+/// NUL byte in the first 8000 bytes of the blob.
+const BINARY_SNIFF_BYTES: usize = 8000;
+
+/// The `paths` whose blob at `head` is binary by content, read in one
+/// `git cat-file --batch`. A path git cannot resolve (for example a quoted
+/// name) is not binary, so its lines are still scanned.
+fn binary_blobs(root: &Path, head: &str, paths: &[&str]) -> Result<BTreeSet<String>, String> {
+    let queried: Vec<&str> = paths
+        .iter()
+        .copied()
+        .filter(|path| !path.contains('\n'))
+        .collect();
+    if queried.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["cat-file", "--batch"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stdin = child.stdin.take().ok_or("git cat-file: no stdin")?;
+    let input: String = queried
+        .iter()
+        .map(|path| format!("{head}:{path}\n"))
+        .collect();
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    writer
+        .join()
+        .map_err(|_| "git cat-file: input writer panicked".to_string())?
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    parse_batch_binary(&out.stdout, &queried)
+}
+
+/// Read `git cat-file --batch` output for `queried`, in order, keeping the
+/// paths whose content sniffs as binary.
+fn parse_batch_binary(stdout: &[u8], queried: &[&str]) -> Result<BTreeSet<String>, String> {
+    let mut binary = BTreeSet::new();
+    let mut rest = stdout;
+    for path in queried {
+        let end = rest
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .ok_or("git cat-file: truncated output")?;
+        let header = String::from_utf8_lossy(&rest[..end]).into_owned();
+        rest = &rest[end + 1..];
+        if header.ends_with(" missing") || header.ends_with(" ambiguous") {
+            continue;
+        }
+        let size: usize = header
+            .rsplit(' ')
+            .next()
+            .and_then(|field| field.parse().ok())
+            .ok_or_else(|| format!("git cat-file: bad header {header:?}"))?;
+        let content = rest.get(..size).ok_or("git cat-file: truncated content")?;
+        if content
+            .iter()
+            .take(BINARY_SNIFF_BYTES)
+            .any(|byte| *byte == 0)
+        {
+            binary.insert((*path).to_string());
+        }
+        rest = rest.get(size + 1..).unwrap_or_default();
+    }
+    Ok(binary)
 }
 
 /// Run `git -C root <args>` and return its stdout, or its stderr as the error.
