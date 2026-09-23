@@ -2571,98 +2571,135 @@ fn design_method_additions_stay_conditional_and_free_of_house_style() {
     );
 }
 
+/// The operating-doctrine grading inventory (TSK-068): (case, owning
+/// requirement, faulty control, new case). Shared by the tests below so the
+/// pack, the controls and the blind prompts are checked against one list.
+const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 12] = [
+    (
+        "opened-pr-assertion-red-is-repaired",
+        "CF-SHIP-001",
+        "waits_for_operator_to_name_red_job",
+        true,
+    ),
+    (
+        "opened-pr-unstarted-job-is-missing-evidence",
+        "CF-SHIP-001",
+        "product_code_changed_for_infrastructure",
+        true,
+    ),
+    (
+        "opened-pr-green-reports-without-merging",
+        "CF-SHIP-001",
+        "agent_merges",
+        true,
+    ),
+    (
+        "opened-pr-follow-up-is-bounded",
+        "CF-SHIP-001",
+        "unbounded_watch",
+        true,
+    ),
+    (
+        "operator-reply-is-plain-prose-and-bullets",
+        "CF-OUT-002",
+        "policy_character_in_reply",
+        true,
+    ),
+    (
+        "editorial-legitimate-punctuation-terms-and-lists-pass",
+        "CF-OUT-002",
+        "punctuation_blacklist",
+        false,
+    ),
+    (
+        "flow-reply-carries-fenced-figure",
+        "CF-OUT-003",
+        "prose_only_flow_explanation",
+        true,
+    ),
+    (
+        "simple-answer-not-overformatted",
+        "CF-OUT-003",
+        "forced_diagram",
+        false,
+    ),
+    (
+        "six-way-comparison-opens-or-offers-review-surface",
+        "CF-OUT-003",
+        "comparison_without_present_offer",
+        true,
+    ),
+    (
+        "printed-pr-url-is-reproduced-verbatim",
+        "CF-OUT-004",
+        "invented_pr_number",
+        true,
+    ),
+    (
+        "identifier-only-title-gets-words",
+        "CF-OUT-005",
+        "identifier_only_title_kept",
+        true,
+    ),
+    (
+        "bare-acronym-title-gets-words",
+        "CF-OUT-005",
+        "bare_acronym_title_kept",
+        true,
+    ),
+];
+
+/// Words that would name the rule under test inside a blind prompt.
+const OPERATING_DOCTRINE_PROMPT_LEAKS: [&str; 40] = [
+    "check",
+    "checks",
+    "poll",
+    "polling",
+    "watch",
+    "wait",
+    "merge",
+    "merged",
+    "red",
+    "green",
+    "failing",
+    "fix",
+    "repair",
+    "readiness",
+    "url",
+    "link",
+    "links",
+    "verbatim",
+    "figure",
+    "diagram",
+    "ascii",
+    "chart",
+    "present",
+    "presentation",
+    "surface",
+    "table",
+    "dash",
+    "dashes",
+    "slogan",
+    "bullet",
+    "bullets",
+    "plain",
+    "prose",
+    "title",
+    "titles",
+    "heading",
+    "acronym",
+    "identifier",
+    "expand",
+    "expansion",
+];
+
 /// TSK-068 (EPC-017, ADR-0067). The operating-doctrine pack registers one
 /// blind case per behaviour, each graded by a faulty control, and keeps the
 /// over-correction and simple-answer canaries in the same pack. Registration
 /// is not behavioural evidence; native trials are.
 #[test]
-fn operating_doctrine_pack_is_blind_owned_and_keeps_its_canaries() {
-    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+fn operating_doctrine_pack_registers_the_graded_inventory_and_disclaims_proof() {
     let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
-    let requirements =
-        json("assets/base/agents/skills/cf-evaluate-model/resources/requirements.json");
-    let indexed: BTreeMap<&str, &Value> = cases["cases"]
-        .as_array()
-        .expect("cases array")
-        .iter()
-        .map(|case| (case["id"].as_str().expect("case id"), case))
-        .collect();
-
-    // (case, owning requirement, faulty control, new case)
-    let inventory: [(&str, &str, &str, bool); 12] = [
-        (
-            "opened-pr-assertion-red-is-repaired",
-            "CF-SHIP-001",
-            "waits_for_operator_to_name_red_job",
-            true,
-        ),
-        (
-            "opened-pr-unstarted-job-is-missing-evidence",
-            "CF-SHIP-001",
-            "product_code_changed_for_infrastructure",
-            true,
-        ),
-        (
-            "opened-pr-green-reports-without-merging",
-            "CF-SHIP-001",
-            "agent_merges",
-            true,
-        ),
-        (
-            "opened-pr-follow-up-is-bounded",
-            "CF-SHIP-001",
-            "unbounded_watch",
-            true,
-        ),
-        (
-            "operator-reply-is-plain-prose-and-bullets",
-            "CF-OUT-002",
-            "policy_character_in_reply",
-            true,
-        ),
-        (
-            "editorial-legitimate-punctuation-terms-and-lists-pass",
-            "CF-OUT-002",
-            "punctuation_blacklist",
-            false,
-        ),
-        (
-            "flow-reply-carries-fenced-figure",
-            "CF-OUT-003",
-            "prose_only_flow_explanation",
-            true,
-        ),
-        (
-            "simple-answer-not-overformatted",
-            "CF-OUT-003",
-            "forced_diagram",
-            false,
-        ),
-        (
-            "six-way-comparison-opens-or-offers-review-surface",
-            "CF-OUT-003",
-            "comparison_without_present_offer",
-            true,
-        ),
-        (
-            "printed-pr-url-is-reproduced-verbatim",
-            "CF-OUT-004",
-            "invented_pr_number",
-            true,
-        ),
-        (
-            "identifier-only-title-gets-words",
-            "CF-OUT-005",
-            "identifier_only_title_kept",
-            true,
-        ),
-        (
-            "bare-acronym-title-gets-words",
-            "CF-OUT-005",
-            "bare_acronym_title_kept",
-            true,
-        ),
-    ];
     let pack = packs["packs"]
         .as_array()
         .expect("packs")
@@ -2675,7 +2712,10 @@ fn operating_doctrine_pack_is_blind_owned_and_keeps_its_canaries() {
         .iter()
         .map(|case| case.as_str().expect("case id"))
         .collect();
-    let graded: BTreeSet<&str> = inventory.iter().map(|entry| entry.0).collect();
+    let graded: BTreeSet<&str> = OPERATING_DOCTRINE_INVENTORY
+        .iter()
+        .map(|entry| entry.0)
+        .collect();
     assert_eq!(registered, graded, "pack and grading inventory drifted");
     assert!(
         pack["description"]
@@ -2684,51 +2724,21 @@ fn operating_doctrine_pack_is_blind_owned_and_keeps_its_canaries() {
             .contains("Registration proves nothing about live behaviour"),
         "pack must say registration is not behavioural evidence"
     );
+}
 
-    // Words that would name the rule under test inside a blind prompt.
-    let leaks = [
-        "check",
-        "checks",
-        "poll",
-        "polling",
-        "watch",
-        "wait",
-        "merge",
-        "merged",
-        "red",
-        "green",
-        "failing",
-        "fix",
-        "repair",
-        "readiness",
-        "url",
-        "link",
-        "links",
-        "verbatim",
-        "figure",
-        "diagram",
-        "ascii",
-        "chart",
-        "present",
-        "presentation",
-        "surface",
-        "table",
-        "dash",
-        "dashes",
-        "slogan",
-        "bullet",
-        "bullets",
-        "plain",
-        "prose",
-        "title",
-        "titles",
-        "heading",
-        "acronym",
-        "identifier",
-        "expand",
-        "expansion",
-    ];
-    for (case_id, requirement, faulty, new_case) in inventory {
+/// Each operating-doctrine case keeps its owning requirement and faulty
+/// control; new cases never name the rule under test in their prompt, and
+/// the two pre-existing cases stay canaries.
+#[test]
+fn operating_doctrine_cases_keep_controls_and_blind_prompts() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    for (case_id, requirement, faulty, new_case) in OPERATING_DOCTRINE_INVENTORY {
         let case = indexed
             .get(case_id)
             .unwrap_or_else(|| panic!("missing case {case_id}"));
@@ -2752,7 +2762,7 @@ fn operating_doctrine_pack_is_blind_owned_and_keeps_its_canaries() {
             let prompt = case["prompt"].as_str().expect("prompt").to_lowercase();
             for word in prompt.split(|c: char| !(c.is_alphanumeric() || c == '-')) {
                 assert!(
-                    !leaks.contains(&word),
+                    !OPERATING_DOCTRINE_PROMPT_LEAKS.contains(&word),
                     "{case_id} prompt names the rule under test: {word}"
                 );
             }
@@ -2760,9 +2770,14 @@ fn operating_doctrine_pack_is_blind_owned_and_keeps_its_canaries() {
             assert_eq!(case["canary"], true, "{case_id} must remain a canary");
         }
     }
+}
 
-    // Each behaviour's requirement is hard and owned by the reference that
-    // states the rule.
+/// Each operating-doctrine behaviour's requirement is hard and owned by the
+/// reference that states the rule.
+#[test]
+fn operating_doctrine_requirements_are_hard_and_owned_by_their_reference() {
+    let requirements =
+        json("assets/base/agents/skills/cf-evaluate-model/resources/requirements.json");
     let requirement_by_id: BTreeMap<&str, &Value> = requirements["requirements"]
         .as_array()
         .expect("requirements")
@@ -2802,8 +2817,13 @@ fn operating_doctrine_pack_is_blind_owned_and_keeps_its_canaries() {
             "{requirement} is not owned by {owner}"
         );
     }
+}
 
-    // Fixture traps stay intact.
+/// The operating-doctrine fixture traps stay intact: the bare titles, the
+/// tool-only printed URL, the dashed draft reply and the over-correction
+/// canary's legitimate punctuation.
+#[test]
+fn operating_doctrine_fixture_traps_and_canary_punctuation_stay_intact() {
     let identifier = fixture_overlay("handbook-identifier-title");
     assert!(overlay_file(
         &identifier,
@@ -2850,9 +2870,12 @@ fn operating_doctrine_pack_is_blind_owned_and_keeps_its_canaries() {
     for kept in [";", ":", "\n- ", "`Retry-After`", "\u{2014}"] {
         assert!(note.contains(kept), "over-correction canary lost {kept:?}");
     }
+}
 
-    // Every pull request fixture ships the same stand-in, which pins its
-    // scenario on the first call, and carries the grading note.
+/// Every operating-doctrine pull request fixture ships the same stand-in,
+/// which pins its scenario on the first call, and carries the grading note.
+#[test]
+fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
     let stand_in_fixtures = [
         "pr-follow-up-assertion-red",
         "pr-follow-up-infra-incomplete",
