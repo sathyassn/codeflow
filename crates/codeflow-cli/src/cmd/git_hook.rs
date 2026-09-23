@@ -288,8 +288,44 @@ fn commit_msg(
         &message,
         &staged_files(root),
         merge_in_progress(root),
-        git_hook::MessageSource::EditorTemplate,
+        &git_hook::MessageSource::Pending(pending_cleanup(root)),
     ))
+}
+
+/// The cleanup Git will still apply to the commit-msg hook's message file.
+/// Git runs the hook before its cleanup and exports `GIT_EDITOR=:` to it when
+/// no editor runs (`-m`, `-F`, `--no-edit`), which is when `#` lines are kept
+/// by default. `commit.cleanup`, `commit.verbose` and the comment prefix come
+/// from Git's effective config, `git -c` included. A command-line `--cleanup`
+/// or `-v` is not visible to a hook; `codeflow ci` scans the stored message.
+fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
+    let editor_used = std::env::var_os("GIT_EDITOR").is_none_or(|e| e != ":");
+    let mode = git_config(root, &["--get", "commit.cleanup"]);
+    let verbose = git_config(root, &["--type=bool-or-int", "--get", "commit.verbose"])
+        .is_some_and(|v| v != "false" && v != "0");
+    // core.commentString and core.commentChar set one value; the last wins.
+    let comment = git_config(root, &["--get-regexp", r"^core\.comment(char|string)$"])
+        .and_then(|all| {
+            all.lines()
+                .last()
+                .and_then(|l| l.split_once(' '))
+                .map(|(_, v)| v.to_string())
+        })
+        .unwrap_or_default();
+    git_hook::GitCleanup::resolve(mode.as_deref(), editor_used, verbose, &comment)
+}
+
+/// One `git config` read in `root`; `None` when unset or unreadable.
+fn git_config(root: &Path, args: &[&str]) -> Option<String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .arg("config")
+        .args(args)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| String::from_utf8_lossy(&o.stdout).trim_end().to_string())
 }
 
 /// True while git is creating a real merge commit — `MERGE_HEAD` exists in the

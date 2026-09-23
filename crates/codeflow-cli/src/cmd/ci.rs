@@ -468,7 +468,7 @@ fn evaluate_commits(git: &GitPolicy, commits: &[CommitRecord]) -> Vec<TaggedViol
             git_hook::policy_characters_in_message(
                 git,
                 &c.message,
-                git_hook::MessageSource::Committed,
+                &git_hook::MessageSource::Committed,
             )
             .into_iter()
             .collect()
@@ -478,7 +478,7 @@ fn evaluate_commits(git: &GitPolicy, commits: &[CommitRecord]) -> Vec<TaggedViol
                 &c.message,
                 &c.files,
                 false,
-                git_hook::MessageSource::Committed,
+                &git_hook::MessageSource::Committed,
             )
             .violations
         };

@@ -208,25 +208,104 @@ fn push_format_violations(
 }
 
 /// Where a commit message comes from. It decides what the policy-character
-/// rule (ADR-0067) scans: the live commit-msg hook reads an editor template
-/// whose `#` lines and scissors section git may still strip, while a message
-/// read back from history is committed content, every byte of it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// rule (ADR-0067) scans. Git hands the commit-msg hook the message file
+/// before its own cleanup, so the live hook scans what that cleanup will
+/// retain; a message read back from history is committed content, every byte.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MessageSource {
-    /// The live commit-msg hook's message file, before git's cleanup.
-    EditorTemplate,
+    /// The live commit-msg hook's message file, with the cleanup Git will
+    /// still apply to it.
+    Pending(GitCleanup),
     /// A message already recorded in history, as `codeflow ci` reads it.
     Committed,
+}
+
+/// The part of Git's commit-message cleanup that decides which lines are
+/// recorded: truncation at the verbose or scissors cut line, and removal of
+/// comment lines. Whitespace cleanup never changes which characters remain.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct GitCleanup {
+    /// The comment prefix (`core.commentChar` or `core.commentString`).
+    comment: String,
+    /// Git drops every line starting with `comment` (the `strip` mode).
+    strip_comments: bool,
+    /// Git truncates the message at its exact cut line.
+    cut_at_scissors: bool,
+}
+
+/// Git's cut line after the comment prefix and one space (`wt_status`).
+const CUT_LINE: &str = "------------------------ >8 ------------------------";
+
+impl GitCleanup {
+    /// Resolve the cleanup the way `git commit` and `git merge` do.
+    /// `mode` is `commit.cleanup`; `editor_used` is false when Git told the
+    /// hook no editor runs (`GIT_EDITOR=:`); `verbose` is `commit.verbose`;
+    /// `comment` is the comment prefix, `#` when unset or `auto`.
+    ///
+    /// Git's defaults: `strip` with an editor, `whitespace` without one, and
+    /// `scissors` only with an editor. An editor session truncates at the
+    /// exact cut line, since Git writes one only for verbose or scissors
+    /// sessions and truncates in both.
+    #[must_use]
+    pub fn resolve(mode: Option<&str>, editor_used: bool, verbose: bool, comment: &str) -> Self {
+        let comment = match comment.trim() {
+            "" | "auto" => "#".to_string(),
+            other => other.to_string(),
+        };
+        let mode = mode.map_or("default", str::trim);
+        let strip_comments = match mode {
+            "verbatim" | "whitespace" | "scissors" => false,
+            "strip" => true,
+            _ => editor_used,
+        };
+        let scissors_mode = mode == "scissors" && editor_used;
+        Self {
+            comment,
+            strip_comments,
+            cut_at_scissors: editor_used || verbose || scissors_mode,
+        }
+    }
+
+    /// The cleanup of an interactive `git commit` under default settings:
+    /// `#` comment lines and a verbose diff preview are dropped.
+    #[must_use]
+    pub fn editor_default() -> Self {
+        Self::resolve(None, true, false, "#")
+    }
+
+    /// The lines of `message` that Git records under this cleanup.
+    #[must_use]
+    pub fn retained(&self, message: &str) -> String {
+        let cut = format!("{} {CUT_LINE}", self.comment);
+        let mut out = Vec::new();
+        for line in message.lines() {
+            if self.cut_at_scissors && line == cut {
+                break;
+            }
+            if self.strip_comments && line.starts_with(self.comment.as_str()) {
+                continue;
+            }
+            out.push(line);
+        }
+        out.join("\n")
+    }
 }
 
 /// The commit-msg stage: conventional format (whitelisted types), the restored
 /// v1 subject-length budget and body-shape rule (ADR-0020), standard git-trailer
 /// footers with an optional ticket requirement, the no-AI-attribution rule, the
 /// no-emoji rule (charter §6.4, AC #13), and the policy-character rule over the
-/// subject and body (ADR-0067). The message is the live hook's editor template.
+/// subject and body (ADR-0067). The message is an interactive editor template
+/// under Git's default cleanup; the live hook passes its resolved cleanup
+/// through [`commit_msg_with_files`].
 #[must_use]
 pub fn commit_msg(policy: &GitPolicy, message: &str, is_merge: bool) -> StageReport {
-    commit_msg_from(policy, message, is_merge, MessageSource::EditorTemplate)
+    commit_msg_from(
+        policy,
+        message,
+        is_merge,
+        &MessageSource::Pending(GitCleanup::editor_default()),
+    )
 }
 
 /// [`commit_msg`] for a message from `source`. The policy-character rule runs
@@ -237,7 +316,7 @@ pub fn commit_msg_from(
     policy: &GitPolicy,
     message: &str,
     is_merge: bool,
-    source: MessageSource,
+    source: &MessageSource,
 ) -> StageReport {
     let mut report = StageReport::default();
     report
@@ -345,21 +424,21 @@ pub fn commit_msg_from(
 }
 
 /// The policy-character rule (ADR-0067) over one commit message, `None` when
-/// the rule is off or the message is clean. An editor template is scanned
-/// after git's comment cleanup; a committed message is scanned as stored, so
-/// a retained `#` line or scissors-like text is still examined.
+/// the rule is off or the message is clean. A pending message is scanned as
+/// Git's cleanup will record it; a committed message is scanned as stored,
+/// so a retained `#` line or scissors-like text is still examined.
 #[must_use]
 pub fn policy_characters_in_message(
     policy: &GitPolicy,
     message: &str,
-    source: MessageSource,
+    source: &MessageSource,
 ) -> Option<Violation> {
     if !policy.policy_characters.is_active() {
         return None;
     }
     match source {
-        MessageSource::EditorTemplate => {
-            policy_character_violation(policy, &strip_commit_comments(message))
+        MessageSource::Pending(cleanup) => {
+            policy_character_violation(policy, &cleanup.retained(message))
         }
         MessageSource::Committed => policy_character_violation(policy, message),
     }
@@ -403,7 +482,7 @@ pub fn commit_msg_with_files(
     message: &str,
     changed_files: &[String],
     is_merge: bool,
-    source: MessageSource,
+    source: &MessageSource,
 ) -> StageReport {
     let mut report = commit_msg_from(policy, message, is_merge, source);
     if policy.breaking_watch_paths.is_empty() {
@@ -1161,44 +1240,100 @@ mod tests {
     fn test_committed_hash_body_line_is_scanned_for_policy_characters() {
         let msg = "feat: add ranges\n\n# pages 1\u{2014}3\n";
         let committed =
-            commit_msg_from(&GitPolicy::default(), msg, false, MessageSource::Committed);
+            commit_msg_from(&GitPolicy::default(), msg, false, &MessageSource::Committed);
         let v = committed
             .violations
             .iter()
             .find(|v| v.rule == "git.policy_characters")
             .expect("the retained `#` line is committed content");
         assert!(v.message.contains("line 3"), "{}", v.message);
-        // The live hook still reads an editor template, where git drops it.
-        assert!(!has_policy_character(&commit_msg(
-            &GitPolicy::default(),
+    }
+
+    fn pending(mode: Option<&str>, editor_used: bool, verbose: bool) -> MessageSource {
+        MessageSource::Pending(GitCleanup::resolve(mode, editor_used, verbose, "#"))
+    }
+
+    fn pending_flags(msg: &str, source: &MessageSource) -> bool {
+        has_policy_character(&commit_msg_from(&GitPolicy::default(), msg, false, source))
+    }
+
+    // Codex EPC-017 review round 2: Git hands commit-msg the message before
+    // its cleanup, and `git commit -m` keeps `#` lines (whitespace mode), so
+    // the live hook scans them; only a stripping editor session drops them.
+    #[test]
+    fn test_pending_hash_line_follows_git_cleanup_mode() {
+        let msg = "feat: add ranges\n\n# pages 1\u{2014}3\n";
+        assert!(pending_flags(msg, &pending(None, false, false)), "-m");
+        assert!(pending_flags(msg, &pending(Some("verbatim"), true, false)));
+        assert!(pending_flags(
             msg,
-            false
-        )));
+            &pending(Some("whitespace"), true, false)
+        ));
+        assert!(pending_flags(msg, &pending(Some("scissors"), true, false)));
+        assert!(pending_flags(msg, &pending(Some("scissors"), false, false)));
+        assert!(!pending_flags(msg, &pending(None, true, false)), "editor");
+        assert!(!pending_flags(msg, &pending(Some("strip"), false, false)));
+        assert!(!pending_flags(msg, &pending(Some("default"), true, false)));
     }
 
     #[test]
-    fn test_committed_scissors_like_text_is_scanned_for_policy_characters() {
-        let msg = "feat: add ranges\n\n# ---- >8 ----\n- pages 1\u{2013}3\n";
-        let committed =
-            commit_msg_from(&GitPolicy::default(), msg, false, MessageSource::Committed);
+    fn test_scissors_like_text_is_scanned_unless_git_cuts_there() {
+        let loose = "feat: add ranges\n\n# ---- >8 ----\n- pages 1\u{2013}3\n";
+        let committed = commit_msg_from(
+            &GitPolicy::default(),
+            loose,
+            false,
+            &MessageSource::Committed,
+        );
         assert!(
             has_policy_character(&committed),
             "{:?}",
             committed.violations
         );
-        // A verbose template's diff preview below the scissors is not message.
-        assert!(!has_policy_character(&commit_msg(
-            &GitPolicy::default(),
-            msg,
-            false
-        )));
+        // Not Git's exact cut line: even a stripping editor session keeps the
+        // text below it, so every mode scans it.
+        assert!(pending_flags(loose, &pending(None, false, false)));
+        assert!(pending_flags(loose, &pending(None, true, false)));
+
+        let exact = format!("feat: add ranges\n\n# {CUT_LINE}\n- pages 1\u{2013}3\n");
+        // `-m` keeps an exact cut line and what follows it...
+        assert!(pending_flags(&exact, &pending(None, false, false)));
+        // ...unless commit.verbose makes Git truncate there.
+        assert!(!pending_flags(&exact, &pending(None, false, true)));
+        // An editor session's verbose diff preview is never message content.
+        assert!(!pending_flags(&exact, &pending(None, true, false)));
+        assert!(!pending_flags(
+            &exact,
+            &pending(Some("verbatim"), true, false)
+        ));
+    }
+
+    #[test]
+    fn test_pending_cleanup_honors_the_comment_prefix() {
+        let msg = "feat: add ranges\n\n# pages 1\u{2014}3\n; note \u{2014} here\n";
+        let semicolon = MessageSource::Pending(GitCleanup::resolve(None, true, false, ";"));
+        // Git strips `;` lines here and keeps the `#` line.
+        let retained = match &semicolon {
+            MessageSource::Pending(cleanup) => cleanup.retained(msg),
+            MessageSource::Committed => unreachable!(),
+        };
+        assert_eq!("feat: add ranges\n\n# pages 1\u{2014}3", retained);
+        assert!(pending_flags(msg, &semicolon));
+        // `auto` and an unset prefix fall back to `#`.
+        assert_eq!(
+            GitCleanup::editor_default(),
+            GitCleanup::resolve(Some("default"), true, false, "auto")
+        );
     }
 
     #[test]
     fn test_merge_message_is_scanned_for_policy_characters() {
         let msg = "Merge branch 'feat/x' \u{2014} tidy\n";
-        for source in [MessageSource::EditorTemplate, MessageSource::Committed] {
-            let report = commit_msg_from(&GitPolicy::default(), msg, true, source);
+        for source in [
+            MessageSource::Pending(GitCleanup::editor_default()),
+            MessageSource::Committed,
+        ] {
+            let report = commit_msg_from(&GitPolicy::default(), msg, true, &source);
             // The format exemption still holds; only the character rule fires.
             assert_eq!(1, report.violations.len(), "{:?}", report.violations);
             assert!(has_policy_character(&report), "{source:?}");
@@ -1445,7 +1580,7 @@ mod tests {
             "feat: tweak a route\n",
             &files,
             false,
-            MessageSource::EditorTemplate,
+            &MessageSource::Pending(GitCleanup::editor_default()),
         );
         let v = report
             .violations
@@ -1465,7 +1600,7 @@ mod tests {
             "feat!: drop a route\n",
             &files,
             false,
-            MessageSource::EditorTemplate,
+            &MessageSource::Pending(GitCleanup::editor_default()),
         );
         assert!(!bang
             .violations
@@ -1477,7 +1612,7 @@ mod tests {
             "feat: drop a route\n\nBREAKING CHANGE: the /old route is gone\n",
             &files,
             false,
-            MessageSource::EditorTemplate,
+            &MessageSource::Pending(GitCleanup::editor_default()),
         );
         assert!(!footer
             .violations
@@ -1493,7 +1628,7 @@ mod tests {
             "docs: tidy the readme\n",
             &files,
             false,
-            MessageSource::EditorTemplate,
+            &MessageSource::Pending(GitCleanup::editor_default()),
         );
         assert!(!report
             .violations
@@ -1510,7 +1645,7 @@ mod tests {
             "feat: tweak a route\n",
             &files,
             false,
-            MessageSource::EditorTemplate,
+            &MessageSource::Pending(GitCleanup::editor_default()),
         );
         assert!(!report
             .violations
