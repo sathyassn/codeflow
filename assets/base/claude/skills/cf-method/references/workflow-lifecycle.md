@@ -187,6 +187,11 @@ walls) is a defect in a reply as much as in a document; no hook sees a reply,
 so evaluation and review judge it. Em and en dashes are absent from new text
 on every policy surface, replies included.
 
+When a reply or document names a link (a pull request, a served portal or
+`cf-present` page, a file), give the exact link the tool printed or one you
+verified. Never guess a URL, port, or pull request number; state an unknown
+link as unknown.
+
 Ordinary recoverable task-scoped edits remain autonomous. A system-level,
 cross-boundary, credential/IAM, production, destructive-disk,
 security-weakening, irreversible, or other high-blast-radius action requires
