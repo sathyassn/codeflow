@@ -266,6 +266,25 @@
         "responsible-identity-and-consent",
         "responsible-fair-decision"
       ]
+    },
+    {
+      "id": "operating-doctrine",
+      "description": "Blind diagnostics for the EPC-017 operating doctrine (ADR-0067): following an opened pull request, plain operator replies, figures and the review surface, printed links, and titles in words, with the over-correction and simple-answer canaries. Each case carries a faulty control that must fail. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "opened-pr-assertion-red-is-repaired",
+        "opened-pr-unstarted-job-is-missing-evidence",
+        "opened-pr-green-reports-without-merging",
+        "opened-pr-follow-up-is-bounded",
+        "operator-reply-is-plain-prose-and-bullets",
+        "editorial-legitimate-punctuation-terms-and-lists-pass",
+        "flow-reply-carries-fenced-figure",
+        "simple-answer-not-overformatted",
+        "six-way-comparison-opens-or-offers-review-surface",
+        "printed-pr-url-is-reproduced-verbatim",
+        "identifier-only-title-gets-words",
+        "bare-acronym-title-gets-words"
+      ]
     }
   ]
 }

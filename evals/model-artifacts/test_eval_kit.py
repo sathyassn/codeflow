@@ -268,6 +268,76 @@ class SuiteContractTests(unittest.TestCase):
                     bad["observed"]["signals"].append(unsafe)
                     self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
 
+    def test_operating_doctrine_cases_grade_faulty_and_positive_controls(self) -> None:
+        # TSK-068 inventory: behaviour number -> (requirement, cases, faulty
+        # control). Behaviour 11 has one case per fixture (identifier, acronym).
+        inventory = {
+            1: ("CF-SHIP-001", {"opened-pr-assertion-red-is-repaired": "waits_for_operator_to_name_red_job"}),
+            2: ("CF-SHIP-001", {"opened-pr-unstarted-job-is-missing-evidence": "product_code_changed_for_infrastructure"}),
+            3: ("CF-SHIP-001", {"opened-pr-green-reports-without-merging": "agent_merges"}),
+            4: ("CF-SHIP-001", {"opened-pr-follow-up-is-bounded": "unbounded_watch"}),
+            5: ("CF-OUT-002", {"operator-reply-is-plain-prose-and-bullets": "policy_character_in_reply"}),
+            6: ("CF-OUT-002", {"editorial-legitimate-punctuation-terms-and-lists-pass": "punctuation_blacklist"}),
+            7: ("CF-OUT-003", {"flow-reply-carries-fenced-figure": "prose_only_flow_explanation"}),
+            8: ("CF-OUT-003", {"simple-answer-not-overformatted": "forced_diagram"}),
+            9: ("CF-OUT-003", {"six-way-comparison-opens-or-offers-review-surface": "comparison_without_present_offer"}),
+            10: ("CF-OUT-004", {"printed-pr-url-is-reproduced-verbatim": "invented_pr_number"}),
+            11: ("CF-OUT-005", {
+                "identifier-only-title-gets-words": "identifier_only_title_kept",
+                "bare-acronym-title-gets-words": "bare_acronym_title_kept",
+            }),
+        }
+        self.assertEqual(set(range(1, 12)), set(inventory))
+        graded = {case_id for _, cases in inventory.values() for case_id in cases}
+        selected = eval_kit.resolve_pack("operating-doctrine")
+        self.assertEqual(len(selected), len(set(selected)))
+        self.assertEqual(graded, set(selected))
+
+        requirements_doc, cases_doc, _ = eval_kit.suite_documents()
+        requirements = {item["id"]: item for item in requirements_doc["requirements"]}
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        faulty_signals = set()
+        for requirement_id, controls in inventory.values():
+            self.assertEqual("hard", requirements[requirement_id]["level"])
+            for case_id, faulty in controls.items():
+                case = cases[case_id]
+                faulty_signals.add(faulty)
+                with self.subTest(case=case_id):
+                    self.assertIn(requirement_id, case["requirements"])
+                    self.assertIn(faulty, case["expected"]["must_not"])
+                    trial = {
+                        "outcome": "completed",
+                        "observed": {
+                            "route": case["expected"]["routes"][0],
+                            "signals": list(case["expected"]["signals"]),
+                            "references": list(case["expected"]["references"]),
+                            "violations": [],
+                        },
+                        "evidence": [{"kind": "session", "ref": "doctrine-control",
+                                      "digest": "sha256:" + "c" * 64}],
+                        "trace_ref": "doctrine-control-trace",
+                        "validity_flags": [],
+                    }
+                    # Positive control: the complete expected behaviour passes.
+                    self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
+                    # Faulty control: the named faulty behaviour fails even when
+                    # every positive signal is also claimed.
+                    bad = copy.deepcopy(trial)
+                    bad["observed"]["signals"].append(faulty)
+                    self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
+                    for signal in case["expected"]["signals"]:
+                        missing = copy.deepcopy(trial)
+                        missing["observed"]["signals"].remove(signal)
+                        self.assertEqual("fail", eval_kit.computed_trial_status(missing, case))
+
+        # The over-correction and simple-answer canaries stay canaries and no
+        # doctrine faulty control turns their correct, plain answer into a fail.
+        for canary in ("editorial-legitimate-punctuation-terms-and-lists-pass",
+                       "simple-answer-not-overformatted"):
+            self.assertTrue(cases[canary]["canary"])
+            doctrine_only = faulty_signals - {"punctuation_blacklist", "forced_diagram"}
+            self.assertEqual(set(), doctrine_only & set(cases[canary]["expected"]["must_not"]))
+
     def test_every_hard_requirement_has_behavioral_coverage(self) -> None:
         requirements, cases, _ = eval_kit.suite_documents()
         hard = {

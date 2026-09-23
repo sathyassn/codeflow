@@ -2570,3 +2570,283 @@ fn design_method_additions_stay_conditional_and_free_of_house_style() {
         "composition reference lost its non-prescriptive framing"
     );
 }
+
+/// TSK-068 (EPC-017, ADR-0067). The operating-doctrine pack registers one
+/// blind case per behaviour, each graded by a faulty control, and keeps the
+/// over-correction and simple-answer canaries in the same pack. Registration
+/// is not behavioural evidence; native trials are.
+#[test]
+fn operating_doctrine_pack_is_blind_owned_and_keeps_its_canaries() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let requirements =
+        json("assets/base/agents/skills/cf-evaluate-model/resources/requirements.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+
+    // (case, owning requirement, faulty control, new case)
+    let inventory: [(&str, &str, &str, bool); 12] = [
+        (
+            "opened-pr-assertion-red-is-repaired",
+            "CF-SHIP-001",
+            "waits_for_operator_to_name_red_job",
+            true,
+        ),
+        (
+            "opened-pr-unstarted-job-is-missing-evidence",
+            "CF-SHIP-001",
+            "product_code_changed_for_infrastructure",
+            true,
+        ),
+        (
+            "opened-pr-green-reports-without-merging",
+            "CF-SHIP-001",
+            "agent_merges",
+            true,
+        ),
+        (
+            "opened-pr-follow-up-is-bounded",
+            "CF-SHIP-001",
+            "unbounded_watch",
+            true,
+        ),
+        (
+            "operator-reply-is-plain-prose-and-bullets",
+            "CF-OUT-002",
+            "policy_character_in_reply",
+            true,
+        ),
+        (
+            "editorial-legitimate-punctuation-terms-and-lists-pass",
+            "CF-OUT-002",
+            "punctuation_blacklist",
+            false,
+        ),
+        (
+            "flow-reply-carries-fenced-figure",
+            "CF-OUT-003",
+            "prose_only_flow_explanation",
+            true,
+        ),
+        (
+            "simple-answer-not-overformatted",
+            "CF-OUT-003",
+            "forced_diagram",
+            false,
+        ),
+        (
+            "six-way-comparison-opens-or-offers-review-surface",
+            "CF-OUT-003",
+            "comparison_without_present_offer",
+            true,
+        ),
+        (
+            "printed-pr-url-is-reproduced-verbatim",
+            "CF-OUT-004",
+            "invented_pr_number",
+            true,
+        ),
+        (
+            "identifier-only-title-gets-words",
+            "CF-OUT-005",
+            "identifier_only_title_kept",
+            true,
+        ),
+        (
+            "bare-acronym-title-gets-words",
+            "CF-OUT-005",
+            "bare_acronym_title_kept",
+            true,
+        ),
+    ];
+    let pack = packs["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| pack["id"] == "operating-doctrine")
+        .expect("operating-doctrine pack");
+    let registered: BTreeSet<&str> = pack["cases"]
+        .as_array()
+        .expect("pack cases")
+        .iter()
+        .map(|case| case.as_str().expect("case id"))
+        .collect();
+    let graded: BTreeSet<&str> = inventory.iter().map(|entry| entry.0).collect();
+    assert_eq!(registered, graded, "pack and grading inventory drifted");
+    assert!(
+        pack["description"]
+            .as_str()
+            .expect("pack description")
+            .contains("Registration proves nothing about live behaviour"),
+        "pack must say registration is not behavioural evidence"
+    );
+
+    // Words that would name the rule under test inside a blind prompt.
+    let leaks = [
+        "check",
+        "checks",
+        "poll",
+        "polling",
+        "watch",
+        "wait",
+        "merge",
+        "merged",
+        "red",
+        "green",
+        "failing",
+        "fix",
+        "repair",
+        "readiness",
+        "url",
+        "link",
+        "links",
+        "verbatim",
+        "figure",
+        "diagram",
+        "ascii",
+        "chart",
+        "present",
+        "presentation",
+        "surface",
+        "table",
+        "dash",
+        "dashes",
+        "slogan",
+        "bullet",
+        "bullets",
+        "plain",
+        "prose",
+        "title",
+        "titles",
+        "heading",
+        "acronym",
+        "identifier",
+        "expand",
+        "expansion",
+    ];
+    for (case_id, requirement, faulty, new_case) in inventory {
+        let case = indexed
+            .get(case_id)
+            .unwrap_or_else(|| panic!("missing case {case_id}"));
+        assert!(
+            case["requirements"]
+                .as_array()
+                .expect("case requirements")
+                .iter()
+                .any(|linked| linked == requirement),
+            "{case_id} lost {requirement}"
+        );
+        assert!(
+            case["expected"]["must_not"]
+                .as_array()
+                .expect("must_not")
+                .iter()
+                .any(|guard| guard == faulty),
+            "{case_id} lost its faulty control {faulty}"
+        );
+        if new_case {
+            let prompt = case["prompt"].as_str().expect("prompt").to_lowercase();
+            for word in prompt.split(|c: char| !(c.is_alphanumeric() || c == '-')) {
+                assert!(
+                    !leaks.contains(&word),
+                    "{case_id} prompt names the rule under test: {word}"
+                );
+            }
+        } else {
+            assert_eq!(case["canary"], true, "{case_id} must remain a canary");
+        }
+    }
+
+    // Each behaviour's requirement is hard and owned by the reference that
+    // states the rule.
+    let requirement_by_id: BTreeMap<&str, &Value> = requirements["requirements"]
+        .as_array()
+        .expect("requirements")
+        .iter()
+        .map(|requirement| (requirement["id"].as_str().expect("id"), requirement))
+        .collect();
+    for (requirement, owner) in [
+        (
+            "CF-SHIP-001",
+            ".agents/skills/cf-ship/references/pr-evidence.md",
+        ),
+        (
+            "CF-OUT-002",
+            ".agents/skills/cf-editorial-review/references/editorial-smells.md",
+        ),
+        (
+            "CF-OUT-003",
+            ".agents/skills/cf-method/references/workflow-lifecycle.md",
+        ),
+        (
+            "CF-OUT-004",
+            ".agents/skills/cf-method/references/workflow-lifecycle.md",
+        ),
+        (
+            "CF-OUT-005",
+            ".agents/skills/cf-editorial-review/references/editorial-smells.md",
+        ),
+    ] {
+        let entry = requirement_by_id[requirement];
+        assert_eq!(entry["level"], "hard", "{requirement} must stay hard");
+        assert!(
+            entry["sources"]
+                .as_array()
+                .expect("sources")
+                .iter()
+                .any(|source| source["path"] == owner),
+            "{requirement} is not owned by {owner}"
+        );
+    }
+
+    // Fixture traps stay intact.
+    let identifier = fixture_overlay("handbook-identifier-title");
+    assert!(overlay_file(
+        &identifier,
+        "handbook-identifier-title",
+        "docs/handbook/tenant-retry-budget.md"
+    )
+    .starts_with("# TSK-058\n"));
+    let acronym = fixture_overlay("handbook-acronym-title");
+    assert!(overlay_file(
+        &acronym,
+        "handbook-acronym-title",
+        "docs/handbook/dependency-scanning.md"
+    )
+    .starts_with("# SCA\n"));
+    assert!(
+        overlay_file(&acronym, "handbook-acronym-title", "docs/security.md")
+            .contains("software composition\nanalysis (SCA)")
+    );
+
+    let printed = "https://github.com/northwind-labs/ledger-service/pull/4817";
+    let url_fixture = fixture_overlay("pr-printed-url");
+    for (path, body) in &url_fixture {
+        assert_eq!(
+            body.contains(printed),
+            path == "tools/gh-scenario.json",
+            "the printed URL must reach the subject only through the tool: {path}"
+        );
+    }
+
+    let reply = fixture_overlay("operator-reply-draft-wall");
+    assert!(
+        overlay_file(&reply, "operator-reply-draft-wall", "DRAFT_REPLY.md").contains('\u{2014}')
+    );
+    assert!(
+        !overlay_file(&reply, "operator-reply-draft-wall", "ROLLOUT_FACTS.md")
+            .contains(['\u{2013}', '\u{2014}'])
+    );
+
+    // The over-correction canary still carries legitimate punctuation, a list
+    // and domain terms that a correct review preserves.
+    let note = fixture_overlay("editorial-false-positive");
+    let note = overlay_file(&note, "editorial-false-positive", "NOTE.md");
+    for kept in [";", ":", "\n- ", "`Retry-After`"] {
+        assert!(note.contains(kept), "over-correction canary lost {kept:?}");
+    }
+}
