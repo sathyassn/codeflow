@@ -642,6 +642,9 @@ Completion requires:
 - both seats approved the final plan version and task breakdown;
 - every acceptance criterion is evidenced;
 - required deterministic gates are green;
+- when a PR was opened, its required checks were followed within the ship
+  poll budget, and the operator received the readiness report with the PR
+  URL the tool printed; no agent merged it;
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;
 - every unit has approved cross-lineage review and the selected Claude judgment

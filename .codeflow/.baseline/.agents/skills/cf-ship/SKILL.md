@@ -58,7 +58,12 @@ description: Land finished work — docs and capability updates, then a PR throu
    revision and scope. Missing required evidence keeps the PR draft. Lint the
    body with `codeflow ci` before pushing and opening the PR. No AI attribution
    or emoji.
-7. Land via a PR **merged by a human** when required *checks* are evidenced
+7. Follow the PR per
+   [references/pr-evidence.md](references/pr-evidence.md): poll required
+   checks at most once a minute for up to thirty minutes, fix assertion-red
+   without asking, report infra-incomplete as missing evidence, never merge,
+   and report readiness with the PR URL the tool printed.
+8. Land via a PR **merged by a human** when required *checks* are evidenced
    green (the same `codeflow test` / `validate` / coverage / security targets,
    locally or in completed CI jobs — a gate is the check, not the job name).
    Classify CI redness with the quality contract: assertion-red blocks;
@@ -69,25 +74,25 @@ description: Land finished work — docs and capability updates, then a PR throu
    remote. An agent never merges into a protected branch — no `gh pr merge`
    into a protected base, no by-hand merge, never `gh pr merge --delete-branch`.
    Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
-8. Confirm the landed state with `codeflow status`; report the final epic and
+9. Confirm the landed state with `codeflow status`; report the final epic and
    capability state.
-9. Clean up after the human merge, with proof. From outside the task worktree:
-   - fetch, then use `codeflow status` as the local worktree/branch inventory;
-     its removable/dirty/unproven classification is evidence, not deletion or
-     ownership authorization. Confirm the task owner is inactive before
-     cleaning every proven-landed resource in this closeout; do not mutate
-     another active owner's worktree;
-   - fetch the remote and inspect `git -C <path> status --short`; if it is
-     dirty or untracked, stop and preserve or harvest the work — never use
-     `git worktree remove --force`;
-   - for a normal merge, require `git merge-base --is-ancestor <branch>
-     origin/<target>`; for a squash merge, require `gh pr view <n> --json
-     state,headRefOid` to report `MERGED` and the branch-tip SHA, or require
-     `git cherry origin/<target> <branch>` to contain no unapplied `+` entry;
-   - remove the clean worktree, then use `git branch -d` after ancestry proof
-     or `git branch -D` only after the squash proof above.
-   Retain anything unproven and record the owner plus the event that permits a
-   later recheck. `git worktree prune` only removes stale administrative
-   records; even after `--dry-run` it is not merge proof or a substitute for
-   this closeout. Name resemblance, a closed PR, age, or a green check is not
-   landing evidence.
+10. Clean up after the human merge, with proof. From outside the task worktree:
+    - fetch, then use `codeflow status` as the local worktree/branch inventory;
+      its removable/dirty/unproven classification is evidence, not deletion or
+      ownership authorization. Confirm the task owner is inactive before
+      cleaning every proven-landed resource in this closeout; do not mutate
+      another active owner's worktree;
+    - fetch the remote and inspect `git -C <path> status --short`; if it is
+      dirty or untracked, stop and preserve or harvest the work; never use
+      `git worktree remove --force`;
+    - for a normal merge, require `git merge-base --is-ancestor <branch>
+      origin/<target>`; for a squash merge, require `gh pr view <n> --json
+      state,headRefOid` to report `MERGED` and the branch-tip SHA, or require
+      `git cherry origin/<target> <branch>` to contain no unapplied `+` entry;
+    - remove the clean worktree, then use `git branch -d` after ancestry proof
+      or `git branch -D` only after the squash proof above.
+    Retain anything unproven and record the owner plus the event that permits a
+    later recheck. `git worktree prune` only removes stale administrative
+    records; even after `--dry-run` it is not merge proof or a substitute for
+    this closeout. Name resemblance, a closed PR, age, or a green check is not
+    landing evidence.
