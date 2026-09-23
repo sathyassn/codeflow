@@ -1,6 +1,7 @@
 //! Branch and commit standards (charter §6.4): conventional commit format, the
 //! restored v1 subject-length budget and body-shape rule (ADR-0020), the
-//! no-AI-attribution rule, and the no-emoji rule.
+//! no-AI-attribution rule, the no-emoji rule, and the policy-character rule
+//! (ADR-0067).
 //!
 //! Shared by the commit-msg git hook and the git-guard PR-body scan so both
 //! planes flag identical content (AC #13). What counts as a violation lives
@@ -10,7 +11,8 @@ use std::sync::OnceLock;
 
 use regex::Regex;
 
-use super::policy::PolicyLevel;
+use super::policy::{GitPolicy, PolicyLevel};
+use super::Violation;
 
 /// Conventional commit subject: `type(scope)!: description`.
 fn conventional_re() -> &'static Regex {
@@ -495,6 +497,80 @@ pub fn find_attribution(text: &str) -> Option<&'static str> {
 #[must_use]
 pub fn find_emoji(text: &str) -> Option<char> {
     text.chars().find(|&c| is_emoji_char(c))
+}
+
+/// The characters ADR-0067 keeps out of new text: U+2013 (en dash) and
+/// U+2014 (em dash). The hyphen-minus (U+002D) and the minus sign are not
+/// policy characters.
+pub const POLICY_CHARACTERS: [char; 2] = ['\u{2013}', '\u{2014}'];
+
+/// The fix every policy-character finding names (ADR-0067), shared by the
+/// commit-msg hook, the git-guard PR-body scan and `codeflow ci`.
+pub const POLICY_CHARACTER_FIX: &str =
+    "use a comma, colon, semicolon, parentheses, or a full stop and a new sentence; \
+     a hyphen (-) inside a compound word; \"to\" in a range (ADR-0067)";
+
+/// Repository trees whose added lines carry the policy-character rule in
+/// `codeflow ci` (ADR-0067). The `.codeflow/.baseline/` mirrors carry the same
+/// bytes as these trees and need no entry of their own.
+pub const POLICY_CHARACTER_TREES: [&str; 6] = [
+    "docs/",
+    "project-management/",
+    ".claude/skills/",
+    ".agents/skills/",
+    "assets/base/agents/skills/",
+    "assets/base/claude/skills/",
+];
+
+/// Whether `path` (repository-relative, `/`-separated) lies under one of the
+/// [`POLICY_CHARACTER_TREES`].
+#[must_use]
+pub fn in_policy_character_tree(path: &str) -> bool {
+    POLICY_CHARACTER_TREES
+        .iter()
+        .any(|tree| path.starts_with(tree))
+}
+
+/// Find the first policy character in `text`: its 1-based line number and the
+/// character itself.
+#[must_use]
+pub fn find_policy_character(text: &str) -> Option<(usize, char)> {
+    text.lines().enumerate().find_map(|(i, line)| {
+        line.chars()
+            .find(|c| POLICY_CHARACTERS.contains(c))
+            .map(|c| (i + 1, c))
+    })
+}
+
+/// The policy-character finding for a PR/MR body, or `None` when the rule is
+/// inactive or the body is clean. Shared by the git-guard `gh pr create` scan
+/// and `codeflow ci`, so both planes report identical content.
+#[must_use]
+pub fn pr_body_policy_character(policy: &GitPolicy, body: &str) -> Option<Violation> {
+    if !policy.policy_characters.is_active() {
+        return None;
+    }
+    let (line, c) = find_policy_character(body)?;
+    Some(Violation::new(
+        "git.policy_characters",
+        policy.policy_characters,
+        format!(
+            "PR body line {line} contains an {}",
+            policy_character_name(c)
+        ),
+        POLICY_CHARACTER_FIX.to_string(),
+    ))
+}
+
+/// Human name of a policy character, for findings: `"em dash (U+2014)"`.
+#[must_use]
+pub fn policy_character_name(c: char) -> String {
+    let name = if c == '\u{2013}' {
+        "en dash"
+    } else {
+        "em dash"
+    };
+    format!("{name} (U+{:04X})", u32::from(c))
 }
 
 fn is_emoji_char(c: char) -> bool {
@@ -1164,6 +1240,56 @@ mod tests {
         // below every arm, so ▶️ (U+25B6 U+FE0F) is detected *only* via 0xFE0F —
         // dropping that arm leaks this real emoji.
         assert_eq!(find_emoji("fix: play \u{25B6}\u{FE0F}"), Some('\u{FE0F}'));
+    }
+
+    // -- policy characters (ADR-0067) --
+
+    #[test]
+    fn test_policy_character_found_with_line() {
+        assert_eq!(
+            find_policy_character("feat: a \u{2014} b"),
+            Some((1, '\u{2014}'))
+        );
+        assert_eq!(
+            find_policy_character("feat: x\n\n- pages 1\u{2013}3\n"),
+            Some((3, '\u{2013}'))
+        );
+        assert_eq!(policy_character_name('\u{2013}'), "en dash (U+2013)");
+        assert_eq!(policy_character_name('\u{2014}'), "em dash (U+2014)");
+    }
+
+    #[test]
+    fn test_policy_character_hyphen_and_minus_pass() {
+        // The hyphen-minus, the minus sign (U+2212), the figure dash (U+2012)
+        // and the horizontal bar (U+2015) are not policy characters.
+        assert_eq!(find_policy_character("fix: re-run a -> b, x - y"), None);
+        assert_eq!(
+            find_policy_character("docs: 3 \u{2212} 1 \u{2012} \u{2015}"),
+            None
+        );
+    }
+
+    #[test]
+    fn test_policy_character_trees() {
+        for path in [
+            "docs/decisions/ADR-0067-written-content-policy.md",
+            "project-management/tasks/TSK-066.md",
+            ".claude/skills/cf-method/SKILL.md",
+            ".agents/skills/cf-method/SKILL.md",
+            "assets/base/agents/skills/cf-method/SKILL.md",
+            "assets/base/claude/skills/cf-reviewer/SKILL.md",
+        ] {
+            assert!(in_policy_character_tree(path), "{path}");
+        }
+        for path in [
+            "crates/codeflow-cli/src/cmd/ci.rs",
+            ".codeflow/.baseline/docs/product.md",
+            "assets/base/docs/product.md",
+            "README.md",
+            "docsx/a.md",
+        ] {
+            assert!(!in_policy_character_tree(path), "{path}");
+        }
     }
 
     #[test]

@@ -1275,7 +1275,8 @@ fn check_gh(args: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
     }
 }
 
-/// Scan a `gh pr create` body for AI attribution / emoji (charter §6.4).
+/// Scan a `gh pr create` body for AI attribution / emoji (charter §6.4) and
+/// policy characters (ADR-0067).
 ///
 /// Both the inline `--body`/`-b` value and the content of a `--body-file`/`-F`
 /// file are scanned. Fail-open (matching the guard's doctrine): a missing or
@@ -1291,7 +1292,8 @@ fn check_gh_pr_create(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation
     }
 }
 
-/// Flag AI-attribution and emoji violations in a single PR-body string.
+/// Flag AI-attribution, emoji and policy-character violations in a single
+/// PR-body string.
 fn scan_pr_body(body: &str, policy: &GitPolicy, out: &mut Vec<Violation>) {
     if policy.ai_attribution.is_active() {
         if let Some(which) = standards::find_attribution(body) {
@@ -1312,6 +1314,9 @@ fn scan_pr_body(body: &str, policy: &GitPolicy, out: &mut Vec<Violation>) {
                 "remove emoji from the PR body (charter §6.4)".to_string(),
             ));
         }
+    }
+    if let Some(v) = standards::pr_body_policy_character(policy, body) {
+        out.push(v);
     }
 }
 
@@ -2633,6 +2638,20 @@ mod tests {
     }
 
     #[test]
+    fn test_pr_body_policy_character_blocked() {
+        let p = default_policy();
+        let cmd = "gh pr create --title 'feat: x' --body 'Adds a hook \u{2014} and a test.'";
+        let v = evaluate(cmd, &ctx(&p, "feat/x"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "git.policy_characters");
+        assert!(
+            v[0].message.contains("em dash (U+2014)"),
+            "{}",
+            v[0].message
+        );
+    }
+
+    #[test]
     fn test_pr_body_clean_allowed() {
         let p = default_policy();
         let cmd = "gh pr create --title 'feat: x' --body 'Summary: adds the hook plane.'";
@@ -2644,9 +2663,10 @@ mod tests {
         let p = GitPolicy {
             ai_attribution: PolicyLevel::Off,
             commit_emoji: PolicyLevel::Off,
+            policy_characters: PolicyLevel::Off,
             ..default_policy()
         };
-        let cmd = "gh pr create --body 'Generated with Bot \u{1F916}'";
+        let cmd = "gh pr create --body 'Generated with Bot \u{1F916} \u{2013}'";
         assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty());
     }
 

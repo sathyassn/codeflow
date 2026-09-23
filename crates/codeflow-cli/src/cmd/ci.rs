@@ -43,8 +43,8 @@ pub struct CiArgs {
     #[arg(long, value_name = "NAME")]
     pub branch: Option<String>,
 
-    /// PR/MR body text to scan for AI attribution, emoji, and the required
-    /// section structure.
+    /// PR/MR body text to scan for AI attribution, emoji, policy characters
+    /// (ADR-0067), and the required section structure.
     #[arg(long, value_name = "TEXT")]
     pub pr_body: Option<String>,
 
@@ -87,6 +87,18 @@ struct CommitRangeEvaluation {
     files: Option<Vec<String>>,
     violations: Vec<TaggedViolation>,
     ran: bool,
+    /// The added-lines policy-character check (ADR-0067): `None` when the
+    /// rule is inactive, `Some(true)` when it ran, `Some(false)` when it could
+    /// not (unresolved range or a failed diff), which is not a pass.
+    added_lines_ran: Option<bool>,
+}
+
+/// One line a commit range adds under a policy-character tree (ADR-0067).
+#[derive(Debug, PartialEq, Eq)]
+struct AddedLine {
+    path: String,
+    line: usize,
+    text: String,
 }
 
 pub fn run(args: &CiArgs) -> i32 {
@@ -160,6 +172,11 @@ pub fn run(args: &CiArgs) -> i32 {
     } else {
         skipped.push("commit");
     }
+    match range.added_lines_ran {
+        Some(true) => ran.push("added-lines"),
+        Some(false) => skipped.push("added-lines"),
+        None => {}
+    }
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {
@@ -231,6 +248,7 @@ fn evaluate_commit_range(
             files: None,
             violations: Vec::new(),
             ran: false,
+            added_lines_ran: git.policy_characters.is_active().then_some(false),
         };
     };
     match enumerate_commits(root, &base_sha, head) {
@@ -242,6 +260,28 @@ fn evaluate_commit_range(
                 range_source,
                 commits.len()
             );
+            let mut violations = evaluate_commits(git, &commits);
+            let added_lines_ran = if git.policy_characters.is_active() {
+                match added_lines(root, &base_sha, head) {
+                    Ok(lines) => {
+                        violations.extend(evaluate_added_lines(git, &lines).into_iter().map(
+                            |violation| TaggedViolation {
+                                sha: None,
+                                violation,
+                            },
+                        ));
+                        Some(true)
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "codeflow ci: warning: could not diff the range ({error}); added-lines check skipped"
+                        );
+                        Some(false)
+                    }
+                }
+            } else {
+                None
+            };
             CommitRangeEvaluation {
                 files: Some(
                     commits
@@ -249,8 +289,9 @@ fn evaluate_commit_range(
                         .flat_map(|commit| commit.files.clone())
                         .collect(),
                 ),
-                violations: evaluate_commits(git, &commits),
+                violations,
                 ran: true,
+                added_lines_ran,
             }
         }
         Err(error) => {
@@ -261,6 +302,7 @@ fn evaluate_commit_range(
                 files: None,
                 violations: Vec::new(),
                 ran: false,
+                added_lines_ran: git.policy_characters.is_active().then_some(false),
             }
         }
     }
@@ -334,9 +376,10 @@ fn print_source_banner(root: &Path) {
 
 /// Print every violation and an honest summary naming what ran vs what was
 /// skipped; return the process exit code: 1 when any violation blocks, 2 when
-/// the commit checks were skipped (nothing in the range was verified — not a
-/// pass), else 0. A skipped branch-naming check is reported but not fatal: a
-/// detached-head run without a CI branch variable is a legitimate state.
+/// the commit checks or the added-lines check were skipped (the range was not
+/// verified in full, which is not a pass), else 0. A skipped branch-naming
+/// check is reported but not fatal: a detached-head run without a CI branch
+/// variable is a legitimate state.
 fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     for t in tagged {
         let plane = match &t.sha {
@@ -394,7 +437,7 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
 
     if blocking {
         1
-    } else if skipped.contains(&"commit") {
+    } else if skipped.contains(&"commit") || skipped.contains(&"added-lines") {
         2
     } else {
         0
@@ -448,9 +491,9 @@ fn evaluate_branch(git: &GitPolicy, branch: &str) -> Option<TaggedViolation> {
     })
 }
 
-/// Scan a PR/MR body for AI attribution and emoji — the same public
-/// `standards` functions the git-guard's PR-body scan uses (identical rules,
-/// so the two planes flag identical content).
+/// Scan a PR/MR body for AI attribution, emoji and policy characters with the
+/// same public `standards` functions the git-guard's PR-body scan uses
+/// (identical rules, so the two planes flag identical content).
 fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
     let mut out = Vec::new();
     if git.ai_attribution.is_active() {
@@ -473,7 +516,40 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
             ));
         }
     }
+    out.extend(standards::pr_body_policy_character(git, body));
     out
+}
+
+/// The policy-character rule over the lines a range adds (ADR-0067): one
+/// finding per added line under a [`standards::POLICY_CHARACTER_TREES`] entry
+/// that carries an en or em dash, naming the file and line. Only added lines
+/// are judged, so existing bytes are grandfathered and nothing asks for a
+/// sweep or a rewrite of `docs/decisions/` history.
+fn evaluate_added_lines(git: &GitPolicy, lines: &[AddedLine]) -> Vec<Violation> {
+    if !git.policy_characters.is_active() {
+        return Vec::new();
+    }
+    lines
+        .iter()
+        .filter(|added| standards::in_policy_character_tree(&added.path))
+        .filter_map(|added| {
+            let (_, c) = standards::find_policy_character(&added.text)?;
+            Some(Violation::new(
+                "git.policy_characters",
+                git.policy_characters,
+                format!(
+                    "{}:{} adds an {}",
+                    added.path,
+                    added.line,
+                    standards::policy_character_name(c)
+                ),
+                format!(
+                    "{}; existing lines are grandfathered, only this added line changes",
+                    standards::POLICY_CHARACTER_FIX
+                ),
+            ))
+        })
+        .collect()
 }
 
 /// How a required PR-body section was (or was not) found.
@@ -857,6 +933,117 @@ fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRe
     Ok(records)
 }
 
+/// Lines the range adds under the policy-character trees, diffed from the
+/// merge-base of `base` and `head` (what the PR itself adds). Rename detection
+/// keeps a moved file's unchanged lines grandfathered.
+fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, String> {
+    let merge_base = git_stdout(root, &["merge-base", base, head])?;
+    let merge_base = merge_base.trim();
+    let mut args = vec![
+        "-c",
+        "core.quotepath=off",
+        "diff-tree",
+        "-r",
+        "-p",
+        "-M",
+        "--unified=0",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        merge_base,
+        head,
+        "--",
+    ];
+    args.extend(standards::POLICY_CHARACTER_TREES);
+    Ok(parse_added_lines(&git_stdout(root, &args)?))
+}
+
+/// Run `git -C root <args>` and return its stdout, or its stderr as the error.
+fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Parse a zero-context unified diff into the lines it adds, with each line's
+/// number in the new file. Hunk line counts decide where a hunk ends, so an
+/// added line whose text begins with `++ ` is never mistaken for a header.
+fn parse_added_lines(diff: &str) -> Vec<AddedLine> {
+    let mut out = Vec::new();
+    let mut path: Option<String> = None;
+    let (mut old_left, mut new_left, mut new_line) = (0usize, 0usize, 0usize);
+    for line in diff.lines() {
+        if old_left == 0 && new_left == 0 {
+            if let Some(rest) = line.strip_prefix("+++ ") {
+                path = diff_path(rest);
+            } else if let Some(header) = line.strip_prefix("@@ ") {
+                if let Some((old_count, start, new_count)) = hunk_header(header) {
+                    (old_left, new_left, new_line) = (old_count, new_count, start);
+                }
+            }
+            continue;
+        }
+        match line.as_bytes().first() {
+            Some(b'+') => {
+                if let Some(p) = &path {
+                    out.push(AddedLine {
+                        path: p.clone(),
+                        line: new_line,
+                        text: line[1..].to_string(),
+                    });
+                }
+                new_line += 1;
+                new_left = new_left.saturating_sub(1);
+            }
+            Some(b'-') => old_left = old_left.saturating_sub(1),
+            Some(b' ') => {
+                new_line += 1;
+                new_left = new_left.saturating_sub(1);
+                old_left = old_left.saturating_sub(1);
+            }
+            // `\ No newline at end of file` belongs to the previous line.
+            Some(b'\\') => {}
+            _ => (old_left, new_left) = (0, 0),
+        }
+    }
+    out
+}
+
+/// The new-side path of a `+++ ` diff header; `None` for a deletion.
+fn diff_path(rest: &str) -> Option<String> {
+    let rest = rest.trim_end_matches('\t');
+    let rest = rest
+        .strip_prefix('"')
+        .and_then(|r| r.strip_suffix('"'))
+        .unwrap_or(rest);
+    rest.strip_prefix("b/").map(str::to_string)
+}
+
+/// Parse `-a[,b] +c[,d] @@ ...` into (old count, new start, new count).
+fn hunk_header(header: &str) -> Option<(usize, usize, usize)> {
+    let mut parts = header.split_whitespace();
+    let old = parts.next()?.strip_prefix('-')?;
+    let new = parts.next()?.strip_prefix('+')?;
+    let count = |range: &str| -> Option<(usize, usize)> {
+        match range.split_once(',') {
+            Some((start, count)) => Some((start.parse().ok()?, count.parse().ok()?)),
+            None => Some((range.parse().ok()?, 1)),
+        }
+    };
+    let (_, old_count) = count(old)?;
+    let (new_start, new_count) = count(new)?;
+    Some((old_count, new_start, new_count))
+}
+
 /// Files a single commit touches (`git diff-tree --no-commit-id --name-only -r`).
 /// Empty on any error — the tripwire is advisory, so an unavailable list means
 /// no nudge.
@@ -1077,9 +1264,10 @@ mod tests {
             commit_format: PolicyLevel::Off,
             commit_emoji: PolicyLevel::Off,
             ai_attribution: PolicyLevel::Off,
+            policy_characters: PolicyLevel::Off,
             ..GitPolicy::default()
         };
-        let v = evaluate_commits(&g, &[commit("ffff6666", "Added some stuff")]);
+        let v = evaluate_commits(&g, &[commit("ffff6666", "Added some stuff \u{2014}")]);
         assert!(v.is_empty(), "off-level checks produce nothing");
     }
 
@@ -1127,6 +1315,143 @@ mod tests {
     #[test]
     fn pr_body_clean_passes() {
         assert!(evaluate_pr_body(&git(), "Summary of a clean PR body.").is_empty());
+    }
+
+    // -- policy characters (ADR-0067) ---------------------------------------
+
+    #[test]
+    fn policy_character_in_commit_body_blocks_in_ci() {
+        let v = evaluate_commits(
+            &git(),
+            &[commit(
+                "aaaa7777",
+                "feat: add ranges\n\n- pages 1\u{2013}3\n",
+            )],
+        );
+        assert!(v.iter().any(|t| t.violation.rule == "git.policy_characters"
+            && t.violation.level == PolicyLevel::Block));
+    }
+
+    #[test]
+    fn pr_body_policy_character_blocks_naming_the_line() {
+        let v = evaluate_pr_body(&git(), "## Summary\n\nAdds a check \u{2014} and tests.\n");
+        let found = v
+            .iter()
+            .find(|x| x.rule == "git.policy_characters")
+            .expect("a policy_characters finding");
+        assert_eq!(found.level, PolicyLevel::Block);
+        assert!(found.message.contains("line 3"), "{}", found.message);
+        assert!(
+            found.message.contains("em dash (U+2014)"),
+            "{}",
+            found.message
+        );
+        assert!(found.remedy.contains("a comma, colon"), "{}", found.remedy);
+    }
+
+    #[test]
+    fn pr_body_hyphen_passes_policy_characters() {
+        assert!(evaluate_pr_body(&git(), "Adds a re-run flag; pages 1 to 3.").is_empty());
+    }
+
+    fn added(path: &str, line: usize, text: &str) -> AddedLine {
+        AddedLine {
+            path: path.to_string(),
+            line,
+            text: text.to_string(),
+        }
+    }
+
+    #[test]
+    fn added_line_with_policy_character_names_file_and_line() {
+        let lines = [
+            added("docs/guide.md", 7, "A rule \u{2014} stated."),
+            added("project-management/tasks/TSK-001.md", 2, "pages 1\u{2013}3"),
+            added(
+                ".agents/skills/cf-x/SKILL.md",
+                4,
+                "a plain line - with a hyphen",
+            ),
+        ];
+        let v = evaluate_added_lines(&git(), &lines);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v[0].message.contains("docs/guide.md:7"), "{}", v[0].message);
+        assert!(
+            v[0].message.contains("em dash (U+2014)"),
+            "{}",
+            v[0].message
+        );
+        assert!(
+            v[1].message
+                .contains("project-management/tasks/TSK-001.md:2"),
+            "{}",
+            v[1].message
+        );
+        assert!(v[0].remedy.contains("grandfathered"), "{}", v[0].remedy);
+    }
+
+    #[test]
+    fn added_line_outside_the_trees_passes() {
+        let lines = [
+            added("crates/codeflow-cli/tests/fixture.md", 1, "x \u{2014} y"),
+            added("README.md", 3, "x \u{2013} y"),
+            added(".codeflow/.baseline/docs/guide.md", 1, "x \u{2014} y"),
+        ];
+        assert!(evaluate_added_lines(&git(), &lines).is_empty());
+    }
+
+    #[test]
+    fn added_lines_off_level_skips() {
+        let g = GitPolicy {
+            policy_characters: PolicyLevel::Off,
+            ..GitPolicy::default()
+        };
+        let lines = [added("docs/guide.md", 1, "x \u{2014} y")];
+        assert!(evaluate_added_lines(&g, &lines).is_empty());
+        assert!(evaluate_pr_body(&g, "x \u{2014} y").is_empty());
+    }
+
+    #[test]
+    fn parse_added_lines_tracks_paths_numbers_and_hunk_ends() {
+        let diff = "diff --git a/docs/a.md b/docs/a.md\n\
+                    index 1..2 100644\n\
+                    --- a/docs/a.md\n\
+                    +++ b/docs/a.md\n\
+                    @@ -3 +3,2 @@ heading\n\
+                    -old line\n\
+                    +new line\n\
+                    +++ looks like a header but is content\n\
+                    @@ -10,0 +12 @@\n\
+                    +tail\n\
+                    \\ No newline at end of file\n\
+                    diff --git a/docs/gone.md b/docs/gone.md\n\
+                    deleted file mode 100644\n\
+                    --- a/docs/gone.md\n\
+                    +++ /dev/null\n\
+                    @@ -1 +0,0 @@\n\
+                    -removed\n\
+                    diff --git a/docs/new file.md b/docs/new file.md\n\
+                    new file mode 100644\n\
+                    --- /dev/null\n\
+                    +++ b/docs/new file.md\t\n\
+                    @@ -0,0 +1 @@\n\
+                    +first\n";
+        assert_eq!(
+            parse_added_lines(diff),
+            vec![
+                added("docs/a.md", 3, "new line"),
+                added("docs/a.md", 4, "++ looks like a header but is content"),
+                added("docs/a.md", 12, "tail"),
+                added("docs/new file.md", 1, "first"),
+            ]
+        );
+    }
+
+    #[test]
+    fn hunk_header_defaults_counts_to_one() {
+        assert_eq!(hunk_header("-3 +3,2 @@ ctx"), Some((1, 3, 2)));
+        assert_eq!(hunk_header("-10,0 +12 @@"), Some((0, 12, 1)));
+        assert_eq!(hunk_header("garbage"), None);
     }
 
     // -- PR-body structure --------------------------------------------------
