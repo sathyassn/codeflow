@@ -277,6 +277,17 @@ publication date._
 
 ### Fixed
 
+<!-- codeflow:release-impact patch -->
+- **Git-guard reads data as data.** The in-session git-guard no longer blocks
+  reading the hook path (`git config core.hooksPath`, `--get`, `--list`,
+  `--show-origin`); it still blocks every write form in every scope, and now
+  also `git config --edit` and removing the `core` section. Heredoc bodies,
+  comments and quoted text are no longer read as commands when only data
+  tools such as `cat`, `git commit -F -` or `gh pr create` read them; a body
+  or substitution that a shell or any other program can run is still checked.
+  A `cd` or `-C` chain that switches to a new branch before committing is
+  judged on that branch.
+
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
   the official pinned Node distribution's compression libraries and explain
   incompatible system-library builds. Regenerated export bytes match that
