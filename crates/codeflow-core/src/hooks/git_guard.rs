@@ -1005,7 +1005,7 @@ const HEREDOC_DATA_READERS: &[&str] = &[
     "diff", "jq", "base64", "python", "python3", "node",
 ];
 
-/// `true` when `segment` reads its input as data: it runs no program, or one of
+/// `true` when `segment` reads its input as data: it only assigns, or runs one of
 /// [`HEREDOC_DATA_READERS`], `git` in a subcommand that takes a message or
 /// patch on stdin with no `-c`/`--config-env` global (either can make any
 /// subcommand an alias that runs a shell), or `gh` in a subcommand that takes
@@ -1013,9 +1013,11 @@ const HEREDOC_DATA_READERS: &[&str] = &[
 /// `make`, a `$VAR` or a function) is read as a script.
 fn reads_as_data(segment: &str) -> bool {
     let words = command_argv(segment);
-    // A segment of only assignments runs no program and reads nothing.
+    // A segment of only assignments runs no program and reads nothing. A
+    // segment with no words at all is a redirect attached to what came before
+    // it (`(bash) <<EOF`), whose reader is unknown.
     let Some((program, args)) = strip_launchers(&words) else {
-        return true;
+        return !words.is_empty();
     };
     match basename(program) {
         "git" => {
@@ -4468,6 +4470,9 @@ mod tests {
             "cat <<'EOF' > >(sh)\ngh pr merge 12\nEOF",
             "echo \"$(cat <<'EOF'\ngh pr merge 12\nEOF\n)\" | bash",
             "printf '%s\\n' \"$(cat <<'EOF'\ngh pr merge 12\nEOF\n)\" | sh",
+            "(bash) <<'EOF'\ngh pr merge 12\nEOF",
+            "{ bash; } <<'EOF'\ngh pr merge 12\nEOF",
+            "tee >(sh) <<'EOF'\ngh pr merge 12\nEOF",
             "(( x = 1 << 2 ))\ngh pr merge 12\n2",
             "echo $(true)#; gh pr merge 12",
             "(( 1 #)); gh pr merge 12",
@@ -4483,6 +4488,7 @@ mod tests {
             "bash -c \"$(cat <<'EOF'\ngit commit -m x\nEOF\n)\"",
             "git checkout feat/x -- f && git commit -m x",
             "git checkout feat/x f && git commit -m x",
+            "(bash) <<'EOF'\ngit commit -m x\nEOF",
         ] {
             let v = evaluate(cmd, &ctx(&p, "main"));
             assert!(has_rule(&v, "git.commit_to_protected"), "{cmd}: {v:?}");
