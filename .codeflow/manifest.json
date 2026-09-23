@@ -137,7 +137,7 @@
     ".agents/skills/cf-editorial-review/references/editorial-smells.md": {
       "src": "agents/skills/cf-editorial-review/references/editorial-smells.md",
       "ownership": "managed",
-      "sha256": "b8885a542c008a91071eb3334a4420747ad8b520b2fdf6c6fdd57fe35ca71412",
+      "sha256": "660f7be14042fb99a8f8f6ff4100bac289dd9a15beb80b3231e7d8124d69e207",
       "exec": false
     },
     ".agents/skills/cf-estimate/SKILL.md": {
@@ -611,7 +611,7 @@
     ".claude/skills/cf-editorial-review/references/editorial-smells.md": {
       "src": "agents/skills/cf-editorial-review/references/editorial-smells.md",
       "ownership": "managed",
-      "sha256": "b8885a542c008a91071eb3334a4420747ad8b520b2fdf6c6fdd57fe35ca71412",
+      "sha256": "660f7be14042fb99a8f8f6ff4100bac289dd9a15beb80b3231e7d8124d69e207",
       "exec": false
     },
     ".claude/skills/cf-estimate/SKILL.md": {

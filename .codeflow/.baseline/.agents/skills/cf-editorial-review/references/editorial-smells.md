@@ -68,7 +68,7 @@ rewrite; the rewrite keeps the fact and drops the performance.
 | Contrast turn | "This is not a linter, it is a discipline." | "The check reads two characters; review reads meaning." |
 | Rhetorical triplet | "Fast, safe, and boring." | "The check runs in under a second and edits nothing." |
 | Dramatic fragment | "One rule. No exceptions." | "The rule has no exceptions." |
-| Stacked hedges | "It might perhaps be worth possibly considering a cap." | "A 31 KiB cap keeps the file loadable." |
+| Stacked hedges | "It might perhaps be worth possibly considering a cap." | "Cap the file at 31 KiB." |
 | Colon reveal | "The result: nothing changed." | "Nothing changed." |
 | Self-narration | "Let me walk you through what I did next." | "Next, the hook was installed." |
 | Ceremonial framing | "It is worth noting that the tests pass." | "The tests pass." |
