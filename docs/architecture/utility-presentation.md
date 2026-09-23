@@ -1,21 +1,22 @@
 # Utility presentation system
 
 <!-- HOW layer. Graduated area page for the utility presentation system.
-     Sources: ADR-0048, ADR-0049, ADR-0053, ADR-0063. The normative authoring
-     doctrine is the shared skill resource; this page records the system's
-     structure and contracts. -->
+     Sources: ADR-0048, ADR-0049, ADR-0053, ADR-0063, ADR-0068. The normative
+     authoring doctrine is the shared skill resource and the figure grammar
+     beside it; this page records the system's structure and contracts. -->
 
 ## Concept
 
 **One design system carries every utility surface CodeFlow renders.** Agents
 author the subject and the runtime owns the chrome, so the same tokens,
-altitude and stage grammar apply to a bounded review session and to a durable
+altitude and figure grammar apply to a bounded review session and to a durable
 repository guide.
 
 ```cf-stage
 subject sources | catalog blocks · repository Markdown @accent
 ->
 shared doctrine | composition rule · page classes · supported carriers
+figure grammar | nine families · twelve rules · altitude contract
 ->
 present runtime | Rust document · Preact chrome · Comment
 portal runtime | Starlight shell · adapter · Pagefind
@@ -31,12 +32,13 @@ folders; present is a composed review document, never a chat answer restyled.
 
 ## Architecture
 
-The doctrine is one file, duplicated by parity rather than by reference, and
+The doctrine is two files, duplicated by parity rather than by reference, and
 the token values are one contract enforced across both stylesheets. Read the
 figure top to bottom as the chain that keeps the copies honest.
 
 ```cf-stage
 utility-presentation-system.md | shared resource, byte-identical in cf-present and cf-docs-portal @accent
+figure-grammar.md | families, rules, altitude contract, declaration schema, specimens @accent
 ->
 cf-present visual-craft | composition gate · Comment surface · feedback pipeline
 cf-docs-portal visual-craft | page composition gate · layers · verification matrix
@@ -72,13 +74,20 @@ to the instrument skin and produce the same artifact.
 | Contract | Where | Verified by |
 |---|---|---|
 | Shared doctrine text | `assets/base/agents/skills/{cf-present,cf-docs-portal}/resources/utility-presentation-system.md` | scaffold parity tests; `codeflow doctor --check managed-drift` |
+| Figure grammar | `assets/base/agents/skills/{cf-present,cf-docs-portal}/resources/figure-grammar.md`: nine families, twelve rules, altitude contract, mark vocabulary, declaration field reference, one specimen per family (ADR-0068) | scaffold parity tests; the families table and the evidence-board pointer pinned in `crates/codeflow-core/tests/manifest_consistency.rs` |
+| Figure declaration | the schema in ADR-0068: id, family, binding, question, idea, caption, states, facts, narrow, twin, source | by inspection and the evaluation kit until the figure runtime and its gate land (EPC-016) |
+| Figure thresholds | text floor 12.5 px (token sheet); mark floor 9 px on the inner mark, narrow break 646 px, elongation ceiling 1.5, clearance 8 px and collision depth 1 px (grammar module); per-figure elongation ceiling with reason (portal configuration) | declared once by the project; the figure gate reads them |
 | Portal carriers | `docs-portal/scripts/lib.mjs` (`cf-stage` parser, altitude trio tablist, full-width `text` fences, tables, media) | adapter tests; `npm run browser:verify` |
 | Present blocks | `crates/codeflow-present` document schema under `.codeflow/schemas/present/` | present contract tests |
 | Type floors | micro 12.5 · caption 13 · ui 13.5 · body 15 px; measure 68ch; scales 0.94 / 1.00 / 1.12 | `utility-tokens.css` and `styles.css` values; token contract test |
 | Token equality | 16 semantic roles × instrument/editorial/ink × light/dark, plus three typeface stacks and the mono stack | `portal_utility_tokens_match_present_skins` in `crates/codeflow-core/tests/manifest_consistency.rs` |
-| Page classes | orient, architecture and reference: the altitude trio with a figure in Concept, a stage on architecture pages; record pointer: one table of folders; records are not portal pages (ADR-0064) | rendered review per class; portal composition gate |
+| Page classes | orient, architecture and reference: the altitude trio with a family figure in every panel and in every how-to section, chosen by the altitude contract; record pointer: one table of folders; records are not portal pages (ADR-0064) | rendered review per class; portal composition gate |
 | Precedence | shared resource is normative; ADR-0053's design-intent note is historical evidence | ADR-0063 |
 
 Unsupported carriers (tree and arbitrary diagram syntaxes on both surfaces;
 Mermaid in the portal, where a fence renders as plain code) are not promised
-anywhere; adding one requires an adapter or runtime change and an ADR.
+anywhere; adding one requires an adapter or runtime change and an ADR. The
+family figure is the default form (ADR-0068) but not yet a portal carrier:
+raw HTML stays escaped, so a portal source authors the declaration beside a
+`cf-stage` or `text` fence until the figure block lands; present renders the
+inline SVG through its `html` block today.

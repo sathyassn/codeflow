@@ -33,12 +33,13 @@ means they start by *seeing* a relationship.
 
 Chrome does not fix weak content. It only frames it.
 
-The design-exploration board that settled utility craft is a **reference**, not
-a document to clone. Do not reproduce its demo subject (system + present +
-portal tabs, sample lineage figure, sample comments). Author **this session's**
-subject into catalog blocks so the same chrome, tokens, and Comment system can
-be used again. Portal work is a different skill (`cf-docs-portal`) on the same
-craft.
+The evidence board that settled utility craft, `docs/verification/tsk-014-w5/`,
+is **evidence**, not a document to clone; its baselines are the plain chat,
+Markdown and HTML controls a figure must beat. Do not reproduce its cases,
+portal families or sample comments. Author **this session's** subject into
+catalog blocks so the same chrome, tokens, and Comment system can be used
+again, and draw figures to `figure-grammar.md`. Portal work is a different
+skill (`cf-docs-portal`) on the same craft.
 
 ---
 

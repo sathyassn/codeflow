@@ -17,7 +17,9 @@ decorative portal chrome.
 
 `cf-design` stays product-generic. This skill is **utility portal** only.
 Author repository sources for this project or any consuming project. Do not
-clone the design-exploration board or copy present Comment chrome.
+clone the evidence board (`docs/verification/tsk-014-w5/`, whose baselines are
+the negative controls) or copy present Comment chrome; draw figures to
+`resources/figure-grammar.md`.
 
 ---
 
