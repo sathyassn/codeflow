@@ -2574,7 +2574,7 @@ fn design_method_additions_stay_conditional_and_free_of_house_style() {
 /// The operating-doctrine grading inventory (TSK-068): (case, owning
 /// requirement, faulty control, new case). Shared by the tests below so the
 /// pack, the controls and the blind prompts are checked against one list.
-const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 13] = [
+const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 14] = [
     (
         "opened-pr-assertion-red-is-repaired",
         "CF-SHIP-001",
@@ -2628,6 +2628,14 @@ const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 13] = [
         "simple-answer-not-overformatted",
         "CF-OUT-003",
         "forced_diagram",
+        false,
+    ),
+    // Codex EPC-017 review, finding 7: the summary sentence count never
+    // pads a one-line answer.
+    (
+        "simple-answer-not-overformatted",
+        "CF-OUT-002",
+        "one_line_answer_padded",
         false,
     ),
     (

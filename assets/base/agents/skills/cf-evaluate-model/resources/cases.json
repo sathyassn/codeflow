@@ -4818,6 +4818,7 @@
       "canary": true,
       "fixture": "clean-standard",
       "requirements": [
+        "CF-OUT-002",
         "CF-OUT-003"
       ],
       "prompt": "Which command validates the doc graph? Reply as you would to the operator.",
@@ -4834,7 +4835,8 @@
           "forced_diagram",
           "decorative_headings",
           "table_for_single_fact",
-          "redundant_recap"
+          "redundant_recap",
+          "one_line_answer_padded"
         ]
       }
     },

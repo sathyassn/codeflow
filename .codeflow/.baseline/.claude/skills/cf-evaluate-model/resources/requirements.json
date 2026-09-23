@@ -1256,7 +1256,7 @@
     {
       "id": "CF-OUT-002",
       "level": "hard",
-      "statement": "Substantial prose and every operator-facing reply are reviewed in their full project, audience, medium, and task context; preserve technical meaning and credible documented voice; remove unsupported certainty, sycophancy, inflation, obstructive formatting, and mannered prose (slogans, contrast turns, dramatic fragments, paragraph walls) without fabricating personality. A reply or summary opens with two to four sentences of plain prose before any bullets or table. The only fixed exclusions are the em and en dash in new text that ADR-0067 names; there is otherwise no lexical, punctuation, list, or emoji blacklist, and legitimate punctuation on existing lines is preserved.",
+      "statement": "Substantial prose and every operator-facing reply are reviewed in their full project, audience, medium, and task context; preserve technical meaning and credible documented voice; remove unsupported certainty, sycophancy, inflation, obstructive formatting, and mannered prose (slogans, contrast turns, dramatic fragments, paragraph walls) without fabricating personality. A summary opens with two to four sentences of plain prose before any bullets or table; a one-line answer stays one line and is never padded to meet that count. The only fixed exclusions are the em and en dash in new text that ADR-0067 names; there is otherwise no lexical, punctuation, list, or emoji blacklist, and legitimate punctuation on existing lines is preserved.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
@@ -1280,6 +1280,7 @@
           "markers": [
             "Operator-facing replies follow the written content policy (ADR-0067)",
             "a summary is two to four sentences before any list",
+            "while a one-line answer stays one line",
             "is a defect in a reply as much as in a document",
             "Em and en dashes are absent from new text on every policy surface, replies included"
           ]

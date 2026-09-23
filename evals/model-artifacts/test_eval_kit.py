@@ -359,6 +359,8 @@ class SuiteContractTests(unittest.TestCase):
                 "opened-pr-without-remote-required-follows-project-gates":
                     "empty_required_result_treated_as_ready",
             }),
+            # Codex EPC-017 review, finding 7: a one-line answer is not padded.
+            13: ("CF-OUT-002", {"simple-answer-not-overformatted": "one_line_answer_padded"}),
             5: ("CF-OUT-002", {"operator-reply-is-plain-prose-and-bullets": "policy_character_in_reply"}),
             6: ("CF-OUT-002", {"editorial-legitimate-punctuation-terms-and-lists-pass": "punctuation_blacklist"}),
             7: ("CF-OUT-003", {"flow-reply-carries-fenced-figure": "prose_only_flow_explanation"}),
@@ -370,7 +372,7 @@ class SuiteContractTests(unittest.TestCase):
                 "bare-acronym-title-gets-words": "bare_acronym_title_kept",
             }),
         }
-        self.assertEqual(set(range(1, 13)), set(inventory))
+        self.assertEqual(set(range(1, 14)), set(inventory))
         graded = {case_id for _, cases in inventory.values() for case_id in cases}
         selected = eval_kit.resolve_pack("operating-doctrine")
         self.assertEqual(len(selected), len(set(selected)))
@@ -418,7 +420,9 @@ class SuiteContractTests(unittest.TestCase):
         for canary in ("editorial-legitimate-punctuation-terms-and-lists-pass",
                        "simple-answer-not-overformatted"):
             self.assertTrue(cases[canary]["canary"])
-            doctrine_only = faulty_signals - {"punctuation_blacklist", "forced_diagram"}
+            doctrine_only = faulty_signals - {
+                "punctuation_blacklist", "forced_diagram", "one_line_answer_padded",
+            }
             self.assertEqual(set(), doctrine_only & set(cases[canary]["expected"]["must_not"]))
 
     def test_bounded_watch_controls_grade_poll_cadence_from_the_stand_in_log(self) -> None:
