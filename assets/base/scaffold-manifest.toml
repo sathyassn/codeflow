@@ -493,6 +493,54 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/design-system/README.md"
+dest = ".claude/skills/cf-present/resources/design-system/README.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/tokens.json"
+dest = ".claude/skills/cf-present/resources/design-system/tokens.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/tokens.css"
+dest = ".claude/skills/cf-present/resources/design-system/tokens.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/chrome.css"
+dest = ".claude/skills/cf-present/resources/design-system/chrome.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/figure.css"
+dest = ".claude/skills/cf-present/resources/design-system/figure.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/chrome.js"
+dest = ".claude/skills/cf-present/resources/design-system/chrome.js"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/portal.reference.html"
+dest = ".claude/skills/cf-present/resources/design-system/portal.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/present.reference.html"
+dest = ".claude/skills/cf-present/resources/design-system/present.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/assets/review-document.example.json"
 dest = ".claude/skills/cf-present/assets/review-document.example.json"
 ownership = "managed"
@@ -570,6 +618,54 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-docs-portal/resources/portal-page-shape.example.md"
 dest = ".claude/skills/cf-docs-portal/resources/portal-page-shape.example.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/README.md"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/README.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/tokens.json"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/tokens.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/tokens.css"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/tokens.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/chrome.css"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/chrome.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/figure.css"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/figure.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/chrome.js"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/chrome.js"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/portal.reference.html"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/portal.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/present.reference.html"
+dest = ".claude/skills/cf-docs-portal/resources/design-system/present.reference.html"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -940,6 +1036,54 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/design-system/README.md"
+dest = ".agents/skills/cf-present/resources/design-system/README.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/tokens.json"
+dest = ".agents/skills/cf-present/resources/design-system/tokens.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/tokens.css"
+dest = ".agents/skills/cf-present/resources/design-system/tokens.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/chrome.css"
+dest = ".agents/skills/cf-present/resources/design-system/chrome.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/figure.css"
+dest = ".agents/skills/cf-present/resources/design-system/figure.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/chrome.js"
+dest = ".agents/skills/cf-present/resources/design-system/chrome.js"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/portal.reference.html"
+dest = ".agents/skills/cf-present/resources/design-system/portal.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-present/resources/design-system/present.reference.html"
+dest = ".agents/skills/cf-present/resources/design-system/present.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/assets/review-document.example.json"
 dest = ".agents/skills/cf-present/assets/review-document.example.json"
 ownership = "managed"
@@ -1014,6 +1158,54 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-docs-portal/resources/portal-page-shape.example.md"
 dest = ".agents/skills/cf-docs-portal/resources/portal-page-shape.example.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/README.md"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/README.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/tokens.json"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/tokens.json"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/tokens.css"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/tokens.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/chrome.css"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/chrome.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/figure.css"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/figure.css"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/chrome.js"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/chrome.js"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/portal.reference.html"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/portal.reference.html"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/design-system/present.reference.html"
+dest = ".agents/skills/cf-docs-portal/resources/design-system/present.reference.html"
 ownership = "managed"
 tiers = ["standard", "full"]
 
