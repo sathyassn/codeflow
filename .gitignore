@@ -9,6 +9,7 @@ lcov.info
 # CodeFlow repository-local agent/runtime state (not scaffolded to consumers).
 /.state/
 /.claude/memory/
+/docs-portal/.portal/
 
 # codeflow:managed:begin
 # secrets, never tracked

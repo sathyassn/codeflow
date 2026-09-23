@@ -26,6 +26,10 @@
 #   --no-session-reason Why no live session could be started, recorded verbatim.
 #   --no-session-owner  Who owns that gate; required with --no-session-reason.
 #   --skip-canary       Record the delegate canary unavailable without running it.
+#   --trust-wait-seconds <N>
+#                       How long the operator gets to answer the canary
+#                       session's workspace-trust prompt (default: 240; 0
+#                       waits not at all).
 #   --keep              Do not delete the work directory (teardown is still reported).
 
 set -eu
@@ -50,6 +54,7 @@ surface can produce"
 NO_SESSION_REASON=""
 NO_SESSION_OWNER=""
 SKIP_CANARY=0
+TRUST_WAIT_SECONDS=240
 KEEP=0
 
 while [ $# -gt 0 ]; do
@@ -67,11 +72,22 @@ while [ $# -gt 0 ]; do
     --no-session-reason) NO_SESSION_REASON=$2; shift 2 ;;
     --no-session-owner) NO_SESSION_OWNER=$2; shift 2 ;;
     --skip-canary) SKIP_CANARY=1; shift ;;
+    --trust-wait-seconds) TRUST_WAIT_SECONDS=$2; shift 2 ;;
     --keep) KEEP=1; shift ;;
-    -h | --help) sed -n '2,30p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,34p' "$0"; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1" >&2; exit 64 ;;
   esac
 done
+
+# A wait budget that is not a whole number of seconds would fail much later, in
+# the middle of the canary, so it is rejected here.
+case $TRUST_WAIT_SECONDS in
+  "" | *[!0-9]*)
+    printf -- '--trust-wait-seconds needs a whole number of seconds: %s\n' \
+      "$TRUST_WAIT_SECONDS" >&2
+    exit 64
+    ;;
+esac
 
 REPO=$(CDPATH= cd -- "$REPO" && pwd)
 [ -n "$COMMIT" ] || COMMIT=$(git -C "$REPO" rev-parse HEAD)
@@ -1328,9 +1344,10 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
   herdr pane wait-output "$HERDR_PANE" --match "TRACKED=1" --timeout 15000 >>"$TRANSCRIPT" 2>&1 || true
   sleep 2
 
-  HERDR_AGENT="cf-codeflow-tsk044-cl01"
-  _start_cmd="herdr agent start $HERDR_AGENT --kind claude --pane $HERDR_PANE -- --permission-mode bypassPermissions --settings $_state/settings.json"
-  if ! _start_out=$(herdr agent start "$HERDR_AGENT" --kind claude --pane "$HERDR_PANE" -- \
+  _agent_name="cf-codeflow-tsk044-cl01"
+  HERDR_AGENT=$_agent_name
+  _start_cmd="herdr agent start $_agent_name --kind claude --pane $HERDR_PANE -- --permission-mode bypassPermissions --settings $_state/settings.json"
+  if ! _start_out=$(herdr agent start "$_agent_name" --kind claude --pane "$HERDR_PANE" -- \
     --permission-mode bypassPermissions --settings "$_state/settings.json" 2>&1); then
     printf '\n$ %s\n%s\n' "$_start_cmd" "$_start_out" >>"$TRANSCRIPT"
     # Say what actually blocked the session rather than that something failed.
@@ -1338,20 +1355,40 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
     # harness asks a human to trust that workspace before it takes a prompt;
     # the pane needs a moment to paint that prompt before it can be read.
     sleep 8
+    # One-shot detection, so this read takes `recent`: the question may already
+    # have scrolled off the visible screen by now. The poll that follows uses
+    # the visible screen instead, because scrollback keeps an answered question
+    # forever and every answer would time out.
     _pane_text=$(herdr pane read "$HERDR_PANE" --source recent --lines 120 2>/dev/null || true)
     printf 'pane after failed agent start:\n%s\n' "$_pane_text" >>"$TRANSCRIPT"
     HERDR_AGENT=""
-    if printf '%s' "$_pane_text" | grep -q 'Is this a project you created or one you trust'; then
-      _why="the Claude Code workspace-trust prompt blocked startup in the tab this run created: the sample carries the scaffolded .claude/settings.json, and the session asks a human to trust the folder before it accepts any prompt. Command: $_start_cmd. Reply: $(oneline "$_start_out")"
-      _who="a human operator, who alone may answer the workspace-trust prompt"
-    else
-      _why="$_start_cmd failed; reply: $(oneline "$_start_out"); pane text is in the transcript"
-      _who="operator environment"
+    if ! printf '%s' "$_pane_text" | grep -qF -- "$TRUST_PROMPT_MATCH"; then
+      canary_unavailable \
+        "$_start_cmd failed; reply: $(oneline "$_start_out"); pane text is in the transcript" \
+        "operator environment"
+      return
     fi
-    canary_unavailable "$_why" "$_who"
-    return
+
+    # The blocker is the trust prompt, and no agent may answer it. The reason
+    # is assembled in two pieces so the sentence about the wait stays inside
+    # the recorded cell, which `record` cuts at 400 characters.
+    _trust_why="the Claude Code workspace-trust prompt blocked startup in the tab this run created: the sample carries the scaffolded .claude/settings.json, and the session asks a human to trust the folder before it accepts any prompt"
+    _trust_detail="Command: $_start_cmd. Reply: $(oneline "$_start_out")"
+
+    # resolve_trust_prompt asks the operator, waits, and then proves a live
+    # session on this pane and tab. It returns non-zero for every outcome that
+    # is not a proven session, so the canary is recorded unavailable with the
+    # reason it actually hit and `delegate wait --until ready` never runs on a
+    # session nobody has seen.
+    if ! resolve_trust_prompt "$HERDR_PANE" "$HERDR_TAB" "$DIR" \
+      "$TRUST_WAIT_SECONDS" "$_agent_name" "$_state/settings.json"; then
+      canary_unavailable "$_trust_why; $TRUST_REASON. $_trust_detail" "$TRUST_OWNER"
+      return
+    fi
+    HERDR_AGENT=$_agent_name
+  else
+    printf '\n$ %s\n%s\n' "$_start_cmd" "$_start_out" >>"$TRANSCRIPT"
   fi
-  printf '\n$ %s\n%s\n' "$_start_cmd" "$_start_out" >>"$TRANSCRIPT"
 
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until ready --timeout-seconds 180
   _ready_status=$CF_STATUS
