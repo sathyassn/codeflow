@@ -1,6 +1,7 @@
 # PR narrative and verification evidence
 
-Read when preparing or updating a PR, including an integration-to-main PR.
+Read when preparing or updating a PR, including an integration-to-main PR,
+and when following a PR after it opens.
 
 Open the PR. Commits stay conventional (`type(scope): description`,
 ≤ 50-char description, ≤ 72-char subject, at most 3 `-` body bullets each
@@ -42,3 +43,33 @@ PR narrative and affected evidence before marking ready; preserve a prior
 review only with a reasoned unchanged-scope link. Lint with
 `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
 <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
+
+## After opening
+
+Follow the PR until its required checks finish or the budget ends. Run
+`gh pr checks <url> --required` at most once a minute, for at most thirty
+minutes. Exit code 8 means checks are still pending. Do not use `--watch`
+without a ceiling, and do not poll without an end.
+
+Classify each red or stuck check with the quality contract's redness classes:
+
+- **Assertion-red, caused by this change.** Return it to its owner (skill
+  step 1), fix it, run the check locally where you can, push, and restart the
+  poll. Do not wait for the operator to name the job. A fix that changes the
+  accepted contract goes back to `cf-plan`.
+- **Red, and you cannot run it locally.** Read its log with
+  `gh run view <run-id> --log-failed`. Fix it if the cause is in the change;
+  otherwise report it as red with the failing line. It still blocks the PR.
+- **Infrastructure-incomplete.** The job was queued past the budget,
+  cancelled, lost its runner, or never started, for example because GitHub
+  Actions was refused for billing or a spending limit. Report it as missing
+  evidence with the reason the tool gave, not as a product defect. A
+  completed green run of the same check still counts, as the quality contract
+  says. Do not rerun the same job without a new reason.
+
+Never merge. When every required check is green, or the thirty minutes end,
+send one readiness report without being asked. It gives the PR URL exactly as
+`gh pr create` or `gh pr view --json url` printed it, never one built from a
+number or guessed. It lists each required check with its state, any missing
+evidence with its reason, and the next action. For a green PR the next action
+is a human merge.
