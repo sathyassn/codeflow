@@ -3,8 +3,8 @@
 //! Intercepts git operations the client-side git hooks can't reach:
 //! force-push / push / delete against protected branches, hard reset on a
 //! protected branch, checkout-and-commit dodges, raw merges on protected,
-//! and AI attribution or emoji in `gh pr create` bodies (charter §6.4,
-//! AC #13). Every rule reads its level from `policy.json.git` — the guard
+//! and AI attribution or emoji in `gh pr create` and `gh pr edit` bodies
+//! (charter §6.4, AC #13). Every rule reads its level from `policy.json.git` — the guard
 //! gives instant in-session feedback; CI + remote protection stay the hard
 //! line (D19).
 
@@ -109,7 +109,7 @@ pub struct GuardContext<'a> {
 pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
     let mut violations = Vec::new();
     // Chained checkout/switch dodges change the branch later segments run on.
-    let mut branch = ctx.current_branch.to_string();
+    let mut branches = BranchTracker::new(ctx.current_branch);
     // A `cd <dir>` earlier in the chain retargets subsequent git ops.
     let mut cd_dir: Option<String> = None;
 
@@ -168,7 +168,10 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
             continue;
         }
 
-        let Some((program, args)) = strip_launchers(&tokens) else {
+        // Dispatch on the argument vector the program receives: unquoted
+        // redirections are the shell's, not arguments.
+        let words = command_argv(&segment);
+        let Some((program, args)) = strip_launchers(&words) else {
             continue;
         };
         let git_dir_env = git_dir_env_prefix(&tokens);
@@ -176,7 +179,7 @@ pub fn evaluate(command: &str, ctx: &GuardContext<'_>) -> Vec<Violation> {
             ProgramKind::Git => {
                 check_git(
                     args,
-                    &mut branch,
+                    &mut branches,
                     cd_dir.as_deref(),
                     git_dir_env,
                     ctx,
@@ -631,7 +634,9 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
 /// shell constructs an agent can hide a `git`/`gh` token behind so it is not
 /// only the first word of a `&&`/`||`/`;`/`|` segment that is inspected:
 /// newlines, backgrounding `&`, subshells `( )`, brace groups `{ }`,
-/// `$(…)`/backtick command substitution, `bash -c '…'`, and `eval '…'`. Program
+/// `$(…)`/backtick command substitution, `bash -c '…'`, and `eval '…'`. Text
+/// the shell never executes stays out: comments and heredoc bodies (see
+/// [`split_into_segments`]). Program
 /// resolution goes through [`strip_launchers`], so an env/`command` prefix on
 /// the wrapper (`env FOO=1 bash -c …`) and a clustered short flag (`bash -lc`)
 /// are both handled. A floor-raise, not a solve — arbitrary interpreters
@@ -639,11 +644,11 @@ fn integrity_write_violation(tokens: &[String], level: PolicyLevel) -> Option<Vi
 /// tail and stay a documented residual (ADR-0009), backstopped by CI + remote.
 fn expand_commands(command: &str) -> Vec<String> {
     let mut raw = Vec::new();
-    split_into_segments(command, &mut raw, 0);
+    split_into_segments(command, &mut raw, 0, false);
 
     let mut out = Vec::new();
     for seg in raw {
-        let toks = shell_tokens(&seg);
+        let toks = command_argv(&seg);
         out.push(seg);
         let Some((prog, args)) = strip_launchers(&toks) else {
             continue;
@@ -653,12 +658,12 @@ fn expand_commands(command: &str) -> Vec<String> {
             // `-c`/`--command`, or a clustered short flag containing `c`
             // (`-lc`, `-ec`): the wrapped command is the following argument.
             if let Some(inner) = shell_c_argument(args) {
-                split_into_segments(inner, &mut out, 1);
+                split_into_segments(inner, &mut out, 1, false);
             }
         } else if name == "eval" {
             // `eval '<cmd>'` runs its (joined) arguments as a command.
             let joined = args.join(" ");
-            split_into_segments(&joined, &mut out, 1);
+            split_into_segments(&joined, &mut out, 1, false);
         }
     }
     out
@@ -685,7 +690,25 @@ fn shell_c_argument(args: &[String]) -> Option<&String> {
 /// backtick substitutions. Honors single/double quotes; treats unquoted
 /// newlines, `;`, `|`, `&`, `(`, `)`, and whitespace-bounded `{`/`}` as
 /// boundaries.
-fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
+///
+/// Text the shell does not execute is not a segment: a comment (an unquoted
+/// `#` that starts a word) and a heredoc body read as data. A body is data
+/// only when every program in the pipeline that reads it is a known data
+/// reader ([`reads_as_data`]: `cat > f <<EOF`, `git commit -F - <<EOF`), that
+/// pipeline has no group or process substitution and does not continue past
+/// the body, and the text it lands in cannot run (`code_context`: set for a
+/// substitution whose output is a command, as in `bash -c "$(cat <<EOF …)"`,
+/// or whose pipeline turns out to feed a non-reader). Any other body is read
+/// as a script, the conservative default. A data body with an unquoted
+/// delimiter still runs its `$(…)` and backtick substitutions. Inside
+/// `(( … ))` and `$[ … ]` arithmetic, `<<` is a shift and `#` is not a
+/// comment.
+///
+/// Residual (ADR-0009): a data body the same command later runs by another
+/// route, such as a heredoc written to a file that a later segment executes,
+/// or a data substitution stored in a variable that is later `eval`ed.
+#[allow(clippy::too_many_lines)] // one character state machine
+fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_context: bool) {
     if depth > 8 {
         return; // bound pathological nesting
     }
@@ -693,6 +716,14 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
     let mut cur = String::new();
     let mut in_single = false;
     let mut in_double = false;
+    // Open `((` arithmetic commands and `$[` arithmetic expansions.
+    let mut arithmetic = 0usize;
+    let mut bracket_arithmetic = 0usize;
+    // Open `( … )` subshells and `{ … }` groups.
+    let mut groups = 0usize;
+    // Heredocs opened on the current line; their bodies follow its newline.
+    let mut heredocs: Vec<Heredoc> = Vec::new();
+    let mut line = Line::default();
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
@@ -707,13 +738,13 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
         // Command substitution executes even inside double quotes.
         if c == '$' && chars.get(i + 1) == Some(&'(') {
             let (inner, ni) = capture_balanced(&chars, i + 2);
-            split_into_segments(&inner, out, depth + 1);
+            line.substitution(inner, &cur, code_context, out, depth);
             i = ni;
             continue;
         }
         if c == '`' {
             let (inner, ni) = capture_backtick(&chars, i + 1);
-            split_into_segments(&inner, out, depth + 1);
+            line.substitution(inner, &cur, code_context, out, depth);
             i = ni;
             continue;
         }
@@ -745,16 +776,103 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
                     i += 1;
                 }
             }
-            '\n' | ';' | '(' | ')' => {
-                push_segment(out, &mut cur);
+            '#' if arithmetic == 0 && bracket_arithmetic == 0 && starts_word(&chars, i) => {
+                // A comment runs to the end of the line; the newline itself
+                // still ends the segment and starts any heredoc bodies.
+                while i < chars.len() && chars[i] != '\n' {
+                    i += 1;
+                }
+            }
+            '\n' => {
+                // A line ending in `|` continues its pipeline past the
+                // heredoc bodies, so their readers are not all known yet.
+                let continues = ends_with_pipe(&chars, i);
+                line.end_segment(out, &mut cur, continues);
+                i += 1;
+                if !heredocs.is_empty() {
+                    let docs = std::mem::take(&mut heredocs);
+                    i = consume_heredoc_bodies(
+                        &chars,
+                        i,
+                        &docs,
+                        &line,
+                        continues,
+                        code_context,
+                        out,
+                        depth,
+                    );
+                }
+                line.finish(continues, out, depth);
+            }
+            '(' if chars.get(i + 1) == Some(&'(') => {
+                arithmetic += 1;
+                line.end_segment(out, &mut cur, false);
+                i += 2;
+            }
+            ')' if arithmetic > 0 && chars.get(i + 1) == Some(&')') => {
+                arithmetic -= 1;
+                line.end_segment(out, &mut cur, false);
+                i += 2;
+            }
+            '$' if chars.get(i + 1) == Some(&'[') => {
+                bracket_arithmetic += 1;
+                cur.push_str("$[");
+                i += 2;
+            }
+            ']' if bracket_arithmetic > 0 => {
+                bracket_arithmetic -= 1;
+                cur.push(c);
                 i += 1;
             }
+            // A group or process substitution in command position belongs to
+            // the pipeline it sits in (`cat <<EOF | { bash; }`, `>(sh)`).
+            '(' => {
+                let in_pipeline = cur.trim().is_empty() || cur.ends_with(['<', '>']);
+                if in_pipeline {
+                    line.grouped.push(line.pipeline);
+                }
+                line.end_segment(out, &mut cur, in_pipeline);
+                groups += 1;
+                i += 1;
+            }
+            ')' => {
+                line.end_segment(out, &mut cur, false);
+                groups = groups.saturating_sub(1);
+                i += 1;
+            }
+            ';' => {
+                line.end_segment(out, &mut cur, false);
+                i += 1;
+            }
+            // `<<<` is a here-string: its word is ordinary text on this line.
+            '<' if chars.get(i + 1) == Some(&'<') && chars.get(i + 2) == Some(&'<') => {
+                cur.push_str("<<<");
+                i += 3;
+            }
+            '<' if arithmetic == 0 && bracket_arithmetic == 0 && chars.get(i + 1) == Some(&'<') => {
+                if let Some((mut doc, end)) = parse_heredoc_operator(&chars, i) {
+                    doc.pipeline = line.pipeline;
+                    doc.in_group = groups > 0;
+                    heredocs.push(doc);
+                    cur.extend(&chars[i..end]);
+                    i = end;
+                } else {
+                    cur.push_str("<<");
+                    i += 2;
+                }
+            }
             '{' if i + 1 >= chars.len() || chars[i + 1].is_whitespace() => {
-                push_segment(out, &mut cur);
+                let in_pipeline = cur.trim().is_empty();
+                if in_pipeline {
+                    line.grouped.push(line.pipeline);
+                }
+                line.end_segment(out, &mut cur, in_pipeline);
+                groups += 1;
                 i += 1;
             }
             '}' if i == 0 || chars[i - 1].is_whitespace() => {
-                push_segment(out, &mut cur);
+                line.end_segment(out, &mut cur, false);
+                groups = groups.saturating_sub(1);
                 i += 1;
             }
             // `&&` is a segment boundary; a `&` that is part of a redirect
@@ -767,7 +885,7 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
                 i += 1;
             }
             '&' => {
-                push_segment(out, &mut cur);
+                line.end_segment(out, &mut cur, false);
                 i += if chars.get(i + 1) == Some(&'&') { 2 } else { 1 };
             }
             // `>|` is the clobber-redirect operator, not a pipe — keep it.
@@ -776,8 +894,9 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
                 i += 1;
             }
             '|' => {
-                push_segment(out, &mut cur);
-                i += if chars.get(i + 1) == Some(&'|') { 2 } else { 1 };
+                let or = chars.get(i + 1) == Some(&'|');
+                line.end_segment(out, &mut cur, !or);
+                i += if or { 2 } else { 1 };
             }
             _ => {
                 cur.push(c);
@@ -785,15 +904,315 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize) {
             }
         }
     }
-    push_segment(out, &mut cur);
+    line.end_segment(out, &mut cur, false);
+    line.finish(false, out, depth);
 }
 
-/// Push the accumulated segment (trimmed) unless it is blank.
-fn push_segment(out: &mut Vec<String>, cur: &mut String) {
-    let s = std::mem::take(cur);
-    let t = s.trim();
-    if !t.is_empty() {
-        out.push(t.to_string());
+/// The top-level segments of the line being split, each tagged with the
+/// pipeline it belongs to, so the programs reading a heredoc are known when
+/// its body starts.
+#[derive(Default)]
+struct Line {
+    pipeline: usize,
+    segments: Vec<(usize, String)>,
+    /// Pipelines holding a group or process substitution, whose readers the
+    /// guard does not resolve.
+    grouped: Vec<usize>,
+    /// Heredoc-bearing substitutions split as data, with their pipeline, to
+    /// recheck once the line shows everything that reads their output.
+    data_substitutions: Vec<(usize, String)>,
+}
+
+impl Line {
+    /// Split a `$(…)`/backtick substitution opened after `prefix`. Output that
+    /// can run makes its heredocs scripts; otherwise it is split as data now
+    /// and, if it holds a heredoc, rechecked by [`Line::finish`].
+    fn substitution(
+        &mut self,
+        inner: String,
+        prefix: &str,
+        code_context: bool,
+        out: &mut Vec<String>,
+        depth: usize,
+    ) {
+        let code = code_context || substitution_output_runs(prefix);
+        split_into_segments(&inner, out, depth + 1, code);
+        if !code && inner.contains("<<") {
+            self.data_substitutions.push((self.pipeline, inner));
+        }
+    }
+
+    /// `true` when every program of `pipeline` reads data and none of it is
+    /// unresolved: no group or process substitution, and, when `continues`,
+    /// not the pipeline still open past the line.
+    fn pipeline_reads_data(&self, pipeline: usize, continues: bool) -> bool {
+        let unresolved =
+            self.grouped.contains(&pipeline) || (continues && pipeline == self.pipeline);
+        !unresolved
+            && self
+                .segments
+                .iter()
+                .filter(|(p, _)| *p == pipeline)
+                .all(|(_, segment)| reads_as_data(segment))
+    }
+
+    /// Close the line: re-split as script every data substitution whose
+    /// pipeline turned out to feed a program that is not a data reader
+    /// (`echo "$(cat <<EOF …)" | bash`), then start the next line.
+    fn finish(&mut self, continues: bool, out: &mut Vec<String>, depth: usize) {
+        for (pipeline, inner) in std::mem::take(&mut self.data_substitutions) {
+            if !self.pipeline_reads_data(pipeline, continues) {
+                split_into_segments(&inner, out, depth + 1, true);
+            }
+        }
+        self.segments.clear();
+        self.grouped.clear();
+    }
+
+    /// End the current segment. `pipe` keeps the next segment in the same
+    /// pipeline (`|`, or a line ending in `|`); any other boundary starts a
+    /// new one.
+    fn end_segment(&mut self, out: &mut Vec<String>, cur: &mut String, pipe: bool) {
+        let text = std::mem::take(cur);
+        let text = text.trim();
+        if !text.is_empty() {
+            out.push(text.to_string());
+            self.segments.push((self.pipeline, text.to_string()));
+        }
+        if !pipe {
+            self.pipeline += 1;
+        }
+    }
+}
+
+/// `true` when the unquoted text before the newline at `i` ends with a pipe
+/// (`|`, not `||`), so the pipeline continues on a later line.
+fn ends_with_pipe(chars: &[char], i: usize) -> bool {
+    let mut j = i;
+    while j > 0 && matches!(chars[j - 1], ' ' | '\t') {
+        j -= 1;
+    }
+    j > 0 && chars[j - 1] == '|' && (j < 2 || chars[j - 2] != '|')
+}
+
+/// Programs that read a heredoc body, or a substitution's output, as data and
+/// never run it. Tools that can execute their input (`awk` `system()`, GNU
+/// `sed e`, `perl`) are left out. `python`/`python3`/`node` run their input
+/// in their own language, outside the guard's model: the documented
+/// interpreter residual.
+const HEREDOC_DATA_READERS: &[&str] = &[
+    "cat", "tee", "echo", "printf", "grep", "sort", "head", "tail", "wc", "tr", "cut", "uniq",
+    "diff", "jq", "base64", "python", "python3", "node",
+];
+
+/// `true` when `segment` reads its input as data: it only assigns, or runs one of
+/// [`HEREDOC_DATA_READERS`], `git` in a subcommand that takes a message or
+/// patch on stdin with no `-c`/`--config-env` global (either can make any
+/// subcommand an alias that runs a shell), or `gh` in a subcommand that takes
+/// a body. A body fed to anything else (a shell, `eval`, `ssh`, `sudo`,
+/// `make`, a `$VAR` or a function) is read as a script.
+fn reads_as_data(segment: &str) -> bool {
+    let words = command_argv(segment);
+    // A segment of only assignments runs no program and reads nothing. A
+    // segment with no words at all is a redirect attached to what came before
+    // it (`(bash) <<EOF`), whose reader is unknown.
+    let Some((program, args)) = strip_launchers(&words) else {
+        return !words.is_empty();
+    };
+    match basename(program) {
+        "git" => {
+            !args
+                .iter()
+                .any(|a| a == "-c" || a.starts_with("--config-env"))
+                && git_subcommand(args).is_some_and(|(sub, _)| {
+                    matches!(
+                        sub,
+                        "commit" | "tag" | "notes" | "hash-object" | "apply" | "am"
+                    )
+                })
+        }
+        "gh" => args
+            .first()
+            .is_some_and(|sub| matches!(sub.as_str(), "pr" | "issue" | "api" | "release" | "gist")),
+        name => HEREDOC_DATA_READERS.contains(&name),
+    }
+}
+
+/// `true` when the output of a substitution that opens after `prefix` (the
+/// segment text so far) can run as a command: in command position
+/// (`$(cat <<EOF …)`), or as an argument of a program that is not a data
+/// reader (`bash -c "$(…)"`, `eval "$(…)"`, `sh <<< "$(…)"`). An assignment
+/// (`x=$(…)`) or a reader (`gh pr create --body "$(…)"`) keeps it data.
+fn substitution_output_runs(prefix: &str) -> bool {
+    let argv = command_argv(prefix);
+    match strip_launchers(&argv) {
+        Some(_) => !reads_as_data(prefix),
+        // No program: command position unless the words are all assignments.
+        None => {
+            argv.is_empty()
+                || !argv.iter().all(|w| {
+                    w.split_once('=')
+                        .is_some_and(|(name, _)| is_identifier(name))
+                })
+        }
+    }
+}
+
+/// `true` when the character at `i` begins a shell word, where an unquoted
+/// `#` opens a comment. After a closing `)` or a backtick it continues the
+/// word instead (`$(x)#y`), so neither counts.
+fn starts_word(chars: &[char], i: usize) -> bool {
+    i == 0 || matches!(chars[i - 1], ' ' | '\t' | '\n' | ';' | '&' | '|' | '(')
+}
+
+/// A here-document opened on the current line, waiting for its body.
+struct Heredoc {
+    delimiter: String,
+    /// Any quoting in the delimiter word (`'EOF'`, `"EOF"`, `\EOF`) makes the
+    /// body literal; otherwise its `$(…)` and backticks still run.
+    literal: bool,
+    /// `<<-` strips leading tabs from the body and the terminator line.
+    strip_tabs: bool,
+    /// The pipeline of the line whose programs read the body.
+    pipeline: usize,
+    /// Opened inside a subshell or group, whose output may feed anything.
+    in_group: bool,
+}
+
+/// Parse the `<<`/`<<-` operator at `start` and its delimiter word. Returns
+/// the heredoc and the index just past the delimiter, or `None` when no
+/// complete delimiter word follows or it holds an unquoted `$` or backtick,
+/// whose expansion rules the guard does not model; the lines after it are then
+/// read as commands.
+fn parse_heredoc_operator(chars: &[char], start: usize) -> Option<(Heredoc, usize)> {
+    let mut i = start + 2;
+    let strip_tabs = chars.get(i) == Some(&'-');
+    if strip_tabs {
+        i += 1;
+    }
+    while matches!(chars.get(i), Some(' ' | '\t')) {
+        i += 1;
+    }
+    let mut delimiter = String::new();
+    let mut literal = false;
+    let mut quote: Option<char> = None;
+    while let Some(&c) = chars.get(i) {
+        match quote {
+            Some(q) if c == q => quote = None,
+            Some(_) => delimiter.push(c),
+            None => match c {
+                '\'' | '"' => {
+                    quote = Some(c);
+                    literal = true;
+                }
+                '\\' => {
+                    literal = true;
+                    if let Some(&next) = chars.get(i + 1) {
+                        delimiter.push(next);
+                        i += 1;
+                    }
+                }
+                '$' | '`' => return None,
+                c if c.is_whitespace() || ";&|<>()".contains(c) => break,
+                c => delimiter.push(c),
+            },
+        }
+        i += 1;
+    }
+    if quote.is_some() || (delimiter.is_empty() && !literal) {
+        return None;
+    }
+    Some((
+        Heredoc {
+            delimiter,
+            literal,
+            strip_tabs,
+            pipeline: 0,
+            in_group: false,
+        },
+        i,
+    ))
+}
+
+/// Consume the bodies of the heredocs opened on the line that just ended,
+/// starting at `start` (just past its newline), and return where command
+/// text resumes. A body is data only when its pipeline reads data
+/// ([`Line::pipeline_reads_data`]), it is not inside a group, and the text is
+/// not in a code context; otherwise it is split as a script. A heredoc whose
+/// terminator never appears is left in place, so the rest is still read as
+/// commands: the conservative reading.
+#[allow(clippy::too_many_arguments)]
+fn consume_heredoc_bodies(
+    chars: &[char],
+    start: usize,
+    docs: &[Heredoc],
+    line: &Line,
+    continues: bool,
+    code_context: bool,
+    out: &mut Vec<String>,
+    depth: usize,
+) -> usize {
+    let mut i = start;
+    for doc in docs {
+        let Some((body, next)) = heredoc_body(chars, i, doc) else {
+            return i;
+        };
+        if code_context || doc.in_group || !line.pipeline_reads_data(doc.pipeline, continues) {
+            split_into_segments(&body, out, depth + 1, false);
+        } else if !doc.literal {
+            body_substitutions(&body, out, depth + 1);
+        }
+        i = next;
+    }
+    i
+}
+
+/// The body lines of `doc` from `start` up to its terminator line, and the
+/// index just past that line; `None` when the terminator never appears.
+fn heredoc_body(chars: &[char], start: usize, doc: &Heredoc) -> Option<(String, usize)> {
+    let mut body = String::new();
+    let mut i = start;
+    while i < chars.len() {
+        let end = chars[i..]
+            .iter()
+            .position(|c| *c == '\n')
+            .map_or(chars.len(), |p| i + p);
+        let line: String = chars[i..end].iter().collect();
+        let line = if doc.strip_tabs {
+            line.trim_start_matches('\t')
+        } else {
+            line.as_str()
+        };
+        if line == doc.delimiter {
+            return Some((body, (end + 1).min(chars.len())));
+        }
+        body.push_str(line);
+        body.push('\n');
+        i = end + 1;
+    }
+    None
+}
+
+/// Split the `$(…)` and backtick substitutions of an unquoted heredoc body,
+/// the only parts of it the shell runs. A backslash escapes `$` and `` ` ``.
+fn body_substitutions(body: &str, out: &mut Vec<String>, depth: usize) {
+    let chars: Vec<char> = body.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        match chars[i] {
+            '\\' => i += 2,
+            '$' if chars.get(i + 1) == Some(&'(') => {
+                let (inner, next) = capture_balanced(&chars, i + 2);
+                split_into_segments(&inner, out, depth, false);
+                i = next;
+            }
+            '`' => {
+                let (inner, next) = capture_backtick(&chars, i + 1);
+                split_into_segments(&inner, out, depth, false);
+                i = next;
+            }
+            _ => i += 1,
+        }
     }
 }
 
@@ -835,12 +1254,44 @@ fn capture_backtick(chars: &[char], start: usize) -> (String, usize) {
     (s, i)
 }
 
+/// The branch each git op in a chain runs on. A chained `checkout`/`switch`
+/// moves it for the ops after it: the session's own checkout, and separately
+/// each retargeted directory (`cd <dir> && git switch -c feat/x && git commit`).
+struct BranchTracker {
+    session: String,
+    /// `(normalized dir, branch)` for checkouts made earlier in the chain.
+    retargeted: Vec<(String, String)>,
+}
+
+impl BranchTracker {
+    fn new(session: &str) -> Self {
+        Self {
+            session: session.to_string(),
+            retargeted: Vec::new(),
+        }
+    }
+
+    fn switch_in(&mut self, dir: &str, branch: String) {
+        let dir = normalize_path(dir);
+        self.retargeted.retain(|(d, _)| *d != dir);
+        self.retargeted.push((dir, branch));
+    }
+
+    fn switched_in(&self, dir: &str) -> Option<String> {
+        let dir = normalize_path(dir);
+        self.retargeted
+            .iter()
+            .find(|(d, _)| *d == dir)
+            .map(|(_, branch)| branch.clone())
+    }
+}
+
 const SANCTIONED: &str = "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
 
 #[allow(clippy::too_many_lines)]
 fn check_git(
     args: &[String],
-    session_branch: &mut String,
+    branches: &mut BranchTracker,
     cd_dir: Option<&str>,
     git_dir_env: Option<String>,
     ctx: &GuardContext<'_>,
@@ -867,27 +1318,31 @@ fn check_git(
     };
 
     // Effective target: an explicit `--git-dir`/`-C`, else `GIT_DIR=`, else a
-    // chained `cd`. When retargeted, evaluate against that repo's branch (via
-    // the injected resolver) instead of the session branch — the review's
+    // chained `cd`. When retargeted, evaluate against that repo's branch — one
+    // an earlier checkout in this chain moved it to, else the injected
+    // resolver's reading — instead of the session branch: the review's
     // wrong-dir evasion. No resolver / unreadable dir falls back to the session
     // branch (documented residual; the target repo's git-hook plane backstops).
     let retarget_dir = retarget_flag
         .or(git_dir_env)
         .or_else(|| cd_dir.map(str::to_string));
-    let retargeted = retarget_dir.is_some();
-    let eval_branch: String = match (&retarget_dir, ctx.dir_branch_lookup) {
-        (Some(dir), Some(resolver)) => resolver(dir).unwrap_or_else(|| session_branch.clone()),
-        _ => session_branch.clone(),
+    let eval_branch: String = match &retarget_dir {
+        Some(dir) => branches
+            .switched_in(dir)
+            .or_else(|| ctx.dir_branch_lookup.and_then(|resolver| resolver(dir)))
+            .unwrap_or_else(|| branches.session.clone()),
+        None => branches.session.clone(),
     };
     let branch = eval_branch.as_str();
 
     match sub {
         "checkout" | "switch" => {
-            // A checkout in a *retargeted* dir does not change the session's
-            // branch, so only track it for the session case.
-            if !retargeted {
-                if let Some(target) = checkout_target(rest) {
-                    *session_branch = target;
+            // A checkout in a retargeted dir moves that dir's branch, not the
+            // session's.
+            if let Some(target) = checkout_target(rest) {
+                match &retarget_dir {
+                    Some(dir) => branches.switch_in(dir, target),
+                    None => branches.session = target,
                 }
             }
         }
@@ -963,12 +1418,12 @@ fn check_git(
         }
         "config" => {
             // Hook-path manipulation via config (`git config core.hooksPath …`
-            // / `--unset core.hooksPath`) disarms the client hooks. A pure read
-            // (`--get`) is harmless and stays allowed.
+            // / `--unset core.hooksPath`) disarms the client hooks. Every read
+            // (`git config core.hooksPath`, `--get`, `--list`) stays allowed.
             if policy.hook_integrity.is_active() && config_writes_hooks_path(rest) {
                 out.push(hook_integrity_violation(
                     policy.hook_integrity,
-                    "`git config core.hooksPath` changes where git looks for hooks".to_string(),
+                    "`git config` would write core.hooksPath, which changes where git looks for hooks".to_string(),
                 ));
             }
         }
@@ -1039,19 +1494,55 @@ fn scan_git_globals(args: &[String]) -> (bool, Option<String>) {
     (hooks_path, retarget)
 }
 
-/// `true` when a `git config` invocation *writes* `core.hooksPath` (a set or an
-/// `--unset`), as opposed to a pure `--get`/`--list` read.
+/// `true` when a `git config` invocation can write `core.hooksPath`: a set,
+/// add, replace or unset whose operands name the key (a value naming it
+/// counts too, so an alias body that rewrites the hook path is caught), a
+/// remove or rename of the `core` section, or an interactive edit. Reads —
+/// `--get*`, `--list`, the `get`/`list` subcommands, and a bare
+/// `git config core.hooksPath` — are allowed whatever scope, file or display
+/// options accompany them.
 fn config_writes_hooks_path(rest: &[String]) -> bool {
-    if !rest.iter().any(|t| mentions_hooks_path(t)) {
-        return false;
-    }
-    let is_read = rest.iter().any(|t| {
+    let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+    let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
+    // Git 2.46+ names the mode as a subcommand word; a config key always
+    // contains a dot, so a key never reads as one.
+    let subcommand = parsed.operands.first().copied().filter(|word| {
         matches!(
-            t.as_str(),
-            "--get" | "--get-all" | "--get-regexp" | "--get-urlmatch" | "-l" | "--list"
+            *word,
+            "get" | "set" | "unset" | "list" | "edit" | "rename-section" | "remove-section"
         )
     });
-    !is_read
+    let operands = &parsed.operands[usize::from(subcommand.is_some())..];
+    let names_hooks_path = operands.iter().any(|o| mentions_hooks_path(o));
+
+    if parsed.has_short(&['e']) || any_long(&["--edit"]) || subcommand == Some("edit") {
+        return true;
+    }
+    if any_long(&["--rename-section", "--remove-section"])
+        || matches!(subcommand, Some("rename-section" | "remove-section"))
+    {
+        return names_hooks_path || operands.iter().any(|o| o.eq_ignore_ascii_case("core"));
+    }
+    let read_mode = parsed.has_short(&['l'])
+        || any_long(&[
+            "--get",
+            "--get-all",
+            "--get-regexp",
+            "--get-urlmatch",
+            "--get-color",
+            "--get-colorbool",
+            "--list",
+        ])
+        || matches!(subcommand, Some("get" | "list"));
+    let key_write = any_long(&[
+        "--add",
+        "--append",
+        "--replace-all",
+        "--unset",
+        "--unset-all",
+    ]) || matches!(subcommand, Some("set" | "unset"))
+        || (!read_mode && operands.len() >= 2);
+    key_write && names_hooks_path
 }
 
 /// Guard `git update-ref` (ADR-0009). Two vectors: (1) a direct write to a
@@ -1269,19 +1760,22 @@ fn check_gh(args: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
         return;
     }
     match plain.get(1) {
-        Some(&"create") => check_gh_pr_create(&plain[2..], ctx.policy, out),
+        // `gh pr edit` takes the same body flags, so an edited body is
+        // scanned like a new one (ADR-0067).
+        Some(&"create" | &"edit") => check_gh_pr_body(&plain[2..], ctx.policy, out),
         Some(&"merge") => check_gh_pr_merge(&plain[2..], ctx, out),
         _ => {}
     }
 }
 
-/// Scan a `gh pr create` body for AI attribution / emoji (charter §6.4).
+/// Scan a `gh pr create` or `gh pr edit` body for AI attribution / emoji
+/// (charter §6.4) and policy characters (ADR-0067).
 ///
 /// Both the inline `--body`/`-b` value and the content of a `--body-file`/`-F`
 /// file are scanned. Fail-open (matching the guard's doctrine): a missing or
 /// unreadable body file passes rather than blocking. A stdin body (`-F -`) is
 /// out of scope — its content is not available to the guard, so it is not read.
-fn check_gh_pr_create(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation>) {
+fn check_gh_pr_body(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation>) {
     let inline = flag_value(rest, &["--body", "-b"]);
     let from_file = flag_value(rest, &["--body-file", "-F"])
         .filter(|path| *path != "-")
@@ -1291,7 +1785,8 @@ fn check_gh_pr_create(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation
     }
 }
 
-/// Flag AI-attribution and emoji violations in a single PR-body string.
+/// Flag AI-attribution, emoji and policy-character violations in a single
+/// PR-body string.
 fn scan_pr_body(body: &str, policy: &GitPolicy, out: &mut Vec<Violation>) {
     if policy.ai_attribution.is_active() {
         if let Some(which) = standards::find_attribution(body) {
@@ -1312,6 +1807,9 @@ fn scan_pr_body(body: &str, policy: &GitPolicy, out: &mut Vec<Violation>) {
                 "remove emoji from the PR body (charter §6.4)".to_string(),
             ));
         }
+    }
+    if let Some(v) = standards::pr_body_policy_character(policy, body) {
+        out.push(v);
     }
 }
 
@@ -1555,6 +2053,59 @@ const GIT_COMMIT_OPTIONS: OptionSpec = OptionSpec {
         ("--status", Arity::Flag),
         ("--no-status", Arity::Flag),
         ("--no-gpg-sign", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// `git config` (git-config(1)): the legacy mode options and those of the
+/// `get`/`set`/`unset`/`list`/`edit` subcommands. The file, blob, type,
+/// default, comment and pattern options take a value, so it is never read as
+/// a key; the mode options are what [`config_writes_hooks_path`] reads.
+const GIT_CONFIG_OPTIONS: OptionSpec = OptionSpec {
+    short: &[('f', Arity::Value)],
+    long: &[
+        ("--file", Arity::Value),
+        ("--blob", Arity::Value),
+        ("--type", Arity::Value),
+        ("--default", Arity::Value),
+        ("--comment", Arity::Value),
+        ("--value", Arity::Value),
+        ("--url", Arity::Value),
+        ("--get", Arity::Flag),
+        ("--get-all", Arity::Flag),
+        ("--get-regexp", Arity::Flag),
+        ("--get-urlmatch", Arity::Flag),
+        ("--get-color", Arity::Flag),
+        ("--get-colorbool", Arity::Flag),
+        ("--list", Arity::Flag),
+        ("--add", Arity::Flag),
+        ("--append", Arity::Flag),
+        ("--replace-all", Arity::Flag),
+        ("--unset", Arity::Flag),
+        ("--unset-all", Arity::Flag),
+        ("--rename-section", Arity::Flag),
+        ("--remove-section", Arity::Flag),
+        ("--edit", Arity::Flag),
+        ("--global", Arity::Flag),
+        ("--system", Arity::Flag),
+        ("--local", Arity::Flag),
+        ("--worktree", Arity::Flag),
+        ("--all", Arity::Flag),
+        ("--regexp", Arity::Flag),
+        ("--fixed-value", Arity::Flag),
+        ("--bool", Arity::Flag),
+        ("--int", Arity::Flag),
+        ("--bool-or-int", Arity::Flag),
+        ("--path", Arity::Flag),
+        ("--expiry-date", Arity::Flag),
+        ("--no-type", Arity::Flag),
+        ("--null", Arity::Flag),
+        ("--name-only", Arity::Flag),
+        ("--show-origin", Arity::Flag),
+        ("--show-scope", Arity::Flag),
+        ("--includes", Arity::Flag),
+        ("--no-includes", Arity::Flag),
         (END_OF_OPTIONS, Arity::Flag),
     ],
     git_style: true,
@@ -1866,11 +2417,25 @@ fn no_verify_violation(sub: &str, branch: &str) -> Violation {
 /// backslash escapes (outside single quotes).
 #[must_use]
 pub fn shell_tokens(segment: &str) -> Vec<String> {
-    let mut tokens = Vec::new();
+    shell_words(segment).into_iter().map(|w| w.text).collect()
+}
+
+/// One shell word after quote removal, with the length of its leading run of
+/// unquoted, unescaped characters: a redirection operator only counts when it
+/// was written there (`2>/dev/null` redirects, `'2>/dev/null'` is text).
+struct ShellWord {
+    text: String,
+    unquoted_prefix: usize,
+}
+
+fn shell_words(segment: &str) -> Vec<ShellWord> {
+    let mut words = Vec::new();
     let mut cur = String::new();
     let mut in_single = false;
     let mut in_double = false;
     let mut started = false;
+    let mut prefix_open = true;
+    let mut unquoted_prefix = 0;
     let mut chars = segment.chars();
 
     while let Some(c) = chars.next() {
@@ -1878,33 +2443,85 @@ pub fn shell_tokens(segment: &str) -> Vec<String> {
             '\'' if !in_double => {
                 in_single = !in_single;
                 started = true;
+                prefix_open = false;
             }
             '"' if !in_single => {
                 in_double = !in_double;
                 started = true;
+                prefix_open = false;
             }
             '\\' if !in_single => {
-                if let Some(next) = chars.next() {
+                // A backslash-newline is a line continuation: both vanish.
+                if let Some(next) = chars.next().filter(|next| *next != '\n') {
                     cur.push(next);
                     started = true;
+                    prefix_open = false;
                 }
             }
             c if c.is_whitespace() && !in_single && !in_double => {
                 if started {
-                    tokens.push(std::mem::take(&mut cur));
+                    words.push(ShellWord {
+                        text: std::mem::take(&mut cur),
+                        unquoted_prefix,
+                    });
                     started = false;
                 }
+                prefix_open = true;
+                unquoted_prefix = 0;
             }
             c => {
                 cur.push(c);
                 started = true;
+                if prefix_open && !in_single && !in_double {
+                    unquoted_prefix += c.len_utf8();
+                }
             }
         }
     }
     if started {
-        tokens.push(cur);
+        words.push(ShellWord {
+            text: cur,
+            unquoted_prefix,
+        });
     }
-    tokens
+    words
+}
+
+/// The argument vector the program receives: the segment's words without its
+/// unquoted redirections (`2>&1`, `> out`, `<<EOF`, `<<< text`), which the
+/// shell removes before the program runs. The integrity checks keep reading
+/// the full token list, where a redirect is the evidence.
+fn command_argv(segment: &str) -> Vec<String> {
+    let words = shell_words(segment);
+    let mut argv = Vec::with_capacity(words.len());
+    let mut i = 0;
+    while i < words.len() {
+        let word = &words[i];
+        i += 1;
+        match redirect_operator_len(&word.text) {
+            Some(len) if len <= word.unquoted_prefix => {
+                if len == word.text.len() {
+                    i += 1; // a bare operator: its target is the next word
+                }
+            }
+            _ => argv.push(word.text.clone()),
+        }
+    }
+    argv
+}
+
+/// Byte length of the redirection operator a word starts with: an optional
+/// fd number, then `>`, `>>`, `>|`, `>&`, `<`, `<<`, `<<-`, `<<<`, `<>` or
+/// `<&`; or a leading `&>`/`&>>`. `None` when the word is not a redirection.
+fn redirect_operator_len(word: &str) -> Option<usize> {
+    if let Some(rest) = word.strip_prefix("&>") {
+        return Some(if rest.starts_with('>') { 3 } else { 2 });
+    }
+    let fd = word.len() - word.trim_start_matches(|c: char| c.is_ascii_digit()).len();
+    ["<<<", "<<-", ">>", ">|", ">&", "<<", "<>", "<&", ">", "<"]
+        .iter()
+        .find(|op| word[fd..].starts_with(**op))
+        .map(|op| fd + op.len())
 }
 
 /// Skip leading `VAR=value` assignments; return `(program, args)`.
@@ -1990,15 +2607,20 @@ fn git_subcommand(args: &[String]) -> Option<(&str, &[String])> {
     None
 }
 
-/// The branch a `git checkout`/`git switch` lands on, when determinable.
+/// The branch a `git checkout`/`git switch` lands on, when determinable. A
+/// branch followed by paths (`git checkout feat/x -- f`) restores files and
+/// stays on the current branch.
 fn checkout_target(rest: &[String]) -> Option<String> {
-    let mut iter = rest.iter().peekable();
+    let mut iter = rest.iter();
     while let Some(t) = iter.next() {
         match t.as_str() {
             "-b" | "-B" | "-c" | "-C" => return iter.next().cloned(),
             "--detach" | "--" => return None,
             s if s.starts_with('-') => {}
-            s => return Some(s.to_string()),
+            s => {
+                let paths_follow = iter.any(|t| t == "--" || !t.starts_with('-'));
+                return (!paths_follow).then(|| s.to_string());
+            }
         }
     }
     None
@@ -2633,6 +3255,39 @@ mod tests {
     }
 
     #[test]
+    fn test_pr_body_policy_character_blocked() {
+        let p = default_policy();
+        let cmd = "gh pr create --title 'feat: x' --body 'Adds a hook \u{2014} and a test.'";
+        let v = evaluate(cmd, &ctx(&p, "feat/x"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "git.policy_characters");
+        assert!(
+            v[0].message.contains("em dash (U+2014)"),
+            "{}",
+            v[0].message
+        );
+    }
+
+    // Codex EPC-017 review, finding 5: an edited body is scanned too.
+    #[test]
+    fn test_pr_edit_body_policy_character_blocked() {
+        let p = default_policy();
+        let inline = "gh pr edit 12 --body 'Adds a hook \u{2014} and a test.'";
+        let v = evaluate(inline, &ctx(&p, "feat/x"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "git.policy_characters");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("body.md");
+        std::fs::write(&path, "Summary: pages 1\u{2013}3.").unwrap();
+        let from_file = format!("gh pr edit -F '{}'", path.display());
+        let v = evaluate(&from_file, &ctx(&p, "feat/x"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "git.policy_characters");
+        let clean = "gh pr edit 12 --title 'feat: x' --body 'Summary: adds a test.'";
+        assert!(evaluate(clean, &ctx(&p, "feat/x")).is_empty());
+    }
+
+    #[test]
     fn test_pr_body_clean_allowed() {
         let p = default_policy();
         let cmd = "gh pr create --title 'feat: x' --body 'Summary: adds the hook plane.'";
@@ -2644,9 +3299,10 @@ mod tests {
         let p = GitPolicy {
             ai_attribution: PolicyLevel::Off,
             commit_emoji: PolicyLevel::Off,
+            policy_characters: PolicyLevel::Off,
             ..default_policy()
         };
-        let cmd = "gh pr create --body 'Generated with Bot \u{1F916}'";
+        let cmd = "gh pr create --body 'Generated with Bot \u{1F916} \u{2013}'";
         assert!(evaluate(cmd, &ctx(&p, "feat/x")).is_empty());
     }
 
@@ -2981,9 +3637,94 @@ mod tests {
 
     #[test]
     fn test_config_get_hooks_path_allowed() {
-        // Reading the value is harmless.
+        // Reading the value is harmless, whatever the mode, scope, source file
+        // or display flags, and whatever the output is redirected to.
         let p = default_policy();
-        assert!(evaluate("git config --get core.hooksPath", &ctx(&p, "feat/x")).is_empty());
+        for cmd in [
+            "git config core.hooksPath",
+            "git config core.hookspath",
+            "git config --get core.hooksPath",
+            "git config --get-all core.hooksPath",
+            "git config --get-regexp hookspath",
+            "git config -l",
+            "git config --list --show-origin",
+            "git config --show-origin core.hooksPath",
+            "git config --show-scope --get core.hooksPath",
+            "git config --local core.hooksPath",
+            "git config --global --get core.hooksPath",
+            "git config --worktree core.hooksPath",
+            "git config --file .git/config core.hooksPath",
+            "git config -f .git/config --get core.hooksPath",
+            "git config --type=path core.hooksPath",
+            "git config --type path core.hooksPath",
+            "git config --default .githooks --get core.hooksPath",
+            "git config get core.hooksPath",
+            "git config get --show-origin core.hooksPath",
+            "git config list",
+            "git config core.hooksPath 2>/dev/null",
+            "git config core.hooksPath 2>&1",
+            "git config core.hooksPath > /tmp/hooks-path",
+            "git config core.hooksPath || echo unset",
+            "git -C /repo config core.hooksPath",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_config_hooks_path_writes_blocked() {
+        // Every spelling that writes, unsets or can rewrite core.hooksPath, in
+        // every scope, including a quoted value that only looks like a
+        // redirect and an alias whose body rewrites the hook path.
+        let p = default_policy();
+        for cmd in [
+            "git config core.hooksPath /tmp/evil",
+            "git config core.hookspath /tmp/evil",
+            "git config --local core.hooksPath /tmp/evil",
+            "git config --global core.hooksPath /tmp/evil",
+            "git config --system core.hooksPath /tmp/evil",
+            "git config --worktree core.hooksPath /tmp/evil",
+            "git config --file .git/config core.hooksPath /tmp/evil",
+            "git config -f .git/config core.hooksPath /tmp/evil",
+            "git config --type=path core.hooksPath /tmp/evil",
+            "git config core.hooksPath /tmp/evil 2>/dev/null",
+            "git config core.hooksPath '2>/dev/null'",
+            "git config --add core.hooksPath /tmp/evil",
+            "git config --replace-all core.hooksPath /tmp/evil",
+            "git config --unset core.hooksPath",
+            "git config --unset-all core.hooksPath",
+            "git config --global --unset core.hooksPath",
+            "git config --unset core.hooksPath 2>/dev/null",
+            "git config set core.hooksPath /tmp/evil",
+            "git config set --global core.hooksPath /tmp/evil",
+            "git config unset core.hooksPath",
+            "git config -e",
+            "git config --edit",
+            "git config --global --edit",
+            "git config edit",
+            "git config --remove-section core",
+            "git config --rename-section core old",
+            "git config remove-section core",
+            "git config alias.x '!git config core.hooksPath /tmp/evil'",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_config_other_keys_not_hook_integrity() {
+        // Writes to unrelated keys and sections are not an integrity concern.
+        let p = default_policy();
+        for cmd in [
+            "git config user.name x",
+            "git config --unset user.name",
+            "git config --remove-section alias",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(!has_rule(&v, "git.hook_integrity"), "{cmd}: {v:?}");
+        }
     }
 
     #[test]
@@ -3675,5 +4416,181 @@ mod tests {
             &ctx_with_dir_branch(&p, "main", &resolver)
         )
         .is_empty());
+    }
+
+    // -- data is not a command: heredoc bodies, quoted arguments, comments --
+
+    #[test]
+    fn test_heredoc_body_is_data() {
+        // Prose written through a heredoc names commands without running
+        // them: quoted and unquoted delimiters, `<<-`, and bodies with
+        // backticks, apostrophes and `;` that only look like shell syntax.
+        let p = default_policy();
+        for cmd in [
+            "python3 - <<'EOF'\ntext = \"Pull requests into main are merged by the operator only; never run gh pr merge.\"\nEOF",
+            "cat > AGENTS.md <<'EOF'\n- Never run `gh pr merge`; the operator merges.\n- Don't `git push --force origin main`.\nEOF",
+            "cat > AGENTS.md <<\"EOF\"\ngh pr merge 12 --squash\nEOF",
+            "cat > notes.md <<EOF\ngh pr merge 12 --squash; git commit -m x\nEOF",
+            "cat <<-EOF > notes.md\n\tgh pr merge 12\n\tEOF",
+            "cat <<EOF\ngh pr merge \\$(12) and \\`gh pr merge 13\\`\nEOF",
+            "git commit -F - <<'EOF'\nfix: x\n\n- then gh pr merge after review\nEOF",
+            "cat <<'A' <<'B'\ngh pr merge 1\nA\ngh pr merge 2\nB",
+            "gh pr create --title t --body \"$(cat <<'EOF'\nMerge with `gh pr merge 12`; the operator does it.\nEOF\n)\"",
+            "git commit -m \"$(cat <<'EOF'\nfix: x\n\n- never `gh pr merge 12`\nEOF\n)\"",
+            "x=$(cat <<'EOF'\n`gh pr merge 12`\nEOF\n)",
+            "cat > f <<'EOF' && git add f\nnever `gh pr merge 12`\nEOF",
+            "cat <<'EOF' | tee -a f | grep -c x\n`gh pr merge 12`\nEOF",
+            "gh pr create --title t --body-file - <<'EOF'\nnever `gh pr merge 12`\nEOF",
+            "jq -n --arg b \"$(cat <<'EOF'\n`gh pr merge 12`\nEOF\n)\" '$b'",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_quoted_arguments_and_comments_are_data() {
+        let p = default_policy();
+        for cmd in [
+            "echo 'run gh pr merge; then git push --force origin main'",
+            "echo \"never run gh pr merge\"",
+            "python3 -c \"print('gh pr merge 12; git commit -m x')\"",
+            "printf '%s\\n' 'git commit -m x' '`gh pr merge 12`'",
+            "ls # later: gh pr merge 12; git push --force origin main",
+            "# don't run `gh pr merge`\nls",
+            "ls;# gh pr merge 12",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "main"));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_real_invocations_around_data_still_caught() {
+        // A real invocation in command position is caught wherever it sits:
+        // chained, piped, substituted, wrapped, fed to a shell as a heredoc
+        // script, substituted inside an unquoted heredoc body, after a
+        // heredoc's terminator, or after a heredoc that never terminates.
+        let p = default_policy();
+        for cmd in [
+            "ls && gh pr merge 12",
+            "ls; gh pr merge 12",
+            "echo y | gh pr merge 12",
+            "echo $(gh pr merge 12)",
+            "echo `gh pr merge 12`",
+            "echo \"see `gh pr merge 12`\"",
+            "bash -c \"gh pr merge 12\"",
+            "bash <<'EOF'\ngh pr merge 12\nEOF",
+            "sh -s <<EOF\nls\ngh pr merge 12\nEOF",
+            "cat <<'EOF' | sh\ngh pr merge 12\nEOF",
+            "cat <<EOF\n$(gh pr merge 12)\nEOF",
+            "cat <<EOF\n`gh pr merge 12`\nEOF",
+            "cat > f <<'EOF'\ntext\nEOF\ngh pr merge 12",
+            "cat <<'EOF'\ngh pr merge 12",
+            "cat <<$'EOF'\ngh pr merge 12\nEOF",
+            "bash -c \"$(cat <<'EOF'\ngh pr merge 12\nEOF\n)\"",
+            "eval \"$(cat <<'EOF'\ngh pr merge 12\nEOF\n)\"",
+            "sh <<< \"$(cat <<'EOF'\ngh pr merge 12\nEOF\n)\"",
+            "$(cat <<'EOF'\ngh pr merge 12\nEOF\n)",
+            "cat <<'EOF' | \\\nbash\ngh pr merge 12\nEOF",
+            "cat <<'EOF' |\ngh pr merge 12\nEOF\nbash",
+            "$SHELL <<'EOF'\ngh pr merge 12\nEOF",
+            "ssh host <<'EOF'\ngh pr merge 12\nEOF",
+            "sudo -s <<'EOF'\ngh pr merge 12\nEOF",
+            "make -f - <<'EOF'\nall:\n\tgh pr merge 12\nEOF",
+            "x=$[1<<2]\ngh pr merge 12\n2]",
+            "bash -c 2>/dev/null \"gh pr merge 12\"",
+            "awk '{system($0)}' <<'EOF'\ngh pr merge 12\nEOF",
+            "perl -ne 'system $_' <<'EOF'\ngh pr merge 12\nEOF",
+            "sed e <<'EOF'\ngh pr merge 12\nEOF",
+            "git -c alias.x='!sh' x <<'EOF'\ngh pr merge 12\nEOF",
+            "cat <<'EOF' | git -c alias.x='!sh' x\ngh pr merge 12\nEOF",
+            "cat <<'EOF' | { bash; }\ngh pr merge 12\nEOF",
+            "cat <<'EOF' | (bash)\ngh pr merge 12\nEOF",
+            "(cat <<'EOF'\ngh pr merge 12\nEOF\n) | bash",
+            "cat <<'EOF' > >(sh)\ngh pr merge 12\nEOF",
+            "echo \"$(cat <<'EOF'\ngh pr merge 12\nEOF\n)\" | bash",
+            "printf '%s\\n' \"$(cat <<'EOF'\ngh pr merge 12\nEOF\n)\" | sh",
+            "(bash) <<'EOF'\ngh pr merge 12\nEOF",
+            "{ bash; } <<'EOF'\ngh pr merge 12\nEOF",
+            "tee >(sh) <<'EOF'\ngh pr merge 12\nEOF",
+            "(( x = 1 << 2 ))\ngh pr merge 12\n2",
+            "echo $(true)#; gh pr merge 12",
+            "(( 1 #)); gh pr merge 12",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert!(has_rule(&v, "git.pr_merge_to_protected"), "{cmd}: {v:?}");
+        }
+        for cmd in [
+            "cat > f <<'EOF'\ntext\nEOF\ngit commit -m x",
+            "echo 'text' && git commit -m x",
+            "echo ok # note\ngit commit -m x",
+            "git \\\ncommit -m x",
+            "bash -c \"$(cat <<'EOF'\ngit commit -m x\nEOF\n)\"",
+            "git checkout feat/x -- f && git commit -m x",
+            "git checkout feat/x f && git commit -m x",
+            "(bash) <<'EOF'\ngit commit -m x\nEOF",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "main"));
+            assert!(has_rule(&v, "git.commit_to_protected"), "{cmd}: {v:?}");
+        }
+    }
+
+    // -- chained checkout in a retargeted directory --
+
+    #[test]
+    fn test_retargeted_switch_then_commit_allowed() {
+        // The target repo is on main, but the chain first moves it to a new
+        // feature branch; the commit lands there.
+        let p = default_policy();
+        let resolver = |_dir: &str| Some("main".to_string());
+        for cmd in [
+            "cd /repo && git switch -c feat/x && git commit -m x",
+            "cd /repo && git checkout -b feat/x && git commit -m x",
+            "git -C /repo switch -c feat/x && git -C /repo commit -m x",
+            "git -C /repo switch -c feat/x && git -C /repo/ commit -m x",
+        ] {
+            let v = evaluate(cmd, &ctx_with_dir_branch(&p, "main", &resolver));
+            assert!(v.is_empty(), "{cmd}: {v:?}");
+        }
+    }
+
+    #[test]
+    fn test_retargeted_switch_does_not_leak() {
+        // A switch in one directory says nothing about another directory or
+        // the session, and a switch back to main is tracked too.
+        let p = default_policy();
+        let on_main = |_dir: &str| Some("main".to_string());
+        let on_feat = |_dir: &str| Some("feat/y".to_string());
+        for (cmd, resolver, session) in [
+            (
+                "git -C /a switch -c feat/x && git -C /b commit -m x",
+                &on_main as &dyn Fn(&str) -> Option<String>,
+                "feat/s",
+            ),
+            (
+                "git -C /a switch -c feat/x && git commit -m x",
+                &on_main as &dyn Fn(&str) -> Option<String>,
+                "main",
+            ),
+            (
+                "cd /repo && git switch main && git commit -m x",
+                &on_feat as &dyn Fn(&str) -> Option<String>,
+                "feat/s",
+            ),
+            (
+                "cd /repo && git checkout feat/x -- f && git commit -m x",
+                &on_main as &dyn Fn(&str) -> Option<String>,
+                "feat/s",
+            ),
+            (
+                "git -C /repo checkout feat/x -- f && git -C /repo commit -m x",
+                &on_main as &dyn Fn(&str) -> Option<String>,
+                "feat/s",
+            ),
+        ] {
+            let v = evaluate(cmd, &ctx_with_dir_branch(&p, session, resolver));
+            assert!(has_rule(&v, "git.commit_to_protected"), "{cmd}: {v:?}");
+        }
     }
 }

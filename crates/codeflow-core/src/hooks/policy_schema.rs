@@ -83,7 +83,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, then `security`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 39] = [
+pub const SCHEMA: [KeySpec; 40] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -305,6 +305,15 @@ pub const SCHEMA: [KeySpec; 39] = [
         valid: LEVEL_VALID,
         purpose: "Emoji in commit subjects and PR bodies.",
         notes: "",
+    },
+    KeySpec {
+        path: "git.policy_characters",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "En and em dashes (U+2013, U+2014) in commit messages, PR bodies, and lines a ci range adds under the written-content trees (ADR-0067).",
+        notes: "Judges new text only: `codeflow ci` checks lines the range \
+                adds under docs/, project-management/ and the skill trees, so \
+                existing bytes are grandfathered and nothing asks for a sweep.",
     },
     // ---- git: PR-body structure --------------------------------------------
     KeySpec {

@@ -692,6 +692,22 @@ fn ci_templates_resolve_cargo_bin_through_cargo_home() {
     );
 }
 
+/// Codex EPC-017 review, finding 5: the PR-body check (structure and the
+/// ADR-0067 characters) must rerun when the body is edited after opening,
+/// and the body keeps reaching `codeflow ci` through `env:`, never inline.
+#[test]
+fn shipped_ci_rechecks_an_edited_pr_body_through_env() {
+    let workflow = std::fs::read_to_string(repo_root().join("assets/base/ci/codeflow-ci.yml"))
+        .expect("shipped CI workflow is readable");
+    assert!(
+        workflow.contains("  pull_request:\n    types: [opened, synchronize, reopened, edited]\n"),
+        "shipped CI must subscribe pull_request to edited"
+    );
+    assert!(workflow.contains("CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}"));
+    let body_uses = workflow.matches("github.event.pull_request.body").count();
+    assert_eq!(body_uses, 1, "the PR body is read only through env");
+}
+
 #[test]
 fn codeql_remains_repository_owned_not_a_scaffolded_workflow() {
     let root = repo_root();
@@ -1035,6 +1051,7 @@ fn portal_skill_preserves_explicit_ownership_and_integrity_contracts() {
         "restore exact reviewed bytes",
         "Empty reserved directories are removed without",
         "Chromium, Firefox and WebKit",
+        "exact served URL from the tool output",
     ] {
         assert!(
             operations.contains(marker),

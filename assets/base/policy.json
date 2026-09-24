@@ -27,6 +27,7 @@
     "breaking_watch_paths": [],
     "ai_attribution": "block",
     "commit_emoji": "block",
+    "policy_characters": "block",
     "pr_sections": "block",
     "pr_required_sections": ["Summary", "Changes"],
     "pr_code_sections": ["Testing"],

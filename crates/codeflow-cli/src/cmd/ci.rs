@@ -14,8 +14,10 @@
 //! scaffolded wrappers avoid the skip state entirely (full-depth checkout
 //! plus explicit `--base`/`--head`).
 
+use std::collections::BTreeSet;
+use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, Stdio};
 
 use clap::Args;
 use codeflow_core::hooks::policy::{Policy, PolicySource};
@@ -43,8 +45,8 @@ pub struct CiArgs {
     #[arg(long, value_name = "NAME")]
     pub branch: Option<String>,
 
-    /// PR/MR body text to scan for AI attribution, emoji, and the required
-    /// section structure.
+    /// PR/MR body text to scan for AI attribution, emoji, policy characters
+    /// (ADR-0067), and the required section structure.
     #[arg(long, value_name = "TEXT")]
     pub pr_body: Option<String>,
 
@@ -71,6 +73,9 @@ struct CommitRecord {
     sha: String,
     message: String,
     files: Vec<String>,
+    /// A merge commit gets only the policy-character rule (ADR-0067); the
+    /// conventional-format rules have always skipped merges in CI.
+    is_merge: bool,
 }
 
 /// How the base..head range was resolved, for an honest one-line report.
@@ -87,6 +92,21 @@ struct CommitRangeEvaluation {
     files: Option<Vec<String>>,
     violations: Vec<TaggedViolation>,
     ran: bool,
+    /// The added-lines policy-character check (ADR-0067): `None` when the
+    /// rule is inactive, `Some(true)` when it ran, `Some(false)` when it could
+    /// not (unresolved range or a failed diff), which is not a pass.
+    added_lines_ran: Option<bool>,
+}
+
+/// One line a commit range adds under a policy-character tree (ADR-0067).
+#[derive(Debug, PartialEq, Eq)]
+struct AddedLine {
+    path: String,
+    line: usize,
+    text: String,
+    /// The new-side blob id from the patch's `index` line, which decides
+    /// binary content without resolving the path.
+    blob: Option<String>,
 }
 
 pub fn run(args: &CiArgs) -> i32 {
@@ -160,6 +180,11 @@ pub fn run(args: &CiArgs) -> i32 {
     } else {
         skipped.push("commit");
     }
+    match range.added_lines_ran {
+        Some(true) => ran.push("added-lines"),
+        Some(false) => skipped.push("added-lines"),
+        None => {}
+    }
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {
@@ -231,17 +256,42 @@ fn evaluate_commit_range(
             files: None,
             violations: Vec::new(),
             ran: false,
+            added_lines_ran: git.policy_characters.is_active().then_some(false),
         };
     };
     match enumerate_commits(root, &base_sha, head) {
         Ok(commits) => {
+            let merges = commits.iter().filter(|c| c.is_merge).count();
             println!(
-                "codeflow ci: range {}..{} ({}) — {} non-merge commit(s)",
+                "codeflow ci: range {}..{} ({}) — {} non-merge commit(s), {} merge(s)",
                 short(&base_sha),
                 head,
                 range_source,
-                commits.len()
+                commits.len() - merges,
+                merges
             );
+            let mut violations = evaluate_commits(git, &commits);
+            let added_lines_ran = if git.policy_characters.is_active() {
+                match added_lines(root, &base_sha, head) {
+                    Ok(lines) => {
+                        violations.extend(evaluate_added_lines(git, &lines).into_iter().map(
+                            |violation| TaggedViolation {
+                                sha: None,
+                                violation,
+                            },
+                        ));
+                        Some(true)
+                    }
+                    Err(error) => {
+                        eprintln!(
+                            "codeflow ci: warning: could not diff the range ({error}); added-lines check skipped"
+                        );
+                        Some(false)
+                    }
+                }
+            } else {
+                None
+            };
             CommitRangeEvaluation {
                 files: Some(
                     commits
@@ -249,8 +299,9 @@ fn evaluate_commit_range(
                         .flat_map(|commit| commit.files.clone())
                         .collect(),
                 ),
-                violations: evaluate_commits(git, &commits),
+                violations,
                 ran: true,
+                added_lines_ran,
             }
         }
         Err(error) => {
@@ -261,6 +312,7 @@ fn evaluate_commit_range(
                 files: None,
                 violations: Vec::new(),
                 ran: false,
+                added_lines_ran: git.policy_characters.is_active().then_some(false),
             }
         }
     }
@@ -334,9 +386,10 @@ fn print_source_banner(root: &Path) {
 
 /// Print every violation and an honest summary naming what ran vs what was
 /// skipped; return the process exit code: 1 when any violation blocks, 2 when
-/// the commit checks were skipped (nothing in the range was verified — not a
-/// pass), else 0. A skipped branch-naming check is reported but not fatal: a
-/// detached-head run without a CI branch variable is a legitimate state.
+/// the commit checks or the added-lines check were skipped (the range was not
+/// verified in full, which is not a pass), else 0. A skipped branch-naming
+/// check is reported but not fatal: a detached-head run without a CI branch
+/// variable is a legitimate state.
 fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
     for t in tagged {
         let plane = match &t.sha {
@@ -394,7 +447,7 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
 
     if blocking {
         1
-    } else if skipped.contains(&"commit") {
+    } else if skipped.contains(&"commit") || skipped.contains(&"added-lines") {
         2
     } else {
         0
@@ -408,12 +461,31 @@ fn report(tagged: &[TaggedViolation], ran: &[&str], skipped: &[&str]) -> i32 {
 /// Run every commit through the same `git_hook::commit_msg` the commit-msg
 /// hook runs (format, breaking-footer, AI attribution, emoji), tagging each
 /// finding with its commit sha. Reusing that function is what guarantees the
-/// CI checks cannot drift from the hook (ADR-0017).
+/// CI checks cannot drift from the hook (ADR-0017). History is committed
+/// content, so the policy-character rule scans each stored message whole,
+/// merges included (ADR-0067 names no merge exemption).
 fn evaluate_commits(git: &GitPolicy, commits: &[CommitRecord]) -> Vec<TaggedViolation> {
     let mut out = Vec::new();
     for c in commits {
-        let stage = git_hook::commit_msg_with_files(git, &c.message, &c.files, false);
-        for violation in stage.violations {
+        let violations = if c.is_merge {
+            git_hook::policy_characters_in_message(
+                git,
+                &c.message,
+                &git_hook::MessageSource::Committed,
+            )
+            .into_iter()
+            .collect()
+        } else {
+            git_hook::commit_msg_with_files(
+                git,
+                &c.message,
+                &c.files,
+                false,
+                &git_hook::MessageSource::Committed,
+            )
+            .violations
+        };
+        for violation in violations {
             out.push(TaggedViolation {
                 sha: Some(c.sha.clone()),
                 violation,
@@ -448,9 +520,9 @@ fn evaluate_branch(git: &GitPolicy, branch: &str) -> Option<TaggedViolation> {
     })
 }
 
-/// Scan a PR/MR body for AI attribution and emoji — the same public
-/// `standards` functions the git-guard's PR-body scan uses (identical rules,
-/// so the two planes flag identical content).
+/// Scan a PR/MR body for AI attribution, emoji and policy characters with the
+/// same public `standards` functions the git-guard's PR-body scan uses
+/// (identical rules, so the two planes flag identical content).
 fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
     let mut out = Vec::new();
     if git.ai_attribution.is_active() {
@@ -473,7 +545,40 @@ fn evaluate_pr_body(git: &GitPolicy, body: &str) -> Vec<Violation> {
             ));
         }
     }
+    out.extend(standards::pr_body_policy_character(git, body));
     out
+}
+
+/// The policy-character rule over the lines a range adds (ADR-0067): one
+/// finding per added line under a [`standards::POLICY_CHARACTER_TREES`] entry
+/// that carries an en or em dash, naming the file and line. Only added lines
+/// are judged, so existing bytes are grandfathered and nothing asks for a
+/// sweep or a rewrite of `docs/decisions/` history.
+fn evaluate_added_lines(git: &GitPolicy, lines: &[AddedLine]) -> Vec<Violation> {
+    if !git.policy_characters.is_active() {
+        return Vec::new();
+    }
+    lines
+        .iter()
+        .filter(|added| standards::in_policy_character_tree(&added.path))
+        .filter_map(|added| {
+            let (_, c) = standards::find_policy_character(&added.text)?;
+            Some(Violation::new(
+                "git.policy_characters",
+                git.policy_characters,
+                format!(
+                    "{}:{} adds an {}",
+                    added.path,
+                    added.line,
+                    standards::policy_character_name(c)
+                ),
+                format!(
+                    "{}; existing lines are grandfathered, only this added line changes",
+                    standards::POLICY_CHARACTER_FIX
+                ),
+            ))
+        })
+        .collect()
 }
 
 /// How a required PR-body section was (or was not) found.
@@ -834,14 +939,14 @@ fn rev_parse(root: &Path, rev: &str) -> Option<String> {
     (!sha.is_empty()).then_some(sha)
 }
 
-/// Enumerate the non-merge commits in `base..head`, newest first, as
-/// (sha, full-message) records. Uses a NUL-delimited `git log` so multi-line
-/// bodies parse unambiguously.
+/// Enumerate the commits in `base..head`, newest first, as (sha, stored
+/// message) records flagged merge or not. Uses a NUL-delimited `git log` so
+/// multi-line bodies parse unambiguously.
 fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRecord>, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(root)
-        .args(["log", "--no-merges", "-z", "--format=%H%n%B"])
+        .args(["log", "-z", "--format=%H %P%n%B"])
         .arg(format!("{base}..{head}"))
         .output()
         .map_err(|e| e.to_string())?;
@@ -851,10 +956,256 @@ fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRe
     let mut records = parse_log(&String::from_utf8_lossy(&out.stdout));
     // Populate each commit's touched files for the contract-surface tripwire
     // (ADR-0020); a per-commit call keeps the -z log parse unambiguous.
-    for rec in &mut records {
+    for rec in records.iter_mut().filter(|rec| !rec.is_merge) {
         rec.files = commit_files(root, &rec.sha);
     }
     Ok(records)
+}
+
+/// Lines the range adds under the policy-character trees, diffed from the
+/// merge-base of `base` and `head` (what the PR itself adds). Rename detection
+/// keeps a moved file's unchanged lines grandfathered. `--text` stops a
+/// `-diff` or `binary` attribute from hiding a text addition behind a
+/// binary-files summary; a patch is skipped as binary only by the content of
+/// its new-side blob, named by the full object id in its `index` line.
+fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, String> {
+    let merge_base = git_stdout(root, &["merge-base", base, head])?;
+    let merge_base = merge_base.trim();
+    let mut args = vec![
+        "-c",
+        "core.quotepath=off",
+        "diff-tree",
+        "-r",
+        "-p",
+        "-M",
+        "--unified=0",
+        "--no-color",
+        "--no-ext-diff",
+        "--no-textconv",
+        "--text",
+        "--full-index",
+        "--src-prefix=a/",
+        "--dst-prefix=b/",
+        merge_base,
+        head,
+        "--",
+    ];
+    args.extend(standards::POLICY_CHARACTER_TREES);
+    let lines = parse_added_lines(&git_stdout(root, &args)?);
+    let blobs: BTreeSet<&str> = lines.iter().filter_map(|l| l.blob.as_deref()).collect();
+    let binary = binary_blobs(root, &blobs.into_iter().collect::<Vec<_>>())?;
+    // A line without a blob id cannot be classified, so it is scanned.
+    Ok(lines
+        .into_iter()
+        .filter(|added| added.blob.as_ref().is_none_or(|b| !binary.contains(b)))
+        .collect())
+}
+
+/// Git's own binary heuristic, applied to content instead of attributes: a
+/// NUL byte in the first 8000 bytes of the blob.
+const BINARY_SNIFF_BYTES: usize = 8000;
+
+/// The `blobs` (full object ids) whose content is binary, read in one
+/// `git cat-file --batch`. An id Git cannot read is an error, never a pass.
+fn binary_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeSet<String>, String> {
+    if blobs.is_empty() {
+        return Ok(BTreeSet::new());
+    }
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["cat-file", "--batch"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stdin = child.stdin.take().ok_or("git cat-file: no stdin")?;
+    let mut input = String::new();
+    for blob in blobs {
+        input.push_str(blob);
+        input.push('\n');
+    }
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let out = child.wait_with_output().map_err(|e| e.to_string())?;
+    writer
+        .join()
+        .map_err(|_| "git cat-file: input writer panicked".to_string())?
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    parse_batch_binary(&out.stdout, blobs)
+}
+
+/// Read `git cat-file --batch` output for `queried` blob ids, in order,
+/// keeping the ids whose content sniffs as binary.
+fn parse_batch_binary(stdout: &[u8], queried: &[&str]) -> Result<BTreeSet<String>, String> {
+    let mut binary = BTreeSet::new();
+    let mut rest = stdout;
+    for blob in queried {
+        let end = rest
+            .iter()
+            .position(|byte| *byte == b'\n')
+            .ok_or("git cat-file: truncated output")?;
+        let header = String::from_utf8_lossy(&rest[..end]).into_owned();
+        rest = &rest[end + 1..];
+        if header.ends_with(" missing") || header.ends_with(" ambiguous") {
+            return Err(format!("git cat-file: cannot read blob {blob}: {header}"));
+        }
+        let size: usize = header
+            .rsplit(' ')
+            .next()
+            .and_then(|field| field.parse().ok())
+            .ok_or_else(|| format!("git cat-file: bad header {header:?}"))?;
+        let content = rest.get(..size).ok_or("git cat-file: truncated content")?;
+        if content
+            .iter()
+            .take(BINARY_SNIFF_BYTES)
+            .any(|byte| *byte == 0)
+        {
+            binary.insert((*blob).to_string());
+        }
+        rest = rest.get(size + 1..).unwrap_or_default();
+    }
+    Ok(binary)
+}
+
+/// Run `git -C root <args>` and return its stdout, or its stderr as the error.
+fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .output()
+        .map_err(|e| e.to_string())?;
+    if !out.status.success() {
+        return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
+}
+
+/// Parse a zero-context unified diff into the lines it adds, with each line's
+/// number in the new file. Hunk line counts decide where a hunk ends, so an
+/// added line whose text begins with `++ ` is never mistaken for a header.
+fn parse_added_lines(diff: &str) -> Vec<AddedLine> {
+    let mut out = Vec::new();
+    let mut path: Option<String> = None;
+    let mut blob: Option<String> = None;
+    let (mut old_left, mut new_left, mut new_line) = (0usize, 0usize, 0usize);
+    for line in diff.lines() {
+        if old_left == 0 && new_left == 0 {
+            if line.starts_with("diff --git ") {
+                (path, blob) = (None, None);
+            } else if let Some(ids) = line.strip_prefix("index ") {
+                blob = index_new_blob(ids);
+            } else if let Some(rest) = line.strip_prefix("+++ ") {
+                path = diff_path(rest);
+            } else if let Some(header) = line.strip_prefix("@@ ") {
+                if let Some((old_count, start, new_count)) = hunk_header(header) {
+                    (old_left, new_left, new_line) = (old_count, new_count, start);
+                }
+            }
+            continue;
+        }
+        match line.as_bytes().first() {
+            Some(b'+') => {
+                if let Some(p) = &path {
+                    out.push(AddedLine {
+                        path: p.clone(),
+                        line: new_line,
+                        text: line[1..].to_string(),
+                        blob: blob.clone(),
+                    });
+                }
+                new_line += 1;
+                new_left = new_left.saturating_sub(1);
+            }
+            Some(b'-') => old_left = old_left.saturating_sub(1),
+            Some(b' ') => {
+                new_line += 1;
+                new_left = new_left.saturating_sub(1);
+                old_left = old_left.saturating_sub(1);
+            }
+            // `\ No newline at end of file` belongs to the previous line.
+            Some(b'\\') => {}
+            _ => (old_left, new_left) = (0, 0),
+        }
+    }
+    out
+}
+
+/// The new-side path of a `+++ ` diff header; `None` for a deletion. A
+/// quoted name is decoded; malformed quoting keeps the raw text, so its
+/// lines are still reported rather than dropped.
+fn diff_path(rest: &str) -> Option<String> {
+    let rest = rest.trim_end_matches('\t');
+    let decoded = unquote_git_path(rest).unwrap_or_else(|| rest.trim_matches('"').to_string());
+    decoded.strip_prefix("b/").map(str::to_string)
+}
+
+/// The new blob id of an `index <old>..<new>[ <mode>]` patch line.
+fn index_new_blob(ids: &str) -> Option<String> {
+    let (_, new) = ids.split_once("..")?;
+    let new = new.split(' ').next()?;
+    (!new.is_empty() && new.bytes().all(|b| b.is_ascii_hexdigit())).then(|| new.to_string())
+}
+
+/// Decode a name Git printed in C-style quotes: `\"`, `\\`, the control
+/// escapes and three-digit octal bytes. An unquoted name is returned as is;
+/// `None` means the quoting is malformed.
+fn unquote_git_path(raw: &str) -> Option<String> {
+    let Some(inner) = raw.strip_prefix('"') else {
+        return Some(raw.to_string());
+    };
+    let inner = inner.strip_suffix('"')?.as_bytes();
+    let mut out = Vec::with_capacity(inner.len());
+    let mut i = 0;
+    while i < inner.len() {
+        let byte = inner[i];
+        i += 1;
+        if byte != b'\\' {
+            out.push(byte);
+            continue;
+        }
+        let escape = *inner.get(i)?;
+        i += 1;
+        out.push(match escape {
+            b'a' => 0x07,
+            b'b' => 0x08,
+            b't' => b'\t',
+            b'n' => b'\n',
+            b'v' => 0x0b,
+            b'f' => 0x0c,
+            b'r' => b'\r',
+            b'"' => b'"',
+            b'\\' => b'\\',
+            b'0'..=b'3' => {
+                let digits = inner.get(i - 1..i + 2)?;
+                i += 2;
+                let text = std::str::from_utf8(digits).ok()?;
+                u8::from_str_radix(text, 8).ok()?
+            }
+            _ => return None,
+        });
+    }
+    Some(String::from_utf8_lossy(&out).into_owned())
+}
+
+/// Parse `-a[,b] +c[,d] @@ ...` into (old count, new start, new count).
+fn hunk_header(header: &str) -> Option<(usize, usize, usize)> {
+    let mut parts = header.split_whitespace();
+    let old = parts.next()?.strip_prefix('-')?;
+    let new = parts.next()?.strip_prefix('+')?;
+    let count = |range: &str| -> Option<(usize, usize)> {
+        match range.split_once(',') {
+            Some((start, count)) => Some((start.parse().ok()?, count.parse().ok()?)),
+            None => Some((range.parse().ok()?, 1)),
+        }
+    };
+    let (_, old_count) = count(old)?;
+    let (new_start, new_count) = count(new)?;
+    Some((old_count, new_start, new_count))
 }
 
 /// Files a single commit touches (`git diff-tree --no-commit-id --name-only -r`).
@@ -878,17 +1229,21 @@ fn commit_files(root: &Path, sha: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Parse the NUL-delimited `git log --format=%H%n%B` output into records.
+/// Parse the NUL-delimited `git log --format=%H %P%n%B` output into records;
+/// more than one parent after the sha marks a merge.
 fn parse_log(stdout: &str) -> Vec<CommitRecord> {
     stdout
         .split('\0')
         .filter(|rec| !rec.trim().is_empty())
         .filter_map(|rec| {
-            let (sha, message) = rec.split_once('\n')?;
+            let (header, message) = rec.split_once('\n')?;
+            let mut ids = header.split_whitespace();
+            let sha = ids.next()?.to_string();
             Some(CommitRecord {
-                sha: sha.trim().to_string(),
+                sha,
                 message: message.to_string(),
                 files: Vec::new(),
+                is_merge: ids.count() > 1,
             })
         })
         .collect()
@@ -912,6 +1267,7 @@ mod tests {
             sha: sha.to_string(),
             message: message.to_string(),
             files: Vec::new(),
+            is_merge: false,
         }
     }
 
@@ -920,6 +1276,7 @@ mod tests {
             sha: sha.to_string(),
             message: message.to_string(),
             files: files.iter().map(|s| (*s).to_string()).collect(),
+            is_merge: false,
         }
     }
 
@@ -1077,9 +1434,10 @@ mod tests {
             commit_format: PolicyLevel::Off,
             commit_emoji: PolicyLevel::Off,
             ai_attribution: PolicyLevel::Off,
+            policy_characters: PolicyLevel::Off,
             ..GitPolicy::default()
         };
-        let v = evaluate_commits(&g, &[commit("ffff6666", "Added some stuff")]);
+        let v = evaluate_commits(&g, &[commit("ffff6666", "Added some stuff \u{2014}")]);
         assert!(v.is_empty(), "off-level checks produce nothing");
     }
 
@@ -1127,6 +1485,279 @@ mod tests {
     #[test]
     fn pr_body_clean_passes() {
         assert!(evaluate_pr_body(&git(), "Summary of a clean PR body.").is_empty());
+    }
+
+    // -- policy characters (ADR-0067) ---------------------------------------
+
+    // Codex EPC-017 review, finding 3: CI reads committed history, so a
+    // retained `#` line is scanned, and a merge message is not exempt.
+    #[test]
+    fn committed_hash_line_and_merge_message_are_scanned_in_ci() {
+        let hash_line = commit("aaaa8888", "feat: add ranges\n\n# pages 1\u{2014}3\n");
+        let merge = CommitRecord {
+            is_merge: true,
+            ..commit("bbbb8888", "Merge branch 'feat/x' \u{2014} tidy\n")
+        };
+        let v = evaluate_commits(&git(), &[hash_line, merge]);
+        for sha in ["aaaa8888", "bbbb8888"] {
+            assert!(
+                v.iter().any(|t| t.sha.as_deref() == Some(sha)
+                    && t.violation.rule == "git.policy_characters"),
+                "{sha}: {} finding(s)",
+                v.len()
+            );
+        }
+        // The merge gets only the character rule, never the format rules.
+        assert_eq!(
+            1,
+            v.iter()
+                .filter(|t| t.sha.as_deref() == Some("bbbb8888"))
+                .count()
+        );
+        let clean = CommitRecord {
+            is_merge: true,
+            ..commit("cccc8888", "Merge branch 'feat/x'\n")
+        };
+        assert!(evaluate_commits(&git(), &[clean]).is_empty());
+    }
+
+    #[test]
+    fn parse_log_marks_merges_from_parent_count() {
+        let stdout = "aaaa1111 p1\nfeat: one\n\0bbbb2222 p1 p2\nMerge x\n\0cccc3333 \nroot\n\0";
+        let recs = parse_log(stdout);
+        let merges: Vec<_> = recs.iter().map(|r| (r.sha.as_str(), r.is_merge)).collect();
+        assert_eq!(
+            merges,
+            [("aaaa1111", false), ("bbbb2222", true), ("cccc3333", false)]
+        );
+    }
+
+    #[test]
+    fn policy_character_in_commit_body_blocks_in_ci() {
+        let v = evaluate_commits(
+            &git(),
+            &[commit(
+                "aaaa7777",
+                "feat: add ranges\n\n- pages 1\u{2013}3\n",
+            )],
+        );
+        assert!(v.iter().any(|t| t.violation.rule == "git.policy_characters"
+            && t.violation.level == PolicyLevel::Block));
+    }
+
+    #[test]
+    fn pr_body_policy_character_blocks_naming_the_line() {
+        let v = evaluate_pr_body(&git(), "## Summary\n\nAdds a check \u{2014} and tests.\n");
+        let found = v
+            .iter()
+            .find(|x| x.rule == "git.policy_characters")
+            .expect("a policy_characters finding");
+        assert_eq!(found.level, PolicyLevel::Block);
+        assert!(found.message.contains("line 3"), "{}", found.message);
+        assert!(
+            found.message.contains("em dash (U+2014)"),
+            "{}",
+            found.message
+        );
+        assert!(found.remedy.contains("a comma, colon"), "{}", found.remedy);
+    }
+
+    #[test]
+    fn pr_body_hyphen_passes_policy_characters() {
+        assert!(evaluate_pr_body(&git(), "Adds a re-run flag; pages 1 to 3.").is_empty());
+    }
+
+    fn added(path: &str, line: usize, text: &str) -> AddedLine {
+        AddedLine {
+            path: path.to_string(),
+            line,
+            text: text.to_string(),
+            blob: None,
+        }
+    }
+
+    fn in_blob(blob: &str, line: AddedLine) -> AddedLine {
+        AddedLine {
+            blob: Some(blob.to_string()),
+            ..line
+        }
+    }
+
+    #[test]
+    fn added_line_with_policy_character_names_file_and_line() {
+        let lines = [
+            added("docs/guide.md", 7, "A rule \u{2014} stated."),
+            added("project-management/tasks/TSK-001.md", 2, "pages 1\u{2013}3"),
+            added(
+                ".agents/skills/cf-x/SKILL.md",
+                4,
+                "a plain line - with a hyphen",
+            ),
+        ];
+        let v = evaluate_added_lines(&git(), &lines);
+        assert_eq!(v.len(), 2, "{v:?}");
+        assert!(v[0].message.contains("docs/guide.md:7"), "{}", v[0].message);
+        assert!(
+            v[0].message.contains("em dash (U+2014)"),
+            "{}",
+            v[0].message
+        );
+        assert!(
+            v[1].message
+                .contains("project-management/tasks/TSK-001.md:2"),
+            "{}",
+            v[1].message
+        );
+        assert!(v[0].remedy.contains("grandfathered"), "{}", v[0].remedy);
+    }
+
+    #[test]
+    fn added_line_outside_the_trees_passes() {
+        let lines = [
+            added("crates/codeflow-cli/tests/fixture.md", 1, "x \u{2014} y"),
+            added("README.md", 3, "x \u{2013} y"),
+            added(".codeflow/.baseline/docs/guide.md", 1, "x \u{2014} y"),
+        ];
+        assert!(evaluate_added_lines(&git(), &lines).is_empty());
+    }
+
+    #[test]
+    fn added_lines_off_level_skips() {
+        let g = GitPolicy {
+            policy_characters: PolicyLevel::Off,
+            ..GitPolicy::default()
+        };
+        let lines = [added("docs/guide.md", 1, "x \u{2014} y")];
+        assert!(evaluate_added_lines(&g, &lines).is_empty());
+        assert!(evaluate_pr_body(&g, "x \u{2014} y").is_empty());
+    }
+
+    #[test]
+    fn parse_added_lines_tracks_paths_numbers_and_hunk_ends() {
+        let diff = "diff --git a/docs/a.md b/docs/a.md\n\
+                    index 1..2 100644\n\
+                    --- a/docs/a.md\n\
+                    +++ b/docs/a.md\n\
+                    @@ -3 +3,2 @@ heading\n\
+                    -old line\n\
+                    +new line\n\
+                    +++ looks like a header but is content\n\
+                    @@ -10,0 +12 @@\n\
+                    +tail\n\
+                    \\ No newline at end of file\n\
+                    diff --git a/docs/gone.md b/docs/gone.md\n\
+                    deleted file mode 100644\n\
+                    --- a/docs/gone.md\n\
+                    +++ /dev/null\n\
+                    @@ -1 +0,0 @@\n\
+                    -removed\n\
+                    diff --git a/docs/new file.md b/docs/new file.md\n\
+                    new file mode 100644\n\
+                    --- /dev/null\n\
+                    +++ b/docs/new file.md\t\n\
+                    @@ -0,0 +1 @@\n\
+                    +first\n";
+        assert_eq!(
+            parse_added_lines(diff),
+            vec![
+                in_blob("2", added("docs/a.md", 3, "new line")),
+                in_blob(
+                    "2",
+                    added("docs/a.md", 4, "++ looks like a header but is content")
+                ),
+                in_blob("2", added("docs/a.md", 12, "tail")),
+                added("docs/new file.md", 1, "first"),
+            ]
+        );
+    }
+
+    #[test]
+    fn parse_added_lines_skips_pure_renames_and_binary_files() {
+        let diff = "diff --git a/docs/old.md b/docs/moved.md\n\
+                    similarity index 100%\n\
+                    rename from docs/old.md\n\
+                    rename to docs/moved.md\n\
+                    diff --git a/docs/logo.png b/docs/logo.png\n\
+                    new file mode 100644\n\
+                    index 0000000..1234567\n\
+                    Binary files /dev/null and b/docs/logo.png differ\n\
+                    diff --git a/docs/edit.md b/docs/renamed.md\n\
+                    similarity index 80%\n\
+                    rename from docs/edit.md\n\
+                    rename to docs/renamed.md\n\
+                    --- a/docs/edit.md\n\
+                    +++ b/docs/renamed.md\n\
+                    @@ -2 +2 @@\n\
+                    -before\n\
+                    +after\n";
+        assert_eq!(
+            parse_added_lines(diff),
+            vec![added("docs/renamed.md", 2, "after")]
+        );
+    }
+
+    // Codex EPC-017 review round 2, N1: a quoted name must decode to the
+    // real path, and each patch carries its own blob id for classification.
+    #[test]
+    fn parse_added_lines_decodes_quoted_paths_and_keeps_blob_ids() {
+        let diff = "diff --git \"a/docs/rel\\\"notes.md\" \"b/docs/rel\\\"notes.md\"\n\
+                    new file mode 100644\n\
+                    index 0000000000000000000000000000000000000000..abc123 100644\n\
+                    --- /dev/null\n\
+                    +++ \"b/docs/rel\\\"notes.md\"\n\
+                    @@ -0,0 +1 @@\n\
+                    +text\n\
+                    diff --git a/docs/b.md b/docs/b.md\n\
+                    --- a/docs/b.md\n\
+                    +++ b/docs/b.md\n\
+                    @@ -1 +1 @@\n\
+                    -x\n\
+                    +y\n";
+        assert_eq!(
+            parse_added_lines(diff),
+            vec![
+                in_blob("abc123", added("docs/rel\"notes.md", 1, "text")),
+                // No `index` line in this patch: no stale id carries over.
+                added("docs/b.md", 1, "y"),
+            ]
+        );
+    }
+
+    #[test]
+    fn unquote_git_path_decodes_c_style_escapes() {
+        assert_eq!(
+            unquote_git_path("b/plain.md").as_deref(),
+            Some("b/plain.md")
+        );
+        assert_eq!(
+            unquote_git_path(r#""b/a\"b\\c\td""#).as_deref(),
+            Some("b/a\"b\\c\td")
+        );
+        // Octal bytes rebuild UTF-8 when core.quotepath is on.
+        assert_eq!(
+            unquote_git_path(r#""b/x\342\200\224y""#).as_deref(),
+            Some("b/x\u{2014}y")
+        );
+        assert_eq!(unquote_git_path(r#""b/bad\q""#), None);
+        assert_eq!(unquote_git_path(r#""b/open"#), None);
+        // Malformed quoting keeps the raw text instead of dropping lines.
+        assert_eq!(diff_path(r#""b/bad\q""#).as_deref(), Some(r"bad\q"));
+        assert_eq!(diff_path("b/ok.md\t").as_deref(), Some("ok.md"));
+    }
+
+    #[test]
+    fn index_new_blob_reads_the_new_side_id() {
+        assert_eq!(index_new_blob("abc..def 100644").as_deref(), Some("def"));
+        assert_eq!(index_new_blob("abc..def").as_deref(), Some("def"));
+        assert_eq!(index_new_blob("abc,def..0123"), Some("0123".to_string()));
+        assert_eq!(index_new_blob("garbage"), None);
+    }
+
+    #[test]
+    fn hunk_header_defaults_counts_to_one() {
+        assert_eq!(hunk_header("-3 +3,2 @@ ctx"), Some((1, 3, 2)));
+        assert_eq!(hunk_header("-10,0 +12 @@"), Some((0, 12, 1)));
+        assert_eq!(hunk_header("garbage"), None);
     }
 
     // -- PR-body structure --------------------------------------------------

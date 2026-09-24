@@ -476,7 +476,9 @@ ASCII diagram whose scope and detail fit the explanation. Prefer the least
 complicated form that remains complete, not the physically smallest; complex
 subjects may need a larger, layered, or multi-view diagram. Add a brief caption
 or legend when it aids orientation. Decorative or forced diagrams, headings,
-tables, and recaps are findings, not polish.
+tables, and recaps are findings, not polish. A reply whose point is a flow,
+dependency, state change, or other relationship carries a figure, so a
+prose-only answer there is a finding too.
 Verified truth and policy come first, then the consuming project's documented
 voice and context.
 
@@ -642,6 +644,9 @@ Completion requires:
 - both seats approved the final plan version and task breakdown;
 - every acceptance criterion is evidenced;
 - required deterministic gates are green;
+- when a PR was opened, its required checks were followed within the ship
+  poll budget, and the operator received the readiness report with the PR
+  URL the tool printed; no agent merged it;
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;
 - every unit has approved cross-lineage review and the selected Claude judgment

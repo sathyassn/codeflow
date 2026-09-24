@@ -1,6 +1,7 @@
 # PR narrative and verification evidence
 
-Read when preparing or updating a PR, including an integration-to-main PR.
+Read when preparing or updating a PR, including an integration-to-main PR,
+and when following a PR after it opens.
 
 Open the PR. Commits stay conventional (`type(scope): description`,
 ≤ 50-char description, ≤ 72-char subject, at most 3 `-` body bullets each
@@ -42,3 +43,45 @@ PR narrative and affected evidence before marking ready; preserve a prior
 review only with a reasoned unchanged-scope link. Lint with
 `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
 <file>` before `git push` and `gh pr create`. No AI attribution, no emoji.
+
+## After opening
+
+Follow the PR until its required checks finish or the budget ends. The
+required checks are the project's gates as the skill defines them (test,
+validation, coverage and security), whether or not the host marks them
+required. Run `gh pr checks <url> --required` at most once a minute, for at
+most thirty minutes. Exit code 8 means checks are still pending.
+
+Remote protection may mark no check required. Then `--required` fails with
+`no required checks reported`, and an empty list is not readiness. Read all
+check runs with `gh pr checks <url>` on the same cadence and match each
+project gate to the run that carries it. A gate with no matching run, or
+whose run you cannot read, is missing evidence.
+
+Do not use `--watch` without a ceiling, and do not poll without an end.
+`--watch` refreshes every ten seconds by default and has no timeout of its
+own. Run `timeout 30m gh pr checks <url> --watch --interval 60`, or poll by
+hand.
+
+Classify each red or stuck check with the quality contract's redness classes:
+
+- **Assertion-red, caused by this change.** Return it to its owner (skill
+  step 1), fix it, run the check locally where you can, push, and restart the
+  poll. Do not wait for the operator to name the job. A fix that changes the
+  accepted contract goes back to `cf-plan`.
+- **Red, and you cannot run it locally.** Read its log with
+  `gh run view <run-id> --log-failed`. Fix it if the cause is in the change;
+  otherwise report it as red with the failing line. It still blocks the PR.
+- **Infrastructure-incomplete.** The job was queued past the budget,
+  cancelled, lost its runner, or never started, for example because GitHub
+  Actions was refused for billing or a spending limit. Report it as missing
+  evidence with the reason the tool gave, not as a product defect. A
+  completed green run of the same check still counts, as the quality contract
+  says. Do not rerun the same job without a new reason.
+
+Never merge. When every required check is green, or the thirty minutes end,
+send one readiness report without being asked. It gives the PR URL exactly as
+`gh pr create` or `gh pr view --json url` printed it, never one built from a
+number or guessed. It lists each required check with its state, any missing
+evidence with its reason, and the next action. For a green PR the next action
+is a human merge.
