@@ -158,9 +158,11 @@ as the removal causes no issue. Replies and documents use HTML figures (the
 figure grammar, drawn by the figure block, and the justified `html` stage),
 ASCII on plain-text surfaces, and never Mermaid. The impact assessment of the
 same day found no issue that argues against the removal, and TSK-087 carries
-it in 3.0.0: the present `diagram` block and its Mermaid renderer go, a saved
-`diagram` block is refused with its conversion named, and the review page
-loses the inline style allowance Mermaid needed.
+it in 3.0.0, which is the first release of present: the `diagram` block and
+its Mermaid renderer go; new `present open` and `update` input with a
+`diagram` block is refused with its conversion named; a revision already
+stored with one still loads, read only, with the conversion notice and its
+source.
 
 The rejection of an external diagram syntax above stands. Its clause that
 Mermaid is supporting-only in present describes the runtime before TSK-087;
