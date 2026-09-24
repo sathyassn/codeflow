@@ -8,8 +8,10 @@ passed every check named in TSK-069. A Codex review then found seven more
 defects. Its second round accepted six of the fixes on
 `fix/epc017-codex-review`, found one still open in the live commit-msg hook,
 and found one new defect in the binary-file check. Its third round accepted
-the binary-file fix and found two more gaps in the live hook. Fixes for those
-are on the same branch and await a Codex recheck. The body of the pull
+the binary-file fix and found two more gaps in the live hook. Its fourth
+round accepted those fixes and asked only that the record and code comments
+call the hook's cleanup inference best effort, and its fifth round approved
+that wording. The body of the pull
 request that lands that branch carries the final-head gate artifact: the
 tested commit SHA, the commands run, the base and head range, and whether a
 pull request body was supplied to `codeflow ci`. The pull request to `main`
@@ -124,10 +126,12 @@ above is `update` adding that key to the existing file.
 | Grok, combined body | `origin/main...9af5c6d02`: cross-file contradictions, mirrors, hashes, the new policy key against installed hooks, epic criteria | approved; lesser notes applied in #529 |
 | Fable, editorial round 1 | all prose in the combined diff | changes requested: three blocking findings |
 | Fable, editorial round 2 | the fixes in #529 | approved |
-| Codex | none | not run: the seat is unavailable until 2026-09-27; recorded as reduced assurance |
+| Codex, first attempt | none | not run: the plugin seat was unavailable; the review then ran on the Herdr seat in the rows below |
 | Codex gpt-6-astra, high, 2026-09-23 | adversarial review of `origin/main...962ec0b6f` | changes requested: one P1 and six P2 findings; fixes submitted on `fix/epc017-codex-review` |
 | Codex gpt-6-astra, high, 2026-09-23, round 2 | recheck of `962ec0b6f..01c9570de` | changes requested: six findings resolved; finding 3 open in the live hook; new finding N1 |
-| Codex gpt-6-astra, high, 2026-09-23, round 3 | recheck of `01c9570de..f76e82368` | changes requested: N1 resolved; finding 3 still partly open, with new findings N2 (scissors) and N3 (comment prefix). Fixed below, awaiting recheck |
+| Codex gpt-6-astra, high, 2026-09-23, round 3 | recheck of `01c9570de..f76e82368` | changes requested: N1 resolved; finding 3 still partly open, with new findings N2 (scissors) and N3 (comment prefix). Fixed below |
+| Codex gpt-6-astra, high, 2026-09-23, round 4 | recheck of `f76e82368..5fa096d53` | changes requested: N2 and N3 resolved; the record and code comments still claimed a certain cleanup model |
+| Codex gpt-6-astra, high, 2026-09-23, round 5 | recheck of `5fa096d53..2e64ffc91` | approved: the wording now calls the inference best effort; no executable change |
 
 ### Codex round two and three fixes
 
