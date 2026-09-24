@@ -63,7 +63,13 @@ fn operative(path: &str) -> bool {
         )
         || path.contains("/skills/")
         || ((path.contains("/agents/") || path.starts_with("agents/")) && name.contains("reviewer"))
-        || path.contains("/workflows/")
+        || [
+            ".claude/workflows/",
+            "assets/base/claude/workflows/",
+            ".codeflow/.baseline/.claude/workflows/",
+        ]
+        .iter()
+        .any(|prefix| path.starts_with(prefix))
 }
 
 fn historical(path: &str) -> bool {

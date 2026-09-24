@@ -262,3 +262,38 @@ fn catalog_instruction_scan_leaves_nonrouting_preservation_tests_alone() {
         .unwrap()
         .is_empty());
 }
+
+#[test]
+fn instruction_scan_limits_workflows_to_managed_agent_examples() {
+    let dir = tempfile::tempdir().unwrap();
+    let catalog = scan_catalog();
+    for path in [
+        ".github/workflows/canary.yml",
+        "docs/workflows/example.md",
+        "other/.claude/workflows/example.js",
+        "assets/base/claude/workflows-extra/example.js",
+    ] {
+        write(dir.path(), path, "orchid-one-pin quartz-old-selector");
+    }
+    assert!(scan::instruction_selectors(dir.path(), &catalog)
+        .unwrap()
+        .is_empty());
+    // The retirement rule is independent: CI remains subject to that scan.
+    assert_eq!(
+        scan::retired_selectors(dir.path(), &catalog).unwrap().len(),
+        4
+    );
+    let paths = [
+        ".claude/workflows/example.js",
+        "assets/base/claude/workflows/example.js",
+        ".codeflow/.baseline/.claude/workflows/example.js",
+    ];
+    for path in paths {
+        write(dir.path(), path, "orchid-one-pin");
+    }
+    let findings = scan::instruction_selectors(dir.path(), &catalog).unwrap();
+    assert_eq!(findings.len(), paths.len());
+    assert!(findings
+        .iter()
+        .all(|finding| paths.iter().any(|path| finding.path == Path::new(path))));
+}

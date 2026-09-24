@@ -100,6 +100,18 @@ fn duplicate_family_lineage_is_rejected() {
     );
 }
 #[test]
+fn seat_id_equal_to_line_id_is_rejected() {
+    // Rename a worker-only line, leaving every other reference valid, so the
+    // sole failure is the ambiguous seat-or-line namespace used by --route.
+    let value = fixture()
+        .to_string()
+        .replace("quartz-worker", "orchid-seat");
+    assert_eq!(
+        Catalog::parse(value.as_bytes()).unwrap_err(),
+        "seat id orchid-seat collides with a line id"
+    );
+}
+#[test]
 fn non_claude_design_owner_is_rejected() {
     assert_invalid(
         |v| v["design_owner"] = json!("quartz-seat"),
