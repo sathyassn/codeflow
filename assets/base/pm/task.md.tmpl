@@ -58,9 +58,11 @@ created: {{DATE}}
        inside the approved node's outcome, scope, interfaces, ownership, and
        safety boundary, with a compact evidence pointer.
      - Verification evidence and anything not verified.
+     - Review findings, each with severity and disposition.
      - Recovery evidence, only for an irreversible/high-blast-radius surface.
      - Follow-ups, each routed to its single real tracked home.
 
      A material node, edge, guard, owner, acceptance/interface, scope, or safety
      change is never legalized here after implementation: stop, settle Plan
-     vN+1 with both primary seats, then continue. -->
+     vN+1 with both primary seats (seat-loss rule: task-graph.md), then
+     continue. -->

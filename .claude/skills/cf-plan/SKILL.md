@@ -44,9 +44,10 @@ You are clarifying and materializing planned work, not building it.
 4. Check the request against `product.md` non-goals; surface conflicts instead
    of planning around them.
 5. Use the exact dual-settled Plan vN; never add scope or design silently.
-   Substantive amendments return to both seats as Plan vN+1. In a recorded solo
-   degradation, perform the same clarity/evidence work and name the missing
-   cross-vendor assurance.
+   Substantive amendments return to both seats as Plan vN+1, under the
+   seat-loss rule in `cf-model-orchestrator/resources/task-graph.md`. In a
+   recorded solo degradation, perform the same clarity/evidence work and name
+   the missing cross-vendor assurance.
    Before allocating, check whether active tracking or approved adoption assigns
    CodeFlow execution. Otherwise retain the approved external or native/session
    plan at earned durability; create no CodeFlow records or gate claims.

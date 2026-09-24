@@ -44,8 +44,8 @@ records the item, both verdicts, the evidence, and why the item is reversible
 and settleable. The dissenting seat's verdict on that item stays as given and is
 never recorded as approval; that seat must still approve the rest of Plan vN.
 Any other open item keeps its gate: an operator-owned item stops only that item
-for the operator, and a safety, security, evidence-adequacy or correctness
-dissent is not settleable and returns to repair.
+for the operator, and a dissent on an axis that section lists as not settleable
+returns to repair.
 
 For multi-task work, `TASK_GRAPH` follows
 [the settled task graph contract](task-graph.md), covers exactly the assigned
@@ -675,10 +675,10 @@ Completion requires:
   primary has approved the integrated design/code judgment;
 - design and implementation proportionality are approved;
 - every finding from every review, material and minor, is recorded in the task
-  closeout or the PR body with its disposition under "Materiality and
-  prioritization": fixed, with the commit; tracked once, with its home and
-  event trigger; or dropped, with the reason. A minor finding never blocks,
-  and it is never left unrecorded;
+  closeout or the PR body as finding, severity, disposition and evidence, with
+  a disposition that "Materiality and prioritization" defines: fixed, with the
+  commit; tracked once, with its home and event trigger; or dropped, with the
+  reason. A minor finding never blocks, and it is never left unrecorded;
 - substantial changed prose has its contextual editorial approval;
 - no unresolved critical/high security issue or material assumption remains.
 - every catastrophic action, if any, has the human authorization and recovery

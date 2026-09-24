@@ -932,12 +932,13 @@
     {
       "id": "CF-MM-004",
       "level": "hard",
-      "statement": "Both seats approve the exact plan and task assignments; changed ownership, scope, lineage, isolation, or reviewer invalidates both approvals, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
+      "statement": "Both seats approve the exact plan and task assignments, except that a reversible item may carry recorded settled dissent while the dissenting seat still approves the rest; changed ownership, scope, lineage, isolation, or reviewer invalidates both approvals, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
           "markers": [
             "A changed plan invalidates both approvals",
+            "that seat must still approve the rest of Plan vN",
             "TASK_ASSIGNMENTS:",
             "CLAUDE_APPROVAL:",
             "CODEX_APPROVAL:"
@@ -1462,14 +1463,14 @@
     {
       "id": "CF-PM-002",
       "level": "hard",
-      "statement": "Task closeout records review-relevant bounded implementation discoveries and evidence without diary ceremony; a material scope, graph, ownership, acceptance/interface, or safety change stops execution and receives dual-approved Plan vN+1 before work continues, never retrospective approval in closeout.",
+      "statement": "Task closeout records review-relevant bounded implementation discoveries and evidence without diary ceremony; a material scope, graph, ownership, acceptance/interface, or safety change stops execution and receives Plan vN+1 approved by both seats, or by the available standing seats after a recorded seat loss, before work continues, never retrospective approval in closeout.",
       "sources": [
         {
           "path": "project-management/templates/task.md",
           "markers": [
             "Bounded discoveries/deviations",
             "never legalized here after implementation",
-            "settle Plan vN+1 with both primary seats, then continue"
+            "settle Plan vN+1 with both primary seats (seat-loss rule: task-graph.md), then continue"
           ]
         },
         {

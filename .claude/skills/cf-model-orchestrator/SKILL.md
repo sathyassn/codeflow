@@ -44,7 +44,7 @@ path instead.
 
 Select the smallest complete stage set. A change request selects implementation
 through the readiness report; research, plan or review alone needs a brief that
-asks only for it.
+asks for just that.
 
 - **Research/analysis:** independent discovery, evidence comparison, settled
   findings, then stop without edits.
@@ -170,8 +170,7 @@ Codex via official `codex` CLI and the app-server daemon
 (Herdr CLI if daemon missing; no third-party Grok Codex plugins). Codex reaches
 Claude via Herdr (tmux degraded) plus schema-v2. Hermes and other non-catalog
 harnesses delegate to one native host unless both lanes are proven. Missing lane:
-exhaust qualified routes before recorded solo fallback. Host is not duty; Claude
-produces design.
+exhaust qualified routes before recorded solo fallback.
 
 ## Preflight
 
@@ -280,7 +279,7 @@ The host reconciles the two drafts into **Plan v1** using the plan contract in
 the quality resource. Both seats review exactly that version. Amendments create
 v2, v3, and so on; approval of an older version does not carry forward.
 Convergence is bounded to two reconciliation rounds; past them, the plan
-contract's `SETTLED_DISSENT` rule decides each open item.
+contract's `SETTLED_DISSENT` rule governs each open item.
 
 For multi-task work, both approvals cover the same canonical task graph. A
 material node, dependency, decision guard, ownership, acceptance, interface, or
@@ -290,8 +289,8 @@ evidence and do not manufacture replanning ceremony.
 
 ### 3. Detailed tasking
 
-After dual approval, expand the agreed plan using capability-routing's
-assignment row:
+After both seats approve Plan vN, any settled dissent aside, expand the agreed
+plan using capability-routing's assignment row:
 
 - task id, responsible primary/reviewer seat@effort, execution mode, actual
   binding-or-route@effort, routing reason, requested-versus-observed evidence,
@@ -335,8 +334,8 @@ Do not parallelize a short task when coordination costs more than it saves.
 Never use concurrent writers in one worktree or rebase a shared integration
 branch.
 
-After both seats approve the exact Plan vN and task graph, or record settled
-dissent, invoke `cf-plan` to
+After both seats approve the exact Plan vN and task graph, any settled
+dissent aside, invoke `cf-plan` to
 materialize only the warranted epic/spec/task/ADR records on a `plan/` branch.
 Validate them and merge that planning PR into each task's declared
 `integration_target`. Before implementation, each durable task uses

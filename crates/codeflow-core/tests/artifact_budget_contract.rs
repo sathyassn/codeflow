@@ -948,19 +948,23 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
         &[
             (
                 "change request runs to readiness",
-                "A change request selects implementation through the readiness report; research, plan or review alone needs a brief that asks only for it.",
+                "A change request selects implementation through the readiness report; research, plan or review alone needs a brief that asks for just that.",
             ),
             (
                 "reconciliation bound settles dissent",
-                "past them, the plan contract's `SETTLED_DISSENT` rule decides each open item.",
+                "past them, the plan contract's `SETTLED_DISSENT` rule governs each open item.",
             ),
             (
                 "hand-off accepts settled dissent",
-                "After both seats approve the exact Plan vN and task graph, or record settled dissent, invoke `cf-plan`",
+                "After both seats approve the exact Plan vN and task graph, any settled dissent aside, invoke `cf-plan`",
             ),
             (
                 "mid-run seat loss reroutes",
                 "a mid-run failure gets one bounded retry, then capability-routing's seat-loss route, never a silent downgrade.",
+            ),
+            (
+                "tasking entry admits settled dissent",
+                "After both seats approve Plan vN, any settled dissent aside, expand the agreed plan",
             ),
             (
                 "reassignment approval points at the exception",
@@ -981,7 +985,7 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
             ),
             (
                 "unsettleable dissent keeps its gate",
-                "an operator-owned item stops only that item for the operator, and a safety, security, evidence-adequacy or correctness dissent is not settleable and returns to repair.",
+                "an operator-owned item stops only that item for the operator, and a dissent on an axis that section lists as not settleable returns to repair.",
             ),
             (
                 "plan approval after seat loss",
@@ -1009,7 +1013,7 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
             ),
             (
                 "every finding recorded",
-                "every finding from every review, material and minor, is recorded in the task closeout or the PR body with its disposition",
+                "every finding from every review, material and minor, is recorded in the task closeout or the PR body as finding, severity, disposition and evidence",
             ),
             (
                 "minor findings recorded",
@@ -1062,6 +1066,26 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
         ],
     ),
     (
+        "assets/base/agents/skills/cf-plan/SKILL.md",
+        &[(
+            "amendments point at seat loss",
+            "Substantive amendments return to both seats as Plan vN+1, under the seat-loss rule",
+        )],
+    ),
+    (
+        "assets/base/pm/task.md.tmpl",
+        &[
+            (
+                "template keeps both seats and points at seat loss",
+                "settle Plan vN+1 with both primary seats (seat-loss rule: task-graph.md), then continue.",
+            ),
+            (
+                "template records review findings",
+                "Review findings, each with severity and disposition.",
+            ),
+        ],
+    ),
+    (
         "assets/base/AGENTS.md.tmpl",
         &[(
             "graph mutation points at the exception",
@@ -1107,7 +1131,7 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
             ),
             (
                 "findings in the readiness report",
-                "every review finding as the quality contract's completion gate records it (finding, severity, disposition, evidence)",
+                "every review finding in the record the quality contract's completion gate defines",
             ),
             (
                 "protected next action",
@@ -1118,7 +1142,7 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
 ];
 
 const HERDR_TRUST_POINTER: &str =
-    "Trust only this task's worktree or this run's sample; ask for others (`autonomy.md`).";
+    "Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`).";
 
 #[test]
 fn finish_line_corrections_keep_their_rules() {
@@ -1202,7 +1226,10 @@ fn unconditional_no_merge_clauses(text: &str) -> Vec<String> {
     for (start, _) in lower.match_indices("never merge") {
         let rest = &lower[start + "never merge".len()..];
         let scoped = rest.trim_start_matches('s').trim_start();
-        let window: String = scoped.chars().take(40).collect();
+        let clause = scoped
+            .find(['.', ';', ':', '!', '?'])
+            .map_or(scoped, |end| &scoped[..end]);
+        let window: String = clause.chars().take(40).collect();
         if !window.contains("protected") {
             found.push(content[start..].chars().take(60).collect());
         }
@@ -1261,6 +1288,11 @@ fn no_merge_check_rejects_the_old_wording() {
     assert_eq!(
         unconditional_no_merge_clauses("URL the tool printed; no agent merged it;").len(),
         1
+    );
+    assert_eq!(
+        unconditional_no_merge_clauses("Never merge. Protected targets remain human.").len(),
+        1,
+        "a protected target in the next sentence does not scope the prohibition"
     );
     assert!(unconditional_no_merge_clauses(
         "An agent never merges into a protected target: no by-hand merge there."
@@ -1358,7 +1390,7 @@ fn autonomy_reference_keeps_its_owned_parts() {
             ),
             (
                 "unsettleable dissent",
-                "safety, security or evidence-adequacy axis is not settleable",
+                "safety, security, correctness or evidence-adequacy axis is not settleable",
             ),
             (
                 "local readiness",
