@@ -124,7 +124,7 @@ try {
   if (canonicalJson(outcome) !== canonicalJson(EXPECTED)) {
     throw new Error(`present figure outcomes differ from the portal specimen table:\n${JSON.stringify(detail, null, 2)}`);
   }
-  process.stdout.write(`cf-present figure checks passed: ${names.length} specimens drawn in light and dark at 1280 and 390 px with the portal's rule outcomes, one refused declaration shown, the DOM guard accepting the grammar boundary and refusing 17 departures from it\n`);
+  process.stdout.write(`cf-present figure checks passed: ${names.length} specimens drawn in light and dark at 1280 and 390 px with the portal's rule outcomes, one refused declaration shown, the DOM guard accepting the grammar boundary, a 1001-point polyline included, and refusing 17 departures from it\n`);
 } finally {
   await browser?.close();
   if (sessionId !== null) await closeSession(sessionId);
@@ -160,15 +160,20 @@ async function checkGuard(browser) {
     drawn[name] = renderFigure(declaration, { idPrefix: "cf-present-figure-1", bound });
   }
   // The grammar's own boundary: a 211-character mark id with the text that
-  // labels it, and a text carrying all four styles.
+  // labels it, a text carrying all four styles, and a 1001-point polyline,
+  // since the grammar sets no point count.
   const boundary = JSON.parse(await readFile(join(specimenRoot, "03-layering.json"), "utf8"));
   const mark = boundary.figure.wide.draw.find((item) => item.state !== undefined && item.id !== undefined);
   mark.id = `m${"-a".repeat(105)}`;
   const label = boundary.figure.wide.draw.find((item) => item.text !== undefined);
   label.for = [mark.id];
   label.style = ["strong", "mute", "head", "mono"];
+  const line = boundary.figure.wide.draw.find((item) => item.shape === "polyline");
+  const [[x0, y0], [x1, y1]] = [line.points[0], line.points.at(-1)];
+  line.points = Array.from({ length: 1001 }, (_, step) => [Math.round((x0 + ((x1 - x0) * step) / 1000) * 100) / 100, Math.round((y0 + ((y1 - y0) * step) / 1000) * 100) / 100]);
   validateDeclaration(boundary);
   drawn["boundary"] = renderFigure(boundary, { idPrefix: "cf-present-figure-1" });
+  if ((drawn["boundary"].match(/<polyline [^>]*points="([^"]*)"/u)?.[1].split(" ").length ?? 0) !== 1001) throw new Error("the boundary figure does not draw a 1001-point polyline");
   const page = await browser.newPage();
   try {
     await page.setContent("<!doctype html><html><body></body></html>");

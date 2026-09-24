@@ -24,7 +24,8 @@ const KEBAB = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const KEBABS = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?: [a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/u;
 const DECLARED_STATE = "data-state";
 const PATH_DATA = /^[MLHVCQZz0-9., -]{1,4096}$/u;
-const POINTS = /^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?(?: -?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?){0,999}$/u;
+// The grammar sets no point count; the declaration envelope bounds it.
+const POINTS = /^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?(?: -?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?)*$/u;
 const VIEW_BOX = /^0 0 \d+(?:\.\d+)? \d+(?:\.\d+)?$/u;
 const LOCAL_FILL = "fill";
 const json = (shape: "array" | "object") => (value: string): boolean => {
