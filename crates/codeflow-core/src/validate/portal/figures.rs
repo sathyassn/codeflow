@@ -2297,4 +2297,59 @@ mod tests {
         legacy.as_object_mut().unwrap().remove("figures");
         expect(&legacy, "evidence records no figures, but the configuration declares page classes or figure bindings");
     }
+
+    #[test]
+    fn a_derived_figure_is_compared_with_its_source_and_its_drawing() {
+        let declaration: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../docs-portal/tests/fixtures/figures/10-extent-derived.json"
+        ))
+        .unwrap();
+        let body = declaration["figure"].as_object().unwrap().clone();
+        let policy = b"{\"git\":{\"commit_desc_max_len\":50,\"commit_subject_max_len\":72}}\n";
+        let blobs = BTreeMap::from([("policy.json".to_string(), policy.to_vec())]);
+        let evidence = |edit: &dyn Fn(&mut serde_json::Value)| {
+            let mut value = serde_json::json!({
+                "declaration_path": "figures/commit-limits.json",
+                "declaration_sha256": "0".repeat(64),
+                "grammar_version": 1,
+                "figure_id": "commit-limits",
+                "family": "extent",
+                "binding": "derived",
+                "routes": [],
+                "facts": [],
+                "derived": {
+                    "source_path": "policy.json",
+                    "source_sha256": sha256_hex(policy),
+                    "select": "git",
+                    "values": { "commit_desc_max_len": 50, "commit_subject_max_len": 72 },
+                    "drawn": { "commit_desc_max_len": 50.02, "commit_subject_max_len": 72 }
+                }
+            });
+            edit(&mut value);
+            let figure: FigureEvidence = serde_json::from_value(value).unwrap();
+            let mut report = PortalValidationReport {
+                checked_pages: 0,
+                issues: Vec::new(),
+            };
+            verify_derived_binding(&figure, &body, &blobs, &mut report);
+            report.issues
+        };
+        assert_eq!(evidence(&|_| {}), Vec::<String>::new());
+        let drawn = "figure figures/commit-limits.json rule 6 (fidelity): drawn values differ from the values derived from the source";
+        assert_eq!(
+            evidence(&|value| value["derived"]["drawn"]["commit_desc_max_len"] = 60.into()),
+            [drawn]
+        );
+        assert_eq!(
+            evidence(&|value| {
+                value["derived"]["values"]["commit_desc_max_len"] = 60.into();
+                value["derived"]["drawn"]["commit_desc_max_len"] = 60.into();
+            }),
+            ["figure figures/commit-limits.json rule 6 (fidelity): recorded derived values differ from policy.json"]
+        );
+        assert_eq!(
+            evidence(&|value| value["derived"]["source_path"] = "other.json".into()),
+            ["figure figures/commit-limits.json derived evidence does not match its declared source"]
+        );
+    }
 }
