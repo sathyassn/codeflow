@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
-import { canonicalJson, composeFigure, FIGURE_RULES, figureRuleFailures, probeFigures, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
+import { canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { specimens } from "./page-shapes.mjs";
 
@@ -117,6 +117,56 @@ test("rule 6 reads each drawn value back off the rendered marks", { skip: proces
         assert.ok(messages.includes(`${label}: the row-0 mark is transformed, and the grammar draws no transform`), `${where}: ${messages.join("\n")}`);
         assert.ok(messages.some((message) => message.startsWith(`${label}: the row-0 mark reads 25 on its scale and the committed value is 50`)), `${where}: ${messages.join("\n")}`);
       }
+    }
+  } finally { await browser.close(); }
+});
+
+// The structural check: a rendered figure must be its clean render. Its DOM
+// must equal the pinned declaration's drawing, root viewBox included, and
+// its drawings must compute the geometry and visibility styles the kit sheets
+// alone give them, so a stylesheet the kit does not ship cannot move, hide or
+// clip a mark (R3-2, R3-3).
+test("a figure that is not its clean render fails, whatever changed it", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+  const declaration = (await specimens()).find(({ name }) => name === "10-extent-derived.json").declaration;
+  const { bound, composed, evidence } = fidelity(declaration);
+  const html = renderFigure(declaration, { idPrefix: "d", bound });
+  const css = await sheet();
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    const page = await browser.newPage();
+    const read = async (width, change = null, argument = undefined) => {
+      await page.setViewportSize({ width, height: 900 });
+      await page.setContent(`<!doctype html><html data-theme="light" data-cfp-skin="instrument"><head><style>${css}</style></head><body><main>${html}</main></body></html>`);
+      if (change) await page.evaluate(change, argument);
+      return (await page.evaluate(readFigureDom))[0];
+    };
+    const addSheet = (rule) => document.head.append(Object.assign(document.createElement("style"), { textContent: rule }));
+    for (const width of [1280, 390]) {
+      const clean = await read(width);
+      assert.deepEqual(figureDomFailures(await read(width), clean), [], "positive control: a clean render is its own clean render");
+      const cases = {
+        "a stylesheet translate": [addSheet, ".cf-m-used { translate: 0 1000px; }", /a drawn <rect> has translate 0px 1000px where the kit sheets alone give none/],
+        "a stylesheet rotate": [addSheet, ".cf-m-used { rotate: 12deg; }", /a drawn <rect> has rotate 12deg where the kit sheets alone give none/],
+        "a stylesheet scale": [addSheet, ".cf-m-used { scale: 0.5 1; }", /a drawn <rect> has scale 0.5 1 where the kit sheets alone give none/],
+        "a clipped root": [addSheet, ".cf-fig-svg { overflow: hidden; }", /a drawn <svg> has overflow hidden where the kit sheets alone give visible/],
+        "a hidden mark": [addSheet, ".cf-m-used { visibility: hidden; }", /a drawn <rect> has visibility hidden/],
+        "a changed viewBox": [() => { for (const svg of document.querySelectorAll(".cf-fig-svg")) { const [x, y, w, h] = svg.getAttribute("viewBox").split(" "); svg.setAttribute("viewBox", `${x} ${y} ${w} ${Number(h) / 2}`); } }, /the rendered figure is not the drawing its pinned declaration produces/],
+        "a moved viewBox origin": [() => { for (const svg of document.querySelectorAll(".cf-fig-svg")) svg.setAttribute("viewBox", svg.getAttribute("viewBox").replace(/^0 /, "40 ")); }, /the rendered figure is not the drawing its pinned declaration produces/],
+        "an inline style": [() => document.querySelector(".cf-fig-svg rect").setAttribute("style", "translate: 0 1000px"), /the rendered figure is not the drawing its pinned declaration produces/],
+      };
+      for (const [name, entry] of Object.entries(cases)) {
+        const [change, argument, expected] = entry.length === 3 ? entry : [entry[0], undefined, entry[1]];
+        const failures = figureDomFailures(await read(width, change, argument), clean);
+        assert.ok(failures.some((failure) => expected.test(failure)), `${name} at ${width}: ${failures.join("\n")}`);
+      }
+    }
+    // The readback, the secondary check, reads both axes: a bar translated
+    // down its own length and more no longer sits on its row.
+    const translated = await probe(page, css, html, addSheet, ".cf-m-used { translate: 0 1000px; }");
+    const sixes = figureRuleFailures({ ...translated, evidence, composed }).filter((failure) => failure.rule === 6).map((failure) => failure.message);
+    for (const label of ["wide", "narrow", "wide dark", "narrow dark"]) {
+      assert.ok(sixes.some((message) => message.startsWith(`${label}: the row-0 mark spans y`)), sixes.join("\n"));
+      assert.ok(sixes.includes(`${label}: the row-0 mark is transformed, and the grammar draws no transform`), sixes.join("\n"));
     }
   } finally { await browser.close(); }
 });

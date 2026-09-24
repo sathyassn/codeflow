@@ -11,7 +11,7 @@ import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertGeneratorIdentity } from "./generator.mjs";
 import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { PORTAL_ACCENT_BACKGROUNDS, pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
-import { canonicalJson, composeFigure, FIGURE_RULES, figureRuleFailures, probeFigures, THRESHOLDS } from "./figure-grammar.mjs";
+import { canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "./figure-grammar.mjs";
 import { ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
@@ -63,6 +63,7 @@ async function verifyPortal(lifecycle) {
   assertDeclaredCarriers(config, assignments);
   const surfaces = await discoverSurfaceRoutes(generated.pages, root);
   const declarations = pinnedDeclarations(snapshot, head, generated);
+  const kitSheets = pinnedKitSheets(snapshot, head, path.relative(repository, root));
 
   const outputRelative = safeRelative(`.portal/browser-evidence/${runId}`, "browser evidence path");
   const output = path.join(root, outputRelative);
@@ -91,7 +92,7 @@ async function verifyPortal(lifecycle) {
     await waitForServer(siteRoot, server, () => serverOutput.toString("utf8"));
     for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
       lifecycle.throwIfInterrupted();
-      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, declarations, lifecycle }));
+      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, declarations, kitSheets, lifecycle }));
     }
   } catch (error) {
     lifecycle.throwIfInterrupted();
@@ -137,7 +138,7 @@ async function verifyPortal(lifecycle) {
   console.log(`portal browser verification passed: ${outputRelative}/results.json`);
 }
 
-async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, declarations, lifecycle }) {
+async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, declarations, kitSheets, lifecycle }) {
   const profile = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-${runId}-${name}-`));
   const trace = path.join(output, `${name}-trace.zip`);
   const runtime = { console: [], page: [], request: [], remote: [] };
@@ -205,7 +206,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
 
     await assertDeepLink(page, name, origin, config.base, surfaces.deepLink);
     const compositionResult = await assertPortalComposition(page, name, origin, config, assignments);
-    const figureResult = await assertFigureGate(page, name, origin, config, assignments, generated, declarations);
+    const figureResult = await assertFigureGate(page, name, origin, config, assignments, generated, declarations, kitSheets);
     const previewResult = await assertStrictIdPreview(page, name, origin, config, surfaces.strictPreview);
     await assertSourceLink(page, name, origin, config, generated);
     await visit(page, siteRoot);
@@ -366,8 +367,8 @@ async function assertPortalComposition(page, engine, origin, config, assignments
 // holds all twelve rules of the grammar, read off the render at a wide and a
 // narrow width, in light and in dark. Each failure names the page, the place
 // on the page and the rule.
-async function assertFigureGate(page, engine, origin, config, assignments, generated, declarations) {
-  const { failures, drawn } = await figureGateFailures(page, (route) => visit(page, routeUrl(origin, config.base, route)), assignments, generated, declarations);
+async function assertFigureGate(page, engine, origin, config, assignments, generated, declarations, kitSheets) {
+  const { failures, drawn } = await figureGateFailures(page, (route) => visit(page, routeUrl(origin, config.base, route)), assignments, generated, declarations, kitSheets);
   if (failures.length) throw new Error(`${engine}: figure gate: ${failures.length} failure(s)\n  ${failures.join("\n  ")}`);
   return `${engine}:figure-gate:${drawn}`;
 }
@@ -385,60 +386,97 @@ export function pinnedDeclarations(snapshot, commit, generated) {
   return declarations;
 }
 
+// The kit sheets as committed at the evidenced commit: the only stylesheets a
+// clean render of a figure gets, so the gate can tell whether anything else
+// on a page moves, hides or clips a drawing.
+export const KIT_SHEETS = Object.freeze(["utility-tokens.css", "portal.css", "figure-roles.css", "figure.css"]);
+export function pinnedKitSheets(snapshot, commit, portalRelative) {
+  return KIT_SHEETS.map((name) => {
+    const file = safeRelative(path.posix.join(portalRelative.split(path.sep).join("/") || ".", "src/styles", name), "kit sheet path");
+    return new TextDecoder("utf-8", { fatal: true }).decode(snapshot.bytes(["cat-file", "blob", `${commit}:${file}`], 1024 * 1024, "kit sheet"));
+  }).join("\n");
+}
+
 // `declarations` maps each declaration path to its pinned declaration; rule 6
 // reads the drawn values back against it and the committed values.
-export async function figureGateFailures(page, visitRoute, assignments, generated, declarations) {
+// `kitSheets` is the committed kit CSS: each rendered figure's DOM must equal
+// a clean render of its pinned declaration, and its drawings must compute the
+// same geometry and visibility styles as that render under the kit alone.
+export async function figureGateFailures(page, visitRoute, assignments, generated, declarations, kitSheets) {
   const failures = [];
-  const recorded = new Map((generated.figures ?? []).map((entry) => [entry.declaration_path, entry]));
   let drawn = 0;
-  for (const assignment of assignments) {
-    if (!assignment.figures?.length) continue;
-    const observed = {};
-    for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
-      await page.setViewportSize({ width, height: 900 });
-      await visitRoute(assignment.route);
-      await page.evaluate((theme) => {
-        document.documentElement.dataset.theme = theme;
-        for (const panel of document.querySelectorAll(".portal-altitude")) panel.hidden = false;
-      }, mode);
-      observed[label] = await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx });
-      observed[`${label}Places`] = await page.evaluate(() => [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
-        const companion = figure.closest(".cf-companion");
-        return {
-          declaration: companion?.dataset.cfCompanion ?? null,
-          placement: companion?.dataset.cfPlacement ?? null,
-          altitude: figure.closest(".portal-altitude")?.dataset.altitude ?? null,
+  // The clean render gets its own context where the browser allows one (a
+  // persistent profile has only its own), so nothing from the page carries.
+  const browser = page.context().browser();
+  const cleanContext = browser === null ? null : await browser.newContext();
+  const clean = await (cleanContext ?? page.context()).newPage();
+  try {
+    const recorded = new Map((generated.figures ?? []).map((entry) => [entry.declaration_path, entry]));
+    for (const assignment of assignments) {
+      if (!assignment.figures?.length) continue;
+      const observed = {};
+      for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
+        await page.setViewportSize({ width, height: 900 });
+        await visitRoute(assignment.route);
+        await page.evaluate((theme) => {
+          document.documentElement.dataset.theme = theme;
+          for (const panel of document.querySelectorAll(".portal-altitude")) panel.hidden = false;
+        }, mode);
+        observed[label] = await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx });
+        observed[`${label}Dom`] = await page.evaluate(readFigureDom);
+        observed[`${label}Root`] = await page.evaluate(() => [...document.documentElement.attributes].filter((attribute) => attribute.name.startsWith("data-")).map((attribute) => [attribute.name, attribute.value]));
+        observed[`${label}Places`] = await page.evaluate(() => [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
+          const companion = figure.closest(".cf-companion");
+          return {
+            declaration: companion?.dataset.cfCompanion ?? null,
+            placement: companion?.dataset.cfPlacement ?? null,
+            altitude: figure.closest(".portal-altitude")?.dataset.altitude ?? null,
+          };
+        }));
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const places = observed.widePlaces;
+      const expected = assignment.figures.map((binding) => binding.declaration).sort();
+      const found = places.map((place) => place.declaration).sort();
+      if (canonicalJson(found) !== canonicalJson(expected)) {
+        failures.push(`${assignment.source} (at ${assignment.route}): the configuration binds ${expected.join(", ") || "no figure"} and the page draws ${found.join(", ") || "none"}`);
+      }
+      for (const [index, place] of places.entries()) {
+        drawn += 1;
+        const binding = assignment.figures.find((candidate) => candidate.declaration === place.declaration);
+        const where = `${assignment.source} (at ${assignment.route}, ${place.altitude ? `${place.altitude} panel` : place.placement === "anchor" ? `#${binding?.anchor}` : "page head"}, ${place.declaration ?? "an unbound figure"})`;
+        const entry = recorded.get(place.declaration);
+        if (entry === undefined) failures.push(`${where}: the evidence manifest records no such figure`);
+        const evidence = entry === undefined ? null : {
+          facts: entry.facts.map((fact) => ({ ...fact, matches: canonicalJson(fact.derived) === canonicalJson(fact.drawn) })),
+          data: entry.derived === null ? null : { drawn: entry.derived.drawn, derived: entry.derived.values },
         };
-      }));
+        let composed = null;
+        let expectedHtml = null;
+        try {
+          const declaration = declarations.get(place.declaration);
+          if (declaration === undefined) throw new Error("its pinned declaration is not available");
+          const bound = entry?.derived ? { source: declaration.figure.source, derived: entry.derived.values } : null;
+          composed = composeFigure(declaration, bound);
+          expectedHtml = renderFigure(declaration, { idPrefix: `cf-fig-${assignment.figures.indexOf(binding)}`, bound, facts: entry?.facts ?? null });
+        } catch (error) { failures.push(`${where}: rule 6 (${FIGURE_RULES[6]}): the committed composition cannot be rebuilt: ${error.message}`); }
+        const ruleFailures = figureRuleFailures({
+          wide: observed.wide[index], narrow: observed.narrow[index], wideDark: observed.wideDark[index], narrowDark: observed.narrowDark[index], evidence, composed,
+        });
+        for (const failure of ruleFailures) failures.push(`${where}: rule ${failure.rule} (${failure.name}): ${failure.message}`);
+        if (expectedHtml === null) continue;
+        for (const [label, width] of [["wide", 1440], ["narrow", 390], ["wideDark", 1440], ["narrowDark", 390]]) {
+          await clean.setViewportSize({ width, height: 900 });
+          const root = observed[`${label}Root`].map(([name, value]) => ` ${name}="${value.replaceAll("&", "&amp;").replaceAll("\"", "&quot;")}"`).join("");
+          await clean.setContent(`<!doctype html><html${root}><head><style>${kitSheets}</style></head><body><main>${expectedHtml}</main></body></html>`);
+          const [reading] = await clean.evaluate(readFigureDom);
+          for (const message of figureDomFailures(observed[`${label}Dom`][index], reading)) failures.push(`${where}: rule 6 (${FIGURE_RULES[6]}): ${label}: ${message}`);
+        }
+      }
     }
-    await page.setViewportSize({ width: 1440, height: 900 });
-    const places = observed.widePlaces;
-    const expected = assignment.figures.map((binding) => binding.declaration).sort();
-    const found = places.map((place) => place.declaration).sort();
-    if (canonicalJson(found) !== canonicalJson(expected)) {
-      failures.push(`${assignment.source} (at ${assignment.route}): the configuration binds ${expected.join(", ") || "no figure"} and the page draws ${found.join(", ") || "none"}`);
-    }
-    places.forEach((place, index) => {
-      drawn += 1;
-      const binding = assignment.figures.find((candidate) => candidate.declaration === place.declaration);
-      const where = `${assignment.source} (at ${assignment.route}, ${place.altitude ? `${place.altitude} panel` : place.placement === "anchor" ? `#${binding?.anchor}` : "page head"}, ${place.declaration ?? "an unbound figure"})`;
-      const entry = recorded.get(place.declaration);
-      if (entry === undefined) failures.push(`${where}: the evidence manifest records no such figure`);
-      const evidence = entry === undefined ? null : {
-        facts: entry.facts.map((fact) => ({ ...fact, matches: canonicalJson(fact.derived) === canonicalJson(fact.drawn) })),
-        data: entry.derived === null ? null : { drawn: entry.derived.drawn, derived: entry.derived.values },
-      };
-      let composed = null;
-      try {
-        const declaration = declarations.get(place.declaration);
-        if (declaration === undefined) throw new Error("its pinned declaration is not available");
-        composed = composeFigure(declaration, entry?.derived ? { source: declaration.figure.source, derived: entry.derived.values } : null);
-      } catch (error) { failures.push(`${where}: rule 6 (${FIGURE_RULES[6]}): the committed composition cannot be rebuilt: ${error.message}`); }
-      const ruleFailures = figureRuleFailures({
-        wide: observed.wide[index], narrow: observed.narrow[index], wideDark: observed.wideDark[index], narrowDark: observed.narrowDark[index], evidence, composed,
-      });
-      for (const failure of ruleFailures) failures.push(`${where}: rule ${failure.rule} (${failure.name}): ${failure.message}`);
-    });
+  } finally {
+    await clean.close();
+    await cleanContext?.close();
   }
   return { failures, drawn };
 }

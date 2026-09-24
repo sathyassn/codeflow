@@ -11,7 +11,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "@playwright/test";
 import { sha256 } from "../scripts/lib.mjs";
-import { figureGateFailures, observePortalPage, pinnedDeclarations } from "../scripts/browser-verify.mjs";
+import { figureGateFailures, observePortalPage, pinnedDeclarations, pinnedKitSheets } from "../scripts/browser-verify.mjs";
 import { GitSnapshot } from "../scripts/git-snapshot.mjs";
 import { classifyPortalPages, declaredCarrierFailures, pageClassFailures } from "../scripts/page-classes.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
@@ -227,11 +227,24 @@ test("the mixed fixture renders every class and the gates name only what falls s
       const misrecorded = structuredClone(evidence);
       misrecorded.figures[0].declaration_sha256 = "0".repeat(64);
       assert.throws(() => pinnedDeclarations(snapshot, evidence.repository.commit, misrecorded), new RegExp(`figure declaration ${misrecorded.figures[0].declaration_path} does not match its recorded hash`));
-      const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, evidence, declarations);
+      const kitSheets = pinnedKitSheets(snapshot, evidence.repository.commit, path.relative(path.resolve(root, config.repository_root), root));
+      const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, evidence, declarations, kitSheets);
       assert.equal(drawn, 6);
       assert.ok(failures.length > 0);
       for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
       assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states done and stop differ on shape, need 2/.test(failure)), failures.join("\n"));
+
+      // A stylesheet the kit does not ship moves the used bars off their
+      // rows. The DOM is untouched, so only the clean-render comparison of
+      // computed geometry, and the readback on both axes, can see it.
+      const hostile = async (route) => {
+        await visitRoute(route);
+        await page.addStyleTag({ content: ".cf-m-used { translate: 0 1000px; }" });
+      };
+      const moved = (await figureGateFailures(page, hostile, assignments.filter((assignment) => assignment.route === "reference/guide"), evidence, declarations, kitSheets)).failures;
+      const onLimits = /^docs\/guide\.md \(at reference\/guide, (?:page head|#[^,]+), figures\/commit-limits\.json\): rule 6 /;
+      assert.ok(moved.some((failure) => onLimits.test(failure) && /wide: a drawn <rect> has translate 0px 1000px where the kit sheets alone give none/.test(failure)), moved.join("\n"));
+      assert.ok(moved.some((failure) => onLimits.test(failure) && /the row-0 mark spans y/.test(failure)), moved.join("\n"));
     } finally {
       await browser.close();
       await site.close();

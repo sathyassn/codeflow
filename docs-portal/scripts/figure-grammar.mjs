@@ -973,7 +973,8 @@ export function probeFigures(options) {
   // The grammar draws no transform on a mark or any group above it.
   const transformedUpTo = (node, svg) => {
     for (let element = node; element && element !== svg; element = element.parentElement) {
-      if (element.hasAttribute("transform") || getComputedStyle(element).transform !== "none") return true;
+      const style = getComputedStyle(element);
+      if (element.hasAttribute("transform") || ["transform", "translate", "rotate", "scale"].some((property) => style.getPropertyValue(property) !== "none")) return true;
     }
     return false;
   };
@@ -1114,6 +1115,50 @@ export function probeFigures(options) {
   return figures;
 }
 
+// Runs in the page, self-contained like probeFigures. For each figure, its
+// DOM in canonical form (namespace, name, sorted attributes, text; comments
+// render nothing) and, for every element of its drawings, the computed
+// properties that move, resize, hide or clip a mark. The gate compares both
+// with a clean render of the pinned declaration under the kit sheets alone,
+// so no other stylesheet, inline style or attribute can change a drawing.
+export function readFigureDom() {
+  const ROOT = ["transform", "translate", "rotate", "scale", "opacity", "clip-path", "mask-image", "filter", "overflow"];
+  const DRAWN = [...ROOT, "display", "visibility", "fill-opacity", "stroke-opacity", "stroke-width", "x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "d", "offset-path"];
+  const paint = (value) => (!value || value === "none" ? "none" : /rgba\([^)]*,\s*0\)$/.test(value) || value === "transparent" ? "clear" : value.startsWith("url(") ? "pattern" : "colour");
+  const canonical = (node) => {
+    if (node.nodeType === Node.TEXT_NODE) return JSON.stringify(node.data);
+    if (node.nodeType !== Node.ELEMENT_NODE) return "";
+    const attributes = [...node.attributes].map((attribute) => `${attribute.namespaceURI ?? ""}|${attribute.name}=${JSON.stringify(attribute.value)}`).sort();
+    return `<${node.namespaceURI}|${node.localName} ${attributes.join(" ")}>${[...node.childNodes].map(canonical).join("")}</>`;
+  };
+  return [...document.querySelectorAll("figure.cf-fig")].map((figure) => ({
+    tree: canonical(figure),
+    styles: [...figure.querySelectorAll("svg")].flatMap((svg) => [svg, ...svg.querySelectorAll("*")].map((element) => {
+      const style = getComputedStyle(element);
+      const values = (element === svg ? ROOT : DRAWN).map((property) => `${property}=${style.getPropertyValue(property)}`);
+      if (element !== svg) values.push(`fill=${paint(style.fill)}`, `stroke=${paint(style.stroke)}`);
+      return `${element.localName}: ${values.join("; ")}`;
+    })),
+  }));
+}
+
+// Rule 6 failures from one figure's DOM reading against the reading of a
+// clean render of its pinned declaration under the kit sheets alone.
+export function figureDomFailures(observed, baseline) {
+  if (!observed || !baseline) return ["the figure or its clean render could not be read"];
+  if (observed.tree !== baseline.tree) return ["the rendered figure is not the drawing its pinned declaration produces"];
+  if (observed.styles.length !== baseline.styles.length) return ["the rendered figure draws a different number of elements from its clean render"];
+  const failures = [];
+  observed.styles.forEach((style, position) => {
+    if (style === baseline.styles[position]) return;
+    const [tag, values] = style.split(": ");
+    const clean = new Map(baseline.styles[position].split(": ")[1].split("; ").map((entry) => entry.split("=")));
+    const differing = values.split("; ").map((entry) => entry.split("=")).filter(([property, value]) => clean.get(property) !== value);
+    failures.push(`a drawn <${tag}> has ${differing.map(([property, value]) => `${property} ${value} where the kit sheets alone give ${clean.get(property)}`).join(", ")}`);
+  });
+  return [...new Set(failures)];
+}
+
 // Rule failures for one figure from a wide and a narrow observation, each in
 // light and dark. The result names the rule by number, so a report reads as
 // "the page, the altitude and the rule".
@@ -1206,9 +1251,13 @@ function valueReadback(composition, record, variant) {
     const mark = (record.geometry ?? []).find((candidate) => candidate.id.endsWith(`-${variant}-${item.id}`));
     if (!mark) { failures.push(`the ${item.id} mark for ${formatNumber(item.value)} is not drawn`); continue; }
     if (mark.transformed) failures.push(`the ${item.id} mark is transformed, and the grammar draws no transform`);
-    const [x, , width] = mark.box;
+    const [x, y, width, height] = mark.box;
     const bar = mark.tag === "rect";
     if (bar && Math.abs(x - r0) > 0.5) failures.push(`the ${item.id} bar starts at ${round(x)}, not at the scale origin ${round(r0)}`);
+    // The mark must also sit where its row or rule is drawn, not only span
+    // the right length somewhere else.
+    const [top, depth] = bar ? [item.y, item.h] : [Math.min(item.y1, item.y2), Math.abs(item.y2 - item.y1)];
+    if (Math.abs(y - top) > 0.5 || Math.abs(height - depth) > 0.5) failures.push(`the ${item.id} mark spans y ${round(y)} to ${round(y + height)}, not ${round(top)} to ${round(top + depth)}`);
     const shown = read(bar ? x + width : x + width / 2);
     if (Math.abs(shown - item.value) > DRAWN_VALUE_TOLERANCE * Math.max(1, Math.abs(item.value))) {
       failures.push(`the ${item.id} mark reads ${round(shown)} on its scale and the committed value is ${formatNumber(item.value)}`);
