@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
-import { checkFacts, composeFigure, drawnValuesMatch, FAMILIES, markdownSections, renderFigure, SHAPE_CLASSES, slugHeading, TEXT_CLASSES, validateDeclaration } from "../scripts/figure-grammar.mjs";
+import { checkFacts, composeFigure, drawnValuesMatch, FAMILIES, markdownSections, MIN_PLOT_WIDTH, renderFigure, SHAPE_CLASSES, slugHeading, TEXT_CLASSES, validateDeclaration } from "../scripts/figure-grammar.mjs";
 
 import { specimens } from "./page-shapes.mjs";
 
@@ -100,6 +100,26 @@ test("declarations are refused where the grammar can tell without a browser", as
   assert.throws(() => renderFigure(undrawn), /rule 2: declared states are never drawn: unused/);
   const dropping = variant((figure) => { figure.narrow.drops = [figure.states[0].name]; });
   assert.throws(() => renderFigure(dropping), /rule 5: the narrow composition drops nothing but declares drops/);
+});
+
+// An extent keeps a usable plot width (R5-3). A unit whose value labels would
+// leave less than the minimum is refused before drawing, and a derived value
+// too long for the budget is refused when the figure is composed; the
+// narrow scale of anything drawn runs forwards, at least that wide.
+test("an extent layout keeps a positive, usable plot width or is refused", async () => {
+  const base = (await specimens()).find(({ name }) => name === "10-extent-derived.json").declaration;
+  const bound = (derived) => ({ source: base.figure.source, derived });
+  const withUnit = (unit) => { const copy = structuredClone(base); copy.figure.layout.unit = unit; return copy; };
+  const accepted = validateDeclaration(withUnit("chars per line"));
+  const { narrow, wide } = composeFigure(accepted, bound({ commit_desc_max_len: 50, commit_subject_max_len: 72 }));
+  for (const composition of [narrow, wide]) {
+    const [start, end] = composition.scale.range;
+    assert.ok(end - start >= MIN_PLOT_WIDTH, JSON.stringify(composition.scale));
+    for (const bar of composition.draw.filter((item) => item.shape === "rect")) assert.ok(bar.w > 0, JSON.stringify(bar));
+  }
+  assert.throws(() => validateDeclaration(withUnit("milliseconds per successful transaction")), /the extent value labels leave -?[\d.]+ units to plot at the narrow width, under the 160 the layout needs; shorten layout\.unit/);
+  const edge = withUnit("chars per line");
+  assert.throws(() => composeFigure(edge, bound({ commit_desc_max_len: 50.12, commit_subject_max_len: 72000.25 })), /under the 160 the layout needs/);
 });
 
 test("facts re-derive from the anchored section, so a wrong fact under a valid anchor fails", () => {

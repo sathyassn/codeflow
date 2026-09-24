@@ -212,6 +212,15 @@ function validateLayout(figure, fail) {
     onlyKeys(layout, ["kind", "max", "unit", "rows", "limits"], "layout", fail);
     if (!(typeof layout.max === "number" && layout.max > 0 && layout.max <= 1e6)) fail("layout.max must be a positive number");
     if (layout.unit !== undefined) text(layout.unit, "layout.unit", fail, 40);
+    // The widest value label this layout can know before binding: its
+    // maximum or an authored value, with its unit. A derived value is held to
+    // the same budget when the figure is composed.
+    if (typeof layout.max === "number" && (layout.unit === undefined || typeof layout.unit === "string")) {
+      const unitCharacters = layout.unit ? layout.unit.length + 1 : 0;
+      const numbers = [layout.max, ...(layout.rows ?? []).map((row) => row?.value).filter((value) => typeof value === "number")];
+      const failure = extentPlotFailure(Math.max(...numbers.map((value) => formatNumber(value).length)) + unitCharacters);
+      if (failure !== null) fail(failure);
+    }
     if (!Array.isArray(layout.rows) || layout.rows.length < 1 || layout.rows.length > 16) fail("layout.rows must list 1 to 16 rows");
     for (const row of layout.rows ?? []) {
       if (!isObject(row)) { fail("each layout row must be an object"); continue; }
@@ -467,6 +476,18 @@ const TEXT_OVERHANG = 0.25 * LABEL_FONT;
 const MIN_RENDER_SCALE = 0.9;
 const LIMIT_HALF_STROKE = 1;
 const LABEL_GAP = Math.ceil(THRESHOLDS.labelClearancePx / MIN_RENDER_SCALE + LIMIT_HALF_STROKE + TEXT_OVERHANG);
+// An extent layout reserves room past its scale for its widest value label,
+// and keeps at least this much to plot in the 360-unit narrow composition; a
+// layout whose labels would leave less is refused, never drawn reversed.
+const EXTENT_NARROW_WIDTH = 360;
+export const MIN_PLOT_WIDTH = 160;
+function extentReserve(widestCharacters) {
+  return Math.max(40, LABEL_GAP + widestCharacters * MONO_ADVANCE + TEXT_OVERHANG);
+}
+function extentPlotFailure(widestCharacters) {
+  const plot = EXTENT_NARROW_WIDTH - extentReserve(widestCharacters);
+  return plot < MIN_PLOT_WIDTH ? `the extent value labels leave ${formatNumber(plot)} units to plot at the narrow width, under the ${MIN_PLOT_WIDTH} the layout needs; shorten layout.unit` : null;
+}
 
 function layoutCompositions(figure, bound) {
   const value = (entry) => (typeof entry.value === "number" ? entry.value : bound.derived[entry.value]);
@@ -476,13 +497,15 @@ function layoutCompositions(figure, bound) {
     const unit = figure.layout.unit ? ` ${figure.layout.unit}` : "";
     const drawnValues = {};
     const valueTexts = rows.map((row) => `${formatNumber(row.number)}${unit}`);
-    const widest = Math.max(0, ...valueTexts.map((text) => text.length)) * MONO_ADVANCE;
+    const widestCharacters = Math.max(0, ...valueTexts.map((text) => text.length));
+    const failure = extentPlotFailure(widestCharacters);
+    if (failure !== null) throw new Error(`${figure.id}: ${failure}`);
     const compose = (width, narrow) => {
       const labelWidth = narrow ? 0 : 150;
       const left = labelWidth;
       // Room past the scale for the widest value label, which may sit past a
       // bar at the maximum or past the last limit.
-      const right = width - Math.max(40, LABEL_GAP + widest + TEXT_OVERHANG);
+      const right = width - extentReserve(widestCharacters);
       const scale = linearScale([0, figure.layout.max], [left, right]);
       const draw = [];
       const rowHeight = narrow ? 58 : 40;
@@ -520,7 +543,7 @@ function layoutCompositions(figure, bound) {
       return { width, height, draw, scale: { domain: scale.domain, range: scale.range } };
     };
     const wide = compose(THRESHOLDS.wideMaxWidth, false);
-    const narrow = compose(360, true);
+    const narrow = compose(EXTENT_NARROW_WIDTH, true);
     return { wide, narrow, drawnValues };
   }
   const { columns, rows } = figure.layout;

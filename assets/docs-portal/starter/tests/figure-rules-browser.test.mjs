@@ -127,17 +127,23 @@ test("rule 6 reads each drawn value back off the rendered marks", { skip: proces
 // past the advance) still clears every mark it does not label, at 1280 and
 // 390 px in both modes.
 test("the derived extent layout clears rule 8 in Chromium, WebKit and Firefox", { skip: process.platform === "win32", timeout: 300_000 }, async () => {
-  const declaration = (await specimens()).find(({ name }) => name === "10-extent-derived.json").declaration;
-  const { bound, composed, evidence } = fidelity(declaration);
-  const html = renderFigure(declaration, { idPrefix: "d", bound });
+  const specimen = (await specimens()).find(({ name }) => name === "10-extent-derived.json").declaration;
+  // The specimen, and a long unit inside the label budget (R5-3), whose
+  // value labels take most of the room the layout reserves.
+  const longUnit = structuredClone(specimen);
+  longUnit.figure.layout.unit = "chars per line";
   const css = await sheet();
   for (const [name, engine] of Object.entries({ chromium, webkit, firefox })) {
     const browser = await engine.launch({ headless: true, env: hardenedChildEnvironment() });
     try {
-      const observed = await probe(await browser.newPage(), css, html);
-      const failures = figureRuleFailures({ ...observed, evidence, composed });
-      assert.deepEqual(failures.filter((failure) => failure.rule === 8), [], `${name}: ${JSON.stringify(failures)}`);
-      assert.deepEqual(failures, [], `${name}: ${JSON.stringify(failures)}`);
+      for (const [variant, declaration] of [["specimen", specimen], ["long unit", longUnit]]) {
+        const { bound, composed, evidence } = fidelity(declaration);
+        const html = renderFigure(declaration, { idPrefix: "d", bound });
+        const observed = await probe(await browser.newPage(), css, html);
+        const failures = figureRuleFailures({ ...observed, evidence, composed });
+        assert.deepEqual(failures.filter((failure) => failure.rule === 8), [], `${name}, ${variant}: ${JSON.stringify(failures)}`);
+        assert.deepEqual(failures, [], `${name}, ${variant}: ${JSON.stringify(failures)}`);
+      }
     } finally { await browser.close(); }
   }
 });

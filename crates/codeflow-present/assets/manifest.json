@@ -15,7 +15,7 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-XPKYX3RX.js",
+      "present.app": "/app/assets/app-4RACGUE4.js",
       "present.style": "/app/assets/app-LESYG36A.css"
     },
     "inline": {
@@ -26,6 +26,42 @@
       }
     },
     "assets": [
+      {
+        "request_path": "/app/assets/app-4RACGUE4.js",
+        "stored_path": "service/app-4RACGUE4.js.br",
+        "media_type": "text/javascript; charset=utf-8",
+        "content_encoding": "br",
+        "raw_bytes": 70791,
+        "encoded_bytes": 21746,
+        "sha256": "98163b5c429d231d4e03a5dce47edee6afcc4e8137844a0f6ad638c2fe23723b",
+        "etag": "\"sha256-mBY7XEKdIx1OA6Xc5H7e5q/MToE3hEoPatY4wv4jcjs=\"",
+        "imports": [
+          {
+            "request_path": "/app/assets/chunk-chunk-PUSCJW6P.js",
+            "kind": "import-statement"
+          },
+          {
+            "request_path": "/app/assets/chunk-diagram-27NGNDTY.js",
+            "kind": "dynamic-import"
+          },
+          {
+            "request_path": "/app/assets/chunk-figure-VSFHWZES.js",
+            "kind": "dynamic-import"
+          },
+          {
+            "request_path": "/app/assets/chunk-figure-VSFHWZES.js",
+            "kind": "dynamic-import"
+          },
+          {
+            "request_path": "/app/assets/chunk-fonts-JQZUE2F7.js",
+            "kind": "dynamic-import"
+          },
+          {
+            "request_path": "/app/assets/chunk-syntax-LGUEA3UM.js",
+            "kind": "dynamic-import"
+          }
+        ]
+      },
       {
         "request_path": "/app/assets/app-LESYG36A.css",
         "stored_path": "service/app-LESYG36A.css.br",
@@ -39,42 +75,6 @@
           {
             "request_path": "/app/assets/svg%3E",
             "kind": "url-token"
-          }
-        ]
-      },
-      {
-        "request_path": "/app/assets/app-XPKYX3RX.js",
-        "stored_path": "service/app-XPKYX3RX.js.br",
-        "media_type": "text/javascript; charset=utf-8",
-        "content_encoding": "br",
-        "raw_bytes": 70791,
-        "encoded_bytes": 21744,
-        "sha256": "8efdf29299b474c6c3a63f534ab1956d73806adfb0e1397ac4c22be42f31c34e",
-        "etag": "\"sha256-jv3ykpm0dMbDpj9TSrGVbXOAat+w4Tl6xMIr5C8xw04=\"",
-        "imports": [
-          {
-            "request_path": "/app/assets/chunk-chunk-PUSCJW6P.js",
-            "kind": "import-statement"
-          },
-          {
-            "request_path": "/app/assets/chunk-diagram-27NGNDTY.js",
-            "kind": "dynamic-import"
-          },
-          {
-            "request_path": "/app/assets/chunk-figure-5WTERFAW.js",
-            "kind": "dynamic-import"
-          },
-          {
-            "request_path": "/app/assets/chunk-figure-5WTERFAW.js",
-            "kind": "dynamic-import"
-          },
-          {
-            "request_path": "/app/assets/chunk-fonts-JQZUE2F7.js",
-            "kind": "dynamic-import"
-          },
-          {
-            "request_path": "/app/assets/chunk-syntax-LGUEA3UM.js",
-            "kind": "dynamic-import"
           }
         ]
       },
@@ -2817,14 +2817,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/chunk-figure-5WTERFAW.js",
-        "stored_path": "service/chunk-figure-5WTERFAW.js.br",
+        "request_path": "/app/assets/chunk-figure-VSFHWZES.js",
+        "stored_path": "service/chunk-figure-VSFHWZES.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 32210,
-        "encoded_bytes": 10598,
-        "sha256": "cbbb220019c06efb6210d6222f31628be5bd14e9fd010125b56a843d921282d7",
-        "etag": "\"sha256-y7siABnAbvtiENYiLzFii+W9FOn9AQEltWqEPZISgtc=\"",
+        "raw_bytes": 32723,
+        "encoded_bytes": 10791,
+        "sha256": "8ca52c5ef373d8f967d510a24d330900b445ae811ad753d4f8808792c6cbb35b",
+        "etag": "\"sha256-jKUsXvNz2Pln1RCiTTMJALRFroEa11PU+ICHksbLs1s=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-PUSCJW6P.js",
@@ -5267,20 +5267,20 @@
     ],
     "metrics": {
       "asset_count": 120,
-      "raw_corpus_bytes": 4426675,
-      "brotli_corpus_bytes": 1099805,
+      "raw_corpus_bytes": 4427188,
+      "brotli_corpus_bytes": 1100000,
       "largest_raw_chunk_bytes": 667680,
       "largest_brotli_chunk_bytes": 131167
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-49b7bb39e55f7883.js.gz",
+      "stored_path": "export/renderer-4aa16e58fcdd88c9.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 4396899,
-      "encoded_bytes": 1219782,
-      "sha256": "49b7bb39e55f7883d27feea99798ef59335a5980fde5aaeab666d5664cda220d"
+      "raw_bytes": 4397425,
+      "encoded_bytes": 1220160,
+      "sha256": "4aa16e58fcdd88c9bcd11386c4b936d476a70655d9bea5b590c9d64acdd4cbce"
     }
   },
   "budgets": {
@@ -5290,5 +5290,5 @@
     "largest_brotli_chunk_bytes": 150000,
     "export_gzip_bytes": 1300000
   },
-  "corpus_sha256": "fb04d41a75de4e2233266f79e04792cd0885fb202a70a2187f46cb84c830c643"
+  "corpus_sha256": "5ad8ca8782fc8a76386878d514fe4ea72111f589d3b395c0fa77c41f9d6cdaaf"
 }

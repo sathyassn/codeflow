@@ -37,6 +37,10 @@ const LABEL_FONT: f64 = 14.0;
 const MONO_ADVANCE: f64 = 0.65 * LABEL_FONT;
 const TEXT_OVERHANG: f64 = 0.25 * LABEL_FONT;
 const LABEL_GAP: f64 = 14.0;
+/// An extent layout keeps at least this much to plot in its 360-unit narrow
+/// composition; one whose value labels would leave less is refused.
+const EXTENT_NARROW_WIDTH: f64 = 360.0;
+const MIN_PLOT_WIDTH: f64 = 160.0;
 const LINE: [&str; 3] = ["path", "line", "polyline"];
 
 /// A mark of the closed vocabulary: the kit class, its legend key form, and
@@ -400,12 +404,21 @@ fn extent_layout(layout: &Value, derived: &Map<String, Value>) -> Result<Compose
         .max()
         .unwrap_or(0) as f64
         * MONO_ADVANCE;
+    let reserve = 40.0_f64.max(LABEL_GAP + widest + TEXT_OVERHANG);
+    let plot = EXTENT_NARROW_WIDTH - reserve;
+    if plot < MIN_PLOT_WIDTH {
+        return Err(format!(
+            "the extent value labels leave {} units to plot at the narrow width, under the {} the layout needs; shorten layout.unit",
+            format_number(plot),
+            js_number(MIN_PLOT_WIDTH)
+        ));
+    }
     let mut compose = |width: f64, narrow: bool| -> Composition {
         let label_width = if narrow { 0.0 } else { 150.0 };
         let left = label_width;
         // Room past the scale for the widest value label, which may sit past
         // a bar at the maximum or past the last limit.
-        let right = width - 40.0_f64.max(LABEL_GAP + widest + TEXT_OVERHANG);
+        let right = width - reserve;
         let scale = |value: f64| left + (value / max) * (right - left);
         let invert = |position: f64| {
             if right == left {
@@ -473,7 +486,7 @@ fn extent_layout(layout: &Value, derived: &Map<String, Value>) -> Result<Compose
         }
     };
     let wide = compose(WIDE_MAX_WIDTH, false);
-    let narrow = compose(360.0, true);
+    let narrow = compose(EXTENT_NARROW_WIDTH, true);
     Ok((wide, narrow, Some(drawn_values)))
 }
 
@@ -1661,6 +1674,30 @@ mod tests {
         assert_eq!(
             super::LABEL_GAP,
             (8.0_f64 / 0.9 + 1.0 + super::TEXT_OVERHANG).ceil()
+        );
+    }
+
+    /// A value label that would leave the extent less than its minimum plot
+    /// width is refused, never drawn with a reversed scale (R5-3); a long
+    /// unit inside the budget draws.
+    #[test]
+    fn an_extent_keeps_a_usable_plot_width() {
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs-portal/tests/fixtures/figures");
+        let mut declaration: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(fixtures.join("10-extent-derived.json")).unwrap(),
+        )
+        .unwrap();
+        let derived = serde_json::json!({"commit_desc_max_len": 50, "commit_subject_max_len": 72});
+        declaration["figure"]["layout"]["unit"] = "chars per line".into();
+        assert!(super::render_figure(&declaration, "cf-fig-0", derived.as_object()).is_ok());
+        declaration["figure"]["layout"]["unit"] = "milliseconds per successful transaction".into();
+        let refused = super::render_figure(&declaration, "cf-fig-0", derived.as_object())
+            .err()
+            .unwrap();
+        assert!(
+            refused.contains("under the 160 the layout needs"),
+            "{refused}"
         );
     }
 
