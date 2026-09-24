@@ -294,7 +294,7 @@
     },
     "tests/portal-fixture.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "1127b1571190391ece2af3e2b28a95b25d8bd8f8303ed2bd3566602022644a48"
+      "pristine_sha256": "dd3960e341d14073974c219b1020624903edeff9dc7b4c40f4d4b14cfc4a10c5"
     },
     "tsconfig.json": {
       "ownership": "managed",

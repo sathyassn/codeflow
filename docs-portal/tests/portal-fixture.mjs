@@ -70,6 +70,11 @@ export async function selfContainedPortalFixture() {
       records: { enabled: false, layer: null, pointers: [] },
       layers: FIXTURE_LAYERS,
       base: "/",
+      // The consumer's own carriers, classes and bindings name its sources,
+      // which this fixture does not carry.
+      page_carriers: [],
+      page_classes: [],
+      figures: [],
     });
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
     await writeFile(path.join(root, "docs/seed.md"), "# Seed\n");
