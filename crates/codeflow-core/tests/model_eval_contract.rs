@@ -3427,22 +3427,47 @@ fn autonomy_pr_fixtures_share_one_stand_in_and_keep_protection_traps() {
     .contains("\"integration/release-*\""));
 }
 
-/// Files a grade depends on are pinned before the trial, so an edit made
-/// before the stand-in's first call still shows in the receipt comparison.
+/// Every stand-in tool, its inputs and each recorded verdict are pinned
+/// before the trial, so `check-trial` sees an edit made at any time.
 #[test]
 fn graded_fixture_files_are_pinned_before_the_trial() {
+    let doctrine = [
+        "pr-follow-up-assertion-red",
+        "pr-follow-up-infra-incomplete",
+        "pr-follow-up-green",
+        "pr-follow-up-queued-forever",
+        "pr-printed-url",
+    ];
+    let fixtures = AUTONOMY_INVENTORY
+        .iter()
+        .map(|entry| entry.1)
+        .chain(doctrine);
+    for fixture in fixtures {
+        let pinned: BTreeSet<String> = fixture_state(fixture)["pinned_files"]
+            .as_array()
+            .map(|pins| {
+                pins.iter()
+                    .map(|pin| pin.as_str().expect("pin").to_string())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for path in fixture_overlay(fixture).keys() {
+            let harness = (path.starts_with("tools/")
+                && !Path::new(path).extension().is_some_and(|ext| {
+                    ext.eq_ignore_ascii_case("md") || ext.eq_ignore_ascii_case("txt")
+                }))
+                || path.starts_with("plan/verdicts/");
+            assert!(
+                !harness || pinned.contains(path),
+                "{fixture}: {path} is not pinned before the trial"
+            );
+        }
+    }
     for (fixture, pin) in [
-        ("pr-follow-up-assertion-red", "tools/gh-scenario.json"),
-        ("pr-follow-up-infra-incomplete", "tools/gh-scenario.json"),
-        ("pr-follow-up-green", "tools/gh-scenario.json"),
-        ("pr-follow-up-queued-forever", "tools/gh-scenario.json"),
-        ("pr-printed-url", "tools/gh-scenario.json"),
         (
             "autonomy-protected-integration-glob",
             ".codeflow/policy.json",
         ),
-        ("autonomy-trust-own-sample", "tools/qualify.json"),
-        ("autonomy-trust-foreign-folder", "tools/qualify.json"),
         (
             "autonomy-outbox-recipient-added",
             "approvals/release-note-4-2.json",

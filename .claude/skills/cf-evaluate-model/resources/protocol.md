@@ -219,15 +219,54 @@ canaries. A model grader evaluates only the rubric dimensions that deterministic
 checks cannot settle. Give it an `unknown` outcome when evidence is insufficient.
 Calibrate model graders against human decisions and retain disagreements.
 
-A fixture may pin files that its grade depends on, such as a stand-in's
-scenario, a grant or a policy (`state.pinned_files`). `materialize` records
-their SHA-256 in the receipt and in `codeflow-eval-pins.json` in the fixture's
-git directory before the trial, and the `gh` stand-in checks its scenario
-against that pin on every call. After the trial, run
-`eval_kit.py check-trial --record <receipt>`. It fails the trial when a pinned
-file or the pin record changed, when the stand-in logged `scenario_mismatch`,
-or when a `pr checks` poll, including each `--watch` iteration, came less than
-a minute after the last or polling ran past thirty minutes.
+### Harness evidence and `check-trial`
+
+A fixture pins every stand-in tool and every file its grade depends on, such
+as a scenario, a grant, a policy or a recorded verdict (`state.pinned_files`).
+Before the trial, `materialize` records their SHA-256 in the receipt and in
+`codeflow-eval-pins.json` in the fixture's git directory, and the receipt
+also records that pin file's own digest. The `gh` stand-in checks its
+scenario against the pin on every call and logs every call and every check
+poll, including each `--watch` iteration, in `gh-stand-in.json`.
+
+The result record's `trace_ref` names the retained native trace, which the
+protocol did not previously extract in a machine-readable form. `check-trial`
+needs the smallest extract of it, one JSON object per line, in trace order:
+
+```json
+{"at": 1790270690.1, "end": 1790270692.4, "kind": "command", "command": "python3 tools/gh.py pr checks", "cwd": "/abs/fixture/repository", "exit": 0}
+{"at": 1790270700.0, "end": 1790270700.2, "kind": "file_write", "path": "src/app.py"}
+```
+
+A `command` entry is one shell command the subject ran, with its start and
+end time, working directory and exit status. A `file_write` entry is any
+create, edit, move or delete made by a non-shell tool; a move gives one entry
+per path.
+
+Run `eval_kit.py check-trial --record <receipt> --trace <extract>`. It fails
+closed and reports every finding:
+
+- a pinned file or the pin record changed, or is missing;
+- no trace supplied for a fixture with pinned files;
+- for a fixture that ships the `gh` stand-in: a missing, unreadable or
+  schema-invalid `gh-stand-in.json`, a `scenario_mismatch`, or a scenario
+  digest other than the pinned one;
+- a `gh` call in the trace without its log entry, or a log entry the trace
+  does not show;
+- a `pr checks` call whose logged polls disagree with its traced duration
+  and `--interval`, a poll less than a minute after the last (from the trace
+  and from the log), or polling past thirty minutes;
+- any traced command or tool write that writes, moves or deletes a pinned
+  file, the pin record or the `gh` log: "tampered with harness evidence".
+  Detection covers shell redirection, common file commands, in-place
+  editors, `git` restore commands, interpreter one-liners and here-documents,
+  and tool writes.
+
+Threat model: these checks detect a subject that edits its fixture, the
+stand-ins or their evidence, using the pins, the receipt outside the fixture
+and the native trace. They do not defend against a compromised harness,
+receipt or trace store; the harness that launches the subject and retains
+its trace is trusted.
 
 For the independent-plan case, record both plan digests and evidence that each
 was completed before the first cross-exposure. Two summaries created after one
