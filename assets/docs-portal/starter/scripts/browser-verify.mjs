@@ -11,7 +11,7 @@ import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertGeneratorIdentity } from "./generator.mjs";
 import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { PORTAL_ACCENT_BACKGROUNDS, pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
-import { canonicalJson, figureRuleFailures, probeFigures, THRESHOLDS } from "./figure-grammar.mjs";
+import { canonicalJson, composeFigure, FIGURE_RULES, figureRuleFailures, probeFigures, THRESHOLDS } from "./figure-grammar.mjs";
 import { ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
@@ -46,7 +46,8 @@ async function verifyPortal(lifecycle) {
   const generated = JSON.parse(evidenceBytes);
   assertGeneratorIdentity(generated?.generator);
   const repository = path.resolve(root, config.repository_root);
-  const head = new GitSnapshot(repository).resolveHead();
+  const snapshot = new GitSnapshot(repository);
+  const head = snapshot.resolveHead();
   const configSha256 = digest(configBytes);
   if (generated?.schema_version !== 1 || generated?.repository?.commit !== head || generated?.config_sha256 !== configSha256 || !Array.isArray(generated?.pages) || !Array.isArray(generated?.artifacts)) {
     throw new Error("browser verification requires current commit-bound portal evidence");
@@ -61,6 +62,7 @@ async function verifyPortal(lifecycle) {
   const assignments = classifyPortalPages(config, generated.pages);
   assertDeclaredCarriers(config, assignments);
   const surfaces = await discoverSurfaceRoutes(generated.pages, root);
+  const declarations = pinnedDeclarations(snapshot, head, generated);
 
   const outputRelative = safeRelative(`.portal/browser-evidence/${runId}`, "browser evidence path");
   const output = path.join(root, outputRelative);
@@ -89,7 +91,7 @@ async function verifyPortal(lifecycle) {
     await waitForServer(siteRoot, server, () => serverOutput.toString("utf8"));
     for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
       lifecycle.throwIfInterrupted();
-      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, lifecycle }));
+      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, declarations, lifecycle }));
     }
   } catch (error) {
     lifecycle.throwIfInterrupted();
@@ -135,7 +137,7 @@ async function verifyPortal(lifecycle) {
   console.log(`portal browser verification passed: ${outputRelative}/results.json`);
 }
 
-async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, lifecycle }) {
+async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, declarations, lifecycle }) {
   const profile = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-${runId}-${name}-`));
   const trace = path.join(output, `${name}-trace.zip`);
   const runtime = { console: [], page: [], request: [], remote: [] };
@@ -203,7 +205,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
 
     await assertDeepLink(page, name, origin, config.base, surfaces.deepLink);
     const compositionResult = await assertPortalComposition(page, name, origin, config, assignments);
-    const figureResult = await assertFigureGate(page, name, origin, config, assignments, generated);
+    const figureResult = await assertFigureGate(page, name, origin, config, assignments, generated, declarations);
     const previewResult = await assertStrictIdPreview(page, name, origin, config, surfaces.strictPreview);
     await assertSourceLink(page, name, origin, config, generated);
     await visit(page, siteRoot);
@@ -364,13 +366,28 @@ async function assertPortalComposition(page, engine, origin, config, assignments
 // holds all twelve rules of the grammar, read off the render at a wide and a
 // narrow width, in light and in dark. Each failure names the page, the place
 // on the page and the rule.
-async function assertFigureGate(page, engine, origin, config, assignments, generated) {
-  const { failures, drawn } = await figureGateFailures(page, (route) => visit(page, routeUrl(origin, config.base, route)), assignments, generated);
+async function assertFigureGate(page, engine, origin, config, assignments, generated, declarations) {
+  const { failures, drawn } = await figureGateFailures(page, (route) => visit(page, routeUrl(origin, config.base, route)), assignments, generated, declarations);
   if (failures.length) throw new Error(`${engine}: figure gate: ${failures.length} failure(s)\n  ${failures.join("\n  ")}`);
   return `${engine}:figure-gate:${drawn}`;
 }
 
-export async function figureGateFailures(page, visitRoute, assignments, generated) {
+// Each recorded figure declaration as committed at the evidenced commit, held
+// to the hash the evidence records: the render is measured against it.
+const MAX_DECLARATION_BYTES = 256 * 1024;
+export function pinnedDeclarations(snapshot, commit, generated) {
+  const declarations = new Map();
+  for (const entry of generated.figures ?? []) {
+    const bytes = snapshot.bytes(["cat-file", "blob", `${commit}:${safeRelative(entry.declaration_path, "figure declaration path")}`], MAX_DECLARATION_BYTES, "figure declaration");
+    if (digest(bytes) !== entry.declaration_sha256) throw new Error(`figure declaration ${entry.declaration_path} does not match its recorded hash`);
+    declarations.set(entry.declaration_path, JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  }
+  return declarations;
+}
+
+// `declarations` maps each declaration path to its pinned declaration; rule 6
+// reads the drawn values back against it and the committed values.
+export async function figureGateFailures(page, visitRoute, assignments, generated, declarations) {
   const failures = [];
   const recorded = new Map((generated.figures ?? []).map((entry) => [entry.declaration_path, entry]));
   let drawn = 0;
@@ -411,8 +428,14 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
         facts: entry.facts.map((fact) => ({ ...fact, matches: canonicalJson(fact.derived) === canonicalJson(fact.drawn) })),
         data: entry.derived === null ? null : { drawn: entry.derived.drawn, derived: entry.derived.values },
       };
+      let composed = null;
+      try {
+        const declaration = declarations.get(place.declaration);
+        if (declaration === undefined) throw new Error("its pinned declaration is not available");
+        composed = composeFigure(declaration, entry?.derived ? { source: declaration.figure.source, derived: entry.derived.values } : null);
+      } catch (error) { failures.push(`${where}: rule 6 (${FIGURE_RULES[6]}): the committed composition cannot be rebuilt: ${error.message}`); }
       const ruleFailures = figureRuleFailures({
-        wide: observed.wide[index], narrow: observed.narrow[index], wideDark: observed.wideDark[index], narrowDark: observed.narrowDark[index], evidence,
+        wide: observed.wide[index], narrow: observed.narrow[index], wideDark: observed.wideDark[index], narrowDark: observed.narrowDark[index], evidence, composed,
       });
       for (const failure of ruleFailures) failures.push(`${where}: rule ${failure.rule} (${failure.name}): ${failure.message}`);
     });

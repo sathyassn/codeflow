@@ -11,7 +11,8 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "@playwright/test";
 import { sha256 } from "../scripts/lib.mjs";
-import { figureGateFailures, observePortalPage } from "../scripts/browser-verify.mjs";
+import { figureGateFailures, observePortalPage, pinnedDeclarations } from "../scripts/browser-verify.mjs";
+import { GitSnapshot } from "../scripts/git-snapshot.mjs";
 import { classifyPortalPages, declaredCarrierFailures, pageClassFailures } from "../scripts/page-classes.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { COMPOSED_PAGE, FIGURE_FACTS_PATH, SHELL_PAGE, panelBindings, specimen, writeFigureInputs } from "./page-shapes.mjs";
@@ -220,7 +221,13 @@ test("the mixed fixture renders every class and the gates name only what falls s
         "docs/plain.md (explanatory page at reference/plain) lacks the altitude trio concept, architecture, technical: missing concept, architecture, technical; present none",
       ]);
 
-      const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, evidence);
+      const snapshot = new GitSnapshot(path.resolve(root, config.repository_root));
+      const declarations = pinnedDeclarations(snapshot, evidence.repository.commit, evidence);
+      assert.equal(declarations.size, 6);
+      const misrecorded = structuredClone(evidence);
+      misrecorded.figures[0].declaration_sha256 = "0".repeat(64);
+      assert.throws(() => pinnedDeclarations(snapshot, evidence.repository.commit, misrecorded), new RegExp(`figure declaration ${misrecorded.figures[0].declaration_path} does not match its recorded hash`));
+      const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, evidence, declarations);
       assert.equal(drawn, 6);
       assert.ok(failures.length > 0);
       for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);

@@ -58,7 +58,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "4bd5ebb13c4c17ab3679291f67e9e15aff29c7f52c3846ba3b5f8f4528be72f3"
+      "pristine_sha256": "9f20c0f7f76f4b34025f98fcb1fd48e8d533de3d2736fd80f2d744124f730b4d"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -70,7 +70,7 @@
     },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "a8371627fb34c762298085b3e1c24aa2f6e79ef3e278f77bb3af5490cd445555"
+      "pristine_sha256": "ad62a75090597a9834c2e3b9f50397ae4aa5cf5fe72c5b243f55f00e0ece4fcd"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -178,7 +178,7 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "7c25ef97a5660985723fcff53c7a5f048ccdaa64c373c3d3191528d53d99749f"
+      "pristine_sha256": "75689faf57f144ff06ba4f97962a3aefe1c6ed2f2c2d302260e9fd46260f8e96"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
@@ -186,7 +186,7 @@
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "cd8361db254526dcd3023e8b8ff7871e47273bef073a1728d58907535ecfff9b"
+      "pristine_sha256": "df1c053ee8979557f8c51c6e847ba85fdb88e486f0f455d5ad64734054524fc6"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",

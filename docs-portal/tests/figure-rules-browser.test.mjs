@@ -6,7 +6,7 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium } from "@playwright/test";
-import { canonicalJson, FIGURE_RULES, figureRuleFailures, probeFigures, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
+import { canonicalJson, composeFigure, FIGURE_RULES, figureRuleFailures, probeFigures, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { specimens } from "./page-shapes.mjs";
 
@@ -15,6 +15,16 @@ const styles = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/s
 async function sheet() {
   const parts = await Promise.all(["utility-tokens.css", "portal.css", "figure-roles.css", "figure.css"].map((name) => readFile(path.join(styles, name), "utf8")));
   return parts.join("\n");
+}
+
+// The committed values a specimen is checked against: its authored facts, and
+// for the derived specimen the policy values its bars encode.
+const POLICY = { commit_desc_max_len: 50, commit_subject_max_len: 72 };
+function fidelity(declaration) {
+  const bound = declaration.figure.binding === "derived" ? { source: declaration.figure.source, derived: POLICY } : null;
+  const composed = composeFigure(declaration, bound);
+  const facts = declaration.figure.facts.map((fact) => ({ claim: fact.claim, source: fact.source, drawn: fact.value, derived: fact.value, matches: true }));
+  return { bound, composed, evidence: { facts, data: bound === null ? null : { drawn: composed.drawnValues, derived: POLICY } } };
 }
 
 async function probe(page, css, html, breakage = null) {
@@ -67,6 +77,34 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
   } finally { await browser.close(); }
 });
 
+// Rule 6 reads the bars and limits themselves: a render whose marks or value
+// text no longer encode the committed values fails, although every attribute
+// the figure carries about its values is left as rendered.
+test("rule 6 reads each drawn value back off the rendered marks", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+  const declaration = (await specimens()).find(({ name }) => name === "10-extent-derived.json").declaration;
+  const { bound, composed, evidence } = fidelity(declaration);
+  const html = renderFigure(declaration, { idPrefix: "d", bound });
+  const css = await sheet();
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    const page = await browser.newPage();
+    const clean = await probe(page, css, html);
+    assert.deepEqual(figureRuleFailures({ ...clean, evidence, composed }), []);
+    const sixes = (observed) => figureRuleFailures({ ...observed, evidence, composed }).filter((failure) => failure.rule === 6).map((failure) => failure.message);
+    const metadata = () => [...document.querySelectorAll("figure.cf-fig, .cf-fig [data-cf-value]")].map((node) => `${node.getAttribute("data-cf-values")}|${node.getAttribute("data-cf-value")}|${node.getAttribute("data-cf-facts")}`).join("\n");
+    const halved = await probe(page, css, html, () => { for (const bar of document.querySelectorAll(".cf-fig-svg [data-state] > rect:first-child")) bar.setAttribute("width", String(Number(bar.getAttribute("width")) / 2)); });
+    assert.equal(await page.evaluate(metadata), await (async () => { await page.setContent(html); return page.evaluate(metadata); })(), "the halved render keeps every value attribute");
+    const halvedSixes = sixes(halved);
+    for (const label of ["wide", "narrow", "wide dark", "narrow dark"]) {
+      assert.ok(halvedSixes.some((message) => message.startsWith(`${label}: the row-0 mark reads 25 on its scale and the committed value is 50`)), halvedSixes.join("\n"));
+    }
+    const moved = await probe(page, css, html, () => { for (const limit of document.querySelectorAll(".cf-fig-svg [data-state] > line:first-child")) { limit.setAttribute("x1", "200"); limit.setAttribute("x2", "200"); } });
+    assert.ok(sixes(moved).some((message) => /^wide: the limit-0 mark reads [\d.]+ on its scale and the committed value is 72$/.test(message)), sixes(moved).join("\n"));
+    const relabelled = await probe(page, css, html, () => { for (const text of document.querySelectorAll(".cf-fig-svg text")) if (text.textContent === "50 chars") text.textContent = "90 chars"; });
+    assert.ok(sixes(relabelled).some((message) => message === 'narrow: the row-0 mark is labelled ["90 chars","Description"], not ["50 chars","Description"]'), sixes(relabelled).join("\n"));
+  } finally { await browser.close(); }
+});
+
 test("the specimens that hold every rule, and the doctrine conflicts the gate names in the rest", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
   const css = await sheet();
   const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
@@ -74,8 +112,8 @@ test("the specimens that hold every rule, and the doctrine conflicts the gate na
   try {
     const page = await browser.newPage();
     for (const { name, declaration } of await specimens()) {
-      const bound = declaration.figure.binding === "derived" ? { source: declaration.figure.source, derived: { commit_desc_max_len: 50, commit_subject_max_len: 72 } } : null;
-      const failures = figureRuleFailures(await probe(page, css, renderFigure(declaration, { idPrefix: "s", bound })));
+      const { bound, composed, evidence } = fidelity(declaration);
+      const failures = figureRuleFailures({ ...await probe(page, css, renderFigure(declaration, { idPrefix: "s", bound })), evidence, composed });
       outcome[name] = [...new Set(failures.map((failure) => failure.rule))].sort((a, b) => a - b);
     }
   } finally { await browser.close(); }

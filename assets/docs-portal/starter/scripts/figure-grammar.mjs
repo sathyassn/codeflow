@@ -491,7 +491,9 @@ function layoutCompositions(figure, bound) {
         draw.push({ text: `${limit.label} ${formatNumber(limit.number)}`, x, y: axisY + 22 + (narrow ? index * 20 : 0), anchor: narrow ? "end" : "middle", style: "mute", for: [id] });
       });
       const height = axisY + 30 + (narrow ? Math.max(0, limits.length - 1) * 20 : 0);
-      return { width, height, draw };
+      // The scale travels with the composition, so the gate can read each
+      // rendered mark back through it (rule 6).
+      return { width, height, draw, scale: { domain: scale.domain, range: scale.range } };
     };
     const wide = compose(THRESHOLDS.wideMaxWidth, false);
     const narrow = compose(360, true);
@@ -972,6 +974,7 @@ export function probeFigures(options) {
       states: {},
       marks: [],
       texts: [],
+      geometry: [],
       collisions: [],
       signatures: {},
     };
@@ -1023,6 +1026,11 @@ export function probeFigures(options) {
         for (const key of Object.keys(token)) entry[key].add(token[key]);
         record.states[state] = entry;
         record.drawn.push(state);
+        if (group.id) {
+          let box = null;
+          try { box = primary.getBBox(); } catch { box = null; }
+          if (box) record.geometry.push({ id: group.id, tag: primary.tagName.toLowerCase(), box: [box.x, box.y, box.width, box.height].map((value) => round(value, 0.001)) });
+        }
         for (const node of drawn) {
           record.marks.push({ state, tag: node.tagName.toLowerCase(), size: round(infoDimension(node), 0.1) });
           labelled.set(node, group.id || null);
@@ -1077,7 +1085,9 @@ export function probeFigures(options) {
 // Rule failures for one figure from a wide and a narrow observation, each in
 // light and dark. The result names the rule by number, so a report reads as
 // "the page, the altitude and the rule".
-export function figureRuleFailures({ wide, narrow, wideDark = null, narrowDark = null, evidence = null }) {
+// `composed` is composeFigure() of the pinned declaration with the committed
+// values; given it, rule 6 reads every value-bearing mark back off the render.
+export function figureRuleFailures({ wide, narrow, wideDark = null, narrowDark = null, evidence = null, composed = null }) {
   const failures = [];
   const add = (rule, message) => failures.push({ rule, name: FIGURE_RULES[rule], message });
   const renders = [["wide", wide], ["narrow", narrow], ["wide dark", wideDark], ["narrow dark", narrowDark]].filter(([, record]) => record);
@@ -1137,6 +1147,42 @@ export function figureRuleFailures({ wide, narrow, wideDark = null, narrowDark =
     });
     if (evidence.data && canonicalJson(wide.values) !== canonicalJson(evidence.data.drawn)) add(6, `the drawn values ${JSON.stringify(wide.values)} differ from the recorded drawn values ${JSON.stringify(evidence.data.drawn)}`);
     if (evidence.data && !drawnValuesMatch(evidence.data.drawn, evidence.data.derived)) add(6, "the drawn values differ from the values derived from the source");
+  }
+  if (composed) {
+    for (const [label, record] of renders) {
+      const variant = label.startsWith("wide") ? "wide" : "narrow";
+      for (const message of valueReadback(composed[variant], record, variant)) add(6, `${label}: ${message}`);
+    }
+  }
+  return failures;
+}
+
+// Rule 6 on the render itself: each mark that encodes a value is measured
+// where it is drawn and read back through its composition's scale, and the
+// text that labels it must state the committed value. The attributes a figure
+// carries about its own values are never the evidence here.
+function valueReadback(composition, record, variant) {
+  const scale = composition?.scale;
+  if (!scale) return [];
+  const failures = [];
+  const [d0, d1] = scale.domain;
+  const [r0, r1] = scale.range;
+  const read = (position) => (r1 === r0 ? d0 : d0 + ((position - r0) / (r1 - r0)) * (d1 - d0));
+  const texts = (predicate) => composition.draw.filter((item) => item.text !== undefined && predicate(item)).map((item) => String(item.text).trim().slice(0, 60)).sort();
+  for (const item of composition.draw) {
+    if (item.value === undefined || item.id === undefined) continue;
+    const mark = (record.geometry ?? []).find((candidate) => candidate.id.endsWith(`-${variant}-${item.id}`));
+    if (!mark) { failures.push(`the ${item.id} mark for ${formatNumber(item.value)} is not drawn`); continue; }
+    const [x, , width] = mark.box;
+    const bar = mark.tag === "rect";
+    if (bar && Math.abs(x - r0) > 0.5) failures.push(`the ${item.id} bar starts at ${round(x)}, not at the scale origin ${round(r0)}`);
+    const shown = read(bar ? x + width : x + width / 2);
+    if (Math.abs(shown - item.value) > DRAWN_VALUE_TOLERANCE * Math.max(1, Math.abs(item.value))) {
+      failures.push(`the ${item.id} mark reads ${round(shown)} on its scale and the committed value is ${formatNumber(item.value)}`);
+    }
+    const expected = texts((text) => text.for?.includes(item.id));
+    const labels = record.texts.filter((text) => text.labels.includes(mark.id)).map((text) => text.text).sort();
+    if (canonicalJson(labels) !== canonicalJson(expected)) failures.push(`the ${item.id} mark is labelled ${JSON.stringify(labels)}, not ${JSON.stringify(expected)}`);
   }
   return failures;
 }
