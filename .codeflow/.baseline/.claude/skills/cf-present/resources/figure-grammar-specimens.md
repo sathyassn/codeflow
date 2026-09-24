@@ -12,6 +12,12 @@ one-sentence caption and a table twin. The declaration beside each specimen
 states the narrow recomposition. Labels are 14 units, so at the 646 px break
 they render at 12.5 px. Facts are this repository's own.
 
+The YAML beside each specimen sketches its intent; the module loads only the
+JSON declarations of `figure-grammar.md` section 6, and the complete ones for
+these specimens are the portal starter's `tests/fixtures/figures/*.json`. The
+gate still fails three of them: flow on rule 3, derivation on rule 8 and graph
+on rules 3 and 8, so check a figure built from those against the gate.
+
 ## 1. flow
 
 ```yaml

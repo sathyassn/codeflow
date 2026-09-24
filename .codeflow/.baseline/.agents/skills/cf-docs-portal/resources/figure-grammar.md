@@ -163,8 +163,12 @@ Named anti-patterns, each observed on that board and each now a rule:
 Every figure carries a declaration: one JSON file the grammar module draws
 from and the gate checks. The docs portal binds the file to a page in
 `portal.config.json`; a present `figure` block carries the same object in its
-`declaration` field. ADR-0068 records the schema; this is the field reference,
-and `figure-grammar-specimens.md` shows one complete file per family.
+`declaration` field. ADR-0068 records the schema; this is the field reference.
+The complete declarations the module draws, one per family plus a derived
+extent, are the portal starter's test fixtures: `tests/fixtures/figures/*.json`
+in an adopted portal, `docs-portal/tests/fixtures/figures/` in the CodeFlow
+repository. The YAML beside each specimen in `figure-grammar-specimens.md`
+sketches its intent and is not a file the module loads.
 
 ```json
 {
@@ -195,14 +199,22 @@ and `figure-grammar-specimens.md` shows one complete file per family.
 
 | Field | Rule |
 |---|---|
-| `id`, `family`, `binding` | kebab-case id unique on the page; one of the nine families; `authored` or `derived` |
-| `question`, `idea`, `title`, `caption`, `kicker` | plain text, no em or en dash; the caption is one sentence ending in a full stop and never repeats the title (rule 9); `kicker` is optional |
-| `description` | optional; generated from the title, states and facts when absent (rule 11) |
-| `states` | every drawn state in legend order: `name` (the `data-state` value), `mark` from the vocabulary in section 4, `means` (the legend text) |
-| `facts` | every fact the figure asserts (rule 6): `source` is a repository path with an optional `#anchor` naming a heading; `check.kind` is `contains` (the anchored section holds `check.text`; `value` is `true`), `count-items` (`value` is the number of list items under the anchor) or `json` (`check.select` is a dotted path into a JSON file; `value` is what it holds) |
-| `wide`, `narrow` | each composition's `width`, `height` and `draw` list; a draw item is one state mark (`state`, `shape` and its geometry), one decoration (`deco`: rule, axis or tick) or one text (`text`, `x`, `y`, and `for` naming the mark ids it labels); `narrow` also declares `recompose` (rotate, stack, strip or list), `drops` and `marks` (rule 5) |
-| `twin` | `"facts"` for a table of the facts, or `{ columns, rows }` (rule 12) |
-| `source`, `layout` | derived binding only: `source` is `{ path, select }` into a committed JSON file, and `layout` (extent or coverage) replaces `wide` and `narrow` with rows whose values are selectors into that source |
+| envelope | `{ "schema_version": 1, "figure": { ... } }`; the module refuses a bare figure object and an unknown key at any level |
+| `id`, `family`, `binding` | kebab-case id of at most 64 characters, unique on the page; one of the nine families; `authored` or `derived` |
+| `question`, `idea`, `title`, `caption` | required plain text, no em or en dash; the caption is one sentence ending in a full stop and never repeats the title (rule 9) |
+| `kicker` | optional; the line above the figure, the title when absent |
+| `description` | optional; generated from the `idea`, the states and the facts when absent (rule 11) |
+| `states` | 1 to 24 drawn states in legend order: `name` (kebab-case, the `data-state` value), `mark` from the vocabulary in section 4, `means` (the legend text), and optional `channels` naming the non-hue channels the state relies on (interior, edge, width, dash, shape, overlay); the gate measures the channels on the render (rule 3) |
+| `facts` | 1 to 32 facts the figure asserts (rule 6), each with `claim`, `derive`, `source`, `check` and `value`. `source` is a repository path with an optional `#anchor` naming a heading; the anchored section is the scope, and without an anchor the whole file is. `check.kind` is `contains` (the scope holds `check.text`; `value` is `true`), `count-items` (`value` is the number of list items in the scope) or `json` (a `.json` source with no anchor; `check.select` is a dotted path; `value` is what it holds) |
+| `wide`, `narrow` | each composition's `width` (120 to 720 units wide, 120 to 368 narrow), `height` (40 to 2400) and `draw` list of 1 to 600 items; every coordinate stays within 4000 units |
+| `narrow` recomposition | `recompose` (rotate, stack, strip or list), `drops` (the declared states the narrow composition leaves out), `marks` (`"same"` or the states it draws), and optional `elongation_max` (1 to 4, default 1.5), which above 1.5 needs a `reason` (rule 5) |
+| draw: state mark | `state`, `shape` and its geometry, an optional `id` (kebab-case, unique in the composition, and needed for a text's `for`) and optional parts. Line marks (done, todo, blocked, warn, stop, limit, trans, return) take `path`, `line` or `polyline`; human, node, agent and act take `circle`; merge takes `diamond` or `path`; cross takes `cross`; optional takes `rect`, `path`, `line` or `polyline`; every other mark takes `rect` |
+| geometry | `path`: `d`, absolute M, L, H, V, C, Q and Z commands only; `line`: `x1`, `y1`, `x2`, `y2`; `polyline`: `points`, two or more `[x, y]` pairs; `rect`: `x`, `y`, `w`, `h` and optional `rx` (0 to 40); `circle` and `diamond`: `cx`, `cy`, `r`; `cross`: `cx`, `cy`, `size` |
+| parts | `head`, `open` (an open head) and `square` (a square end) take `start`, `end` or `both` on a line shape; `cap: "end"` closes a `rect` bar; `cross` is `true` or `{ cx, cy, size }`; `tick: true` sits inside a `circle` |
+| draw: decoration | `deco` (rule, axis or tick) with a `path`, `line`, `polyline` or `rect` shape and its geometry |
+| draw: text | `text`, `x`, `y`, optional `anchor` (start, middle or end), `style` (strong, mute, head or mono, or a list of them) and `for`, the mark ids it labels |
+| `twin` | `"facts"` for a table of the facts, or `{ columns, rows }` with 1 to 8 columns and 1 to 64 rows (rule 12); backticks mark code in a cell |
+| `source`, `layout` | `source` is `{ path, select }` into a committed JSON file, derived binding only, and a derived figure draws from a `layout`. A layout replaces `wide` and the narrow `width`, `height` and `draw`; the module composes both. `extent` takes `max`, optional `unit`, 1 to 16 `rows` of `{ label, value, state }` and optional `limits` of the same shape, where `value` is a number or, derived only, a selector into the source; `coverage` takes 1 to 8 `columns` and 1 to 16 `rows` of `{ label, cells }`, one state name per column |
 
 Coordinates are user units; the frame scales them. The module refuses an
 unknown key, an undeclared state, a declared state it never draws and a
