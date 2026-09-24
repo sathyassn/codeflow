@@ -40,6 +40,7 @@ still represents the same conceptual item.
 
 | Information shape | Block | Use it for |
 |---|---|---|
+| a relationship the reader must see | `figure` | the default primary carrier: a figure-grammar declaration in one of the nine families, drawn by the runtime with its legend, caption and table twin |
 | connected explanation | `narrative` | short Markdown passages that need continuity |
 | enumerable points | `bullets` | steps, findings, criteria, or concise options |
 | exceptional emphasis | `callout` | one material note, risk, success, warning, or danger |
@@ -49,16 +50,17 @@ still represents the same conceptual item.
 | verification state | `status` | pass, fail, pending, or not-run evidence |
 | source text | `code` / `diff` | inspectable code or a unified change |
 | hierarchy | `tree` | ownership, composition, or repository structure |
-| supporting relationship or sequence | `diagram` | Mermaid flow, sequence, timeline, state, class, ER, or mind map — a quick supporting form, not the primary carrier when the claim needs a true stage |
+| supporting relationship or sequence | `diagram` | Mermaid flow, sequence, timeline, state, class, ER, or mind map: a quick supporting form, never the primary carrier when the claim needs a figure |
 | actual visual/audio evidence | `media` | bounded embedded PNG/JPEG/GIF/WebP/MP4/WebM/MP3/Ogg |
 | secondary depth | `disclosure` | detail that should not dominate the first read |
 | true peer views | `tabs` | one-at-a-time alternatives sharing the same context |
 | requested response | `feedback_prompt` | the exact question or review decision sought |
-| subject-led stage or exceptional static layout | `html` | bounded inert HTML/SVG — the authored primary stage (utility tokens, labeled nodes, named edges) or a static layout standard blocks cannot express |
+| flow interim or exceptional static layout | `html` | bounded inert HTML/SVG: a labeled flow stage (the flow family's interim form) or a static layout standard blocks cannot express |
 
 Do not add a block category merely for variety. Repeat a block when the
 information warrants it, but consolidate fragments that form one thought. A
-diagram needs `acc_title` and `acc_description`; media needs meaningful `alt`.
+figure needs its caption, facts and twin; a diagram needs `acc_title` and
+`acc_description`; media needs meaningful `alt`.
 Colour is never the only carrier of state. Keep the first reading path complete
 without opening disclosures or switching tabs.
 
@@ -67,7 +69,7 @@ ordinary chat and choose one primary carrier for it. A successful first view
 lets the reader perceive the governing relationship before reading supporting
 paragraphs. A sequence of headings, prose, status pills, and text cards is still
 an illustrated document—not a visual explanation—when their geometry encodes
-nothing. Use diagrams, trees, tables, diffs, media, or a justified bounded HTML
+nothing. Use figures, trees, tables, diffs, media, or a justified bounded HTML
 composition only when their position, connection, scale, state, or actual image
 carries meaning. If removing the sentences leaves no useful relationship, the
 surface has not earned its visual claim.
@@ -134,6 +136,22 @@ as shape (carrier first)—not a narrative-only bar.
 }
 ```
 
+### Figure
+
+```json
+{"type":"figure","id":"change-states","declaration":{"schema_version":1,"figure":{"id":"change-states","family":"state","binding":"authored","title":"...","caption":"...","states":[],"facts":[],"wide":{},"narrow":{},"twin":"facts"}}}
+```
+
+`declaration` is a figure declaration exactly as `figure-grammar.md` section 6
+defines it, the same file the docs portal binds; the elided fields are filled
+as the specimens in `figure-grammar-specimens.md` show. The service checks the
+envelope (schema version, a family from the nine, the authored binding, a
+title and a caption, at most 64 KiB); the runtime validates the rest with the
+grammar module before it draws and shows the refusal in place of the figure.
+Present draws authored figures only, and it draws each fact as declared: only
+the portal re-derives facts from their sources, so cite sources a reviewer
+can check. Figures share the diagram budget of 24 drawn blocks.
+
 ### Progressive depth
 
 `disclosure.blocks` and each `tabs[].blocks` use the same block catalog. Nest
@@ -143,18 +161,17 @@ side by side.
 
 ### Sandboxed HTML
 
-`html` has two sanctioned uses: the **authored primary stage** — a subject-led
-SVG/HTML composition drawn with utility tokens (`var(--cf-…)`), labeled nodes,
-and named edges, when the governing claim needs true geometry (the example
-JSON's first block) — and an exceptional static layout the standard catalog
-cannot express. Interactive HTML stays in the document for annotation; the
+`html` has two sanctioned uses: a **labeled flow stage**, the flow family's
+interim form until a flow figure passes the rules (utility tokens
+`var(--cf-…)`, labeled nodes, named edges; the example JSON's first block), and
+an exceptional static layout the standard catalog cannot express. Interactive HTML stays in the document for annotation; the
 runtime scopes authored style selectors and contains its layout/paint so it
 cannot style or overlay review controls. Scripts, forms, navigation, network
 loads, reserved runtime identities, and top-layer controls are prohibited.
 Offline exports additionally place authored HTML in a sandboxed frame.
 Never use it as a component SDK, a way around the schema, or a
 place for product runtime code. Prefer a standard block over equivalent custom
-HTML, and never make Mermaid/ASCII stand in for a stage the claim deserves.
+HTML, and never make Mermaid/ASCII stand in for a figure the claim deserves.
 
 ## Language and review quality
 

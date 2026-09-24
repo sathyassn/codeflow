@@ -160,40 +160,55 @@ Named anti-patterns, each observed on that board and each now a rule:
 
 ## 6. Figure declaration
 
-Every figure carries a declaration. It is the contract the runtime draws from
-in the derived binding, and the contract the verifier checks in both bindings.
-ADR-0068 records the schema; this is the field reference.
+Every figure carries a declaration: one JSON file the grammar module draws
+from and the gate checks. The docs portal binds the file to a page in
+`portal.config.json`; a present `figure` block carries the same object in its
+`declaration` field. ADR-0068 records the schema; this is the field reference,
+and `figure-grammar-specimens.md` shows one complete file per family.
 
-```yaml
-figure:
-  id: landing-paths            # stable kebab-case id, unique on the page
-  family: flow                 # one of the nine family names
-  binding: authored            # authored: SVG supplied; derived: drawn from source
-  question: "How does a change reach main, and what stops it?"
-  idea: "Both landing paths end at a human merge behind green checks."
-  caption: "One task lands as a pull request; a body of work lands task by task on an integration branch."
-  states:                      # every drawn state, in legend order
-    - name: done               # the data-state value and legend key
-      means: "travel completed"
-      channels: [width, dash]  # two non-hue channels from rule 3
-  facts:                       # every fact the figure asserts (rule 6)
-    - claim: "two landing paths"
-      source: "AGENTS.md#git-rules"
-      derive: "count the paths named under 'Work lands by exactly two paths'"
-  narrow:                      # rule 5
-    recompose: rotate          # rotate | stack | strip | list
-    drops: []                  # states not drawn at narrow, keyed out of the legend
-    marks: same                # same, or the narrow mark names
-    elongation_max: 1.5        # optional; above the default only with `reason`
-  twin: inline                 # inline table below the figure, or derived from facts
-  source:                      # derived binding only
-    path: ".codeflow/policy.json"
-    select: "git.protected_branches"
+```json
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "change-states",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state is a change in, and what is the only way out of a red check?",
+    "idea": "The only route out of a red check returns to editing.",
+    "title": "States of a change and the one route out of a red check",
+    "kicker": "Change states",
+    "caption": "A red check sends the change back to editing, and no route leads from red to merged.",
+    "states": [{ "name": "return", "mark": "return", "means": "The only route out of red" }],
+    "facts": [{
+      "claim": "a red check returns to editing",
+      "source": "AGENTS.md#git-rules",
+      "derive": "the sentence beginning 'When a gate blocks you, fix the cause'",
+      "check": { "kind": "contains", "text": "When a gate blocks you, fix the cause" },
+      "value": true
+    }],
+    "wide": { "width": 640, "height": 220, "draw": [{ "state": "return", "shape": "path", "d": "M 40 120 C 200 200 440 200 600 120", "head": "end" }] },
+    "narrow": { "recompose": "stack", "drops": [], "marks": "same", "width": 360, "height": 300, "draw": [{ "state": "return", "shape": "path", "d": "M 40 60 C 120 260 240 260 320 60", "head": "end" }] },
+    "twin": { "columns": ["From", "To", "On"], "rows": [["checks red", "editing", "fix the cause"]] }
+  }
+}
 ```
 
-`facts` and `states` are required in both bindings. `source` is required in the
-derived binding and forbidden in the authored one. The description is generated
-from `idea`, `states` and `facts` unless the figure supplies its own.
+| Field | Rule |
+|---|---|
+| `id`, `family`, `binding` | kebab-case id unique on the page; one of the nine families; `authored` or `derived` |
+| `question`, `idea`, `title`, `caption`, `kicker` | plain text, no em or en dash; the caption is one sentence ending in a full stop and never repeats the title (rule 9); `kicker` is optional |
+| `description` | optional; generated from the title, states and facts when absent (rule 11) |
+| `states` | every drawn state in legend order: `name` (the `data-state` value), `mark` from the vocabulary in section 4, `means` (the legend text) |
+| `facts` | every fact the figure asserts (rule 6): `source` is a repository path with an optional `#anchor` naming a heading; `check.kind` is `contains` (the anchored section holds `check.text`; `value` is `true`), `count-items` (`value` is the number of list items under the anchor) or `json` (`check.select` is a dotted path into a JSON file; `value` is what it holds) |
+| `wide`, `narrow` | each composition's `width`, `height` and `draw` list; a draw item is one state mark (`state`, `shape` and its geometry), one decoration (`deco`: rule, axis or tick) or one text (`text`, `x`, `y`, and `for` naming the mark ids it labels); `narrow` also declares `recompose` (rotate, stack, strip or list), `drops` and `marks` (rule 5) |
+| `twin` | `"facts"` for a table of the facts, or `{ columns, rows }` (rule 12) |
+| `source`, `layout` | derived binding only: `source` is `{ path, select }` into a committed JSON file, and `layout` (extent or coverage) replaces `wide` and `narrow` with rows whose values are selectors into that source |
+
+Coordinates are user units; the frame scales them. The module refuses an
+unknown key, an undeclared state, a declared state it never draws and a
+narrow composition that drops a state it does not declare. The portal
+re-derives every fact from its source at build time and fails a figure whose
+drawn value differs; present draws facts as declared.
 
 ## 7. Chat form
 

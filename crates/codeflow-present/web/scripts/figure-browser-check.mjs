@@ -4,7 +4,8 @@
 // own probe reads the result in light and dark at 1280 and 390 px. The rule
 // outcomes must equal the portal's specimen table, so a specimen renders the
 // same in present as in the portal. A declaration the grammar refuses shows
-// its reason in place of the figure.
+// its reason in place of the figure. The grammar's field reference example
+// must validate and derive its fact.
 //
 // Usage: node scripts/figure-browser-check.mjs [--screenshots <dir>]
 import { execFileSync } from "node:child_process";
@@ -13,7 +14,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
-import { canonicalJson, figureRuleFailures, probeFigures, THRESHOLDS } from "../src/figure-grammar.mjs";
+import { canonicalJson, checkFacts, figureRuleFailures, probeFigures, renderFigure, THRESHOLDS, validateDeclaration } from "../src/figure-grammar.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
@@ -37,6 +38,7 @@ const EXPECTED = {
 };
 
 await access(codeflow);
+await checkReferenceExample();
 const root = await mkdtemp(join(tmpdir(), "cf-present-figures-"));
 const project = join(root, "project");
 const environment = {
@@ -138,6 +140,22 @@ async function closeSession(id) {
       await new Promise((resolve) => setTimeout(resolve, 250));
     }
   }
+}
+
+// The field reference in figure-grammar.md section 6 shows one declaration.
+// It must validate, draw and derive its fact, so the documentation cannot
+// drift from the module it documents.
+async function checkReferenceExample() {
+  const grammar = await readFile(join(repoRoot, "assets/base/agents/skills/cf-present/resources/figure-grammar.md"), "utf8");
+  const section = grammar.slice(grammar.indexOf("## 6. Figure declaration"));
+  const example = section.match(/```json\n([\s\S]*?)\n```/u)?.[1];
+  if (example === undefined) throw new Error("figure-grammar.md section 6 has no JSON example");
+  const declaration = JSON.parse(example);
+  validateDeclaration(declaration, "figure-grammar.md section 6 example");
+  renderFigure(declaration);
+  const agents = await readFile(join(repoRoot, "AGENTS.md"), "utf8");
+  const facts = checkFacts(declaration.figure, (path) => (path === "AGENTS.md" ? agents : null));
+  if (!facts.every((fact) => fact.matches)) throw new Error(`figure-grammar.md section 6 example facts do not derive: ${JSON.stringify(facts)}`);
 }
 
 async function findBrowser() {
