@@ -220,11 +220,13 @@ pub enum MessageSource {
     Committed,
 }
 
-/// The lines of a pending commit message that Git is certain to drop, so the
-/// live hook can scan everything else. It removes only what the hook can see
-/// Git will remove: comment lines under a strip cleanup, and everything from
-/// Git's own verbose or scissors cut signature down. Anything uncertain is
-/// scanned; `codeflow ci` scans the stored message and stays the authority.
+/// The live hook's best-effort model of Git's commit-message cleanup, for
+/// early feedback. From config and environment it infers whether Git strips
+/// comment lines, and it treats Git's full cut signature as the start of a
+/// verbose or scissors preview. Both are inferences: a command-line cleanup
+/// override can make the stripping wrong, and a message that carries the
+/// signature as content is cut although Git keeps the text below it.
+/// `codeflow ci` scans the stored message and stays the authority.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct GitCleanup {
     /// The exact comment prefix, `None` when Git picks one per process
@@ -237,9 +239,10 @@ pub struct GitCleanup {
 /// The lines `wt_status_append_cut_line` writes (Git 2.53.0 `wt-status.c`
 /// lines 1117 to 1123): the `cut_line` constant (line 42), then the
 /// explanation, each line as the comment prefix, one space, the text. Git
-/// writes them only for a verbose or scissors session, and truncates there.
-/// The explanation is translated under a non-English locale, where this
-/// match fails and the preview is scanned.
+/// writes them for a verbose or scissors session, which truncates there; the
+/// hook takes a match as that case, a heuristic that a message holding the
+/// same lines as content also triggers. The explanation is translated under
+/// a non-English locale, where this match fails and the preview is scanned.
 const CUT_SIGNATURE: [&str; 3] = [
     "------------------------ >8 ------------------------",
     "Do not modify or remove the line above.",
@@ -247,7 +250,8 @@ const CUT_SIGNATURE: [&str; 3] = [
 ];
 
 impl GitCleanup {
-    /// Resolve what Git will drop. `mode` is the raw `commit.cleanup` value;
+    /// Infer the cleanup from config and environment. `mode` is the raw
+    /// `commit.cleanup` value;
     /// `editor_used` is false when Git told the hook no editor runs
     /// (`GIT_EDITOR=:`); `comment` is the raw value of the last
     /// `core.commentChar` or `core.commentString` setting, `None` when unset.
@@ -255,7 +259,8 @@ impl GitCleanup {
     /// Git strips comments for `strip`, and for the default mode only with an
     /// editor (Git 2.53.0 `sequencer.c` `get_cleanup_mode`). Values are used
     /// byte for byte, as Git uses them; `auto` (any case) leaves the prefix
-    /// unknown. A command-line `--cleanup` is not visible to the hook.
+    /// unknown. A command-line `--cleanup` is not visible to the hook and
+    /// can make the inferred stripping wrong, with or without an editor.
     #[must_use]
     pub fn resolve(mode: Option<&str>, editor_used: bool, comment: Option<&str>) -> Self {
         let comment = match comment {

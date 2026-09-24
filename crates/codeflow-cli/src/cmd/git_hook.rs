@@ -292,13 +292,15 @@ fn commit_msg(
     ))
 }
 
-/// What Git will certainly drop from the commit-msg hook's message file.
+/// The hook's best-effort inference of Git's cleanup of the commit-msg
+/// message file, for early feedback only.
 /// Git runs the hook before its cleanup and exports `GIT_EDITOR=:` to it when
 /// no editor runs (`-m`, `-F`, `--no-edit`), which keeps `#` lines by
 /// default. `commit.cleanup` and the comment prefix come from Git's effective
 /// config, `git -c` included, read byte for byte. A command-line `--cleanup`,
-/// `-v` or `--no-verbose` is not visible to a hook, so it infers nothing from
-/// them; `codeflow ci` scans the stored message and stays the authority.
+/// `-v` or `--no-verbose` is not visible to a hook, so the inference can be
+/// wrong in either direction; `codeflow ci` scans the stored message and
+/// stays the authority.
 fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
     let editor_used = std::env::var_os("GIT_EDITOR").is_none_or(|e| e != ":");
     let mode = git_config_values(root, &["--get", "commit.cleanup"]).pop();

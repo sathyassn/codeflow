@@ -9,10 +9,11 @@ defects. Its second round accepted six of the fixes on
 `fix/epc017-codex-review`, found one still open in the live commit-msg hook,
 and found one new defect in the binary-file check. Its third round accepted
 the binary-file fix and found two more gaps in the live hook. Fixes for those
-are on the same branch and await a Codex recheck. The full gate on that branch's final
-head, with the tested commit, is recorded in the body of the pull request
-that lands it, and the pull request to `main` repeats it for the head that
-ships.
+are on the same branch and await a Codex recheck. The body of the pull
+request that lands that branch carries the final-head gate artifact: the
+tested commit SHA, the commands run, the base and head range, and whether a
+pull request body was supplied to `codeflow ci`. The pull request to `main`
+repeats it for the head that ships.
 
 ```text
 TSK-066 written content policy  (#521) --+
@@ -137,13 +138,16 @@ later removes, and Git exports `GIT_EDITOR=:` to the hook when no editor
 runs (`-m`, `-F`, `--amend --no-edit`, `git merge --no-edit`).
 
 Round two tried to predict Git's cleanup, and round three found two places
-where the prediction dropped text Git keeps. The hook now drops only text
-Git is certain to remove and scans everything else:
+where the prediction dropped text Git keeps. The hook is early feedback,
+not a copy of Git's cleanup. It infers comment stripping from config and
+environment, and it uses a heuristic for the verbose preview: the full
+three-line cut signature Git writes where it truncates. Everything else is
+scanned.
 
 | Text in the message file | Hook drops it when |
 |---|---|
-| A line starting with the exact comment prefix | cleanup is `strip`, or the default mode with an editor |
-| Git's cut line followed by its two instruction lines, and all below | always; Git writes this only where it truncates |
+| A line starting with the exact comment prefix | config and environment point to `strip` cleanup: `commit.cleanup=strip`, or the default mode with an editor |
+| Git's cut line followed by its two instruction lines, and all below | the full signature matches in the configured prefix; a heuristic, since a message can carry the same lines as content |
 | Anything else, including a bare cut line | never |
 
 With the default `#` prefix, Git's cleanup keeps comment lines here:
@@ -176,17 +180,23 @@ control with a verbose diff preview.
 What the hook cannot know, and how it errs:
 
 - A command-line `--cleanup`, `-v` or `--no-verbose` is invisible to a hook.
-  The hook reads only the environment and config.
-- Where Git's behaviour cannot be observed, the hook scans more, not less:
-  `-m --cleanup=strip`, `-v -m` or `commit.verbose` on a commit whose cut line
-  Git removes, `commentChar=auto`, and a verbose preview under a non-English
-  locale, where Git translates the instruction lines.
-- It can scan less than Git keeps in two cases: an editor session with a
-  command-line `--cleanup` of verbatim, whitespace or scissors, and a message
-  that itself carries Git's full cut signature without a verbose or scissors
-  cleanup.
-- The stored-message check in `codeflow ci` scans every byte Git recorded.
-  It stays required and is the authority; the hook gives early feedback.
+  The hook reads only the environment and config, so an unseen cleanup
+  override can make its inferred stripping wrong, with or without an editor.
+- It can scan more than Git keeps: `-m --cleanup=strip`, `-v -m` or
+  `commit.verbose` on a commit whose cut line Git removes, `commentChar=auto`,
+  and a verbose preview under a non-English locale, where Git translates the
+  instruction lines.
+- It can scan less than Git keeps in two cases:
+  - A command-line `--cleanup` of verbatim, whitespace or scissors while
+    config or the default points to stripping, in an editor session or not.
+    For example, with `commit.cleanup=strip`, `git commit --cleanup=verbatim
+    -m` keeps a `#` line holding an em dash that the hook drops.
+  - A message that itself carries Git's full cut signature, committed
+    without a verbose or scissors cleanup: Git keeps the text below it, and
+    the hook does not scan it.
+- The stored-message check in `codeflow ci` scans every byte Git recorded,
+  so it catches both cases. It stays required and is the authority; the hook
+  gives early feedback only.
 
 **N1, quoted names.** The binary check now reads each patch's new-side blob
 id from its `index` line (`--full-index`) instead of looking up a path, and a
