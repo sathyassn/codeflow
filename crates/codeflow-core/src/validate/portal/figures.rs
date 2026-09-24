@@ -972,8 +972,9 @@ fn verify_page_class(
 /// binding exactly once, compared as parsed HTML. On an explanatory page each
 /// sits under its declared panel heading. Figure or companion markup anywhere
 /// else fails, however it is spelled; a comment renders nothing and text that
-/// names a kit class is not markup. The page content carries no CSS: only the
-/// site's own built sheets may style what a reader sees.
+/// names a kit class is not markup. The page content carries no CSS and no
+/// executable content: only the site's own built sheets and runtime may style
+/// or script what a reader sees.
 fn verify_rendered_figures(
     page: &Page,
     output: &str,
@@ -1039,6 +1040,34 @@ fn verify_rendered_figures(
         let kinds: Vec<&str> = rendered.css.iter().map(String::as_str).collect();
         report.issues.push(format!(
             "{route} renders page CSS, which only the site's own sheets may carry: {}",
+            kinds.join(", ")
+        ));
+    }
+    if !rendered.active.is_empty() {
+        let kinds: Vec<&str> = rendered.active.iter().map(String::as_str).collect();
+        report.issues.push(format!(
+            "{route} renders executable content, which only the site's runtime may carry: {}",
+            kinds.join(", ")
+        ));
+    }
+}
+
+/// A built page, read before a browser consumes its templates: its content
+/// region carries no CSS or executable content, and the rest of the page
+/// carries none of what the runtime never emits.
+pub(super) fn verify_built_page(path: &str, html: &str, report: &mut PortalValidationReport) {
+    let found = dom::built_page_carriers(html);
+    if !found.content.is_empty() {
+        let kinds: Vec<&str> = found.content.iter().map(String::as_str).collect();
+        report.issues.push(format!(
+            "built page {path} carries CSS or executable content in its content: {}",
+            kinds.join(", ")
+        ));
+    }
+    if !found.page.is_empty() {
+        let kinds: Vec<&str> = found.page.iter().map(String::as_str).collect();
+        report.issues.push(format!(
+            "built page {path} carries what the site's runtime never emits: {}",
             kinds.join(", ")
         ));
     }
@@ -2034,12 +2063,76 @@ mod tests {
             ("## Concept\n\nText <span style=\"opacity:0\">inline</span>.\n", "a style attribute on <span>"),
             ("## Concept\n\n<link rel=\"stylesheet\" href=\"/x.css\">\n", "a <link> element"),
             ("## Concept\n\n<svg><style>.cf-fig{opacity:0}</style></svg>\n", "a <style> element"),
-            ("## Concept\n\n<div><template shadowrootmode=\"open\"><style>p{}</style></template></div>\n", "a declarative shadow root"),
+            ("## Concept\n\n<div><template shadowrootmode=\"open\"><style>p{}</style></template></div>\n", "a <style> element"),
         ] {
             assert!(dom::rendered_figures(page).css.contains(kind), "{page}");
         }
-        let inert = "<!-- codeflow-source-begin route=r source_sha256=x class=illustrated -->\n\n<style>.cf-fig{opacity:0}</style>\n\n<!-- codeflow-source-end -->\n";
+        let inert = "<!-- codeflow-source-begin route=r source_sha256=x class=illustrated -->\n\n<style>.cf-fig{opacity:0}</style>\n\n<script>alert(1)</script>\n\n<!-- codeflow-source-end -->\n";
         assert!(dom::rendered_figures(inert).css.is_empty());
+        assert!(dom::rendered_figures(inert).active.is_empty());
+        // Nor executable content (R5-1, R5-2): the review's CSSOM insertion,
+        // handlers, script URLs however spelled, frames and shadow roots of
+        // either mode. The clean page carries none.
+        assert!(dom::rendered_figures(&clean).active.is_empty());
+        for (page, kind) in [
+            ("## Concept\n\n<script>\ndocument.styleSheets[0].insertRule(\".cf-fig {opacity:0}\", document.styleSheets[0].cssRules.length);\n</script>\n", "a <script> element"),
+            ("## Concept\n\n<svg><script>void 0</script></svg>\n", "a <script> element"),
+            ("## Concept\n\n<img src=\"x.png\" onerror=\"void 0\">\n", "an event-handler attribute on <img>"),
+            ("## Concept\n\nText <span ONMOUSEOVER=\"void 0\">here</span>.\n", "an event-handler attribute on <span>"),
+            ("## Concept\n\n<a href=\" java\tscript:void(0)\">x</a>\n", "a script URL on <a>"),
+            ("## Concept\n\n<svg><a xlink:href=\"JavaScript:void(0)\"><text>x</text></a></svg>\n", "a script URL on <a>"),
+            ("## Concept\n\n<svg><a><set attributeName=\"href\" to=\"javascript:void(0)\"/></a></svg>\n", "a script URL on <set>"),
+            ("## Concept\n\n<iframe srcdoc=\"x\"></iframe>\n", "an <iframe> element"),
+            ("## Concept\n\n<object data=\"x.svg\"></object>\n", "an <object> element"),
+            ("## Concept\n\n<embed src=\"x.svg\">\n", "an <embed> element"),
+            ("## Concept\n\n<div><template shadowrootmode=\"closed\"><style>:host{opacity:0}</style>Shadow</template></div>\n", "a declarative shadow root"),
+            ("## Concept\n\n<div><template shadowrootmode=\"open\"><style>:host{opacity:0}</style>Shadow</template></div>\n", "a declarative shadow root"),
+        ] {
+            assert!(dom::rendered_figures(page).active.contains(kind), "{page}");
+        }
+        // A plain link, and text that mentions a script URL, run nothing.
+        assert!(dom::rendered_figures("## Concept\n\n<a href=\"/guide/\" title=\"javascript: tips\">guide</a> about javascript: URLs\n").active.is_empty());
+    }
+
+    /// A built page is read before a browser consumes its templates (R5-2).
+    /// The runtime's head scripts and its icon template are allowed; its
+    /// content region carries nothing, and nothing anywhere carries a shadow
+    /// root, a handler or a frame.
+    #[test]
+    fn built_pages_carry_only_what_the_runtime_emits() {
+        let page = |content: &str, chrome: &str| {
+            format!("<!doctype html><html><head><script>(function(){{}})();</script><script type=\"module\" src=\"/_astro/page.js\"></script></head><body><template id=\"theme-icons\"><svg></svg></template><nav style=\"--depth: 0;\">{chrome}</nav><main><div class=\"sl-markdown-content\"><p>Text.</p>{content}</div></main></body></html>")
+        };
+        let clean = dom::built_page_carriers(&page("", ""));
+        assert!(
+            clean.content.is_empty() && clean.page.is_empty(),
+            "{:?} {:?}",
+            clean.content,
+            clean.page
+        );
+        let closed = "<div><template shadowrootmode=\"closed\"><style>:host{opacity:0}</style>Shadow</template></div>";
+        let open = closed.replace("closed", "open");
+        for shadow in [closed.to_string(), open] {
+            assert!(dom::built_page_carriers(&page(&shadow, ""))
+                .content
+                .contains("a declarative shadow root"));
+            assert!(dom::built_page_carriers(&page("", &shadow))
+                .page
+                .contains("a declarative shadow root"));
+        }
+        let script = dom::built_page_carriers(&page(
+            "<script>document.styleSheets[0].insertRule(\".cf-fig{opacity:0}\")</script>",
+            "",
+        ));
+        assert!(script.content.contains("a <script> element"));
+        let styled = dom::built_page_carriers(&page("<p style=\"opacity:0\">x</p>", ""));
+        assert!(styled.content.contains("a style attribute on <p>"));
+        let handler = dom::built_page_carriers(&page("", "<button onclick=\"void 0\">x</button>"));
+        assert!(handler
+            .page
+            .contains("an event-handler attribute on <button>"));
+        let style = dom::built_page_carriers(&page("", "<style>.cf-fig{opacity:0}</style>"));
+        assert!(style.page.contains("a <style> element"));
     }
 
     #[test]

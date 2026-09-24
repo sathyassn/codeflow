@@ -5,10 +5,14 @@
 //! references, attribute quoting and comments mean what they mean to a
 //! browser. Every element that carries figure or companion markup is then
 //! either inside a companion, which the caller compares with its
-//! reconstruction, or counted as stray. Page content carries no CSS at all:
-//! a style element, a stylesheet link, a style attribute or a declarative
-//! shadow root anywhere in it is recorded, so only the site's own built
-//! sheets can style a page.
+//! reconstruction, or counted as stray. Page content carries no CSS and no
+//! executable content at all: a style element, a stylesheet link, a style
+//! attribute, a script, an event handler, a `javascript:` URL, a frame or
+//! embedded object, or a declarative shadow root anywhere in it is recorded,
+//! so only the site's own built sheets and runtime can style or script a page.
+//! A built page is read the same way before a browser consumes any template:
+//! its content region carries none of these, and the rest of the page carries
+//! no style element, event handler, `javascript:` URL, frame or shadow root.
 
 use pulldown_cmark::{html, CowStr, Event, Parser, Tag, TagEnd};
 use scraper::{ElementRef, Html, Node};
@@ -23,6 +27,44 @@ pub(super) struct RenderedFigures {
     pub stray: usize,
     /// The kinds of CSS the rendered content carries, each named once.
     pub css: std::collections::BTreeSet<String>,
+    /// The kinds of executable content the rendered content carries.
+    pub active: std::collections::BTreeSet<String>,
+}
+
+/// What a built page carries that only the runtime may: in its content
+/// region, any CSS or executable content; anywhere, the carriers the runtime
+/// never emits.
+#[derive(Default)]
+pub(super) struct BuiltCarriers {
+    pub content: std::collections::BTreeSet<String>,
+    pub page: std::collections::BTreeSet<String>,
+}
+
+pub(super) fn built_page_carriers(html: &str) -> BuiltCarriers {
+    let document = Html::parse_document(html);
+    let mut found = BuiltCarriers::default();
+    for element in document
+        .root_element()
+        .descendants()
+        .filter_map(ElementRef::wrap)
+    {
+        let in_content = element
+            .ancestors()
+            .filter_map(ElementRef::wrap)
+            .any(|ancestor| has_class(ancestor, |class| class == "sl-markdown-content"));
+        if in_content {
+            found.content.extend(css_carrier(element));
+            found.content.extend(active_carrier(element));
+        } else {
+            if element.value().name() == "style" {
+                found.page.insert("a <style> element".to_string());
+            }
+            if element.value().name() != "script" {
+                found.page.extend(active_carrier(element));
+            }
+        }
+    }
+    found
 }
 
 pub(super) fn rendered_figures(markdown: &str) -> RenderedFigures {
@@ -31,6 +73,7 @@ pub(super) fn rendered_figures(markdown: &str) -> RenderedFigures {
         companions: Vec::new(),
         stray: 0,
         css: std::collections::BTreeSet::new(),
+        active: std::collections::BTreeSet::new(),
     };
     let mut heading = None;
     walk(document.root_element(), &mut heading, &mut found);
@@ -42,30 +85,90 @@ pub(super) fn rendered_figures(markdown: &str) -> RenderedFigures {
         if let Some(kind) = css_carrier(element) {
             found.css.insert(kind);
         }
+        if let Some(kind) = active_carrier(element) {
+            found.active.insert(kind);
+        }
     }
     found
 }
 
 /// CSS in rendered content, in any namespace and inside template contents:
-/// a style element, a link element, a style attribute or a declarative shadow
-/// root, which could carry a style element of its own.
+/// a style element, a link element or a style attribute.
 fn css_carrier(element: ElementRef<'_>) -> Option<String> {
     let value = element.value();
     let name = value.name();
     match name {
         "style" => Some("a <style> element".to_string()),
         "link" => Some("a <link> element".to_string()),
+        _ => value
+            .attr("style")
+            .map(|_| format!("a style attribute on <{name}>")),
+    }
+}
+
+/// Executable content, in any namespace and inside template contents: a
+/// script, a frame or embedded object, a declarative shadow root (open or
+/// closed, which can carry styles and scripts of its own), an event-handler
+/// attribute, or a URL a browser would run as script.
+fn active_carrier(element: ElementRef<'_>) -> Option<String> {
+    let value = element.value();
+    let name = value.name();
+    match name {
+        "script" => return Some("a <script> element".to_string()),
+        "iframe" | "frame" | "frameset" | "object" | "embed" => {
+            return Some(format!("an <{name}> element"));
+        }
         "template"
             if value.attrs().any(|(attribute, _)| {
                 attribute == "shadowrootmode" || attribute == "shadowroot"
             }) =>
         {
-            Some("a declarative shadow root".to_string())
+            return Some("a declarative shadow root".to_string());
         }
-        _ => value
-            .attr("style")
-            .map(|_| format!("a style attribute on <{name}>")),
+        _ => {}
     }
+    for (attribute, text) in value.attrs() {
+        if attribute.len() > 2
+            && attribute
+                .get(..2)
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case("on"))
+        {
+            return Some(format!("an event-handler attribute on <{name}>"));
+        }
+        let url = matches!(
+            attribute,
+            "href"
+                | "src"
+                | "action"
+                | "formaction"
+                | "xlink:href"
+                | "data"
+                | "poster"
+                | "background"
+                | "srcdoc"
+        ) || (matches!(name, "animate" | "set")
+            && matches!(attribute, "to" | "from" | "by" | "values"));
+        if url && (attribute == "srcdoc" || runs_script(text)) {
+            return Some(format!("a script URL on <{name}>"));
+        }
+    }
+    None
+}
+
+/// A URL a browser runs as script: after the leading and trailing control
+/// characters and spaces it trims and the tabs and newlines it removes, the
+/// scheme is `javascript:` in any case. A list of values runs if any does.
+fn runs_script(text: &str) -> bool {
+    text.split(';').any(|part| {
+        let cleaned: String = part
+            .trim_matches(|c: char| c <= ' ')
+            .chars()
+            .filter(|c| !matches!(c, '\t' | '\n' | '\r'))
+            .collect();
+        cleaned
+            .get(..11)
+            .is_some_and(|scheme| scheme.eq_ignore_ascii_case("javascript:"))
+    })
 }
 
 /// The canonical form of the one element an HTML fragment holds, the form

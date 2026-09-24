@@ -1023,6 +1023,18 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         ) else {
             continue;
         };
+        if std::path::Path::new(&artifact.path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
+        {
+            match std::str::from_utf8(&bytes) {
+                Ok(html) => figures::verify_built_page(&artifact.path, html, &mut report),
+                Err(error) => report.issues.push(format!(
+                    "built HTML is not UTF-8 {}: {error}",
+                    artifact.path
+                )),
+            }
+        }
         if let Some(page) = page_by_artifact.get(&artifact.path) {
             let html = match std::str::from_utf8(&bytes) {
                 Ok(html) => html,
