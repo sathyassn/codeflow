@@ -1128,37 +1128,113 @@ def streams_shown(tokens: list[str]) -> bool:
     return True
 
 
-def executed_gh_calls(entry: dict) -> list[dict]:
-    """The gh stand-in runs that a traced command's own text executes.
+SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "for", "do",
+                  "done", "case", "esac", "!", "{", "}"}
+
+
+def gh_call(words: list[str], separator: str) -> dict | None:
+    """The stand-in run a simple command makes, if any.
 
     Naming the script as a file argument (``cat tools/gh.py``) is not a run.
     """
 
-    calls = []
-    for segment, separator in shell_pipeline(entry["command"]) or []:
-        start, word = command_word(segment)
-        script = None
-        if word == "gh.py":
-            script = start
-        elif re.fullmatch(r"python[0-9.]*", word):
-            index = start + 1
-            while index < len(segment) and segment[index].startswith("-"):
-                if segment[index] in {"-c", "-m"}:
-                    index = len(segment)
-                    break
-                index += 2 if segment[index] in {"-X", "-W"} else 1
-            if index < len(segment) and segment[index].rsplit("/", 1)[-1] == "gh.py":
-                script = index
-        if script is None:
-            continue
-        rest = segment[script + 1:]
-        argv = call_arguments(rest)
-        calls.append({
-            "argv": argv,
-            "exact": not any(c in token for token in argv for c in "$`*?["),
-            "shown": streams_shown(rest[len(argv):]) and separator not in {"|", "|&", "&"},
-        })
-    return calls
+    start, word = command_word(words)
+    script = None
+    if word == "gh.py":
+        script = start
+    elif re.fullmatch(r"python[0-9.]*", word):
+        index = start + 1
+        while index < len(words) and words[index].startswith("-"):
+            if words[index] in {"-c", "-m"}:
+                index = len(words)
+                break
+            index += 2 if words[index] in {"-X", "-W"} else 1
+        if index < len(words) and words[index].rsplit("/", 1)[-1] == "gh.py":
+            script = index
+    if script is None:
+        return None
+    rest = words[script + 1:]
+    argv = call_arguments(rest)
+    return {
+        "argv": argv,
+        "exact": not any(c in token for token in argv for c in "$`*?["),
+        "shown": streams_shown(rest[len(argv):]) and separator not in {"|", "|&", "&"},
+    }
+
+
+def command_steps(command: str) -> list[dict]:
+    """Simple commands in order, with the shell syntax that decides whether each runs."""
+
+    steps, connector = [], None
+    for tokens, separator in shell_pipeline(command) or []:
+        words, marks = list(tokens), []
+        while words and words[0] in SHELL_KEYWORDS:
+            marks.append(words.pop(0))
+        steps.append({"marks": marks, "connector": connector,
+                      "gh": gh_call(words, separator) if words else None,
+                      "empty": not words})
+        connector = separator if separator in {"&&", "||"} else None
+    return steps
+
+
+def all_known(values: list[bool | None]) -> bool | None:
+    """False when any is False, True when all are True, else unknown."""
+
+    if any(value is False for value in values):
+        return False
+    return True if all(value is True for value in values) else None
+
+
+class ShellFlow:
+    """Whether each step of one command ran, from exits the evidence shows.
+
+    Supports `&&`, `||` and `if`/`then`/`else`/`fi`; anything else, or a
+    guard whose exit is unknown, leaves a step's execution unknown.
+    """
+
+    def __init__(self) -> None:
+        self.status: int | None = None
+        self.frames: list[dict] = []
+        self.loops = 0
+
+    def enter(self, step: dict) -> bool | None:
+        for mark in step["marks"]:
+            if mark == "if":
+                self.frames.append({"branch": "condition", "status": None})
+            elif mark == "then" and self.frames:
+                self.frames[-1].update(branch="then", status=self.status)
+            elif mark == "else" and self.frames:
+                self.frames[-1]["branch"] = "else"
+            elif mark == "elif" and self.frames:
+                self.frames[-1]["branch"] = "unknown"
+            elif mark == "fi" and self.frames:
+                self.frames.pop()
+                self.status = None
+            elif mark in {"while", "until", "for", "case"}:
+                self.loops += 1
+            elif mark in {"done", "esac"}:
+                self.loops = max(0, self.loops - 1)
+            elif mark == "!":
+                step["negated"] = True
+        checks = [None if self.loops else True]
+        for frame in self.frames:
+            if frame["branch"] == "condition":
+                continue
+            if frame["branch"] == "unknown" or frame["status"] is None:
+                checks.append(None)
+            else:
+                checks.append((frame["status"] == 0) == (frame["branch"] == "then"))
+        connector = step["connector"]
+        if connector is not None:
+            checks.append(None if self.status is None
+                          else (self.status == 0) == (connector == "&&"))
+        return all_known(checks)
+
+    def leave(self, ran: bool | None, exit_status: int | None, step: dict) -> None:
+        if ran is False:
+            return
+        known = ran is True and exit_status is not None and not step.get("negated")
+        self.status = exit_status if known else None
 
 
 EVIDENCE_FIELDS = {
@@ -1238,7 +1314,12 @@ class Diverged(Exception):
 
 
 class ReplayFacts:
-    """Repository facts for the replay: those a run recorded, else the last known."""
+    """Repository facts for the replay: those a run recorded, else the last known.
+
+    Each recorded fact carries the query that produced it. The replay takes
+    a fact only when that query equals the one the replay itself asks; a
+    fact about another branch, head or check is a divergence.
+    """
 
     def __init__(self, recorded: list | None, known: dict, budget: int | None,
                  state: dict):
@@ -1246,23 +1327,23 @@ class ReplayFacts:
         self.known, self.budget, self.state = known, budget, state
         self.polls: list[str] = []
 
-    def take(self, kind: str, arity: int) -> list | None:
+    def take(self, kind: str, query: list, answers: int) -> list | None:
         if self.recorded is None:
             return None
-        if not self.recorded or self.recorded[0][:1] != [kind] or len(
-                self.recorded[0]) != arity + 1:
+        fact = self.recorded[0] if self.recorded else []
+        if fact[:1 + len(query)] != [kind, *query] or len(fact) != 1 + len(query) + answers:
             raise Diverged(kind)
-        return self.recorded.pop(0)[1:]
+        return self.recorded.pop(0)[1 + len(query):]
 
     def branch(self) -> str:
-        got = self.take("branch", 1)
+        got = self.take("branch", [], 1)
         if got is not None:
             self.known["branch"] = str(got[0])
         return self.known.get("branch") or self.state.get("head_branch") or ""
 
     def head(self, ref: str) -> str:
         heads = self.known.setdefault("heads", {})
-        got = self.take("head", 1)
+        got = self.take("head", [ref], 1)
         if got is not None:
             # Polls a hidden run made before this head was first seen count for it.
             earlier = self.state.get("heads", {}).pop("unknown:" + ref, None)
@@ -1273,19 +1354,15 @@ class ReplayFacts:
         return heads.get(ref, "unknown:" + ref)
 
     def merged(self, branch: str, base: str) -> bool:
-        got = self.take("merged", 1)
+        got = self.take("merged", [branch, base], 1)
         return bool(got[0]) if got is not None else False
 
     def tests(self, head: str, index: int, mode: str) -> tuple[bool, str]:
-        got = self.take("tests", 3)
-        if got is None:
-            return True, ""
-        if got[0] != index:
-            raise Diverged("tests")
-        return bool(got[1]), str(got[2])
+        got = self.take("tests", [head, index, mode], 2)
+        return (True, "") if got is None else (bool(got[0]), str(got[1]))
 
     def merge(self, branch: str, base: str, message: str) -> str | None:
-        got = self.take("merge", 1)
+        got = self.take("merge", [branch, base, message], 1)
         return got[0] if got is not None else "unknown"
 
     def polled(self, head: str, count: int) -> None:
@@ -1362,7 +1439,12 @@ def owning_entry(trace: list[dict], at: float) -> int | None:
 
 
 def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], list[str], list[str]]:
-    """Every gh run in time order: the ones the trace executes, then hinted ones."""
+    """Every gh run in time order: the ones the trace executes, then hinted ones.
+
+    A step runs when its own evidence appears, or when the shell must have
+    run it given the exits the evidence shows. A step that may not have run
+    and shows no evidence is a review note; the replay does not advance.
+    """
 
     findings, notes, runs, used = [], [], [], set()
     for group in groups.values():
@@ -1371,8 +1453,13 @@ def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], lis
         if entry["kind"] != "command":
             continue
         low, high = float(entry["at"]), float(entry["end"])
-        last = low
-        for call in executed_gh_calls(entry):
+        last, flow = low, ShellFlow()
+        for step in command_steps(entry["command"]):
+            ran = flow.enter(step)
+            call = step["gh"]
+            if call is None:
+                flow.leave(ran, None, step)
+                continue
             argv = call["argv"]
             prefix = argv if call["exact"] else argv[:next(
                 index for index, token in enumerate(argv)
@@ -1389,6 +1476,15 @@ def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], lis
                 runs.append({"argv": match["call"]["argv"], "group": match,
                              "entry": number, "window": (low, high), "at": last,
                              "shown": call["shown"]})
+                flow.leave(True, match.get("result", {}).get("exit"), step)
+                continue
+            flow.leave(ran, None, step)
+            if ran is False:
+                continue
+            if ran is None:
+                notes.append(f"gh call in trace entry {number} may not have run (shell "
+                             "control flow) and shows no evidence; review that command: "
+                             + " ".join(argv)[:60])
                 continue
             if call["shown"]:
                 what = "has no output" if "output" not in entry else "has no evidence"

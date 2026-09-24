@@ -209,7 +209,7 @@
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "d1f96f635fcdc5c13f936053e401bc88fce95f19abd059de26afd2a2472ff68a",
+      "sha256": "d964ea1a8b78803670a5ba1550d3f5a54396c6ba12dd8ae793fb9f17df05abcb",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -233,7 +233,7 @@
     ".agents/skills/cf-evaluate-model/resources/protocol.md": {
       "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
       "ownership": "managed",
-      "sha256": "cc9d112b54a9ec81eabc5eac4429099883f50dea8e8d14ebf48ed9c46839d280",
+      "sha256": "7a783e8e110c61f3b7f788b689b4b1221b9072400d6177e58b2eecf8f9950d28",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
@@ -251,7 +251,7 @@
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "4fa403236242846ae6f25662fbea4d70ce8c48ee7ac5cf35df92f95bf412de0b",
+      "sha256": "715690be399671feb62ce1161db332d7430238b9fde9a66311a14e7ca1ca2fab",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/fake_client.py": {
@@ -689,7 +689,7 @@
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "d1f96f635fcdc5c13f936053e401bc88fce95f19abd059de26afd2a2472ff68a",
+      "sha256": "d964ea1a8b78803670a5ba1550d3f5a54396c6ba12dd8ae793fb9f17df05abcb",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -713,7 +713,7 @@
     ".claude/skills/cf-evaluate-model/resources/protocol.md": {
       "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
       "ownership": "managed",
-      "sha256": "cc9d112b54a9ec81eabc5eac4429099883f50dea8e8d14ebf48ed9c46839d280",
+      "sha256": "7a783e8e110c61f3b7f788b689b4b1221b9072400d6177e58b2eecf8f9950d28",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
@@ -731,7 +731,7 @@
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "4fa403236242846ae6f25662fbea4d70ce8c48ee7ac5cf35df92f95bf412de0b",
+      "sha256": "715690be399671feb62ce1161db332d7430238b9fde9a66311a14e7ca1ca2fab",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/fake_client.py": {

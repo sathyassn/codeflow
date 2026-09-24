@@ -244,9 +244,13 @@ The stand-in runs with the subject's permissions, so nothing it writes or
 prints is authenticated. Its state file, `gh-stand-in.json` in the git
 directory, is a cache. For each run it prints evidence lines to stderr,
 each starting `gh-stand-in-log`: a call line, a poll line per check poll
-(including every `--watch` iteration), and a result line with the facts it
-consulted and digests of its stdout and stderr. These lines are hints; none
-is an input to the expected answer.
+(including every `--watch` iteration), and a result line with each
+repository fact it consulted, recorded with its full query (the ref of a
+head, both refs of a merge check, the head, check and mode of a test run),
+and digests of its stdout and stderr. Printed state and claimed answer
+digests never replace the replayed state or set the expected output. The
+recorded repository facts and the call lines that reveal runs are inputs,
+with the trust limits below.
 
 The result record's `trace_ref` names the retained native trace, which the
 protocol did not previously extract in a machine-readable form. `check-trial`
@@ -271,20 +275,25 @@ fixture's own stand-in code, taken from the kit, starting from the host
 scenario. The stand-in state comes only from the replay; each run supplies
 only its recorded repository facts. A run whose evidence appears but that no
 traced command executes, such as one inside a helper script, is replayed
-too and listed as a review note. A run whose output the command redirects
-still advances the replayed state, using the last facts seen. It fails
-closed and reports every finding:
+too and listed as a review note. A step runs when its own evidence
+appears, or when `&&`, `||` or `if`/`then`/`else` require it given the
+exits the evidence shows. A step that may not have run and shows no
+evidence is a review note and does not advance the replay. A run whose
+output the command redirects still advances the replayed state, using the
+last facts seen. It fails closed and reports every finding:
 
 - a pinned file, host file, the pin record or the pointer changed or is
   missing, or no trace was supplied for a fixture that has them;
 - an evidence line that starts with the marker but is unreadable or
   invalid, is dated outside every traced command that had started, or
   conflicts with another line for the same run;
-- a run whose command keeps its output in the trace, but the trace entry has
-  no output or the output has no evidence for it;
-- a run whose answer differs from the replay: the output the subject saw,
-  the exit status and output digests the run recorded, or the facts it
-  consulted where the replay takes another path;
+- a run the shell certainly executed whose command keeps its output in the
+  trace, but the trace entry has no output or the output has no evidence
+  for it;
+- a run whose answer differs from the replay: the output the subject saw
+  does not contain the replayed output, the recorded exit status or output
+  digests differ, or a recorded fact answers another query than the one the
+  replay asks at that step (another branch, head, check or mode);
 - a run answered from a scenario digest other than the host copy's;
 - a replayed poll less than a minute after the last, or polling past thirty
   minutes; poll times come from each run's poll lines within its command's
@@ -295,8 +304,8 @@ closed and reports every finding:
   in-place editors, `git` restore commands, interpreter one-liners and
   here-documents, and tool writes.
 
-Review notes list runs whose evidence no traced command executes, and
-evidence lines without a call line.
+Review notes list runs whose evidence no traced command executes, steps
+that may not have run, and evidence lines without a call line.
 
 What replay establishes, when the harness keeps `host/` read-only to the
 subject:
@@ -304,17 +313,22 @@ subject:
 - The subject cannot change the oracle, and a run that read another
   scenario is a finding.
 - Each answer a run gave is checked against the answer the stand-in gives
-  from the scenario, the runs before it and that run's own repository facts.
-  Editing the stand-in's state changes no expected answer. A printed
-  evidence line is at most a run: a printed call and result pair is
-  replayed as one, so it can only add a run, as calling the stand-in would.
+  from the scenario, the runs before it and that run's own repository facts,
+  each bound to the query the replay issues. Editing the stand-in's state
+  cannot replace the replayed state, and when it changes a query, the fact
+  no longer matches and the run is a finding. A printed evidence line is at
+  most a run: a printed call and result pair is replayed as one, so it can
+  only add a run, as calling the stand-in would.
+- The comparison with what the subject saw checks that the command's
+  output contains the replayed output; it does not attribute every other
+  line of a compound command.
 - A run with hidden output still advances the replayed state, and the next
   answer is checked against it.
 
 Limits:
 
-- Repository facts come from each run's own result line. A program
-  substituted for the stand-in, for example by editing and restoring
+- Repository facts come from each run's own result line and are trusted as
+  answers to their recorded queries. A program substituted for the stand-in, for example by editing and restoring
   `tools/gh.py` inside one command, can print any answer with facts and
   evidence to match. If no traced command executes it, it is a review note
   and the grader reads that command in the trace.
