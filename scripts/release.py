@@ -21,6 +21,13 @@ DEFAULT_CONFIG = ROOT / ".release/config.json"
 IMPACT_ORDER = {"none": 0, "patch": 1, "minor": 2, "major": 3}
 PLACEHOLDERS = {"", "n/a", "none", "todo", "tbd", "-"}
 CONTRACT_BREAKING = {"not-applicable": "no", "compatible": "no", "breaking": "yes"}
+# The PR template's Migration choice text; Impact and Breaking alternatives
+# already fail their value checks.
+UNRESOLVED_ALTERNATIVES = {
+    "none, steps, or see breaking change",
+    "none | steps | see breaking change",
+    "steps",
+}
 STABLE_TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
 IMPACT_MARKER = re.compile(
     r"<!--\s*codeflow:release-impact\s+(none|patch|minor|major)"
@@ -87,6 +94,20 @@ def is_placeholder(value: str) -> bool:
     return normalize_value(value).casefold() in PLACEHOLDERS
 
 
+def guidance_text(value: str) -> str:
+    """Casefolded text with Markdown quoting and repeated whitespace removed."""
+    return " ".join(re.sub(r"[`\"']", "", value).split()).casefold()
+
+
+def is_unresolved_alternative(value: str) -> bool:
+    """The PR template's choice text left in place instead of a chosen value."""
+    return guidance_text(value) in UNRESOLVED_ALTERNATIVES
+
+
+def lacks_migration_guidance(value: str) -> bool:
+    return is_placeholder(value) or not guidance_text(value) or is_unresolved_alternative(value)
+
+
 def parse_release_impact(body: str) -> dict[str, str]:
     sections = list(re.finditer(r"(?m)^## Release impact\s*$", body))
     if len(sections) != 1:
@@ -122,9 +143,11 @@ def parse_release_impact(body: str) -> dict[str, str]:
             fail("release impact field migration is required")
     else:
         fields["breaking"] = CONTRACT_BREAKING[fields["contract"]]
+    if "migration" in fields and is_unresolved_alternative(fields["migration"]):
+        fail("release impact field migration still holds the template alternatives")
     if (fields["breaking"] == "yes") != (fields["impact"] == "major"):
         fail("breaking must be yes if and only if impact is major")
-    if fields["breaking"] == "yes" and is_placeholder(fields.get("migration", "")):
+    if fields["breaking"] == "yes" and lacks_migration_guidance(fields.get("migration", "")):
         fail("a breaking change requires migration guidance")
     return fields
 
@@ -748,7 +771,7 @@ def check_pr(args: argparse.Namespace) -> None:
             f"declared impact {fields['impact']} must equal newly added changelog impact "
             f"{added_impact}"
         )
-    if added_impact == "major" and is_placeholder(fields.get("migration", "")):
+    if added_impact == "major" and lacks_migration_guidance(fields.get("migration", "")):
         fail("an added major entry requires migration guidance")
     if fields["impact"] != "none":
         if "CHANGELOG.md" not in paths or "changelog" not in fields["evidence"].casefold():
