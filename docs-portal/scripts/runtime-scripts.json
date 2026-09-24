@@ -1,0 +1,40 @@
+{
+  "schema_version": 1,
+  "regenerate": "npm run build && node scripts/runtime-scripts.mjs dist",
+  "lock_sha256": "ceaea3cf3a4b973559038ef140c819f5b813e2431bd873df761f5a060e47d7b2",
+  "pre_paint_template": "(function(){var t=__THEME__,d=document.documentElement,r=function(k,a){try{var v=localStorage.getItem(k);return a.indexOf(v)>=0?v:null}catch(e){return null}};d.dataset.portalTheme=t;d.dataset.cfpSkin=r(\"cf-portal-skin\",[\"instrument\",\"editorial\",\"ink\"])||(t===\"folio\"?\"ink\":\"instrument\");d.dataset.cfpTypeface=r(\"cf-portal-typeface\",[\"instrument\",\"editorial\",\"plex\"])||(t===\"folio\"?\"plex\":\"instrument\");d.dataset.cfpScale=r(\"cf-portal-scale\",[\"compact\",\"default\",\"large\"])||\"default\";})();",
+  "scripts": [
+    {
+      "sha256": "556a395a9e1aa928fa9d280ca5e029f5c2a279aa087f015402e9c056e808e600",
+      "starts": "window.StarlightThemeProvider = (() => {\n\t\tconst"
+    },
+    {
+      "sha256": "560ae070a06f20cdd7a622c9e9f12fd55cba60707094a2e462d15d7c1328b93a",
+      "starts": "var e=document.getElementById(`starlight__sideba"
+    },
+    {
+      "sha256": "7ffcc0504ef8b9c737258a78af8410be42687e841d90e2211d82be8de67a7a4a",
+      "starts": "(() => {\n\t\tconst openBtn = document.querySelecto"
+    },
+    {
+      "sha256": "84fe3cb14cb04c05f2836daabe974e0bf718200f0c7cf74a11b3c2fe6bc69383",
+      "starts": "var e=class extends HTMLElement{constructor(){su"
+    },
+    {
+      "sha256": "85b9df00d9aec268b8c09cdd64a9337e28b2010cf26b53f31a976b3446922a35",
+      "starts": "customElements.define(`portal-display`,class ext"
+    },
+    {
+      "sha256": "c17db23800de57e34c9e07e50f9b988b7be5e744870b8b1f335126ca5563957e",
+      "starts": "(() => {\n\t\t\ttry {\n\t\t\t\tif (!matchMedia('(min-widt"
+    },
+    {
+      "sha256": "ede095e23b6caf8b789276f773814244f7aeec619978e5061375ef5a2c745ce4",
+      "starts": "(() => {\n\t\t\tconst scroller = document.getElement"
+    },
+    {
+      "sha256": "f04c5609f9c7ccce6fb96a5f5bde7fce2859737bbacc19b2ef34304a683456f6",
+      "starts": "var e=class extends HTMLElement{btn=this.querySe"
+    }
+  ]
+}

@@ -26,6 +26,8 @@
     { "path": "scripts/page-classes.mjs", "ownership": "managed" },
     { "path": "scripts/process-environment.mjs", "ownership": "managed" },
     { "path": "scripts/publication.mjs", "ownership": "managed" },
+    { "path": "scripts/runtime-scripts.json", "ownership": "managed" },
+    { "path": "scripts/runtime-scripts.mjs", "ownership": "managed" },
     { "path": "scripts/workflow.mjs", "ownership": "managed" },
     { "path": "src/components/PortalDisplay.astro", "ownership": "managed" },
     { "path": "src/content.config.ts", "ownership": "managed" },

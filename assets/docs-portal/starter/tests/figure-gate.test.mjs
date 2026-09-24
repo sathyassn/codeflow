@@ -11,7 +11,8 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "@playwright/test";
 import { sha256 } from "../scripts/lib.mjs";
-import { figureGateFailures, observePortalPage, pinnedDeclarations, pinnedKitSheets } from "../scripts/browser-verify.mjs";
+import { figureGateFailures, observePortalPage, pinnedDeclarations, pinnedKitSheets, pinnedRuntimeScripts } from "../scripts/browser-verify.mjs";
+import { REGENERATE, builtRuntimeScripts } from "../scripts/runtime-scripts.mjs";
 import { drawnValuesMatch } from "../scripts/figure-grammar.mjs";
 import { GitSnapshot } from "../scripts/git-snapshot.mjs";
 import { classifyPortalPages, declaredCarrierFailures, pageClassFailures } from "../scripts/page-classes.mjs";
@@ -238,9 +239,15 @@ test("the mixed fixture renders every class and the gates name only what falls s
       misrecorded.figures[0].declaration_sha256 = "0".repeat(64);
       assert.throws(() => pinnedDeclarations(snapshot, evidence.repository.commit, misrecorded), new RegExp(`figure declaration ${misrecorded.figures[0].declaration_path} does not match its recorded hash`));
       const kitSheets = pinnedKitSheets(snapshot, evidence.repository.commit, path.relative(path.resolve(root, config.repository_root), root));
+      const inlineScripts = pinnedRuntimeScripts(snapshot, evidence.repository.commit, path.relative(path.resolve(root, config.repository_root), root), config.theme);
+      // The committed list of the runtime's inline scripts is what a fresh
+      // build of this lockfile emits; when either moves, regenerate it.
+      const committedScripts = JSON.parse(await readFile(path.join(root, "scripts/runtime-scripts.json"), "utf8"));
+      assert.deepEqual(await builtRuntimeScripts(path.join(root, "dist"), config.theme, committedScripts), committedScripts.scripts, `scripts/runtime-scripts.json is stale against a fresh build; run: ${REGENERATE}`);
+      assert.equal(committedScripts.lock_sha256, sha256(await readFile(path.join(root, "package-lock.json"))), `scripts/runtime-scripts.json was built from another lockfile; run: ${REGENERATE}`);
       // The clean control: the real build, with the site's own sheets and
       // chrome styles, fails only the figure built to break a rule.
-      const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, built, declarations, kitSheets);
+      const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, built, declarations, kitSheets, inlineScripts);
       assert.equal(drawn, 6);
       assert.ok(failures.length > 0);
       for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
@@ -252,7 +259,7 @@ test("the mixed fixture renders every class and the gates name only what falls s
       // behind that: every computed property against a clean copy of the page,
       // the ancestors of each figure, and the figure's visibility.
       const guideOnly = assignments.filter((assignment) => assignment.route === "reference/guide");
-      const hostile = async (change) => (await figureGateFailures(page, async (route) => { await visitRoute(route); await page.evaluate(change.inject, change.css); }, guideOnly, built, declarations, kitSheets)).failures;
+      const hostile = async (change) => (await figureGateFailures(page, async (route) => { await visitRoute(route); await page.evaluate(change.inject, change.css); }, guideOnly, built, declarations, kitSheets, inlineScripts)).failures;
       const addSheet = (css) => document.head.append(Object.assign(document.createElement("style"), { textContent: css }));
       const onGuide = /^docs\/guide\.md \(at reference\/guide(?:, (?:page head|#[^,]+), figures\/(?:commit-limits|install-steps)\.json)?\): /;
       const cases = [
@@ -299,13 +306,28 @@ test("the mixed fixture renders every class and the gates name only what falls s
       const intoContent = (markup) => builtBytes.replace(/(<div class="sl-markdown-content"[^>]*>)/, `$1${markup}`);
       const onDisk = async (markup) => {
         await writeFile(builtGuide, intoContent(markup));
-        try { return (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets)).failures; } finally { await writeFile(builtGuide, builtBytes); }
+        try { return (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(builtGuide, builtBytes); }
       };
       const rerun = await onDisk("<script>{ const sheet = [...document.styleSheets].find((candidate) => candidate.media.mediaText !== \"print\"); sheet.insertRule(\".cf-fig {opacity:0}\", sheet.cssRules.length); }</script>");
       assert.ok(rerun.some((failure) => /served page: dist\/reference\/guide\/index\.html is served with sha256 \w+, not the recorded \w+/.test(failure)), rerun.join("\n"));
       assert.ok(rerun.some((failure) => /executable content: a <script> element in the page content/.test(failure)), rerun.join("\n"));
       assert.ok(rerun.some((failure) => /holds \d+ rules that are not the \d+ its served bytes parse to/.test(failure)), rerun.join("\n"));
       assert.ok(rerun.some((failure) => /rule 6 .*: wide: the figure is not visible to a reader/.test(failure)), rerun.join("\n"));
+      // The clean copy runs only the runtime's scripts, so it does not repeat
+      // the page's insertion and the figure differs from it.
+      assert.ok(rerun.some((failure) => /rule 6 .*: wide: <figure class="cf-fig[^"]*"> computes opacity 0 where the clean copy computes 1/.test(failure)), rerun.join("\n"));
+
+      // Inline scripts outside the content are the runtime's own: an extra
+      // one in the page chrome fails, and so does a changed Starlight script,
+      // with the regeneration to run if the runtime really changed.
+      const regenerate = `if the runtime changed, regenerate scripts/runtime-scripts.json: ${REGENERATE}`;
+      const extra = await hostile({ inject: () => document.head.append(Object.assign(document.createElement("script"), { textContent: "void 0" })), css: null });
+      assert.ok(extra.some((failure) => failure.includes("executable content: inline scripts outside the content are not ones the site's runtime emits (sha256 ") && failure.endsWith(regenerate)), extra.join("\n"));
+      assert.ok(builtBytes.includes("window.StarlightThemeProvider = (() => {"));
+      await writeFile(builtGuide, builtBytes.replace("window.StarlightThemeProvider = (() => {", "window.StarlightThemeProvider = (() => { "));
+      let changed;
+      try { changed = (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(builtGuide, builtBytes); }
+      assert.ok(changed.some((failure) => failure.includes("executable content: inline scripts outside the content are not ones the site's runtime emits (sha256 ") && failure.endsWith(regenerate)), changed.join("\n"));
       for (const mode of ["closed", "open"]) {
         const shadowed = await onDisk(`<div><template shadowrootmode="${mode}"><style>:host{opacity:0}</style>Shadow</template></div>`);
         assert.ok(shadowed.some((failure) => /served page: the served page declares a shadow root/.test(failure)), `${mode}: ${shadowed.join("\n")}`);
@@ -479,6 +501,20 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
       assert.match(result.stdout + result.stderr, /built page dist\/reference\/guide\/index\.html carries CSS or executable content in its content: (?:[^\n]*, )?a declarative shadow root/, `${mode}: ${result.stdout}${result.stderr}`);
       await writeFile(builtGuide, builtBytes);
     }
+    // Inline scripts outside the content are the runtime's own (R5-1): an
+    // extra one in the head fails, and so does a changed Starlight script,
+    // each naming the regeneration to run if the runtime really changed.
+    const builtOnly = async (edited) => {
+      const record = JSON.parse(pristine);
+      record.artifacts.find((artifact) => artifact.path === "dist/reference/guide/index.html").sha256 = sha256(edited);
+      await writeFile(builtGuide, edited);
+      await writeFile(evidencePath, `${JSON.stringify(record, null, 2)}\n`);
+      try { const result = validate(); assert.notEqual(result.status, 0, result.stdout); return result.stdout + result.stderr; } finally { await writeFile(builtGuide, builtBytes); }
+    };
+    const regenerate = /built page dist\/reference\/guide\/index\.html carries inline scripts the site's runtime does not emit \(sha256 \w{12}\); if the runtime changed, regenerate scripts\/runtime-scripts\.json: npm run build && node scripts\/runtime-scripts\.mjs dist/;
+    assert.match(await builtOnly(builtBytes.replace("</head>", "<script>void 0</script></head>")), regenerate);
+    assert.ok(builtBytes.includes("window.StarlightThemeProvider = (() => {"));
+    assert.match(await builtOnly(builtBytes.replace("window.StarlightThemeProvider = (() => {", "window.StarlightThemeProvider = (() => { ")), regenerate);
     await writeFile(evidencePath, pristine);
     const restored = validate();
     assert.match(restored.stdout + restored.stderr, /validate --portal: 2 page\(s\) clean/, restored.stdout + restored.stderr);

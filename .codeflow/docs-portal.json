@@ -18,7 +18,7 @@
     },
     "astro.config.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ae490b955bed20bbba8542a213f1ea96e06d75ec1bfc34ac6c08f3d987dc8b01"
+      "pristine_sha256": "632cdfa71119270876ca6257b2c4fc4e0b35070b8147188ea87401b51728f093"
     },
     "package-lock.json": {
       "ownership": "managed",
@@ -58,7 +58,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "c216c52785db4729136590da87f0911f657bfec9452b8d8d930ff4e9ab66d0b8"
+      "pristine_sha256": "5546a891182f4cc232c12e7a32dc72a00b4e410e1f10666f9f427bd5dbb648b6"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -103,6 +103,14 @@
     "scripts/publication.mjs": {
       "ownership": "managed",
       "pristine_sha256": "1aba89319a960bdc77bf6b579e965d3bbc5b43eaf38f6469598541eb9aaf7f76"
+    },
+    "scripts/runtime-scripts.json": {
+      "ownership": "managed",
+      "pristine_sha256": "d2b3ba48000fba56aab70b7b64a70f3659cc5b927a772b3d8479a075861022e3"
+    },
+    "scripts/runtime-scripts.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "24d805a66dc3e89d14610fda39e2b3e4aadbb155942a653cfc8e15b753facd4b"
     },
     "scripts/workflow.mjs": {
       "ownership": "managed",
@@ -178,7 +186,7 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "9503456037c25ba5829b86cb1ea3a44d16ee68c989259ee8dd50db171ea332e8"
+      "pristine_sha256": "b25f6f2e549372e769e8e69fa06d44a6809a161eb3ca275f05562148f085fb19"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",

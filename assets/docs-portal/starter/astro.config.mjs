@@ -3,6 +3,7 @@ import { defineConfig } from "astro/config";
 import starlight from "@astrojs/starlight";
 import rawConfig from "./portal.config.json" with { type: "json" };
 import { validatePortalConfig } from "./scripts/lib.mjs";
+import { prePaintScript } from "./scripts/runtime-scripts.mjs";
 import { asIsMarkdownIntegration } from "./scripts/as-is-markdown.mjs";
 
 const config = validatePortalConfig(rawConfig);
@@ -25,14 +26,10 @@ export default defineConfig({
         {
           // Pre-paint display state: the configured theme is the fallback
           // (signal -> instrument skin, folio -> ink + plex), stored Display
-          // choices win. Inline so there is no wrong-skin flash.
+          // choices win. Inline so there is no wrong-skin flash; its text
+          // lives in scripts/runtime-scripts.json, where the gate reads it.
           tag: "script",
-          content:
-            `(function(){var t=${JSON.stringify(config.theme)},d=document.documentElement,r=function(k,a){try{var v=localStorage.getItem(k);return a.indexOf(v)>=0?v:null}catch(e){return null}};` +
-            `d.dataset.portalTheme=t;` +
-            `d.dataset.cfpSkin=r("cf-portal-skin",["instrument","editorial","ink"])||(t==="folio"?"ink":"instrument");` +
-            `d.dataset.cfpTypeface=r("cf-portal-typeface",["instrument","editorial","plex"])||(t==="folio"?"plex":"instrument");` +
-            `d.dataset.cfpScale=r("cf-portal-scale",["compact","default","large"])||"default";})();`,
+          content: prePaintScript(config.theme),
         },
         { tag: "script", attrs: { src: `${base}portal-preview.js`, defer: true } },
         { tag: "script", attrs: { src: `${base}portal-tabs.js`, defer: true } },
