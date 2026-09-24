@@ -150,6 +150,43 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
     }
 }
 
+/// CodeFlow's own policy requires the four always-present body sections, and
+/// Testing for code, and its template carries each of them as a heading. The
+/// shipped default policy stays at Summary and Changes so no consumer's
+/// unchanged policy starts blocking on an update.
+#[test]
+fn repository_policy_requires_the_always_present_pr_sections() {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(".codeflow/policy.json")).expect("policy JSON");
+    let names = |key: &str| -> Vec<String> {
+        policy["git"][key]
+            .as_array()
+            .unwrap_or_else(|| panic!("git.{key} must be an array"))
+            .iter()
+            .map(|name| name.as_str().expect("section name").to_string())
+            .collect()
+    };
+    assert_eq!(
+        names("pr_required_sections"),
+        ["Summary", "Changes", "Reviews", "Release impact"]
+    );
+    assert_eq!(names("pr_code_sections"), ["Testing"]);
+    let template = read(".github/pull_request_template.md");
+    for heading in ["Summary", "Changes", "Testing", "Reviews", "Release impact"] {
+        assert!(
+            template.lines().any(|line| line == format!("## {heading}")),
+            "repository template lost the always-present ## {heading} heading"
+        );
+    }
+    let shipped: serde_json::Value =
+        serde_json::from_str(&read("assets/base/policy.json")).expect("shipped policy JSON");
+    assert_eq!(
+        shipped["git"]["pr_required_sections"],
+        serde_json::json!(["Summary", "Changes"]),
+        "the shipped default must not start blocking existing consumers"
+    );
+}
+
 #[test]
 fn ship_returns_failures_to_their_owner_without_waiving_configured_gates() {
     assert_contains(

@@ -69,7 +69,9 @@
     "pr_sections": "block",
     "pr_required_sections": [
       "Summary",
-      "Changes"
+      "Changes",
+      "Reviews",
+      "Release impact"
     ],
     "pr_code_sections": [
       "Testing"
