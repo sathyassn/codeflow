@@ -233,16 +233,21 @@ root. It also fails any figure or companion markup that is not a companion
 equal to its rebuild. The browser gate requires the served page to be the
 recorded built page, every stylesheet to be a recorded built sheet served
 with its hash and holding exactly the rules its bytes parse to, and every
-external script to be a recorded built script served with its hash. It
-compares each figure's DOM with a clean render of the pinned declaration, and
+external script to be a recorded built script served with its hash. Every
+inline script outside the content, in both the validator and the browser
+gate, must be on the runtime's allowlist: the fixed scripts whose hashes the
+starter commits in `scripts/runtime-scripts.json`, regenerated from a fresh
+build whenever the lockfile changes, and the pre-paint display script for the
+configured theme. The clean copy runs only those and the recorded built
+scripts. It compares each figure's DOM with a clean render of the pinned declaration, and
 every computed property of the companion, the figure and its descendants with
 a clean copy of the page. The figure, its caption and its legend must be
 visible at full opacity, and no ancestor may move, clip, filter or hide the
 figure unless the clean copy's does too. The gate detects drift, hand edits to
 generated output, page CSS, page scripts and changed derived values. It
 compares computed styles, not pixels. It trusts the runtime's recorded sheets
-and scripts, which the build makes from committed sources; the runtime's
-inline scripts are not yet held to recorded hashes. It does not defend
+and scripts and its allowlisted inline scripts, which come from committed
+sources. It does not defend
 against a committer who can also change the validator, the grammar module,
 the portal runtime or its sheets; review and CI own that boundary.
 
