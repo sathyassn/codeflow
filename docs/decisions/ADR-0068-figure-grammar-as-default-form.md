@@ -167,3 +167,25 @@ source.
 The rejection of an external diagram syntax above stands. Its clause that
 Mermaid is supporting-only in present describes the runtime before TSK-087;
 once TSK-087 lands, Mermaid is unsupported on both surfaces.
+
+## Update 2026-09-24: the declaration schema as shipped
+
+TSK-059 shipped the figure runtime, and the declaration it reads differs from
+the schema table above. That table stays as decided; this update records the
+interface as built. The field reference is `figure-grammar.md` section 6 in
+the `cf-present` and `cf-docs-portal` skills, and the grammar module
+(`docs-portal/scripts/figure-grammar.mjs`) enforces it.
+
+| Field | Decided above | As shipped |
+|---|---|---|
+| envelope | not stated | `{ "schema_version": 1, "figure": { ... } }`; an unknown key at any level is refused |
+| `binding` | `authored` means SVG supplied | `authored` draws from the declared `wide` and `narrow` compositions; no SVG is supplied |
+| `title`, `kicker` | absent | `title` required; `kicker` optional |
+| `states[]` | `name`, `means`, `channels` required | `name`, `mark` and `means` required; `channels` optional, since the gate measures the channels on the render |
+| `facts[]` | `claim`, `source`, `derive` | adds `check` (`contains`, `count-items` or `json`) and `value`, so each fact re-derives from its source |
+| `wide`, `narrow` | `narrow` holds the recomposition only | both carry `width`, `height` and a `draw` list of state marks, decorations and texts |
+| `layout` | absent | an `extent` or `coverage` layout the module composes into both widths; a derived figure draws from one |
+| `twin` | `inline` or `derived` | `"facts"` or `{ columns, rows }` |
+
+The verifier rules above hold as written. The portal adds one: a companion
+figure on a page must be the drawing its pinned declaration produces.
