@@ -125,3 +125,13 @@ and on safety, security or evidence stay closed.
 ## Architecture impact
 
 None. The scaffold gains one managed reference; no runtime behavior changes.
+
+## Amendment, 2026-09-24: correctness is not settleable
+
+TSK-076 added a correctness defect to the axes a dissent cannot be settled
+on. The list is now operator-owned, safety, security, correctness and
+evidence adequacy. The change came from the TSK-076 round one reviews (Fable
+F1, Grok M1), which found that `cf-method/references/autonomy.md` omitted the
+correctness axis the quality contract already kept closed.
+`cf-method/references/autonomy.md` owns this list; the text above is
+unchanged, and the reference wins where they differ.

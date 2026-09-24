@@ -761,7 +761,7 @@
         {
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
-            "Clean up after the human merge, with proof",
+            "Clean up after either merge, with proof",
             "never use `git worktree remove --force`",
             "to report `MERGED` and the branch-tip SHA",
             "no unapplied `+` entry",
@@ -932,12 +932,13 @@
     {
       "id": "CF-MM-004",
       "level": "hard",
-      "statement": "Both seats approve the exact plan and task assignments; changed ownership, scope, lineage, isolation, or reviewer invalidates both approvals, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
+      "statement": "Both seats approve the exact plan and task assignments, except that a reversible item may carry recorded settled dissent while the dissenting seat still approves the rest; changed ownership, scope, lineage, isolation, or reviewer invalidates both approvals, while trigger-based effort escalation or a permitted executor change inside the approved primary boundary is evidence rather than reassignment.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
           "markers": [
             "A changed plan invalidates both approvals",
+            "that seat must still approve the rest of Plan vN",
             "TASK_ASSIGNMENTS:",
             "CLAUDE_APPROVAL:",
             "CODEX_APPROVAL:"
@@ -1052,7 +1053,7 @@
     {
       "id": "CF-MM-009",
       "level": "hard",
-      "statement": "A missing peer degrades only after proven unavailability and is recorded; a mid-run loss retries boundedly and blocks rather than silently continuing.",
+      "statement": "A missing peer degrades only after proven unavailability and is recorded; a mid-run loss retries boundedly, then moves to the recorded fallback as Plan vN+1 approved by the available standing seats, with the lost seat recorded unavailable and never as approving, rather than silently continuing.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
@@ -1462,14 +1463,14 @@
     {
       "id": "CF-PM-002",
       "level": "hard",
-      "statement": "Task closeout records review-relevant bounded implementation discoveries and evidence without diary ceremony; a material scope, graph, ownership, acceptance/interface, or safety change stops execution and receives dual-approved Plan vN+1 before work continues, never retrospective approval in closeout.",
+      "statement": "Task closeout records review-relevant bounded implementation discoveries and evidence without diary ceremony; a material scope, graph, ownership, acceptance/interface, or safety change stops execution and receives Plan vN+1 approved by both seats, or by the available standing seats after a recorded seat loss, before work continues, never retrospective approval in closeout.",
       "sources": [
         {
           "path": "project-management/templates/task.md",
           "markers": [
             "Bounded discoveries/deviations",
             "never legalized here after implementation",
-            "settle Plan vN+1 with both primary seats, then continue"
+            "settle Plan vN+1 with both primary seats (seat-loss rule: task-graph.md), then continue"
           ]
         },
         {
@@ -2192,7 +2193,7 @@
     {
       "id": "CF-QA-013",
       "level": "hard",
-      "statement": "A gate is the verification check, not the CI job name. An assertion-red completed check cannot be overridden by model consensus. A CI job that never completed (runner loss, OOM, timeout, billing) is missing job evidence, not a failed check; a completed same-check in a sibling job or local codeflow test satisfies that gate. A check that never ran anywhere remains missing and is a blocker or declared limitation, never a pass. Agents still do not merge.",
+      "statement": "A gate is the verification check, not the CI job name. An assertion-red completed check cannot be overridden by model consensus. A CI job that never completed (runner loss, OOM, timeout, billing) is missing job evidence, not a failed check; a completed same-check in a sibling job or local codeflow test satisfies that gate. A check that never ran anywhere and has no local equivalent is a missing gate, named as the blocker, never a pass. Agents never merge a protected target.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
@@ -2214,7 +2215,7 @@
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "a gate is the check, not the job name",
-            "an infra-killed job that only restacks already-green checks does not"
+            "the quality contract classifies redness"
           ]
         }
       ]
@@ -2301,7 +2302,7 @@
     {
       "id": "CF-SHIP-001",
       "level": "hard",
-      "statement": "Agents prepare reviewable PRs and evidence but a human merges protected branches when required checks are evidenced green; an infra-killed duplicate CI job is not a failed check and is not agent merge authority. After opening a PR the agent follows its required checks at most once a minute for at most thirty minutes without an unbounded watch, repairs an assertion-red check its change caused without waiting to be asked, reports an infrastructure-incomplete job as missing evidence with the tool's reason rather than fixing it as a product defect, never merges, and sends one unprompted readiness report with the printed PR URL, each required check's state, and the next action.",
+      "statement": "Agents prepare reviewable PRs and evidence; a human merges every protected target when required checks are evidenced green, and the primary merges a green, reviewed PR only into an integration branch no protected-branch policy covers; an infra-killed duplicate CI job is not a failed check and is not agent merge authority. After opening a PR the agent follows its required checks at most once a minute for at most thirty minutes without an unbounded watch, repairs an assertion-red check its change caused without waiting to be asked, reports an infrastructure-incomplete job as missing evidence with the tool's reason rather than fixing it as a product defect, never merges a protected target, and sends one unprompted readiness report with the printed PR URL, each required check's state, and the next action; it says ready on local evidence only with a completed green result of every owed required check.",
       "sources": [
         {
           "path": "AGENTS.md",
@@ -2314,14 +2315,14 @@
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "required *checks* are evidenced",
-            "An agent never merges into"
+            "An agent never merges into a protected target"
           ]
         },
         {
           "path": ".agents/skills/cf-ship/SKILL.md",
           "markers": [
             "poll required checks at most once a minute for up to thirty minutes",
-            "fix assertion-red without asking, report infra-incomplete as missing evidence, never merge",
+            "fix assertion-red without asking, report infra-incomplete as missing evidence, and report",
             "report readiness with the PR URL the tool printed"
           ]
         },
@@ -2333,7 +2334,9 @@
             "Do not use `--watch` without a ceiling, and do not poll without an end",
             "Do not wait for the operator to name the job",
             "Report it as missing evidence with the reason the tool gave, not as a product defect",
-            "Never merge. When every required check is green, or the thirty minutes end, send one readiness report without being asked"
+            "When every required check is green, or the thirty minutes end, send one readiness report without being asked",
+            "for every protected target, including a protected `integration/` glob, the next action is a human merge",
+            "Say \"ready for your merge on local evidence\" only when every owed required check has a completed green result"
           ]
         },
         {

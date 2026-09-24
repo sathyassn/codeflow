@@ -324,6 +324,9 @@ public interface, authority, or safety boundary?
 └─ yes -> stop; reconcile and dual-approve Plan vN+1; update records; continue
 ```
 
+That approval follows `cf-model-orchestrator/resources/task-graph.md`,
+"Mutation and settlement", including its recorded seat-loss exception.
+
 Closeout never retroactively legitimizes a material deviation. It names the
 approved plan delivered, the relevant bounded deviations, what was and was not
 verified, and each follow-up's single real home. Omit empty ceremony.

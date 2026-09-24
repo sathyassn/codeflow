@@ -52,15 +52,17 @@ created: {{DATE}}
 
 <!-- Fill before status becomes complete/cancelled; delete inapplicable bullets.
      - Delivered outcome.
-     - Plan conformance: as approved under Plan vN, or the later dual-approved
-       Plan vN+1 that authorized a material change.
+     - Plan conformance: as approved under Plan vN, or the later approved Plan
+       vN+1 (seat-loss rule: task-graph.md) that authorized a material change.
      - Bounded discoveries/deviations: only review-relevant facts that stayed
        inside the approved node's outcome, scope, interfaces, ownership, and
        safety boundary, with a compact evidence pointer.
      - Verification evidence and anything not verified.
+     - Review findings, each with severity and disposition.
      - Recovery evidence, only for an irreversible/high-blast-radius surface.
      - Follow-ups, each routed to its single real tracked home.
 
      A material node, edge, guard, owner, acceptance/interface, scope, or safety
      change is never legalized here after implementation: stop, settle Plan
-     vN+1 with both primary seats, then continue. -->
+     vN+1 with both primary seats (seat-loss rule: task-graph.md), then
+     continue. -->

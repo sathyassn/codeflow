@@ -91,14 +91,19 @@ yours, is foreign.
 
 ## Settled dissent
 
-Plan reconciliation and post-review rework each get two rounds. If two seats
-still disagree after that on a reversible choice inside the accepted outcome,
-the Claude judgment primary settles it. The plan records `SETTLED_DISSENT`
+Plan reconciliation and post-review rework are each bounded to two
+evidence-moving rounds. A repeated attempt without a new hypothesis or changed
+evidence is not another round. At the bound, the owner changes strategy with
+fresh evidence or surfaces a real block. The bound never closes a material
+finding: it stays open until it is fixed. After that, if two seats still
+disagree on a reversible choice inside the accepted outcome, the Claude
+judgment primary settles it. The plan records `SETTLED_DISSENT`
 with the item, both verdicts, the evidence, and why the item is reversible.
 The dissenting verdict stays as given and is never recorded as approval; that
 seat still approves the rest of the plan. A dissent on an operator-owned,
-safety, security or evidence-adequacy axis is not settleable: an operator-owned
-item is asked, and the others keep their gate closed and return to repair.
+safety, security, correctness or evidence-adequacy axis is not settleable: an
+operator-owned item is asked, and the others keep their gate closed and return
+to repair.
 
 ## Decision table
 
@@ -116,7 +121,7 @@ item is asked, and the others keep their gate closed and return to repair.
 | A trust prompt | 1 for the task's own project or worktree, or a sample this run's harness created: answer it; 3 for any other path: ask | Trust prompts above |
 | A credit is missing, or a seat or tool is refused or unavailable after preflight | 2: do not purchase; name the gap, record reduced assurance and continue on the recorded fallback | `AGENTS.md` Entry points; `capability-routing.md` |
 | A seat is lost mid-run after approval | 2: move the unit to the recorded fallback; the available standing seats approve the reassignment as Plan vN+1; the lost seat's actual verdict stays recorded | CodeFlow ADR-0070, amending ADR-0035 |
-| Two seats still disagree after two rounds | 2 on a reversible item: the Claude judgment primary settles it and records `SETTLED_DISSENT`, never approval; 3 on an operator-owned item: ask; not settleable on safety, security or evidence adequacy: keep the gate closed and repair | Settled dissent above; CodeFlow ADR-0070 |
+| Two seats still disagree after two rounds | 2 on a reversible item: the Claude judgment primary settles it and records `SETTLED_DISSENT`, never approval; 3 on an operator-owned item: ask; not settleable on safety, security, correctness or evidence adequacy: keep the gate closed and repair | Settled dissent above; CodeFlow ADR-0070 |
 | A green, reviewed pull request into an `integration/` branch that policy does not protect | 2: the primary merges without fast forward and reruns the gate | `AGENTS.md` Git rules, Bodies of work; `codeflow integrate`; `.codeflow/policy.json` |
 | Local evidence is green and hosted jobs never ran | 2: report "ready for your merge on local evidence" only with a completed green result of every owed check, local or hosted, and name each hosted job that did not run and why | `quality-contract.md` redness classes |
 | An owed check has no completed result anywhere | a missing gate: name it as the blocker, keep the pull request draft, continue other work | `quality-contract.md` redness classes |
