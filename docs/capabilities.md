@@ -136,7 +136,16 @@ Rule *levels* are policy values, user-flippable per repo (`off`/`warn`/`allow`/
 `block`), so a team tunes strictness to its risk tolerance — including the
 PR-body structure gate (`git.pr_sections`: required sections present with real
 content, a code-touching range carries the testing sections, and leftover
-template placeholders draw a warn naming their line). The structural
+template placeholders draw a warn naming their line). Markdown parsing rejects
+fake headings and duplicate required sections, accepts nested evidence, and
+requires a nonempty body on PR events. Fresh defaults also require Reviews and
+Release impact; existing consumers retain their configured section lists.
+Summary style, missing `Not tested:`, long fences, prose width and approximate
+rendered rows warn under `pr_sections`. The independent `pr_release_impact`
+check defaults to warn: it validates generic fields, compatibility consistency,
+migration guidance and breaking commit floors against `pr_breaking_level`
+(default major). It requires no release automation or project-specific fields.
+The generic PR template ships at every tier. The structural
 anti-bypass layer is not flippable, by design: the strict policy validator (an
 invalid file fails loud rather than silently reverting to defaults), the schema
 drift-guard pinning the registry to the policy struct, the gate-context token

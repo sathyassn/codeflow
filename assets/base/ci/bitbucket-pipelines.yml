@@ -12,10 +12,9 @@
 # commit in history so the range walk resolves.
 #
 # NOTE: Bitbucket does not expose the PR description as an environment variable,
-# so the PR-body scan — attribution, emoji, and the required-section
-# structure — is skipped here (the commit + branch
-# checks still run). To also scan the body, fetch it via the Bitbucket API and
-# pass `codeflow ci --pr-body-file <file>`.
+# so supply it through CODEFLOW_PR_BODY or `codeflow ci --pr-body-file <file>`
+# using a project-owned description retrieval step. A missing body on a PR
+# event fails the default section policy; commit and branch checks still run.
 #
 # This is a copy-in template (see this directory's README): `codeflow init`
 # scaffolds the GitHub workflow today; a platform picker is a follow-up.

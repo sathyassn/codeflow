@@ -19,6 +19,8 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod pr_body;
+
 use clap::Args;
 use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
@@ -29,6 +31,7 @@ use codeflow_core::workgraph::{
     check_work_start_for_branch, declared_work_target, durable_work_tracking_enabled,
     resolve_work_target, task_id_from_branch,
 };
+use pr_body::find_section;
 
 #[derive(Debug, Args)]
 pub struct CiArgs {
@@ -96,6 +99,7 @@ struct CommitRangeEvaluation {
     /// rule is inactive, `Some(true)` when it ran, `Some(false)` when it could
     /// not (unresolved range or a failed diff), which is not a pass.
     added_lines_ran: Option<bool>,
+    breaking_commit: bool,
 }
 
 /// One line a commit range adds under a policy-character tree (ADR-0067).
@@ -225,19 +229,84 @@ pub fn run(args: &CiArgs) -> i32 {
 
     // --- PR-body check ----------------------------------------------------
     if let Some(body) = &pr_body {
-        tagged.extend(
-            evaluate_pr_body(git, body)
-                .into_iter()
-                .chain(evaluate_pr_structure(git, body, range.files.as_deref()))
-                .map(|violation| TaggedViolation {
-                    sha: None,
-                    violation,
-                }),
-        );
+        tagged.extend(evaluate_pr_checks(
+            git,
+            body,
+            range.files.as_deref(),
+            range.breaking_commit,
+            epic_into_main(&branch, args.base.as_deref(), |key| std::env::var(key).ok()),
+        ));
         ran.push("PR-body");
     }
 
     report(&tagged, &ran, &skipped)
+}
+
+fn evaluate_pr_checks(
+    git: &GitPolicy,
+    body: &str,
+    files: Option<&[String]>,
+    breaking_commit: bool,
+    epic_into_main: bool,
+) -> Vec<TaggedViolation> {
+    let mut findings = Vec::new();
+    if !pr_body::has_content(body) && git.pr_sections.is_active() {
+        findings.push(Violation::new(
+            "git.pr_sections",
+            git.pr_sections,
+            "PR body is missing or empty".into(),
+            "provide a PR body with real content".into(),
+        ));
+    }
+    findings.extend(evaluate_pr_body(git, body));
+    findings.extend(evaluate_pr_structure(git, body, files));
+    findings.extend(pr_body::presentation(git, body, epic_into_main));
+    findings.extend(pr_body::release(git, body, breaking_commit));
+    findings
+        .into_iter()
+        .map(|violation| TaggedViolation {
+            sha: None,
+            violation,
+        })
+        .collect()
+}
+
+fn breaking_marker(message: &str) -> bool {
+    message.lines().next().is_some_and(|subject| {
+        subject
+            .split_once(": ")
+            .is_some_and(|(prefix, _)| prefix.ends_with('!'))
+    }) || message
+        .lines()
+        .skip(1)
+        .any(|line| line.starts_with("BREAKING CHANGE:") || line.starts_with("BREAKING-CHANGE:"))
+}
+
+fn is_pr_event(env: impl Fn(&str) -> Option<String>) -> bool {
+    env("GITHUB_EVENT_NAME")
+        .is_some_and(|value| matches!(value.as_str(), "pull_request" | "pull_request_target"))
+        || ["CI_MERGE_REQUEST_IID", "BITBUCKET_PR_ID", "GITHUB_HEAD_REF"]
+            .iter()
+            .any(|key| env(key).is_some_and(|value| !value.is_empty()))
+        || env("CI_PIPELINE_SOURCE").as_deref() == Some("merge_request_event")
+}
+
+fn epic_into_main(
+    branch: &str,
+    explicit_base: Option<&str>,
+    env: impl Fn(&str) -> Option<String>,
+) -> bool {
+    branch.starts_with("integration/")
+        && (matches!(
+            explicit_base,
+            Some("main" | "origin/main" | "refs/heads/main" | "refs/remotes/origin/main")
+        ) || [
+            "GITHUB_BASE_REF",
+            "CI_MERGE_REQUEST_TARGET_BRANCH_NAME",
+            "BITBUCKET_PR_DESTINATION_BRANCH",
+        ]
+        .iter()
+        .any(|key| env(key).as_deref() == Some("main")))
 }
 
 fn evaluate_commit_range(
@@ -257,6 +326,7 @@ fn evaluate_commit_range(
             violations: Vec::new(),
             ran: false,
             added_lines_ran: git.policy_characters.is_active().then_some(false),
+            breaking_commit: false,
         };
     };
     match enumerate_commits(root, &base_sha, head) {
@@ -301,6 +371,9 @@ fn evaluate_commit_range(
                 ),
                 violations,
                 ran: true,
+                breaking_commit: commits
+                    .iter()
+                    .any(|commit| breaking_marker(&commit.message)),
                 added_lines_ran,
             }
         }
@@ -313,6 +386,7 @@ fn evaluate_commit_range(
                 violations: Vec::new(),
                 ran: false,
                 added_lines_ran: git.policy_characters.is_active().then_some(false),
+                breaking_commit: false,
             }
         }
     }
@@ -591,6 +665,8 @@ enum SectionState {
     Empty,
     /// No matching heading at all.
     Missing,
+    /// More than one matching document heading makes the declaration ambiguous.
+    Duplicate,
 }
 
 /// Enforce the PR-body structure policy (`git.pr_sections`): the
@@ -632,6 +708,10 @@ fn evaluate_pr_structure(
     for (section, why) in required {
         let (found, detail) = match find_section(body, section) {
             SectionState::Present => continue,
+            SectionState::Duplicate => (
+                format!("PR body has duplicate section '## {section}'{why}"),
+                "keep one authoritative section for each required heading",
+            ),
             SectionState::Empty => (
                 format!("PR body section '## {section}' is present but empty{why}"),
                 "fill the section in — HTML comments and bare '-' bullets do not count as content",
@@ -651,7 +731,7 @@ fn evaluate_pr_structure(
 
     // Template remnants: always warn-only — a nudge to finish the body, never
     // a block (mirrors the breaking_watch_paths tripwire convention).
-    for (line_no, line, what) in find_placeholders(body) {
+    for (line_no, line, what) in find_placeholders(&strip_html_comments(body, true)) {
         out.push(Violation::new(
             "git.pr_sections",
             PolicyLevel::Warn,
@@ -708,68 +788,19 @@ fn is_docs_path(path: &str) -> bool {
             && matches!(extension.as_str(), "png" | "jpg" | "jpeg" | "gif" | "webp"))
 }
 
-/// Find a required section `name` in the body: a `##`/`###` heading whose
-/// trimmed text equals `name` case-insensitively. Content runs to the next
-/// heading of any depth; when every matching heading is content-free the
-/// section is [`SectionState::Empty`].
-fn find_section(body: &str, name: &str) -> SectionState {
-    let lines: Vec<&str> = body.lines().collect();
-    let mut state = SectionState::Missing;
-    let mut i = 0;
-    while i < lines.len() {
-        let matched = heading(lines[i]).is_some_and(|(depth, text)| {
-            (2..=3).contains(&depth) && text.eq_ignore_ascii_case(name)
-        });
-        if !matched {
-            i += 1;
-            continue;
-        }
-        let mut content = String::new();
-        i += 1;
-        while i < lines.len() && heading(lines[i]).is_none() {
-            content.push_str(lines[i]);
-            content.push('\n');
-            i += 1;
-        }
-        if section_has_content(&content) {
-            return SectionState::Present;
-        }
-        state = SectionState::Empty;
-    }
-    state
-}
-
-/// Parse a markdown ATX heading line into (depth, text). Leading whitespace is
-/// tolerated; a closing `##` sequence is stripped (`## Summary ##` → `Summary`).
-fn heading(line: &str) -> Option<(usize, &str)> {
-    let t = line.trim();
-    let depth = t.bytes().take_while(|b| *b == b'#').count();
-    if depth == 0 || depth > 6 {
-        return None;
-    }
-    let rest = &t[depth..];
-    if !rest.is_empty() && !rest.starts_with(' ') && !rest.starts_with('\t') {
-        return None;
-    }
-    Some((depth, rest.trim().trim_end_matches('#').trim_end()))
-}
-
-/// `true` when section text carries real content: anything beyond blank
-/// lines, HTML comments, and bare `-` bullets (the template's empty stubs).
-fn section_has_content(text: &str) -> bool {
-    strip_html_comments(text).lines().any(|l| {
-        let t = l.trim();
-        !t.is_empty() && t != "-"
-    })
-}
-
 /// Remove every `<!-- … -->` span (multi-line included). An unclosed comment
 /// swallows the rest of the text — exactly how a markdown renderer treats it.
-fn strip_html_comments(text: &str) -> String {
+fn strip_html_comments(text: &str, preserve_lines: bool) -> String {
     let mut out = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find("<!--") {
         out.push_str(&rest[..start]);
+        if preserve_lines {
+            let end = rest[start..]
+                .find("-->")
+                .map_or(rest.len(), |end| start + end + 3);
+            out.extend(rest[start..end].chars().filter(|ch| *ch == '\n'));
+        }
         match rest[start..].find("-->") {
             Some(end) => rest = &rest[start + end + 3..],
             None => return out,
@@ -791,6 +822,13 @@ fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
             "the template's paste-your-output placeholder"
         } else if is_empty_table_row(t) {
             "a table row of empty cells"
+        } else if t.contains("none | patch | minor | major")
+            || t.contains("yes | no")
+            || t.contains("<revision>")
+            || t.contains("<command>")
+            || t.contains("<steps>")
+        {
+            "unresolved template alternatives or placeholders"
         } else if t == "- CAP-" || t == "- EPC-" {
             "a bare linked-work bullet"
         } else {
@@ -914,7 +952,12 @@ fn resolve_pr_body(args: &CiArgs) -> Result<Option<String>, String> {
             )),
         };
     }
-    Ok(std::env::var(PR_BODY_ENV).ok().filter(|v| !v.is_empty()))
+    let body = std::env::var(PR_BODY_ENV).ok();
+    if is_pr_event(|key| std::env::var(key).ok()) {
+        Ok(Some(body.unwrap_or_default()))
+    } else {
+        Ok(body.filter(|value| !value.is_empty()))
+    }
 }
 
 /// Resolve the first base candidate that names a real commit, returning its sha.
@@ -1259,7 +1302,11 @@ mod tests {
     use super::*;
 
     fn git() -> GitPolicy {
-        GitPolicy::default()
+        // Existing consumer arrays remain authoritative after update.
+        GitPolicy {
+            pr_required_sections: vec!["Summary".into(), "Changes".into()],
+            ..GitPolicy::default()
+        }
     }
 
     fn commit(sha: &str, message: &str) -> CommitRecord {
@@ -1791,7 +1838,7 @@ mod tests {
     fn pr_structure_warn_level_warns_not_blocks() {
         let g = GitPolicy {
             pr_sections: PolicyLevel::Warn,
-            ..GitPolicy::default()
+            ..git()
         };
         let v = evaluate_pr_structure(
             &g,
@@ -1807,7 +1854,7 @@ mod tests {
     fn pr_structure_off_skips_everything() {
         let g = GitPolicy {
             pr_sections: PolicyLevel::Off,
-            ..GitPolicy::default()
+            ..git()
         };
         let bare = "no sections at all\n\n|  |  |\n";
         assert!(evaluate_pr_structure(&g, bare, Some(&code_files())).is_empty());
@@ -1879,6 +1926,15 @@ mod tests {
             "{v:?}"
         );
         assert!(v.iter().all(|x| x.message.contains("line ")), "{v:?}");
+    }
+
+    #[test]
+    fn pr_template_comments_hide_remnants_without_shifting_line_numbers() {
+        let body = "<!--\n- CAP-\n-->\n- EPC-\n";
+        let findings = find_placeholders(&strip_html_comments(body, true));
+        assert_eq!(findings.len(), 1);
+        assert_eq!(findings[0].0, 4);
+        assert_eq!(findings[0].1, "- EPC-");
     }
 
     #[test]

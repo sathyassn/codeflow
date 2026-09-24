@@ -3,8 +3,8 @@
 The verification checks live in the **`codeflow` binary**, not in the CI files.
 `codeflow ci` verifies a commit range and branch name against
 `.codeflow/policy.json` — commit format, no-AI-attribution, no-emoji,
-breaking-change footer, branch naming, and (when a PR/MR body is provided)
-the PR-body structure — reusing the exact same functions the
+breaking-change footer, branch naming, and PR/MR body structure and release
+claims, reusing the exact same functions the
 git-client hooks and the Claude git-guard use. That makes the binary the
 **single source of truth**: the CI plane can no longer drift from the hooks the
 way inline shell regex did (CodeFlow ADR-0017).
@@ -23,7 +23,7 @@ it reads from that platform's CI variables (`codeflow ci` auto-detects them):
 |---|---|---|
 | `codeflow-ci.yml` | GitHub Actions | `github.event.pull_request.base.sha` / `.head.sha` / `.head.ref`, body via `CODEFLOW_PR_BODY` |
 | `.gitlab-ci.yml` | GitLab CI | `CI_MERGE_REQUEST_DIFF_BASE_SHA`, `CI_COMMIT_SHA`, `CI_MERGE_REQUEST_SOURCE_BRANCH_NAME`, body via `CI_MERGE_REQUEST_DESCRIPTION` |
-| `bitbucket-pipelines.yml` | Bitbucket Pipelines | `BITBUCKET_PR_DESTINATION_COMMIT`, `BITBUCKET_COMMIT`, `BITBUCKET_BRANCH` (no PR-body variable — body scan skipped) |
+| `bitbucket-pipelines.yml` | Bitbucket Pipelines | `BITBUCKET_PR_DESTINATION_COMMIT`, `BITBUCKET_COMMIT`, `BITBUCKET_BRANCH` (supply the body via `CODEFLOW_PR_BODY` or `--pr-body-file`) |
 | `ci-generic.sh` | anything (pre-receive hook, Makefile, other CI) | `$1 $2` args, or `BASE`/`HEAD` env, or auto-detect; body via `CODEFLOW_PR_BODY` |
 
 On a host `codeflow ci` does not recognize, the range fallback (when no
@@ -32,6 +32,32 @@ the base branch), then the policy's `git.protected_branches` tried in order
 (`origin/main`, `main`, `origin/master`, `master` by default). When no base
 resolves, the commit checks are skipped with a warning and `codeflow ci` exits
 non-zero — pass `--base`/`--head` explicitly to fix the setup.
+
+## PR body checks
+
+On recognized GitHub PR, GitLab MR and Bitbucket PR events, a missing or empty
+body fails under the default `git.pr_sections: block` policy. Local and push
+runs can omit the body. Bitbucket's copy-in wrapper needs a project-owned step
+to supply the description before `codeflow ci`; it no longer skips that check.
+
+The parser recognizes real Markdown headings, including nested evidence, and
+rejects duplicate required sections. Fresh installs require Summary, Changes,
+Reviews and Release impact, plus Testing for ranges that touch code. Existing
+section lists and enforcement levels stay unchanged on update. The PR template
+ships at minimal, standard and full tiers through the usual managed-file merge.
+
+Presentation warnings cover Summary length, code spans and paths, missing
+`Not tested:`, fences over twelve lines, long prose lines, template remnants,
+and roughly 65 wrapped rows at 100 columns (90 for an integration branch into
+main). They are advisory and follow `pr_sections`; off/allow disables them.
+
+`git.pr_release_impact` defaults to warn independently. It checks Impact
+(none/patch/minor/major), Breaking (yes/no), Rationale and Migration, allowing
+extra project fields. Breaking is yes exactly at `git.pr_breaking_level`
+(default major); pre-1.0 projects declare their own level. Breaking needs
+substantive migration guidance, and a breaking commit marker sets an impact
+floor at that level. No release calculator, changelog, task tracker or language
+is assumed. Upgrade the binary before adding the new keys to a policy file.
 
 ## What `codeflow init` scaffolds
 

@@ -14,6 +14,7 @@ codeflow-core = { path = "../codeflow-core" }
 codeflow-present = { path = "../codeflow-present" }
 anyhow.workspace = true
 clap.workspace = true
+pulldown-cmark.workspace = true
 rust-embed.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

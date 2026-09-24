@@ -17,6 +17,16 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Portable pull request checks.** `codeflow ci` reads Markdown sections,
+  rejects missing PR-event bodies and ambiguous headings, and warns about
+  summary detail, missing testing limits and oversized evidence. Generic release
+  checks default to warn, with a project-owned breaking level and commit floor.
+  Fresh installs include Reviews and Release impact in the required sections
+  and ship the PR template at every tier. Updates preserve existing policy
+  values and customized templates. Upgrade the binary before adding the new
+  policy keys; older binaries do not recognize them.
+
+<!-- codeflow:release-impact minor -->
 - **Written content policy check (ADR-0067).** The commit-msg hook and
   `codeflow ci` block em and en dashes in new commit messages, pull request
   bodies and lines a change adds under `docs/`, `project-management/` and the
