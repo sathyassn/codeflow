@@ -181,13 +181,20 @@ pub struct GitPolicy {
     /// a PR body is provided (`--pr-body`, `--pr-body-file`, or
     /// `CODEFLOW_PR_BODY`). Level (off/warn/allow/block); default `block`.
     /// Governs both section lists below; the always-warn template-remnant
-    /// scan rides along. No PR body provided = the check is skipped, exactly
-    /// like the attribution/emoji PR-body scan.
+    /// scan rides along. Missing bodies fail on PR events; local/push runs
+    /// without a body skip.
     pub pr_sections: PolicyLevel,
+    /// Generic release declaration syntax, consistency and breaking commit floor.
+    /// Defaults to warn; off/allow disables this independent check.
+    pub pr_release_impact: PolicyLevel,
+    /// Impact level representing incompatibility (major by default).
+    /// Pre-1.0 projects can explicitly choose minor.
+    pub pr_breaking_level: String,
     /// Markdown headings every PR body must carry (matched case-insensitively
     /// at `##`/`###` depth). A present-but-empty section — nothing but HTML
     /// comments and bare `-` bullets before the next heading — counts as
-    /// missing. Default `["Summary", "Changes"]`. Enforced under `pr_sections`.
+    /// missing. Defaults: Summary, Changes, Reviews, Release impact.
+    /// Enforced under `pr_sections`; updates preserve existing lists.
     pub pr_required_sections: Vec<String>,
     /// Headings required ONLY when the commit range touches non-docs files
     /// (docs-only = every changed path is `*.md`, `*.txt`, `LICENSE*`,
@@ -244,7 +251,14 @@ impl Default for GitPolicy {
             commit_emoji: PolicyLevel::Block,
             policy_characters: PolicyLevel::Block,
             pr_sections: PolicyLevel::Block,
-            pr_required_sections: vec!["Summary".into(), "Changes".into()],
+            pr_release_impact: PolicyLevel::Warn,
+            pr_breaking_level: "major".into(),
+            pr_required_sections: vec![
+                "Summary".into(),
+                "Changes".into(),
+                "Reviews".into(),
+                "Release impact".into(),
+            ],
             pr_code_sections: vec!["Testing".into()],
             branch_naming: PolicyLevel::Block,
             branch_prefixes: [
@@ -537,6 +551,7 @@ impl GitPolicy {
         self.commit_emoji = PolicyLevel::Off;
         self.policy_characters = PolicyLevel::Off;
         self.pr_sections = PolicyLevel::Off;
+        self.pr_release_impact = PolicyLevel::Off;
         self.branch_naming = PolicyLevel::Off;
         self.test_gate_on_push = PolicyLevel::Off;
         self.security_review = PolicyLevel::Off;
@@ -609,7 +624,12 @@ mod tests {
         assert_eq!(g.policy_characters, PolicyLevel::Block);
         // PR-body structure gate: the doctrine sections ship block-enforced.
         assert_eq!(g.pr_sections, PolicyLevel::Block);
-        assert_eq!(g.pr_required_sections, vec!["Summary", "Changes"]);
+        assert_eq!(
+            g.pr_required_sections,
+            vec!["Summary", "Changes", "Reviews", "Release impact"]
+        );
+        assert_eq!(g.pr_release_impact, PolicyLevel::Warn);
+        assert_eq!(g.pr_breaking_level, "major");
         assert_eq!(g.pr_code_sections, vec!["Testing"]);
         assert_eq!(g.branch_naming, PolicyLevel::Block);
         assert_eq!(g.branch_prefixes.len(), 13);
@@ -675,6 +695,8 @@ mod tests {
             defaults.breaking_watch_paths
         );
         assert_eq!(from_asset.git.pr_sections, defaults.pr_sections);
+        assert_eq!(from_asset.git.pr_release_impact, defaults.pr_release_impact);
+        assert_eq!(from_asset.git.pr_breaking_level, defaults.pr_breaking_level);
         assert_eq!(
             from_asset.git.pr_required_sections,
             defaults.pr_required_sections
