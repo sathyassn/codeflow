@@ -5,7 +5,10 @@
 //! references, attribute quoting and comments mean what they mean to a
 //! browser. Every element that carries figure or companion markup is then
 //! either inside a companion, which the caller compares with its
-//! reconstruction, or counted as stray.
+//! reconstruction, or counted as stray. Page content carries no CSS at all:
+//! a style element, a stylesheet link, a style attribute or a declarative
+//! shadow root anywhere in it is recorded, so only the site's own built
+//! sheets can style a page.
 
 use pulldown_cmark::{html, CowStr, Event, Parser, Tag, TagEnd};
 use scraper::{ElementRef, Html, Node};
@@ -18,6 +21,8 @@ pub(super) struct RenderedFigures {
     /// Elements outside every companion that carry figure or companion
     /// markup: a kit class or a figure data attribute.
     pub stray: usize,
+    /// The kinds of CSS the rendered content carries, each named once.
+    pub css: std::collections::BTreeSet<String>,
 }
 
 pub(super) fn rendered_figures(markdown: &str) -> RenderedFigures {
@@ -25,10 +30,42 @@ pub(super) fn rendered_figures(markdown: &str) -> RenderedFigures {
     let mut found = RenderedFigures {
         companions: Vec::new(),
         stray: 0,
+        css: std::collections::BTreeSet::new(),
     };
     let mut heading = None;
     walk(document.root_element(), &mut heading, &mut found);
+    for element in document
+        .root_element()
+        .descendants()
+        .filter_map(ElementRef::wrap)
+    {
+        if let Some(kind) = css_carrier(element) {
+            found.css.insert(kind);
+        }
+    }
     found
+}
+
+/// CSS in rendered content, in any namespace and inside template contents:
+/// a style element, a link element, a style attribute or a declarative shadow
+/// root, which could carry a style element of its own.
+fn css_carrier(element: ElementRef<'_>) -> Option<String> {
+    let value = element.value();
+    let name = value.name();
+    match name {
+        "style" => Some("a <style> element".to_string()),
+        "link" => Some("a <link> element".to_string()),
+        "template"
+            if value.attrs().any(|(attribute, _)| {
+                attribute == "shadowrootmode" || attribute == "shadowroot"
+            }) =>
+        {
+            Some("a declarative shadow root".to_string())
+        }
+        _ => value
+            .attr("style")
+            .map(|_| format!("a style attribute on <{name}>")),
+    }
 }
 
 /// The canonical form of the one element an HTML fragment holds, the form

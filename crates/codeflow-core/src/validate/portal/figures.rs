@@ -972,7 +972,8 @@ fn verify_page_class(
 /// binding exactly once, compared as parsed HTML. On an explanatory page each
 /// sits under its declared panel heading. Figure or companion markup anywhere
 /// else fails, however it is spelled; a comment renders nothing and text that
-/// names a kit class is not markup.
+/// names a kit class is not markup. The page content carries no CSS: only the
+/// site's own built sheets may style what a reader sees.
 fn verify_rendered_figures(
     page: &Page,
     output: &str,
@@ -1032,6 +1033,13 @@ fn verify_rendered_figures(
     if rendered.stray > 0 {
         report.issues.push(format!(
             "{route} renders companion or figure markup outside its companion blocks"
+        ));
+    }
+    if !rendered.css.is_empty() {
+        let kinds: Vec<&str> = rendered.css.iter().map(String::as_str).collect();
+        report.issues.push(format!(
+            "{route} renders page CSS, which only the site's own sheets may carry: {}",
+            kinds.join(", ")
         ));
     }
 }
@@ -1998,6 +2006,40 @@ mod tests {
         );
         let found = dom::rendered_figures(&region);
         assert_eq!((found.companions.len(), found.stray), (1, 0));
+        assert!(found.css.is_empty(), "{:?}", found.css);
+        // Page content carries no CSS (R4-1, R4-2): each rule the review used
+        // as a style block, a style attribute, a stylesheet link, an SVG style
+        // and a declarative shadow root are all found; the clean page and a
+        // style block inside an as-is region, which renders as text, are not.
+        assert!(dom::rendered_figures(&clean).css.is_empty());
+        for rule in [
+            ".cf-fig { opacity: 0; }",
+            ".cf-companion { opacity: 0; }",
+            ".cf-fig { clip-path: inset(50%); }",
+            ".cf-fig { filter: opacity(0); }",
+            ".cf-fig-caption { visibility: hidden; }",
+            ".cf-fig { translate: 0 1000px; }",
+            ".cf-fig-svg .cf-m-trans { stroke-dasharray: 0 100000; }",
+        ] {
+            let styled = format!("## Concept\n\n<style>{rule}</style>\n\n{companion}\n");
+            let css = dom::rendered_figures(&styled).css;
+            assert_eq!(
+                css.into_iter().collect::<Vec<_>>(),
+                ["a <style> element"],
+                "{rule}"
+            );
+        }
+        for (page, kind) in [
+            ("## Concept\n\n<div style=\"opacity:0\">\n\nx\n\n</div>\n", "a style attribute on <div>"),
+            ("## Concept\n\nText <span style=\"opacity:0\">inline</span>.\n", "a style attribute on <span>"),
+            ("## Concept\n\n<link rel=\"stylesheet\" href=\"/x.css\">\n", "a <link> element"),
+            ("## Concept\n\n<svg><style>.cf-fig{opacity:0}</style></svg>\n", "a <style> element"),
+            ("## Concept\n\n<div><template shadowrootmode=\"open\"><style>p{}</style></template></div>\n", "a declarative shadow root"),
+        ] {
+            assert!(dom::rendered_figures(page).css.contains(kind), "{page}");
+        }
+        let inert = "<!-- codeflow-source-begin route=r source_sha256=x class=illustrated -->\n\n<style>.cf-fig{opacity:0}</style>\n\n<!-- codeflow-source-end -->\n";
+        assert!(dom::rendered_figures(inert).css.is_empty());
     }
 
     #[test]
