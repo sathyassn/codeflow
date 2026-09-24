@@ -222,6 +222,16 @@ narrow composition that drops a state it does not declare. The portal
 re-derives every fact from its source at build time and fails a figure whose
 drawn value differs; present draws facts as declared.
 
+The portal gate checks what a page renders against what its pinned
+declaration draws. `codeflow validate --portal` parses each page as a browser
+would and fails any figure or companion markup that is not a companion equal
+to its rebuild. The browser gate compares each figure's rendered DOM with a
+clean render of the pinned declaration, and its geometry and visibility
+styles with that render under the kit sheets alone. It detects drift and
+hand edits to generated output and to derived values. It does not defend
+against a committer who can also change the validator, the grammar module or
+the kit sheets; review and CI own that boundary.
+
 ## 7. Chat form
 
 In chat the family choice is the same; the medium changes the marks. Draw an
