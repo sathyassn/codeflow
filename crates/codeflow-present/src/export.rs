@@ -141,9 +141,11 @@ fn enhance_export(
         1,
     );
     let styles = include_str!("../web/src/styles.css");
+    // The figure block's sheet: the kit's figure.css, byte for byte.
+    let figure_styles = include_str!("../web/src/figure.css");
     let system_fallback = include_str!("../web/src/export-fallback.css");
     let head = format!(
-        "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\"><meta name=\"referrer\" content=\"no-referrer\"><style data-cf-present-export-style=\"true\">{styles}\n{system_fallback}\n{utility_style}</style>"
+        "<meta http-equiv=\"Content-Security-Policy\" content=\"{csp}\"><meta name=\"referrer\" content=\"no-referrer\"><style data-cf-present-export-style=\"true\">{styles}\n{figure_styles}\n{system_fallback}\n{utility_style}</style>"
     );
     html = html.replacen(marker, &format!("{head}{marker}"), 1);
     let payload = format!(

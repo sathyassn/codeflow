@@ -363,6 +363,28 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             escape_html_to(acc_description, output);
             output.push_str("</span></figcaption></figure>");
         }
+        Block::Figure { declaration, .. } => {
+            // The grammar module draws the figure on the client, as the
+            // diagram block does. Until then, and without scripts, the
+            // placeholder shows the title and the one-sentence caption.
+            let title = declaration
+                .pointer("/figure/title")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            let caption = declaration
+                .pointer("/figure/caption")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default();
+            output.push_str("<div class=\"figure-block\" data-cf-figure-block=\"pending\" data-cf-figure-declaration=\"");
+            escape_attr_to(&declaration.to_string(), output);
+            output.push_str("\"><div data-cf-figure-output><p class=\"figure-block__title\">");
+            escape_html_to(title, output);
+            output.push_str("</p><p class=\"figure-block__caption\">");
+            escape_html_to(caption, output);
+            output.push_str(
+                "</p></div><p data-cf-figure-status class=\"sr-only\" role=\"status\"></p></div>",
+            );
+        }
         Block::Media {
             mime_type,
             data_base64,
@@ -451,6 +473,7 @@ fn block_kind(block: &Block) -> &'static str {
         Block::Diff { .. } => "diff",
         Block::Tree { .. } => "tree",
         Block::Diagram { .. } => "diagram",
+        Block::Figure { .. } => "figure",
         Block::Media { .. } => "media",
         Block::Disclosure { .. } => "disclosure",
         Block::Tabs { .. } => "tabs",
@@ -623,6 +646,19 @@ mod tests {
                     markdown: "Nested body".to_string(),
                 }],
             },
+            Block::Figure {
+                id: "figure".to_string(),
+                declaration: serde_json::json!({
+                    "schema_version": 1,
+                    "figure": {
+                        "id": "review-path",
+                        "family": "flow",
+                        "binding": "authored",
+                        "title": "Résumé <path>",
+                        "caption": "A change passes review before it lands."
+                    }
+                }),
+            },
             Block::Tabs {
                 id: "tabs".to_string(),
                 tabs: vec![
@@ -692,5 +728,67 @@ mod tests {
                 block.canonical_review_text()
             );
         }
+    }
+
+    #[test]
+    fn figure_placeholder_carries_its_declaration_for_the_client() {
+        let declaration = serde_json::json!({
+            "schema_version": 1,
+            "figure": {
+                "id": "review-path",
+                "family": "flow",
+                "binding": "authored",
+                "title": "Quotes \" and <tags> stay text",
+                "caption": "A change passes review before it lands."
+            }
+        });
+        let document = PresentationDocument {
+            schema_version: 1,
+            title: "Figure".to_string(),
+            language: None,
+            provenance: Provenance::default(),
+            blocks: vec![Block::Figure {
+                id: "figure".to_string(),
+                declaration: declaration.clone(),
+            }],
+        };
+        let rendered = render_document(
+            &document,
+            &RenderOptions {
+                session_id: "00000000-0000-0000-0000-000000000000",
+                revision: 1,
+                event_sequence: 0,
+                script_path: None,
+                style_path: None,
+                prepaint_source: None,
+                utility_style: None,
+                identity: None,
+                feedback: None,
+                read_only_warning: None,
+                interactive: false,
+            },
+        );
+        let parsed = Html::parse_document(&rendered);
+        // The client draws from the declaration attribute, which parses back
+        // to the declaration the document carried.
+        let placeholder = parsed
+            .tree
+            .nodes()
+            .filter_map(ElementRef::wrap)
+            .find(|element| element.value().attr("data-cf-figure-block") == Some("pending"))
+            .expect("figure placeholder");
+        assert!(placeholder
+            .descendants()
+            .filter_map(ElementRef::wrap)
+            .any(|element| element.value().attr("data-cf-figure-status").is_some()));
+        let carried = placeholder
+            .value()
+            .attr("data-cf-figure-declaration")
+            .expect("declaration attribute");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(carried).unwrap(),
+            declaration
+        );
+        assert!(!rendered.contains("<tags>"));
     }
 }

@@ -47,6 +47,7 @@
         {"$ref": "#/$defs/diff"},
         {"$ref": "#/$defs/tree"},
         {"$ref": "#/$defs/diagram"},
+        {"$ref": "#/$defs/figure"},
         {"$ref": "#/$defs/media"},
         {"$ref": "#/$defs/disclosure"},
         {"$ref": "#/$defs/tabs"},
@@ -208,6 +209,35 @@
         "source": {"type": "string", "x-codeflow-max-bytes": 65536},
         "acc_title": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 512},
         "acc_description": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 524288}
+      }
+    },
+    "figure": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "id", "declaration"],
+      "properties": {
+        "type": {"const": "figure"},
+        "id": {"$ref": "#/$defs/id"},
+        "declaration": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["schema_version", "figure"],
+          "$comment": "A figure-grammar declaration (figure-grammar.md). The service checks this envelope; the client validates the full declaration with the grammar module before it draws and shows the refusal in place of the figure. Present draws authored figures only; derived figures bind their data in the docs portal.",
+          "x-codeflow-max-bytes": 65536,
+          "properties": {
+            "schema_version": {"const": 1},
+            "figure": {
+              "type": "object",
+              "required": ["id", "family", "binding", "title", "caption"],
+              "properties": {
+                "family": {"enum": ["flow", "structure", "layering", "sequence", "state", "coverage", "extent", "derivation", "graph"]},
+                "binding": {"const": "authored"},
+                "title": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 512},
+                "caption": {"type": "string", "minLength": 1, "pattern": "\\S", "x-codeflow-max-bytes": 512}
+              }
+            }
+          }
+        }
       }
     },
     "media": {

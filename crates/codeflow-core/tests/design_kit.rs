@@ -495,6 +495,57 @@ fn kit_copies_are_byte_identical_across_skills_and_mirrors() {
     );
 }
 
+/// One figure runtime (TSK-059): the portal, its managed starter and present
+/// carry the kit's figure sheet byte for byte, and present and the starter
+/// carry the portal's grammar module byte for byte, since present's esbuild
+/// entry reaches only `web/src`.
+#[test]
+fn figure_runtime_copies_match_the_kit_sheet_and_the_portal_module() {
+    let root = repo_root();
+    let sheet = read_kit("figure.css");
+    let module = std::fs::read_to_string(root.join("docs-portal/scripts/figure-grammar.mjs"))
+        .expect("the portal grammar module is readable");
+    let mut problems = Vec::new();
+    for (copy, source, label) in [
+        (
+            "docs-portal/src/styles/figure.css",
+            &sheet,
+            "the kit figure.css",
+        ),
+        (
+            "assets/docs-portal/starter/src/styles/figure.css",
+            &sheet,
+            "the kit figure.css",
+        ),
+        (
+            "crates/codeflow-present/web/src/figure.css",
+            &sheet,
+            "the kit figure.css",
+        ),
+        (
+            "crates/codeflow-present/web/src/figure-grammar.mjs",
+            &module,
+            "docs-portal/scripts/figure-grammar.mjs",
+        ),
+        (
+            "assets/docs-portal/starter/scripts/figure-grammar.mjs",
+            &module,
+            "docs-portal/scripts/figure-grammar.mjs",
+        ),
+    ] {
+        match std::fs::read_to_string(root.join(copy)) {
+            Ok(bytes) if &bytes == source => {}
+            Ok(_) => problems.push(format!("{copy} differs from {label}")),
+            Err(error) => problems.push(format!("{copy} is unreadable: {error}")),
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "figure runtime copies drifted:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
 /// Every kit file ships to both harnesses from its own skill source, and the
 /// repository manifest records the hash of the bytes it installed.
 #[test]
