@@ -798,6 +798,25 @@ fn operator_axis_list_problems(label: &str, text: &str) -> Vec<String> {
             "{label}: the clarity gate lost `Ask the operator only`"
         ));
     }
+    // A list is two or more axes in any sentence about asking, so a second
+    // ask rule outside the pointer sentence fails too.
+    for sentence in content.split(". ") {
+        let asks = sentence.split_whitespace().any(|word| {
+            word.trim_matches(|c: char| !c.is_alphabetic())
+                .to_lowercase()
+                .starts_with("ask")
+        });
+        let named: Vec<&str> = OPERATOR_AXES
+            .iter()
+            .copied()
+            .filter(|axis| sentence.contains(axis))
+            .collect();
+        if asks && named.len() > 1 {
+            problems.push(format!(
+                "{label}: `{sentence}` keeps a second list of axes {named:?}"
+            ));
+        }
+    }
     problems
 }
 
@@ -856,6 +875,14 @@ fn autonomy_pointer_checks_reject_a_missing_pointer_and_a_second_list() {
     assert!(
         !operator_axis_list_problems("fixture", listed_pointer).is_empty(),
         "a pointer that keeps a partial list must fail"
+    );
+
+    let second_rule = format!("{CF_PLAN_AUTONOMY_POINTER} Also ask about taste, scope and spend.");
+    assert!(
+        operator_axis_list_problems("fixture", &second_rule)
+            .iter()
+            .any(|problem| problem.contains("second list")),
+        "a separate ask sentence that lists axes must fail"
     );
 
     let current = format!("Choose from evidence. {CF_PLAN_AUTONOMY_POINTER} Ask the smallest.");
