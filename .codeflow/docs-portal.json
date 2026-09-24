@@ -158,7 +158,7 @@
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "53e12f4538e7e693feec09f027a591f692fa0ed8316be04dd9bf9bdef79c36c8"
+      "pristine_sha256": "50f8bdcdedd0eef9cdd3dbdd31f17f23777387c24e2019dc145e2289895a1d64"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
