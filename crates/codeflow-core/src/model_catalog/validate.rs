@@ -257,14 +257,7 @@ impl Catalog {
         {
             return Err("catalog needs effort triggers and rules".into());
         }
-        let policy: serde_json::Value = serde_json::from_str(include_str!(concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../../assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json"
-        )))
-        .map_err(|e| e.to_string())?;
-        let native_triggers = policy["extra_family_review"]["triggers"]
-            .as_array()
-            .ok_or("missing routing triggers")?;
+        let native_triggers = crate::model_qualification::routing_policy_triggers()?;
         for (name, facts) in &self.named_policies {
             nonempty(name, "named policy")?;
             if facts.is_empty() {
@@ -289,9 +282,7 @@ impl Catalog {
             }
             for triggered in &duty.triggered {
                 if !self.named_policies.contains_key(&triggered.trigger)
-                    && !native_triggers
-                        .iter()
-                        .any(|v| v.as_str() == Some(&triggered.trigger))
+                    && !native_triggers.contains(&triggered.trigger)
                 {
                     return Err(format!("unknown participant trigger {}", triggered.trigger));
                 }

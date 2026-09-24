@@ -644,19 +644,20 @@ fn override_effort_mismatch_is_open() {
     );
 }
 #[test]
-fn override_on_non_design_duties_grants_nothing() {
-    let record = override_record();
+fn override_on_non_design_duties_is_rejected() {
     let observed = BTreeMap::new();
     for duty in ["orchestrate", "unit-review"] {
-        let mut req = request(duty, &observed);
-        req.requested_override = Some(&record.route);
-        req.operator_override = Some(&record);
-        let result = catalog().resolve(&req).unwrap();
-        assert!(result
-            .participants
-            .iter()
-            .all(|p| p.operator_override.is_none()));
-        assert_ne!(result.participants[0].version, "orchid-two");
+        for record_duty in ["design", duty] {
+            let mut record = override_record();
+            record.duty = record_duty.into();
+            let mut req = request(duty, &observed);
+            req.requested_override = Some(&record.route);
+            req.operator_override = Some(&record);
+            assert_eq!(
+                catalog().resolve(&req).unwrap_err(),
+                "OPERATOR_OVERRIDE is only valid for design"
+            );
+        }
     }
 }
 #[test]
@@ -1254,4 +1255,119 @@ fn overlay_cannot_gain_seat_authority_from_a_preexisting_binding() {
     let mut forged = fixture();
     forged["lines"][0]["versions"][0]["personal_candidate"] = json!(false);
     assert!(parse(&forged).is_err());
+}
+
+#[test]
+fn overlay_worker_adoption_selects_addition_but_manual_keeps_it_inert() {
+    for (adoption, expected) in [
+        (Adoption::Workers, "quartz-new"),
+        (Adoption::Manual, "quartz-two"),
+    ] {
+        let mut c = catalog();
+        c.lines[3].adoption = adoption;
+        let overlay = json!({"schema_version":1,"additions":[{"line":"quartz-worker","id":"quartz-new","alias":"quartz-latest","pinned_id":"quartz-new-pin","selectors":{"codex-cli":"quartz-new-pin"},"efforts":["medium"]}],"exclusions":[]});
+        let (copy, exclusions) = PersonalOverlay::parse(&serde_json::to_vec(&overlay).unwrap())
+            .unwrap()
+            .apply(&c)
+            .unwrap();
+        assert!(exclusions.is_empty());
+        let result = copy
+            .resolve(&request("light-execution", &BTreeMap::new()))
+            .unwrap();
+        assert!(!result.is_open());
+        assert_eq!(result.participants[0].version, expected);
+        assert_eq!(result.participants[0].pinned_id, format!("{expected}-pin"));
+        assert_eq!(result.participants[0].eligibility, Eligibility::Candidate);
+        assert!(result.participants[0].seat.is_none());
+    }
+}
+
+#[test]
+fn route_less_override_leaves_eligible_design_open() {
+    let c = catalog();
+    let observed = BTreeMap::new();
+    let record = override_record();
+    let mut req = request("design", &observed);
+    assert!(!c.resolve(&req).unwrap().is_open());
+    req.operator_override = Some(&record);
+    let result = c.resolve(&req).unwrap();
+    assert!(result.is_open());
+    assert!(result.participants.is_empty());
+    assert_eq!(
+        result.open[0].reasons,
+        ["missing OPERATOR_OVERRIDE invocation route"]
+    );
+}
+
+#[test]
+fn override_floor_is_explicitly_the_design_duty_floor() {
+    let mut record = override_record();
+    record.route.effort = Effort::Medium;
+    let result = override_result(
+        Some(&record),
+        &record.route,
+        &catalog(),
+        &[],
+        &BTreeMap::new(),
+    );
+    assert!(result.is_open());
+    assert_eq!(
+        result.open[0].reasons,
+        ["OPERATOR_OVERRIDE effort below design duty floor"]
+    );
+}
+
+#[test]
+fn missing_optional_second_opinion_does_not_open_filled_independent_review() {
+    let c = catalog();
+    let observed = BTreeMap::new();
+    let mut req = request("general-review", &observed);
+    req.author_lineage = Some("codex");
+    let result = c.resolve(&req).unwrap();
+    assert!(!result.is_open());
+    assert_eq!(result.participants[0].participant, "independent");
+    assert_eq!(result.open.len(), 1);
+    assert_eq!(result.open[0].participant, "advisory");
+    assert_eq!(result.open[0].label, ParticipantLabel::SecondOpinion);
+
+    let excluded = [
+        exclude("cinder-one"),
+        exclude("orchid-one"),
+        exclude("orchid-two"),
+    ];
+    req.exclusions = &excluded;
+    let result = c.resolve(&req).unwrap();
+    assert!(result.is_open());
+    assert!(result
+        .open
+        .iter()
+        .any(|gap| gap.label == ParticipantLabel::Required));
+}
+
+#[test]
+fn resolution_revalidates_public_catalog_mutations() {
+    let mut c = catalog();
+    let observed = BTreeMap::new();
+    let req = request("orchestrate", &observed);
+    assert!(!c.resolve(&req).unwrap().is_open());
+    c.duties.get_mut("orchestrate").unwrap().required[0].alternatives[0].effort = Effort::Medium;
+    assert!(c
+        .resolve(&req)
+        .unwrap_err()
+        .contains("below its effort floor"));
+}
+
+#[test]
+fn native_routing_policy_trigger_is_shared_with_catalog_validation() {
+    let mut c = catalog();
+    c.duties.get_mut("unit-review").unwrap().triggered[0].trigger =
+        "security-sensitive change".into();
+    let observed = BTreeMap::new();
+    let facts = vec!["security-sensitive change".into()];
+    let mut req = request("unit-review", &observed);
+    req.trigger_facts = &facts;
+    let result = c.resolve(&req).unwrap();
+    assert!(!result.is_open());
+    assert_eq!(result.participants.len(), 2);
+    assert_eq!(result.participants[1].participant, "extra");
 }

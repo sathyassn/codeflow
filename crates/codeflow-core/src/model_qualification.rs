@@ -627,10 +627,26 @@ fn validate_repository_relative_reference(value: &str, label: &str) -> Result<()
     Ok(())
 }
 
+fn routing_policy() -> Result<&'static RoutingPolicy, String> {
+    static POLICY: OnceLock<Result<RoutingPolicy, String>> = OnceLock::new();
+    POLICY
+        .get_or_init(|| {
+            let policy: RoutingPolicy =
+                serde_json::from_str(ROUTING_POLICY).map_err(|error| error.to_string())?;
+            validate_parsed_routing_policy(&policy, &policy.policy_id)?;
+            Ok(policy)
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// Shared immutable policy facts; parsing and validation happen once.
+pub(crate) fn routing_policy_triggers() -> Result<&'static [String], String> {
+    Ok(&routing_policy()?.extra_family_review.triggers)
+}
+
 fn validate_routing_policy(policy_id: &str) -> Result<(), String> {
-    let policy: RoutingPolicy =
-        serde_json::from_str(ROUTING_POLICY).map_err(|error| error.to_string())?;
-    validate_parsed_routing_policy(&policy, policy_id)
+    validate_parsed_routing_policy(routing_policy()?, policy_id)
 }
 
 fn validate_parsed_routing_policy(policy: &RoutingPolicy, policy_id: &str) -> Result<(), String> {

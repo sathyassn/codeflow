@@ -89,6 +89,10 @@ Each line has an adoption policy and an `adopted_version` reference. Manual
 worker selection uses that reference; `workers` adoption admits newer
 eligible candidate versions automatically. Seat selection always needs
 designation or exact full qualification, regardless of worker adoption.
+An overlay addition stays inert on a manual line because the overlay cannot
+change its `adopted_version`. A line with `workers` adoption may select that
+addition for a candidate-eligible worker duty. Q1 remains open with the
+operator; the seed keeps manual adoption.
 
 ### Duties and effort
 
@@ -102,7 +106,9 @@ requires the opposite lineage: the Codex seat reviews Claude authorship; the
 Claude seat reviews Codex authorship; Grok authorship uses Codex, then Claude.
 The Grok participant is added on its review trigger when Grok is not the
 author. A second opinion remains labeled as such and cannot close an
-independent-review gap.
+independent-review gap. An unfilled optional second opinion is retained as
+a labeled diagnostic but does not make `is_open()` true; an unfilled required
+participant still leaves the duty open.
 
 Reasoning support excludes the version currently serving the owning seat.
 Computer-use QA selects the opposite lineage's capable harness: Codex on
@@ -111,7 +117,9 @@ alternatives in that order. Test authoring belongs to the unit's executing
 participant and is not resolved separately.
 
 ADR-0056 is unchanged. Seats enter at high; bounded workers may enter at
-medium. An xhigh trigger adds an `xhigh-reasoning` obligation at xhigh in
+medium. A high trigger raises a worker's entry effort from medium to high,
+subject to the version supporting high; it does not raise the seat's entry
+effort. An xhigh trigger adds an `xhigh-reasoning` obligation at xhigh in
 the seat's family, potentially using the same version in a separate worker
 session. The seat stays at high and retains approval. A seat lacking xhigh
 remains eligible. No eligible same-family worker leaves the obligation open
@@ -138,15 +146,24 @@ record. It names the exact task, design duty, route including harness,
 effort, plan version and location of the operator instruction. TSK-080 reads
 that record as committed on the task's integration target using the planning
 anchor rule; arbitrary caller strings and working-tree records confer no
-authority. The engine matches the typed record against the requested task,
-duty, route and effort. Approval of the plan supplies authority; this does
-not independently authenticate the operator.
+authority. The engine takes `requested_override` as a separate input containing
+the invocation route and effort, in addition to the typed `operator_override`
+record. TSK-080 must supply both and match the record against the requested
+task, duty, route and effort. A missing invocation route or a mismatched
+record leaves design open even when the ordinary first line is eligible.
+A record naming a non-design duty is rejected: design resolution returns
+an open gap for the duty mismatch, and an override supplied to a non-design
+resolution returns an explicit error instead of being ignored. Approval of
+the plan supplies authority; this does not independently authenticate the
+operator.
 
 A matching override replaces only the ordinary first-line restriction for
 that task. It may name any line listed by a catalog seat, including the
 Claude seat's second line or another family's seat line. Seat eligibility,
 supported effort at or above high, exclusions and pinned identity still
-apply. Missing or mismatched fields, retirement, unsupported effort, an
+apply. The override effort is checked explicitly against the design duty's
+floor before ordinary seat eligibility is checked. Missing or mismatched
+fields, retirement, unsupported effort, an
 exclusion or identity drift leave design open. The record grants nothing
 for another task or a non-design duty. Workers never receive direction or
 fidelity approval through this exception.
@@ -188,3 +205,11 @@ schema 4 reader keeps the current managed tree working until TSK-085 removes
 it. Native identity canaries, the real roster, command output and final
 qualification are later tasks in EPC-018; these engine tests do not claim
 their evidence.
+
+The general-review fictional fixture intentionally lists only the Grok and
+Claude seats as independent alternatives. For Claude-authored work, excluding
+Grok therefore leaves that participant open while the same-lineage second
+opinion remains advisory. TSK-085 must reconcile this fixture-specific
+acceptance example with the epic's broader "another opposite-lineage seat"
+rule: if the real catalog lists Codex, that available seat fills the gap.
+The real roster table is also added when TSK-085 accepts this decision.

@@ -138,6 +138,7 @@ struct Candidates {
 #[derive(Debug, Clone, Serialize)]
 pub struct OpenParticipant {
     pub participant: String,
+    pub label: ParticipantLabel,
     pub reasons: Vec<String>,
 }
 
@@ -145,6 +146,7 @@ pub struct OpenParticipant {
 pub struct Resolution {
     pub participants: Vec<ResolvedParticipant>,
     pub obligations: Vec<ResolvedParticipant>,
+    /// Unfilled participants, including labeled optional second opinions.
     pub open: Vec<OpenParticipant>,
     pub xhigh_trigger_met: bool,
 }
@@ -152,7 +154,9 @@ pub struct Resolution {
 impl Resolution {
     #[must_use]
     pub fn is_open(&self) -> bool {
-        !self.open.is_empty()
+        self.open
+            .iter()
+            .any(|gap| gap.label == ParticipantLabel::Required)
     }
 }
 
@@ -310,13 +314,19 @@ impl Catalog {
     /// Return all owed participants and obligations, including named open gaps.
     ///
     /// # Errors
-    /// Returns catalog validation errors before resolving any participant.
+    /// Returns catalog validation errors or rejects an override on a non-design duty.
     pub fn resolve(&self, request: &ResolveRequest<'_>) -> Result<Resolution, String> {
         self.validate()?;
+        if request.duty != "design"
+            && (request.operator_override.is_some() || request.requested_override.is_some())
+        {
+            return Err("OPERATOR_OVERRIDE is only valid for design".into());
+        }
         let mut result = Resolution::default();
         if request.duty == "test-authoring" {
             result.open.push(OpenParticipant {
                 participant: "test-authoring".into(),
+                label: ParticipantLabel::Required,
                 reasons: vec![
                     "not resolved separately; the unit's executing participant writes its tests"
                         .into(),
@@ -327,6 +337,7 @@ impl Catalog {
         let Some(duty) = self.duties.get(request.duty) else {
             result.open.push(OpenParticipant {
                 participant: request.duty.into(),
+                label: ParticipantLabel::Required,
                 reasons: vec!["unknown duty".into()],
             });
             return Ok(result);
@@ -431,6 +442,7 @@ impl Catalog {
                 Ok(chosen) => result.participants.push(chosen),
                 Err(reason) => result.open.push(OpenParticipant {
                     participant: participant.id.clone(),
+                    label: participant.label,
                     reasons: vec![reason],
                 }),
             }
@@ -452,6 +464,7 @@ impl Catalog {
             }
             result.open.push(OpenParticipant {
                 participant: participant.id.clone(),
+                label: participant.label,
                 reasons: candidates.reasons,
             });
         }
@@ -687,6 +700,9 @@ impl Catalog {
         if route.effort != record.route.effort {
             return Err("OPERATOR_OVERRIDE effort mismatch".into());
         }
+        if route.effort < floor("design", true) {
+            return Err("OPERATOR_OVERRIDE effort below design duty floor".into());
+        }
         let harness = route
             .harness
             .as_deref()
@@ -716,7 +732,7 @@ impl Catalog {
         for line in lines {
             for version in line.versions.iter().rev() {
                 // The override changes the design line restriction only. Check
-                // ordinary seat authority under a neutral duty, then design floor.
+                // ordinary seat authority after explicitly checking the design floor.
                 let eligibility_request = EligibilityRequest {
                     duty: "orchestrate",
                     line: &line.id,
