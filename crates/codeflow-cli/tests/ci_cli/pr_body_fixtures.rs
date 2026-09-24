@@ -89,6 +89,18 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             policy["git"]["pr_required_sections"],
             json!(["Summary", "Changes", "Reviews", "Release impact"])
         );
+        let headings: Vec<_> = std::str::from_utf8(&template)
+            .unwrap()
+            .lines()
+            .filter_map(|line| line.strip_prefix("## "))
+            .collect();
+        assert_eq!(
+            headings,
+            ["Summary", "Changes", "Testing", "Reviews", "Release impact"]
+        );
+        for section in policy["git"]["pr_required_sections"].as_array().unwrap() {
+            assert!(headings.contains(&section.as_str().unwrap()));
+        }
         assert_clean(
             dir.path(),
             &fill_installed_template(std::str::from_utf8(&template).unwrap()),

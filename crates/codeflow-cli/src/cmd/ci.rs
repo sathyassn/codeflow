@@ -812,8 +812,8 @@ fn strip_html_comments(text: &str, preserve_lines: bool) -> String {
 
 /// Scan the body for leftovers of the shipped PR template, each reported as
 /// (1-based line number, the trimmed line, what it is): the paste-your-output
-/// placeholder, a table row of empty cells (`|  |  |`), and a bare `- CAP-` /
-/// `- EPC-` linked-work bullet with nothing after the dash-prefix.
+/// placeholder, a table row of empty cells (`|  |  |`), and unresolved
+/// Release impact alternatives.
 fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
     let mut out = Vec::new();
     for (idx, line) in body.lines().enumerate() {
@@ -832,17 +832,9 @@ fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
             || normalized.contains("yes | no")
             || normalized
                 .strip_prefix("- migration:")
-                .is_some_and(|value| {
-                    value.trim() == "none, steps, or \"see breaking change\""
-                        || value.trim() == "none | steps | \"see breaking change\""
-                })
-            || t.contains("<revision>")
-            || t.contains("<command>")
-            || t.contains("<steps>")
+                .is_some_and(|value| value.trim() == "none, steps, or \"see breaking change\"")
         {
             "unresolved template alternatives or placeholders"
-        } else if t == "- CAP-" || t == "- EPC-" {
-            "a bare linked-work bullet"
         } else {
             continue;
         };
@@ -1920,7 +1912,7 @@ mod tests {
     fn pr_structure_placeholders_warn_never_block() {
         let body = format!(
             "{FULL_BODY}\n```text\n(paste the real test summary output here)\n```\n\n\
-             | Metric | This PR |\n|---|---|\n|  |  |\n\n- CAP-\n- EPC-\n"
+             | Metric | This PR |\n|---|---|\n|  |  |\n\n- Impact: none | patch | minor | major\n- Breaking: yes | no\n"
         );
         let v = evaluate_pr_structure(&git(), &body, Some(&code_files()));
         assert_eq!(v.len(), 4, "{v:?}");
@@ -1935,7 +1927,7 @@ mod tests {
         assert!(v.iter().any(|x| x.message.contains("empty cells")), "{v:?}");
         assert!(
             v.iter()
-                .filter(|x| x.message.contains("linked-work"))
+                .filter(|x| x.message.contains("unresolved template alternatives"))
                 .count()
                 == 2,
             "{v:?}"
@@ -1949,7 +1941,6 @@ mod tests {
             "- Impact: `none | patch | minor | major`",
             "- Breaking: `yes | no`",
             "- Migration: `none`, steps, or \"see Breaking change\"",
-            "- Migration: none | steps | \"see Breaking change\"",
         ] {
             let findings = evaluate_pr_structure(
                 &git(),
@@ -1966,12 +1957,17 @@ mod tests {
     }
 
     #[test]
+    fn obsolete_template_placeholders_are_not_remnants() {
+        assert!(find_placeholders("- CAP-\n- EPC-\n<revision> <command> <steps>").is_empty());
+    }
+
+    #[test]
     fn pr_template_comments_hide_remnants_without_shifting_line_numbers() {
-        let body = "<!--\n- CAP-\n-->\n- EPC-\n";
+        let body = "<!--\n- Impact: none | patch | minor | major\n-->\n- Breaking: yes | no\n";
         let findings = find_placeholders(&strip_html_comments(body, true));
         assert_eq!(findings.len(), 1);
         assert_eq!(findings[0].0, 4);
-        assert_eq!(findings[0].1, "- EPC-");
+        assert_eq!(findings[0].1, "- Breaking: yes | no");
     }
 
     #[test]

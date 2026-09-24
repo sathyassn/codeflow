@@ -182,8 +182,8 @@ fn repository_policy_requires_the_always_present_pr_sections() {
         serde_json::from_str(&read("assets/base/policy.json")).expect("shipped policy JSON");
     assert_eq!(
         shipped["git"]["pr_required_sections"],
-        serde_json::json!(["Summary", "Changes"]),
-        "the shipped default must not start blocking existing consumers"
+        serde_json::json!(["Summary", "Changes", "Reviews", "Release impact"]),
+        "fresh installs require the approved template sections"
     );
 }
 

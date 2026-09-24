@@ -403,7 +403,9 @@ fn ci_warn_level_structure_reports_and_proceeds() {
 fn ci_template_remnants_warn_but_pass() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
-    let body = format!("{FULL_BODY}\n(paste the real test summary output here)\n|  |  |\n- CAP-\n");
+    let body = format!(
+        "{FULL_BODY}\n(paste the real test summary output here)\n|  |  |\n- Breaking: yes | no\n"
+    );
     let out = ci_with_body(dir.path(), &body);
     assert_eq!(
         out.status.code(),
@@ -414,7 +416,10 @@ fn ci_template_remnants_warn_but_pass() {
     assert!(stderr.contains("template remnant"), "{stderr}");
     assert!(stderr.contains("paste-your-output"), "{stderr}");
     assert!(stderr.contains("empty cells"), "{stderr}");
-    assert!(stderr.contains("linked-work"), "{stderr}");
+    assert!(
+        stderr.contains("unresolved template alternatives"),
+        "{stderr}"
+    );
 }
 
 #[test]
