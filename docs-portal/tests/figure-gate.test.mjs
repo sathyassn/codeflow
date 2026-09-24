@@ -110,6 +110,18 @@ async function serve(directory) {
   return { origin: `http://127.0.0.1:${server.address().port}`, close: () => new Promise((resolve) => server.close(resolve)) };
 }
 
+// `browser:verify` awaits its entry point at the top level, so a module-level
+// binding declared below it is read before initialization. The first consumer
+// build with bound figures failed that way; the entry point must come last.
+test("the browser gate's entry point runs after every module-level binding", async () => {
+  const source = await readFile(path.join(starterRoot, "scripts/browser-verify.mjs"), "utf8");
+  const lines = source.split("\n");
+  const entry = lines.findIndex((line) => line.startsWith("if (process.argv[1] && "));
+  assert.notEqual(entry, -1, "browser-verify.mjs has an entry point");
+  const later = lines.slice(entry).filter((line) => /^(export )?(const|let|var|class) /.test(line));
+  assert.deepEqual(later, [], "module-level bindings declared after the entry point");
+});
+
 test("the adapter refuses a figure binding it can prove wrong from committed inputs", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
   const root = await mixedFixture();
   try {

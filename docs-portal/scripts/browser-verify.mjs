@@ -35,10 +35,6 @@ if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId)) throw new Error("PORTAL_BR
 const PORTAL_SKINS = Object.freeze(Object.keys(PORTAL_ACCENT_BACKGROUNDS));
 export const PALETTE_PILL_GROUPS = 2;
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, () => verifyPortal(lifecycle)));
-}
-
 async function verifyPortal(lifecycle) {
   const configBytes = await readBoundedRegularFile(path.join(root, "portal.config.json"), 64 * 1024, "portal configuration");
   const config = validatePortalConfig(JSON.parse(configBytes));
@@ -1340,4 +1336,10 @@ async function waitForServer(base, processHandle, output) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`portal preview did not become ready: ${output()}`);
+}
+
+// The entry point runs last, once every module-level binding is initialized:
+// a top-level await above a later `const` reads it before initialization.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, () => verifyPortal(lifecycle)));
 }
