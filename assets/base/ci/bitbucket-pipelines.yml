@@ -11,10 +11,12 @@
 # source branch BITBUCKET_BRANCH. `clone: depth: full` puts the destination
 # commit in history so the range walk resolves.
 #
-# NOTE: Bitbucket does not expose the PR description as an environment variable,
-# so supply it through CODEFLOW_PR_BODY or `codeflow ci --pr-body-file <file>`
-# using a project-owned description retrieval step. A missing body on a PR
-# event fails the default section policy; commit and branch checks still run.
+# Bitbucket's documented default variables expose the PR ID and destination,
+# but no description: https://support.atlassian.com/bitbucket-cloud/docs/variables-and-secrets/
+# With no CODEFLOW_PR_BODY channel, codeflow warns and skips body checks.
+# A project-owned API retrieval step can export CODEFLOW_PR_BODY or supply
+# `codeflow ci --pr-body-file <file>`. An explicitly empty body is checked and
+# fails the default section policy. Do not synthesize an empty channel here.
 #
 # This is a copy-in template (see this directory's README): `codeflow init`
 # scaffolds the GitHub workflow today; a platform picker is a follow-up.

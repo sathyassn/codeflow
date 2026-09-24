@@ -187,7 +187,7 @@ pub struct GitPolicy {
     /// Generic release declaration syntax, consistency and breaking commit floor.
     /// Defaults to warn; off/allow disables this independent check.
     pub pr_release_impact: PolicyLevel,
-    /// Impact level representing incompatibility (major by default).
+    /// Minimum impact level for incompatibility (major by default).
     /// Pre-1.0 projects can explicitly choose minor.
     pub pr_breaking_level: String,
     /// Markdown headings every PR body must carry (matched case-insensitively

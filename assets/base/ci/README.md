@@ -35,13 +35,18 @@ non-zero — pass `--base`/`--head` explicitly to fix the setup.
 
 ## PR body checks
 
-On recognized GitHub PR, GitLab MR and Bitbucket PR events, a missing or empty
-body fails under the default `git.pr_sections: block` policy. Local and push
-runs can omit the body. Bitbucket's copy-in wrapper needs a project-owned step
-to supply the description before `codeflow ci`; it no longer skips that check.
+On recognized GitHub PR and GitLab MR events, a missing or empty body fails
+under the default `git.pr_sections: block` policy. Local and push runs can omit
+it. Bitbucket's [default variables](https://support.atlassian.com/bitbucket-cloud/docs/variables-and-secrets/)
+include a PR ID but no description channel. Without `CODEFLOW_PR_BODY`, its
+copy-in wrapper warns that body checks were skipped and explains how to supply
+one. A project-owned retrieval step can export that variable or pass
+`--pr-body-file`. An explicitly empty body still fails the default policy.
 
-The parser recognizes real Markdown headings, including nested evidence, and
-rejects duplicate required sections. Fresh installs require Summary, Changes,
+The parser recognizes unindented ATX headings outside HTML containers, keeps
+nested evidence, and rejects duplicate required sections at the preferred
+depth. Depth two takes precedence over same-name depth-three subsections;
+setext underlines do not end a section. Fresh installs require Summary, Changes,
 Reviews and Release impact, plus Testing for ranges that touch code. Existing
 section lists and enforcement levels stay unchanged on update. The PR template
 ships at minimal, standard and full tiers through the usual managed-file merge.
@@ -53,10 +58,10 @@ main). They are advisory and follow `pr_sections`; off/allow disables them.
 
 `git.pr_release_impact` defaults to warn independently. It checks Impact
 (none/patch/minor/major), Breaking (yes/no), Rationale and Migration, allowing
-extra project fields. Breaking is yes exactly at `git.pr_breaking_level`
-(default major); pre-1.0 projects declare their own level. Breaking needs
-substantive migration guidance, and a breaking commit marker sets an impact
-floor at that level. No release calculator, changelog, task tracker or language
+extra project fields. Value tokens are case-insensitive. Breaking yes requires
+Impact at or above `git.pr_breaking_level` (default major) and substantive
+migration guidance. A breaking commit marker requires both Breaking yes and
+that impact floor. Pre-1.0 projects declare their own minimum breaking level. No release calculator, changelog, task tracker or language
 is assumed. Upgrade the binary before adding the new keys to a policy file.
 
 ## What `codeflow init` scaffolds

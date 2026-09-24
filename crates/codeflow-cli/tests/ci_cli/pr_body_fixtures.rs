@@ -89,7 +89,10 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             policy["git"]["pr_required_sections"],
             json!(["Summary", "Changes", "Reviews", "Release impact"])
         );
-        assert_clean(dir.path(), BODY);
+        assert_clean(
+            dir.path(),
+            &fill_installed_template(std::str::from_utf8(&template).unwrap()),
+        );
         update(dir.path(), &source());
         update(dir.path(), &source());
         assert_eq!(
@@ -201,12 +204,12 @@ fn updates_preserve_explicit_release_defaults_off_warn_and_pre_one_mapping() {
         update(dir.path(), &source());
         update(dir.path(), &source());
         assert_eq!(read_policy(dir.path()), policy);
-        let invalid = BODY.replace("Impact: patch", "Impact: major");
+        let invalid = BODY.replace("Impact: patch", "Impact: huge");
         let result = ci_with_body(dir.path(), &invalid);
-        assert_eq!(result.status.code(), Some(0));
+        assert_eq!(result.status.code(), Some(i32::from(setting == "block")));
         assert_eq!(
             String::from_utf8_lossy(&result.stderr).contains("git.pr_release_impact"),
-            setting == "warn"
+            setting != "off"
         );
         if mapping == "minor" {
             let pre_one = BODY
@@ -226,7 +229,6 @@ fn pr_events_require_a_body_but_push_and_local_runs_can_omit_it() {
         ("GITHUB_EVENT_NAME", "pull_request"),
         ("GITHUB_EVENT_NAME", "pull_request_target"),
         ("CI_PIPELINE_SOURCE", "merge_request_event"),
-        ("BITBUCKET_PR_ID", "42"),
     ] {
         for body in [None, Some(""), Some("  \n<!-- comment -->")] {
             let mut command = codeflow();
@@ -273,9 +275,14 @@ fn real_commit_range_floors_release_impact_at_project_breaking_level() {
         assert_eq!(output.status.code(), Some(1));
         assert!(String::from_utf8_lossy(&output.stderr)
             .contains("breaking commit marker requires Impact of at least minor"));
+        let above_floor = BODY.replace("Impact: patch", "Impact: MAJOR");
+        let rejected = ci_with_body(dir.path(), &above_floor);
+        assert_eq!(rejected.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&rejected.stderr)
+            .contains("breaking commit marker requires Breaking: yes"));
         let fixed = BODY
-            .replace("Impact: patch", "Impact: minor")
-            .replace("Breaking: no", "Breaking: yes")
+            .replace("Impact: patch", "Impact: MAJOR")
+            .replace("Breaking: no", "Breaking: YES")
             .replace("Migration: none", "Migration: Rename the old option.");
         assert_clean(dir.path(), &fixed);
     }
@@ -369,4 +376,114 @@ fn rendered_budget_detects_epic_target_and_markdown_failures_reach_cli() {
         assert_eq!(output.status.code(), Some(1), "{replacement}");
         assert!(String::from_utf8_lossy(&output.stderr).contains("'## Summary'"));
     }
+}
+
+/// Fill only fields that actually exist in the installed template. Never add a
+/// missing heading: that would hide a template/default-policy mismatch.
+fn fill_installed_template(template: &str) -> String {
+    template
+        .replace(
+            "## Summary\n",
+            "## Summary\n\nClarify the command's result.\n",
+        )
+        .replace("\n-\n", "\n- Explain the result.\n")
+        .replace(
+            "- Revision and command:",
+            "- Revision and command: fixture HEAD, python -m unittest",
+        )
+        .replace(
+            "(paste the real test summary output here)",
+            "Ran 3 tests\nOK",
+        )
+        .replace("- Coverage:", "- Coverage: not measured for this fixture")
+        .replace("- New tests:", "- New tests: three command tests")
+        .replace("- Not tested:", "- Not tested: Windows")
+        .replace("|  |  |  |", "| Maintainer | fixture HEAD | approved |")
+        .replace(
+            "- Impact: `none | patch | minor | major`",
+            "- Impact: patch",
+        )
+        .replace("- Breaking: `yes | no`", "- Breaking: no")
+        .replace(
+            "- Rationale:",
+            "- Rationale: Clarify output without changing behavior.",
+        )
+        .replace(
+            "- Migration: `none`, steps, or \"see Breaking change\"",
+            "- Migration: none",
+        )
+}
+
+#[test]
+fn unfilled_installed_templates_fail_only_for_empty_required_sections() {
+    for tier in [Tier::Minimal, Tier::Standard, Tier::Full] {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_range(dir.path(), "code");
+        install(dir.path(), tier, &source());
+        let template =
+            std::fs::read_to_string(dir.path().join(".github/pull_request_template.md")).unwrap();
+        let output = ci_with_body(dir.path(), &template);
+        assert_eq!(output.status.code(), Some(1));
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(
+            !error.contains("missing required section"),
+            "{tier:?}: {error}"
+        );
+        let lines: Vec<_> = error.lines().collect();
+        let mut blocks = 0;
+        for (index, line) in lines.iter().enumerate() {
+            if line.contains("policy rule") && line.contains("(block)") {
+                blocks += 1;
+                assert!(line.contains("git.pr_sections"), "{error}");
+                assert!(lines[index + 1].contains("present but empty"), "{error}");
+            }
+        }
+        assert!(blocks > 0, "{error}");
+    }
+}
+
+#[test]
+fn bitbucket_missing_channel_warns_but_explicit_empty_bodies_fail() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    let run = |env_body: Option<&str>, flags: &[&str]| {
+        let mut command = codeflow();
+        command
+            .current_dir(dir.path())
+            .args([
+                "ci", "--base", "main", "--head", "HEAD", "--branch", "feat/x",
+            ])
+            .env("BITBUCKET_PR_ID", "42")
+            .args(flags);
+        if let Some(body) = env_body {
+            command.env("CODEFLOW_PR_BODY", body);
+        }
+        command.output().unwrap()
+    };
+    let missing = run(None, &[]);
+    assert_eq!(missing.status.code(), Some(0));
+    let warning = String::from_utf8_lossy(&missing.stderr);
+    for text in [
+        "warning",
+        "body was not supplied",
+        "checks skipped",
+        "CODEFLOW_PR_BODY",
+        "--pr-body-file",
+    ] {
+        assert!(warning.contains(text), "{warning}");
+    }
+    assert!(!String::from_utf8_lossy(&missing.stdout).contains("PR-body"));
+    let empty_file = dir.path().join("empty-body.md");
+    std::fs::write(&empty_file, "").unwrap();
+    for output in [
+        run(Some(""), &[]),
+        run(None, &["--pr-body", ""]),
+        run(None, &["--pr-body-file", empty_file.to_str().unwrap()]),
+    ] {
+        assert_eq!(output.status.code(), Some(1));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("PR body is missing or empty"));
+    }
+    let supplied = run(Some(BODY), &[]);
+    assert_eq!(supplied.status.code(), Some(0));
+    assert!(!String::from_utf8_lossy(&supplied.stderr).contains("was not supplied"));
 }

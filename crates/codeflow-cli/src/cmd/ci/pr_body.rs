@@ -9,6 +9,7 @@ struct Section<'a> {
     name: String,
     depth: HeadingLevel,
     start: usize,
+    heading_start: usize,
     end: usize,
     body: &'a str,
 }
@@ -18,22 +19,26 @@ struct Section<'a> {
 fn sections(body: &str) -> Vec<Section<'_>> {
     let mut result: Vec<Section<'_>> = Vec::new();
     let mut nesting: usize = 0;
-    let mut heading: Option<(HeadingLevel, String)> = None;
+    let mut heading: Option<(HeadingLevel, String, usize)> = None;
+    let mut html = HtmlContainers::default();
     for (event, span) in Parser::new(body).into_offset_iter() {
         match event {
-            Event::Start(Tag::Heading { level, .. }) if nesting == 0 => {
+            Event::Start(Tag::Heading { level, .. })
+                if nesting == 0 && html.open.is_empty() && atx_heading(body, span.start) =>
+            {
                 for section in &mut result {
                     if section.end == body.len() && section.depth >= level {
                         section.end = span.start;
                     }
                 }
-                heading = Some((level, String::new()));
+                heading = Some((level, String::new(), span.start));
             }
             Event::End(TagEnd::Heading(_)) if nesting == 0 => {
-                if let Some((depth, name)) = heading.take() {
+                if let Some((depth, name, heading_start)) = heading.take() {
                     result.push(Section {
                         name,
                         depth,
+                        heading_start,
                         start: span.end,
                         end: body.len(),
                         body,
@@ -43,12 +48,114 @@ fn sections(body: &str) -> Vec<Section<'_>> {
             Event::Text(text) | Event::Code(text) if heading.is_some() => {
                 heading.as_mut().unwrap().1.push_str(&text);
             }
+            Event::Html(value) | Event::InlineHtml(value) => html.observe(&value),
             Event::Start(_) => nesting += 1,
             Event::End(_) => nesting = nesting.saturating_sub(1),
             _ => {}
         }
     }
     result
+}
+
+/// ATX section headings must start at column zero. Setext headings are prose
+/// for this contract, even though `CommonMark` parses them as headings.
+fn atx_heading(body: &str, offset: usize) -> bool {
+    let line_start = body[..offset].rfind('\n').map_or(0, |pos| pos + 1);
+    offset == line_start && body[offset..].starts_with('#')
+}
+
+fn matching_sections<'s, 'b>(sections: &'s [Section<'b>], name: &str) -> Vec<&'s Section<'b>> {
+    let depth = if sections
+        .iter()
+        .any(|s| s.matches(name) && s.depth == HeadingLevel::H2)
+    {
+        HeadingLevel::H2
+    } else {
+        HeadingLevel::H3
+    };
+    sections
+        .iter()
+        .filter(|s| s.matches(name) && s.depth == depth)
+        .collect()
+}
+
+/// `CommonMark` ends an HTML block at a blank line. Keep the enclosing HTML
+/// containers across that boundary so Markdown examples inside them cannot
+/// declare top-level PR sections. Only parser-emitted HTML is inspected.
+#[derive(Default)]
+struct HtmlContainers {
+    open: Vec<String>,
+    pending: String,
+}
+
+impl HtmlContainers {
+    fn observe(&mut self, html: &str) {
+        // The Markdown parser may emit one HTML event per source line, even
+        // within a single comment or tag. Keep unfinished tokens across events.
+        self.pending.push_str(html);
+        let mut rest = self.pending.as_str();
+        loop {
+            let Some(start) = rest.find('<') else {
+                rest = "";
+                break;
+            };
+            rest = &rest[start..];
+            if rest.starts_with("<!--") {
+                let Some(end) = rest.find("-->") else { break };
+                rest = &rest[end + 3..];
+                continue;
+            }
+            let token = &rest[1..];
+            let mut quote = None;
+            let end = token.char_indices().find_map(|(index, ch)| {
+                match (quote, ch) {
+                    (None, '"' | '\'') => quote = Some(ch),
+                    (Some(open), close) if open == close => quote = None,
+                    (None, '>') => return Some(index),
+                    _ => {}
+                }
+                None
+            });
+            let Some(end) = end else { break };
+            let tag = &token[..end];
+            let closing = tag.starts_with('/');
+            let name = tag
+                .trim_start_matches('/')
+                .split_whitespace()
+                .next()
+                .unwrap_or_default()
+                .trim_end_matches('/')
+                .to_ascii_lowercase();
+            if closing {
+                if let Some(index) = self.open.iter().rposition(|open| *open == name) {
+                    self.open.truncate(index);
+                }
+            } else if !tag.trim_end().ends_with('/')
+                && name.starts_with(|ch: char| ch.is_ascii_alphabetic())
+                && !matches!(
+                    name.as_str(),
+                    "area"
+                        | "base"
+                        | "br"
+                        | "col"
+                        | "embed"
+                        | "hr"
+                        | "img"
+                        | "input"
+                        | "link"
+                        | "meta"
+                        | "param"
+                        | "source"
+                        | "track"
+                        | "wbr"
+                )
+            {
+                self.open.push(name);
+            }
+            rest = &token[end + 1..];
+        }
+        self.pending = rest.to_string();
+    }
 }
 
 impl Section<'_> {
@@ -68,11 +175,20 @@ impl Section<'_> {
 fn visible_text(body: &str, include_code: bool) -> String {
     let mut text = String::new();
     let mut excluded = 0;
-    for event in Parser::new(body) {
+    let mut heading_excluded = false;
+    for (event, span) in Parser::new(body).into_offset_iter() {
         match event {
-            Event::Start(Tag::Heading { .. }) => excluded += 1,
+            Event::Start(Tag::Heading { .. }) => {
+                heading_excluded = atx_heading(body, span.start);
+                excluded += usize::from(heading_excluded);
+            }
             Event::Start(Tag::CodeBlock(_)) if !include_code => excluded += 1,
-            Event::End(TagEnd::Heading(_)) => excluded -= 1,
+            Event::End(TagEnd::Heading(_)) => {
+                excluded -= usize::from(heading_excluded);
+                if !heading_excluded {
+                    text.push('\n');
+                }
+            }
             Event::End(TagEnd::CodeBlock) if !include_code => excluded -= 1,
             Event::Text(value) | Event::Code(value) if excluded == 0 => text.push_str(&value),
             Event::SoftBreak | Event::HardBreak | Event::End(_) if excluded == 0 => {
@@ -90,7 +206,7 @@ pub(super) fn has_content(body: &str) -> bool {
 
 pub(super) fn find_section(body: &str, name: &str) -> SectionState {
     let sections = sections(body);
-    let matches: Vec<_> = sections.iter().filter(|s| s.matches(name)).collect();
+    let matches = matching_sections(&sections, name);
     match matches.as_slice() {
         [] => SectionState::Missing,
         [section] if has_content(section.content()) => SectionState::Present,
@@ -228,22 +344,16 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
         ));
     };
     let parsed = sections(body);
-    let sections: Vec<_> = parsed
-        .iter()
-        .filter(|s| s.matches("Release impact"))
-        .collect();
-    let [section] = sections.as_slice() else {
+    let matched = matching_sections(&parsed, "Release impact");
+    let [section] = matched.as_slice() else {
         issue("PR body needs exactly one Release impact section".into());
         return out;
     };
     // Do not consume sibling/subsection migration fields as release fields.
     let content = section.content();
-    let end = Parser::new(content)
-        .into_offset_iter()
-        .find_map(|(event, range)| {
-            matches!(event, Event::Start(Tag::Heading { .. })).then_some(range.start)
-        })
-        .unwrap_or(content.len());
+    let end = sections(content)
+        .first()
+        .map_or(content.len(), |s| s.heading_start);
     let text = visible_text(&content[..end], false);
     let mut fields = std::collections::BTreeMap::new();
     for line in text.lines() {
@@ -263,28 +373,38 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
             ));
         }
     }
-    let impact = fields.get("impact").copied().unwrap_or_default();
-    let breaking = fields.get("breaking").copied().unwrap_or_default();
+    let impact = fields
+        .get("impact")
+        .copied()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
+    let breaking = fields
+        .get("breaking")
+        .copied()
+        .unwrap_or_default()
+        .to_ascii_lowercase();
     let levels = ["none", "patch", "minor", "major"];
-    if !levels.contains(&impact) {
+    if !levels.contains(&impact.as_str()) {
         issue("PR Impact must be none, patch, minor or major".into());
     }
-    if !["yes", "no"].contains(&breaking) {
+    if !["yes", "no"].contains(&breaking.as_str()) {
         issue("PR Breaking must be yes or no".into());
-    } else if (breaking == "yes") != (impact == git.pr_breaking_level) {
-        issue(format!(
-            "PR Breaking must be yes if and only if Impact is {}",
-            git.pr_breaking_level
-        ));
     }
-    if breaking_commit
-        && levels.iter().position(|level| *level == impact)
-            < levels
-                .iter()
-                .position(|level| *level == git.pr_breaking_level)
-    {
+    let below_floor = levels.iter().position(|level| *level == impact)
+        < levels
+            .iter()
+            .position(|level| *level == git.pr_breaking_level);
+    if breaking_commit && breaking != "yes" {
+        issue("breaking commit marker requires Breaking: yes".into());
+    }
+    if (breaking_commit || breaking == "yes") && below_floor {
         issue(format!(
-            "breaking commit marker requires Impact of at least {}",
+            "{} requires Impact of at least {}",
+            if breaking_commit {
+                "breaking commit marker"
+            } else {
+                "Breaking: yes"
+            },
             git.pr_breaking_level
         ));
     }
@@ -295,14 +415,8 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
             .unwrap_or_default()
             .trim_matches(['"', '\'']);
         let substantive = if migration.eq_ignore_ascii_case("see Breaking change") {
-            parsed
-                .iter()
-                .filter(|s| s.matches("Breaking change"))
-                .count()
-                == 1
-                && parsed.iter().any(|s| {
-                    s.matches("Breaking change") && substantive(&visible_text(s.content(), true))
-                })
+            let guidance = matching_sections(&parsed, "Breaking change");
+            guidance.len() == 1 && substantive(&visible_text(guidance[0].content(), true))
         } else {
             substantive(migration)
         };
@@ -391,9 +505,76 @@ mod tests {
         );
         assert_eq!(
             find_section("Summary\n-------\nWorks.", "Summary"),
-            SectionState::Present
+            SectionState::Missing
         );
         assert!(has_content("## Testing\n```\n<!-- literal output -->\n```"));
+    }
+
+    #[test]
+    fn setext_paragraphs_do_not_end_atx_sections() {
+        // Exact body from Grok finding 2.
+        let body = "## Testing\nAll good\n---\n## Changes\nx\n";
+        assert_eq!(find_section(body, "Testing"), SectionState::Present);
+        for underline in ["---", "==="] {
+            for name in ["Summary", "Changes", "Reviews", "Release impact", "Testing"] {
+                let body = format!("## {name}\nAll good\n{underline}\n## Next\nx\n");
+                assert_eq!(find_section(&body, name), SectionState::Present, "{body}");
+            }
+        }
+        assert_eq!(
+            find_section("Summary\n===\ntext", "Summary"),
+            SectionState::Missing
+        );
+    }
+
+    #[test]
+    fn only_unindented_headings_outside_html_declare_sections() {
+        for fake in [
+            " ## Summary\nexample", "  ## Summary\nexample", "   ## Summary\nexample",
+            "<details>\n\n## Summary\nexample\n\n</details>",
+            "<details\n class='example'>\n\n## Summary\nexample\n\n</details>",
+            "<custom-panel>\n\n## Summary\nexample\n\n</custom-panel>",
+            "<DIV class='example'>\n\n## Summary\nexample\n\n</DIV>",
+            "<details data-label='a > b'><summary>Example</summary>\n\n## Summary\nexample\n\n</details>",
+            "<details>\n<div>\n\n## Summary\nexample\n\n</div>\n</details>",
+        ] {
+            assert_eq!(find_section(fake, "Summary"), SectionState::Missing, "{fake}");
+            let real = format!("{fake}\n\n## Summary\nReal summary.");
+            assert_eq!(find_section(&real, "Summary"), SectionState::Present, "{real}");
+        }
+        let commented = "<!--\n<details>\n<head>\n-->\n## Summary\nReal summary.";
+        assert_eq!(find_section(commented, "Summary"), SectionState::Present);
+    }
+
+    #[test]
+    fn depth_two_sections_take_precedence_over_same_name_subsections() {
+        for body in [
+            "## Testing\nParent content.\n### Testing\nNested content.",
+            "## Testing\n### Testing\nNested content.",
+            "### Testing\nEarlier example.\n## Testing\nReal evidence.",
+        ] {
+            assert_eq!(
+                find_section(body, "Testing"),
+                SectionState::Present,
+                "{body}"
+            );
+        }
+        assert_eq!(
+            find_section(
+                "### Testing\nExample.\n## Testing\n<!-- empty -->",
+                "Testing"
+            ),
+            SectionState::Empty
+        );
+        assert_eq!(
+            find_section("## Testing\nFirst.\n## Testing\nSecond.", "Testing"),
+            SectionState::Duplicate
+        );
+        let body = format!(
+            "### Release impact\nEarlier example.\n{}",
+            declaration("Minor", "No", "None")
+        );
+        assert!(release(&GitPolicy::default(), &body, false).is_empty());
     }
 
     #[test]
@@ -445,24 +626,33 @@ mod tests {
     }
 
     #[test]
-    fn release_checks_values_equivalence_and_project_mapping() {
-        for level in ["patch", "minor", "major"] {
+    fn release_checks_minimum_impact_and_case_insensitive_values() {
+        let levels = ["none", "patch", "minor", "major"];
+        for (floor, level) in levels.iter().enumerate().skip(1) {
             let git = GitPolicy {
-                pr_breaking_level: level.into(),
+                pr_breaking_level: (*level).into(),
                 ..GitPolicy::default()
             };
-            for impact in ["none", "patch", "minor", "major"] {
-                let breaking = if impact == level { "yes" } else { "no" };
-                let body = declaration(impact, breaking, "Replace the old call with the new call.");
-                assert!(release(&git, &body, false).is_empty(), "{level}: {body}");
-                let wrong = declaration(
-                    impact,
-                    if breaking == "yes" { "no" } else { "yes" },
-                    "Replace old calls.",
-                );
-                assert!(release(&git, &wrong, false)
-                    .iter()
-                    .any(|v| v.message.contains("if and only if")));
+            for (rank, impact) in levels.iter().enumerate() {
+                for breaking in ["No", "YES"] {
+                    let body = declaration(
+                        &impact.to_ascii_uppercase(),
+                        breaking,
+                        "Replace the old call.",
+                    );
+                    let findings = release(&git, &body, false);
+                    assert_eq!(
+                        findings.is_empty(),
+                        breaking == "No" || rank >= floor,
+                        "{level}: {body}: {findings:?}"
+                    );
+                    let marked = release(&git, &body, true);
+                    assert_eq!(
+                        marked.is_empty(),
+                        breaking == "YES" && rank >= floor,
+                        "{level}: {body}: {marked:?}"
+                    );
+                }
             }
         }
         for (impact, breaking, reason) in [

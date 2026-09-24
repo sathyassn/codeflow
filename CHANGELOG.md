@@ -18,7 +18,7 @@ publication date._
 
 <!-- codeflow:release-impact minor -->
 - **Portable pull request checks.** `codeflow ci` reads Markdown sections,
-  rejects missing PR-event bodies and ambiguous headings, and warns about
+  rejects explicitly empty PR bodies and ambiguous headings, and warns about
   summary detail, missing testing limits and oversized evidence. Generic release
   checks default to warn, with a project-owned breaking level and commit floor.
   Fresh installs include Reviews and Release impact in the required sections

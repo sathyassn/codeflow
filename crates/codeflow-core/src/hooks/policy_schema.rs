@@ -336,7 +336,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         path: "git.pr_breaking_level",
         kind: KeyKind::Enum(&["patch", "minor", "major"]),
         valid: "patch | minor | major",
-        purpose: "Impact level that means Breaking: yes in the project's release policy.",
+        purpose: "Minimum impact level permitted for Breaking: yes in the project's release policy.",
         notes: "Defaults to major. Pre-1.0 projects explicitly choose their level, commonly minor. Breaking commit markers floor Impact at this level.",
     },
     KeySpec {

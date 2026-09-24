@@ -818,12 +818,24 @@ fn find_placeholders(body: &str) -> Vec<(usize, String, &'static str)> {
     let mut out = Vec::new();
     for (idx, line) in body.lines().enumerate() {
         let t = line.trim();
+        let normalized = t
+            .replace('`', "")
+            .split_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase();
         let what = if t.contains("(paste the real test summary output here)") {
             "the template's paste-your-output placeholder"
         } else if is_empty_table_row(t) {
             "a table row of empty cells"
-        } else if t.contains("none | patch | minor | major")
-            || t.contains("yes | no")
+        } else if normalized.contains("none | patch | minor | major")
+            || normalized.contains("yes | no")
+            || normalized
+                .strip_prefix("- migration:")
+                .is_some_and(|value| {
+                    value.trim() == "none, steps, or \"see breaking change\""
+                        || value.trim() == "none | steps | \"see breaking change\""
+                })
             || t.contains("<revision>")
             || t.contains("<command>")
             || t.contains("<steps>")
@@ -953,7 +965,10 @@ fn resolve_pr_body(args: &CiArgs) -> Result<Option<String>, String> {
         };
     }
     let body = std::env::var(PR_BODY_ENV).ok();
-    if is_pr_event(|key| std::env::var(key).ok()) {
+    if body.is_none() && std::env::var("BITBUCKET_PR_ID").is_ok_and(|value| !value.is_empty()) {
+        eprintln!("codeflow ci: warning: Bitbucket PR body was not supplied; body checks skipped. Pass CODEFLOW_PR_BODY, --pr-body or --pr-body-file to check it.");
+        Ok(None)
+    } else if is_pr_event(|key| std::env::var(key).ok()) {
         Ok(Some(body.unwrap_or_default()))
     } else {
         Ok(body.filter(|value| !value.is_empty()))
@@ -1926,6 +1941,28 @@ mod tests {
             "{v:?}"
         );
         assert!(v.iter().all(|x| x.message.contains("line ")), "{v:?}");
+    }
+
+    #[test]
+    fn unresolved_release_and_migration_template_alternatives_warn() {
+        for field in [
+            "- Impact: `none | patch | minor | major`",
+            "- Breaking: `yes | no`",
+            "- Migration: `none`, steps, or \"see Breaking change\"",
+            "- Migration: none | steps | \"see Breaking change\"",
+        ] {
+            let findings = evaluate_pr_structure(
+                &git(),
+                &format!("{FULL_BODY}\n{field}"),
+                Some(&code_files()),
+            );
+            assert_eq!(findings.len(), 1, "{field}: {findings:?}");
+            assert_eq!(findings[0].level, PolicyLevel::Warn);
+            assert!(findings[0]
+                .message
+                .contains("unresolved template alternatives"));
+        }
+        assert!(find_placeholders("- Impact: minor\n- Breaking: no\n- Migration: none").is_empty());
     }
 
     #[test]
