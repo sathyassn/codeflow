@@ -14,6 +14,7 @@ pub mod git;
 pub mod hooks;
 pub mod integrate;
 pub mod ledger;
+pub mod model_catalog;
 pub mod model_qualification;
 pub mod models;
 pub mod recall;

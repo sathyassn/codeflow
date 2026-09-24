@@ -1,0 +1,215 @@
+---
+id: ADR-0069
+title: "Model catalog with product lines, seats and duties"
+status: proposed
+date: 2026-09-23
+supersedes: []
+superseded_by: []
+architecture_impact: "docs/architecture.md: catalog data, eligibility and pure duty resolution"
+---
+
+# Model catalog with product lines, seats and duties
+
+## Context
+
+The current ensemble binds each family to one concrete model and describes
+fallbacks in prose. It cannot compute the latest eligible version or return
+both participants owed by independent planning. EPC-018 Plan v3.4 replaces
+that representation with a catalog while preserving qualification boundaries,
+author-relative review and ADR-0056 effort floors.
+
+The operator designated the intended roster on 2026-09-23. Designation is an
+explicit assignment of a seat, not evidence that a native qualification suite
+ran. This proposed decision accompanies TSK-079's engine; TSK-085 accepts it
+when the managed roster switches to schema 5. TSK-080 owns the command and
+its approved-plan lookup.
+
+## Decision
+
+Keep the managed file name `current-ensemble.json`. Schema 5 describes
+families, ordered product versions, seats and duties. The engine returns data
+and gaps; it never launches a model, probes availability or reads a clock.
+
+```text
+family -> product line -> versions, oldest to newest
+       -> primary seat -> eligible lines, preferred first
+
+duty -> required participants + triggered participants
+     -> each participant's ordered alternatives
+     -> eligible pinned identity, or a named open participant
+```
+
+Figure: version order applies inside a line; alternative order applies
+between routes. Every owed participant is resolved independently.
+
+A family identifies its provider, lineage, supported harnesses, trusted probe
+ids and usage bucket. Harness and probe ids must already be supported by
+`harnesses.json` and the code allowlist; catalog data cannot supply commands.
+There is one primary seat per family. Two standing seats must have distinct
+lineages, and the design owner is the standing Claude seat.
+
+A version records an alias for discovery, a pinned launch id, selectors per
+harness, supported efforts and lifecycle: `active`, `fallback-only` or
+`retired`. Designations contain the seat, date and instruction record.
+Scoped evidence separately names its exact harness, selector, effort and
+duty, with its record and evidence paths. Qualification starts empty for
+the designated roster; a follow-up adds actual evidence without relabeling
+the designation. An approved full-suite binding remains the ADR-0039
+record, including native observations and human approval.
+
+The validator rejects unknown fields and duplicate JSON keys, unsupported
+harnesses or probes, collapsed standing lineages, a non-Claude design owner,
+multiple primary seats in a family, and a listed seat line without any
+potentially eligible version. A retired version cannot carry a designation;
+a designation must name a seat that lists its line. Missing designation or
+evidence records and defaults below duty floors are errors.
+
+### Eligibility and selection
+
+A seat needs its designation or an approved full-suite binding for the exact
+role, harness, selector and effort. Scoped worker evidence never satisfies a
+seat. Designated output is labeled "designated, full suite not run" unless
+the exact full qualification exists.
+
+Candidate workers may perform the bounded, light, evidence, advisory
+reasoning, consultation and non-design execution work allowed by ADR-0060.
+Design implementation requires scoped evidence for the exact tuple. A worker
+never gains direction or fidelity approval.
+
+The participant's effort must be supported; unsupported effort excludes that
+version instead of clamping it. Retired versions are always ineligible.
+A fallback-only version serves only on a listed seat fallback. A fresh native
+exclusion removes the affected version or harness; exhaustion of a usage
+bucket removes every line using it. Unknown usage excludes nothing. A stale
+Codex plugin login is a native exclusion; the qualified Herdr interactive
+Codex seat remains the fallback transport allowed by ADR-0059.
+
+Resolve alternatives in their declared order, then versions newest first.
+Each line has an adoption policy and an `adopted_version` reference. Manual
+worker selection uses that reference; `workers` adoption admits newer
+eligible candidate versions automatically. Seat selection always needs
+designation or exact full qualification, regardless of worker adoption.
+An overlay addition stays inert on a manual line because the overlay cannot
+change its `adopted_version`. A line with `workers` adoption may select that
+addition for a candidate-eligible worker duty. Q1 remains open with the
+operator; the seed keeps manual adoption.
+
+### Duties and effort
+
+A duty carries required participants and triggered participants. Each
+participant has ordered seat or line alternatives, an author-lineage relation
+and entry effort. Trigger ids come from the routing policy or an explicitly
+named policy's list of facts. Policy is data, not an expression language.
+
+Independent planning and body review owe both standing seats. Unit review
+requires the opposite lineage: the Codex seat reviews Claude authorship; the
+Claude seat reviews Codex authorship; Grok authorship uses Codex, then Claude.
+The Grok participant is added on its review trigger when Grok is not the
+author. A second opinion remains labeled as such and cannot close an
+independent-review gap. An unfilled optional second opinion is retained as
+a labeled diagnostic but does not make `is_open()` true; an unfilled required
+participant still leaves the duty open.
+
+Reasoning support excludes the version currently serving the owning seat.
+Computer-use QA selects the opposite lineage's capable harness: Codex on
+`codex-app`, or Claude on `claude-code`. Grok-authored UI uses those
+alternatives in that order. Test authoring belongs to the unit's executing
+participant and is not resolved separately.
+
+ADR-0056 is unchanged. Seats enter at high; bounded workers may enter at
+medium. A high trigger raises a worker's entry effort from medium to high,
+subject to the version supporting high; it does not raise the seat's entry
+effort. An xhigh trigger adds an `xhigh-reasoning` obligation at xhigh in
+the seat's family, potentially using the same version in a separate worker
+session. The seat stays at high and retains approval. A seat lacking xhigh
+remains eligible. No eligible same-family worker leaves the obligation open
+and the trigger explicitly unmet.
+
+### Launch identity and design authority
+
+Every launch uses the resolved version's pinned id. Aliases are used only
+by the identity canary to discover newer versions. An observed mismatch
+inherits neither designation nor scoped or full-suite evidence. Resolution
+tries the next eligible alternative; only a candidate-eligible worker duty
+may then use the observed model as a candidate, with drift recorded.
+Otherwise the participant remains open. An unobservable native identity is
+an explicit limitation.
+
+The Claude design owner's first line owns direction, design production and
+fidelity approval. With that line ineligible, design stays open. Fable may
+hold the seat as a recorded fallback for orchestration, planning and review
+with reduced assurance; without a matching operator override it never
+authors design or gives design or fidelity approval.
+
+The only exception is an `OPERATOR_OVERRIDE` in the approved Plan vN task
+record. It names the exact task, design duty, route including harness,
+effort, plan version and location of the operator instruction. TSK-080 reads
+that record as committed on the task's integration target using the planning
+anchor rule; arbitrary caller strings and working-tree records confer no
+authority. The engine takes `requested_override` as a separate input containing
+the invocation route and effort, in addition to the typed `operator_override`
+record. TSK-080 must supply both and match the record against the requested
+task, duty, route and effort. A missing invocation route or a mismatched
+record leaves design open even when the ordinary first line is eligible.
+A record naming a non-design duty is rejected: design resolution returns
+an open gap for the duty mismatch, and an override supplied to a non-design
+resolution returns an explicit error instead of being ignored. Approval of
+the plan supplies authority; this does not independently authenticate the
+operator.
+
+A matching override replaces only the ordinary first-line restriction for
+that task. It may name any line listed by a catalog seat, including the
+Claude seat's second line or another family's seat line. Seat eligibility,
+supported effort at or above high, exclusions and pinned identity still
+apply. The override effort is checked explicitly against the design duty's
+floor before ordinary seat eligibility is checked. Missing or mismatched
+fields, retirement, unsupported effort, an
+exclusion or identity drift leave design open. The record grants nothing
+for another task or a non-design duty. Workers never receive direction or
+fidelity approval through this exception.
+
+### Local and project selection
+
+The optional personal file `~/.codeflow/model-catalog.local.json` may add
+candidate versions to existing lines or exclude versions. It cannot add a
+family, harness or probe, change seat or duty policy, designate a version,
+or claim evidence. Any invalid entry rejects the whole overlay.
+
+The project file `.codeflow/model-selection.json` stays at schema 1 under
+ADR-0041. It references approved binding ids for exact roles and harnesses;
+a reference cannot transfer qualification to another effort or harness.
+
+Project schema 2 is deferred until a consuming project needs it. It may
+eventually narrow eligible choices by reordering approved alternatives,
+excluding a version, pinning an eligible version or choosing a supported
+effort at or above its floor. It must never introduce raw selectors or
+commands, add a family, harness or probe, confer designation or evidence,
+collapse independent lineages, lower effort floors, transfer tuple evidence,
+override native exclusions or drift, or bypass task-specific design
+authority.
+
+The model `grok-4.7-build-fast` is known and not routed.
+
+## Consequences and verification
+
+A roster change becomes a catalog edit validated against the same eligibility
+rules. Model names stay in catalog data and historical records; rules and
+duty definitions refer to families, seats and lines. Configuration can
+represent a gap explicitly instead of silently substituting a weaker
+participant.
+
+TSK-079 uses fictional catalogs to test every validator boundary, participant
+set, effort obligation, drift case, override match and overlay restriction.
+It also tests schema 1 binding references against schema 5. A transitional
+schema 4 reader keeps the current managed tree working until TSK-085 removes
+it. Native identity canaries, the real roster, command output and final
+qualification are later tasks in EPC-018; these engine tests do not claim
+their evidence.
+
+The general-review fictional fixture intentionally lists only the Grok and
+Claude seats as independent alternatives. For Claude-authored work, excluding
+Grok therefore leaves that participant open while the same-lineage second
+opinion remains advisory. TSK-085 must reconcile this fixture-specific
+acceptance example with the epic's broader "another opposite-lineage seat"
+rule: if the real catalog lists Codex, that available seat fills the gap.
+The real roster table is also added when TSK-085 accepts this decision.

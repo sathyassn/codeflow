@@ -9,7 +9,7 @@ use std::io::Read;
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 const MAX_RECORD_BYTES: u64 = 1024 * 1024;
 const HARNESS_CATALOG: &str = include_str!(concat!(
@@ -121,7 +121,7 @@ pub struct InternalRoute {
 }
 
 /// One exact effort accepted by a managed worker route.
-#[derive(Debug, Clone, Copy, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, PartialOrd, Ord)]
 #[serde(rename_all = "lowercase")]
 pub enum RouteEffort {
     Low,
@@ -215,7 +215,7 @@ pub struct ResolvedSelection {
 }
 
 /// One promoted model+harness binding.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QualifiedBinding {
     pub schema_version: u64,
@@ -233,7 +233,7 @@ pub struct QualifiedBinding {
 }
 
 /// Requested binding recorded by the evaluated native session.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestedBinding {
     pub model: String,
@@ -244,7 +244,7 @@ pub struct RequestedBinding {
 }
 
 /// Native observation proving the requested model and effort.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservedBinding {
     pub model: String,
@@ -253,7 +253,7 @@ pub struct ObservedBinding {
 }
 
 /// Content-addressed observation retained without potentially sensitive refs.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ObservedEvidence {
     pub kind: String,
@@ -261,7 +261,7 @@ pub struct ObservedEvidence {
 }
 
 /// Full-suite result that justified promotion.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct QualificationEvidence {
     pub run_id: String,
@@ -272,7 +272,7 @@ pub struct QualificationEvidence {
 }
 
 /// Optional live settings input whose digest doctor can recompute.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SettingsSource {
     pub path: PathBuf,
@@ -280,7 +280,7 @@ pub struct SettingsSource {
 }
 
 /// Explicit human approval retained from the full evaluation result.
-#[derive(Debug, Clone, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Approval {
     pub reviewer: String,
@@ -392,8 +392,15 @@ fn validate_ensemble_triggers(ensemble: &EnsembleCatalog) -> Result<(), String> 
 /// Returns an error when roles, seats, lineages, selectors, or required
 /// responsibility fields are missing or contradictory.
 pub fn current_ensemble() -> Result<BTreeMap<String, EnsembleBinding>, String> {
+    parse_legacy_ensemble(CURRENT_ENSEMBLE.as_bytes())
+}
+
+/// Transitional schema 4 reader, removed with the managed schema 5 switch.
+pub(crate) fn parse_legacy_ensemble(
+    bytes: &[u8],
+) -> Result<BTreeMap<String, EnsembleBinding>, String> {
     let ensemble: EnsembleCatalog =
-        serde_json::from_str(CURRENT_ENSEMBLE).map_err(|error| error.to_string())?;
+        crate::strict_json::parse_strict_json(bytes).map_err(|error| error.to_string())?;
     validate_parsed_ensemble(ensemble)
 }
 
@@ -620,10 +627,26 @@ fn validate_repository_relative_reference(value: &str, label: &str) -> Result<()
     Ok(())
 }
 
+fn routing_policy() -> Result<&'static RoutingPolicy, String> {
+    static POLICY: OnceLock<Result<RoutingPolicy, String>> = OnceLock::new();
+    POLICY
+        .get_or_init(|| {
+            let policy: RoutingPolicy =
+                serde_json::from_str(ROUTING_POLICY).map_err(|error| error.to_string())?;
+            validate_parsed_routing_policy(&policy, &policy.policy_id)?;
+            Ok(policy)
+        })
+        .as_ref()
+        .map_err(Clone::clone)
+}
+
+/// Shared immutable policy facts; parsing and validation happen once.
+pub(crate) fn routing_policy_triggers() -> Result<&'static [String], String> {
+    Ok(&routing_policy()?.extra_family_review.triggers)
+}
+
 fn validate_routing_policy(policy_id: &str) -> Result<(), String> {
-    let policy: RoutingPolicy =
-        serde_json::from_str(ROUTING_POLICY).map_err(|error| error.to_string())?;
-    validate_parsed_routing_policy(&policy, policy_id)
+    validate_parsed_routing_policy(routing_policy()?, policy_id)
 }
 
 fn validate_parsed_routing_policy(policy: &RoutingPolicy, policy_id: &str) -> Result<(), String> {
@@ -963,7 +986,7 @@ fn same_file_identity(
     opened.len() == current.len() && opened.modified().ok() == current.modified().ok()
 }
 
-fn validate_binding(
+pub(crate) fn validate_binding(
     record: &QualifiedBinding,
     catalog: &BTreeMap<String, HarnessMetadata>,
 ) -> Result<(), String> {
@@ -1211,7 +1234,7 @@ mod tests {
     fn record() -> QualifiedBinding {
         QualifiedBinding {
             schema_version: 1,
-            binding_id: "claude-fable-high".into(),
+            binding_id: "fictional-orchid-high".into(),
             provider: "anthropic".into(),
             lineage: "claude".into(),
             eligible_roles: vec![
@@ -1221,14 +1244,14 @@ mod tests {
             ],
             qualified_at: "2026-07-25T10:00:00Z".into(),
             requested: RequestedBinding {
-                model: "fable-5".into(),
+                model: "orchid-5".into(),
                 effort: "high".into(),
                 harness: "claude-code".into(),
                 harness_version: "2.1.220".into(),
                 settings_digest: digest(),
             },
             observed: ObservedBinding {
-                model: "fable-5".into(),
+                model: "orchid-5".into(),
                 effort: "high".into(),
                 evidence: vec![ObservedEvidence {
                     kind: "session".into(),
@@ -1279,39 +1302,39 @@ mod tests {
             ensemble["claude-judgment-primary"]
                 .internal_routes
                 .iter()
-                .any(|route| route.route_id == "fable-high-reasoning"
+                .any(|route| route.workloads.contains(&RouteWorkload::Reasoning)
                     && route.default_effort == RouteEffort::High),
-            "Fable high in-family worker route missing"
+            "Claude high in-family worker route missing"
         );
         assert!(
             ensemble["claude-judgment-primary"]
                 .internal_routes
                 .iter()
-                .any(|route| route.route_id == "fable-xhigh-reasoning"
+                .any(|route| route.workloads.contains(&RouteWorkload::Reasoning)
                     && route.default_effort == RouteEffort::Xhigh),
-            "Fable xhigh in-family worker route missing"
+            "Claude xhigh in-family worker route missing"
         );
         assert!(
             ensemble["codex-engineering-primary"]
                 .internal_routes
                 .iter()
-                .any(|route| route.route_id == "astra-high-reasoning"
+                .any(|route| route.workloads.contains(&RouteWorkload::Reasoning)
                     && route.default_effort == RouteEffort::High),
-            "Astra high in-family worker route missing"
+            "Codex high in-family worker route missing"
         );
         assert!(
             ensemble["codex-engineering-primary"]
                 .internal_routes
                 .iter()
-                .any(|route| route.route_id == "astra-xhigh-reasoning"
+                .any(|route| route.workloads.contains(&RouteWorkload::Reasoning)
                     && route.default_effort == RouteEffort::Xhigh),
-            "Astra xhigh in-family worker route missing"
+            "Codex xhigh in-family worker route missing"
         );
         assert!(
             ensemble["grok-engineering-primary"]
                 .internal_routes
                 .iter()
-                .any(|route| route.route_id == "grok-xhigh-reasoning"
+                .any(|route| route.workloads.contains(&RouteWorkload::Reasoning)
                     && route.default_effort == RouteEffort::Xhigh),
             "Grok xhigh in-family worker route missing"
         );
@@ -1356,7 +1379,7 @@ mod tests {
                 "schema_version": 1,
                 "bindings": [{
                     "role": "claude-judgment-primary",
-                    "binding_id": "claude-fable-high"
+                    "binding_id": "fictional-orchid-high"
                 }]
             }),
         );
@@ -1366,11 +1389,11 @@ mod tests {
             vec![ResolvedSelection {
                 role: "claude-judgment-primary".into(),
                 seat: "claude-primary".into(),
-                binding_id: "claude-fable-high".into(),
+                binding_id: "fictional-orchid-high".into(),
                 provider: "anthropic".into(),
                 lineage: "claude".into(),
                 harness: "claude-code".into(),
-                model: "fable-5".into(),
+                model: "orchid-5".into(),
                 effort: "high".into(),
             }]
         );
@@ -1386,7 +1409,7 @@ mod tests {
                 "bindings": [
                     {
                         "role": "claude-judgment-primary",
-                        "binding_id": "claude-fable-high"
+                        "binding_id": "fictional-orchid-high"
                     },
                     {
                         "role": "codex-engineering-primary",
@@ -1404,7 +1427,7 @@ mod tests {
                 "schema_version": 1,
                 "bindings": [{
                     "role": "codex-engineering-primary",
-                    "binding_id": "claude-fable-high"
+                    "binding_id": "fictional-orchid-high"
                 }]
             }),
         );
@@ -1421,7 +1444,7 @@ mod tests {
                 "schema_version": 1,
                 "bindings": [{
                     "role": "codex-engineering-primary",
-                    "binding_id": "claude-fable-high"
+                    "binding_id": "fictional-orchid-high"
                 }]
             }),
         );
@@ -1439,7 +1462,7 @@ mod tests {
                 "schema_version": 1,
                 "bindings": [{
                     "role": "claude-judgment-primary",
-                    "binding_id": "claude-fable-high"
+                    "binding_id": "fictional-orchid-high"
                 }]
             }),
         );
@@ -1458,11 +1481,11 @@ mod tests {
                 "bindings": [
                     {
                         "role": "claude-judgment-primary",
-                        "binding_id": "claude-fable-high"
+                        "binding_id": "fictional-orchid-high"
                     },
                     {
                         "role": "codex-engineering-primary",
-                        "binding_id": "claude-fable-high"
+                        "binding_id": "fictional-orchid-high"
                     }
                 ]
             }),
@@ -1488,11 +1511,11 @@ mod tests {
                 "bindings": [
                     {
                         "role": "claude-judgment-primary",
-                        "binding_id": "claude-fable-high"
+                        "binding_id": "fictional-orchid-high"
                     },
                     {
                         "role": "claude-judgment-primary",
-                        "binding_id": "claude-fable-high"
+                        "binding_id": "fictional-orchid-high"
                     }
                 ]
             }),
@@ -1505,7 +1528,7 @@ mod tests {
             &serde_json::json!({
                 "schema_version": 1,
                 "bindings": [],
-                "selector": "opus"
+                "selector": "orchid"
             }),
         );
         let error = resolve_project_selection(root.path(), &[]).unwrap_err();
@@ -1550,7 +1573,7 @@ mod tests {
     #[test]
     fn binding_id_must_start_with_an_alphanumeric_character() {
         let mut binding = record();
-        binding.binding_id = ".claude-fable-high".into();
+        binding.binding_id = ".fictional-orchid-high".into();
         let error = validate_binding(&binding, &harness_catalog().unwrap()).unwrap_err();
         assert!(error.contains("must start with a letter or digit"));
     }
@@ -1913,7 +1936,7 @@ mod tests {
         let mut ensemble = shipped_ensemble();
         binding_mut(&mut ensemble, "codex-engineering-primary").internal_routes[0]
             .native_selectors
-            .insert("claude-code".into(), "fable".into());
+            .insert("claude-code".into(), "orchid".into());
         assert!(validate_parsed_ensemble(ensemble)
             .unwrap_err()
             .contains("outside parent role"));
@@ -1925,7 +1948,11 @@ mod tests {
         let route = binding_mut(&mut candidate, "claude-judgment-primary")
             .internal_routes
             .iter()
-            .find(|route| route.route_id == "opus-design-implementation-pilot")
+            .find(|route| {
+                route
+                    .workloads
+                    .contains(&RouteWorkload::DesignImplementation)
+            })
             .expect("shipped design qualification candidate");
         assert_eq!(route.status, RouteStatus::Candidate);
         assert!(route.evidence.is_empty());
@@ -1938,10 +1965,14 @@ mod tests {
         let route = binding_mut(&mut scoped, "claude-judgment-primary")
             .internal_routes
             .iter_mut()
-            .find(|route| route.route_id == "opus-design-implementation-pilot")
+            .find(|route| {
+                route
+                    .workloads
+                    .contains(&RouteWorkload::DesignImplementation)
+            })
             .expect("shipped design qualification candidate");
         route.status = RouteStatus::ScopedQualified;
-        route.evidence = vec!["docs/verification/opus-design-pilot.md".into()];
+        route.evidence = vec!["docs/verification/orchid-design-pilot.md".into()];
         assert!(
             validate_parsed_ensemble(scoped).is_ok(),
             "owner-bound scoped-qualified design routes with evidence must remain valid"
@@ -1995,7 +2026,7 @@ mod tests {
         let mut valid = shipped_ensemble();
         let route = &mut binding_mut(&mut valid, "claude-judgment-primary").internal_routes[0];
         route.status = RouteStatus::ScopedQualified;
-        route.evidence = vec!["docs/verification/fable-high-reasoning.md".into()];
+        route.evidence = vec!["docs/verification/orchid-high-reasoning.md".into()];
         assert!(validate_parsed_ensemble(valid).is_ok());
 
         for invalid in [
