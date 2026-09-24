@@ -20,6 +20,7 @@ ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_CONFIG = ROOT / ".release/config.json"
 IMPACT_ORDER = {"none": 0, "patch": 1, "minor": 2, "major": 3}
 PLACEHOLDERS = {"", "n/a", "none", "todo", "tbd", "-"}
+CONTRACT_BREAKING = {"not-applicable": "no", "compatible": "no", "breaking": "yes"}
 STABLE_TAG = re.compile(r"v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)")
 IMPACT_MARKER = re.compile(
     r"<!--\s*codeflow:release-impact\s+(none|patch|minor|major)"
@@ -99,15 +100,32 @@ def parse_release_impact(body: str) -> dict[str, str]:
         if key in fields:
             fail(f"release impact field {match.group(1)} is duplicated")
         fields[key] = normalize_value(match.group(2))
-    for key in ["unit", "impact", "rationale", "evidence", "contract"]:
+    for key in ["unit", "impact", "rationale", "evidence"]:
         if key not in fields or (
             key in {"rationale", "evidence"} and is_placeholder(fields[key])
         ):
             fail(f"release impact field {key} is required and substantive")
     if fields["unit"] != "codeflow" or fields["impact"] not in IMPACT_ORDER:
         fail("release unit/impact must be codeflow and none, patch, minor, or major")
-    if fields["contract"] not in {"not-applicable", "compatible", "breaking"}:
+    # Breaking replaces the legacy three-state Contract field. During the
+    # transition either is accepted; when both appear they must agree.
+    if "breaking" not in fields and "contract" not in fields:
+        fail("release impact field breaking is required")
+    if "contract" in fields and fields["contract"] not in CONTRACT_BREAKING:
         fail("release contract must be not-applicable, compatible, or breaking")
+    if "breaking" in fields:
+        if fields["breaking"] not in {"yes", "no"}:
+            fail("release breaking must be yes or no")
+        if "contract" in fields and CONTRACT_BREAKING[fields["contract"]] != fields["breaking"]:
+            fail("legacy contract disagrees with breaking")
+        if "migration" not in fields:
+            fail("release impact field migration is required")
+    else:
+        fields["breaking"] = CONTRACT_BREAKING[fields["contract"]]
+    if (fields["breaking"] == "yes") != (fields["impact"] == "major"):
+        fail("breaking must be yes if and only if impact is major")
+    if fields["breaking"] == "yes" and is_placeholder(fields.get("migration", "")):
+        fail("a breaking change requires migration guidance")
     return fields
 
 
@@ -673,12 +691,8 @@ def check_pr(args: argparse.Namespace) -> None:
     watched = sorted(
         path for path in paths if matches_any(path, config["watched_contract_paths"])
     )
-    if watched and fields["contract"] == "not-applicable":
+    if watched and fields.get("contract") == "not-applicable":
         fail("watched contract changes require compatible or breaking assessment")
-    if fields["contract"] == "breaking" and fields["impact"] != "major":
-        fail("breaking contract requires major impact")
-    if fields["impact"] == "major" and is_placeholder(fields.get("migration", "")):
-        fail("major impact requires migration guidance")
     proposed = merge_tree(base, head, cwd=args.root)
     after = validate_release_tree(proposed, config, state, cwd=args.root)
     baseline = resolve_baseline(config, state, cwd=args.root)
