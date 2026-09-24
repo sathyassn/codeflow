@@ -464,6 +464,7 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
         observed[label] = await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx });
         observed[`${label}Dom`] = await page.evaluate(readFigureDom);
         observed[`${label}Context`] = await page.evaluate(readFigureContext);
+        for (const failure of figureChromeFailures(await page.evaluate(readFigureChrome))) failures.push(`${assignment.source} (at ${assignment.route}, ${width}px ${mode}): ${failure}`);
         observed[`${label}Url`] = page.url();
         observed[`${label}Root`] = await page.evaluate(() => [...document.documentElement.attributes].filter((attribute) => attribute.name.startsWith("data-")).map((attribute) => [attribute.name, attribute.value]));
         observed[`${label}Places`] = await page.evaluate(() => [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
@@ -717,6 +718,45 @@ async function settle(page) {
 // the ::before and ::after boxes that draw; the geometry and visibility
 // effects of each ancestor to the root; and whether the figure, its caption
 // and its legend are visible.
+// The legend and the twin as the page lays them out. The clean copy carries
+// the same site styles, so a site rule that reaches into the figure shows in
+// both and only an absolute reading can see it: each legend key centred on
+// its label, and the twin marker the figure sheet's chevron with no fill or
+// mask from the site.
+export function readFigureChrome() {
+  return [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
+    const keys = [...figure.querySelectorAll(".cf-legend li")].filter((item) => item.getClientRects().length > 0).map((item) => {
+      const key = item.querySelector("svg.cf-key").getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(item);
+      range.setStartAfter(item.querySelector("svg.cf-key"));
+      const label = range.getBoundingClientRect();
+      return { state: item.dataset.state, offset: (key.top + key.height / 2) - (label.top + label.height / 2) };
+    });
+    const summary = figure.querySelector(".cf-twin > summary");
+    const marker = summary === null ? null : getComputedStyle(summary, "::before");
+    return {
+      id: figure.dataset.cfFigureId,
+      keys,
+      marker: marker === null ? null : { background: marker.backgroundColor, image: marker.backgroundImage, mask: marker.maskImage || marker.webkitMaskImage || "none", width: marker.width, border: marker.borderRightStyle },
+    };
+  });
+}
+
+export function figureChromeFailures(figures) {
+  const failures = [];
+  for (const figure of figures) {
+    for (const key of figure.keys) {
+      if (Math.abs(key.offset) > 1) failures.push(`figure ${figure.id}: the ${key.state} legend key sits ${Math.abs(key.offset).toFixed(1)}px ${key.offset < 0 ? "above" : "below"} its label`);
+    }
+    const marker = figure.marker;
+    if (marker !== null && (!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(marker.background) || marker.image !== "none" || marker.mask !== "none" || marker.width !== "6px" || marker.border !== "solid")) {
+      failures.push(`figure ${figure.id}: the twin marker is not the figure sheet's chevron (${JSON.stringify(marker)})`);
+    }
+  }
+  return failures;
+}
+
 export function readFigureContext() {
   const EFFECTS = ["opacity", "visibility", "display", "content-visibility", "clip-path", "mask-image", "filter", "backdrop-filter", "transform", "translate", "rotate", "scale", "perspective", "offset-path", "zoom"];
   const name = (element) => `<${element.localName}${element.getAttribute("class") ? ` class="${element.getAttribute("class")}"` : ""}>`;

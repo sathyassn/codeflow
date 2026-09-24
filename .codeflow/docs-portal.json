@@ -50,7 +50,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "b81d16df4f46409f04e531a04aae5f6ca348304ea5a59286fcb0a273818381ab"
+      "pristine_sha256": "30821ac56e0fdc77307a49194a1ec5386eee9a12ef25ff2418a1174775a4b726"
     },
     "scripts/as-is-markdown.mjs": {
       "ownership": "managed",
@@ -58,7 +58,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "f994822b871684dff03904eb665241070c9413a7b712d220d8a1464bb9d65b6d"
+      "pristine_sha256": "e75ee60b0d12db73bd4db46906574d08c3a2feba184ab012ec36a9274b1bbfd6"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -70,7 +70,7 @@
     },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "abd26e6854f49f8815a7cd08d7a16e8977435633f59f2ad5107c98339ecf08ea"
+      "pristine_sha256": "dac22d6c35522141fd96bb7b346b2b899e6250a6409c9382b7a58026a6de35ef"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -154,7 +154,7 @@
     },
     "src/styles/figure-roles.css": {
       "ownership": "managed",
-      "pristine_sha256": "f5945d59cacaf5ddf2499d584609d005ade2b12c1e9a6704e813ab8df1ec454a"
+      "pristine_sha256": "58a75d1e0a419f4fc59cdd7475ee78001339e883ee03beacdea10c9579daf748"
     },
     "src/styles/figure.css": {
       "ownership": "managed",
@@ -186,11 +186,11 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "64c9030531a13028d4c347618d514dd6279e023fbcf6d0d01a81d4393304dcf4"
+      "pristine_sha256": "18560b79241863b19b832c8dcc3db60a3c8c3f6ae50aa213fa4e81930acec3c8"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "be736d97f14997d604c30db05feb3235aba635d614602bda2c94f07c4153264b"
+      "pristine_sha256": "e07c030f4db7e174373fe6a2dd0e54af55e965d4624a314a55a4c1461e0c7aa8"
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
@@ -250,7 +250,7 @@
     },
     "tests/fixtures/figures/rendered/02-structure.html": {
       "ownership": "managed",
-      "pristine_sha256": "085eb75a740d2e4e7ee0bd100f397d5dc6e432d94de8fc21e4a24d1aafff0c13"
+      "pristine_sha256": "1481056b10650255e35673f3fba56eceadb8a989f05fd2a2493ae17fdb9b0ce9"
     },
     "tests/fixtures/figures/rendered/03-layering.html": {
       "ownership": "managed",
@@ -274,7 +274,7 @@
     },
     "tests/fixtures/figures/rendered/08-derivation.html": {
       "ownership": "managed",
-      "pristine_sha256": "fcd375e8ef31597494e7a1de5ef5ef7be5b62a913919e2d3ee3f19fe6065ae38"
+      "pristine_sha256": "2e35a96c21170f188a7949b7ee8225bac8052c44fb0257ef6c69c278c69a52c2"
     },
     "tests/fixtures/figures/rendered/09-graph.html": {
       "ownership": "managed",

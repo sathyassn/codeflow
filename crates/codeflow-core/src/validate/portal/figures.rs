@@ -1165,7 +1165,7 @@ fn verify_lookup(
 
 fn companion_opening(declaration: &str, placement: &str, sha256: &str) -> String {
     format!(
-        "<div class=\"cf-companion\" data-cf-companion=\"{}\" data-cf-placement=\"{placement}\" data-cf-declaration-sha256=\"{sha256}\">",
+        "<div class=\"cf-companion not-content\" data-cf-companion=\"{}\" data-cf-placement=\"{placement}\" data-cf-declaration-sha256=\"{sha256}\">",
         super::escape_html_attribute(declaration)
     )
 }

@@ -263,7 +263,7 @@ test("the mixed fixture renders every class and the gates name only what falls s
       assert.equal(drawn, 6);
       assert.ok(failures.length > 0);
       for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
-      assert.deepEqual(failures.filter((failure) => /served page|page CSS|executable content|clean copy|not visible to a reader|effective opacity/.test(failure)), []);
+      assert.deepEqual(failures.filter((failure) => /served page|page CSS|executable content|clean copy|not visible to a reader|effective opacity|legend key sits|twin marker/.test(failure)), []);
       assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states done and stop differ on shape, need 2/.test(failure)), failures.join("\n"));
 
       // Page CSS (R3-2, R4-1, R4-2). Each rule is refused at its source, as a
@@ -289,6 +289,18 @@ test("the mixed fixture renders every class and the gates name only what falls s
         assert.ok(failures.some((failure) => onGuide.test(failure) && /page CSS: a stylesheet from a <style> element in the head is not a built sheet/.test(failure)), `${css}: ${failures.join("\n")}`);
         for (const pattern of expected) assert.ok(failures.some((failure) => onGuide.test(failure) && / rule 6 \(/.test(failure) && pattern.test(failure)), `${css} ${pattern}: ${failures.join("\n")}`);
       }
+      // Starlight's content rules reach into a companion that does not opt
+      // out of them: the list rule pushes each legend key 10px above its
+      // label and the details rule paints the twin marker as a dot. The clean
+      // copy carries the same site styles, so only the absolute reading of
+      // the legend and the marker sees it, at every width and mode.
+      const opted = await hostile({ inject: () => { for (const companion of document.querySelectorAll(".cf-companion")) companion.classList.remove("not-content"); }, css: null });
+      for (const [width, mode] of [[1440, "light"], [390, "light"], [1440, "dark"], [390, "dark"]]) {
+        const where = `docs/guide.md (at reference/guide, ${width}px ${mode}): figure install-steps: `;
+        assert.ok(opted.some((failure) => failure.startsWith(where) && /the [a-z-]+ legend key sits \d+(?:\.\d)?px above its label/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
+        assert.ok(opted.some((failure) => failure.startsWith(where) && /the twin marker is not the figure sheet's chevron/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
+      }
+
       // A style attribute on the content, the figure's ancestor, is refused
       // at its source and seen on the ancestor chain.
       const attributed = await hostile({ inject: () => document.querySelector(".sl-markdown-content").setAttribute("style", "opacity: 0.5"), css: null });
@@ -442,7 +454,7 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
       const page = record.pages.find((entry) => entry.route === route);
       const original = originals.get(route).toString("utf8");
       let edited = edit(original);
-      if (smuggle) edited = edited.replace("<div class=\"cf-companion\"", `<!-- ${original.match(/<div class="cf-companion"[^\n]*/)[0]} -->\n\n<div class="cf-companion"`);
+      if (smuggle) edited = edited.replace("<div class=\"cf-companion not-content\"", `<!-- ${original.match(/<div class="cf-companion not-content"[^\n]*/)[0]} -->\n\n<div class="cf-companion not-content"`);
       assert.notEqual(edited, original, route);
       rewrite?.(page, Buffer.byteLength(edited) - Buffer.byteLength(original), Buffer.from(edited));
       page.output_markdown_sha256 = sha256(edited);
@@ -476,7 +488,7 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     // so do a style attribute and a stylesheet link.
     const ownCss = /orient\/product renders page CSS, which only the site's own sheets may carry: /;
     for (const rule of [".cf-fig { opacity: 0; }", ".cf-companion { opacity: 0; }", ".cf-fig { clip-path: inset(50%); }", ".cf-fig { filter: opacity(0); }", ".cf-fig-caption { visibility: hidden; }", ".cf-fig { translate: 0 1000px; }", ".cf-fig-svg .cf-m-trans { stroke-dasharray: 0 100000; }"]) {
-      const output = await editCaption("orient/product", null, false, (text) => text.replace("<div class=\"cf-companion\"", `<style>${rule}</style>\n\n<div class="cf-companion"`));
+      const output = await editCaption("orient/product", null, false, (text) => text.replace("<div class=\"cf-companion not-content\"", `<style>${rule}</style>\n\n<div class="cf-companion not-content"`));
       assert.match(output, new RegExp(`${ownCss.source}a <style> element`), `${rule}: ${output}`);
       assert.doesNotMatch(output, /does not render the figure|renders a companion that no bound/, `${rule}: the companion itself is unchanged`);
     }
@@ -487,7 +499,7 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     // script, and an event handler, each fail beside the untouched companion.
     const ownScript = /orient\/product renders executable content, which only the site's runtime may carry: /;
     const insertion = "<script>\ndocument.styleSheets[0].insertRule(\n  \".cf-fig {opacity:0}\", document.styleSheets[0].cssRules.length\n);\n</script>";
-    const scripted = await editCaption("orient/product", null, false, (text) => text.replace("<div class=\"cf-companion\"", `${insertion}\n\n<div class="cf-companion"`));
+    const scripted = await editCaption("orient/product", null, false, (text) => text.replace("<div class=\"cf-companion not-content\"", `${insertion}\n\n<div class="cf-companion not-content"`));
     assert.match(scripted, new RegExp(`${ownScript.source}a <script> element`), scripted);
     assert.doesNotMatch(scripted, /does not render the figure|renders a companion that no bound/, scripted);
     assert.match(await editCaption("orient/product", null, false, (text) => text.replace("## Concept", "## Concept\n\n<p onclick=\"void 0\">x</p>")), new RegExp(`${ownScript.source}an event-handler attribute on <p>`));

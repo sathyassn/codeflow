@@ -432,7 +432,7 @@ function pinnedSourceUrl(sourcePath, target = "file") {
 function companionBlock(binding, placement, index) {
   const entry = figures.get(binding.declaration);
   const figureHtml = renderFigure(entry.declaration, { idPrefix: `cf-fig-${index}`, bound: entry.bound, facts: entry.facts });
-  return `<div class="cf-companion" data-cf-companion="${escapeHtml(binding.declaration)}" data-cf-placement="${placement}" data-cf-declaration-sha256="${entry.sha256}">${figureHtml}<p class="cf-companion-source">Figure declared in <code>${escapeHtml(binding.declaration)}</code>, not part of the page source.</p></div>`;
+  return `<div class="cf-companion not-content" data-cf-companion="${escapeHtml(binding.declaration)}" data-cf-placement="${placement}" data-cf-declaration-sha256="${entry.sha256}">${figureHtml}<p class="cf-companion-source">Figure declared in <code>${escapeHtml(binding.declaration)}</code>, not part of the page source.</p></div>`;
 }
 
 function recordContextFor(page, routesById) {
@@ -517,7 +517,7 @@ function renderAsIsPage(page, bindings, routesById, referencedMedia, anchorsBySo
   const rendered = `${opening}${region.toString("utf8")}${closing}`;
   const expected = [beginMarker, ...inserts.flatMap((insert) => [`<!-- codeflow-companion-begin declaration=${insert.declaration_path} sha256=${figures.get(insert.declaration_path).sha256} -->`, "<div", "<!-- codeflow-companion-end -->"]), endMarker];
   const blocks = topLevelHtmlBlocks(rendered.slice(rendered.indexOf(beginMarker)));
-  const markers = blocks.filter((value) => value.startsWith("<!-- codeflow-") || value.startsWith("<div class=\"cf-companion\""));
+  const markers = blocks.filter((value) => value.startsWith("<!-- codeflow-") || value.startsWith("<div class=\"cf-companion not-content\""));
   if (markers.length !== expected.length || markers.some((value, index) => !value.startsWith(expected[index]))) {
     throw new Error(`${page.source_path}: the ${page.page_class} source leaves a block open (an unclosed fence or raw HTML block), so it cannot render unchanged`);
   }
