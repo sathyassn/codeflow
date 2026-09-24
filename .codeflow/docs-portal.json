@@ -58,7 +58,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "030bd7b501520aee1d8346c9e717a6d890384c9b3459d7e86f9fa7ffb720d45d"
+      "pristine_sha256": "c216c52785db4729136590da87f0911f657bfec9452b8d8d930ff4e9ab66d0b8"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -70,7 +70,7 @@
     },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "64efcf7a6e26e7cd33d1b057279ebccf8f1d1e7738d46280817514e448323ef3"
+      "pristine_sha256": "abd26e6854f49f8815a7cd08d7a16e8977435633f59f2ad5107c98339ecf08ea"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -178,15 +178,15 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "64131bced489dca8c8794cb5399e62941cb66d96d5aa7e7c3595cab4d8d87598"
+      "pristine_sha256": "9503456037c25ba5829b86cb1ea3a44d16ee68c989259ee8dd50db171ea332e8"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "acd37589f25be7d7699b4c393330704743eef31e7ad0c2f045f1ec951c2cf72c"
+      "pristine_sha256": "be736d97f14997d604c30db05feb3235aba635d614602bda2c94f07c4153264b"
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "bd70d16f7b9861a008e8fe175e5b9a861cb71bf931eec69186b981b84ed7750c"
+      "pristine_sha256": "2b9bb45994aa4b2b6738cc959eb2347e4c36ca32e50ea25f6e29d11f2a162a01"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",

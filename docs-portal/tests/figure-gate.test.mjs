@@ -244,7 +244,7 @@ test("the mixed fixture renders every class and the gates name only what falls s
       assert.equal(drawn, 6);
       assert.ok(failures.length > 0);
       for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
-      assert.deepEqual(failures.filter((failure) => /page CSS|clean copy|not visible to a reader|effective opacity/.test(failure)), []);
+      assert.deepEqual(failures.filter((failure) => /served page|page CSS|executable content|clean copy|not visible to a reader|effective opacity/.test(failure)), []);
       assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states done and stop differ on shape, need 2/.test(failure)), failures.join("\n"));
 
       // Page CSS (R3-2, R4-1, R4-2). Each rule is refused at its source, as a
@@ -275,6 +275,42 @@ test("the mixed fixture renders every class and the gates name only what falls s
       const attributed = await hostile({ inject: () => document.querySelector(".sl-markdown-content").setAttribute("style", "opacity: 0.5"), css: null });
       assert.ok(attributed.some((failure) => /page CSS: a style attribute on <div class="sl-markdown-content[^"]*"> carries CSS the site's sheets do not/.test(failure)), attributed.join("\n"));
       assert.ok(attributed.some((failure) => /an ancestor <div class="sl-markdown-content[^"]*"> has opacity 0\.5 where the clean copy has 1/.test(failure)), attributed.join("\n"));
+
+      // Executable content (R5-1). The review's CSSOM insertion leaves the
+      // served sheet unchanged, so only its rule list and the figure's own
+      // visibility can show it; handlers and scripts in the content are
+      // refused where they stand.
+      const insertRule = () => { const sheet = [...document.styleSheets].find((candidate) => candidate.media.mediaText !== "print"); sheet.insertRule(".cf-fig {opacity:0}", sheet.cssRules.length); };
+      const inserted = await hostile({ inject: insertRule, css: null });
+      assert.ok(inserted.some((failure) => /page CSS: the stylesheet \/_astro\/common\.[^ ]+\.css holds \d+ rules that are not the \d+ its served bytes parse to/.test(failure)), inserted.join("\n"));
+      assert.ok(inserted.some((failure) => /rule 6 .*: wide: the figure is not visible to a reader/.test(failure)), inserted.join("\n"));
+      const handler = await hostile({ inject: () => document.querySelector(".sl-markdown-content p").setAttribute("onclick", "void 0"), css: null });
+      assert.ok(handler.some((failure) => /executable content: an event-handler attribute on <p>/.test(failure)), handler.join("\n"));
+      const script = await hostile({ inject: () => document.querySelector(".sl-markdown-content").append(Object.assign(document.createElement("script"), { textContent: "void 0" })), css: null });
+      assert.ok(script.some((failure) => /executable content: a <script> element in the page content/.test(failure)), script.join("\n"));
+
+      // The same insertion written into the built page, where the clean copy
+      // runs it too: the served page is not the recorded one, it carries a
+      // script, and the figure must be visible whatever the copy shows. A
+      // closed shadow root in the built page, beside the open-root control,
+      // is read from the served bytes before the browser consumes it (R5-2).
+      const builtGuide = path.join(root, "dist/reference/guide/index.html");
+      const builtBytes = await readFile(builtGuide, "utf8");
+      const intoContent = (markup) => builtBytes.replace(/(<div class="sl-markdown-content"[^>]*>)/, `$1${markup}`);
+      const onDisk = async (markup) => {
+        await writeFile(builtGuide, intoContent(markup));
+        try { return (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets)).failures; } finally { await writeFile(builtGuide, builtBytes); }
+      };
+      const rerun = await onDisk("<script>{ const sheet = [...document.styleSheets].find((candidate) => candidate.media.mediaText !== \"print\"); sheet.insertRule(\".cf-fig {opacity:0}\", sheet.cssRules.length); }</script>");
+      assert.ok(rerun.some((failure) => /served page: dist\/reference\/guide\/index\.html is served with sha256 \w+, not the recorded \w+/.test(failure)), rerun.join("\n"));
+      assert.ok(rerun.some((failure) => /executable content: a <script> element in the page content/.test(failure)), rerun.join("\n"));
+      assert.ok(rerun.some((failure) => /holds \d+ rules that are not the \d+ its served bytes parse to/.test(failure)), rerun.join("\n"));
+      assert.ok(rerun.some((failure) => /rule 6 .*: wide: the figure is not visible to a reader/.test(failure)), rerun.join("\n"));
+      for (const mode of ["closed", "open"]) {
+        const shadowed = await onDisk(`<div><template shadowrootmode="${mode}"><style>:host{opacity:0}</style>Shadow</template></div>`);
+        assert.ok(shadowed.some((failure) => /served page: the served page declares a shadow root/.test(failure)), `${mode}: ${shadowed.join("\n")}`);
+        assert.ok(shadowed.some((failure) => /served page: dist\/reference\/guide\/index\.html is served with sha256/.test(failure)), `${mode}: ${shadowed.join("\n")}`);
+      }
     } finally {
       await browser.close();
       await site.close();
@@ -412,5 +448,39 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     }
     assert.match(await editCaption("orient/product", null, false, (text) => text.replace("## Concept", "## Concept\n\n<div style=\"opacity: 0\">hidden</div>")), new RegExp(`${ownCss.source}a style attribute on <div>`));
     assert.match(await editCaption("orient/product", null, false, (text) => text.replace("## Concept", "## Concept\n\n<link rel=\"stylesheet\" href=\"/elsewhere.css\">")), new RegExp(`${ownCss.source}a <link> element`));
+
+    // Nor executable content (R5-1): the review's CSSOM insertion from a
+    // script, and an event handler, each fail beside the untouched companion.
+    const ownScript = /orient\/product renders executable content, which only the site's runtime may carry: /;
+    const insertion = "<script>\ndocument.styleSheets[0].insertRule(\n  \".cf-fig {opacity:0}\", document.styleSheets[0].cssRules.length\n);\n</script>";
+    const scripted = await editCaption("orient/product", null, false, (text) => text.replace("<div class=\"cf-companion\"", `${insertion}\n\n<div class="cf-companion"`));
+    assert.match(scripted, new RegExp(`${ownScript.source}a <script> element`), scripted);
+    assert.doesNotMatch(scripted, /does not render the figure|renders a companion that no bound/, scripted);
+    assert.match(await editCaption("orient/product", null, false, (text) => text.replace("## Concept", "## Concept\n\n<p onclick=\"void 0\">x</p>")), new RegExp(`${ownScript.source}an event-handler attribute on <p>`));
+
+    // The built page is read too, before any template becomes a shadow root
+    // (R5-2): a closed root, beside the open-root control, added only to the
+    // built output with its recorded hash rewritten, fails.
+    const builtGuide = path.join(portal, "dist/reference/guide/index.html");
+    const builtBytes = await readFile(builtGuide, "utf8");
+    for (const mode of ["closed", "open"]) {
+      const record = JSON.parse(pristine);
+      const edited = builtBytes.replace(/(<div class="sl-markdown-content"[^>]*>)/, `$1<div><template shadowrootmode="${mode}"><style>:host{opacity:0}</style>Shadow</template></div>`);
+      assert.notEqual(edited, builtBytes);
+      record.artifacts.find((artifact) => artifact.path === "dist/reference/guide/index.html").sha256 = sha256(edited);
+      for (const entry of record.pages) {
+        await writeFile(path.join(portal, entry.output_markdown), originals.get(entry.route));
+        await writeFile(path.join(portal, entry.markdown_twin), originals.get(entry.route));
+      }
+      await writeFile(builtGuide, edited);
+      await writeFile(evidencePath, `${JSON.stringify(record, null, 2)}\n`);
+      const result = validate();
+      assert.notEqual(result.status, 0, result.stdout);
+      assert.match(result.stdout + result.stderr, /built page dist\/reference\/guide\/index\.html carries CSS or executable content in its content: (?:[^\n]*, )?a declarative shadow root/, `${mode}: ${result.stdout}${result.stderr}`);
+      await writeFile(builtGuide, builtBytes);
+    }
+    await writeFile(evidencePath, pristine);
+    const restored = validate();
+    assert.match(restored.stdout + restored.stderr, /validate --portal: 2 page\(s\) clean/, restored.stdout + restored.stderr);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

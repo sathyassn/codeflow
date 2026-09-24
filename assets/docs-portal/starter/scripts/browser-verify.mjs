@@ -403,20 +403,28 @@ export function pinnedKitSheets(snapshot, commit, portalRelative) {
 // a clean render of its pinned declaration, and its drawings must compute the
 // same chosen geometry and visibility styles as that render under the kit
 // alone. That comparison is secondary to three checks on every page:
-//   1. Page CSS is refused at its source. Every stylesheet must be a link in
-//      the head to a built CSS file the evidence records, served with its
-//      recorded hash and importing nothing; content and a figure's ancestors
-//      carry no style element, link, style attribute or shadow root.
+//   1. Page CSS and executable content are refused at their source. The
+//      served page must be the built page the evidence records, with no
+//      declarative shadow root before the browser consumes its templates.
+//      Every stylesheet must be a link in the head to a built CSS file the
+//      evidence records, served with its recorded hash, importing nothing,
+//      and holding exactly the rules its served bytes parse to. Every external
+//      script must be a built script the evidence records, served with its
+//      hash. Content and a figure's ancestors carry no style element, link,
+//      style attribute, script or shadow root, and no element carries an
+//      event handler, a script URL, a frame or an embedded document.
 //   2. Every computed property of each companion, figure and figure
 //      descendant, pseudo-elements included, equals a clean copy of the same
 //      page: loaded afresh, stripped of any CSS the first check refuses, with
 //      the pinned rendering in place of each figure.
-//   3. Each figure, its caption and its legend are visible, and no ancestor
-//      moves, clips, filters or hides it unless the clean copy's does too.
+//   3. Each figure, its caption and its legend are visible at full opacity,
+//      whatever the clean copy shows, and no ancestor moves, clips, filters
+//      or hides it unless the clean copy's does too.
 export async function figureGateFailures(page, visitRoute, assignments, generated, declarations, kitSheets) {
   const failures = [];
   let drawn = 0;
   const pinnedSheets = pinnedBuiltSheets(generated.artifacts);
+  const pinnedScripts = pinnedBuiltAssets(generated.artifacts, ".js");
   // The clean render gets its own context where the browser allows one (a
   // persistent profile has only its own), so nothing from the page carries.
   const browser = page.context().browser();
@@ -427,7 +435,9 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
     for (const assignment of assignments) {
       await page.setViewportSize({ width: 1440, height: 900 });
       await visitRoute(assignment.route);
-      for (const failure of await pageCssFailures(page, pinnedSheets)) failures.push(`${assignment.source} (at ${assignment.route}): page CSS: ${failure}`);
+      for (const failure of await servedPageFailures(page, assignment.route, generated.artifacts)) failures.push(`${assignment.source} (at ${assignment.route}): served page: ${failure}`);
+      for (const failure of await pageCssFailures(page, pinnedSheets, clean)) failures.push(`${assignment.source} (at ${assignment.route}): page CSS: ${failure}`);
+      for (const failure of await pageScriptFailures(page, pinnedScripts)) failures.push(`${assignment.source} (at ${assignment.route}): executable content: ${failure}`);
       if (!assignment.figures?.length) continue;
       const observed = {};
       for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
@@ -513,14 +523,78 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
   return { failures, drawn };
 }
 
-// The stylesheets a build may serve: the CSS files among its recorded
-// artifacts, each with the hash the evidence records for it.
+// The stylesheets or scripts a build may serve: the files of that kind among
+// its recorded artifacts, each with the hash the evidence records for it.
+export function pinnedBuiltAssets(artifacts, extension) {
+  return (Array.isArray(artifacts) ? artifacts : []).filter((artifact) => typeof artifact?.path === "string" && artifact.path.startsWith("dist/") && artifact.path.endsWith(extension)).map((artifact) => ({ path: artifact.path, sha256: artifact.sha256 }));
+}
 export function pinnedBuiltSheets(artifacts) {
-  return (Array.isArray(artifacts) ? artifacts : []).filter((artifact) => typeof artifact?.path === "string" && artifact.path.startsWith("dist/") && artifact.path.endsWith(".css")).map((artifact) => ({ path: artifact.path, sha256: artifact.sha256 }));
+  return pinnedBuiltAssets(artifacts, ".css");
 }
 
-// Check 1: CSS may reach the page only from the site's own built sheets.
-export async function pageCssFailures(page, pinnedSheets) {
+async function servedSha256(page, url) {
+  const response = await page.request.get(url);
+  return { ok: response.ok(), sha256: createHash("sha256").update(await response.body()).digest("hex"), text: await response.text() };
+}
+
+// Check 1, the page itself: it is served as the built page the evidence
+// records, and its bytes, read before any template becomes a shadow root,
+// declare none.
+export async function servedPageFailures(page, route, artifacts) {
+  const built = route === "index" ? "dist/index.html" : `dist/${route}/index.html`;
+  const recorded = (Array.isArray(artifacts) ? artifacts : []).find((artifact) => artifact?.path === built);
+  const served = await servedSha256(page, page.url());
+  const failures = [];
+  if (recorded === undefined) failures.push(`the evidence records no built page ${built}`);
+  else if (!served.ok || served.sha256 !== recorded.sha256) failures.push(`${built} is served with sha256 ${served.sha256}, not the recorded ${recorded.sha256}`);
+  if (/<template\b[^>]*\sshadowroot(?:mode)?\s*=/i.test(served.text)) failures.push("the served page declares a shadow root");
+  return failures;
+}
+
+// Check 1, scripts: executable content reaches the page only from the site's
+// runtime. External scripts are built scripts the evidence records, served
+// with their hash. The content and a figure's ancestors carry no script,
+// event handler, script URL, frame or embedded document. What the runtime's
+// own scripts create in the page chrome is theirs (the search dialog's form,
+// for one, has a script URL as its action); the built page is read for these
+// before any script runs (servedPageFailures and validate --portal).
+export async function pageScriptFailures(page, pinnedScripts) {
+  const found = await page.evaluate(() => {
+    const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");
+    const runs = (value) => value.split(";").some((part) => part.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "").replace(/[\t\n\r]/g, "").toLowerCase().startsWith("javascript:"));
+    const urls = ["href", "src", "action", "formaction", "xlink:href", "data", "poster", "background"];
+    const carriers = new Set();
+    const scope = new Set(content ? [content, ...content.querySelectorAll("*")] : []);
+    for (const figure of document.querySelectorAll("figure.cf-fig")) for (let node = figure; node; node = node.parentElement) scope.add(node);
+    for (const element of scope) {
+      const tag = element.localName;
+      if (tag === "script") carriers.add("a <script> element in the page content");
+      if (["iframe", "frame", "frameset", "object", "embed"].includes(tag)) carriers.add(`an <${tag}> element`);
+      if (tag === "template" && (element.hasAttribute("shadowrootmode") || element.hasAttribute("shadowroot"))) carriers.add("a declarative shadow root");
+      for (const attribute of element.attributes) {
+        if (/^on./i.test(attribute.name)) carriers.add(`an event-handler attribute on <${tag}>`);
+        else if (attribute.name === "srcdoc") carriers.add(`an embedded document on <${tag}>`);
+        else if ((urls.includes(attribute.name) || (["animate", "set"].includes(tag) && ["to", "from", "by", "values"].includes(attribute.name))) && runs(attribute.value)) carriers.add(`a script URL on <${tag}>`);
+      }
+    }
+    return { carriers: [...carriers], scripts: [...document.scripts].filter((script) => script.src).map((script) => script.src) };
+  });
+  const failures = [...found.carriers];
+  const origin = new URL(page.url()).origin;
+  for (const source of found.scripts) {
+    const url = new URL(source);
+    const pin = url.origin === origin ? pinnedScripts.find((candidate) => url.pathname.endsWith(`/${candidate.path.slice("dist/".length)}`)) : undefined;
+    if (pin === undefined) { failures.push(`the script ${url.origin === origin ? url.pathname : url.href} is not a built script the evidence records`); continue; }
+    const served = await servedSha256(page, source);
+    if (!served.ok || served.sha256 !== pin.sha256) failures.push(`the script ${url.pathname} is served with sha256 ${served.sha256}, not the recorded ${pin.sha256}`);
+  }
+  return failures;
+}
+
+// Check 1: CSS may reach the page only from the site's own built sheets, and
+// each sheet holds exactly the rules its served bytes parse to, read in
+// `parser`, a page no page script reaches.
+export async function pageCssFailures(page, pinnedSheets, parser = null) {
   const found = await page.evaluate(() => {
     const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");
     const scope = new Set(content ? content.querySelectorAll("*") : []);
@@ -535,9 +609,13 @@ export async function pageCssFailures(page, pinnedSheets) {
     }
     const sheets = [...document.styleSheets].map((sheet) => {
       let imports = [];
-      try { imports = [...sheet.cssRules].filter((rule) => rule instanceof CSSImportRule).map((rule) => rule.href); } catch { imports = ["an unreadable rule list"]; }
+      let rules = null;
+      try {
+        imports = [...sheet.cssRules].filter((rule) => rule instanceof CSSImportRule).map((rule) => rule.href);
+        rules = [...sheet.cssRules].map((rule) => rule.cssText);
+      } catch { imports = ["an unreadable rule list"]; }
       const owner = sheet.ownerNode;
-      return { href: sheet.href, owner: owner?.localName ?? null, inHead: owner?.parentElement === document.head, imports };
+      return { href: sheet.href, owner: owner?.localName ?? null, inHead: owner?.parentElement === document.head, imports, rules };
     });
     return { carriers: [...carriers], sheets, adopted: document.adoptedStyleSheets.length };
   });
@@ -549,10 +627,18 @@ export async function pageCssFailures(page, pinnedSheets) {
     const url = new URL(sheet.href);
     const pin = url.origin === origin ? pinnedSheets.find((candidate) => url.pathname.endsWith(`/${candidate.path.slice("dist/".length)}`)) : undefined;
     if (pin === undefined) { failures.push(`the stylesheet ${url.origin === origin ? url.pathname : url.href} is not a built sheet the evidence records`); continue; }
-    const response = await page.request.get(sheet.href);
-    const served = createHash("sha256").update(await response.body()).digest("hex");
-    if (!response.ok() || served !== pin.sha256) failures.push(`the stylesheet ${url.pathname} is served with sha256 ${served}, not the recorded ${pin.sha256}`);
+    const served = await servedSha256(page, sheet.href);
+    if (!served.ok || served.sha256 !== pin.sha256) failures.push(`the stylesheet ${url.pathname} is served with sha256 ${served.sha256}, not the recorded ${pin.sha256}`);
     for (const imported of sheet.imports) failures.push(`the stylesheet ${url.pathname} imports ${imported}`);
+    if (parser !== null) {
+      await parser.goto("about:blank");
+      const parsed = await parser.evaluate(({ text, baseURL }) => {
+        const sheet = new CSSStyleSheet({ baseURL });
+        sheet.replaceSync(text);
+        return [...sheet.cssRules].map((rule) => rule.cssText);
+      }, { text: served.text, baseURL: sheet.href });
+      if (canonicalJson(parsed) !== canonicalJson(sheet.rules)) failures.push(`the stylesheet ${url.pathname} holds ${sheet.rules?.length ?? "unreadable"} rules that are not the ${parsed.length} its served bytes parse to`);
+    }
   }
   return failures;
 }
@@ -646,8 +732,8 @@ export function readFigureContext() {
 export function figureContextFailures(observed, baseline) {
   if (!observed || !baseline) return ["the figure or its clean copy could not be read"];
   const failures = [];
-  for (const [part, shown] of Object.entries(observed.visible)) if (!shown && baseline.visible[part]) failures.push(`the ${part} is not visible to a reader`);
-  if (observed.opacity < 1 && !(baseline.opacity < 1)) failures.push(`the figure draws at an effective opacity of ${observed.opacity}`);
+  for (const [part, shown] of Object.entries(observed.visible)) if (!shown) failures.push(`the ${part} is not visible to a reader`);
+  if (!(observed.opacity >= 1)) failures.push(`the figure draws at an effective opacity of ${observed.opacity}`);
   if (observed.chain.length !== baseline.chain.length) failures.push("the figure sits in a different place in the page from its clean copy");
   else observed.chain.forEach((ancestor, position) => {
     const clean = baseline.chain[position];
