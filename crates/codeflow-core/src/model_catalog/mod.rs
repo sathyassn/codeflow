@@ -4,10 +4,12 @@
 //! authenticates an operator. Callers supply fresh native facts and anchored
 //! plan records. Product lines order versions from oldest to newest.
 
+mod diagnostics;
 mod inputs;
 mod operator;
 mod overlay;
 mod resolve;
+pub mod scan;
 mod selection;
 mod validate;
 
