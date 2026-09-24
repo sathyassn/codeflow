@@ -12,6 +12,7 @@ import test from "node:test";
 import { chromium } from "@playwright/test";
 import { sha256 } from "../scripts/lib.mjs";
 import { figureGateFailures, observePortalPage, pinnedDeclarations, pinnedKitSheets } from "../scripts/browser-verify.mjs";
+import { drawnValuesMatch } from "../scripts/figure-grammar.mjs";
 import { GitSnapshot } from "../scripts/git-snapshot.mjs";
 import { classifyPortalPages, declaredCarrierFailures, pageClassFailures } from "../scripts/page-classes.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
@@ -171,11 +172,14 @@ test("the mixed fixture renders every class and the gates name only what falls s
       ["system/decisions/ADR-0001-first", "pass-through", "accepted-record", []],
     ]);
     const limits = evidence.figures.find((figure) => figure.declaration_path === "figures/commit-limits.json");
-    assert.deepEqual(limits.derived, {
+    // The drawn values are read back off the drawing grid, so they match the
+    // derived values within the grid's rounding, the bound rule 6 applies.
+    const { drawn: drawnLimits, ...derivedLimits } = limits.derived;
+    assert.deepEqual(derivedLimits, {
       source_path: "policy.json", source_sha256: sha256(POLICY), select: "git",
       values: { commit_desc_max_len: 50, commit_subject_max_len: 72 },
-      drawn: { commit_desc_max_len: 50, commit_subject_max_len: 72 },
     });
+    assert.ok(drawnValuesMatch(drawnLimits, derivedLimits.values), JSON.stringify(drawnLimits));
 
     // The unchanged source: strip the recorded insertions from the rendered
     // region and the committed body after its title comes back byte for byte.

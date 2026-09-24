@@ -454,9 +454,19 @@ export function bandScale(count, [start, end], padding = 0) {
   return (index) => start + step * index + step * padding;
 }
 
-// Space between a label and a mark it does not label, in drawing units: the
-// rule 8 clearance at the smallest scale a composition renders at.
-const LABEL_GAP = 12;
+// Label budgets in drawing units, from worst-case text metrics rather than
+// one engine's. A value label is 14px monospace, which advances at most 0.65em
+// a character, and an engine may report a text box up to 0.25em past its
+// advance on either side (Firefox reports about 0.23em). The gap between a
+// label's advance and a mark it does not label holds the rule 8 clearance at
+// the smallest scale a composition renders at, budgeted at 0.9, plus that
+// overhang and half a limit line's stroke.
+const LABEL_FONT = 14;
+const MONO_ADVANCE = 0.65 * LABEL_FONT;
+const TEXT_OVERHANG = 0.25 * LABEL_FONT;
+const MIN_RENDER_SCALE = 0.9;
+const LIMIT_HALF_STROKE = 1;
+const LABEL_GAP = Math.ceil(THRESHOLDS.labelClearancePx / MIN_RENDER_SCALE + LIMIT_HALF_STROKE + TEXT_OVERHANG);
 
 function layoutCompositions(figure, bound) {
   const value = (entry) => (typeof entry.value === "number" ? entry.value : bound.derived[entry.value]);
@@ -465,10 +475,14 @@ function layoutCompositions(figure, bound) {
     const limits = (figure.layout.limits ?? []).map((limit) => ({ ...limit, number: value(limit) }));
     const unit = figure.layout.unit ? ` ${figure.layout.unit}` : "";
     const drawnValues = {};
+    const valueTexts = rows.map((row) => `${formatNumber(row.number)}${unit}`);
+    const widest = Math.max(0, ...valueTexts.map((text) => text.length)) * MONO_ADVANCE;
     const compose = (width, narrow) => {
       const labelWidth = narrow ? 0 : 150;
       const left = labelWidth;
-      const right = width - 40;
+      // Room past the scale for the widest value label, which may sit past a
+      // bar at the maximum or past the last limit.
+      const right = width - Math.max(40, LABEL_GAP + widest + TEXT_OVERHANG);
       const scale = linearScale([0, figure.layout.max], [left, right]);
       const draw = [];
       const rowHeight = narrow ? 58 : 40;
@@ -483,8 +497,8 @@ function layoutCompositions(figure, bound) {
         if (typeof row.value === "string") drawnValues[row.value] = round(scale.invert(left + round(length)), 0.0001);
         // The value sits past the bar and clear of any limit line it would
         // otherwise touch, so it never reads as that limit's label.
-        const valueText = `${formatNumber(row.number)}${unit}`;
-        const valueWidth = valueText.length * 8.5;
+        const valueText = valueTexts[index];
+        const valueWidth = valueText.length * MONO_ADVANCE;
         let valueX = left + length + LABEL_GAP;
         for (const limitX of limits.map((limit) => scale(limit.number)).sort((a, b) => a - b)) {
           if (limitX > valueX - LABEL_GAP && limitX < valueX + valueWidth + LABEL_GAP) valueX = limitX + LABEL_GAP;

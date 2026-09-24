@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
-import { chromium } from "@playwright/test";
+import { chromium, firefox, webkit } from "@playwright/test";
 import { canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { specimens } from "./page-shapes.mjs";
@@ -119,6 +119,27 @@ test("rule 6 reads each drawn value back off the rendered marks", { skip: proces
       }
     }
   } finally { await browser.close(); }
+});
+
+// Rule 8 on the derived extent layout in every engine the portal gate runs.
+// The layout budgets label clearance from worst-case text metrics, so a text
+// box an engine reports wider than another's (Firefox's reaches about 0.23em
+// past the advance) still clears every mark it does not label, at 1280 and
+// 390 px in both modes.
+test("the derived extent layout clears rule 8 in Chromium, WebKit and Firefox", { skip: process.platform === "win32", timeout: 300_000 }, async () => {
+  const declaration = (await specimens()).find(({ name }) => name === "10-extent-derived.json").declaration;
+  const { bound, composed, evidence } = fidelity(declaration);
+  const html = renderFigure(declaration, { idPrefix: "d", bound });
+  const css = await sheet();
+  for (const [name, engine] of Object.entries({ chromium, webkit, firefox })) {
+    const browser = await engine.launch({ headless: true, env: hardenedChildEnvironment() });
+    try {
+      const observed = await probe(await browser.newPage(), css, html);
+      const failures = figureRuleFailures({ ...observed, evidence, composed });
+      assert.deepEqual(failures.filter((failure) => failure.rule === 8), [], `${name}: ${JSON.stringify(failures)}`);
+      assert.deepEqual(failures, [], `${name}: ${JSON.stringify(failures)}`);
+    } finally { await browser.close(); }
+  }
 });
 
 // The structural check: a rendered figure must be its clean render. Its DOM

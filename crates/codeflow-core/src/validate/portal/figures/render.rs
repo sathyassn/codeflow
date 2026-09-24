@@ -28,7 +28,15 @@ use serde_json::{Map, Value};
 
 const WIDE_MAX_WIDTH: f64 = 720.0;
 const ELONGATION_MAX: f64 = 1.5;
-const LABEL_GAP: f64 = 12.0;
+/// Label budgets in drawing units, as the grammar module sets them from
+/// worst-case text metrics: a 14px monospace value label advances at most
+/// 0.65em a character, and an engine may report a text box up to 0.25em past
+/// its advance on either side. The gap is the 8px rule 8 clearance at a 0.9
+/// render scale, plus that overhang and half a limit line's stroke, rounded up.
+const LABEL_FONT: f64 = 14.0;
+const MONO_ADVANCE: f64 = 0.65 * LABEL_FONT;
+const TEXT_OVERHANG: f64 = 0.25 * LABEL_FONT;
+const LABEL_GAP: f64 = 14.0;
 const LINE: [&str; 3] = ["path", "line", "polyline"];
 
 /// A mark of the closed vocabulary: the kit class, its legend key form, and
@@ -382,10 +390,22 @@ fn extent_layout(layout: &Value, derived: &Map<String, Value>) -> Result<Compose
         .map_or(String::new(), |unit| format!(" {unit}"));
     let max = number(layout, "max")?;
     let mut drawn_values = Map::new();
+    let value_texts: Vec<String> = rows
+        .iter()
+        .map(|(_, number)| format!("{}{unit}", format_number(*number)))
+        .collect();
+    let widest = value_texts
+        .iter()
+        .map(|text| text.encode_utf16().count())
+        .max()
+        .unwrap_or(0) as f64
+        * MONO_ADVANCE;
     let mut compose = |width: f64, narrow: bool| -> Composition {
         let label_width = if narrow { 0.0 } else { 150.0 };
         let left = label_width;
-        let right = width - 40.0;
+        // Room past the scale for the widest value label, which may sit past
+        // a bar at the maximum or past the last limit.
+        let right = width - 40.0_f64.max(LABEL_GAP + widest + TEXT_OVERHANG);
         let scale = |value: f64| left + (value / max) * (right - left);
         let invert = |position: f64| {
             if right == left {
@@ -411,8 +431,8 @@ fn extent_layout(layout: &Value, derived: &Map<String, Value>) -> Result<Compose
                     json_number(round(invert(left + round(length, 0.01)), 0.0001)),
                 );
             }
-            let value_text = format!("{}{unit}", format_number(*number));
-            let value_width = value_text.encode_utf16().count() as f64 * 8.5;
+            let value_text = value_texts[index].clone();
+            let value_width = value_text.encode_utf16().count() as f64 * MONO_ADVANCE;
             let mut value_x = left + length + LABEL_GAP;
             let mut limit_xs: Vec<f64> = limits.iter().map(|(_, number)| scale(*number)).collect();
             limit_xs.sort_by(f64::total_cmp);
@@ -1634,6 +1654,16 @@ mod tests {
     /// The portal commits the HTML its grammar draws for every specimen
     /// (docs-portal/tests/figure-grammar.test.mjs pins it to renderFigure), so
     /// reconstructing each one here proves the validator draws the same bytes.
+    /// The gap is the grammar module's budget: the 8px clearance at a 0.9
+    /// render scale, half a limit stroke and the text overhang, rounded up.
+    #[test]
+    fn label_gap_is_budgeted_from_worst_case_metrics() {
+        assert_eq!(
+            super::LABEL_GAP,
+            (8.0_f64 / 0.9 + 1.0 + super::TEXT_OVERHANG).ceil()
+        );
+    }
+
     #[test]
     fn reconstruction_matches_the_portal_rendered_specimens() {
         let fixtures =
