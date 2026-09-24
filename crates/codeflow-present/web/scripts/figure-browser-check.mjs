@@ -124,7 +124,7 @@ try {
   if (canonicalJson(outcome) !== canonicalJson(EXPECTED)) {
     throw new Error(`present figure outcomes differ from the portal specimen table:\n${JSON.stringify(detail, null, 2)}`);
   }
-  process.stdout.write(`cf-present figure checks passed: ${names.length} specimens drawn in light and dark at 1280 and 390 px with the portal's rule outcomes, one refused declaration shown, the DOM guard refusing 12 departures from the grammar\n`);
+  process.stdout.write(`cf-present figure checks passed: ${names.length} specimens drawn in light and dark at 1280 and 390 px with the portal's rule outcomes, one refused declaration shown, the DOM guard accepting the grammar boundary and refusing 17 departures from it\n`);
 } finally {
   await browser?.close();
   if (sessionId !== null) await closeSession(sessionId);
@@ -159,6 +159,16 @@ async function checkGuard(browser) {
     const bound = declaration.figure.binding === "derived" ? { derived: { commit_desc_max_len: 50, commit_subject_max_len: 72 } } : null;
     drawn[name] = renderFigure(declaration, { idPrefix: "cf-present-figure-1", bound });
   }
+  // The grammar's own boundary: a 211-character mark id with the text that
+  // labels it, and a text carrying all four styles.
+  const boundary = JSON.parse(await readFile(join(specimenRoot, "03-layering.json"), "utf8"));
+  const mark = boundary.figure.wide.draw.find((item) => item.state !== undefined && item.id !== undefined);
+  mark.id = `m${"-a".repeat(105)}`;
+  const label = boundary.figure.wide.draw.find((item) => item.text !== undefined);
+  label.for = [mark.id];
+  label.style = ["strong", "mute", "head", "mono"];
+  validateDeclaration(boundary);
+  drawn["boundary"] = renderFigure(boundary, { idPrefix: "cf-present-figure-1" });
   const page = await browser.newPage();
   try {
     await page.setContent("<!doctype html><html><body></body></html>");
@@ -188,6 +198,11 @@ async function checkGuard(browser) {
           "namespaced href": guard(html, (root) => root.querySelector("svg [data-state] rect").setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#x")),
           foreignObject: guard(html, (root) => root.querySelector("svg.cf-fig-svg").append(svgElement("foreignObject"))),
           "html title in svg": guard(html, (root) => root.querySelector("svg.cf-fig-svg").append(document.createElement("title"))),
+          "unknown shape class": guard(html, set("svg [data-state] rect", "class", "cf-m-totally-unknown")),
+          "unknown text style": guard(html, set("svg text", "class", "cf-t cf-t--unlisted")),
+          "repeated text style": guard(html, set("svg text", "class", "cf-t cf-t--mono cf-t--mono")),
+          "unknown family": guard(html, set("figure", "data-cf-figure", "unlisted")),
+          "undeclared state": guard(html, set("svg [data-state]", "data-state", "unlisted")),
         },
       };
     }, { drawn, clean: "03-layering.json" });
@@ -206,6 +221,11 @@ async function checkGuard(browser) {
       "namespaced href": "a xlink:href attribute on <rect>",
       foreignObject: "a <foreignObject> element",
       "html title in svg": "a <title> element",
+      "unknown shape class": "an unexpected class value on <rect>",
+      "unknown text style": "an unexpected class value on <text>",
+      "repeated text style": "an unexpected class value on <text>",
+      "unknown family": "an unexpected data-cf-figure value on <figure>",
+      "undeclared state": "a data-state the figure does not declare on <g>",
     };
     if (canonicalJson(result.refused) !== canonicalJson(expected)) throw new Error(`the guard's refusals differ:\n${JSON.stringify(result.refused, null, 2)}`);
   } finally { await page.close(); }

@@ -92,6 +92,16 @@ export const FACT_CHECKS = Object.freeze(["contains", "count-items", "json"]);
 
 const DECORATIONS = Object.freeze({ rule: "cf-f-rule", axis: "cf-f-axis", tick: "cf-f-tick" });
 const TEXT_STYLES = Object.freeze({ strong: "cf-t--strong", mute: "cf-t--mute", head: "cf-t--head", mono: "cf-t--mono" });
+// Every class the drawing writes on a shape, and every class a text adds to
+// cf-t: the closed vocabulary present's DOM guard accepts. The part classes
+// are the literals markParts and legendKey write; a test pins them.
+const PART_CLASSES = Object.freeze(["cf-m-trans-head", "cf-m-state", "cf-m-cap", "cf-m-cross", "cf-m-done", "cf-m-hatchline"]);
+export const SHAPE_CLASSES = Object.freeze([...new Set([
+  ...Object.values(MARKS).flatMap((mark) => [mark.className, mark.head, mark.cross].filter((value) => value !== undefined)),
+  ...Object.values(DECORATIONS),
+  ...PART_CLASSES,
+])]);
+export const TEXT_CLASSES = Object.freeze(Object.values(TEXT_STYLES));
 const RECOMPOSE = Object.freeze(["rotate", "stack", "strip", "list"]);
 const LIMITS = Object.freeze({ states: 24, draw: 600, facts: 32, twinRows: 64, twinColumns: 8, text: 400, coordinate: 4000 });
 const KEBAB = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
@@ -255,7 +265,7 @@ function validateComposition(composition, name, stateNames, maxWidth, fail) {
       coordinates(item, ["x", "y"], where, fail);
       if (item.anchor !== undefined && !["start", "middle", "end"].includes(item.anchor)) fail(`${where} anchor must be start, middle or end`);
       const styles = item.style === undefined ? [] : Array.isArray(item.style) ? item.style : [item.style];
-      if (styles.some((style) => !Object.hasOwn(TEXT_STYLES, style))) fail(`${where} style must be among ${Object.keys(TEXT_STYLES).join(", ")}`);
+      if (styles.some((style) => !Object.hasOwn(TEXT_STYLES, style)) || new Set(styles).size !== styles.length) fail(`${where} style must be distinct entries among ${Object.keys(TEXT_STYLES).join(", ")}`);
       if (item.for !== undefined) {
         if (!Array.isArray(item.for) || item.for.some((id) => typeof id !== "string")) fail(`${where} for must list mark ids`);
         else references.push(...item.for.map((id) => [where, id]));
@@ -944,6 +954,29 @@ export function probeFigures(options) {
     if (tag === "rect" || tag === "circle") return node.getBoundingClientRect();
     return null;
   };
+  // A mark's box in its SVG's own coordinates, through every transform on
+  // the mark and its ancestors, attribute or CSS: what the reader sees,
+  // expressed in the units the composition's scale speaks.
+  const boxInSvg = (node, svg) => {
+    let box = null;
+    try { box = node.getBBox(); } catch { return null; }
+    const outer = svg.getScreenCTM();
+    const inner = node.getScreenCTM();
+    if (!box || !outer || !inner) return null;
+    const matrix = outer.inverse().multiply(inner);
+    const corners = [[box.x, box.y], [box.x + box.width, box.y], [box.x, box.y + box.height], [box.x + box.width, box.y + box.height]]
+      .map(([x, y]) => [matrix.a * x + matrix.c * y + matrix.e, matrix.b * x + matrix.d * y + matrix.f]);
+    const xs = corners.map(([x]) => x);
+    const ys = corners.map(([, y]) => y);
+    return [Math.min(...xs), Math.min(...ys), Math.max(...xs) - Math.min(...xs), Math.max(...ys) - Math.min(...ys)];
+  };
+  // The grammar draws no transform on a mark or any group above it.
+  const transformedUpTo = (node, svg) => {
+    for (let element = node; element && element !== svg; element = element.parentElement) {
+      if (element.hasAttribute("transform") || getComputedStyle(element).transform !== "none") return true;
+    }
+    return false;
+  };
   const figures = [];
   for (const figure of document.querySelectorAll("figure.cf-fig")) {
     const ground = getComputedStyle(figure).backgroundColor;
@@ -1007,7 +1040,7 @@ export function probeFigures(options) {
         if (!text.textContent.trim()) continue;
         const fontSize = parseFloat(getComputedStyle(text).fontSize) || 0;
         const rect = text.getBoundingClientRect();
-        record.texts.push({ text: text.textContent.trim().slice(0, 60), size: round(fontSize * scaleOf(text), 0.01), box: [rect.left, rect.top, rect.right, rect.bottom], labels: (text.getAttribute("data-cf-for") ?? "").split(/\s+/).filter(Boolean) });
+        record.texts.push({ text: text.textContent.trim().slice(0, 60), full: text.textContent.trim().slice(0, 400), size: round(fontSize * scaleOf(text), 0.01), box: [rect.left, rect.top, rect.right, rect.bottom], labels: (text.getAttribute("data-cf-for") ?? "").split(/\s+/).filter(Boolean) });
       }
       for (const group of svg.querySelectorAll("[data-state]")) {
         const state = group.getAttribute("data-state");
@@ -1027,9 +1060,8 @@ export function probeFigures(options) {
         record.states[state] = entry;
         record.drawn.push(state);
         if (group.id) {
-          let box = null;
-          try { box = primary.getBBox(); } catch { box = null; }
-          if (box) record.geometry.push({ id: group.id, tag: primary.tagName.toLowerCase(), box: [box.x, box.y, box.width, box.height].map((value) => round(value, 0.001)) });
+          const box = boxInSvg(primary, svg);
+          if (box) record.geometry.push({ id: group.id, tag: primary.tagName.toLowerCase(), box: box.map((value) => round(value, 0.001)), transformed: transformedUpTo(primary, svg) });
         }
         for (const node of drawn) {
           record.marks.push({ state, tag: node.tagName.toLowerCase(), size: round(infoDimension(node), 0.1) });
@@ -1168,11 +1200,12 @@ function valueReadback(composition, record, variant) {
   const [d0, d1] = scale.domain;
   const [r0, r1] = scale.range;
   const read = (position) => (r1 === r0 ? d0 : d0 + ((position - r0) / (r1 - r0)) * (d1 - d0));
-  const texts = (predicate) => composition.draw.filter((item) => item.text !== undefined && predicate(item)).map((item) => String(item.text).trim().slice(0, 60)).sort();
+  const texts = (predicate) => composition.draw.filter((item) => item.text !== undefined && predicate(item)).map((item) => String(item.text).trim()).sort();
   for (const item of composition.draw) {
     if (item.value === undefined || item.id === undefined) continue;
     const mark = (record.geometry ?? []).find((candidate) => candidate.id.endsWith(`-${variant}-${item.id}`));
     if (!mark) { failures.push(`the ${item.id} mark for ${formatNumber(item.value)} is not drawn`); continue; }
+    if (mark.transformed) failures.push(`the ${item.id} mark is transformed, and the grammar draws no transform`);
     const [x, , width] = mark.box;
     const bar = mark.tag === "rect";
     if (bar && Math.abs(x - r0) > 0.5) failures.push(`the ${item.id} bar starts at ${round(x)}, not at the scale origin ${round(r0)}`);
@@ -1181,7 +1214,7 @@ function valueReadback(composition, record, variant) {
       failures.push(`the ${item.id} mark reads ${round(shown)} on its scale and the committed value is ${formatNumber(item.value)}`);
     }
     const expected = texts((text) => text.for?.includes(item.id));
-    const labels = record.texts.filter((text) => text.labels.includes(mark.id)).map((text) => text.text).sort();
+    const labels = record.texts.filter((text) => text.labels.includes(mark.id)).map((text) => text.full).sort();
     if (canonicalJson(labels) !== canonicalJson(expected)) failures.push(`the ${item.id} mark is labelled ${JSON.stringify(labels)}, not ${JSON.stringify(expected)}`);
   }
   return failures;

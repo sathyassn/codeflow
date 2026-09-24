@@ -27,13 +27,13 @@ function fidelity(declaration) {
   return { bound, composed, evidence: { facts, data: bound === null ? null : { drawn: composed.drawnValues, derived: POLICY } } };
 }
 
-async function probe(page, css, html, breakage = null) {
+async function probe(page, css, html, breakage = null, argument = undefined) {
   const document = (theme) => `<!doctype html><html data-theme="${theme}" data-cfp-skin="instrument"><head><style>${css} body{margin:0;background:var(--cf-canvas);font-family:var(--cf-font-sans)} main{max-width:720px;margin:0 auto;padding:0 16px}</style></head><body><main>${html}</main></body></html>`;
   const observed = {};
   for (const [label, width, theme] of [["wide", 1280, "light"], ["narrow", 390, "light"], ["wideDark", 1280, "dark"], ["narrowDark", 390, "dark"]]) {
     await page.setViewportSize({ width, height: 900 });
     await page.setContent(document(theme));
-    if (breakage) await page.evaluate(breakage);
+    if (breakage) await page.evaluate(breakage, argument);
     observed[label] = (await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx }))[0];
   }
   return observed;
@@ -102,6 +102,40 @@ test("rule 6 reads each drawn value back off the rendered marks", { skip: proces
     assert.ok(sixes(moved).some((message) => /^wide: the limit-0 mark reads [\d.]+ on its scale and the committed value is 72$/.test(message)), sixes(moved).join("\n"));
     const relabelled = await probe(page, css, html, () => { for (const text of document.querySelectorAll(".cf-fig-svg text")) if (text.textContent === "50 chars") text.textContent = "90 chars"; });
     assert.ok(sixes(relabelled).some((message) => message === 'narrow: the row-0 mark is labelled ["90 chars","Description"], not ["50 chars","Description"]'), sixes(relabelled).join("\n"));
+
+    // A transform halves what the reader sees while every attribute and the
+    // local box stay as drawn: on the bar, on its group, and through CSS.
+    const bars = ".cf-fig-svg [data-state] > rect:first-child";
+    const transforms = {
+      "the bar": (selector) => { for (const bar of document.querySelectorAll(selector)) bar.setAttribute("transform", `translate(${Number(bar.getAttribute("x")) / 2} 0) scale(0.5 1)`); },
+      "its group": (selector) => { for (const bar of document.querySelectorAll(selector)) bar.parentElement.setAttribute("transform", `translate(${Number(bar.getAttribute("x")) / 2} 0) scale(0.5 1)`); },
+      "a CSS transform": (selector) => { for (const bar of document.querySelectorAll(selector)) { bar.style.transformBox = "view-box"; bar.style.transformOrigin = `${bar.getAttribute("x")}px 0`; bar.style.transform = "scaleX(0.5)"; } },
+    };
+    for (const [where, transform] of Object.entries(transforms)) {
+      const messages = sixes(await probe(page, css, html, transform, bars));
+      for (const label of ["wide", "narrow", "wide dark", "narrow dark"]) {
+        assert.ok(messages.includes(`${label}: the row-0 mark is transformed, and the grammar draws no transform`), `${where}: ${messages.join("\n")}`);
+        assert.ok(messages.some((message) => message.startsWith(`${label}: the row-0 mark reads 25 on its scale and the committed value is 50`)), `${where}: ${messages.join("\n")}`);
+      }
+    }
+  } finally { await browser.close(); }
+});
+
+// The value label is compared whole: a limit label at the 60-character
+// ceiling still has its value read after it.
+test("rule 6 reads a value label past its sixtieth character", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+  const declaration = structuredClone((await specimens()).find(({ name }) => name === "10-extent-derived.json").declaration);
+  declaration.figure.layout.limits[0].label = "L".repeat(60);
+  const { bound, composed, evidence } = fidelity(declaration);
+  const html = renderFigure(declaration, { idPrefix: "d", bound });
+  const css = await sheet();
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    const page = await browser.newPage();
+    const sixes = (observed) => figureRuleFailures({ ...observed, evidence, composed }).filter((failure) => failure.rule === 6).map((failure) => failure.message);
+    assert.deepEqual(sixes(await probe(page, css, html)), []);
+    const relabelled = await probe(page, css, html, () => { for (const text of document.querySelectorAll(".cf-fig-svg text")) if (text.textContent.endsWith(" 72")) text.textContent = text.textContent.replace(/ 72$/, " 99"); });
+    assert.ok(sixes(relabelled).some((message) => message.startsWith("wide: the limit-0 mark is labelled")), sixes(relabelled).join("\n"));
   } finally { await browser.close(); }
 });
 

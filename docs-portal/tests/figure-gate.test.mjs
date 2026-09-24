@@ -321,11 +321,14 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     // Edit the visible caption inside each companion and rewrite every hash
     // the evidence records for it: only the reconstruction of the pinned
     // declaration can tell the companion no longer draws what it declares.
-    const editCaption = async (route, rewrite) => {
+    // With `smuggle`, a comment carrying the pristine companion sits beside
+    // the edited one: a comment renders nothing, so it proves nothing.
+    const editCaption = async (route, rewrite = null, smuggle = false) => {
       const record = JSON.parse(pristine);
       const page = record.pages.find((entry) => entry.route === route);
       const original = originals.get(route).toString("utf8");
-      const edited = original.replace(/(<figcaption class="cf-fig-caption">)[^<]*/, "$1An edited caption.");
+      let edited = original.replace(/(<figcaption class="cf-fig-caption">)[^<]*/, "$1An edited caption.");
+      if (smuggle) edited = edited.replace("<div class=\"cf-companion\"", `<!-- ${original.match(/<div class="cf-companion"[^\n]*/)[0]} -->\n\n<div class="cf-companion"`);
       assert.notEqual(edited, original, route);
       rewrite?.(page, Buffer.byteLength(edited) - Buffer.byteLength(original), Buffer.from(edited));
       page.output_markdown_sha256 = sha256(edited);
@@ -350,5 +353,8 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
       region.region_sha256 = sha256(bytes.subarray(region.output_offset_bytes, region.output_offset_bytes + region.region_bytes));
     }), /the companion figures\/install-steps\.json is not the recorded insertion at its bound place/);
     assert.match(await editCaption("orient/product"), /orient\/product does not render the figure its declaration figures\/concept\.json draws/);
+    const smuggled = await editCaption("orient/product", null, true);
+    assert.match(smuggled, /orient\/product renders a companion that no bound declaration draws in the concept panel/);
+    assert.match(smuggled, /orient\/product does not render the figure its declaration figures\/concept\.json draws/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
-import { checkFacts, composeFigure, drawnValuesMatch, FAMILIES, markdownSections, renderFigure, slugHeading, validateDeclaration } from "../scripts/figure-grammar.mjs";
+import { checkFacts, composeFigure, drawnValuesMatch, FAMILIES, markdownSections, renderFigure, SHAPE_CLASSES, slugHeading, TEXT_CLASSES, validateDeclaration } from "../scripts/figure-grammar.mjs";
 
 import { specimens } from "./page-shapes.mjs";
 
@@ -63,6 +63,20 @@ test("the committed rendered specimens are what the grammar draws", async () => 
   }
 });
 
+// The class vocabulary present's DOM guard accepts is every class the
+// drawing code can write, read off the module source itself.
+test("the exported class vocabulary covers every class the drawing writes", async () => {
+  const source = await readFile(new URL("../scripts/figure-grammar.mjs", import.meta.url), "utf8");
+  const written = new Set([...source.matchAll(/"(cf-[mf]-[a-z-]+)"/g)].map((match) => match[1]));
+  assert.deepEqual([...written].filter((name) => !SHAPE_CLASSES.includes(name)), []);
+  const texts = new Set([...source.matchAll(/"(cf-t--[a-z]+)"/g)].map((match) => match[1]));
+  assert.deepEqual([...texts].sort(), [...TEXT_CLASSES].sort());
+  for (const { declaration } of await specimens()) {
+    const bound = declaration.figure.binding === "derived" ? { derived: { commit_desc_max_len: 50, commit_subject_max_len: 72 } } : null;
+    for (const [, classes] of renderFigure(declaration, { bound }).matchAll(/<(?:path|line|polyline|rect|circle) class="([^"]+)"/g)) assert.ok(SHAPE_CLASSES.includes(classes), classes);
+  }
+});
+
 test("declarations are refused where the grammar can tell without a browser", async () => {
   const base = (await specimens()).find(({ name }) => name === "03-layering.json").declaration;
   const variant = (change) => { const copy = structuredClone(base); change(copy.figure); return copy; };
@@ -72,6 +86,7 @@ test("declarations are refused where the grammar can tell without a browser", as
     [(figure) => { figure.states[0].mark = "sparkle"; }, /draws unknown mark sparkle/],
     [(figure) => { figure.wide.draw.push({ state: "ghost", shape: "rect", x: 0, y: 0, w: 10, h: 10 }); }, /draws undeclared state ghost/],
     [(figure) => { figure.facts = []; }, /rule 6: facts must list 1 to/],
+    [(figure) => { figure.wide.draw.find((item) => item.text !== undefined).style = ["mono", "mono"]; }, /style must be distinct entries/],
     [(figure) => { figure.twin = null; }, /rule 12: twin must be facts or/],
     [(figure) => { delete figure.narrow; }, /rule 5: narrow must declare the recomposition/],
     [(figure) => { figure.facts[0].source = "../outside.md"; }, /source must be a repository path/],

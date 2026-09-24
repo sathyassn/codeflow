@@ -5,6 +5,11 @@
 // disagree, and the figure is refused rather than inserted. A reference to a
 // resource is allowed only as `url(#id)` naming a pattern the same figure
 // defines; `aria-labelledby` must name the figure's own title and description.
+// Families, shape classes and text styles come from the grammar module itself,
+// so the two cannot drift apart; a state named on a mark or legend entry must
+// be one its figure declares. Identifiers are held to their character set, not
+// a length: the declaration envelope already bounds them.
+import { FAMILIES, SHAPE_CLASSES, TEXT_CLASSES } from "./figure-grammar.mjs";
 
 const HTML = "http://www.w3.org/1999/xhtml";
 const SVG = "http://www.w3.org/2000/svg";
@@ -13,11 +18,11 @@ type Check = RegExp | ((value: string) => boolean);
 
 const NUMBER = /^-?\d+(?:\.\d+)?$/u;
 const JS_NUMBER = /^-?\d+(?:\.\d+)?(?:e[+-]?\d+)?$/u;
-const ID = /^[A-Za-z0-9_-]{1,200}$/u;
-const IDS = /^[A-Za-z0-9_-]{1,200}(?: [A-Za-z0-9_-]{1,200})*$/u;
+const ID = /^[A-Za-z0-9_-]+$/u;
+const IDS = /^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$/u;
 const KEBAB = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const KEBABS = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?: [a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/u;
-const SHAPE_CLASS = /^cf-[mf]-[a-z]+(?:-[a-z]+)*(?:--[a-z]+)?$/u;
+const DECLARED_STATE = "data-state";
 const PATH_DATA = /^[MLHVCQZz0-9., -]{1,4096}$/u;
 const POINTS = /^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?(?: -?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?){0,999}$/u;
 const VIEW_BOX = /^0 0 \d+(?:\.\d+)? \d+(?:\.\d+)?$/u;
@@ -30,15 +35,20 @@ const json = (shape: "array" | "object") => (value: string): boolean => {
     return false;
   }
 };
-const exactly = (...values: string[]) => (value: string): boolean => values.includes(value);
+const exactly = (...values: readonly string[]) => (value: string): boolean => values.includes(value);
+// cf-t, then each text style at most once.
+const textClass = (value: string): boolean => {
+  const [base, ...styles] = value.split(" ");
+  return base === "cf-t" && new Set(styles).size === styles.length && styles.every((style) => TEXT_CLASSES.includes(style));
+};
 
-const SHAPE: Record<string, Check> = { class: SHAPE_CLASS, [LOCAL_FILL]: /^url\(#[A-Za-z0-9_-]{1,200}\)$/u };
+const SHAPE: Record<string, Check> = { class: exactly(...SHAPE_CLASSES), [LOCAL_FILL]: /^url\(#[A-Za-z0-9_-]+\)$/u };
 const coordinates = (...names: string[]): Record<string, Check> => Object.fromEntries(names.map((name) => [name, NUMBER]));
 
 const ALLOWED: Record<string, Record<string, Check>> = {
   [`${HTML} figure`]: {
     class: exactly("cf-fig"),
-    "data-cf-figure": KEBAB,
+    "data-cf-figure": exactly(...FAMILIES),
     "data-cf-figure-id": KEBAB,
     "data-cf-binding": exactly("authored", "derived"),
     "data-cf-states": KEBABS,
@@ -48,7 +58,7 @@ const ALLOWED: Record<string, Record<string, Check>> = {
   },
   [`${HTML} span`]: { class: exactly("cf-fig-kicker") },
   [`${HTML} ul`]: { class: exactly("cf-legend"), "aria-label": exactly("Legend") },
-  [`${HTML} li`]: { "data-state": KEBAB, "data-cf-wide": exactly("") },
+  [`${HTML} li`]: { [DECLARED_STATE]: KEBAB, "data-cf-wide": exactly("") },
   [`${HTML} figcaption`]: { class: exactly("cf-fig-caption") },
   [`${HTML} details`]: { class: exactly("cf-twin") },
   [`${HTML} summary`]: {},
@@ -64,7 +74,7 @@ const ALLOWED: Record<string, Record<string, Check>> = {
     class: exactly("cf-fig-svg cf-fig-svg--wide", "cf-fig-svg cf-fig-svg--narrow", "cf-key"),
     viewBox: VIEW_BOX,
     role: exactly("img"),
-    "aria-labelledby": /^[A-Za-z0-9_-]{1,200}-t [A-Za-z0-9_-]{1,200}-d$/u,
+    "aria-labelledby": /^[A-Za-z0-9_-]+-t [A-Za-z0-9_-]+-d$/u,
     "aria-hidden": exactly("true"),
     "data-cf-variant": exactly("wide", "narrow"),
   },
@@ -78,9 +88,9 @@ const ALLOWED: Record<string, Record<string, Check>> = {
     patternUnits: exactly("userSpaceOnUse"),
     patternTransform: exactly("rotate(45)"),
   },
-  [`${SVG} g`]: { "data-state": KEBAB, id: ID, "data-cf-value": JS_NUMBER },
+  [`${SVG} g`]: { [DECLARED_STATE]: KEBAB, id: ID, "data-cf-value": JS_NUMBER },
   [`${SVG} text`]: {
-    class: /^cf-t(?: cf-t--[a-z]+){0,4}$/u,
+    class: textClass,
     ...coordinates("x", "y"),
     "text-anchor": exactly("middle", "end"),
     "data-cf-for": IDS,
@@ -99,6 +109,7 @@ export function unsafeFigureNode(root: ParentNode): string | null {
     new Set(elements.filter((node) => node.namespaceURI === namespace && node.localName === name).map((node) => node.id));
   const patterns = ids(SVG, "pattern");
   const labels = new Set([...ids(SVG, "title"), ...ids(SVG, "desc")]);
+  const declared = (node: Element) => new Set((node.closest("figure")?.getAttribute("data-cf-states") ?? "").split(" "));
   for (const node of elements) {
     const tag = node.localName;
     const allowed = ALLOWED[`${node.namespaceURI ?? ""} ${tag}`];
@@ -111,6 +122,7 @@ export function unsafeFigureNode(root: ParentNode): string | null {
       if (!(typeof check === "function" ? check(value) : check.test(value))) return `an unexpected ${name} value on <${tag}>`;
       if (name === LOCAL_FILL && !patterns.has(value.slice(5, -1))) return `a ${name} reference outside the figure on <${tag}>`;
       if (name === "aria-labelledby" && !value.split(" ").every((id) => labels.has(id))) return `an ${name} reference outside the figure on <${tag}>`;
+      if (name === DECLARED_STATE && !declared(node).has(value)) return `a ${name} the figure does not declare on <${tag}>`;
     }
   }
   return null;
