@@ -163,7 +163,8 @@ skills use (flow, structure, layering, sequence, state, coverage, extent,
 derivation, graph); the medium changes the marks, not the choice. Draw an
 ASCII figure only when a relationship carries the point, then draw the family
 that relationship names, with one idea, every mark explained and one caption
-line. Use a
+line; a reply whose point is such a relationship must carry one (see the reply
+rule below). Use a
 diagram whose scope and detail fit the explanation: prefer the least complicated
 form that remains complete, not the physically smallest; complex subjects may
 need a larger, layered, or multi-view diagram, with a brief caption or legend when it
@@ -176,6 +177,25 @@ policy outrank CodeFlow philosophy, the consuming project's documented
 voice/examples, audience, medium, task, and requested tone. Preserve technical
 meaning; never fabricate personality, experience, feelings, familiarity, or
 slang.
+
+Operator-facing replies follow the written content policy (ADR-0067). When
+the point is a flow, dependency, state change, or other relationship, the
+reply carries a figure: fenced ASCII in chat, an HTML or SVG stage in
+`cf-present` or the portal. When a substantial comparison, review, or
+decision would be clearer on one surface with anchored feedback, open or
+offer `cf-present` and say why. A simple answer stays simple: no figure, no
+headings, no recap. Write short plain prose; a summary is two to four
+sentences before any list, while a one-line answer stays one line. Add
+bullets or a table only where they carry facts better than a sentence.
+Mannered prose, as the editorial smells reference lists it, is a defect in a
+reply as much as in a document; no hook sees a reply, so evaluation and
+review judge it. Em and en dashes are absent from new text on every policy
+surface, replies included.
+
+When a reply or document names a link (a pull request, a served portal or
+`cf-present` page, a file), give the exact link the tool printed or one you
+verified. Never guess a URL, port, or pull request number; state an unknown
+link as unknown.
 
 Ordinary recoverable task-scoped edits remain autonomous. A system-level,
 cross-boundary, credential/IAM, production, destructive-disk,

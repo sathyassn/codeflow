@@ -17,7 +17,10 @@
 name: codeflow-ci
 
 on:
+  # `edited` reruns the checks when the PR body changes after it opens, so an
+  # edited body is linted again (a bare `pull_request:` would skip edits).
   pull_request:
+    types: [opened, synchronize, reopened, edited]
   push:
     branches: [main, master]
 
