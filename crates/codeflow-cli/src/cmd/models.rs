@@ -5,8 +5,7 @@ use std::collections::BTreeMap;
 use clap::{Args, Subcommand};
 use codeflow_core::model_catalog::{
     anchored_override, load_catalog_document, parse_override_route, Catalog, CatalogDocument,
-    CatalogInputs, Exclusion, ExclusionScope, OpenParticipant, ParticipantLabel, Resolution,
-    ResolveRequest,
+    CatalogInputs, Exclusion, ExclusionScope, ParticipantLabel, Resolution, ResolveRequest,
 };
 
 #[derive(Debug, Args)]
@@ -23,6 +22,7 @@ enum ModelsCommand {
 
 #[derive(Debug, Args)]
 struct ResolveArgs {
+    /// Catalog duty whose participants and obligations must be resolved.
     #[arg(long)]
     duty: String,
     /// Supported host harness id, such as claude-code or codex-app.
@@ -30,14 +30,16 @@ struct ResolveArgs {
     host: String,
     #[arg(long, default_value = "none", value_parser = ["claude", "codex", "grok", "none"])]
     author: String,
-    /// Fresh native exclusion: `selector:<id>` or `bucket:<id>` (repeatable).
+    /// Fresh native exclusion: `selector:<id>` excludes the whole version across harnesses; `bucket:<id>` excludes its usage bucket (repeatable).
     #[arg(long)]
     exclude: Vec<String>,
     /// Fresh identity canary observation: `<pinned-id>=<observed-id>`.
     #[arg(long)]
     observed: Vec<String>,
+    /// Catalog trigger fact to apply to this resolution (repeatable).
     #[arg(long)]
     trigger: Vec<String>,
+    /// Canonical task id for this resolution; required with --override.
     #[arg(long)]
     task: Option<String>,
     /// Task id of the anchored `OPERATOR_OVERRIDE`; must equal --task.
@@ -49,26 +51,26 @@ struct ResolveArgs {
     /// Exact override invocation effort.
     #[arg(long)]
     effort: Option<String>,
+    /// Print the resolution as JSON; input errors go to stderr with exit 2.
     #[arg(long)]
     json: bool,
 }
 
 pub fn run(args: &ModelsArgs) -> i32 {
     let ModelsCommand::Resolve(args) = &args.command;
-    let result = resolve(args).unwrap_or_else(|reason| Resolution {
-        open: vec![OpenParticipant {
-            participant: args.duty.clone(),
-            label: ParticipantLabel::Required,
-            reasons: vec![reason],
-        }],
-        ..Resolution::default()
-    });
+    let result = match resolve(args) {
+        Ok(result) => result,
+        Err(reason) => {
+            eprintln!("models resolve: {reason}");
+            return 2;
+        }
+    };
     if args.json {
         match serde_json::to_string_pretty(&result) {
             Ok(json) => println!("{json}"),
             Err(error) => {
                 eprintln!("models resolve: {error}");
-                return 1;
+                return 2;
             }
         }
     } else {
@@ -78,10 +80,21 @@ pub fn run(args: &ModelsArgs) -> i32 {
 }
 
 fn resolve(args: &ResolveArgs) -> Result<Resolution, String> {
+    if args.override_id.is_some() && args.task.is_none() {
+        return Err("--override requires --task".into());
+    }
     let root = super::repo_root();
     let CatalogDocument::Current(catalog) = load_catalog_document(&root)? else {
         return Err("models resolve requires managed catalog schema 5; schema 4 remains supported by doctor".into());
     };
+    if args.duty == "test-authoring" {
+        return Err(
+            "test-authoring is not resolved separately; use the unit's implementation duty".into(),
+        );
+    }
+    if !catalog.duties.contains_key(&args.duty) {
+        return Err(format!("unknown duty {}", args.duty));
+    }
     let home = codeflow_core::registry::codeflow_home();
     let mut inputs = CatalogInputs::load(*catalog, &root, home.as_deref())?;
     if !inputs
@@ -185,13 +198,18 @@ fn parse_exclusion(catalog: &Catalog, text: &str) -> Result<Vec<Exclusion>, Stri
 }
 
 fn render_text(result: &Resolution) {
-    for p in result.participants.iter().chain(&result.obligations) {
+    for (prefix, p) in result
+        .participants
+        .iter()
+        .map(|p| ("", p))
+        .chain(result.obligations.iter().map(|p| ("obligation: ", p)))
+    {
         let label = match p.label {
             ParticipantLabel::Required => "required",
             ParticipantLabel::SecondOpinion => "second-opinion",
         };
         println!(
-            "{}: {} / {} version={} pinned={} harness={} effort={} [{}{}]",
+            "{prefix}{}: {} / {} version={} pinned={} harness={} effort={} [{}{}]",
             p.participant,
             p.seat.as_deref().unwrap_or("worker"),
             p.line,
@@ -222,13 +240,18 @@ fn render_text(result: &Resolution) {
         }
     }
     for gap in &result.open {
+        let prefix = if gap.participant.starts_with("xhigh-reasoning:") {
+            "obligation: "
+        } else {
+            ""
+        };
         let label = if gap.label == ParticipantLabel::Required {
             "required"
         } else {
             "second-opinion"
         };
         println!(
-            "{}: open [{label}]: {}",
+            "{prefix}{}: open [{label}]: {}",
             gap.participant,
             gap.reasons.join("; ")
         );

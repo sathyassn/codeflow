@@ -37,13 +37,18 @@ impl Fixture {
         write(self.root(), CATALOG, &value.to_string());
     }
 
-    fn run(&self, duty: &str, author: &str, extra: &[&str]) -> Output {
-        Command::new(env!("CARGO_BIN_EXE_codeflow"))
+    fn command(&self) -> Command {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+        command
             .current_dir(self.root())
             .env("CODEFLOW_HOME", &self.home)
+            .args(["models", "resolve"]);
+        command
+    }
+
+    fn run(&self, duty: &str, author: &str, extra: &[&str]) -> Output {
+        self.command()
             .args([
-                "models",
-                "resolve",
                 "--duty",
                 duty,
                 "--host",
@@ -60,13 +65,28 @@ impl Fixture {
     fn resolved(&self, duty: &str, author: &str, extra: &[&str], success: bool) -> Value {
         let output = self.run(duty, author, extra);
         assert_eq!(
-            output.status.success(),
-            success,
+            output.status.code(),
+            Some(i32::from(!success)),
             "{}\n{}",
             String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
+        assert!(
+            output.stderr.is_empty(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
         serde_json::from_slice(&output.stdout).unwrap()
+    }
+
+    fn input_error(&self, duty: &str, extra: &[&str], reason: &str) {
+        let output = self.run(duty, "none", extra);
+        assert_eq!(output.status.code(), Some(2), "{output:?}");
+        assert!(output.stdout.is_empty(), "{output:?}");
+        assert_eq!(
+            String::from_utf8(output.stderr).unwrap(),
+            format!("models resolve: {reason}\n")
+        );
     }
 }
 
@@ -110,8 +130,12 @@ fn models_resolve_every_duty_and_author_and_required_exit_status() {
         .unwrap()
         .iter()
         .any(|p| p["label"] == "second-opinion"));
-    fixture.resolved("test-authoring", "none", &[], false);
-    fixture.resolved("unknown-duty", "none", &[], false);
+    fixture.input_error(
+        "test-authoring",
+        &[],
+        "test-authoring is not resolved separately; use the unit's implementation duty",
+    );
+    fixture.input_error("unknown-duty", &[], "unknown duty unknown-duty");
 }
 
 #[test]
@@ -305,21 +329,19 @@ fn models_override_matches_anchored_plan_and_never_working_tree() {
         "unapproved working tree corruption",
     );
     fixture.resolved("design", "none", &override_args("TSK-900", "TSK-900"), true);
-    for (task, id) in [
-        ("TSK-900", "../record.md"),
-        ("TSK-900", "anything"),
-        ("TSK-900", "TSK-901"),
-        ("TSK-901", "TSK-900"),
-        ("TSK-999", "TSK-999"),
+    for (task, id, reason) in [
+        ("TSK-900", "../record.md", "OPERATOR_OVERRIDE task mismatch"),
+        ("TSK-900", "anything", "OPERATOR_OVERRIDE task mismatch"),
+        ("TSK-900", "TSK-901", "OPERATOR_OVERRIDE task mismatch"),
+        ("TSK-901", "TSK-900", "OPERATOR_OVERRIDE task mismatch"),
+        ("TSK-999", "TSK-999", "task TSK-999 not committed"),
     ] {
-        let result = fixture.resolved("design", "none", &override_args(task, id), false);
-        assert_eq!(result["open"][0]["participant"], "design");
+        fixture.input_error("design", &override_args(task, id), reason);
     }
-    fixture.resolved(
+    fixture.input_error(
         "orchestrate",
-        "none",
         &override_args("TSK-900", "TSK-900"),
-        false,
+        "OPERATOR_OVERRIDE is only valid for design",
     );
 }
 
@@ -327,41 +349,52 @@ fn models_override_matches_anchored_plan_and_never_working_tree() {
 fn models_override_rejects_each_missing_or_mismatched_field() {
     let original = block();
     let mut records = vec![
-        String::new(),
-        format!("{original}\n\n{original}"),
-        format!("{original}\n```\n\n## Execution contract\n\n```text\n{original}"),
-        original.replace("TSK-900", "TSK-901"),
-        original.replace("duty: design", "duty: orchestrate"),
-        original.replace(ROUTE, "orchid-main@claude-code"),
-        original.replace("effort: high", "effort: xhigh"),
-        original.replace("Plan v3.4", "not-a-plan"),
+        (
+            String::new(),
+            "Execution contract requires exactly one OPERATOR_OVERRIDE block".to_owned(),
+        ),
+        (
+            format!("{original}\n\n{original}"),
+            "Execution contract requires exactly one OPERATOR_OVERRIDE block".into(),
+        ),
+        (
+            format!("{original}\n```\n\n## Execution contract\n\n```text\n{original}"),
+            "task requires exactly one Execution contract".into(),
+        ),
+        (
+            original.replace("TSK-900", "TSK-901"),
+            "OPERATOR_OVERRIDE task mismatch".into(),
+        ),
+        (
+            original.replace("duty: design", "duty: orchestrate"),
+            "OPERATOR_OVERRIDE duty mismatch".into(),
+        ),
+        (
+            original.replace(ROUTE, "orchid-main@claude-code"),
+            "OPERATOR_OVERRIDE route mismatch".into(),
+        ),
+        (
+            original.replace("effort: high", "effort: xhigh"),
+            "OPERATOR_OVERRIDE effort mismatch".into(),
+        ),
+        (
+            original.replace("Plan v3.4", "not-a-plan"),
+            "override plan must name Plan vN".into(),
+        ),
     ];
-    for field in [
-        "task:",
-        "duty:",
-        "route:",
-        "effort:",
-        "plan:",
-        "instruction:",
-    ] {
-        records.push(
+    for field in ["task", "duty", "route", "effort", "plan", "instruction"] {
+        records.push((
             original
                 .lines()
-                .filter(|line| !line.starts_with(field))
+                .filter(|line| !line.starts_with(&format!("{field}:")))
                 .collect::<Vec<_>>()
                 .join("\n"),
-        );
+            format!("missing OPERATOR_OVERRIDE {field}"),
+        ));
     }
-    for record in records {
+    for (record, reason) in records {
         let fixture = planning_fixture(&record);
-        let result = fixture.resolved(
-            "design",
-            "none",
-            &override_args("TSK-900", "TSK-900"),
-            false,
-        );
-        assert_eq!(result["participants"], json!([]));
-        assert!(!result["open"][0]["reasons"].as_array().unwrap().is_empty());
+        fixture.input_error("design", &override_args("TSK-900", "TSK-900"), &reason);
     }
 }
 
@@ -373,33 +406,30 @@ fn models_override_rejects_unanchored_blocks_and_records() {
         "project-management/tasks/TSK-900.md",
         &task("TSK-900", &block()),
     );
-    fixture.resolved(
+    fixture.input_error(
         "design",
-        "none",
         &override_args("TSK-900", "TSK-900"),
-        false,
+        "Execution contract requires exactly one OPERATOR_OVERRIDE block",
     );
     git(fixture.root(), &["add", "."]);
     git(
         fixture.root(),
         &["commit", "-m", "test: unapproved task branch override"],
     );
-    fixture.resolved(
+    fixture.input_error(
         "design",
-        "none",
         &override_args("TSK-900", "TSK-900"),
-        false,
+        "Execution contract requires exactly one OPERATOR_OVERRIDE block",
     );
     write(
         fixture.root(),
         "project-management/tasks/TSK-999.md",
         &task("TSK-999", &block().replace("TSK-900", "TSK-999")),
     );
-    fixture.resolved(
+    fixture.input_error(
         "design",
-        "none",
         &override_args("TSK-999", "TSK-999"),
-        false,
+        "task TSK-999 not committed",
     );
 }
 
@@ -436,7 +466,7 @@ fn models_loads_overlay_and_rejects_project_violation_without_writes() {
         r#"{"schema_version":1,"bindings":[{"role":"claude-judgment-primary","binding_id":"missing"}]}"#,
     );
     let before = snapshot(fixture.root());
-    fixture.resolved("orchestrate", "none", &[], false);
+    fixture.input_error("orchestrate", &[], "missing binding record");
     assert_eq!(snapshot(fixture.root()), before);
 }
 
@@ -507,11 +537,10 @@ fn models_override_rejects_target_only_commit_and_unstable_target() {
         &["commit", "-m", "test: update fixture target plan"],
     );
     git(fixture.root(), &["checkout", "task/TSK-900-fixture"]);
-    fixture.resolved(
+    fixture.input_error(
         "design",
-        "none",
         &override_args("TSK-900", "TSK-900"),
-        false,
+        "Execution contract requires exactly one OPERATOR_OVERRIDE block",
     );
     for target in ["HEAD", "task/TSK-900-fixture", "integration/fixture~0"] {
         write(
@@ -527,11 +556,248 @@ fn models_override_rejects_target_only_commit_and_unstable_target() {
             fixture.root(),
             &["commit", "-m", "test: invalid fixture target"],
         );
-        fixture.resolved(
+        fixture.input_error(
             "design",
-            "none",
             &override_args("TSK-900", "TSK-900"),
-            false,
+            "override target must be a stable non-task branch",
         );
     }
+}
+
+#[test]
+fn models_override_without_task_reports_missing_argument() {
+    let fixture = Fixture::new();
+    fixture.input_error(
+        "design",
+        &[
+            "--override",
+            "TSK-900",
+            "--route",
+            ROUTE,
+            "--effort",
+            "high",
+        ],
+        "--override requires --task",
+    );
+}
+
+#[test]
+fn models_input_errors_use_stderr_and_exit_two() {
+    let fixture = Fixture::new();
+    for (extra, reason) in [
+        (
+            vec!["--observed", "bad"],
+            "observed must be pinned-id=observed-id",
+        ),
+        (
+            vec!["--observed", "unknown=pin"],
+            "unknown observed pinned id unknown",
+        ),
+        (
+            vec!["--exclude", "selector:unknown"],
+            "unknown excluded selector unknown",
+        ),
+        (
+            vec!["--task", "../record"],
+            "task must be a canonical TSK id",
+        ),
+        (
+            vec!["--route", ROUTE],
+            "--route and --effort require --override",
+        ),
+    ] {
+        fixture.input_error("design", &extra, reason);
+    }
+    let output = fixture
+        .command()
+        .args(["--duty", "design", "--host", "unknown", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert_eq!(
+        String::from_utf8(output.stderr).unwrap(),
+        "models resolve: unsupported host harness\n"
+    );
+    for (extra, reason) in [
+        (
+            vec!["--no-such-flag"],
+            "unexpected argument '--no-such-flag'",
+        ),
+        (
+            vec![
+                "--task",
+                "TSK-900",
+                "--override",
+                "TSK-900",
+                "--route",
+                ROUTE,
+                "--effort",
+                "superhigh",
+            ],
+            "unknown variant `superhigh`",
+        ),
+    ] {
+        let output = fixture.run("design", "none", &extra);
+        assert_eq!(output.status.code(), Some(2));
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8(output.stderr).unwrap().contains(reason));
+    }
+    fixture.catalog(&json!({"schema_version":5}));
+    let output = fixture.run("design", "none", &[]);
+    assert_eq!(output.status.code(), Some(2));
+    assert!(output.stdout.is_empty());
+    assert!(String::from_utf8(output.stderr)
+        .unwrap()
+        .contains("missing field `policy_id`"));
+}
+
+#[test]
+fn models_real_resolutions_preserve_engine_json_and_exit_status() {
+    use codeflow_core::model_catalog::{Catalog, Exclusion, ExclusionScope, ResolveRequest};
+    let fixture = Fixture::new();
+    let catalog = Catalog::parse(fixture_data::fixture().to_string().as_bytes()).unwrap();
+    let observations = std::collections::BTreeMap::new();
+    let exclusions = [Exclusion {
+        scope: ExclusionScope::Version("orchid-one".into()),
+        reason: "caller supplied selector:orchid-one".into(),
+        fresh_native: true,
+    }];
+    for (extra, exclusions) in [
+        (vec![], &[][..]),
+        (vec!["--exclude", "selector:orchid-one"], &exclusions[..]),
+    ] {
+        let expected = catalog
+            .resolve(&ResolveRequest {
+                duty: "design",
+                task: "",
+                host_harness: "claude-code",
+                author_lineage: None,
+                exclusions,
+                observed_ids: &observations,
+                trigger_facts: &[],
+                requested_override: None,
+                operator_override: None,
+            })
+            .unwrap();
+        let output = fixture.run("design", "none", &extra);
+        assert_eq!(output.status.code(), Some(i32::from(expected.is_open())));
+        assert!(output.stderr.is_empty());
+        assert_eq!(
+            String::from_utf8(output.stdout).unwrap(),
+            format!("{}\n", serde_json::to_string_pretty(&expected).unwrap())
+        );
+    }
+}
+
+#[test]
+fn models_failure_paths_never_invent_participant_names() {
+    let fixture = planning_fixture(&block());
+    let mut override_excluded = override_args("TSK-900", "TSK-900");
+    override_excluded.extend(["--exclude", "selector:orchid-two"]);
+    for extra in [
+        vec!["--exclude", "selector:orchid-one"],
+        vec!["--observed", "orchid-one-pin=drifted"],
+        override_excluded,
+    ] {
+        let result = fixture.resolved("design", "none", &extra, false);
+        assert_eq!(result["open"][0]["participant"], "designer");
+        if extra.contains(&"--override") {
+            assert_eq!(result["open"][0]["reasons"], json!(["OPERATOR_OVERRIDE route ineligible: orchid-two: native exclusion: caller supplied selector:orchid-two"]));
+        }
+    }
+    // Rejected input has no participant result at all. Only the engine may
+    // name a real open participant, including ineligible anchored overrides.
+    fixture.input_error(
+        "design",
+        &override_args("TSK-901", "TSK-900"),
+        "OPERATOR_OVERRIDE task mismatch",
+    );
+    let output = fixture
+        .command()
+        .args([
+            "--duty",
+            "design",
+            "--host",
+            "claude-code",
+            "--exclude",
+            "selector:orchid-one",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(1));
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.starts_with("designer: open [required]:"));
+    assert!(!text.contains("design: open"));
+}
+
+#[test]
+fn models_help_describes_context_output_and_whole_version_exclusions() {
+    let fixture = Fixture::new();
+    let output = fixture.command().arg("--help").output().unwrap();
+    assert!(output.status.success());
+    let help = String::from_utf8(output.stdout).unwrap();
+    for (flag, description) in [
+        (
+            "--duty",
+            "Catalog duty whose participants and obligations must be resolved",
+        ),
+        (
+            "--trigger",
+            "Catalog trigger fact to apply to this resolution",
+        ),
+        (
+            "--task",
+            "Canonical task id for this resolution; required with --override",
+        ),
+        (
+            "--json",
+            "Print the resolution as JSON; input errors go to stderr with exit 2",
+        ),
+        (
+            "--exclude",
+            "`selector:<id>` excludes the whole version across harnesses",
+        ),
+    ] {
+        assert!(help.contains(flag));
+        assert!(help.contains(description), "{flag}: {help}");
+    }
+}
+
+#[test]
+fn models_text_marks_filled_and_open_obligations() {
+    let fixture = Fixture::new();
+    let command = || {
+        fixture
+            .command()
+            .args([
+                "--duty",
+                "orchestrate",
+                "--host",
+                "claude-code",
+                "--trigger",
+                "deep",
+            ])
+            .output()
+            .unwrap()
+    };
+    let output = command();
+    assert_eq!(output.status.code(), Some(0));
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.starts_with("host: orchid-seat"));
+    assert!(text.contains("\nobligation: xhigh-reasoning:orchid-seat: "));
+    let mut catalog = fixture_data::fixture();
+    for line in catalog["lines"].as_array_mut().unwrap() {
+        if line["family"] == "orchid" {
+            for version in line["versions"].as_array_mut().unwrap() {
+                version["efforts"] = json!(["medium", "high"]);
+            }
+        }
+    }
+    fixture.catalog(&catalog);
+    let output = command();
+    assert_eq!(output.status.code(), Some(1));
+    let text = String::from_utf8(output.stdout).unwrap();
+    assert!(text.contains("\nobligation: xhigh-reasoning:orchid-seat: open [required]:"));
+    assert!(text.contains("xhigh trigger met: false"));
 }
