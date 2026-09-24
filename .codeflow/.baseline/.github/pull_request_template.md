@@ -56,8 +56,10 @@
 
 <!-- Impact is the change level a consumer sees; the project's release
      policy maps it to a version and names the level a break takes.
-     Breaking states compatibility; resolve it, never leave `yes | no`.
-     Migration is `none` unless Breaking is yes. Project fields go after
+     Breaking states compatibility. Choose each value; never leave the
+     alternatives. Migration is normally `none` for nonbreaking work; it
+     names steps when Breaking is yes, and a refinement of a pending breaking
+     entry keeps that entry's migration reference. Project fields go after
      Migration. -->
 
 - Impact: `none | patch | minor | major`

@@ -24,6 +24,8 @@ One publisher remains:
 PRs carry one `Release impact` section with `Impact`, `Breaking`,
 `Rationale`, `Migration`, `Unit` and `Evidence`. `Breaking: yes` holds if and
 only if `Impact: major`, and a break needs substantive migration guidance.
+A nonbreaking refinement of a pending major entry still carries its migration
+reference, and a field left at the template's alternatives fails.
 The legacy `Contract` field is accepted during the transition and must agree
 with `Breaking` when both appear. `scripts/release.py check-pr` compares
 the declaration with the current target, actual proposed merge tree, pending

@@ -136,8 +136,12 @@ four fields, then the project's own fields (unit, changelog entry, evidence):
   `Breaking: no` is the explicit compatibility claim, so it is never
   prefilled.
 - `Rationale`: the consumer-visible effect and the evidence for the level.
-- `Migration`: always present; `none` unless Breaking is yes, then steps or
-  a pointer to a Breaking change section.
+- `Migration`: always present. It is normally `none` for nonbreaking work.
+  When Breaking is yes, give steps or a pointer to a Breaking change section.
+  A nonbreaking PR that refines or reconciles a pending breaking entry, such
+  as a wording-only edit declared `none`, still carries that entry's
+  migration reference.
+- A value is chosen, never left as the template's alternatives.
 
 In stable SemVer, as CodeFlow uses it, Breaking is yes if and only if Impact
 is major, and its checker enforces both directions. Pre-1.0 and other
