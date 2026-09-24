@@ -144,6 +144,24 @@ Keep native macOS, Linux and Windows execution claims separate from cross-target
 type checking. Missing native platform or installer evidence remains explicit
 and blocks claiming that platform's release qualification.
 
+### Policy key upgrade order
+
+`codeflow update` adds each new `.codeflow/policy.json` key to an existing
+consumer with its default. The git-hook shims run whichever `codeflow` is on
+`PATH`, and a binary older than the key rejects the policy file, so every
+commit fails at `commit-msg`. A release that adds a policy key says in its
+notes: upgrade the `codeflow` on `PATH` first, then run `codeflow update`.
+
+| Policy file | Hook binary | Result |
+|---|---|---|
+| Without the new key | older | passes, rule not checked |
+| Without the new key | newer | rule checked at its default |
+| With the new key | newer | rule checked as set |
+| With the new key | older | every commit blocked: unknown key |
+
+Recovery from the last row is to upgrade the binary on `PATH`; do not delete
+the key to make the hook pass.
+
 ### Same-PR preparation and deliberate publication
 
 1. Add curated notes and adjacent impact markers to the normal work PR's
