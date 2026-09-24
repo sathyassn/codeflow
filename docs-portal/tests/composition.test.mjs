@@ -1,7 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import os from "node:os";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { paletteSwatchFailures, PALETTE_PILL_GROUPS } from "../scripts/browser-verify.mjs";
 import {
@@ -10,7 +9,7 @@ import {
   pageClassFailures, recordPointerRoute, recordRouteFailures, staleSourceFailures,
 } from "../scripts/page-classes.mjs";
 import { COMPOSED_PAGE, SHELL_PAGE } from "./page-shapes.mjs";
-import { commitFixture, configureFixture, portalFixture, runAdapter, starterRoot } from "./portal-fixture.mjs";
+import { commitFixture, configureFixture, portalFixture, runAdapter } from "./portal-fixture.mjs";
 
 // What a composed page carries, counted inside each panel that owns it.
 const CARRIED = Object.freeze({
@@ -255,58 +254,3 @@ test("palette pills must show the live tokens of the palette they select", () =>
     "display panel 1 offers instrument, editorial, the tokens define instrument, editorial, ink",
   ]);
 });
-
-test("the starter mirror of the verifier and its tests is byte-identical to the live copies", async () => {
-  const mirror = path.join(starterRoot, "..", "assets/docs-portal/starter");
-  const present = await readdir(mirror).then(() => true, () => false);
-  assert.equal(present, true, "the codeflow checkout carries the starter mirror this test compares against");
-  assert.deepEqual(await mirrorDrift(starterRoot, mirror, ["scripts", "tests"]), []);
-});
-
-test("the mirror equality check names a perturbed copy", async () => {
-  const root = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-mirror-"));
-  try {
-    for (const side of ["live", "mirror"]) {
-      await mkdir(path.join(root, side, "scripts"), { recursive: true });
-      await writeFile(path.join(root, side, "scripts/browser-verify.mjs"), "export const gate = 1;\n");
-      await writeFile(path.join(root, side, "scripts/page-classes.mjs"), "export const rules = 1;\n");
-    }
-    assert.deepEqual(await mirrorDrift(path.join(root, "live"), path.join(root, "mirror"), ["scripts"]), []);
-    await writeFile(path.join(root, "mirror/scripts/page-classes.mjs"), "export const rules = 2;\n");
-    assert.deepEqual(await mirrorDrift(path.join(root, "live"), path.join(root, "mirror"), ["scripts"]), ["byte drift at scripts/page-classes.mjs"]);
-    await rm(path.join(root, "mirror/scripts/page-classes.mjs"));
-    assert.deepEqual(await mirrorDrift(path.join(root, "live"), path.join(root, "mirror"), ["scripts"]), ["scripts/page-classes.mjs is missing from the mirror"]);
-    await writeFile(path.join(root, "mirror/scripts/page-classes.mjs"), "export const rules = 1;\n");
-    await writeFile(path.join(root, "mirror/scripts/extra.mjs"), "export const extra = 1;\n");
-    assert.deepEqual(await mirrorDrift(path.join(root, "live"), path.join(root, "mirror"), ["scripts"]), ["scripts/extra.mjs is in the mirror but not in the live copy"]);
-  } finally { await rm(root, { recursive: true, force: true }); }
-});
-
-// The starter ships the verifier and its tests to every consumer, so a fix
-// applied to one copy and not the other would leave consumers on a gate the
-// repository no longer runs. Both directions are reported: a file the mirror
-// lacks and a file only the mirror carries.
-async function mirrorDrift(liveRoot, mirrorRoot, directories) {
-  const drift = [];
-  for (const directory of directories) {
-    const live = await relativeFiles(path.join(liveRoot, directory), directory);
-    const mirrored = await relativeFiles(path.join(mirrorRoot, directory), directory);
-    for (const relative of live) {
-      if (!mirrored.includes(relative)) { drift.push(`${relative} is missing from the mirror`); continue; }
-      const [a, b] = await Promise.all([readFile(path.join(liveRoot, relative)), readFile(path.join(mirrorRoot, relative))]);
-      if (!a.equals(b)) drift.push(`byte drift at ${relative}`);
-    }
-    for (const relative of mirrored) if (!live.includes(relative)) drift.push(`${relative} is in the mirror but not in the live copy`);
-  }
-  return drift.sort();
-}
-
-async function relativeFiles(directory, prefix) {
-  const files = [];
-  for (const entry of await readdir(directory, { withFileTypes: true })) {
-    const relative = `${prefix}/${entry.name}`;
-    if (entry.isDirectory()) files.push(...await relativeFiles(path.join(directory, entry.name), relative));
-    else if (entry.isFile()) files.push(relative);
-  }
-  return files.sort();
-}

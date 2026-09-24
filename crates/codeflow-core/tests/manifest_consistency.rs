@@ -931,16 +931,108 @@ fn portal_bundle_is_single_complete_and_bounded() {
 /// The repository guide is the first consumer of the shipped starter. Keep
 /// project-owned configuration independent, but require every reusable starter
 /// file to exist and remain byte-identical so a dogfood-only fix cannot pass
-/// while consumers receive stale runtime or tests.
+/// while consumers receive stale runtime or tests. The check runs here and not
+/// in the starter's own tests, because a consumer has no second copy to
+/// compare against.
 #[test]
 fn portal_dogfood_runtime_matches_the_shipped_starter() {
     let root = repo_root();
-    let starter = root.join("assets/docs-portal/starter");
-    let dogfood = root.join("docs-portal");
+    // Tracked and untracked files that are not ignored, so a new dogfood file
+    // counts before it is staged and build output never does.
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(&root)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            "docs-portal",
+        ])
+        .output()
+        .expect("git is available for portal parity verification");
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let dogfood_files: Vec<String> = output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).replace('\\', "/"))
+        .map(|path| path.trim_start_matches("docs-portal/").to_owned())
+        .collect();
+    assert!(!dogfood_files.is_empty(), "docs-portal lists no files");
+    let problems = portal_mirror_drift(
+        &root.join("assets/docs-portal/starter"),
+        &root.join("docs-portal"),
+        &dogfood_files,
+    );
+    assert!(
+        problems.is_empty(),
+        "docs-portal diverged from the shipped reusable starter:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+#[test]
+fn portal_mirror_drift_names_each_perturbed_copy() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    let starter = root.path().join("starter");
+    let dogfood = root.path().join("dogfood");
+    for side in [&starter, &dogfood] {
+        std::fs::create_dir_all(side.join("scripts")).expect("create scripts");
+        std::fs::create_dir_all(side.join("node_modules/pkg")).expect("create node_modules");
+        std::fs::write(side.join("scripts/gate.mjs"), "export const gate = 1;\n").expect("write");
+        std::fs::write(side.join("portal.config.json"), "{}\n").expect("write");
+    }
+    std::fs::write(dogfood.join("portal.config.json"), "{\"title\":\"own\"}\n").expect("write");
+    std::fs::write(starter.join("node_modules/pkg/index.js"), "1\n").expect("write");
+    let listed = |dir: &Path| -> Vec<String> {
+        walk_files(dir)
+            .iter()
+            .map(|path| rel(dir, path))
+            .filter(|path| !path.starts_with("node_modules/"))
+            .collect()
+    };
+    // Project-owned configuration and the dependency tree are out of scope.
+    assert_eq!(
+        portal_mirror_drift(&starter, &dogfood, &listed(&dogfood)),
+        Vec::<String>::new()
+    );
+    std::fs::write(dogfood.join("scripts/gate.mjs"), "export const gate = 2;\n").expect("write");
+    assert_eq!(
+        portal_mirror_drift(&starter, &dogfood, &listed(&dogfood)),
+        vec!["byte drift at scripts/gate.mjs".to_owned()]
+    );
+    std::fs::remove_file(dogfood.join("scripts/gate.mjs")).expect("remove");
+    assert_eq!(
+        portal_mirror_drift(&starter, &dogfood, &listed(&dogfood)),
+        vec!["missing dogfood file scripts/gate.mjs".to_owned()]
+    );
+    std::fs::write(dogfood.join("scripts/gate.mjs"), "export const gate = 1;\n").expect("write");
+    std::fs::write(
+        dogfood.join("scripts/extra.mjs"),
+        "export const extra = 1;\n",
+    )
+    .expect("write");
+    assert_eq!(
+        portal_mirror_drift(&starter, &dogfood, &listed(&dogfood)),
+        vec!["scripts/extra.mjs is in docs-portal but not in the shipped starter".to_owned()]
+    );
+}
+
+/// Differences between the shipped starter and the dogfood portal, in both
+/// directions: a starter file the dogfood lacks or holds different bytes for,
+/// and a dogfood file (from `dogfood_files`, relative paths) the starter lacks.
+/// `portal.config.json` is project-owned and the dependency tree is excluded,
+/// matching the exclusion in `EmbeddedAssets`.
+fn portal_mirror_drift(starter: &Path, dogfood: &Path, dogfood_files: &[String]) -> Vec<String> {
     let mut problems = Vec::new();
-    // Match the exact dependency-tree exclusion in EmbeddedAssets without
-    // excluding any authored starter file or weakening the parity inventory.
-    let sources: Vec<PathBuf> = std::fs::read_dir(&starter)
+    let sources: Vec<PathBuf> = std::fs::read_dir(starter)
         .expect("starter directory is readable")
         .map(|entry| entry.expect("starter entry is readable").path())
         .filter(|path| path.file_name().is_none_or(|name| name != "node_modules"))
@@ -953,7 +1045,7 @@ fn portal_dogfood_runtime_matches_the_shipped_starter() {
         })
         .collect();
     for source in sources {
-        let relative = rel(&starter, &source);
+        let relative = rel(starter, &source);
         if relative == "portal.config.json" {
             continue;
         }
@@ -968,11 +1060,15 @@ fn portal_dogfood_runtime_matches_the_shipped_starter() {
             problems.push(format!("byte drift at {relative}"));
         }
     }
-    assert!(
-        problems.is_empty(),
-        "docs-portal diverged from the shipped reusable starter:\n  {}",
-        problems.join("\n  ")
-    );
+    for relative in dogfood_files {
+        if !starter.join(relative).is_file() {
+            problems.push(format!(
+                "{relative} is in docs-portal but not in the shipped starter"
+            ));
+        }
+    }
+    problems.sort();
+    problems
 }
 
 #[test]
