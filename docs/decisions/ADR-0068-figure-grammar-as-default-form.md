@@ -150,3 +150,20 @@ states the written rules; it does not own them.
 normative figure text beside the shared doctrine and the declaration schema as
 a new interface. The runtimes, the token contract and the page classes are
 unchanged by this record.
+
+## Update 2026-09-24: Mermaid retired from present
+
+The operator decided on 2026-09-24 to remove Mermaid from cf-present, as long
+as the removal causes no issue. Replies and documents use HTML figures (the
+figure grammar, drawn by the figure block, and the justified `html` stage),
+ASCII on plain-text surfaces, and never Mermaid. The impact assessment of the
+same day found no issue that argues against the removal, and TSK-087 carries
+it in 3.0.0, which is the first release of present: the `diagram` block and
+its Mermaid renderer go; new `present open` and `update` input with a
+`diagram` block is refused with its conversion named; a revision already
+stored with one still loads, read only, with the conversion notice and its
+source.
+
+The rejection of an external diagram syntax above stands. Its clause that
+Mermaid is supporting-only in present describes the runtime before TSK-087;
+once TSK-087 lands, Mermaid is unsupported on both surfaces.
