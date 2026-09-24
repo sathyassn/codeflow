@@ -105,7 +105,8 @@ def is_unresolved_alternative(value: str) -> bool:
 
 
 def lacks_migration_guidance(value: str) -> bool:
-    return is_placeholder(value) or not guidance_text(value) or is_unresolved_alternative(value)
+    normalized = guidance_text(value)
+    return normalized in PLACEHOLDERS or normalized in UNRESOLVED_ALTERNATIVES
 
 
 def parse_release_impact(body: str) -> dict[str, str]:

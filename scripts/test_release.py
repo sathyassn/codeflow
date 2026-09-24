@@ -528,6 +528,17 @@ TEMPLATE = SCRIPT.parent.parent / ".github" / "pull_request_template.md"
 UNRESOLVED_MIGRATION = '`none`, steps, or "see Breaking change"'
 
 
+QUOTED_MIGRATION_PLACEHOLDERS = [
+    '"none"', "'TODO'", '`" N/A "`', '"  TBD  "', "'-'", '""', "'   '",
+]
+SUBSTANTIVE_MIGRATIONS = [
+    "Run the new command to convert saved records.",
+    '"docs/migrate.md"',
+    "see Breaking change",
+    "Run `cat old.json | tool migrate` to convert saved records.",
+]
+
+
 def filled_template(
     impact: str, breaking: str, migration: str = UNRESOLVED_MIGRATION
 ) -> str:
@@ -630,6 +641,12 @@ class ReleaseImpactFieldTests(unittest.TestCase):
 
     def test_breaking_rejects_empty_and_placeholder_migration(self) -> None:
         for value in ["``", " NONE ", "n/a", "TODO", "TBD", "-", "`none`"]:
+            with self.subTest(migration=value):
+                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                    self.parse(self.body("major", breaking="yes", migration=value))
+
+    def test_quoted_migration_placeholders_are_rejected(self) -> None:
+        for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
                 with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
                     self.parse(self.body("major", breaking="yes", migration=value))
@@ -802,6 +819,31 @@ class PullRequestTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
             self.run_check(base, head, filled_template("major", "yes", "``"))
         self.run_check(base, head, filled_template("major", "yes", "run the new command"))
+
+    def test_declared_breaking_normalizes_quoted_migration_guidance(self) -> None:
+        base = self.repo.target
+        self.repo.pending("3.0.0", [("major", "replace old command")])
+        head = self.repo.commit("feat!: replace old command")
+        for value in QUOTED_MIGRATION_PLACEHOLDERS:
+            with self.subTest(migration=value):
+                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                    self.run_check(base, head, filled_template("major", "yes", value))
+        for value in SUBSTANTIVE_MIGRATIONS:
+            with self.subTest(migration=value):
+                self.run_check(base, head, filled_template("major", "yes", value))
+
+    def test_reconciled_major_normalizes_quoted_migration_guidance(self) -> None:
+        self.repo.pending("3.0.0", [("major", "replace old command")])
+        base = self.repo.commit("feat!: pending break")
+        self.repo.pending("3.0.0", [("major", "replace old command after migration")])
+        head = self.repo.commit("docs: clarify breaking note")
+        for value in QUOTED_MIGRATION_PLACEHOLDERS:
+            with self.subTest(migration=value):
+                with self.assertRaisesRegex(release.ReleaseError, "added major entry"):
+                    self.run_check(base, head, filled_template("none", "no", value))
+        for value in SUBSTANTIVE_MIGRATIONS:
+            with self.subTest(migration=value):
+                self.run_check(base, head, filled_template("none", "no", value))
 
     def test_filled_template_refinement_of_pending_major_keeps_migration(self) -> None:
         self.repo.pending("3.0.0", [("major", "replace old command")])
