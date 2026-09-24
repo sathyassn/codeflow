@@ -29,11 +29,10 @@ You are clarifying and materializing planned work, not building it.
    affected areas/capabilities. Resolve discoverable facts from the repository,
    tools, and authoritative sources. Make a reversible implementation choice
    from evidence when it preserves the accepted outcome. Ask the operator only
-   when plausible answers would change the outcome, public behavior, authority,
-   material security boundary, irreversible action, or another decision they
-   own. Ask the smallest consequential question (smallest is *scope*, not
-   count) and include evidence, viable options, consequences, and a
-   recommendation; do not ask them to perform repository discovery for you.
+   what `cf-method/references/autonomy.md` reserves to them. Ask the smallest
+   consequential question (smallest is *scope*, not count) and include
+   evidence, viable options, consequences, and a recommendation; do not ask
+   them to perform repository discovery for you.
    After both seats have settled Plan vN, **synthesize that settled ground** —
    do not open a second interview on boundaries, landing shape, or reversible
    implementation choices already approved. Still ask every *live*

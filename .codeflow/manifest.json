@@ -302,6 +302,12 @@
       "sha256": "735f5414b20e3f42bff0ce078d1ba290895aca02d07fac417c3ddd4b2f90edaa",
       "exec": false
     },
+    ".agents/skills/cf-method/references/autonomy.md": {
+      "src": "claude/skills/cf-method/references/autonomy.md",
+      "ownership": "managed",
+      "sha256": "fc2e1207e2d82c270256e0fbc7e1e5e0a3062b3e346e12aac35d4fb23ceb86ae",
+      "exec": false
+    },
     ".agents/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
@@ -317,7 +323,7 @@
     ".agents/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "46cc9ed92ccc7ca4a5c5100f2c73f4103f8723ef603601e7230167feef3f62d9",
+      "sha256": "93b237e5ba57ca4b625c0af5672b40469b50e11fa3e2b0d625029ae7a6c8ff43",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
@@ -371,7 +377,7 @@
     ".agents/skills/cf-plan/SKILL.md": {
       "src": "agents/skills/cf-plan/SKILL.md",
       "ownership": "managed",
-      "sha256": "82e177dfdc7bb72131a030aadcbed1aa161025325c80150ea191b847e958a9f4",
+      "sha256": "a5f8c3933291c00420d9a3e0aa36d08d0fe6f75b6fe44fde45c0c5443a678403",
       "exec": false
     },
     ".agents/skills/cf-present/SKILL.md": {
@@ -776,6 +782,12 @@
       "sha256": "735f5414b20e3f42bff0ce078d1ba290895aca02d07fac417c3ddd4b2f90edaa",
       "exec": false
     },
+    ".claude/skills/cf-method/references/autonomy.md": {
+      "src": "claude/skills/cf-method/references/autonomy.md",
+      "ownership": "managed",
+      "sha256": "fc2e1207e2d82c270256e0fbc7e1e5e0a3062b3e346e12aac35d4fb23ceb86ae",
+      "exec": false
+    },
     ".claude/skills/cf-method/references/project-organization.md": {
       "src": "claude/skills/cf-method/references/project-organization.md",
       "ownership": "managed",
@@ -791,7 +803,7 @@
     ".claude/skills/cf-method/references/workflow-lifecycle.md": {
       "src": "claude/skills/cf-method/references/workflow-lifecycle.md",
       "ownership": "managed",
-      "sha256": "46cc9ed92ccc7ca4a5c5100f2c73f4103f8723ef603601e7230167feef3f62d9",
+      "sha256": "93b237e5ba57ca4b625c0af5672b40469b50e11fa3e2b0d625029ae7a6c8ff43",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
@@ -845,7 +857,7 @@
     ".claude/skills/cf-plan/SKILL.md": {
       "src": "agents/skills/cf-plan/SKILL.md",
       "ownership": "managed",
-      "sha256": "82e177dfdc7bb72131a030aadcbed1aa161025325c80150ea191b847e958a9f4",
+      "sha256": "a5f8c3933291c00420d9a3e0aa36d08d0fe6f75b6fe44fde45c0c5443a678403",
       "exec": false
     },
     ".claude/skills/cf-present/SKILL.md": {
@@ -1037,13 +1049,13 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "de6d6b7ee0e462b1d67a4d4ee6584ae2d78234db474394600282a47c74423997",
+      "sha256": "98e174c51dd5f47fd8185b6f621a9eec695fa34ab87c2b811a876313029666c5",
       "exec": false
     },
     "CLAUDE.md": {
       "src": "CLAUDE.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "600e5c457fd3b0ee8019429ba81943b61535f21350bcad327f068bb8b6c8a6be",
+      "sha256": "c9a4109ed5890ab6dd91c24c231338e72be403ee975cf84a8609891fb1b747f2",
       "exec": false
     },
     "docs/architecture.md": {
