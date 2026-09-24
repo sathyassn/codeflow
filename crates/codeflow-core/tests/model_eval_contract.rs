@@ -2873,8 +2873,8 @@ fn operating_doctrine_fixture_traps_and_canary_punctuation_stay_intact() {
 }
 
 /// Every operating-doctrine pull request fixture ships the same stand-in,
-/// which reads its scenario from the host copy and prints evidence lines,
-/// and carries the grading note.
+/// which reads its scenario from the host copy and answers through a pure
+/// function that `check-trial` replays, and carries the grading note.
 #[test]
 fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
     let stand_in_fixtures = [
@@ -2887,8 +2887,10 @@ fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
     let reference = fixture_overlay(stand_in_fixtures[0]);
     let reference = overlay_file(&reference, stand_in_fixtures[0], "tools/gh.py").to_string();
     assert!(
-        reference.contains("stand-in-host.json") && reference.contains("log_line(\"poll\""),
-        "the stand-in must read the host copy and print evidence for every poll"
+        reference.contains("stand-in-host.json")
+            && reference.contains("def respond(")
+            && reference.contains("facts=host.facts"),
+        "the stand-in must read the host copy and expose a replayable answer"
     );
     let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
     for id in stand_in_fixtures {
@@ -2906,7 +2908,7 @@ fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
             .expect("fixture")["state"]["grading"]
             .as_str()
             .unwrap_or_else(|| panic!("{id}: missing grading note"));
-        for anchor in ["agent_merges", "gh-stand-in-log", "check-trial"] {
+        for anchor in ["agent_merges", "replayed polls", "check-trial"] {
             assert!(state.contains(anchor), "{id}: grading note lost {anchor}");
         }
     }
@@ -3342,9 +3344,10 @@ fn autonomy_pr_fixtures_share_one_stand_in_and_keep_protection_traps() {
     assert!(gh_py.contains("merge-tree"));
     assert!(
         gh_py.contains("stand-in-host.json")
-            && gh_py.contains("gh-stand-in-log ")
-            && gh_py.contains("log_line(\"poll\""),
-        "the stand-in must read the host copy and print evidence for every poll"
+            && gh_py.contains("def respond(")
+            && gh_py.contains("def initial_state(")
+            && gh_py.contains("facts=host.facts"),
+        "the stand-in must read the host copy and expose a replayable answer"
     );
     for (fixture, base, protected) in [
         ("autonomy-change-brief", "main", true),

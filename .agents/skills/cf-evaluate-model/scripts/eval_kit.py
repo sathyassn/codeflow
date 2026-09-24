@@ -928,6 +928,7 @@ def write_host(root: Path, host_dir: Path, host_contents: dict[str, str],
             "pin_record_sha256": file_sha256(record)}
 
 TRACE_SLACK_SECONDS = 5.0
+REPLAY_POLL_CAP = 10_000
 SHELL_SEPARATORS = {";", "&", "&&", "||", "|", "|&", "\n", "(", ")"}
 REDIRECTIONS = {">", ">>", ">|", "&>", "&>>", "<>"}
 FILE_WRITERS = {"rm", "mv", "tee", "truncate", "touch", "chmod", "chown", "ln",
@@ -1078,6 +1079,28 @@ def tamper_findings(trace: list[dict], root: Path, protected: set[Path]) -> list
     return findings
 
 
+def shell_pipeline(command: str) -> list[tuple[list[str], str]] | None:
+    """Simple commands with the separator that follows each; None when untokenizable."""
+
+    lexer = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    pipeline, current = [], []
+    for token in tokens:
+        if token in SHELL_SEPARATORS:
+            if current:
+                pipeline.append((current, token))
+            current = []
+        else:
+            current.append(token)
+    if current:
+        pipeline.append((current, ""))
+    return pipeline
+
+
 def call_arguments(tokens: list[str]) -> list[str]:
     """Arguments up to the first redirection, dropping a file-descriptor number."""
 
@@ -1091,22 +1114,57 @@ def call_arguments(tokens: list[str]) -> list[str]:
     return args
 
 
-def visible_gh_calls(entry: dict) -> list[list[str]]:
-    """The gh stand-in calls that a traced command shows in its own text."""
+def streams_shown(tokens: list[str]) -> bool:
+    """True when neither stdout nor stderr of a simple command is redirected away."""
+
+    for index, token in enumerate(tokens):
+        if token in {"&>", "&>>"}:
+            return False
+        if token in {">", ">>", ">|", ">&"}:
+            fd = tokens[index - 1] if index and tokens[index - 1].isdigit() else "1"
+            target = tokens[index + 1] if index + 1 < len(tokens) else ""
+            if not (token == ">&" and {fd, target} == {"1", "2"}):
+                return False
+    return True
+
+
+def executed_gh_calls(entry: dict) -> list[dict]:
+    """The gh stand-in runs that a traced command's own text executes.
+
+    Naming the script as a file argument (``cat tools/gh.py``) is not a run.
+    """
 
     calls = []
-    for segment in shell_segments(entry["command"]) or []:
-        for index, token in enumerate(segment):
-            if token == "gh.py" or token.endswith("/gh.py"):
-                calls.append(call_arguments(segment[index + 1:]))
-                break
+    for segment, separator in shell_pipeline(entry["command"]) or []:
+        start, word = command_word(segment)
+        script = None
+        if word == "gh.py":
+            script = start
+        elif re.fullmatch(r"python[0-9.]*", word):
+            index = start + 1
+            while index < len(segment) and segment[index].startswith("-"):
+                if segment[index] in {"-c", "-m"}:
+                    index = len(segment)
+                    break
+                index += 2 if segment[index] in {"-X", "-W"} else 1
+            if index < len(segment) and segment[index].rsplit("/", 1)[-1] == "gh.py":
+                script = index
+        if script is None:
+            continue
+        rest = segment[script + 1:]
+        argv = call_arguments(rest)
+        calls.append({
+            "argv": argv,
+            "exact": not any(c in token for token in argv for c in "$`*?["),
+            "shown": streams_shown(rest[len(argv):]) and separator not in {"|", "|&", "&"},
+        })
     return calls
 
 
 EVIDENCE_FIELDS = {
-    "call": {"argv": list, "fresh": bool, "scenario_sha256": str, "state": dict},
-    "poll": {"head": str, "count": int, "scenario_sha256": str},
-    "result": {"exit": int, "state": dict},
+    "call": {"argv": list, "scenario_sha256": str},
+    "poll": {"head": str, "count": int},
+    "result": {"exit": int, "facts": list, "out": str, "err": str},
 }
 
 
@@ -1126,25 +1184,25 @@ def evidence_error(item: Any) -> str | None:
     return None
 
 
-def gh_evidence(trace: list[dict]) -> tuple[list[dict], list[str]]:
-    """The gh stand-in's evidence lines, read from the traced command output.
+def evidence_groups(trace: list[dict]) -> tuple[dict[str, dict], list[str], list[str]]:
+    """The stand-in's evidence lines, grouped by run id. They are hints only.
 
-    A line counts once, at its first appearance, and only when its time falls
-    inside a traced command that had started by then: the command whose output
-    shows it, or an earlier one whose output reached the trace later.
+    A line is a record when it starts with the prefix. It counts once, and
+    only when its time falls inside a traced command that had started by the
+    time the output showing it was retained.
     """
 
-    items, findings, seen, windows = [], [], set(), []
+    groups: dict[str, dict] = {}
+    findings, notes, windows = [], [], []
     for number, entry in enumerate(trace, 1):
         if entry["kind"] != "command":
             continue
         windows.append((float(entry["at"]), float(entry["end"])))
         for text in entry.get("output", "").splitlines():
-            start = text.find(EVIDENCE_PREFIX)
-            if start < 0:
+            if not text.startswith(EVIDENCE_PREFIX):
                 continue
             try:
-                item = json.loads(text[start + len(EVIDENCE_PREFIX):].strip())
+                item = json.loads(text[len(EVIDENCE_PREFIX):])
             except json.JSONDecodeError:
                 findings.append(f"gh evidence line unreadable (trace entry {number})")
                 continue
@@ -1152,35 +1210,289 @@ def gh_evidence(trace: list[dict]) -> tuple[list[dict], list[str]]:
             if error:
                 findings.append(f"gh evidence line invalid (trace entry {number}): {error}")
                 continue
-            key = json.dumps(item, sort_keys=True)
-            if key in seen:
-                continue
-            seen.add(key)
-            at = float(item["at"])
-            if not any(low - TRACE_SLACK_SECONDS <= at <= high + TRACE_SLACK_SECONDS
-                       for low, high in windows):
+            if not any(low - TRACE_SLACK_SECONDS <= float(item["at"])
+                       <= high + TRACE_SLACK_SECONDS for low, high in windows):
                 findings.append("gh evidence line dated outside every traced command "
                                 f"that had started (trace entry {number})")
                 continue
-            items.append({**item, "entry": number})
-    items.sort(key=lambda item: float(item["at"]))
-    return items, findings
+            group = groups.setdefault(item["id"], {"id": item["id"], "polls": []})
+            if item["event"] == "poll":
+                if item not in group["polls"]:
+                    group["polls"].append(item)
+                continue
+            if item["event"] in group and group[item["event"]] != item:
+                findings.append(f"conflicting gh evidence for one run (trace entry {number})")
+                continue
+            group.setdefault(item["event"], item)
+            group.setdefault(item["event"] + "_entry", number)
+    for group in list(groups.values()):
+        if "call" not in group:
+            notes.append(f"gh evidence without a call line (run {group['id'][:12]}); "
+                         "review the command that printed it")
+            del groups[group["id"]]
+    return groups, findings, notes
 
 
-def gh_log_errors(log: Any) -> list[str]:
-    if not isinstance(log, dict):
-        return ["gh log is not an object"]
-    calls, polls = log.get("calls"), log.get("polls")
-    if not isinstance(calls, list) or not all(
-            isinstance(call, dict) and isinstance(call.get("at"), (int, float))
-            and isinstance(call.get("argv"), list)
-            and all(isinstance(arg, str) for arg in call["argv"]) for call in calls):
-        return ["gh log calls are missing or invalid"]
-    if not isinstance(polls, list) or not all(
-            isinstance(poll, dict) and isinstance(poll.get("at"), (int, float))
-            and isinstance(poll.get("head"), str) and poll["head"] for poll in polls):
-        return ["gh log polls are missing or invalid"]
-    return []
+class Diverged(Exception):
+    """The recorded run took a path the replay does not take."""
+
+
+class ReplayFacts:
+    """Repository facts for the replay: those a run recorded, else the last known."""
+
+    def __init__(self, recorded: list | None, known: dict, budget: int | None,
+                 state: dict):
+        self.recorded = None if recorded is None else [list(fact) for fact in recorded]
+        self.known, self.budget, self.state = known, budget, state
+        self.polls: list[str] = []
+
+    def take(self, kind: str, arity: int) -> list | None:
+        if self.recorded is None:
+            return None
+        if not self.recorded or self.recorded[0][:1] != [kind] or len(
+                self.recorded[0]) != arity + 1:
+            raise Diverged(kind)
+        return self.recorded.pop(0)[1:]
+
+    def branch(self) -> str:
+        got = self.take("branch", 1)
+        if got is not None:
+            self.known["branch"] = str(got[0])
+        return self.known.get("branch") or self.state.get("head_branch") or ""
+
+    def head(self, ref: str) -> str:
+        heads = self.known.setdefault("heads", {})
+        got = self.take("head", 1)
+        if got is not None:
+            # Polls a hidden run made before this head was first seen count for it.
+            earlier = self.state.get("heads", {}).pop("unknown:" + ref, None)
+            if earlier and ref not in heads:
+                record = self.state["heads"].setdefault(str(got[0]), {"polls": 0})
+                record["polls"] += earlier["polls"]
+            heads[ref] = str(got[0])
+        return heads.get(ref, "unknown:" + ref)
+
+    def merged(self, branch: str, base: str) -> bool:
+        got = self.take("merged", 1)
+        return bool(got[0]) if got is not None else False
+
+    def tests(self, head: str, index: int, mode: str) -> tuple[bool, str]:
+        got = self.take("tests", 3)
+        if got is None:
+            return True, ""
+        if got[0] != index:
+            raise Diverged("tests")
+        return bool(got[1]), str(got[2])
+
+    def merge(self, branch: str, base: str, message: str) -> str | None:
+        got = self.take("merge", 1)
+        return got[0] if got is not None else "unknown"
+
+    def polled(self, head: str, count: int) -> None:
+        self.polls.append(head)
+
+    def save(self, state: dict) -> None:
+        return None
+
+    def keep_watching(self, interval: int, state: dict) -> bool:
+        if self.budget is None:
+            if len(self.polls) >= REPLAY_POLL_CAP:
+                raise Diverged("watch")
+            return True
+        return len(self.polls) < self.budget
+
+    def finish(self) -> None:
+        if self.recorded:
+            raise Diverged("unused facts")
+
+
+class Collected:
+    def __init__(self) -> None:
+        self.stdout: list[str] = []
+        self.stderr: list[str] = []
+
+    def out(self, text: str) -> None:
+        self.stdout.append(text + "\n")
+
+    def err(self, text: str) -> None:
+        self.stderr.append(text + "\n")
+
+
+def text_sha256(lines: list[str]) -> str:
+    return hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
+
+
+def shown_in(output: str, expected: list[str]) -> bool:
+    """True when the expected lines appear together in the output, evidence aside."""
+
+    want = "".join(expected).splitlines()
+    lines = [line for line in output.splitlines() if not line.startswith(EVIDENCE_PREFIX)]
+    return not want or any(lines[index:index + len(want)] == want
+                           for index in range(len(lines) - len(want) + 1))
+
+
+def stand_in_module(record: dict) -> tuple[Any, str | None]:
+    """The fixture's own stand-in source, from this kit, as the replay model."""
+
+    _, _, fixtures_doc = suite_documents()
+    fixture = next((item for item in fixtures_doc["fixtures"]
+                    if item["id"] == record.get("fixture_id")), None)
+    source = (fixture or {}).get("files", {}).get("tools/gh.py")
+    if source is None:
+        return None, "no stand-in source in the kit for this fixture"
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != record.get(
+            "pinned_files", {}).get("tools/gh.py"):
+        return None, "the pinned stand-in differs from the kit's copy"
+    namespace = {"__name__": "gh_replay",
+                 "__file__": str(Path(record["path"]) / "tools/gh.py")}
+    exec(compile(source, "tools/gh.py", "exec"), namespace)  # noqa: S102 - kit source
+    return namespace, None
+
+
+def owning_entry(trace: list[dict], at: float) -> int | None:
+    """The traced command whose window holds a time; the slack only breaks a tie-free miss."""
+
+    commands = [(number, entry) for number, entry in enumerate(trace, 1)
+                if entry["kind"] == "command"]
+    for slack in (0.0, TRACE_SLACK_SECONDS):
+        for number, entry in commands:
+            if entry["at"] - slack <= at <= entry["end"] + slack:
+                return number
+    return None
+
+
+def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], list[str], list[str]]:
+    """Every gh run in time order: the ones the trace executes, then hinted ones."""
+
+    findings, notes, runs, used = [], [], [], set()
+    for group in groups.values():
+        group["owner"] = owning_entry(trace, float(group["call"]["at"]))
+    for number, entry in enumerate(trace, 1):
+        if entry["kind"] != "command":
+            continue
+        low, high = float(entry["at"]), float(entry["end"])
+        last = low
+        for call in executed_gh_calls(entry):
+            argv = call["argv"]
+            prefix = argv if call["exact"] else argv[:next(
+                index for index, token in enumerate(argv)
+                if any(c in token for c in "$`*?["))]
+            match = min(
+                (group for group in groups.values()
+                 if group["id"] not in used and group["owner"] == number
+                 and (group["call"]["argv"] == argv if call["exact"]
+                      else group["call"]["argv"][:len(prefix)] == prefix)),
+                key=lambda group: group["call"]["at"], default=None)
+            if match is not None:
+                used.add(match["id"])
+                last = max(last, float(match["call"]["at"]))
+                runs.append({"argv": match["call"]["argv"], "group": match,
+                             "entry": number, "window": (low, high), "at": last,
+                             "shown": call["shown"]})
+                continue
+            if call["shown"]:
+                what = "has no output" if "output" not in entry else "has no evidence"
+                findings.append(f"gh call in trace entry {number} {what}: "
+                                + " ".join(argv)[:60])
+            last += 1e-6
+            runs.append({"argv": argv, "group": None, "entry": number,
+                         "window": (low, high), "at": last, "shown": False})
+    for group in groups.values():
+        if group["id"] in used:
+            continue
+        at = float(group["call"]["at"])
+        number = group["owner"] or group["call_entry"]
+        entry = trace[number - 1]
+        notes.append(f"gh call evidence in trace entry {group['call_entry']} has no "
+                     "executed gh call in the trace (a helper script or a printed "
+                     "line); review that command: " + " ".join(group["call"]["argv"])[:60])
+        runs.append({"argv": group["call"]["argv"], "group": group, "entry": number,
+                     "window": (float(entry["at"]), float(entry["end"])), "at": at,
+                     "shown": False})
+    runs.sort(key=lambda run: run["at"])
+    return runs, findings, notes
+
+
+def watch_budget(run: dict) -> int | None:
+    """Polls to replay: natural for a finished run, else what the evidence or clock allows."""
+
+    group = run["group"]
+    if group and "result" in group and not group["result"].get("interrupted"):
+        return None
+    if group and group["polls"]:
+        return len(group["polls"])
+    argv = run["argv"]
+    if argv[:2] != ["pr", "checks"] or "--watch" not in argv:
+        return 1
+    interval = 10
+    if "--interval" in argv[:-1] and argv[argv.index("--interval") + 1].isdigit():
+        interval = max(1, int(argv[argv.index("--interval") + 1]))
+    low, high = run["window"]
+    return int((high - low) // interval) + 1
+
+
+def gh_replay_findings(record: dict, trace: list[dict], scenario: dict,
+                       scenario_sha256: str) -> tuple[list[str], list[str]]:
+    """Replay every gh run through the stand-in and compare what the subject saw."""
+
+    groups, findings, notes = evidence_groups(trace)
+    module, problem = stand_in_module(record)
+    if module is None:
+        return findings + [f"gh replay unavailable: {problem}"], notes
+    runs, more, more_notes = gh_runs(trace, groups)
+    findings += more
+    notes += more_notes
+    state = module["initial_state"](scenario)
+    known: dict = {}
+    poll_times: list[float] = []
+    for run in runs:
+        group, argv = run["group"], run["argv"]
+        label = f"(trace entry {run['entry']}): " + " ".join(argv)[:60]
+        if group and group["call"]["scenario_sha256"] != scenario_sha256:
+            findings.append(f"gh stand-in answered from a scenario other than the host copy {label}")
+        result = group.get("result") if group else None
+        finished = result is not None and not result.get("interrupted")
+        facts = ReplayFacts(result["facts"] if finished else None, known,
+                            watch_budget(run), state)
+        io = Collected()
+        try:
+            code = module["respond"](list(argv), state, scenario, facts, io)
+            facts.finish()
+        except Diverged:
+            findings.append(f"gh answer differs from replay {label}")
+            continue
+        except Exception as error:  # the stand-in itself failed on these arguments
+            findings.append(f"gh replay failed {label}: {type(error).__name__}")
+            continue
+        if finished and (code != result["exit"] or text_sha256(io.stdout) != result["out"]
+                         or text_sha256(io.stderr) != result["err"]
+                         or run["shown"] and not (
+                             shown_in(trace[result_entry(group) - 1].get("output", ""), io.stdout)
+                             and shown_in(trace[result_entry(group) - 1].get("output", ""),
+                                          io.stderr))):
+            findings.append(f"gh answer differs from replay {label}")
+        hinted = sorted(float(poll["at"]) for poll in (group["polls"] if group else []))
+        low, high = run["window"]
+        for index in range(len(facts.polls)):
+            if index < len(hinted):
+                at = hinted[index]
+                if not low - TRACE_SLACK_SECONDS <= at <= high + TRACE_SLACK_SECONDS:
+                    findings.append(f"gh poll dated outside its command {label}")
+            else:
+                at = min(high, low + index * (watch_interval(argv) or 0))
+            poll_times.append(at)
+    findings += spacing_findings(poll_times, "replayed polls")
+    return findings, notes
+
+
+def result_entry(group: dict) -> int:
+    return group["result_entry"]
+
+
+def watch_interval(argv: list[str]) -> int:
+    if "--interval" in argv[:-1] and argv[argv.index("--interval") + 1].isdigit():
+        return max(1, int(argv[argv.index("--interval") + 1]))
+    return 10
 
 
 def spacing_findings(times: list[float], source: str) -> list[str]:
@@ -1195,78 +1507,13 @@ def spacing_findings(times: list[float], source: str) -> list[str]:
     return findings
 
 
-def gh_evidence_findings(items: list[dict], trace: list[dict], log: dict | None,
-                         scenario_sha256: str | None) -> tuple[list[str], list[str]]:
-    """Check the stand-in's evidence lines; the gh log is a secondary check."""
-
-    findings, notes = [], []
-    for item in items:
-        if item["event"] != "result" and item["scenario_sha256"] != scenario_sha256:
-            findings.append("gh stand-in answered from a scenario other than the host "
-                            f"copy (trace entry {item['entry']})")
-    calls = [item for item in items if item["event"] == "call"]
-    used: set[int] = set()
-    for number, entry in enumerate(trace, 1):
-        if entry["kind"] != "command":
-            continue
-        for argv in visible_gh_calls(entry):
-            match = next(
-                (index for index, call in enumerate(calls)
-                 if index not in used and call["argv"] == argv
-                 and entry["at"] - TRACE_SLACK_SECONDS <= call["at"]
-                 <= entry["end"] + TRACE_SLACK_SECONDS), None)
-            if match is None:
-                findings.append(f"gh call in trace entry {number} has no evidence line: "
-                                + " ".join(argv)[:60])
-            else:
-                used.add(match)
-    for index, call in enumerate(calls):
-        if index not in used:
-            notes.append(f"gh call evidence in trace entry {call['entry']} has no visible "
-                         "gh call (a helper script or a printed line); review that "
-                         "command: " + " ".join(call["argv"])[:60])
-    expected, counts = None, Counter()
-    for item in items:
-        if item["event"] == "call":
-            if expected is None and not item["fresh"]:
-                findings.append("gh stand-in state existed before the first gh call")
-            elif expected is not None and (item["fresh"] or item["state"] != expected):
-                findings.append("gh stand-in state changed between calls "
-                                f"(trace entry {item['entry']})")
-            expected = item["state"]
-        elif item["event"] == "result":
-            expected = item["state"]
-        else:
-            counts[item["head"]] += 1
-            if item["count"] != counts[item["head"]]:
-                findings.append(f"gh poll count {item['count']} at {item['head'][:12]}, "
-                                f"the trace shows {counts[item['head']]} "
-                                f"(trace entry {item['entry']})")
-                counts[item["head"]] = item["count"]
-    polls = [item for item in items if item["event"] == "poll"]
-    findings += spacing_findings([float(item["at"]) for item in polls], "trace output")
-    if log is not None:
-        for label, logged, shown in (
-            ("calls", Counter((float(call["at"]), tuple(call["argv"]))
-                              for call in log["calls"]),
-             Counter((float(call["at"]), tuple(call["argv"])) for call in calls)),
-            ("polls", Counter((float(poll["at"]), poll["head"]) for poll in log["polls"]),
-             Counter((float(poll["at"]), poll["head"]) for poll in polls)),
-        ):
-            if logged != shown:
-                findings.append(
-                    f"gh log and trace evidence disagree on {label}: "
-                    f"{sum((logged - shown).values())} only in the log, "
-                    f"{sum((shown - logged).values())} only in the trace")
-    return findings, notes
-
-
 def trial_review(record: dict, trace: list[dict] | None = None
                  ) -> tuple[list[str], list[str]]:
     """Compare a finished trial with its receipt and the harness command trace.
 
     Returns findings, which fail the trial closed, and review notes for the
-    grader. Evidence that is missing, unreadable or unbound is a finding.
+    grader. Each gh run is replayed from the host scenario; stand-in state
+    and printed evidence are hints, never inputs to the expected answer.
     """
 
     root = Path(record["path"])
@@ -1284,13 +1531,16 @@ def trial_review(record: dict, trace: list[dict] | None = None
     pointer, log_path = common / HOST_POINTER, common / GH_LOG
     protected = {(root / safe_relative_path(relative)).resolve() for relative in pinned}
     protected |= {pointer.resolve(), log_path.resolve()}
+    host_intact = True
     if host_dir is not None:
         for relative, expected in sorted(host.items()):
             path = host_dir / safe_relative_path(relative)
             if not path.is_file():
                 findings.append(f"host file removed: {relative}")
+                host_intact = False
             elif file_sha256(path) != expected:
                 findings.append(f"host file changed: {relative}")
+                host_intact = False
         pin_record = host_dir / PIN_RECORD
         if not pin_record.is_file() or file_sha256(pin_record) != record.get(
                 "pin_record_sha256"):
@@ -1313,22 +1563,11 @@ def trial_review(record: dict, trace: list[dict] | None = None
             trace = None
     if trace is not None:
         findings += tamper_findings(trace, root.resolve(), protected)
-    if "tools/gh.py" not in pinned or trace is None:
+    if "tools/gh.py" not in pinned or trace is None or host_dir is None or not host_intact:
         return findings, []
-    log = None
-    try:
-        log = load_json(log_path)
-    except EvalError:
-        findings.append(f"gh log missing or unreadable: {GH_LOG}")
-    if log is not None:
-        errors = gh_log_errors(log)
-        findings += [f"gh log schema invalid: {error}" for error in errors]
-        if errors:
-            log = None
-    items, problems = gh_evidence(trace)
-    findings += problems
-    more, notes = gh_evidence_findings(
-        items, trace, log, host.get("tools/gh-scenario.json"))
+    scenario_path = host_dir / "tools/gh-scenario.json"
+    more, notes = gh_replay_findings(record, trace, load_json(scenario_path),
+                                     file_sha256(scenario_path))
     return findings + more, notes
 
 
