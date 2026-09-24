@@ -5,7 +5,8 @@
 // outcomes must equal the portal's specimen table, so a specimen renders the
 // same in present as in the portal. A declaration the grammar refuses shows
 // its reason in place of the figure. The grammar's field reference example
-// must validate and derive its fact.
+// must validate and derive its fact. The DOM guard passes every specimen the
+// grammar draws and refuses each attribute, value and reference it does not.
 //
 // Usage: node scripts/figure-browser-check.mjs [--screenshots <dir>]
 import { execFileSync } from "node:child_process";
@@ -13,8 +14,9 @@ import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:f
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+import { build } from "esbuild";
 import { chromium } from "playwright-core";
-import { canonicalJson, checkFacts, figureRuleFailures, probeFigures, renderFigure, THRESHOLDS, validateDeclaration } from "../src/figure-grammar.mjs";
+import { canonicalJson, checkFacts, composeFigure, figureRuleFailures, probeFigures, renderFigure, THRESHOLDS, validateDeclaration } from "../src/figure-grammar.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
@@ -73,6 +75,7 @@ try {
   if (sessionId === null) throw new Error(`could not parse present open output: ${opened}`);
 
   browser = await chromium.launch({ executablePath: await findBrowser(), headless: true });
+  await checkGuard(browser);
   const page = await browser.newPage();
   const consoleErrors = [];
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
@@ -113,14 +116,15 @@ try {
   const outcome = {};
   const detail = {};
   for (const name of names) {
-    const failures = figureRuleFailures(observed.get(name));
+    const { declaration } = blocks.find((block) => block.id === name.replace(/\.json$/u, ""));
+    const failures = figureRuleFailures({ ...observed.get(name), composed: composeFigure(declaration) });
     outcome[name] = [...new Set(failures.map((failure) => failure.rule))].sort((a, b) => a - b);
     detail[name] = { rules: outcome[name], first: [...new Set(failures.map((failure) => `rule ${failure.rule}: ${failure.message}`))].slice(0, 4) };
   }
   if (canonicalJson(outcome) !== canonicalJson(EXPECTED)) {
     throw new Error(`present figure outcomes differ from the portal specimen table:\n${JSON.stringify(detail, null, 2)}`);
   }
-  process.stdout.write(`cf-present figure checks passed: ${names.length} specimens drawn in light and dark at 1280 and 390 px with the portal's rule outcomes, one refused declaration shown\n`);
+  process.stdout.write(`cf-present figure checks passed: ${names.length} specimens drawn in light and dark at 1280 and 390 px with the portal's rule outcomes, one refused declaration shown, the DOM guard refusing 12 departures from the grammar\n`);
 } finally {
   await browser?.close();
   if (sessionId !== null) await closeSession(sessionId);
@@ -145,6 +149,68 @@ async function closeSession(id) {
 // The field reference in figure-grammar.md section 6 shows one declaration.
 // It must validate, draw and derive its fact, so the documentation cannot
 // drift from the module it documents.
+// The guard runs in a page against the grammar's own output for every
+// specimen, then against that output with one thing the grammar never writes.
+async function checkGuard(browser) {
+  const bundled = await build({ absWorkingDir: webRoot, entryPoints: ["src/figure-guard.ts"], bundle: true, format: "iife", globalName: "FigureGuard", write: false, logLevel: "silent" });
+  const drawn = {};
+  for (const name of (await readdir(specimenRoot)).filter((file) => file.endsWith(".json")).sort()) {
+    const declaration = JSON.parse(await readFile(join(specimenRoot, name), "utf8"));
+    const bound = declaration.figure.binding === "derived" ? { derived: { commit_desc_max_len: 50, commit_subject_max_len: 72 } } : null;
+    drawn[name] = renderFigure(declaration, { idPrefix: "cf-present-figure-1", bound });
+  }
+  const page = await browser.newPage();
+  try {
+    await page.setContent("<!doctype html><html><body></body></html>");
+    await page.addScriptTag({ content: bundled.outputFiles[0].text });
+    const result = await page.evaluate(({ drawn, clean }) => {
+      const guard = (html, change = null) => {
+        const template = document.createElement("template");
+        template.innerHTML = html;
+        change?.(template.content);
+        return globalThis.FigureGuard.unsafeFigureNode(template.content);
+      };
+      const svgElement = (name) => document.createElementNS("http://www.w3.org/2000/svg", name);
+      const set = (selector, name, value) => (root) => root.querySelector(selector).setAttribute(name, value);
+      const html = drawn[clean];
+      return {
+        specimens: Object.fromEntries(Object.entries(drawn).map(([name, figure]) => [name, guard(figure)])),
+        refused: {
+          contenteditable: guard(html, set("figure", "contenteditable", "true")),
+          "data-unknown": guard(html, set("figure", "data-unknown", "yes")),
+          "escaped css url": guard(html, set("svg [data-state] rect", "filter", "u\\72l(https://example.invalid/x#y)")),
+          "remote fill": guard(html, set("svg [data-state] rect", "fill", "url(https://example.invalid/x#y)")),
+          "fill outside the figure": guard(html, set("svg [data-state] rect", "fill", "url(#elsewhere)")),
+          "labelled outside the figure": guard(html, set("svg.cf-fig-svg", "aria-labelledby", "elsewhere-t elsewhere-d")),
+          "event handler": guard(html, set("svg.cf-fig-svg", "onload", "void 0")),
+          "inline style": guard(html, set("figure", "style", "color: red")),
+          "extra class": guard(html, set("figure", "class", "cf-fig extra")),
+          "namespaced href": guard(html, (root) => root.querySelector("svg [data-state] rect").setAttributeNS("http://www.w3.org/1999/xlink", "xlink:href", "#x")),
+          foreignObject: guard(html, (root) => root.querySelector("svg.cf-fig-svg").append(svgElement("foreignObject"))),
+          "html title in svg": guard(html, (root) => root.querySelector("svg.cf-fig-svg").append(document.createElement("title"))),
+        },
+      };
+    }, { drawn, clean: "03-layering.json" });
+    const passed = Object.entries(result.specimens).filter(([, reason]) => reason !== null);
+    if (passed.length) throw new Error(`the guard refused grammar output: ${JSON.stringify(Object.fromEntries(passed))}`);
+    const expected = {
+      contenteditable: "a contenteditable attribute on <figure>",
+      "data-unknown": "a data-unknown attribute on <figure>",
+      "escaped css url": "a filter attribute on <rect>",
+      "remote fill": "an unexpected fill value on <rect>",
+      "fill outside the figure": "a fill reference outside the figure on <rect>",
+      "labelled outside the figure": "an aria-labelledby reference outside the figure on <svg>",
+      "event handler": "a onload attribute on <svg>",
+      "inline style": "a style attribute on <figure>",
+      "extra class": "an unexpected class value on <figure>",
+      "namespaced href": "a xlink:href attribute on <rect>",
+      foreignObject: "a <foreignObject> element",
+      "html title in svg": "a <title> element",
+    };
+    if (canonicalJson(result.refused) !== canonicalJson(expected)) throw new Error(`the guard's refusals differ:\n${JSON.stringify(result.refused, null, 2)}`);
+  } finally { await page.close(); }
+}
+
 async function checkReferenceExample() {
   const grammar = await readFile(join(repoRoot, "assets/base/agents/skills/cf-present/resources/figure-grammar.md"), "utf8");
   const section = grammar.slice(grammar.indexOf("## 6. Figure declaration"));

@@ -4,14 +4,8 @@
 // docs-portal/scripts/figure-grammar.mjs, pinned by a test, because the
 // esbuild entry reaches only web/src.
 import { renderFigure, validateDeclaration } from "./figure-grammar.mjs";
+import { unsafeFigureNode } from "./figure-guard";
 
-// The grammar module escapes every declared string and number it writes, so
-// its output carries only these elements. Anything else means the module and
-// this check disagree, and the figure is refused rather than inserted.
-const DRAWN_ELEMENTS = new Set([
-  "figure", "span", "svg", "title", "desc", "defs", "pattern", "g", "text", "line", "path", "polyline", "rect", "circle",
-  "ul", "li", "figcaption", "details", "summary", "div", "table", "thead", "tbody", "tr", "th", "td", "code",
-]);
 let sequence = 0;
 
 export function renderFigureBlock(element: HTMLElement): void {
@@ -20,7 +14,7 @@ export function renderFigureBlock(element: HTMLElement): void {
     validateDeclaration(declaration);
     const template = document.createElement("template");
     template.innerHTML = renderFigure(declaration, { idPrefix: `cf-present-figure-${++sequence}` });
-    const unsafe = unsafeNode(template.content);
+    const unsafe = unsafeFigureNode(template.content);
     if (unsafe !== null) throw new Error(`the drawn figure carries ${unsafe}`);
     element.querySelector("[data-cf-figure-output]")?.replaceChildren(template.content);
     element.dataset.cfFigureBlock = "ready";
@@ -35,18 +29,4 @@ export function markFigureFailure(element: HTMLElement, message: string): void {
   if (!status) return;
   status.classList.remove("sr-only");
   status.textContent = message;
-}
-
-function unsafeNode(root: DocumentFragment): string | null {
-  for (const node of root.querySelectorAll("*")) {
-    const tag = node.localName;
-    if (!DRAWN_ELEMENTS.has(tag)) return `a <${tag}> element`;
-    for (const attribute of node.attributes) {
-      const name = attribute.name.toLowerCase();
-      const value = attribute.value.trim().toLowerCase();
-      if (name.startsWith("on") || name === "style" || name.endsWith("href")) return `a ${name} attribute`;
-      if (value.includes("url(") && !/^url\(#[a-z0-9_.:-]+\)$/u.test(value)) return `a resource reference in ${name}`;
-    }
-  }
-  return null;
 }
