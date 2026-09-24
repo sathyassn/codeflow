@@ -2,6 +2,7 @@
 // every family and facts re-derive from their sources. The rules that need a
 // render are in figure-rules-browser.test.mjs.
 import assert from "node:assert/strict";
+import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { checkFacts, composeFigure, drawnValuesMatch, FAMILIES, markdownSections, renderFigure, slugHeading, validateDeclaration } from "../scripts/figure-grammar.mjs";
 
@@ -45,6 +46,20 @@ test("every family validates, renders, keys its drawn states and re-derives its 
     assert.equal((html.match(/<svg class="cf-fig-svg cf-fig-svg--(?:wide|narrow)"/g) ?? []).length, 2, name);
     assert.equal((html.match(/<details class="cf-twin"/g) ?? []).length, 1, name);
     if (bound !== null) assert.ok(drawnValuesMatch(composeFigure(declaration, bound).drawnValues, bound.derived), policy);
+  }
+});
+
+// The HTML each specimen renders to, committed so the Rust validator's
+// reconstruction of a companion is pinned to the same bytes (see
+// figures/render.rs in codeflow-core). CODEFLOW_UPDATE_FIGURE_FIXTURES=1
+// rewrites them after a deliberate change to the drawing.
+test("the committed rendered specimens are what the grammar draws", async () => {
+  for (const { name, declaration } of await specimens()) {
+    const bound = declaration.figure.binding === "derived" ? { source: declaration.figure.source, derived: { commit_desc_max_len: 50, commit_subject_max_len: 72 } } : null;
+    const html = `${renderFigure(declaration, { idPrefix: "cf-fig-0", bound })}\n`;
+    const file = new URL(`./fixtures/figures/rendered/${name.replace(/\.json$/, ".html")}`, import.meta.url);
+    if (process.env.CODEFLOW_UPDATE_FIGURE_FIXTURES === "1") await writeFile(file, html);
+    assert.equal(await readFile(file, "utf8"), html, name);
   }
 });
 

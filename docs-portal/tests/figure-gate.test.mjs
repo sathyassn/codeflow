@@ -234,12 +234,13 @@ test("the mixed fixture renders every class and the gates name only what falls s
 
 // The Rust validator reads what the adapter wrote. With the portal in a
 // folder of its repository, as consumers adopt it, `validate --portal`
-// accepts the illustrated page with its inserted figure, and refuses the
-// route once its body no longer equals the committed source, even with every
-// recorded hash rewritten to match. Runs where this checkout has built the
-// codeflow binary.
+// accepts the illustrated page with its inserted figure and the explanatory
+// page with its panel figure, and refuses a route once its body no longer
+// equals the committed source or a companion no longer draws what its pinned
+// declaration draws, even with every recorded hash rewritten to match. Runs
+// where this checkout has built the codeflow binary.
 const codeflowBinary = path.join(starterRoot, "..", "target", "debug", process.platform === "win32" ? "codeflow.exe" : "codeflow");
-test("validate --portal accepts the inserted figure and refuses a tampered source", { skip: process.platform === "win32", timeout: 300_000 }, async (context) => {
+test("validate --portal accepts the inserted figures and refuses a tampered source or companion", { skip: process.platform === "win32", timeout: 300_000 }, async (context) => {
   if (!(await stat(codeflowBinary).then(() => true, () => false))) { context.skip("the codeflow binary is not built in this checkout"); return; }
   const root = await mkdtemp(path.join(starterRoot, ".portal-test-runtime-"));
   try {
@@ -253,17 +254,20 @@ test("validate --portal accepts the inserted figure and refuses a tampered sourc
     await mkdir(path.join(root, "figures"));
     await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
     await writeFile(path.join(root, "docs/guide.md"), GUIDE);
-    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nAn explanatory page left unillustrated.\n");
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\n## Concept\n\nAn explanatory page with one panel figure.\n");
     const steps = await specimen("04-sequence.json");
     steps.figure.id = "install-steps";
     steps.figure.facts = [{ claim: "The install section lists two steps", source: "docs/guide.md#install", derive: "numbered items in the Install section", check: { kind: "count-items" }, value: 2 }];
     await writeFile(path.join(root, "figures/install-steps.json"), `${JSON.stringify(steps, null, 2)}\n`);
+    const concept = await specimen("03-layering.json");
+    concept.figure.facts = [{ claim: "The product page has a concept panel", source: "docs/product.md#concept", derive: "the Concept section", check: { kind: "contains", text: "one panel figure" }, value: true }];
+    await writeFile(path.join(root, "figures/concept.json"), `${JSON.stringify(concept, null, 2)}\n`);
     const config = JSON.parse(await readFile(path.join(portal, "portal.config.json"), "utf8"));
     Object.assign(config, {
       repository_root: "..", source_roots: ["docs"], exclude: [], primitive_tokens: null, repository_url: null, release_version: null,
       records: { enabled: false, layer: null, pointers: [] }, layers: LAYERS, base: "/", page_carriers: [],
       page_classes: [{ source: "docs/guide.md", class: "illustrated" }],
-      figures: [{ declaration: "figures/install-steps.json", route: "reference/guide" }],
+      figures: [{ declaration: "figures/install-steps.json", route: "reference/guide" }, { declaration: "figures/concept.json", route: "orient/product", panel: "concept" }],
     });
     const configText = `${JSON.stringify(config, null, 2)}\n`;
     await writeFile(path.join(portal, "portal.config.json"), configText);
@@ -289,8 +293,11 @@ test("validate --portal accepts the inserted figure and refuses a tampered sourc
     // Rewrite one byte of the committed body inside the rendered region and
     // every hash that records it: only the source equality can still fail.
     const evidencePath = path.join(portal, ".portal/generated/evidence.json");
-    const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+    const pristine = await readFile(evidencePath, "utf8");
+    const evidence = JSON.parse(pristine);
     const guide = evidence.pages.find((page) => page.route === "reference/guide");
+    const originals = new Map();
+    for (const page of evidence.pages) originals.set(page.route, await readFile(path.join(portal, page.output_markdown)));
     const rendered = await readFile(path.join(portal, guide.output_markdown));
     const tampered = Buffer.from(rendered.toString("utf8").replace("2. Check the result.", "2. Chuck the result."));
     const region = guide.source_region;
@@ -303,5 +310,38 @@ test("validate --portal accepts the inserted figure and refuses a tampered sourc
     const refused = validate();
     assert.notEqual(refused.status, 0);
     assert.match(refused.stdout + refused.stderr, /reference\/guide rendered source region does not equal the committed source: the page body no longer equals the committed source/);
+
+    // Edit the visible caption inside each companion and rewrite every hash
+    // the evidence records for it: only the reconstruction of the pinned
+    // declaration can tell the companion no longer draws what it declares.
+    const editCaption = async (route, rewrite) => {
+      const record = JSON.parse(pristine);
+      const page = record.pages.find((entry) => entry.route === route);
+      const original = originals.get(route).toString("utf8");
+      const edited = original.replace(/(<figcaption class="cf-fig-caption">)[^<]*/, "$1An edited caption.");
+      assert.notEqual(edited, original, route);
+      rewrite?.(page, Buffer.byteLength(edited) - Buffer.byteLength(original), Buffer.from(edited));
+      page.output_markdown_sha256 = sha256(edited);
+      page.markdown_twin_sha256 = sha256(edited);
+      for (const entry of record.pages) {
+        const text = entry.route === route ? edited : originals.get(entry.route);
+        await writeFile(path.join(portal, entry.output_markdown), text);
+        await writeFile(path.join(portal, entry.markdown_twin), text);
+      }
+      await writeFile(evidencePath, `${JSON.stringify(record, null, 2)}\n`);
+      const result = validate();
+      assert.notEqual(result.status, 0, result.stdout);
+      return result.stdout + result.stderr;
+    };
+    assert.match(await editCaption("reference/guide", (page, growth, bytes) => {
+      const region = page.source_region;
+      const insert = region.inserts[0];
+      insert.block_bytes += growth;
+      region.region_bytes += growth;
+      const start = region.output_offset_bytes + insert.offset_bytes;
+      insert.block_sha256 = sha256(bytes.subarray(start, start + insert.block_bytes));
+      region.region_sha256 = sha256(bytes.subarray(region.output_offset_bytes, region.output_offset_bytes + region.region_bytes));
+    }), /the companion figures\/install-steps\.json is not the recorded insertion at its bound place/);
+    assert.match(await editCaption("orient/product"), /orient\/product does not render the figure its declaration figures\/concept\.json draws/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });

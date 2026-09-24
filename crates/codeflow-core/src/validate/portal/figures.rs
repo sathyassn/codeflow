@@ -23,6 +23,8 @@ use crate::capability::parse_capabilities;
 use crate::scaffold::sha256_hex;
 use crate::strict_json::parse_strict_json;
 
+mod render;
+
 pub(super) const PAGE_CLASSES: [&str; 3] = ["illustrated", "pass-through", "derived-lookup"];
 pub(super) const PAGE_CLASS_REASONS: [&str; 3] =
     ["accepted-record", "governance", "no-relationship"];
@@ -476,14 +478,13 @@ pub(super) fn verify_figures(
     }
 }
 
-/// The declaration bytes behind every bound figure, read from the commit and
-/// compared with the evidence, with every fact and derived value re-derived.
-fn verify_declarations(
-    evidence: &Evidence,
+/// The configured declaration paths, after checking the evidence records each
+/// one exactly once.
+fn verify_inventory<'a>(
     figures: &[FigureEvidence],
-    context: &FigureContext<'_>,
+    context: &FigureContext<'a>,
     report: &mut PortalValidationReport,
-) -> BTreeMap<String, String> {
+) -> Vec<&'a str> {
     let expected: BTreeSet<&str> = context
         .bindings
         .iter()
@@ -500,7 +501,18 @@ fn verify_declarations(
             "evidence figure inventory does not match the configured figure declarations".into(),
         );
     }
-    let paths: Vec<&str> = expected.iter().copied().collect();
+    expected.into_iter().collect()
+}
+
+/// The declaration bytes behind every bound figure, read from the commit and
+/// compared with the evidence, with every fact and derived value re-derived.
+fn verify_declarations(
+    evidence: &Evidence,
+    figures: &[FigureEvidence],
+    context: &FigureContext<'_>,
+    report: &mut PortalValidationReport,
+) -> BTreeMap<String, Pinned> {
+    let paths = verify_inventory(figures, context, report);
     let blobs = match git_batch_blobs(
         context.repository,
         &evidence.repository.commit,
@@ -533,7 +545,6 @@ fn verify_declarations(
             ));
             continue;
         }
-        hashes.insert(path.clone(), actual);
         let Ok(declaration) = parse_strict_json::<serde_json::Value>(bytes) else {
             report
                 .issues
@@ -572,17 +583,58 @@ fn verify_declarations(
             ));
         }
         declared_figures.push((figure, body.clone()));
+        hashes.insert(
+            path.clone(),
+            Pinned {
+                sha256: actual,
+                declaration,
+                derived: None,
+            },
+        );
     }
-    verify_facts(evidence, &declared_figures, context, report);
+    for (path, derived) in verify_facts(evidence, &declared_figures, context, report) {
+        if let Some(pinned) = hashes.get_mut(&path) {
+            pinned.derived = derived;
+        }
+    }
     hashes
 }
+
+/// A declaration as the commit holds it, with the values its derived binding
+/// re-derives from the committed source, so its figure can be reconstructed.
+pub(super) struct Pinned {
+    sha256: String,
+    declaration: serde_json::Value,
+    derived: Option<serde_json::Map<String, serde_json::Value>>,
+}
+
+impl Pinned {
+    /// The companion block the adapter writes for this declaration: the
+    /// wrapper, the figure reconstructed from the declaration, and the line
+    /// that attributes it to the declaration.
+    fn companion(&self, path: &str, placement: &str, index: usize) -> Result<String, String> {
+        let figure = render::render_figure(
+            &self.declaration,
+            &format!("cf-fig-{index}"),
+            self.derived.as_ref(),
+        )?;
+        Ok(format!(
+            "{}{figure}<p class=\"cf-companion-source\">Figure declared in <code>{}</code>, not part of the page source.</p></div>",
+            companion_opening(path, placement, &self.sha256),
+            super::escape_html_attribute(path)
+        ))
+    }
+}
+
+type DerivedValues = Option<serde_json::Map<String, serde_json::Value>>;
 
 fn verify_facts(
     evidence: &Evidence,
     figures: &[(&FigureEvidence, serde_json::Map<String, serde_json::Value>)],
     context: &FigureContext<'_>,
     report: &mut PortalValidationReport,
-) {
+) -> BTreeMap<String, DerivedValues> {
+    let mut derived_values = BTreeMap::new();
     let mut sources = BTreeSet::new();
     for (_, body) in figures {
         for fact in body
@@ -621,7 +673,7 @@ fn verify_facts(
             report.issues.push(format!(
                 "authoritative Git figure fact sources are unreadable: {error}"
             ));
-            return;
+            return derived_values;
         }
     };
     for (figure, body) in figures {
@@ -640,8 +692,12 @@ fn verify_facts(
         for (fact, claimed) in declared.iter().zip(&figure.facts) {
             verify_fact(path, fact, claimed, &blobs, report);
         }
-        verify_derived_binding(figure, body, &blobs, report);
+        derived_values.insert(
+            path.clone(),
+            verify_derived_binding(figure, body, &blobs, report),
+        );
     }
+    derived_values
 }
 
 /// One declared fact against its evidence and its committed source.
@@ -705,12 +761,14 @@ fn verify_fact(
         }
 }
 
+/// The derived values re-derived from the committed source, or `None` for an
+/// authored figure or a source that does not resolve.
 fn verify_derived_binding(
     figure: &FigureEvidence,
     body: &serde_json::Map<String, serde_json::Value>,
     blobs: &BTreeMap<String, Vec<u8>>,
     report: &mut PortalValidationReport,
-) {
+) -> DerivedValues {
     let path = &figure.declaration_path;
     let binding = body.get("binding").and_then(serde_json::Value::as_str);
     let Some(claimed) = &figure.derived else {
@@ -719,30 +777,28 @@ fn verify_derived_binding(
                 .issues
                 .push(format!("derived figure {path} records no derived values"));
         }
-        return;
+        return None;
     };
-    let source = body.get("source");
-    let source_path = source
-        .and_then(|source| source.get("path"))
-        .and_then(serde_json::Value::as_str);
-    let select = source
-        .and_then(|source| source.get("select"))
-        .and_then(serde_json::Value::as_str);
+    let source = |key: &str| {
+        body.get("source")
+            .and_then(|source| source.get(key))
+            .and_then(serde_json::Value::as_str)
+    };
     if binding != Some("derived")
-        || source_path != Some(claimed.source_path.as_str())
-        || select != Some(claimed.select.as_str())
+        || source("path") != Some(claimed.source_path.as_str())
+        || source("select") != Some(claimed.select.as_str())
     {
         report.issues.push(format!(
             "figure {path} derived evidence does not match its declared source"
         ));
-        return;
+        return None;
     }
     let Some(bytes) = blobs.get(&claimed.source_path) else {
         report.issues.push(format!(
             "figure {path} derived source {} is absent",
             claimed.source_path
         ));
-        return;
+        return None;
     };
     if sha256_hex(bytes) != claimed.source_sha256 {
         report.issues.push(format!(
@@ -759,7 +815,7 @@ fn verify_derived_binding(
             "figure {path} derived source does not resolve {}",
             claimed.select
         ));
-        return;
+        return None;
     };
     let layout = body.get("layout");
     let mut values = serde_json::Map::new();
@@ -811,6 +867,7 @@ fn verify_derived_binding(
             "figure {path} rule 6 (fidelity): drawn values differ from the values derived from the source"
         ));
     }
+    derived.as_object().cloned()
 }
 
 /// The class, reason and bound figures a page claims, and for a source
@@ -818,7 +875,7 @@ fn verify_derived_binding(
 fn verify_page_class(
     page: &Page,
     context: &FigureContext<'_>,
-    declarations: &BTreeMap<String, String>,
+    declarations: &BTreeMap<String, Pinned>,
     report: &mut PortalValidationReport,
 ) {
     let route = &page.route;
@@ -868,7 +925,9 @@ fn verify_page_class(
                 && figure.placement == binding.placement()
                 && figure.panel == binding.panel
                 && figure.anchor == binding.anchor
-                && declarations.get(&binding.declaration) == Some(&figure.declaration_sha256)
+                && declarations
+                    .get(&binding.declaration)
+                    .is_some_and(|pinned| pinned.sha256 == figure.declaration_sha256)
                 && !figure.figure_id.is_empty()
         });
     if !matches {
@@ -880,17 +939,20 @@ fn verify_page_class(
     match class {
         EXPLANATORY => {
             if let Some(output) = rendered {
-                for figure in &page.figures {
-                    let marker = companion_opening(
-                        &figure.declaration_path,
-                        "panel",
-                        &figure.declaration_sha256,
-                    );
-                    if !output.contains(&marker) {
-                        report.issues.push(format!(
-                            "{route} does not render its bound figure {} as a companion",
-                            figure.declaration_path
-                        ));
+                for (index, figure) in page.figures.iter().enumerate() {
+                    let path = &figure.declaration_path;
+                    let expected = declarations
+                        .get(path)
+                        .ok_or_else(|| "its declaration is not pinned".to_string())
+                        .and_then(|pinned| pinned.companion(path, "panel", index));
+                    match expected {
+                        Ok(block) if output.contains(&block) => {}
+                        Ok(_) => report.issues.push(format!(
+                            "{route} does not render the figure its declaration {path} draws"
+                        )),
+                        Err(why) => report.issues.push(format!(
+                            "{route} figure {path} cannot be reconstructed: {why}"
+                        )),
                     }
                 }
             }
@@ -903,7 +965,7 @@ fn verify_page_class(
         "derived-lookup" => verify_lookup(page, entry, context, report),
         _ => match (&page.source_region, rendered) {
             (Some(region), Some(output)) => {
-                verify_source_region(page, region, output, context, report);
+                verify_source_region(page, region, output, context, declarations, report);
             }
             (None, _) => report.issues.push(format!(
                 "{route} {class} source records no unchanged source region"
@@ -953,6 +1015,7 @@ fn verify_source_region(
     region: &SourceRegion,
     output: &str,
     context: &FigureContext<'_>,
+    declarations: &BTreeMap<String, Pinned>,
     report: &mut PortalValidationReport,
 ) {
     let route = &page.route;
@@ -993,7 +1056,13 @@ fn verify_source_region(
     {
         return fail(report, "the region markers or hash do not match");
     }
-    match strip_inserts(page, region, rendered_region, &anchor_offsets(body)) {
+    match strip_inserts(
+        page,
+        region,
+        rendered_region,
+        &anchor_offsets(body),
+        declarations,
+    ) {
         Err(why) => fail(report, &why),
         Ok(remaining) if remaining != committed => {
             fail(
@@ -1006,12 +1075,14 @@ fn verify_source_region(
 }
 
 /// The rendered region with every recorded insertion removed, after proving
-/// each one is a bound companion figure at the place its binding names.
+/// each one is the companion its pinned declaration draws, byte for byte, at
+/// the place its binding names.
 fn strip_inserts(
     page: &Page,
     region: &SourceRegion,
     rendered_region: &[u8],
     anchors: &BTreeMap<String, usize>,
+    declarations: &BTreeMap<String, Pinned>,
 ) -> Result<Vec<u8>, String> {
     let mut remaining = Vec::with_capacity(rendered_region.len());
     let mut cursor = 0;
@@ -1027,11 +1098,12 @@ fn strip_inserts(
         remaining.extend_from_slice(&rendered_region[cursor..insert.offset_bytes]);
         consumed_source += insert.offset_bytes - cursor;
         let block = &rendered_region[insert.offset_bytes..stop];
-        let Some(sha) = page
+        let Some((index, sha)) = page
             .figures
             .iter()
-            .find(|figure| figure.declaration_path == insert.declaration_path)
-            .map(|figure| figure.declaration_sha256.as_str())
+            .enumerate()
+            .find(|(_, figure)| figure.declaration_path == insert.declaration_path)
+            .map(|(index, figure)| (index, figure.declaration_sha256.as_str()))
         else {
             return Err("an insertion names a figure the page does not bind".into());
         };
@@ -1045,20 +1117,24 @@ fn strip_inserts(
                 .filter(|offset| *offset > 0),
             _ => None,
         };
-        let opening = format!(
-            "\n<!-- codeflow-companion-begin declaration={} sha256={sha} -->\n\n{}",
-            insert.declaration_path,
-            companion_opening(&insert.declaration_path, &insert.placement, sha)
+        let companion = declarations
+            .get(&insert.declaration_path)
+            .filter(|pinned| pinned.sha256 == sha)
+            .ok_or_else(|| "its declaration is not pinned".to_string())
+            .and_then(|pinned| pinned.companion(&insert.declaration_path, &insert.placement, index))
+            .map_err(|why| {
+                format!(
+                    "the companion {} cannot be reconstructed: {why}",
+                    insert.declaration_path
+                )
+            })?;
+        let expected = format!(
+            "\n<!-- codeflow-companion-begin declaration={} sha256={sha} -->\n\n{companion}{COMPANION_END}",
+            insert.declaration_path
         );
-        let attribution = format!(
-            "<p class=\"cf-companion-source\">Figure declared in <code>{}</code>, not part of the page source.</p></div>",
-            super::escape_html_attribute(&insert.declaration_path)
-        );
-        let text = std::str::from_utf8(block).unwrap_or_default();
         if expected_offset != Some(consumed_source)
             || sha256_hex(block) != insert.block_sha256
-            || !text.starts_with(&opening)
-            || !text.ends_with(&format!("{attribution}{COMPANION_END}"))
+            || block != expected.as_bytes()
         {
             return Err(format!(
                 "the companion {} is not the recorded insertion at its bound place",
@@ -1530,7 +1606,7 @@ mod tests {
     }
 
     const GUIDE: &str = "# Guide\n\nRead this first.\n\n## Install\n\n1. Run it.\n2. Check it.\n";
-    const DECLARATION: &str = r#"{"schema_version":1,"figure":{"id":"steps","family":"sequence","binding":"authored","facts":[{"claim":"Two steps","source":"docs/guide.md#install","derive":"numbered items","check":{"kind":"count-items"},"value":2}]}}"#;
+    const DECLARATION: &str = r#"{"schema_version":1,"figure":{"id":"steps","family":"sequence","binding":"authored","question":"What runs first?","idea":"Running comes before checking.","title":"Run, then check","caption":"Run it, then check it.","twin":"facts","states":[{"name":"trans","mark":"trans","means":"Step"}],"facts":[{"claim":"Two steps","source":"docs/guide.md#install","derive":"numbered items","check":{"kind":"count-items"},"value":2}],"wide":{"width":240,"height":60,"draw":[{"state":"trans","shape":"path","d":"M20 36H200","head":"end","id":"m1"},{"text":"run, then check","x":110,"y":24,"anchor":"middle","for":["m1"]}]},"narrow":{"recompose":"stack","drops":[],"marks":"same","width":200,"height":60,"draw":[{"state":"trans","shape":"path","d":"M20 36H180","head":"end","id":"m1"},{"text":"run, then check","x":20,"y":24,"for":["m1"]}]}}}"#;
 
     fn run_git(root: &Path, args: &[&str]) {
         assert!(std::process::Command::new("git")
@@ -1597,9 +1673,14 @@ mod tests {
             .to_owned();
         let source_hash = sha256_hex(GUIDE.as_bytes());
         let declaration_hash = sha256_hex(DECLARATION.as_bytes());
+        let pinned = Pinned {
+            sha256: declaration_hash.clone(),
+            declaration: serde_json::from_str(DECLARATION).unwrap(),
+            derived: None,
+        };
         let block = format!(
-            "\n<!-- codeflow-companion-begin declaration=figures/steps.json sha256={declaration_hash} -->\n\n{}<figure class=\"cf-fig\"></figure><p class=\"cf-companion-source\">Figure declared in <code>figures/steps.json</code>, not part of the page source.</p></div>\n\n<!-- codeflow-companion-end -->\n",
-            companion_opening("figures/steps.json", "head", &declaration_hash)
+            "\n<!-- codeflow-companion-begin declaration=figures/steps.json sha256={declaration_hash} -->\n\n{}{COMPANION_END}",
+            pinned.companion("figures/steps.json", "head", 0).unwrap()
         );
         let start = "# Guide\n\n".len();
         let region = format!("{block}{}", &GUIDE[start..]);
@@ -1774,6 +1855,44 @@ mod tests {
             .issues(&portal.rendered, &early)
             .iter()
             .any(|issue| issue.contains("does not start after the page title")));
+    }
+
+    #[test]
+    fn validate_rejects_companion_text_its_declaration_does_not_draw() {
+        let portal = illustrated_portal();
+        // The visible caption inside the companion changes; the block, region
+        // and page hashes are all rewritten to match, so only the bound
+        // reconstruction of the pinned declaration can notice.
+        let original = "Run it, then check it.";
+        let edited = "Run it, then skip the check.";
+        assert!(portal.rendered.contains(original));
+        let tampered = portal.rendered.replace(original, edited);
+        let region = &portal.evidence["pages"][0]["source_region"];
+        let offset = usize::try_from(region["output_offset_bytes"].as_u64().unwrap()).unwrap();
+        let region_len = usize::try_from(region["region_bytes"].as_u64().unwrap()).unwrap();
+        let block_len =
+            usize::try_from(region["inserts"][0]["block_bytes"].as_u64().unwrap()).unwrap();
+        let count = portal.rendered[offset..offset + block_len]
+            .matches(original)
+            .count();
+        assert!(count > 0);
+        let growth = (edited.len() - original.len()) * count;
+        let block = &tampered.as_bytes()[offset..offset + block_len + growth];
+        let whole = &tampered.as_bytes()[offset..offset + region_len + growth];
+        let mut evidence = portal.evidence.clone();
+        let source_region = &mut evidence["pages"][0]["source_region"];
+        source_region["region_bytes"] = (region_len + growth).into();
+        source_region["region_sha256"] = sha256_hex(whole).into();
+        source_region["inserts"][0]["block_bytes"] = (block_len + growth).into();
+        source_region["inserts"][0]["block_sha256"] = sha256_hex(block).into();
+        let issues = portal.issues(&tampered, &evidence);
+        assert!(
+            issues
+                .iter()
+                .any(|issue| issue.contains("is not the recorded insertion at its bound place")),
+            "{issues:?}"
+        );
+        assert_eq!(issues.len(), 1, "{issues:?}");
     }
 
     #[test]
