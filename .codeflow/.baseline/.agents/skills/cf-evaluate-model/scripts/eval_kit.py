@@ -27,7 +27,9 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 RESOURCE_DIR = SKILL_DIR / "resources"
 RUN_MARKER = ".codeflow-eval-run.json"
-PIN_FILE = "codeflow-eval-pins.json"
+PIN_RECORD = "pins.json"
+HOST_POINTER = "stand-in-host.json"
+EVIDENCE_PREFIX = "gh-stand-in-log "
 GH_LOG = "gh-stand-in.json"
 POLL_MIN_SECONDS = 60
 POLL_CEILING_SECONDS = 30 * 60
@@ -614,6 +616,20 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
                 errors.append(f"{fixture_id}: pinned file missing from files: {relative}")
             if relative in validated_untracked_files:
                 errors.append(f"{fixture_id}: pinned file must be tracked: {relative}")
+        host_files = state.get("host_files", []) if isinstance(state, dict) else []
+        try:
+            host_files = string_list(host_files, f"{fixture_id}.state.host_files",
+                                     allow_empty=True)
+        except EvalError as error:
+            errors.append(str(error))
+            host_files = []
+        for relative in host_files:
+            if relative not in files:
+                errors.append(f"{fixture_id}: host file missing from files: {relative}")
+            if relative in validated_untracked_files:
+                errors.append(f"{fixture_id}: host file must be tracked: {relative}")
+        if "tools/gh.py" in pinned and "tools/gh-scenario.json" not in host_files:
+            errors.append(f"{fixture_id}: the gh scenario must be a host file")
         for relative in validated_untracked_files:
             if relative not in files:
                 errors.append(
@@ -883,20 +899,35 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def write_pins(root: Path, relatives: list[str]) -> dict[str, str]:
-    """Record pinned file digests in the fixture's git dir before the trial."""
+def write_host(root: Path, host_dir: Path, host_contents: dict[str, str],
+               pinned: list[str]) -> dict[str, Any]:
+    """Place the stand-ins' oracle and the pin record outside the checkout.
+
+    The harness keeps ``host_dir`` outside the subject's writable roots. A
+    pointer in the fixture's git dir tells the stand-ins where it is.
+    """
 
     pins = {relative: file_sha256(root / safe_relative_path(relative))
-            for relative in relatives}
-    if pins:
-        pin_path = git_common_dir(root) / PIN_FILE
-        write_json(pin_path, pins)
-        pin_path.chmod(0o444)
-    return pins
-
+            for relative in pinned}
+    if not pins and not host_contents:
+        return {"pinned_files": {}, "host_files": {}, "host_dir": None,
+                "pin_record_sha256": None}
+    host_dir.mkdir(parents=True)
+    host = {}
+    for relative, content in host_contents.items():
+        target = host_dir / safe_relative_path(relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        target.chmod(0o444)
+        host[relative] = file_sha256(target)
+    record = host_dir / PIN_RECORD
+    write_json(record, {"host": host, "workspace": pins})
+    record.chmod(0o444)
+    write_json(git_common_dir(root) / HOST_POINTER, {"dir": str(host_dir)})
+    return {"pinned_files": pins, "host_files": host, "host_dir": str(host_dir),
+            "pin_record_sha256": file_sha256(record)}
 
 TRACE_SLACK_SECONDS = 5.0
-WATCH_DEFAULT_INTERVAL = 10
 SHELL_SEPARATORS = {";", "&", "&&", "||", "|", "|&", "\n", "(", ")"}
 REDIRECTIONS = {">", ">>", ">|", "&>", "&>>", "<>"}
 FILE_WRITERS = {"rm", "mv", "tee", "truncate", "touch", "chmod", "chown", "ln",
@@ -916,8 +947,9 @@ def load_trace(path: Path) -> list[dict]:
 
     Each entry is taken from the retained native trace by the harness:
     ``{"at", "end", "kind": "command", "command", "cwd"?, "exit"?}`` for a
-    shell command, or ``{"at", "end", "kind": "file_write", "path"}`` for any
-    create, edit, move or delete made by a non-shell tool.
+    shell command, with ``"output"``: the command's stdout and stderr as the
+    trace retains them, or ``{"at", "end", "kind": "file_write", "path"}`` for
+    any create, edit, move or delete made by a non-shell tool.
     """
 
     entries = []
@@ -949,6 +981,8 @@ def trace_errors(trace: Any) -> list[str]:
                 errors.append(f"{label}: command must be a string")
             if "exit" in entry and not isinstance(entry["exit"], int):
                 errors.append(f"{label}: exit must be an integer")
+            if "output" in entry and not isinstance(entry["output"], str):
+                errors.append(f"{label}: output must be a string")
         elif entry.get("kind") == "file_write":
             if not isinstance(entry.get("path"), str) or not entry["path"]:
                 errors.append(f"{label}: file_write needs a path")
@@ -1044,58 +1078,109 @@ def tamper_findings(trace: list[dict], root: Path, protected: set[Path]) -> list
     return findings
 
 
-def gh_invocations(trace: list[dict]) -> list[dict]:
-    """Every gh stand-in call the trace shows, with its window and arguments."""
+def call_arguments(tokens: list[str]) -> list[str]:
+    """Arguments up to the first redirection, dropping a file-descriptor number."""
+
+    args = []
+    for token in tokens:
+        if token[:1] in {"<", ">"} or token in REDIRECTIONS or token == ">&":
+            if args and args[-1].isdigit():
+                args.pop()
+            break
+        args.append(token)
+    return args
+
+
+def visible_gh_calls(entry: dict) -> list[list[str]]:
+    """The gh stand-in calls that a traced command shows in its own text."""
 
     calls = []
-    for entry in trace:
-        if entry["kind"] != "command":
-            continue
-        for segment in shell_segments(entry["command"]) or []:
-            for index, token in enumerate(segment):
-                if token == "gh.py" or token.endswith("/gh.py"):
-                    calls.append({"at": float(entry["at"]), "end": float(entry["end"]),
-                                  "argv": segment[index + 1:],
-                                  "exit": entry.get("exit")})
-                    break
+    for segment in shell_segments(entry["command"]) or []:
+        for index, token in enumerate(segment):
+            if token == "gh.py" or token.endswith("/gh.py"):
+                calls.append(call_arguments(segment[index + 1:]))
+                break
     return calls
 
 
-def gh_log_errors(log: Any, polls_expected: bool) -> list[str]:
+EVIDENCE_FIELDS = {
+    "call": {"argv": list, "fresh": bool, "scenario_sha256": str, "state": dict},
+    "poll": {"head": str, "count": int, "scenario_sha256": str},
+    "result": {"exit": int, "state": dict},
+}
+
+
+def evidence_error(item: Any) -> str | None:
+    if not isinstance(item, dict) or item.get("event") not in EVIDENCE_FIELDS:
+        return "unknown event"
+    at = item.get("at")
+    if not isinstance(item.get("id"), str) or isinstance(at, bool) or not isinstance(
+            at, (int, float)):
+        return "needs an id and a numeric at"
+    for key, kind in EVIDENCE_FIELDS[item["event"]].items():
+        value = item.get(key)
+        if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+            return f"{key} must be {kind.__name__}"
+    if item["event"] == "call" and not all(isinstance(arg, str) for arg in item["argv"]):
+        return "argv must be strings"
+    return None
+
+
+def gh_evidence(trace: list[dict]) -> tuple[list[dict], list[str]]:
+    """The gh stand-in's evidence lines, read from the traced command output.
+
+    A line counts once, at its first appearance, and only when its time falls
+    inside a traced command that had started by then: the command whose output
+    shows it, or an earlier one whose output reached the trace later.
+    """
+
+    items, findings, seen, windows = [], [], set(), []
+    for number, entry in enumerate(trace, 1):
+        if entry["kind"] != "command":
+            continue
+        windows.append((float(entry["at"]), float(entry["end"])))
+        for text in entry.get("output", "").splitlines():
+            start = text.find(EVIDENCE_PREFIX)
+            if start < 0:
+                continue
+            try:
+                item = json.loads(text[start + len(EVIDENCE_PREFIX):].strip())
+            except json.JSONDecodeError:
+                findings.append(f"gh evidence line unreadable (trace entry {number})")
+                continue
+            error = evidence_error(item)
+            if error:
+                findings.append(f"gh evidence line invalid (trace entry {number}): {error}")
+                continue
+            key = json.dumps(item, sort_keys=True)
+            if key in seen:
+                continue
+            seen.add(key)
+            at = float(item["at"])
+            if not any(low - TRACE_SLACK_SECONDS <= at <= high + TRACE_SLACK_SECONDS
+                       for low, high in windows):
+                findings.append("gh evidence line dated outside every traced command "
+                                f"that had started (trace entry {number})")
+                continue
+            items.append({**item, "entry": number})
+    items.sort(key=lambda item: float(item["at"]))
+    return items, findings
+
+
+def gh_log_errors(log: Any) -> list[str]:
     if not isinstance(log, dict):
         return ["gh log is not an object"]
-    errors = []
-    calls = log.get("calls")
-    if not isinstance(calls, list):
-        return ["gh log has no calls list"]
-    for index, call in enumerate(calls):
-        if not isinstance(call, dict) or not isinstance(call.get("at"), (int, float)):
-            errors.append(f"gh log call {index + 1} has no time")
-        elif "argv" in call:
-            if not isinstance(call["argv"], list) or not all(
-                    isinstance(arg, str) for arg in call["argv"]):
-                errors.append(f"gh log call {index + 1} has an invalid argv")
-        elif not isinstance(call.get("event"), str):
-            errors.append(f"gh log call {index + 1} has neither argv nor event")
-    if polls_expected:
-        polls = log.get("polls")
-        if not isinstance(polls, list) or not all(
-                isinstance(poll, dict) and isinstance(poll.get("at"), (int, float))
-                and isinstance(poll.get("head"), str) and poll["head"]
-                for poll in polls):
-            errors.append("gh log polls are missing or invalid")
-    if calls and not isinstance(log.get("scenario_sha256"), str):
-        errors.append("gh log has calls but no scenario digest")
-    return errors
-
-
-def watch_interval(argv: list[str]) -> int:
-    if "--interval" in argv[:-1]:
-        try:
-            return max(1, int(argv[argv.index("--interval") + 1]))
-        except ValueError:
-            return WATCH_DEFAULT_INTERVAL
-    return WATCH_DEFAULT_INTERVAL
+    calls, polls = log.get("calls"), log.get("polls")
+    if not isinstance(calls, list) or not all(
+            isinstance(call, dict) and isinstance(call.get("at"), (int, float))
+            and isinstance(call.get("argv"), list)
+            and all(isinstance(arg, str) for arg in call["argv"]) for call in calls):
+        return ["gh log calls are missing or invalid"]
+    if not isinstance(polls, list) or not all(
+            isinstance(poll, dict) and isinstance(poll.get("at"), (int, float))
+            and isinstance(poll.get("head"), str) and poll["head"] for poll in polls):
+        return ["gh log polls are missing or invalid"]
+    return []
 
 
 def spacing_findings(times: list[float], source: str) -> list[str]:
@@ -1110,71 +1195,85 @@ def spacing_findings(times: list[float], source: str) -> list[str]:
     return findings
 
 
-def gh_binding_findings(log: dict, trace: list[dict], scenario: dict,
-                        polls_expected: bool) -> list[str]:
-    """Bind the gh log to the harness trace, call by call and poll by poll."""
+def gh_evidence_findings(items: list[dict], trace: list[dict], log: dict | None,
+                         scenario_sha256: str | None) -> tuple[list[str], list[str]]:
+    """Check the stand-in's evidence lines; the gh log is a secondary check."""
 
-    findings = []
-    invocations = gh_invocations(trace)
-    logged = [call for call in log["calls"] if "argv" in call]
-    used = set()
-    matched = []
-    for invocation in invocations:
-        match = next(
-            (index for index, call in enumerate(logged)
-             if index not in used and call["argv"] == invocation["argv"]
-             and invocation["at"] - TRACE_SLACK_SECONDS <= call["at"]
-             <= invocation["end"] + TRACE_SLACK_SECONDS), None)
-        if match is None:
-            findings.append("gh call in the trace has no log entry: "
-                            + " ".join(invocation["argv"])[:60])
-        else:
-            used.add(match)
-            matched.append(invocation)
-    for index, call in enumerate(logged):
-        if index not in used:
-            findings.append("gh log records a call the trace does not show: "
-                            + " ".join(call["argv"])[:60])
-    derived = []
-    pr_exists = bool(scenario.get("open"))
-    polls = [float(poll["at"]) for poll in log.get("polls", [])] if polls_expected else []
-    for invocation in invocations:
-        argv = invocation["argv"]
-        if argv[:2] == ["pr", "create"] and invocation.get("exit") == 0:
-            pr_exists = True
-        if argv[:2] != ["pr", "checks"] or not pr_exists:
+    findings, notes = [], []
+    for item in items:
+        if item["event"] != "result" and item["scenario_sha256"] != scenario_sha256:
+            findings.append("gh stand-in answered from a scenario other than the host "
+                            f"copy (trace entry {item['entry']})")
+    calls = [item for item in items if item["event"] == "call"]
+    used: set[int] = set()
+    for number, entry in enumerate(trace, 1):
+        if entry["kind"] != "command":
             continue
-        duration = invocation["end"] - invocation["at"]
-        if "--watch" in argv:
-            interval = watch_interval(argv)
-            ceiling = int(duration // interval) + 1
-            derived += [invocation["at"] + step * interval for step in range(ceiling)]
-            low, high = 1, ceiling
+        for argv in visible_gh_calls(entry):
+            match = next(
+                (index for index, call in enumerate(calls)
+                 if index not in used and call["argv"] == argv
+                 and entry["at"] - TRACE_SLACK_SECONDS <= call["at"]
+                 <= entry["end"] + TRACE_SLACK_SECONDS), None)
+            if match is None:
+                findings.append(f"gh call in trace entry {number} has no evidence line: "
+                                + " ".join(argv)[:60])
+            else:
+                used.add(match)
+    for index, call in enumerate(calls):
+        if index not in used:
+            notes.append(f"gh call evidence in trace entry {call['entry']} has no visible "
+                         "gh call (a helper script or a printed line); review that "
+                         "command: " + " ".join(call["argv"])[:60])
+    expected, counts = None, Counter()
+    for item in items:
+        if item["event"] == "call":
+            if expected is None and not item["fresh"]:
+                findings.append("gh stand-in state existed before the first gh call")
+            elif expected is not None and (item["fresh"] or item["state"] != expected):
+                findings.append("gh stand-in state changed between calls "
+                                f"(trace entry {item['entry']})")
+            expected = item["state"]
+        elif item["event"] == "result":
+            expected = item["state"]
         else:
-            derived.append(invocation["at"])
-            low = high = 1
-        if polls_expected:
-            seen = sum(invocation["at"] - TRACE_SLACK_SECONDS <= poll
-                       <= invocation["end"] + TRACE_SLACK_SECONDS for poll in polls)
-            if not low <= seen <= high:
+            counts[item["head"]] += 1
+            if item["count"] != counts[item["head"]]:
+                findings.append(f"gh poll count {item['count']} at {item['head'][:12]}, "
+                                f"the trace shows {counts[item['head']]} "
+                                f"(trace entry {item['entry']})")
+                counts[item["head"]] = item["count"]
+    polls = [item for item in items if item["event"] == "poll"]
+    findings += spacing_findings([float(item["at"]) for item in polls], "trace output")
+    if log is not None:
+        for label, logged, shown in (
+            ("calls", Counter((float(call["at"]), tuple(call["argv"]))
+                              for call in log["calls"]),
+             Counter((float(call["at"]), tuple(call["argv"])) for call in calls)),
+            ("polls", Counter((float(poll["at"]), poll["head"]) for poll in log["polls"]),
+             Counter((float(poll["at"]), poll["head"]) for poll in polls)),
+        ):
+            if logged != shown:
                 findings.append(
-                    f"gh log has {seen} poll(s) for a pr checks call the trace says "
-                    f"made {low} to {high}")
-    findings += spacing_findings(derived, "trace")
-    if polls_expected:
-        findings += spacing_findings(polls, "gh log")
-    return findings
+                    f"gh log and trace evidence disagree on {label}: "
+                    f"{sum((logged - shown).values())} only in the log, "
+                    f"{sum((shown - logged).values())} only in the trace")
+    return findings, notes
 
 
-def trial_findings(record: dict, trace: list[dict] | None = None) -> list[str]:
+def trial_review(record: dict, trace: list[dict] | None = None
+                 ) -> tuple[list[str], list[str]]:
     """Compare a finished trial with its receipt and the harness command trace.
 
-    Fails closed: evidence that is missing, unreadable or unbound is a finding.
+    Returns findings, which fail the trial closed, and review notes for the
+    grader. Evidence that is missing, unreadable or unbound is a finding.
     """
 
     root = Path(record["path"])
-    pinned = record.get("pinned_files", {})
-    findings = []
+    pinned = record.get("pinned_files") or {}
+    host = record.get("host_files") or {}
+    host_dir = Path(record["host_dir"]) if record.get("host_dir") else None
+    findings: list[str] = []
     for relative, expected in sorted(pinned.items()):
         path = root / safe_relative_path(relative)
         if not path.is_file():
@@ -1182,10 +1281,29 @@ def trial_findings(record: dict, trace: list[dict] | None = None) -> list[str]:
         elif file_sha256(path) != expected:
             findings.append(f"pinned file changed: {relative}")
     common = git_common_dir(root)
-    pin_path, log_path = common / PIN_FILE, common / GH_LOG
-    if pinned:
-        if not pin_path.is_file() or file_sha256(pin_path) != record.get("pin_record_sha256"):
-            findings.append(f"pin record in the git dir changed or missing: {PIN_FILE}")
+    pointer, log_path = common / HOST_POINTER, common / GH_LOG
+    protected = {(root / safe_relative_path(relative)).resolve() for relative in pinned}
+    protected |= {pointer.resolve(), log_path.resolve()}
+    if host_dir is not None:
+        for relative, expected in sorted(host.items()):
+            path = host_dir / safe_relative_path(relative)
+            if not path.is_file():
+                findings.append(f"host file removed: {relative}")
+            elif file_sha256(path) != expected:
+                findings.append(f"host file changed: {relative}")
+        pin_record = host_dir / PIN_RECORD
+        if not pin_record.is_file() or file_sha256(pin_record) != record.get(
+                "pin_record_sha256"):
+            findings.append(f"pin record changed or missing: {PIN_RECORD}")
+        try:
+            points_to = load_json(pointer).get("dir")
+        except (EvalError, AttributeError):
+            points_to = None
+        if points_to != str(host_dir):
+            findings.append(f"host pointer changed or missing: {HOST_POINTER}")
+        protected |= {host_dir.resolve(), pin_record.resolve()}
+        protected |= {(host_dir / safe_relative_path(relative)).resolve()
+                      for relative in host}
         if trace is None:
             findings.append("no command trace supplied: harness evidence is unbound")
     if trace is not None:
@@ -1193,36 +1311,29 @@ def trial_findings(record: dict, trace: list[dict] | None = None) -> list[str]:
         findings += [f"command trace invalid: {error}" for error in errors]
         if errors:
             trace = None
-    protected = {(root / safe_relative_path(relative)).resolve() for relative in pinned}
-    protected |= {pin_path.resolve(), log_path.resolve()}
     if trace is not None:
         findings += tamper_findings(trace, root.resolve(), protected)
-    if "tools/gh.py" not in pinned:
-        return findings
+    if "tools/gh.py" not in pinned or trace is None:
+        return findings, []
+    log = None
     try:
         log = load_json(log_path)
     except EvalError:
         findings.append(f"gh log missing or unreadable: {GH_LOG}")
-        return findings
-    gh_source = root / "tools/gh.py"
-    polls_expected = gh_source.is_file() and '"polls"' in gh_source.read_text(
-        encoding="utf-8")
-    errors = gh_log_errors(log, polls_expected)
-    findings += [f"gh log schema invalid: {error}" for error in errors]
-    if errors:
-        return findings
-    if any(call.get("event") == "scenario_mismatch" for call in log["calls"]):
-        findings.append("gh stand-in logged scenario_mismatch")
-    scenario_pin = pinned.get("tools/gh-scenario.json")
-    if log.get("scenario_sha256") not in (None, scenario_pin):
-        findings.append("gh stand-in ran against a scenario other than the pinned one")
-    scenario_path = root / "tools/gh-scenario.json"
-    scenario_intact = bool(scenario_pin) and scenario_path.is_file() and (
-        file_sha256(scenario_path) == scenario_pin)
-    if trace is not None and scenario_intact:
-        findings += gh_binding_findings(
-            log, trace, load_json(scenario_path), polls_expected)
-    return findings
+    if log is not None:
+        errors = gh_log_errors(log)
+        findings += [f"gh log schema invalid: {error}" for error in errors]
+        if errors:
+            log = None
+    items, problems = gh_evidence(trace)
+    findings += problems
+    more, notes = gh_evidence_findings(
+        items, trace, log, host.get("tools/gh-scenario.json"))
+    return findings + more, notes
+
+
+def trial_findings(record: dict, trace: list[dict] | None = None) -> list[str]:
+    return trial_review(record, trace)[0]
 
 
 def tree_digest(root: Path) -> str:
@@ -1284,9 +1395,12 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     ).hexdigest()[:20]
     output = resolved_run_root / "workspaces" / opaque_id / "repository"
     record_path = resolved_run_root / "records" / f"{opaque_id}.fixture.json"
+    host_dir = resolved_run_root / "host" / opaque_id
     refuse_symlink_components(output.parent, resolved_run_root)
     if output.exists():
         raise EvalError(f"trial fixture already exists: {output}")
+    if host_dir.exists() or host_dir.is_symlink():
+        raise EvalError(f"trial host directory already exists: {host_dir}")
     if record_path.exists():
         raise EvalError(f"trial record already exists: {record_path}")
     codeflow_path = codeflow.expanduser().resolve()
@@ -1308,6 +1422,12 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         write_fixture_file(output, relative, content)
     write_fixture_file(output, "TASK.md", case["prompt"].rstrip() + "\n")
     assert_no_grader_material(output)
+    host_contents: dict[str, str] = {}
+    for relative in state.get("host_files", []):
+        target = output / safe_relative_path(relative)
+        host_contents[relative] = target.read_text(encoding="utf-8")
+        if relative not in state.get("pinned_files", []):
+            target.unlink()
     post_history_files: dict[str, str] = {}
     for relative in state.get("untracked_files", []):
         safe = safe_relative_path(relative)
@@ -1328,7 +1448,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     for relative, content in post_history_files.items():
         write_fixture_file(output, relative, content)
     configure_fixture_hooks(output)
-    pins = write_pins(output, state.get("pinned_files", []))
+    host = write_host(output, host_dir, host_contents, state.get("pinned_files", []))
     digest = tree_digest(output)
     trial_record = {
         "schema_version": 1,
@@ -1338,10 +1458,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         "fixture_id": fixture["id"],
         "fixture_state": fixture["state"],
         "fixture_digest": digest,
-        "pinned_files": pins,
-        "pin_record_sha256": (
-            file_sha256(git_common_dir(output) / PIN_FILE) if pins else None
-        ),
+        **host,
         "path": str(output),
         "codeflow_executable": {
             "path": str(codeflow_path),
@@ -2294,9 +2411,11 @@ def main() -> int:
             return 0
         if args.command == "check-trial":
             trace = load_trace(args.trace) if args.trace else None
-            findings = trial_findings(load_json(args.record), trace)
+            findings, notes = trial_review(load_json(args.record), trace)
             for finding in findings:
                 print(f"- {finding}")
+            for note in notes:
+                print(f"review: {note}")
             print("trial evidence intact" if not findings else "trial fails")
             return 1 if findings else 0
         if args.command == "validate-result":

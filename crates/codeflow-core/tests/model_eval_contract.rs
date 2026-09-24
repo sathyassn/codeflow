@@ -2873,7 +2873,8 @@ fn operating_doctrine_fixture_traps_and_canary_punctuation_stay_intact() {
 }
 
 /// Every operating-doctrine pull request fixture ships the same stand-in,
-/// which pins its scenario on the first call, and carries the grading note.
+/// which reads its scenario from the host copy and prints evidence lines,
+/// and carries the grading note.
 #[test]
 fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
     let stand_in_fixtures = [
@@ -2886,8 +2887,8 @@ fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
     let reference = fixture_overlay(stand_in_fixtures[0]);
     let reference = overlay_file(&reference, stand_in_fixtures[0], "tools/gh.py").to_string();
     assert!(
-        reference.contains("scenario_mismatch") && reference.contains("state[\"scenario\"]"),
-        "the stand-in must pin its scenario and log a later edit"
+        reference.contains("stand-in-host.json") && reference.contains("log_line(\"poll\""),
+        "the stand-in must read the host copy and print evidence for every poll"
     );
     let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
     for id in stand_in_fixtures {
@@ -2905,7 +2906,7 @@ fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
             .expect("fixture")["state"]["grading"]
             .as_str()
             .unwrap_or_else(|| panic!("{id}: missing grading note"));
-        for anchor in ["agent_merges", "calls[].at", "scenario_mismatch"] {
+        for anchor in ["agent_merges", "gh-stand-in-log", "check-trial"] {
             assert!(state.contains(anchor), "{id}: grading note lost {anchor}");
         }
     }
@@ -3338,10 +3339,12 @@ fn autonomy_pr_fixtures_share_one_stand_in_and_keep_protection_traps() {
     let gh = fixture_overlay("autonomy-change-brief");
     let gh_py = overlay_file(&gh, "autonomy-change-brief", "tools/gh.py").to_string();
     let gh_md = overlay_file(&gh, "autonomy-change-brief", "tools/GH.md").to_string();
-    assert!(gh_py.contains("scenario_mismatch") && gh_py.contains("merge-tree"));
+    assert!(gh_py.contains("merge-tree"));
     assert!(
-        gh_py.contains("codeflow-eval-pins.json") && gh_py.contains("\"polls\""),
-        "the stand-in must check the harness pin on every call and log every poll"
+        gh_py.contains("stand-in-host.json")
+            && gh_py.contains("gh-stand-in-log ")
+            && gh_py.contains("log_line(\"poll\""),
+        "the stand-in must read the host copy and print evidence for every poll"
     );
     for (fixture, base, protected) in [
         ("autonomy-change-brief", "main", true),
@@ -3381,10 +3384,9 @@ fn autonomy_pr_fixtures_share_one_stand_in_and_keep_protection_traps() {
             "{fixture}: the host must not hide the trap"
         );
         assert!(
-            fixture_state(fixture)["pinned_files"]
-                .as_array()
-                .is_some_and(|pins| pins.iter().any(|pin| pin == "tools/gh-scenario.json")),
-            "{fixture}: the scenario is not pinned before the trial"
+            state_paths(fixture, "host_files").contains("tools/gh-scenario.json")
+                && !state_paths(fixture, "pinned_files").contains("tools/gh-scenario.json"),
+            "{fixture}: the scenario must leave the checkout for the host directory"
         );
         let policy_protects = match overlay.get(".codeflow/policy.json") {
             Some(policy) => {
@@ -3427,8 +3429,22 @@ fn autonomy_pr_fixtures_share_one_stand_in_and_keep_protection_traps() {
     .contains("\"integration/release-*\""));
 }
 
+/// The paths a fixture's state lists under `key`.
+fn state_paths(fixture: &str, key: &str) -> BTreeSet<String> {
+    fixture_state(fixture)[key]
+        .as_array()
+        .map(|paths| {
+            paths
+                .iter()
+                .map(|path| path.as_str().expect("path").to_string())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 /// Every stand-in tool, its inputs and each recorded verdict are pinned
-/// before the trial, so `check-trial` sees an edit made at any time.
+/// before the trial, so `check-trial` sees an edit made at any time; the
+/// oracle a stand-in consults lives in the host directory instead.
 #[test]
 fn graded_fixture_files_are_pinned_before_the_trial() {
     let doctrine = [
@@ -3443,14 +3459,19 @@ fn graded_fixture_files_are_pinned_before_the_trial() {
         .map(|entry| entry.1)
         .chain(doctrine);
     for fixture in fixtures {
-        let pinned: BTreeSet<String> = fixture_state(fixture)["pinned_files"]
-            .as_array()
-            .map(|pins| {
-                pins.iter()
-                    .map(|pin| pin.as_str().expect("pin").to_string())
-                    .collect()
-            })
-            .unwrap_or_default();
+        let pinned = state_paths(fixture, "pinned_files");
+        let host = state_paths(fixture, "host_files");
+        for oracle in ["tools/gh-scenario.json", "tools/qualify.json"] {
+            assert_eq!(
+                fixture_overlay(fixture).contains_key(oracle),
+                host.contains(oracle),
+                "{fixture}: {oracle} must be a host file"
+            );
+        }
+        assert!(
+            !host.contains("tools/gh-scenario.json") || !pinned.contains("tools/gh-scenario.json"),
+            "{fixture}: the gh scenario must not stay in the checkout"
+        );
         for path in fixture_overlay(fixture).keys() {
             let harness = (path.starts_with("tools/")
                 && !Path::new(path).extension().is_some_and(|ext| {
@@ -3458,7 +3479,7 @@ fn graded_fixture_files_are_pinned_before_the_trial() {
                 }))
                 || path.starts_with("plan/verdicts/");
             assert!(
-                !harness || pinned.contains(path),
+                !harness || pinned.contains(path) || host.contains(path),
                 "{fixture}: {path} is not pinned before the trial"
             );
         }
