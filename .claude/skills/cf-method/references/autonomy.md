@@ -91,9 +91,13 @@ yours, is foreign.
 
 ## Settled dissent
 
-Plan reconciliation and post-review rework each get two rounds. If two seats
-still disagree after that on a reversible choice inside the accepted outcome,
-the Claude judgment primary settles it. The plan records `SETTLED_DISSENT`
+Plan reconciliation and post-review rework are each bounded to two
+evidence-moving rounds. A repeated attempt without a new hypothesis or changed
+evidence is not another round. At the bound, the owner changes strategy with
+fresh evidence or surfaces a real block. The bound never closes a material
+finding: it stays open until it is fixed. Only then, if two seats still
+disagree on a reversible choice inside the accepted outcome, the Claude
+judgment primary settles it. The plan records `SETTLED_DISSENT`
 with the item, both verdicts, the evidence, and why the item is reversible.
 The dissenting verdict stays as given and is never recorded as approval; that
 seat still approves the rest of the plan. A dissent on an operator-owned,

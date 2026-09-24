@@ -305,7 +305,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "fc2e1207e2d82c270256e0fbc7e1e5e0a3062b3e346e12aac35d4fb23ceb86ae",
+      "sha256": "238b2fb74ba488ebabc3b2008e2d0dfce110fc3654cbd07dc4fee86576b952f4",
       "exec": false
     },
     ".agents/skills/cf-method/references/project-organization.md": {
@@ -353,7 +353,7 @@
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
       "ownership": "managed",
-      "sha256": "df254b9782128027fbea2bdfb2b72e0b674496786c0e4936ff0aeca1e979438f",
+      "sha256": "812e5cc5c73f8c1be36c44b742e6162fb593d01f146d852d8186306a8e172929",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/routing-policy.json": {
@@ -449,7 +449,7 @@
     ".agents/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "63266222f4fb0fd98d69fad55fb39f9cfe030fc521b2ba26552d040ef96aaf27",
+      "sha256": "4c5fa6829eb68d7014a4d07e9380ba7800b54fc73b149da3d7d91c9cff6478d1",
       "exec": false
     },
     ".agents/skills/cf-ship/references/release-policy.md": {
@@ -785,7 +785,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "fc2e1207e2d82c270256e0fbc7e1e5e0a3062b3e346e12aac35d4fb23ceb86ae",
+      "sha256": "238b2fb74ba488ebabc3b2008e2d0dfce110fc3654cbd07dc4fee86576b952f4",
       "exec": false
     },
     ".claude/skills/cf-method/references/project-organization.md": {
@@ -833,7 +833,7 @@
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
       "ownership": "managed",
-      "sha256": "df254b9782128027fbea2bdfb2b72e0b674496786c0e4936ff0aeca1e979438f",
+      "sha256": "812e5cc5c73f8c1be36c44b742e6162fb593d01f146d852d8186306a8e172929",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/routing-policy.json": {
@@ -929,7 +929,7 @@
     ".claude/skills/cf-ship/references/pr-evidence.md": {
       "src": "agents/skills/cf-ship/references/pr-evidence.md",
       "ownership": "managed",
-      "sha256": "63266222f4fb0fd98d69fad55fb39f9cfe030fc521b2ba26552d040ef96aaf27",
+      "sha256": "4c5fa6829eb68d7014a4d07e9380ba7800b54fc73b149da3d7d91c9cff6478d1",
       "exec": false
     },
     ".claude/skills/cf-ship/references/release-policy.md": {

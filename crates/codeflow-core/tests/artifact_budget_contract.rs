@@ -1007,6 +1007,14 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
                 "completion keeps protected merges human",
                 "no agent merged it into a protected target;",
             ),
+            (
+                "every finding recorded",
+                "every finding from every review, material and minor, is recorded in the task closeout or the PR body with its disposition",
+            ),
+            (
+                "minor findings recorded",
+                "A minor finding never blocks, and it is never left unrecorded;",
+            ),
         ],
     ),
     (
@@ -1098,6 +1106,10 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
                 "is a missing gate: name it as the blocker, keep the PR draft where required evidence is missing, and continue other authorized work.",
             ),
             (
+                "findings in the readiness report",
+                "every review finding as the quality contract's completion gate records it (finding, severity, disposition, evidence)",
+            ),
+            (
                 "protected next action",
                 "for every protected target, including a protected `integration/` glob, the next action is a human merge.",
             ),
@@ -1122,6 +1134,61 @@ fn finish_line_corrections_keep_their_rules() {
     assert!(
         HERDR_TRUST_POINTER.len() < 90,
         "the cf-herdr trust pointer must stay under 90 bytes"
+    );
+}
+
+/// The orchestrator's "Bounded, evidence-moving loops" invariant and the
+/// reference's settled-dissent bound must mean the same thing: a round counts
+/// only when it moves evidence, and the bound changes strategy rather than
+/// ending the work (operator direction, 2026-09-24).
+const LOOP_BOUND_CLAUSES: &[&str] = &[
+    "two",
+    "A repeated attempt without a new hypothesis or changed evidence is not another round.",
+    "At the bound,",
+    "fresh evidence",
+];
+
+fn loop_bound_problems(label: &str, text: &str) -> Vec<String> {
+    let content = normalized(text);
+    LOOP_BOUND_CLAUSES
+        .iter()
+        .filter(|clause| !content.contains(&normalized(clause)))
+        .map(|clause| format!("{label}: loop bound lost `{clause}`"))
+        .collect()
+}
+
+#[test]
+fn loop_bound_means_the_same_in_the_orchestrator_and_the_reference() {
+    let root = repo_root();
+    let skill = read_text(&root.join(ORCHESTRATOR_SKILL));
+    let invariant_start = skill
+        .find("**Bounded, evidence-moving loops.**")
+        .expect("orchestrator keeps its loop invariant");
+    let invariant = &skill[invariant_start..];
+    let invariant = &invariant[..invariant.find("\n- **").unwrap_or(invariant.len())];
+
+    let reference =
+        read_text(&root.join("assets/base/claude/skills/cf-method/references/autonomy.md"));
+    let section_start = reference
+        .find("## Settled dissent")
+        .expect("reference keeps its settled-dissent section");
+    let section = &reference[section_start..];
+    let section = &section[..section[3..]
+        .find("\n## ")
+        .map_or(section.len(), |end| end + 3)];
+
+    let mut problems = loop_bound_problems("orchestrator", invariant);
+    problems.extend(loop_bound_problems("autonomy.md", section));
+    if !normalized(section).contains("The bound never closes a material finding") {
+        problems.push("autonomy.md: a material finding no longer stays open".to_string());
+    }
+    assert!(problems.is_empty(), "{}", problems.join("\n"));
+
+    let old_reference = "Plan reconciliation and post-review rework each get two rounds. If \
+         two seats still disagree after that on a reversible choice, the primary settles it.";
+    assert!(
+        !loop_bound_problems("fixture", old_reference).is_empty(),
+        "a bare round cap must fail"
     );
 }
 

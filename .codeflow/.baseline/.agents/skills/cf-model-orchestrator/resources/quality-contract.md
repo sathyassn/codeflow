@@ -674,6 +674,11 @@ Completion requires:
 - every unit has approved cross-lineage review and the selected Claude judgment
   primary has approved the integrated design/code judgment;
 - design and implementation proportionality are approved;
+- every finding from every review, material and minor, is recorded in the task
+  closeout or the PR body with its disposition under "Materiality and
+  prioritization": fixed, with the commit; tracked once, with its home and
+  event trigger; or dropped, with the reason. A minor finding never blocks,
+  and it is never left unrecorded;
 - substantial changed prose has its contextual editorial approval;
 - no unresolved critical/high security issue or material assumption remains.
 - every catastrophic action, if any, has the human authorization and recovery

@@ -72,7 +72,9 @@ When every required check is green, or the thirty minutes end, send one
 readiness report without being asked. It gives the PR URL exactly as
 `gh pr create` or `gh pr view --json url` printed it, never one built from a
 number or guessed. It lists each required check with its state, any missing
-evidence with its reason, and the next action. Who merges a green PR depends
+evidence with its reason, every review finding as the quality contract's
+completion gate records it (finding, severity, disposition, evidence), and the
+next action. Who merges a green PR depends
 on its target, as `cf-ship` step 8 says: the primary merges into an
 `integration/` branch no protected-branch policy covers and says so in the
 report; for every protected target, including a protected `integration/`
