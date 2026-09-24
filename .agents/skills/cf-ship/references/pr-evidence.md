@@ -10,7 +10,18 @@ Open the PR. Commits stay conventional (`type(scope): description`,
 **Body** follows the template (summary, changes, testing, linked IDs).
 Tables for tabular data, fenced blocks for pasted output, and bullets for
 enumerable points; do not split necessary explanations to meet a line count.
-Summary is plain language a zero-context reader understands.
+
+**Summary** gives context only: what the PR is and why it exists, in plain
+words a reader with no context understands.
+
+- Write it as one to three short sentences.
+- Keep every detail out of it: no mechanism, file name, identifier, number,
+  rule list, or caveat.
+- Put the details after it as bullets, one point each, in a logical order:
+  problem, change, effect, limits, or the order of the flow.
+- Judge it by what it carries. A short summary that already holds the
+  details fails.
+
 Assess the complete change under the project's adopted release policy; load
 [release-policy.md](release-policy.md) for impact, authority and publication
 boundaries. Carry its required release-impact explanation or justified `none`,

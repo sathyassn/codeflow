@@ -52,6 +52,15 @@ publication date._
   defects. The evaluation kit adds an `operating-doctrine` pack.
 
 <!-- codeflow:release-impact patch -->
+- **Summary shape and reply figures.** A pull request body, report or reply
+  opens with one to three short sentences of context only, and every detail
+  follows as bullets in a logical order. A reply figure matches its surface:
+  an inline HTML figure where the harness renders one, a `cf-present` page
+  when it needs a full page, fenced ASCII on a terminal or other plain-text
+  surface, and never Mermaid. The operating-doctrine evaluation cases grade
+  both with faulty controls.
+
+<!-- codeflow:release-impact patch -->
 - **Claude Code preset prompts.** The shipped preset sets no permission mode
   in its default file and prompts for rooted or home-anchored recursive
   deletes and for force branch deletes spelled `-f`, `--force`, `-df`, `-fd`,

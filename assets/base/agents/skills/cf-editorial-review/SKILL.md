@@ -61,8 +61,9 @@ misrepresent the author or project.
    Utility copy does not become product voice, and CodeFlow does not supply a
    personality for either. Keep formatting proportionate: a simple
    answer needs no apparatus, and when relationships, hierarchy, state,
-   timelines, mappings, or a decision are materially clearer drawn, use an
-   ASCII diagram whose scope and detail fit the explanation. Prefer the least
+   timelines, mappings, or a decision are materially clearer drawn, use a
+   diagram whose scope and detail fit the explanation, in the form the
+   surface renders as the lifecycle reply rule sets out. Prefer the least
    complicated form that remains complete, not the physically smallest;
    complex subjects may need a larger, layered, or multi-view diagram. Add a
    brief caption or legend when it aids orientation. A decorative or forced

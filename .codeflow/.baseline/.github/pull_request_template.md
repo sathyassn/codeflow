@@ -21,10 +21,10 @@
 
 ## Summary
 
-<!-- Two to four sentences of plain prose: what this does and why, in words
-     someone who has never seen this repo understands. Add bullets or a table
-     after the prose only where they carry facts better than a sentence; a
-     summary of bullets alone is incomplete. Derive from
+<!-- Context only: one to three short sentences on what this is and why, in
+     words someone who has never seen this repo understands. Then every
+     detail as bullets, one point each, in a logical order. cf-ship's PR
+     evidence reference owns this shape. Derive from
      `git log --oneline <base>..<head>` and `git diff --stat <base>...<head>`.
      Cover every logical change on the branch. Do not write from the last
      conversation turn, last review round, or latest commit subject. Inspect

@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-23-operating-doctrine-v1",
+  "cases_version": "2026-09-24-summary-and-figure-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -6119,7 +6119,7 @@
           "cf-model-orchestrator"
         ],
         "signals": [
-          "summary_is_two_to_four_plain_sentences",
+          "summary_is_context_only",
           "facts_in_bullets_or_table",
           "operator_action_and_deadline_stated",
           "open_investigation_and_next_update_kept",
@@ -6133,12 +6133,13 @@
           "policy_character_in_reply",
           "slogan_or_mannered_turn_kept",
           "operator_action_buried_or_dropped",
-          "fact_invented"
+          "fact_invented",
+          "summary_carries_details"
         ]
       }
     },
     {
-      "id": "flow-reply-carries-fenced-figure",
+      "id": "flow-reply-carries-figure",
       "kind": "regression",
       "category": "outputs",
       "canary": false,
@@ -6154,7 +6155,7 @@
           "cf-model-orchestrator"
         ],
         "signals": [
-          "fenced_ascii_figure_in_reply",
+          "figure_in_form_surface_renders",
           "figure_matches_documented_hops",
           "retry_reentry_and_dead_letter_shown",
           "short_prose_around_figure"
@@ -6165,7 +6166,9 @@
         "must_not": [
           "prose_only_flow_explanation",
           "figure_invents_hops",
-          "decorative_extra_figures"
+          "decorative_extra_figures",
+          "unrendered_figure_on_plain_text_surface",
+          "mermaid_figure_in_reply"
         ]
       }
     },

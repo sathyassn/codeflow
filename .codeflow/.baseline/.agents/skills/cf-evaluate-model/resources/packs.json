@@ -279,7 +279,7 @@
         "opened-pr-without-remote-required-follows-project-gates",
         "operator-reply-is-plain-prose-and-bullets",
         "editorial-legitimate-punctuation-terms-and-lists-pass",
-        "flow-reply-carries-fenced-figure",
+        "flow-reply-carries-figure",
         "simple-answer-not-overformatted",
         "six-way-comparison-opens-or-offers-review-surface",
         "printed-pr-url-is-reproduced-verbatim",

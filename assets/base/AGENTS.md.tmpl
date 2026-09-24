@@ -164,11 +164,11 @@ of whether a particular harness can run hooks in that mode. See cf-method,
   reaches `main`, via one human-reviewed PR. See cf-method, "Managing a body of
   work."
 - **PR bodies:** follow the template (summary, changes, testing, linked
-  capability/ADR IDs). The Summary is two to four sentences of plain language
-  a reader with zero context understands, then bullets or a table only where
-  they carry facts. Match presentation to the shape of the data: tables for
-  matrices, fenced blocks for pasted output, one-line bullets for the rest,
-  never paragraph walls. A code PR **must** carry real test evidence in
+  capability/ADR IDs). The Summary gives context only, in one to three short
+  sentences; every detail follows as bullets (`cf-ship` owns the shape).
+  Match presentation to the shape of the data: tables for matrices, fenced
+  blocks for pasted output, one-line bullets for the rest, never paragraph
+  walls. A code PR **must** carry real test evidence in
   `## Testing`: pasted test summary, coverage number, new tests, and what was
   NOT tested; "tests pass" as prose is a claim, not evidence.
   Docs-only PRs say so in one line plus the doc checks run. A release-impact

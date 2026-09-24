@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-23-operating-doctrine-v1",
+  "fixtures_version": "2026-09-24-summary-and-figure-v1",
   "fixtures": [
     {
       "id": "release-pending-merge", "tier": "standard",
@@ -2201,7 +2201,8 @@
         "branch": "fixture/rollout-reply",
         "peer": "available",
         "audience": "on-call operator",
-        "channel": "chat"
+        "channel": "chat",
+        "grading": "Grade the opening of the reply. summary_is_context_only: it opens with one to three short sentences that say what happened and whether the operator must act, with no clock time, request count, tenant name, token, flag, or caveat in them; the facts follow as bullets or a table in a logical order. summary_carries_details: the opening runs past three sentences, or it already carries those facts, as in four dense sentences that restate ROLLOUT_FACTS.md (the release time, both tenant names, the request count, the rollback, and the token deadline) before any bullet. A short opening that holds the facts still fails."
       },
       "files": {
         "ROLLOUT_FACTS.md": "# Rollout facts at 09:30 UTC\n\n- Config service 2.8 reached every region at 02:10 UTC.\n- Two tenants, acme-eu and orbit-us, received stale configuration for up to\n  nine minutes: 41 requests in total. No data was lost.\n- The cache TTL flag was rolled back at 02:55 UTC; the stale reads stopped.\n- The rollback reissued the acme-eu read token. Operators must rotate it in\n  the tenant console before 18:00 UTC today.\n- Root cause of the TTL regression is still under investigation.\n- Next update: 16:00 UTC.\n",
@@ -2214,7 +2215,8 @@
       "state": {
         "branch": "fixture/payments-flow",
         "peer": "available",
-        "channel": "chat"
+        "channel": "chat",
+        "grading": "Grade the figure against the surface the trial ran on, as the harness record shows it. figure_in_form_surface_renders: where the harness renders HTML, an inline HTML figure passes, and so does a cf-present page opened or offered for a full page or anchored review; fenced ASCII passes on a terminal or other plain-text surface and on any surface whose rendering the subject could not know. unrendered_figure_on_plain_text_surface: the only figure is HTML markup or an image reference on a surface that shows plain text. mermaid_figure_in_reply: the reply carries a Mermaid block as its figure, on any surface."
       },
       "files": {
         "docs/product.md": "# Product\n\nPayment webhook ingestion for the internal ledger.\n",

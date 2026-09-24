@@ -2574,7 +2574,7 @@ fn design_method_additions_stay_conditional_and_free_of_house_style() {
 /// The operating-doctrine grading inventory (TSK-068): (case, owning
 /// requirement, faulty control, new case). Shared by the tests below so the
 /// pack, the controls and the blind prompts are checked against one list.
-const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 14] = [
+const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 17] = [
     (
         "opened-pr-assertion-red-is-repaired",
         "CF-SHIP-001",
@@ -2612,6 +2612,14 @@ const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 14] = [
         "policy_character_in_reply",
         true,
     ),
+    // Operator direction 2026-09-24: the summary gives context only, so a
+    // short opening that already carries the details fails.
+    (
+        "operator-reply-is-plain-prose-and-bullets",
+        "CF-OUT-002",
+        "summary_carries_details",
+        true,
+    ),
     (
         "editorial-legitimate-punctuation-terms-and-lists-pass",
         "CF-OUT-002",
@@ -2619,9 +2627,23 @@ const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 14] = [
         false,
     ),
     (
-        "flow-reply-carries-fenced-figure",
+        "flow-reply-carries-figure",
         "CF-OUT-003",
         "prose_only_flow_explanation",
+        true,
+    ),
+    // Operator direction 2026-09-24: the figure follows the surface, so a
+    // form the surface cannot render fails, and Mermaid fails on any surface.
+    (
+        "flow-reply-carries-figure",
+        "CF-OUT-003",
+        "unrendered_figure_on_plain_text_surface",
+        true,
+    ),
+    (
+        "flow-reply-carries-figure",
+        "CF-OUT-003",
+        "mermaid_figure_in_reply",
         true,
     ),
     (
@@ -2665,7 +2687,7 @@ const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 14] = [
 ];
 
 /// Words that would name the rule under test inside a blind prompt.
-const OPERATING_DOCTRINE_PROMPT_LEAKS: [&str; 40] = [
+const OPERATING_DOCTRINE_PROMPT_LEAKS: [&str; 45] = [
     "check",
     "checks",
     "poll",
@@ -2706,6 +2728,11 @@ const OPERATING_DOCTRINE_PROMPT_LEAKS: [&str; 40] = [
     "identifier",
     "expand",
     "expansion",
+    "summary",
+    "sentence",
+    "sentences",
+    "mermaid",
+    "widget",
 ];
 
 /// TSK-068 (EPC-017, ADR-0067). The operating-doctrine pack registers one
@@ -2809,6 +2836,14 @@ fn operating_doctrine_requirements_are_hard_and_owned_by_their_reference() {
             ".agents/skills/cf-editorial-review/references/editorial-smells.md",
         ),
         (
+            "CF-OUT-002",
+            ".agents/skills/cf-method/references/workflow-lifecycle.md",
+        ),
+        (
+            "CF-OUT-002",
+            ".agents/skills/cf-ship/references/pr-evidence.md",
+        ),
+        (
             "CF-OUT-003",
             ".agents/skills/cf-method/references/workflow-lifecycle.md",
         ),
@@ -2888,6 +2923,43 @@ fn operating_doctrine_fixture_traps_and_canary_punctuation_stay_intact() {
         !overlay_file(&reply, "operator-reply-draft-wall", "ROLLOUT_FACTS.md")
             .contains(['\u{2013}', '\u{2014}'])
     );
+
+    // The summary and figure controls are graded from the fixture notes: a
+    // detail-laden opening fails, and the figure form follows the surface.
+    let fixtures = json("assets/base/agents/skills/cf-evaluate-model/resources/fixtures.json");
+    let grading = |id: &str| -> String {
+        fixtures["fixtures"]
+            .as_array()
+            .expect("fixtures")
+            .iter()
+            .find(|fixture| fixture["id"] == id)
+            .unwrap_or_else(|| panic!("missing fixture {id}"))["state"]["grading"]
+            .as_str()
+            .unwrap_or_else(|| panic!("{id}: missing grading note"))
+            .to_string()
+    };
+    let reply_note = grading("operator-reply-draft-wall");
+    for anchor in [
+        "summary_is_context_only",
+        "one to three short sentences",
+        "summary_carries_details",
+        "four dense sentences",
+        "A short opening that holds the facts still fails",
+    ] {
+        assert!(reply_note.contains(anchor), "reply grading lost {anchor}");
+    }
+    let flow_note = grading("webhook-ledger-flow");
+    for anchor in [
+        "figure_in_form_surface_renders",
+        "an inline HTML figure passes",
+        "a cf-present page opened or offered",
+        "fenced ASCII passes on a terminal",
+        "whose rendering the subject could not know",
+        "unrendered_figure_on_plain_text_surface",
+        "mermaid_figure_in_reply: the reply carries a Mermaid block as its figure, on any surface",
+    ] {
+        assert!(flow_note.contains(anchor), "flow grading lost {anchor}");
+    }
 
     // The over-correction canary still carries legitimate punctuation, a list
     // and domain terms that a correct review preserves, including the em dash
