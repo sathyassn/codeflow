@@ -439,9 +439,9 @@ closes the checkpoint.
 
 ### 6. Joint closeout
 
-Both seats approve the final diff and evidence ledger. The host reports:
+Seats approve the diff and evidence per the completion gate. The host reports:
 
-- final plan version and both approvals;
+- final plan version and its approvals;
 - session roles and every responsible-primary/executor/reviewer assignment with
   routing reason, requested-versus-observed provenance and usage evidence;
 - design option chosen (or the recorded waiver);
