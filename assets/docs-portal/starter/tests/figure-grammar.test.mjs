@@ -4,7 +4,7 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
-import { checkFacts, composeFigure, drawnValuesMatch, FAMILIES, markdownSections, MIN_PLOT_WIDTH, renderFigure, SHAPE_CLASSES, slugHeading, TEXT_CLASSES, validateDeclaration } from "../scripts/figure-grammar.mjs";
+import { checkFacts, composeFigure, drawnValuesMatch, FAMILIES, MARKS, markdownSections, MIN_PLOT_WIDTH, renderFigure, SHAPE_CLASSES, slugHeading, TEXT_CLASSES, validateDeclaration } from "../scripts/figure-grammar.mjs";
 
 import { specimens } from "./page-shapes.mjs";
 
@@ -47,6 +47,57 @@ test("every family validates, renders, keys its drawn states and re-derives its 
     assert.equal((html.match(/<details class="cf-twin"/g) ?? []).length, 1, name);
     if (bound !== null) assert.ok(drawnValuesMatch(composeFigure(declaration, bound).drawnValues, bound.derived), policy);
   }
+});
+
+// A legend key is read as its primary shape and its parts, the same way the
+// drawn state group is: a key must be the drawing the figure uses for that
+// state, never the mark's canonical form, so a crossed key never labels an
+// uncrossed region and a box never labels a line.
+function drawnForm(markup) {
+  const elements = [...markup.replace(/<defs>.*?<\/defs>/g, "").matchAll(/<(path|rect|line|polyline|circle)\b([^>]*)\/>/g)]
+    .map(([, tag, attributes]) => ({ tag, cls: attributes.match(/class="([^"]+)"/)?.[1], d: attributes.match(/ d="([^"]+)"/)?.[1] ?? "" }));
+  const [primary, ...parts] = elements;
+  const shape = primary.cls === "cf-m-cross" || primary.cls.endsWith("-cross") ? "cross"
+    : primary.tag === "rect" ? "box"
+    : primary.tag === "circle" ? "round"
+    : primary.tag === "path" && /Z$/i.test(primary.d) ? "closed"
+    : "line";
+  return { shape, cls: primary.cls, parts: [...new Set(parts.map((part) => `${part.tag}.${part.cls}`))].sort() };
+}
+
+test("every legend key draws its state the way the figure draws it", async () => {
+  for (const { name, declaration } of await specimens()) {
+    const bound = declaration.figure.binding === "derived" ? { source: declaration.figure.source, derived: { commit_desc_max_len: 50, commit_subject_max_len: 72 } } : null;
+    const html = renderFigure(declaration, { idPrefix: "k", bound });
+    const drawings = html.slice(0, html.indexOf('<ul class="cf-legend"'));
+    for (const state of declaration.figure.states) {
+      const group = drawings.match(new RegExp(`<g data-state="${state.name}"[^>]*>(.*?)</g>`))?.[1];
+      const key = html.match(new RegExp(`<li data-state="${state.name}"[^>]*><svg class="cf-key"[^>]*>(.*?)</svg>`))?.[1];
+      assert.ok(group && key, `${name} draws and keys ${state.name}`);
+      const drawn = drawnForm(group);
+      const keyed = drawnForm(key);
+      // A vertical limit bar is keyed as a short upright line.
+      const shape = (form) => (form.shape === "line" && form.cls === MARKS[state.mark].className && MARKS[state.mark].key === "bar-v" ? "line" : form.shape);
+      assert.deepEqual({ shape: shape(keyed), cls: keyed.cls, parts: keyed.parts }, { shape: shape(drawn), cls: drawn.cls, parts: drawn.parts }, `${name} ${state.name}`);
+    }
+  }
+  // The TSK-058 forms: an uncrossed copy region, a dashed run with square
+  // ends, and a dashed arrow with an open head beside a dashed box.
+  const [structure] = (await specimens()).filter(({ name }) => name === "02-structure.json");
+  const keys = renderFigure(structure.declaration, { idPrefix: "k" });
+  assert.doesNotMatch(keys.match(/<li data-state="copy".*?<\/li>/)[0], /cf-m-cross/);
+  assert.match(keys.match(/<li data-state="compares".*?<\/li>/)[0], /<path class="cf-m-optional" d="M3 8H20"\/><rect class="cf-m-state"/);
+});
+
+test("two states that draw the same legend key are refused", async () => {
+  const [derivation] = (await specimens()).filter(({ name }) => name === "08-derivation.json");
+  assert.doesNotThrow(() => renderFigure(derivation.declaration, { idPrefix: "k" }));
+  // Drawn as a plain box, "declares" keys exactly as "declared" does.
+  const same = structuredClone(derivation.declaration);
+  for (const composition of [same.figure.wide, same.figure.narrow]) {
+    composition.draw = composition.draw.map((item) => (item.state === "declares" ? { state: "declares", shape: "rect", x: 1, y: 1, w: 10, h: 10 } : item));
+  }
+  assert.throws(() => renderFigure(same, { idPrefix: "k" }), /states declared and declares draw the same legend key/);
 });
 
 // The HTML each specimen renders to, committed so the Rust validator's

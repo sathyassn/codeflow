@@ -628,11 +628,19 @@ export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, f
     const body = composition.draw.map((item) => drawItem(item, states, `${id}-hatch`, `${id}-`)).join("");
     return `<svg class="cf-fig-svg cf-fig-svg--${variant}" viewBox="0 0 ${num(composition.width)} ${num(composition.height)}" role="img" aria-labelledby="${id}-t ${id}-d" data-cf-variant="${variant}"><title id="${id}-t">${escapeText(title)}</title><desc id="${id}-d">${escapeText(description)}</desc>${defs}${body}</svg>`;
   };
+  // Two states whose keys draw the same thing cannot be told apart in the
+  // legend, whatever their meanings say, so the drawing is refused.
+  const keyed = new Map();
   const legend = declared.map((name) => {
     const state = states.get(name);
     const wideOnly = wideDrawn.has(name) && !narrowDrawn.has(name);
     const sample = [...wide.draw, ...narrow.draw].find((item) => item.state === name);
-    return `<li data-state="${escapeAttribute(name)}"${wideOnly ? " data-cf-wide" : ""}>${legendKey(state, sample, `${prefix}-key-${name}`)}${escapeText(state.means)}</li>`;
+    const keyId = `${prefix}-key-${name}`;
+    const key = legendKey(state, sample, keyId);
+    const drawing = key.replaceAll(keyId, "");
+    if (keyed.has(drawing)) throw new Error(`states ${keyed.get(drawing)} and ${name} draw the same legend key`);
+    keyed.set(drawing, name);
+    return `<li data-state="${escapeAttribute(name)}"${wideOnly ? " data-cf-wide" : ""}>${key}${escapeText(state.means)}</li>`;
   }).join("");
   const kicker = figure.kicker ?? title;
   return `<figure ${attributes}><span class="cf-fig-kicker">Figure · ${escapeText(kicker)}</span>${svg(wide, "wide")}${svg(narrow, "narrow")}<ul class="cf-legend" aria-label="Legend">${legend}</ul><figcaption class="cf-fig-caption">${escapeText(figure.caption)}</figcaption>${twinTable(figure, factValues)}</figure>`;
@@ -835,12 +843,17 @@ export function parsePath(d) {
   return segments;
 }
 
+// A key draws its state the way the figure draws it: a mark that takes both
+// a box and a line is keyed by the shape its first drawn sample uses, and a
+// head, open head, square end, cap, cross or tick appears only when that
+// sample carries it.
 function legendKey(state, sample, id) {
   const mark = MARKS[state.mark];
   const cls = mark.className;
   const svg = (inner) => `<svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true">${inner}</svg>`;
   const hasPart = (part) => sample?.[part] !== undefined;
-  switch (mark.key) {
+  const kind = mark.key === "box" && LINE.includes(sample?.shape) ? "line" : mark.key;
+  switch (kind) {
     case "line": {
       const head = hasPart("head") ? `<path class="${mark.head ?? "cf-m-trans-head"}" d="${headPath({ x: 26, y: 8, dx: 1, dy: 0 }, 9, 4.5)}"/>` : "";
       const open = hasPart("open") ? `<path class="cf-m-state" d="${headPath({ x: 26, y: 8, dx: 1, dy: 0 }, 9, 4.5)}"/>` : "";
@@ -854,7 +867,7 @@ function legendKey(state, sample, id) {
     case "diamond": return svg(`<path class="${cls}" d="M14 1.5L20.5 8L14 14.5L7.5 8Z"/>`);
     case "cross": return svg(`<path class="${cls}" d="${crossPath(14, 8, 10)}"/>`);
     case "bar": return svg(`<rect class="${cls}" x="2" y="3" width="24" height="10" rx="3"/>${hasPart("cap") ? `<path class="cf-m-cap" d="M19 3H23Q26 3 26 6V10Q26 13 23 13H19Z"/>` : ""}${hasPart("cross") ? `<path class="cf-m-cross" d="${crossPath(14, 8, 9)}"/>` : ""}`);
-    case "box": return svg(`<rect class="${cls}" x="2" y="2" width="24" height="12" rx="3"/>${mark === MARKS.denied || hasPart("cross") ? `<path class="cf-m-cross" d="${crossPath(14, 8, 9)}"/>` : ""}`);
+    case "box": return svg(`<rect class="${cls}" x="2" y="2" width="24" height="12" rx="3"/>${hasPart("cross") ? `<path class="cf-m-cross" d="${crossPath(14, 8, 9)}"/>` : ""}`);
     case "cell": {
       const hatch = mark.hatch ? `<defs><pattern id="${id}" width="4.5" height="4.5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line class="cf-m-hatchline" x1="0" y1="0" x2="0" y2="4.5"/></pattern></defs>` : "";
       const fill = mark.hatch ? ` fill="url(#${id})"` : "";

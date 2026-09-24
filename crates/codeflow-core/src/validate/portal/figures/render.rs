@@ -260,6 +260,9 @@ pub(super) fn render_figure(
             escape_text(&description)
         ))
     };
+    // Two states whose keys draw the same thing cannot be told apart in the
+    // legend, so the drawing is refused, as the module refuses it.
+    let mut keyed: Vec<(String, &str)> = Vec::new();
     let mut legend = String::new();
     for name in &declared {
         let mark_name = state_mark(name).unwrap_or_default();
@@ -274,12 +277,21 @@ pub(super) fn render_figure(
             .iter()
             .chain(&narrow.draw)
             .find(|item| item.get("state").and_then(Value::as_str) == Some(*name));
+        let key_id = format!("{prefix}-key-{name}");
+        let key = legend_key(&mark_name, sample, &key_id)?;
+        let drawing = key.replace(&key_id, "");
+        if let Some((_, first)) = keyed.iter().find(|(seen, _)| *seen == drawing) {
+            return Err(format!(
+                "states {first} and {name} draw the same legend key"
+            ));
+        }
+        keyed.push((drawing, *name));
         let _ = write!(
             legend,
             "<li data-state=\"{}\"{}>{}{}</li>",
             escape_attribute(name),
             if wide_only { " data-cf-wide" } else { "" },
-            legend_key(&mark_name, sample, &format!("{prefix}-key-{name}"))?,
+            key,
             escape_text(means)
         );
     }
@@ -1234,7 +1246,18 @@ fn legend_key(mark_name: &str, sample: Option<&Value>, id: &str) -> Rendered {
         dx: 1.0,
         dy: 0.0,
     };
-    Ok(match mark.key {
+    // A mark that takes both a box and a line is keyed by the shape its first
+    // drawn sample uses; parts appear only when that sample carries them.
+    let line_sample = sample
+        .and_then(|sample| sample.get("shape"))
+        .and_then(Value::as_str)
+        .is_some_and(|shape| matches!(shape, "path" | "line" | "polyline"));
+    let kind = if mark.key == "box" && line_sample {
+        "line"
+    } else {
+        mark.key
+    };
+    Ok(match kind {
         "line" => {
             let head = if has("head") {
                 format!(
@@ -1314,7 +1337,7 @@ fn legend_key(mark_name: &str, sample: Option<&Value>, id: &str) -> Rendered {
         )),
         "box" => svg(format!(
             "<rect class=\"{class}\" x=\"2\" y=\"2\" width=\"24\" height=\"12\" rx=\"3\"/>{}",
-            if mark_name == "denied" || has("cross") {
+            if has("cross") {
                 format!(
                     "<path class=\"cf-m-cross\" d=\"{}\"/>",
                     cross_path(14.0, 8.0, 9.0)
@@ -1698,6 +1721,33 @@ mod tests {
         assert!(
             refused.contains("under the 160 the layout needs"),
             "{refused}"
+        );
+    }
+
+    /// Two states whose legend keys draw the same thing are refused, as the
+    /// grammar module refuses them.
+    #[test]
+    fn two_states_with_the_same_legend_key_are_refused() {
+        let fixtures =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../docs-portal/tests/fixtures/figures");
+        let mut declaration: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(fixtures.join("08-derivation.json")).unwrap())
+                .unwrap();
+        assert!(super::render_figure(&declaration, "k", None).is_ok());
+        for variant in ["wide", "narrow"] {
+            for item in declaration["figure"][variant]["draw"]
+                .as_array_mut()
+                .unwrap()
+                .iter_mut()
+                .filter(|item| item["state"] == "declares")
+            {
+                *item = serde_json::json!({"state": "declares", "shape": "rect", "x": 1, "y": 1, "w": 10, "h": 10});
+            }
+        }
+        let refused = super::render_figure(&declaration, "k", None).err().unwrap();
+        assert_eq!(
+            refused,
+            "states declared and declares draw the same legend key"
         );
     }
 
