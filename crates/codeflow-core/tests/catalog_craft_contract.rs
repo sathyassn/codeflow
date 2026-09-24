@@ -150,10 +150,10 @@ fn ship_and_pr_template_require_whole_branch_summary_and_measured_coverage() {
     }
 }
 
-/// CodeFlow's own policy requires the four always-present body sections, and
-/// Testing for code, and its template carries each of them as a heading. The
-/// shipped default policy stays at Summary and Changes so no consumer's
-/// unchanged policy starts blocking on an update.
+/// The repository's own policy requires the four always-present body
+/// sections, and Testing for code, and its template carries each of them as
+/// a heading. The shipped default policy stays at Summary and Changes so no
+/// consumer's unchanged policy starts blocking on an update.
 #[test]
 fn repository_policy_requires_the_always_present_pr_sections() {
     let policy: serde_json::Value =
