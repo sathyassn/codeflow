@@ -38,6 +38,9 @@ pub(super) struct RenderedFigures {
 pub(super) struct BuiltCarriers {
     pub content: std::collections::BTreeSet<String>,
     pub page: std::collections::BTreeSet<String>,
+    /// The text of each inline script outside the content, which must be one
+    /// the runtime emits.
+    pub inline_scripts: Vec<String>,
 }
 
 pub(super) fn built_page_carriers(html: &str) -> BuiltCarriers {
@@ -59,7 +62,11 @@ pub(super) fn built_page_carriers(html: &str) -> BuiltCarriers {
             if element.value().name() == "style" {
                 found.page.insert("a <style> element".to_string());
             }
-            if element.value().name() != "script" {
+            if element.value().name() == "script" {
+                if element.value().attr("src").is_none() {
+                    found.inline_scripts.push(element.text().collect());
+                }
+            } else {
                 found.page.extend(active_carrier(element));
             }
         }

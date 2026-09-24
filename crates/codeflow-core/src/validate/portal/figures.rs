@@ -1052,11 +1052,76 @@ fn verify_rendered_figures(
     }
 }
 
+/// The committed list of the runtime's fixed inline scripts, in the portal.
+pub(super) const RUNTIME_SCRIPTS_FILE: &str = "scripts/runtime-scripts.json";
+const REGENERATE: &str = "npm run build && node scripts/runtime-scripts.mjs dist";
+
+/// The hashes an inline script outside the page content may have: the
+/// runtime's fixed scripts as committed, and the pre-paint display script the
+/// configuration's theme writes into the committed template.
+pub(super) fn runtime_inline_scripts(
+    list: &[u8],
+    config: &[u8],
+) -> Result<BTreeSet<String>, String> {
+    let list: serde_json::Value =
+        serde_json::from_slice(list).map_err(|error| error.to_string())?;
+    let config: serde_json::Value =
+        serde_json::from_slice(config).map_err(|error| error.to_string())?;
+    let theme = config
+        .get("theme")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("the configuration names no theme")?;
+    let template = list
+        .get("pre_paint_template")
+        .and_then(serde_json::Value::as_str)
+        .ok_or("it has no pre-paint template")?;
+    let mut allowed: BTreeSet<String> = list
+        .get("scripts")
+        .and_then(serde_json::Value::as_array)
+        .ok_or("it lists no scripts")?
+        .iter()
+        .map(|script| {
+            script
+                .get("sha256")
+                .and_then(serde_json::Value::as_str)
+                .filter(|sha| valid_sha256(sha))
+                .map(str::to_string)
+                .ok_or_else(|| "a script entry has no sha256".to_string())
+        })
+        .collect::<Result<_, _>>()?;
+    let theme = serde_json::to_string(theme).map_err(|error| error.to_string())?;
+    allowed.insert(sha256_hex(
+        template.replacen("__THEME__", &theme, 1).as_bytes(),
+    ));
+    Ok(allowed)
+}
+
 /// A built page, read before a browser consumes its templates: its content
-/// region carries no CSS or executable content, and the rest of the page
-/// carries none of what the runtime never emits.
-pub(super) fn verify_built_page(path: &str, html: &str, report: &mut PortalValidationReport) {
+/// region carries no CSS or executable content, the rest of the page carries
+/// none of what the runtime never emits, and every inline script outside the
+/// content is one the runtime emits.
+pub(super) fn verify_built_page(
+    path: &str,
+    html: &str,
+    runtime_scripts: Option<&BTreeSet<String>>,
+    report: &mut PortalValidationReport,
+) {
     let found = dom::built_page_carriers(html);
+    if let Some(allowed) = runtime_scripts {
+        let unknown: BTreeSet<String> = found
+            .inline_scripts
+            .iter()
+            .map(|text| sha256_hex(text.as_bytes()))
+            .filter(|sha| !allowed.contains(sha))
+            .map(|sha| sha[..12].to_string())
+            .collect();
+        if !unknown.is_empty() {
+            report.issues.push(format!(
+                "built page {path} carries inline scripts the site's runtime does not emit (sha256 {}); if the runtime changed, regenerate {RUNTIME_SCRIPTS_FILE}: {REGENERATE}",
+                unknown.into_iter().collect::<Vec<_>>().join(", ")
+            ));
+        }
+    }
     if !found.content.is_empty() {
         let kinds: Vec<&str> = found.content.iter().map(String::as_str).collect();
         report.issues.push(format!(
@@ -1753,6 +1818,14 @@ mod tests {
         });
         let config_bytes = serde_json::to_vec_pretty(&config).unwrap();
         std::fs::write(root.join("portal/portal.config.json"), &config_bytes).unwrap();
+        std::fs::create_dir_all(root.join("portal/scripts")).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs-portal/scripts/runtime-scripts.json"),
+            root.join("portal/scripts/runtime-scripts.json"),
+        )
+        .unwrap();
+
         std::fs::write(root.join("docs/guide.md"), GUIDE).unwrap();
         std::fs::write(root.join("figures/steps.json"), DECLARATION).unwrap();
         for args in [
@@ -1760,7 +1833,13 @@ mod tests {
             &["config", "user.email", "portal-tests@codeflow.invalid"][..],
             &["config", "user.name", "Portal tests"][..],
             &["config", "core.autocrlf", "false"][..],
-            &["add", "docs", "figures", "portal/portal.config.json"][..],
+            &[
+                "add",
+                "docs",
+                "figures",
+                "portal/portal.config.json",
+                "portal/scripts/runtime-scripts.json",
+            ][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
             run_git(root, args);
@@ -2133,6 +2212,48 @@ mod tests {
             .contains("an event-handler attribute on <button>"));
         let style = dom::built_page_carriers(&page("", "<style>.cf-fig{opacity:0}</style>"));
         assert!(style.page.contains("a <style> element"));
+        assert_eq!(clean.inline_scripts, ["(function(){})();"]);
+    }
+
+    /// Every inline script outside the content is one the runtime emits: the
+    /// committed fixed scripts, and the pre-paint script the configured theme
+    /// writes into the committed template. Any other names the regeneration.
+    #[test]
+    fn inline_scripts_are_held_to_the_runtime_list() {
+        let list = std::fs::read(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs-portal/scripts/runtime-scripts.json"),
+        )
+        .unwrap();
+        let committed: serde_json::Value = serde_json::from_slice(&list).unwrap();
+        let allowed = runtime_inline_scripts(&list, br#"{"theme": "signal"}"#).unwrap();
+        assert_eq!(
+            allowed.len(),
+            committed["scripts"].as_array().unwrap().len() + 1
+        );
+        let pre_paint = committed["pre_paint_template"].as_str().unwrap().replacen(
+            "__THEME__",
+            "\"signal\"",
+            1,
+        );
+        assert!(allowed.contains(&sha256_hex(pre_paint.as_bytes())));
+        let folio = runtime_inline_scripts(&list, br#"{"theme": "folio"}"#).unwrap();
+        assert!(!folio.contains(&sha256_hex(pre_paint.as_bytes())));
+        let built = |head: &str| {
+            format!("<!doctype html><html><head><script>{pre_paint}</script>{head}</head><body><main><div class=\"sl-markdown-content\"><p>Text.</p></div></main></body></html>")
+        };
+        let mut report = PortalValidationReport::default();
+        verify_built_page("dist/a/index.html", &built(""), Some(&allowed), &mut report);
+        assert!(report.issues.is_empty(), "{:?}", report.issues);
+        verify_built_page(
+            "dist/a/index.html",
+            &built("<script>document.styleSheets[0].insertRule(\".cf-fig{opacity:0}\")</script>"),
+            Some(&allowed),
+            &mut report,
+        );
+        assert_eq!(report.issues.len(), 1, "{:?}", report.issues);
+        assert!(report.issues[0].starts_with("built page dist/a/index.html carries inline scripts the site's runtime does not emit (sha256 "));
+        assert!(report.issues[0].ends_with("if the runtime changed, regenerate scripts/runtime-scripts.json: npm run build && node scripts/runtime-scripts.mjs dist"));
     }
 
     #[test]

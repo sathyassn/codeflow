@@ -1011,6 +1011,41 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                 .push(format!("page is missing its built output: {}", page.route));
         }
     }
+    // The inline scripts the runtime emits, as committed at the evidenced
+    // commit, with the pre-paint script for the configured theme.
+    let runtime_scripts_path = normalized_portal_root
+        .join(figures::RUNTIME_SCRIPTS_FILE)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let runtime_scripts = git_batch_blobs(
+        &repository,
+        &evidence.repository.commit,
+        &[runtime_scripts_path.as_str()],
+        64 * 1024,
+        64 * 1024,
+    )
+    .map_err(|error| error.to_string())
+    .and_then(|blobs| {
+        blobs
+            .get(&runtime_scripts_path)
+            .cloned()
+            .ok_or_else(|| "it is not committed".to_string())
+    })
+    .and_then(|list| {
+        authoritative_config
+            .as_deref()
+            .ok_or_else(|| "the configuration is unreadable".to_string())
+            .and_then(|config| figures::runtime_inline_scripts(&list, config))
+    });
+    let runtime_scripts = match runtime_scripts {
+        Ok(allowed) => Some(allowed),
+        Err(error) => {
+            report.issues.push(format!(
+                "the runtime's inline script list {runtime_scripts_path} cannot be read: {error}"
+            ));
+            None
+        }
+    };
     let mut artifact_bytes_remaining = actual_artifacts.total_bytes;
     for artifact in &evidence.artifacts {
         let Some(bytes) = verify_file_budgeted(
@@ -1028,7 +1063,12 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
         {
             match std::str::from_utf8(&bytes) {
-                Ok(html) => figures::verify_built_page(&artifact.path, html, &mut report),
+                Ok(html) => figures::verify_built_page(
+                    &artifact.path,
+                    html,
+                    runtime_scripts.as_ref(),
+                    &mut report,
+                ),
                 Err(error) => report.issues.push(format!(
                     "built HTML is not UTF-8 {}: {error}",
                     artifact.path
@@ -4455,6 +4495,14 @@ mod tests {
         }"#;
         let source = b"\xef\xbb\xbf# Guide\r\n\r\nCommit-anchored source.\r\n\r\n## Outcome\r\n\r\n[Jump](./Mixed%20Case%20%2B%20caf%C3%A9.md?view=1#outcome)\r\n";
         std::fs::write(temp.path().join("portal/portal.config.json"), config).unwrap();
+        std::fs::create_dir_all(temp.path().join("portal/scripts")).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs-portal/scripts/runtime-scripts.json"),
+            temp.path().join("portal/scripts/runtime-scripts.json"),
+        )
+        .unwrap();
+
         std::fs::write(temp.path().join("docs/Mixed Case + café.md"), source).unwrap();
         for args in [
             &["init", "-q"][..],
@@ -4463,7 +4511,12 @@ mod tests {
             // Preserve the fixture's intentional CRLF bytes in the committed
             // blob regardless of the Windows runner's global Git defaults.
             &["config", "core.autocrlf", "false"][..],
-            &["add", "docs", "portal/portal.config.json"][..],
+            &[
+                "add",
+                "docs",
+                "portal/portal.config.json",
+                "portal/scripts/runtime-scripts.json",
+            ][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
             assert!(Command::new("git")
@@ -4933,12 +4986,25 @@ mod tests {
           "base": "/"
         }"#;
         std::fs::write(temp.path().join("portal/portal.config.json"), config).unwrap();
+        std::fs::create_dir_all(temp.path().join("portal/scripts")).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs-portal/scripts/runtime-scripts.json"),
+            temp.path().join("portal/scripts/runtime-scripts.json"),
+        )
+        .unwrap();
+
         std::fs::write(temp.path().join("docs/guide.md"), "# Guide\n").unwrap();
         for args in [
             &["init", "-q"][..],
             &["config", "user.email", "portal-tests@codeflow.invalid"][..],
             &["config", "user.name", "Portal tests"][..],
-            &["add", "docs", "portal/portal.config.json"][..],
+            &[
+                "add",
+                "docs",
+                "portal/portal.config.json",
+                "portal/scripts/runtime-scripts.json",
+            ][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
             assert!(Command::new("git")
