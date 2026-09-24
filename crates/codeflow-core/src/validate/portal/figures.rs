@@ -23,6 +23,7 @@ use crate::capability::parse_capabilities;
 use crate::scaffold::sha256_hex;
 use crate::strict_json::parse_strict_json;
 
+mod dom;
 mod render;
 
 pub(super) const PAGE_CLASSES: [&str; 3] = ["illustrated", "pass-through", "derived-lookup"];
@@ -939,7 +940,7 @@ fn verify_page_class(
     match class {
         EXPLANATORY => {
             if let Some(output) = rendered {
-                verify_panel_companions(page, output, declarations, report);
+                verify_rendered_figures(page, output, true, declarations, report);
             }
             if page.source_region.is_some() || page.lookup.is_some() {
                 report.issues.push(format!(
@@ -947,10 +948,16 @@ fn verify_page_class(
                 ));
             }
         }
-        "derived-lookup" => verify_lookup(page, entry, context, report),
+        "derived-lookup" => {
+            verify_lookup(page, entry, context, report);
+            if let Some(output) = rendered {
+                verify_rendered_figures(page, output, false, declarations, report);
+            }
+        }
         _ => match (&page.source_region, rendered) {
             (Some(region), Some(output)) => {
                 verify_source_region(page, region, output, context, declarations, report);
+                verify_rendered_figures(page, output, false, declarations, report);
             }
             (None, _) => report.issues.push(format!(
                 "{route} {class} source records no unchanged source region"
@@ -960,29 +967,32 @@ fn verify_page_class(
     }
 }
 
-/// An explanatory page renders each bound figure as one companion block
-/// directly under its panel heading. Every companion block the page renders
-/// must be the reconstruction of a bound declaration in its declared panel,
-/// each binding exactly once, and no other rendered HTML may carry companion
-/// or figure markup. A comment renders nothing, so a copy inside one is
-/// neither evidence nor an excuse.
-fn verify_panel_companions(
+/// Every figure a page puts in front of a reader must be a companion that
+/// equals the reconstruction of a declaration bound to that page, each
+/// binding exactly once, compared as parsed HTML. On an explanatory page each
+/// sits under its declared panel heading. Figure or companion markup anywhere
+/// else fails, however it is spelled; a comment renders nothing and text that
+/// names a kit class is not markup.
+fn verify_rendered_figures(
     page: &Page,
     output: &str,
+    panels: bool,
     declarations: &BTreeMap<String, Pinned>,
     report: &mut PortalValidationReport,
 ) {
     let route = &page.route;
-    let rendered = rendered_companions(markdown_body(output));
+    let rendered = dom::rendered_figures(markdown_body(output));
     let mut expected = Vec::new();
     for (index, figure) in page.figures.iter().enumerate() {
         let path = &figure.declaration_path;
         match declarations
             .get(path)
             .ok_or_else(|| "its declaration is not pinned".to_string())
-            .and_then(|pinned| pinned.companion(path, "panel", index))
-        {
-            Ok(block) => expected.push((figure.panel.clone(), path, Some(block))),
+            .and_then(|pinned| pinned.companion(path, &figure.placement, index))
+            .and_then(|block| {
+                dom::canonical_fragment(&block).ok_or_else(|| "it is not one element".to_string())
+            }) {
+            Ok(canonical) => expected.push((figure.panel.clone(), path, Some(canonical))),
             Err(why) => {
                 report.issues.push(format!(
                     "{route} figure {path} cannot be reconstructed: {why}"
@@ -992,18 +1002,23 @@ fn verify_panel_companions(
         }
     }
     let mut matched = vec![false; expected.len()];
-    for (panel, block) in &rendered.blocks {
+    for (panel, companion) in &rendered.companions {
         let found = expected
             .iter()
             .enumerate()
             .position(|(index, (want, _, text))| {
-                !matched[index] && want == panel && text.as_deref() == Some(block.as_str())
+                !matched[index]
+                    && (!panels || want == panel)
+                    && text.as_deref() == Some(companion.as_str())
             });
         match found {
             Some(index) => matched[index] = true,
-            None => report.issues.push(format!(
+            None if panels => report.issues.push(format!(
                 "{route} renders a companion that no bound declaration draws in the {} panel",
                 panel.as_deref().unwrap_or("page")
+            )),
+            None => report.issues.push(format!(
+                "{route} renders a companion that no bound declaration draws"
             )),
         }
     }
@@ -1014,82 +1029,11 @@ fn verify_panel_companions(
             ));
         }
     }
-    if rendered.stray {
+    if rendered.stray > 0 {
         report.issues.push(format!(
             "{route} renders companion or figure markup outside its companion blocks"
         ));
     }
-}
-
-struct RenderedCompanions {
-    /// Each top-level companion block, with the level-two heading above it.
-    blocks: Vec<(Option<String>, String)>,
-    /// Whether any other rendered HTML, comments removed, carries companion
-    /// or figure markup.
-    stray: bool,
-}
-
-fn rendered_companions(markdown: &str) -> RenderedCompanions {
-    use pulldown_cmark::{Event, HeadingLevel, Parser, Tag, TagEnd};
-    static COMMENT: LazyLock<Regex> =
-        LazyLock::new(|| Regex::new(r"(?s)<!--.*?(?:-->|\z)").expect("comment pattern"));
-    let marked = |html: &str| {
-        let visible = COMMENT.replace_all(html, "");
-        visible.contains("cf-companion") || visible.contains("cf-fig")
-    };
-    let mut found = RenderedCompanions {
-        blocks: Vec::new(),
-        stray: false,
-    };
-    let mut depth = 0_usize;
-    let mut panel: Option<String> = None;
-    let mut heading: Option<String> = None;
-    let mut block: Option<String> = None;
-    for event in Parser::new(markdown) {
-        match event {
-            Event::Start(tag) => {
-                if depth == 0 {
-                    match tag {
-                        Tag::Heading {
-                            level: HeadingLevel::H2,
-                            ..
-                        } => heading = Some(String::new()),
-                        Tag::HtmlBlock => block = Some(String::new()),
-                        _ => {}
-                    }
-                }
-                depth += 1;
-            }
-            Event::End(tag) => {
-                depth = depth.saturating_sub(1);
-                if depth == 0 {
-                    if tag == TagEnd::Heading(HeadingLevel::H2) {
-                        panel = heading.take().map(|text| text.trim().to_lowercase());
-                    } else if tag == TagEnd::HtmlBlock {
-                        let html = block.take().unwrap_or_default();
-                        let trimmed = html.trim();
-                        if trimmed.starts_with("<div class=\"cf-companion\"") {
-                            found.blocks.push((panel.clone(), trimmed.to_string()));
-                        } else if marked(trimmed) {
-                            found.stray = true;
-                        }
-                    }
-                }
-            }
-            Event::Text(text) | Event::Code(text) => {
-                if let Some(heading) = heading.as_mut() {
-                    heading.push_str(&text);
-                }
-            }
-            Event::Html(html) => match block.as_mut() {
-                Some(block) => block.push_str(&html),
-                None => found.stray |= marked(&html),
-            },
-            Event::InlineHtml(html) => found.stray |= marked(&html),
-            _ => {}
-        }
-    }
-    found
 }
 
 fn verify_lookup(
@@ -2009,28 +1953,51 @@ mod tests {
                 .any(|issue| issue.contains("is not the recorded insertion at its bound place")),
             "{issues:?}"
         );
-        assert_eq!(issues.len(), 1, "{issues:?}");
+        assert!(
+            issues.iter().any(|issue| issue
+                == "reference/guide does not render the figure its declaration figures/steps.json draws"),
+            "{issues:?}"
+        );
     }
 
     #[test]
-    fn panel_companions_are_read_from_rendered_blocks_only() {
-        let companion = "<div class=\"cf-companion\" data-cf-companion=\"f.json\"><figure class=\"cf-fig\"></figure></div>";
-        let page = format!(
-            "<section data-altitude=\"concept\">\n\n## Concept\n\n<!-- {companion} -->\n\n{companion}\n\nText with `class=\"cf-fig\"` in code.\n\n</section>\n"
+    fn rendered_figures_are_read_as_a_browser_parses_them() {
+        let companion = "<div class=\"cf-companion\" data-cf-companion=\"f.json\"><figure class=\"cf-fig\"><figcaption>Drawn.</figcaption></figure></div>";
+        let canonical = dom::canonical_fragment(companion).unwrap();
+        // Positive control: a comment, a code span, a path and plain text that
+        // name a kit class render no figure markup (R2-1, R3-4).
+        let clean = format!(
+            "<section data-altitude=\"concept\">\n\n## Concept\n\n<!-- {companion} -->\n\n{companion}\n\nThe cf-fig class is documented here, with `class=\"cf-fig\"` in code.\n\n<div class=\"portal-provenance\">Source <code>docs/cf-figures.md</code></div>\n\n<div data-codeflow-search-root=\"reference/cf-figures\">x</div>\n\n</section>\n"
         );
-        let found = rendered_companions(&page);
+        let found = dom::rendered_figures(&clean);
         assert_eq!(
-            found.blocks,
-            vec![(Some("concept".to_string()), companion.to_string())]
+            found.companions,
+            vec![(Some("concept".to_string()), canonical.clone())]
         );
-        assert!(!found.stray, "a comment and a code span render no markup");
+        assert_eq!(found.stray, 0);
+        // A companion spelled with character references is still a
+        // companion, and one inside other markup is stray (R3-1).
+        let encoded = format!(
+            "## Concept\n\n{companion}\n\n<div class=\"cf&#45;companion\"><figure class=\"cf&#45;fig\"><figcaption>FALSE UNBOUND CONTENT.</figcaption></figure></div>\n"
+        );
+        let found = dom::rendered_figures(&encoded);
+        assert_eq!(found.companions.len(), 2);
+        assert_ne!(found.companions[1].1, canonical);
         for smuggled in [
-            format!("## Concept\n\n<div class=\"note\">{companion}</div>\n"),
+            "## Concept\n\n<div class=\"note\"><figure class=\"cf&#x2D;fig\"></figure></div>\n"
+                .to_string(),
             "## Concept\n\n- item <span class=\"cf-fig\">x</span>\n".to_string(),
-            format!("## Concept\n\n> {companion}\n"),
+            "## Concept\n\n> <svg class=\"cf-fig-svg\"></svg>\n".to_string(),
         ] {
-            assert!(rendered_companions(&smuggled).stray, "{smuggled}");
+            assert!(dom::rendered_figures(&smuggled).stray > 0, "{smuggled}");
         }
+        // Inside an as-is region raw HTML is text; only the companion between
+        // its markers is markup.
+        let region = format!(
+            "<!-- codeflow-source-begin route=r source_sha256=x class=illustrated -->\n\n<!-- codeflow-companion-begin declaration=f.json sha256=x -->\n\n{companion}\n\n<!-- codeflow-companion-end -->\n\n<div class=\"cf-fig\">raw source markup stays text</div>\n\n<!-- codeflow-source-end -->\n"
+        );
+        let found = dom::rendered_figures(&region);
+        assert_eq!((found.companions.len(), found.stray), (1, 0));
     }
 
     #[test]
