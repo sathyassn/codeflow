@@ -127,8 +127,24 @@ themselves prove either a release or an exemption is needed. Pre-1.0 and other
 version schemes use the adopted project's explicit rules.
 
 Use the project's required PR declaration, fragments or annotations; never
-create a competing input. A useful release-impact explanation names the unit,
-impact, evidence-based rationale, changelog entry and migration where needed.
+create a competing input. The PR's Release impact block states the change in
+four fields, then the project's own fields (unit, changelog entry, evidence):
+
+- `Impact`: the change level a consumer sees.
+- `Breaking`: `yes` or `no`, the plain compatibility statement. It replaces
+  the older three-state `Contract` field. On a watched contract path,
+  `Breaking: no` is the explicit compatibility claim, so it is never
+  prefilled.
+- `Rationale`: the consumer-visible effect and the evidence for the level.
+- `Migration`: always present; `none` unless Breaking is yes, then steps or
+  a pointer to a Breaking change section.
+
+In stable SemVer, as CodeFlow uses it, Breaking is yes if and only if Impact
+is major, and its checker enforces both directions. Pre-1.0 and other
+schemes name the level a break takes in their adopted policy. Compare a PR's
+declaration with the entries it adds, never with the cumulative pending
+version: an additive task declares minor and Breaking no even when earlier
+work already made the pending release major.
 For a commit-driven calculator, the commits that will actually land must retain
 the reviewed markers: a corrected PR title alone is insufficient for merge or
 rebase workflows. For a fragment-driven tool, review its authoritative entries.

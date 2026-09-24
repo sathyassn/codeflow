@@ -61,6 +61,14 @@ publication date._
   both with faulty controls.
 
 <!-- codeflow:release-impact patch -->
+- **Pull request template.** The shipped template has five fixed sections
+  (Summary, Changes, Testing, Reviews, Release impact) with short comments,
+  and lists its conditional sections with the exact condition for each. The
+  Release impact block states `Breaking: yes | no` and always carries
+  `Migration`. Existing policies are unchanged: the required headings are
+  still Summary, Changes and, for code, Testing.
+
+<!-- codeflow:release-impact patch -->
 - **Claude Code preset prompts.** The shipped preset sets no permission mode
   in its default file and prompts for rooted or home-anchored recursive
   deletes and for force branch deletes spelled `-f`, `--force`, `-df`, `-fd`,

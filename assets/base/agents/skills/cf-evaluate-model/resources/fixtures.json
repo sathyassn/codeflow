@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "fixtures_version": "2026-09-24-summary-and-figure-v1",
+  "fixtures_version": "2026-09-24-pr-format-v1",
   "fixtures": [
     {
       "id": "release-pending-merge", "tier": "standard",
@@ -999,9 +999,9 @@
         "artifact": "PR narrative"
       },
       "files": {
-        ".github/pull_request_template.md": "## Summary\n\n## Changes\n\n## Testing\n\n## Linked decisions\n",
-        "CHANGE_FACTS.md": "# Change facts\n\n- Fixes a null dereference when an optional label is absent.\n- Adds one regression test.\n- `cargo test -p labels`: 18 passed.\n- No UI changed.\n- Linked ADR: ADR-0012.\n",
-        "PR_DRAFT.md": "# An Absolutely Transformative Improvement\n\n## Summary\n\nFirst and foremost, this brilliant change represents a major leap forward for the entire platform. Great idea!\n\n## Why This Matters So Much\n\nIt is important to note that quality is important.\n\n## Changes\n\n**MAJOR:** We fixed stuff and made things robust.\n\n## Testing\n\nTests pass.\n\n## Linked decisions\n\nADR-0012\n"
+        ".github/pull_request_template.md": "## Summary\n\n## Changes\n\n## Testing\n\n## Reviews\n\n## Release impact\n\n## Links\n",
+        "CHANGE_FACTS.md": "# Change facts\n\n- Fixes a null dereference when an optional label is absent.\n- Adds one regression test.\n- `cargo test -p labels`: 18 passed.\n- No UI changed.\n- Linked ADR: ADR-0012.\n- No review has run yet.\n- Release impact: patch, not breaking, no migration.\n",
+        "PR_DRAFT.md": "# An Absolutely Transformative Improvement\n\n## Summary\n\nFirst and foremost, this brilliant change represents a major leap forward for the entire platform. Great idea!\n\n## Why This Matters So Much\n\nIt is important to note that quality is important.\n\n## Changes\n\n**MAJOR:** We fixed stuff and made things robust.\n\n## Testing\n\nTests pass.\n\n## Reviews\n\nEveryone loved it.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: It fixes stuff.\n- Migration: none\n\n## Links\n\nADR-0012\n"
       }
     },
     {

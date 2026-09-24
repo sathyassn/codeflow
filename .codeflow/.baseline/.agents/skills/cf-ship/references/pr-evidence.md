@@ -7,9 +7,45 @@ Open the PR. Commits stay conventional (`type(scope): description`,
 ≤ 50-char description, ≤ 72-char subject, at most 3 `-` body bullets each
 ≤ 72 chars, optional `BREAKING CHANGE:` footer); one logical change each.
 **Title** names the whole-branch outcome, not only the last commit.
-**Body** follows the template (summary, changes, testing, linked IDs).
-Tables for tabular data, fenced blocks for pasted output, and bullets for
-enumerable points; do not split necessary explanations to meet a line count.
+
+## Body format
+
+This reference owns the pull request body format; the template carries the
+same shape in short comments. Five sections are always present, in order,
+and the rest appear only when their condition holds.
+
+| Section | When | Content |
+|---|---|---|
+| Summary | always | one to three short sentences of context (rule below) |
+| Changes | always | one bullet per logical change, most important first; numbered only for a sequence; one line per task for an epic |
+| Testing | always; evidence required when the range is code | tested revision and command, fenced gate summary lines, `Coverage:` when the range is code, `New tests:`, `Not tested:` |
+| Reviews | always | one row per current review: reviewer, scope, verdict; `None: reason` when unreviewed |
+| Release impact | always | `Impact`, `Breaking`, `Rationale`, `Migration`, then the project's own fields ([release-policy.md](release-policy.md)) |
+| Screenshots | after Changes, when a rendered surface changed | the changed surface |
+| Tests | after Testing, when an added or renamed test's name does not state what it pins | test and what it pins, about six rows; otherwise one `New tests:` line |
+| Whole-flow evidence | after Testing, when a CLI command's behavior, flags or output; install, update or scaffold; a hook or guard; an automation handoff; or a rendered UI changed | one bullet per journey: what ran, what was observed, what was not exercised |
+| Breaking change | after Release impact, when Breaking is yes and the migration needs more than one line | what breaks and the migration steps |
+| Risk and follow-up | after Release impact, when Impact is the breaking level, a watched contract path changed, a hook, guard, secret scan, sandbox or permission surface changed, or landing needs a human step | what can go wrong, how to back out, steps after merge |
+| Links | last, when the change serves tracked work, a decision or durable evidence | the IDs and the record that carries the detail; omitted, not `N/A`, when there is nothing to link |
+
+- Keep the Testing heading the project's policy requires (`Testing` by
+  default); a renamed heading fails an unchanged policy.
+- A conditional section is a `##` sibling after its parent, never a `###`
+  subsection: release parsers read a section up to the next `##` heading.
+- A PR type never cancels a condition. Read the conditions from the whole
+  target-to-head diff; a mixed or epic PR takes the union.
+- Length target, a warning and never a reason to drop evidence: about 65
+  rows at 100 columns for a task PR and about 90 for an epic into the
+  protected branch. Keep prose lines under about 160 characters and a fenced
+  block to about 12 lines, and link records instead of copying them.
+  Migration, unresolved risk and operator actions may overflow.
+- Reviews rows name the reviewer, scope and verdict only. Findings and
+  dispositions live in the linked record, and authorship lines belong to the
+  task closeout. A review row is the provenance the quality contract
+  requires, not the AI attribution the commit and PR checks block.
+- Tables carry tabular data and fenced blocks carry pasted output. A figure
+  is a fenced ASCII block, a full page is a linked `cf-present` page, and
+  Mermaid is never used.
 
 **Summary** gives context only: what the PR is and why it exists, in plain
 words a reader with no context understands.
@@ -21,6 +57,8 @@ words a reader with no context understands.
   problem, change, effect, limits, or the order of the flow.
 - Judge it by what it carries. A short summary that already holds the
   details fails.
+
+## Release impact and evidence
 
 Assess the complete change under the project's adopted release policy; load
 [release-policy.md](release-policy.md) for impact, authority and publication
@@ -48,8 +86,8 @@ product UI. Docs-only means no executable behavior changed: scripts, hook
 settings, generated runtime assets, and executable examples do not qualify
 merely because they live under docs. Instruction-only changes name the doc
 checks and relevant behavioral evaluations; distinguish added cases from
-live trials actually run. Remove unused template tables or replace them
-with a reasoned N/A. After a rebase or substantive update, refresh the whole
+live trials actually run. Delete unused template lines, and omit a
+conditional section whose condition does not hold. After a rebase or substantive update, refresh the whole
 PR narrative and affected evidence before marking ready; preserve a prior
 review only with a reasoned unchanged-scope link. Lint with
 `codeflow ci --base <base> --head HEAD --branch <name> --pr-body-file
