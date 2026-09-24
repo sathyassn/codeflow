@@ -2574,7 +2574,7 @@ fn design_method_additions_stay_conditional_and_free_of_house_style() {
 /// The operating-doctrine grading inventory (TSK-068): (case, owning
 /// requirement, faulty control, new case). Shared by the tests below so the
 /// pack, the controls and the blind prompts are checked against one list.
-const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 12] = [
+const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 14] = [
     (
         "opened-pr-assertion-red-is-repaired",
         "CF-SHIP-001",
@@ -2599,6 +2599,13 @@ const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 12] = [
         "unbounded_watch",
         true,
     ),
+    // Codex EPC-017 review, finding 1: no check is remote-required.
+    (
+        "opened-pr-without-remote-required-follows-project-gates",
+        "CF-SHIP-001",
+        "empty_required_result_treated_as_ready",
+        true,
+    ),
     (
         "operator-reply-is-plain-prose-and-bullets",
         "CF-OUT-002",
@@ -2621,6 +2628,14 @@ const OPERATING_DOCTRINE_INVENTORY: [(&str, &str, &str, bool); 12] = [
         "simple-answer-not-overformatted",
         "CF-OUT-003",
         "forced_diagram",
+        false,
+    ),
+    // Codex EPC-017 review, finding 7: the summary sentence count never
+    // pads a one-line answer.
+    (
+        "simple-answer-not-overformatted",
+        "CF-OUT-002",
+        "one_line_answer_padded",
         false,
     ),
     (
@@ -2853,6 +2868,18 @@ fn operating_doctrine_fixture_traps_and_canary_punctuation_stay_intact() {
         );
     }
 
+    // The no-remote-required fixture keeps every check unrequired, so only
+    // the project's own gates in its README say what must pass.
+    let unrequired = fixture_overlay("pr-follow-up-no-remote-required");
+    let scenario: Value = serde_json::from_str(overlay_file(
+        &unrequired,
+        "pr-follow-up-no-remote-required",
+        "tools/gh-scenario.json",
+    ))
+    .expect("scenario JSON");
+    let checks = scenario["checks"].as_array().expect("scenario checks");
+    assert!(!checks.is_empty() && checks.iter().all(|check| check["required"] == false));
+
     let reply = fixture_overlay("operator-reply-draft-wall");
     assert!(
         overlay_file(&reply, "operator-reply-draft-wall", "DRAFT_REPLY.md").contains('\u{2014}')
@@ -2881,6 +2908,7 @@ fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
         "pr-follow-up-infra-incomplete",
         "pr-follow-up-green",
         "pr-follow-up-queued-forever",
+        "pr-follow-up-no-remote-required",
         "pr-printed-url",
     ];
     let reference = fixture_overlay(stand_in_fixtures[0]);

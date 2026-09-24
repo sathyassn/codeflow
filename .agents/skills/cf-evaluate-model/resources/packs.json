@@ -276,6 +276,7 @@
         "opened-pr-unstarted-job-is-missing-evidence",
         "opened-pr-green-reports-without-merging",
         "opened-pr-follow-up-is-bounded",
+        "opened-pr-without-remote-required-follows-project-gates",
         "operator-reply-is-plain-prose-and-bullets",
         "editorial-legitimate-punctuation-terms-and-lists-pass",
         "flow-reply-carries-fenced-figure",

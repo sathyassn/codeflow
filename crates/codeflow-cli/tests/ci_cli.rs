@@ -562,3 +562,118 @@ fn ci_commit_message_policy_character_blocks() {
     assert!(stderr.contains("git.policy_characters"), "{stderr}");
     assert!(stderr.contains("commit message line 3"), "{stderr}");
 }
+
+fn ci_range_output(dir: &Path) -> (Option<i32>, String) {
+    let out = ci_range(dir);
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code(), all)
+}
+
+// Codex EPC-017 review, finding 4: a `-diff` attribute turned an added
+// Markdown line into a binary-files summary with no hunk, and the check
+// reported success. Text is now decided by content, not by attributes.
+#[test]
+fn ci_diff_attribute_does_not_hide_an_added_policy_character() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    std::fs::write(dir.path().join(".gitattributes"), "docs/*.md -diff\n").unwrap();
+    std::fs::write(
+        dir.path().join("docs/new.md"),
+        "# New\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add new page"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("docs/new.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    assert!(!all.contains("docs/old.md"), "{all}");
+}
+
+#[test]
+fn ci_genuine_binary_under_a_named_tree_is_not_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    // A NUL in the first bytes marks real binary content, whatever bytes
+    // that happen to spell a dash follow it.
+    let mut blob = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\n".to_vec();
+    blob.extend("\u{2014}\n".as_bytes());
+    std::fs::write(dir.path().join("docs/figure.png"), blob).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add figure"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+}
+
+// Codex EPC-017 review round 2, N1: Git quotes a name holding `"`, `\` or a
+// control byte in patch headers. Binary content is classified by blob id,
+// and the quoted name is decoded, so neither shape is misjudged.
+#[cfg(unix)]
+#[test]
+fn ci_quoted_name_binary_passes_and_quoted_name_text_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    let mut blob = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\n".to_vec();
+    blob.extend("\u{2014}\n".as_bytes());
+    std::fs::write(dir.path().join("docs/release\"preview.png"), blob).unwrap();
+    std::fs::write(dir.path().join("docs/tab\there.png"), b"\0\xe2\x80\x93\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add quoted figures"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+
+    std::fs::write(
+        dir.path().join("docs/release\"notes.md"),
+        "# Notes\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add quoted notes"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("docs/release\"notes.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    assert!(!all.contains("preview.png"), "{all}");
+}
+
+// Codex EPC-017 review, finding 3: git keeps a `#` line given with `-m`,
+// and a merge message is committed text too; CI scans both as stored.
+#[test]
+fn ci_committed_hash_line_and_merge_message_are_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    std::fs::write(dir.path().join("docs/new.md"), "# New\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    let body = "# one \u{2014} two";
+    git(
+        dir.path(),
+        &["commit", "-m", "docs: add new page", "-m", body],
+    );
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("commit message line 3"), "{all}");
+
+    git(dir.path(), &["reset", "--hard", "main"]);
+    git(dir.path(), &["checkout", "-b", "feat/y"]);
+    std::fs::write(dir.path().join("docs/new.md"), "# New\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add new page"]);
+    git(dir.path(), &["checkout", "feat/x"]);
+    let subject = "Merge branch 'feat/y' \u{2014} tidy";
+    git(dir.path(), &["merge", "--no-ff", "feat/y", "-m", subject]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("commit subject contains an em dash"), "{all}");
+    assert!(all.contains("1 merge(s)"), "{all}");
+}

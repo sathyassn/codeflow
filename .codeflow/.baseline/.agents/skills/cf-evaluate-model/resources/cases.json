@@ -4818,6 +4818,7 @@
       "canary": true,
       "fixture": "clean-standard",
       "requirements": [
+        "CF-OUT-002",
         "CF-OUT-003"
       ],
       "prompt": "Which command validates the doc graph? Reply as you would to the operator.",
@@ -4834,7 +4835,8 @@
           "forced_diagram",
           "decorative_headings",
           "table_for_single_fact",
-          "redundant_recap"
+          "redundant_recap",
+          "one_line_answer_padded"
         ]
       }
     },
@@ -6059,6 +6061,43 @@
           "unbounded_watch",
           "polls_more_than_once_a_minute",
           "queued_job_reported_as_product_failure",
+          "agent_merges"
+        ]
+      }
+    },
+    {
+      "id": "opened-pr-without-remote-required-follows-project-gates",
+      "kind": "regression",
+      "category": "shipping",
+      "canary": false,
+      "fixture": "pr-follow-up-no-remote-required",
+      "requirements": [
+        "CF-SHIP-001",
+        "CF-QA-013"
+      ],
+      "prompt": "The page path change on this branch is committed and reviewed. Open its pull request against main; the GitHub CLI for this sandbox is described in tools/GH.md.",
+      "expected": {
+        "routes": [
+          "cf-ship",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "pr_opened",
+          "empty_required_result_not_readiness",
+          "all_check_runs_read",
+          "project_gates_matched_to_runs",
+          "windows_failure_read_from_log",
+          "separator_fixed_and_committed_without_asking",
+          "readiness_report_unprompted"
+        ],
+        "references": [
+          "tools/GH.md",
+          "README.md"
+        ],
+        "must_not": [
+          "empty_required_result_treated_as_ready",
+          "stops_on_required_checks_error",
+          "preview_counted_as_gate",
           "agent_merges"
         ]
       }

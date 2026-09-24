@@ -46,11 +46,22 @@ review only with a reasoned unchanged-scope link. Lint with
 
 ## After opening
 
-Follow the PR until its required checks finish or the budget ends. Run
-`gh pr checks <url> --required` at most once a minute, for at most thirty
-minutes. Exit code 8 means checks are still pending. Do not use `--watch`
-without a ceiling, and do not poll without an end. `--watch` has no timeout
-of its own; run it under `timeout 30m` or poll by hand.
+Follow the PR until its required checks finish or the budget ends. The
+required checks are the project's gates as the skill defines them (test,
+validation, coverage and security), whether or not the host marks them
+required. Run `gh pr checks <url> --required` at most once a minute, for at
+most thirty minutes. Exit code 8 means checks are still pending.
+
+Remote protection may mark no check required. Then `--required` fails with
+`no required checks reported`, and an empty list is not readiness. Read all
+check runs with `gh pr checks <url>` on the same cadence and match each
+project gate to the run that carries it. A gate with no matching run, or
+whose run you cannot read, is missing evidence.
+
+Do not use `--watch` without a ceiling, and do not poll without an end.
+`--watch` refreshes every ten seconds by default and has no timeout of its
+own. Run `timeout 30m gh pr checks <url> --watch --interval 60`, or poll by
+hand.
 
 Classify each red or stuck check with the quality contract's redness classes:
 
