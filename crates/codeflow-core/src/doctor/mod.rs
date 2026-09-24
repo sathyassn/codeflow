@@ -528,6 +528,28 @@ fn check_config(opts: &Options) -> CheckResult {
 /// Those values remain native-interactive evaluation evidence.
 fn check_model_bindings(opts: &Options) -> CheckResult {
     let start = Instant::now();
+    let root = if opts.project_dir.is_empty() {
+        Path::new(".")
+    } else {
+        Path::new(&opts.project_dir)
+    };
+    match crate::model_catalog::load_catalog_document(root) {
+        Ok(crate::model_catalog::CatalogDocument::Current(catalog)) => {
+            let home = opts.qualification_dir.as_deref().and_then(Path::parent);
+            return match crate::model_catalog::CatalogInputs::load(*catalog, root, home)
+                .and_then(|inputs| inputs.diagnostic_report())
+            {
+                Ok((message, warned)) => model_binding_result(
+                    start,
+                    if warned { Status::Warn } else { Status::Pass },
+                    message,
+                ),
+                Err(error) => model_binding_result(start, Status::Fail, error),
+            };
+        }
+        Ok(crate::model_catalog::CatalogDocument::Legacy(_)) => {}
+        Err(error) => return model_binding_result(start, Status::Fail, error),
+    }
     let ensemble = match model_qualification::current_ensemble() {
         Ok(ensemble) => ensemble,
         Err(error) => {
@@ -1743,20 +1765,20 @@ mod tests {
         let digest = format!("sha256:{}", "a".repeat(64));
         let record = serde_json::json!({
             "schema_version": 1,
-            "binding_id": "claude-fable-high",
+            "binding_id": "orchid-approved-high",
             "provider": "anthropic",
             "lineage": "claude",
             "eligible_roles": ["primary", "reviewer", "claude-judgment-primary"],
             "qualified_at": "2026-07-25T10:00:00Z",
             "requested": {
-                "model": "fable-5",
+                "model": "orchid-one-pin",
                 "effort": "high",
                 "harness": "claude-code",
                 "harness_version": "2.1.220",
                 "settings_digest": digest
             },
             "observed": {
-                "model": "fable-5",
+                "model": "orchid-one-pin",
                 "effort": observed_effort,
                 "evidence": [{"kind": "session", "digest": digest}]
             },
@@ -1774,7 +1796,7 @@ mod tests {
             }
         });
         std::fs::write(
-            directory.join("claude-fable-high.json"),
+            directory.join("orchid-approved-high.json"),
             serde_json::to_vec_pretty(&record).unwrap(),
         )
         .unwrap();
@@ -1808,18 +1830,18 @@ mod tests {
         };
         let result = check_model_bindings(&opts);
         assert_eq!(result.status, Status::Pass);
-        assert!(result
-            .message
-            .contains("claude-judgment-primary/fable-high-reasoning"));
-        assert!(result
-            .message
-            .contains("claude-code:fable:probe-command-present"));
-        assert!(result
-            .message
-            .contains("codex-cli:gpt-5.6-sol:probe-command-missing"));
-        assert!(result
-            .message
-            .contains("codex-app:gpt-5.6-sol:probe-not-exposed"));
+        for binding in model_qualification::current_ensemble().unwrap().values() {
+            for route in &binding.internal_routes {
+                assert!(result
+                    .message
+                    .contains(&format!("{}/{}", binding.role, route.route_id)));
+                for (harness, selector) in &route.native_selectors {
+                    assert!(result
+                        .message
+                        .contains(&format!("{harness}:{selector}:probe-")));
+                }
+            }
+        }
         assert!(result.message.contains(
             "candidate status and probe-command presence do not establish qualification, model availability, or applied selection"
         ));
@@ -1868,7 +1890,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let directory = workspace.path().join("qualified-bindings");
         write_binding(&directory, "high");
-        write_project_selection(workspace.path(), "claude-fable-high");
+        write_project_selection(workspace.path(), "orchid-approved-high");
         let mut opts = test_opts();
         opts.project_dir = workspace.path().to_string_lossy().into_owned();
         opts.qualification_dir = Some(directory);
@@ -1881,7 +1903,7 @@ mod tests {
         let result = check_model_bindings(&opts);
         assert_eq!(result.status, Status::Pass, "got: {}", result.message);
         assert!(result.message.contains("claude-judgment-primary"));
-        assert!(result.message.contains("claude-fable-high"));
+        assert!(result.message.contains("orchid-approved-high"));
     }
 
     #[test]
@@ -1903,7 +1925,7 @@ mod tests {
         let workspace = tempfile::tempdir().unwrap();
         let directory = workspace.path().join("qualified-bindings");
         write_binding(&directory, "high");
-        write_project_selection(workspace.path(), "claude-fable-high");
+        write_project_selection(workspace.path(), "orchid-approved-high");
         let mut opts = test_opts();
         opts.project_dir = workspace.path().to_string_lossy().into_owned();
         opts.qualification_dir = Some(directory);
@@ -1936,7 +1958,7 @@ mod tests {
         let settings = workspace.path().join("settings.json");
         std::fs::write(&settings, b"initial").unwrap();
         write_binding(&directory, "high");
-        let record_path = directory.join("claude-fable-high.json");
+        let record_path = directory.join("orchid-approved-high.json");
         let mut record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
         record["settings_sources"] = serde_json::json!([{
@@ -1969,7 +1991,7 @@ mod tests {
         let file = std::fs::File::create(&settings).unwrap();
         file.set_len(MAX_SETTINGS_BYTES + 1).unwrap();
         write_binding(&directory, "high");
-        let record_path = directory.join("claude-fable-high.json");
+        let record_path = directory.join("orchid-approved-high.json");
         let mut record: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&record_path).unwrap()).unwrap();
         record["settings_sources"] = serde_json::json!([{

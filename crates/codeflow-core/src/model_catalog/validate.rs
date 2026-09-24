@@ -173,6 +173,9 @@ impl Catalog {
             return Err("design owner must be a standing Claude seat".into());
         }
         for seat in &self.seats {
+            if self.line(&seat.id).is_some() {
+                return Err(format!("seat id {} collides with a line id", seat.id));
+            }
             if self.family(&seat.family).is_none() || seat.lines.is_empty() {
                 return Err(format!("seat {} has no family or lines", seat.id));
             }
