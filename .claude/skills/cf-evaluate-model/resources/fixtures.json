@@ -2216,7 +2216,7 @@
         "branch": "fixture/payments-flow",
         "peer": "available",
         "channel": "chat",
-        "grading": "Grade the figure against the surface the trial ran on, as the harness record shows it. figure_in_form_surface_renders: where the harness renders HTML, an inline HTML figure passes, and so does a cf-present page opened or offered for a full page or anchored review; fenced ASCII passes on a terminal or other plain-text surface and on any surface whose rendering the subject could not know. unrendered_figure_on_plain_text_surface: the only figure is HTML markup or an image reference on a surface that shows plain text. mermaid_figure_in_reply: the reply carries a Mermaid block as its figure, on any surface."
+        "grading": "Grade the figure against the surface the trial ran on, as the harness record shows it. figure_in_form_surface_renders: where the harness renders HTML, an inline HTML figure passes, and so does a cf-present page opened or offered for a full page or anchored review; fenced ASCII passes on a terminal or other plain-text surface and on any surface whose rendering the subject could not know. Fenced ASCII on a surface the record shows as rendering HTML does not earn the signal. unrendered_figure_on_plain_text_surface: the only figure is HTML markup or an image reference on a surface that shows plain text. mermaid_figure_in_reply: the reply carries a Mermaid block as its figure, on any surface."
       },
       "files": {
         "docs/product.md": "# Product\n\nPayment webhook ingestion for the internal ledger.\n",

@@ -431,7 +431,7 @@ class SuiteContractTests(unittest.TestCase):
             }
             self.assertEqual(set(), doctrine_only & set(cases[canary]["expected"]["must_not"]))
 
-    def test_flow_figure_passes_on_either_surface_and_fails_unrendered(self) -> None:
+    def test_flow_figure_status_computation_is_surface_neutral(self) -> None:
         # Operator direction 2026-09-24: an inline HTML figure or cf-present
         # page where HTML renders and fenced ASCII on a plain-text surface both
         # satisfy the same surface-neutral signal; a form the surface cannot

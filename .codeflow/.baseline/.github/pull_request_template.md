@@ -1,8 +1,9 @@
 <!-- Linted by `codeflow ci`: no AI attribution, no emoji, no em or en dash.
      The five sections below are always present, in this order. Conditional
      sections are listed at the end. Aim for about 65 rows wrapped at 100
-     columns for a task PR and about 90 for an epic; never drop evidence to
-     fit. A figure here is a fenced ASCII block, never Mermaid. -->
+     columns for a task PR, about 80 with Whole-flow evidence, and about 90
+     for an epic; never drop evidence to fit. A figure here is a fenced
+     ASCII block, never Mermaid. -->
 
 ## Summary
 

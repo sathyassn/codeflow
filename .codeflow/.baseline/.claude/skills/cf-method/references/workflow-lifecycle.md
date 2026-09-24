@@ -190,7 +190,7 @@ simple answer stays simple: no figure, no headings, no recap, and a one-line
 answer stays one line.
 
 A longer reply or report opens with a summary that gives context only: what
-this is and why it matters, in plain words a reader with no context
+this is and why it exists, in plain words a reader with no context
 understands.
 
 - Write the summary as one to three short sentences.

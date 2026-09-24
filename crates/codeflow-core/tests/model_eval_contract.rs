@@ -2955,6 +2955,7 @@ fn operating_doctrine_fixture_traps_and_canary_punctuation_stay_intact() {
         "a cf-present page opened or offered",
         "fenced ASCII passes on a terminal",
         "whose rendering the subject could not know",
+        "Fenced ASCII on a surface the record shows as rendering HTML does not earn the signal",
         "unrendered_figure_on_plain_text_surface",
         "mermaid_figure_in_reply: the reply carries a Mermaid block as its figure, on any surface",
     ] {
