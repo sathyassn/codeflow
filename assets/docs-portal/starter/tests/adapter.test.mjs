@@ -14,6 +14,7 @@ import { assertReviewedInstallScripts, REVIEWED_IGNORED_LIFECYCLE_SCRIPTS } from
 import { stopChild } from "../scripts/child-lifecycle.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { GENERATOR, assertGeneratorIdentity } from "../scripts/generator.mjs";
+import { lockDigestFailure, REGENERATE } from "../scripts/runtime-scripts.mjs";
 import { adapterPath, buildFixture, commitFixture, configureFixture, git, initializedFixture, portalFixture, runAdapter, runLocalAdapter, selfContainedPortalFixture, starterRoot } from "./portal-fixture.mjs";
 
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
@@ -2484,3 +2485,22 @@ function pngHeader(width, height) {
   bytes.writeUInt32BE(height, 20);
   return bytes;
 }
+
+// The committed list of the runtime's inline scripts names the lockfile it
+// was built from. This checkout's list matches its lockfile, and the check
+// workflow fails before running anything when a lockfile-only bump leaves the
+// list stale, naming the regeneration to run.
+test("the check workflow fails on a runtime script list built from another lockfile", { timeout: 120_000 }, async () => {
+  assert.equal(await lockDigestFailure(starterRoot), null);
+  const root = await selfContainedPortalFixture();
+  try {
+    assert.equal(await lockDigestFailure(root), null);
+    await writeFile(path.join(root, "package-lock.json"), `${await readFile(path.join(root, "package-lock.json"), "utf8")}\n`);
+    const stale = await lockDigestFailure(root);
+    assert.match(stale, /^scripts\/runtime-scripts\.json was built from another package-lock\.json \(recorded [0-9a-f]{12}, current [0-9a-f]{12}\); regenerate it: /);
+    assert.ok(stale.endsWith(REGENERATE));
+    const result = spawnSync(process.execPath, ["scripts/workflow.mjs", "check"], { cwd: root, encoding: "utf8", env: hardenedChildEnvironment() });
+    assert.notEqual(result.status, 0);
+    assert.ok(result.stderr.includes(stale), result.stderr);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -57,6 +57,17 @@ export async function builtRuntimeScripts(dist, theme, list = committed) {
   return [...found.values()].sort((a, b) => (a.sha256 < b.sha256 ? -1 : 1));
 }
 
+// The committed list names the lockfile it was built from. A lockfile that
+// moved on may bring different runtime scripts, so the check workflow fails
+// until the list is regenerated. The build does not, since regenerating needs
+// a build.
+export async function lockDigestFailure(root) {
+  const lock = createHash("sha256").update(await readFile(path.join(root, "package-lock.json"))).digest("hex");
+  const list = JSON.parse(await readFile(path.join(root, RUNTIME_SCRIPTS_FILE), "utf8"));
+  if (list.lock_sha256 === lock) return null;
+  return `${RUNTIME_SCRIPTS_FILE} was built from another package-lock.json (recorded ${String(list.lock_sha256).slice(0, 12)}, current ${lock.slice(0, 12)}); regenerate it: ${REGENERATE}`;
+}
+
 async function main(argv) {
   const check = argv.includes("--check");
   const dist = argv.filter((argument) => argument !== "--check")[0] ?? "dist";
