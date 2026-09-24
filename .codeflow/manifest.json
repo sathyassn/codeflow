@@ -305,7 +305,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "5a0c98a25ce8261979fea566d3a6a1b7fac0eac4a3c4aed20d44b8242bfbacb5",
+      "sha256": "fc2e1207e2d82c270256e0fbc7e1e5e0a3062b3e346e12aac35d4fb23ceb86ae",
       "exec": false
     },
     ".agents/skills/cf-method/references/project-organization.md": {
@@ -785,7 +785,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "5a0c98a25ce8261979fea566d3a6a1b7fac0eac4a3c4aed20d44b8242bfbacb5",
+      "sha256": "fc2e1207e2d82c270256e0fbc7e1e5e0a3062b3e346e12aac35d4fb23ceb86ae",
       "exec": false
     },
     ".claude/skills/cf-method/references/project-organization.md": {

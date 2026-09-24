@@ -865,8 +865,32 @@ fn autonomy_pointer_checks_reject_a_missing_pointer_and_a_second_list() {
     );
 }
 
+/// Spend is a hard gate. A table row about spend or credits may send the agent
+/// on without purchasing, but it must never say "do not wait", which an agent
+/// can read as permission to buy.
+fn spend_rows_that_do_not_wait(text: &str) -> Vec<String> {
+    text.lines()
+        .filter(|line| line.starts_with('|'))
+        .filter(|line| {
+            let lower = line.to_lowercase();
+            (lower.contains("spend") || lower.contains("credit")) && lower.contains("do not wait")
+        })
+        .map(str::to_string)
+        .collect()
+}
+
 #[test]
-fn autonomy_reference_keeps_its_owned_parts_without_policy_dashes() {
+fn spend_row_check_rejects_do_not_wait() {
+    let old_row = "| Spend, including buying credits, would help | 4: name it in the report \
+         and do not wait on it | this reference |";
+    assert_eq!(spend_rows_that_do_not_wait(old_row).len(), 1);
+    let current = "| Spending money, including buying credits | 4: wait for the operator; \
+         do not spend | this reference |";
+    assert!(spend_rows_that_do_not_wait(current).is_empty());
+}
+
+#[test]
+fn autonomy_reference_keeps_its_owned_parts() {
     let path = repo_root()
         .join("assets/base/claude/skills/cf-method/references")
         .join("autonomy.md");
@@ -877,7 +901,25 @@ fn autonomy_reference_keeps_its_owned_parts_without_policy_dashes() {
                 "finish-line statement",
                 "A task runs from its settled outcome to its finish line",
             ),
-            ("only listed gates", "Stop only at a gate this reference lists."),
+            (
+                "only listed stops",
+                "Stop only at a question or gate this reference lists.",
+            ),
+            (
+                "gate defined",
+                "A gate here is any listed stop: a question on rung 3 or a hard gate on rung 4.",
+            ),
+            ("hard gates heading", "Hard gates, rung 4:"),
+            (
+                "contract hard-gate class",
+                "a system-level, cross-boundary, destructive-disk or security-weakening action, the class `AGENTS.md` \"Match the gate to the blast radius\" names;",
+            ),
+            ("ladder hard-gate class", "contract's hard-gate class"),
+            (
+                "missing credit is not a purchase",
+                "2: do not purchase; name the gap, record reduced assurance and continue on the recorded fallback",
+            ),
+            ("spend waits", "4: wait for the operator; do not spend"),
             (
                 "no offer or progress stop",
                 "Do not stop to offer the next step",
@@ -935,7 +977,19 @@ fn autonomy_reference_keeps_its_owned_parts_without_policy_dashes() {
             ("seat loss", "the available standing seats approve the reassignment"),
         ],
     );
+}
+
+#[test]
+fn autonomy_reference_has_no_unwaited_spend_or_policy_dashes() {
+    let path = repo_root()
+        .join("assets/base/claude/skills/cf-method/references")
+        .join("autonomy.md");
     let text = read_text(&path);
+    assert_eq!(
+        spend_rows_that_do_not_wait(&text),
+        Vec::<String>::new(),
+        "a spend or credit row must never tell the agent not to wait"
+    );
     let dashes: Vec<_> = text
         .lines()
         .enumerate()

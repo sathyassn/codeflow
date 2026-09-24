@@ -42,8 +42,10 @@ and when it asks. It carries:
 - the only full operator-owned list: intent or public behavior the brief
   does not fix, taste, authority or scope beyond the brief, spend,
   credentials, anything sent outside the conversation, a protected-branch
-  merge, production, a delete nothing can restore, and any other step with no
-  way back;
+  merge, production, a delete nothing can restore, the system-level,
+  cross-boundary, destructive-disk and security-weakening class the contract's
+  hard-gate bullet names, and any other step with no way back. A gate in the
+  reference is any listed stop: a question on rung 3 or a hard gate on rung 4;
 - the trust prompt rule: the agent answers a trust prompt for a path inside
   its task's own authorized project or worktree, or a disposable sample its
   own harness created in the same run; any other path goes to the operator.
@@ -61,7 +63,10 @@ The standard contract, `CLAUDE.md`, the lifecycle reference and the
 its compact planning list. The minimal tier installs no skill tree, so its
 contract carries a compact finish-line clause instead of a pointer. The
 hard-gate procedure stays in the contract's "Match the gate to the blast
-radius" bullet, and the reference cites it without changing it.
+radius" bullet, and the reference cites it without changing it. The skill
+texts that still say stop (the orchestrator's plan mode and its "stop for the
+human" reconciliation bound, and the ship flow's merge wording) are corrected
+by TSK-076 on the same integration branch, not by this change.
 
 This decision amends one clause of ADR-0035: "Changing the named producer or
 reviewer seat or lineage creates Plan vN+1 and requires fresh approval from
@@ -101,8 +106,8 @@ The reference's delete gate answers that residual.
 ### Keep the lists where they are and align their wording
 
 Rejected. Seven aligned copies still drift at the next edit, and an agent
-under pressure still has to reconcile them. One owner with pointers costs
-one read.
+under pressure still has to reconcile them. With one owner, an agent
+reads one file.
 
 ### Put the full statement and list in the always-loaded contract
 
