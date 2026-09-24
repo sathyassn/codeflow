@@ -86,7 +86,7 @@ inside your task's own authorized project or worktree, or for a disposable
 sample your own harness created in this run. Any other path goes to the
 operator. Decide by authorization and path identity: compare the resolved
 path with the task's worktree or with the sample path your harness recorded.
-A folder that another run or tool created, or a path that only resembles
+A folder that another run created, or a path that only resembles
 yours, is foreign.
 
 ## Settled dissent

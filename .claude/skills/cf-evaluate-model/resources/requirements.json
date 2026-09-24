@@ -2443,7 +2443,7 @@
             "every protected glob in `.codeflow/policy.json`, including a protected `integration/` glob;",
             "a delete that version control, a backup or a scratch area cannot restore;",
             "Decide by authorization and path identity",
-            "A folder that another run or tool created, or a path that only resembles yours, is foreign.",
+            "A folder that another run created, or a path that only resembles yours, is foreign.",
             "The dissenting verdict stays as given and is never recorded as approval",
             "1: take it without asking; progress goes in the running report, never in an offer",
             "1: choose from evidence and disclose it",
