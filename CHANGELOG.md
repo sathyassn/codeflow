@@ -60,7 +60,7 @@ publication date._
   surface, and never Mermaid. The operating-doctrine evaluation cases grade
   both with faulty controls.
 
-<!-- codeflow:release-impact patch -->
+<!-- codeflow:release-impact minor -->
 - **Pull request template.** The shipped template has five fixed sections
   (Summary, Changes, Testing, Reviews, Release impact) with short comments,
   and lists its conditional sections with the exact condition for each. The
