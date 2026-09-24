@@ -251,6 +251,19 @@ impl Catalog {
         }
         let selector = &version.selectors[request.harness];
         if let Some(seat) = seat {
+            if let Some(selection) = &self.selection {
+                if let Some(selected) = selection.resolve(
+                    self,
+                    &self.bindings,
+                    &seat.role,
+                    request.harness,
+                    request.effort,
+                )? {
+                    if selected.model != version.pinned_id {
+                        return Err("version differs from project binding selection".into());
+                    }
+                }
+            }
             if self
                 .full_binding(seat, version, request.harness, selector, request.effort)
                 .is_some()

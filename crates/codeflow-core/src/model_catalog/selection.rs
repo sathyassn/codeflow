@@ -8,14 +8,14 @@ use crate::model_qualification::{
 };
 
 /// ADR-0041 schema 1 references only. No repository selectors or effort edits.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectSelection {
     pub schema_version: u64,
     pub bindings: Vec<BindingReference>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct BindingReference {
     pub role: String,

@@ -4,6 +4,8 @@
 //! authenticates an operator. Callers supply fresh native facts and anchored
 //! plan records. Product lines order versions from oldest to newest.
 
+mod inputs;
+mod operator;
 mod overlay;
 mod resolve;
 mod selection;
@@ -14,6 +16,8 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use crate::model_qualification::RouteEffort as Effort;
+pub use inputs::{load_catalog_document, CatalogInputs};
+pub use operator::{anchored_override, parse_override_route};
 pub use overlay::{CandidateAddition, PersonalOverlay};
 pub use resolve::{
     Eligibility, EligibilityRequest, Exclusion, ExclusionScope, OpenParticipant, OperatorOverride,
@@ -48,6 +52,8 @@ impl CatalogDocument {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct Catalog {
+    #[serde(skip)]
+    pub(crate) selection: Option<ProjectSelection>,
     pub schema_version: u64,
     pub policy_id: String,
     pub families: Vec<Family>,

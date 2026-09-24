@@ -8,6 +8,7 @@ pub mod estimate;
 pub mod git_hook;
 pub mod hook;
 pub mod integrate;
+pub mod models;
 pub mod new;
 pub mod orient;
 pub mod policy;
