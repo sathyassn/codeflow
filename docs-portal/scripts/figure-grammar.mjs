@@ -1117,13 +1117,16 @@ export function probeFigures(options) {
 
 // Runs in the page, self-contained like probeFigures. For each figure, its
 // DOM in canonical form (namespace, name, sorted attributes, text; comments
-// render nothing) and, for every element of its drawings, the computed
-// properties that move, resize, hide or clip a mark. The gate compares both
-// with a clean render of the pinned declaration under the kit sheets alone,
-// so no other stylesheet, inline style or attribute can change a drawing.
+// render nothing) and, for every element of its drawings, a chosen set of
+// computed properties that move, resize, hide, clip or dash a mark. The gate
+// compares the tree with a clean render of the pinned declaration, which fixes
+// every element and attribute, and the chosen properties with that render
+// under the kit sheets alone. The property set is a secondary check: the
+// portal gate refuses page CSS at its source and compares every computed
+// property against a clean copy of the page (browser-verify.mjs).
 export function readFigureDom() {
   const ROOT = ["transform", "translate", "rotate", "scale", "opacity", "clip-path", "mask-image", "filter", "overflow"];
-  const DRAWN = [...ROOT, "display", "visibility", "fill-opacity", "stroke-opacity", "stroke-width", "x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "d", "offset-path"];
+  const DRAWN = [...ROOT, "display", "visibility", "fill-opacity", "stroke-opacity", "stroke-width", "x", "y", "width", "height", "cx", "cy", "r", "rx", "ry", "d", "offset-path", "stroke-dasharray", "stroke-dashoffset"];
   const paint = (value) => (!value || value === "none" ? "none" : /rgba\([^)]*,\s*0\)$/.test(value) || value === "transparent" ? "clear" : value.startsWith("url(") ? "pattern" : "colour");
   const canonical = (node) => {
     if (node.nodeType === Node.TEXT_NODE) return JSON.stringify(node.data);

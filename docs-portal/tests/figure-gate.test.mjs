@@ -153,7 +153,7 @@ test("the adapter refuses a figure binding it can prove wrong from committed inp
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
-test("the mixed fixture renders every class and the gates name only what falls short", { skip: process.platform === "win32", timeout: 300_000 }, async () => {
+test("the mixed fixture renders every class and the gates name only what falls short", { skip: process.platform === "win32", timeout: 900_000 }, async () => {
   const root = await mixedFixture();
   try {
     const adapted = runLocalAdapter(root);
@@ -196,6 +196,12 @@ test("the mixed fixture renders every class and the gates name only what falls s
     assert.deepEqual(await readFile(path.join(root, guide.markdown_twin)), rendered);
 
     buildFixture(root);
+    // Record the built artifacts, as the workflow does: the stylesheets a
+    // page may load are the CSS files among them.
+    const recorded = spawnSync(process.execPath, ["scripts/evidence.mjs"], { cwd: root, encoding: "utf8" });
+    assert.equal(recorded.status, 0, recorded.stderr);
+    const built = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    assert.ok(built.artifacts.some((artifact) => artifact.path.endsWith(".css")));
     const html = await readFile(path.join(root, "dist/reference/guide/index.html"), "utf8");
     assert.match(html, /&lt;div class=(?:"|&quot;)raw(?:"|&quot;)&gt;Raw markup stays text\.&lt;\/div&gt;/);
     assert.match(html, /<a href="\/orient\/product\/">the product page<\/a>/);
@@ -228,23 +234,43 @@ test("the mixed fixture renders every class and the gates name only what falls s
       misrecorded.figures[0].declaration_sha256 = "0".repeat(64);
       assert.throws(() => pinnedDeclarations(snapshot, evidence.repository.commit, misrecorded), new RegExp(`figure declaration ${misrecorded.figures[0].declaration_path} does not match its recorded hash`));
       const kitSheets = pinnedKitSheets(snapshot, evidence.repository.commit, path.relative(path.resolve(root, config.repository_root), root));
-      const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, evidence, declarations, kitSheets);
+      // The clean control: the real build, with the site's own sheets and
+      // chrome styles, fails only the figure built to break a rule.
+      const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, built, declarations, kitSheets);
       assert.equal(drawn, 6);
       assert.ok(failures.length > 0);
       for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
+      assert.deepEqual(failures.filter((failure) => /page CSS|clean copy|not visible to a reader|effective opacity/.test(failure)), []);
       assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states done and stop differ on shape, need 2/.test(failure)), failures.join("\n"));
 
-      // A stylesheet the kit does not ship moves the used bars off their
-      // rows. The DOM is untouched, so only the clean-render comparison of
-      // computed geometry, and the readback on both axes, can see it.
-      const hostile = async (route) => {
-        await visitRoute(route);
-        await page.addStyleTag({ content: ".cf-m-used { translate: 0 1000px; }" });
-      };
-      const moved = (await figureGateFailures(page, hostile, assignments.filter((assignment) => assignment.route === "reference/guide"), evidence, declarations, kitSheets)).failures;
-      const onLimits = /^docs\/guide\.md \(at reference\/guide, (?:page head|#[^,]+), figures\/commit-limits\.json\): rule 6 /;
-      assert.ok(moved.some((failure) => onLimits.test(failure) && /wide: a drawn <rect> has translate 0px 1000px where the kit sheets alone give none/.test(failure)), moved.join("\n"));
-      assert.ok(moved.some((failure) => onLimits.test(failure) && /the row-0 mark spans y/.test(failure)), moved.join("\n"));
+      // Page CSS (R3-2, R4-1, R4-2). Each rule is refused at its source, as a
+      // stylesheet that is not a built sheet, and is also seen by the checks
+      // behind that: every computed property against a clean copy of the page,
+      // the ancestors of each figure, and the figure's visibility.
+      const guideOnly = assignments.filter((assignment) => assignment.route === "reference/guide");
+      const hostile = async (change) => (await figureGateFailures(page, async (route) => { await visitRoute(route); await page.evaluate(change.inject, change.css); }, guideOnly, built, declarations, kitSheets)).failures;
+      const addSheet = (css) => document.head.append(Object.assign(document.createElement("style"), { textContent: css }));
+      const onGuide = /^docs\/guide\.md \(at reference\/guide(?:, (?:page head|#[^,]+), figures\/(?:commit-limits|install-steps)\.json)?\): /;
+      const cases = [
+        [".cf-fig { opacity: 0; }", /<figure class="cf-fig[^"]*"> computes opacity 0 where the clean copy computes 1/, /the figure is not visible to a reader/],
+        [".cf-companion { opacity: 0; }", /<div class="cf-companion[^"]*"> computes opacity 0 where the clean copy computes 1/, /an ancestor <div class="cf-companion[^"]*"> has opacity 0 where the clean copy has 1/],
+        [".cf-fig { clip-path: inset(50%); }", /<figure class="cf-fig[^"]*"> computes clip-path inset\(50%\) where the clean copy computes none/],
+        [".cf-fig { filter: opacity(0); }", /<figure class="cf-fig[^"]*"> computes filter opacity\(0\) where the clean copy computes none/],
+        [".cf-fig-caption { visibility: hidden; }", /<figcaption class="cf-fig-caption"> computes visibility hidden where the clean copy computes visible/, /the caption is not visible to a reader/],
+        [".cf-fig { translate: 0 1000px; }", /<figure class="cf-fig[^"]*"> computes translate 0px 1000px where the clean copy computes none/],
+        [".cf-fig-svg .cf-m-trans { stroke-dasharray: 0 100000; }", /computes stroke-dasharray 0px, 100000px where the clean copy computes none/],
+        [".cf-m-used { translate: 0 1000px; }", /a drawn <rect> has translate 0px 1000px where the kit sheets alone give none/, /the row-0 mark spans y/],
+      ];
+      for (const [css, ...expected] of cases) {
+        const failures = await hostile({ inject: addSheet, css });
+        assert.ok(failures.some((failure) => onGuide.test(failure) && /page CSS: a stylesheet from a <style> element in the head is not a built sheet/.test(failure)), `${css}: ${failures.join("\n")}`);
+        for (const pattern of expected) assert.ok(failures.some((failure) => onGuide.test(failure) && / rule 6 \(/.test(failure) && pattern.test(failure)), `${css} ${pattern}: ${failures.join("\n")}`);
+      }
+      // A style attribute on the content, the figure's ancestor, is refused
+      // at its source and seen on the ancestor chain.
+      const attributed = await hostile({ inject: () => document.querySelector(".sl-markdown-content").setAttribute("style", "opacity: 0.5"), css: null });
+      assert.ok(attributed.some((failure) => /page CSS: a style attribute on <div class="sl-markdown-content[^"]*"> carries CSS the site's sheets do not/.test(failure)), attributed.join("\n"));
+      assert.ok(attributed.some((failure) => /an ancestor <div class="sl-markdown-content[^"]*"> has opacity 0\.5 where the clean copy has 1/.test(failure)), attributed.join("\n"));
     } finally {
       await browser.close();
       await site.close();
@@ -336,11 +362,12 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     // declaration can tell the companion no longer draws what it declares.
     // With `smuggle`, a comment carrying the pristine companion sits beside
     // the edited one: a comment renders nothing, so it proves nothing.
-    const editCaption = async (route, rewrite = null, smuggle = false) => {
+    const captionEdit = (text) => text.replace(/(<figcaption class="cf-fig-caption">)[^<]*/, "$1An edited caption.");
+    const editCaption = async (route, rewrite = null, smuggle = false, edit = captionEdit) => {
       const record = JSON.parse(pristine);
       const page = record.pages.find((entry) => entry.route === route);
       const original = originals.get(route).toString("utf8");
-      let edited = original.replace(/(<figcaption class="cf-fig-caption">)[^<]*/, "$1An edited caption.");
+      let edited = edit(original);
       if (smuggle) edited = edited.replace("<div class=\"cf-companion\"", `<!-- ${original.match(/<div class="cf-companion"[^\n]*/)[0]} -->\n\n<div class="cf-companion"`);
       assert.notEqual(edited, original, route);
       rewrite?.(page, Buffer.byteLength(edited) - Buffer.byteLength(original), Buffer.from(edited));
@@ -369,5 +396,17 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     const smuggled = await editCaption("orient/product", null, true);
     assert.match(smuggled, /orient\/product renders a companion that no bound declaration draws in the concept panel/);
     assert.match(smuggled, /orient\/product does not render the figure its declaration figures\/concept\.json draws/);
+
+    // Page content carries no CSS (R4-1, R4-2). A style block beside the
+    // untouched companion, with every hash rewritten, fails on that alone;
+    // so do a style attribute and a stylesheet link.
+    const ownCss = /orient\/product renders page CSS, which only the site's own sheets may carry: /;
+    for (const rule of [".cf-fig { opacity: 0; }", ".cf-companion { opacity: 0; }", ".cf-fig { clip-path: inset(50%); }", ".cf-fig { filter: opacity(0); }", ".cf-fig-caption { visibility: hidden; }", ".cf-fig { translate: 0 1000px; }", ".cf-fig-svg .cf-m-trans { stroke-dasharray: 0 100000; }"]) {
+      const output = await editCaption("orient/product", null, false, (text) => text.replace("<div class=\"cf-companion\"", `<style>${rule}</style>\n\n<div class="cf-companion"`));
+      assert.match(output, new RegExp(`${ownCss.source}a <style> element`), `${rule}: ${output}`);
+      assert.doesNotMatch(output, /does not render the figure|renders a companion that no bound/, `${rule}: the companion itself is unchanged`);
+    }
+    assert.match(await editCaption("orient/product", null, false, (text) => text.replace("## Concept", "## Concept\n\n<div style=\"opacity: 0\">hidden</div>")), new RegExp(`${ownCss.source}a style attribute on <div>`));
+    assert.match(await editCaption("orient/product", null, false, (text) => text.replace("## Concept", "## Concept\n\n<link rel=\"stylesheet\" href=\"/elsewhere.css\">")), new RegExp(`${ownCss.source}a <link> element`));
   } finally { await rm(root, { recursive: true, force: true }); }
 });

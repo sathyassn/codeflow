@@ -401,10 +401,22 @@ export function pinnedKitSheets(snapshot, commit, portalRelative) {
 // reads the drawn values back against it and the committed values.
 // `kitSheets` is the committed kit CSS: each rendered figure's DOM must equal
 // a clean render of its pinned declaration, and its drawings must compute the
-// same geometry and visibility styles as that render under the kit alone.
+// same chosen geometry and visibility styles as that render under the kit
+// alone. That comparison is secondary to three checks on every page:
+//   1. Page CSS is refused at its source. Every stylesheet must be a link in
+//      the head to a built CSS file the evidence records, served with its
+//      recorded hash and importing nothing; content and a figure's ancestors
+//      carry no style element, link, style attribute or shadow root.
+//   2. Every computed property of each companion, figure and figure
+//      descendant, pseudo-elements included, equals a clean copy of the same
+//      page: loaded afresh, stripped of any CSS the first check refuses, with
+//      the pinned rendering in place of each figure.
+//   3. Each figure, its caption and its legend are visible, and no ancestor
+//      moves, clips, filters or hides it unless the clean copy's does too.
 export async function figureGateFailures(page, visitRoute, assignments, generated, declarations, kitSheets) {
   const failures = [];
   let drawn = 0;
+  const pinnedSheets = pinnedBuiltSheets(generated.artifacts);
   // The clean render gets its own context where the browser allows one (a
   // persistent profile has only its own), so nothing from the page carries.
   const browser = page.context().browser();
@@ -413,17 +425,20 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
   try {
     const recorded = new Map((generated.figures ?? []).map((entry) => [entry.declaration_path, entry]));
     for (const assignment of assignments) {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await visitRoute(assignment.route);
+      for (const failure of await pageCssFailures(page, pinnedSheets)) failures.push(`${assignment.source} (at ${assignment.route}): page CSS: ${failure}`);
       if (!assignment.figures?.length) continue;
       const observed = {};
       for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
         await page.setViewportSize({ width, height: 900 });
         await visitRoute(assignment.route);
-        await page.evaluate((theme) => {
-          document.documentElement.dataset.theme = theme;
-          for (const panel of document.querySelectorAll(".portal-altitude")) panel.hidden = false;
-        }, mode);
+        await page.evaluate(showForReading, { theme: mode, root: null, strip: null, expected: null });
+        await settle(page);
         observed[label] = await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx });
         observed[`${label}Dom`] = await page.evaluate(readFigureDom);
+        observed[`${label}Context`] = await page.evaluate(readFigureContext);
+        observed[`${label}Url`] = page.url();
         observed[`${label}Root`] = await page.evaluate(() => [...document.documentElement.attributes].filter((attribute) => attribute.name.startsWith("data-")).map((attribute) => [attribute.name, attribute.value]));
         observed[`${label}Places`] = await page.evaluate(() => [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
           const companion = figure.closest(".cf-companion");
@@ -441,10 +456,13 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
       if (canonicalJson(found) !== canonicalJson(expected)) {
         failures.push(`${assignment.source} (at ${assignment.route}): the configuration binds ${expected.join(", ") || "no figure"} and the page draws ${found.join(", ") || "none"}`);
       }
+      const rendered = [];
+      const wheres = [];
       for (const [index, place] of places.entries()) {
         drawn += 1;
         const binding = assignment.figures.find((candidate) => candidate.declaration === place.declaration);
         const where = `${assignment.source} (at ${assignment.route}, ${place.altitude ? `${place.altitude} panel` : place.placement === "anchor" ? `#${binding?.anchor}` : "page head"}, ${place.declaration ?? "an unbound figure"})`;
+        wheres.push(where);
         const entry = recorded.get(place.declaration);
         if (entry === undefined) failures.push(`${where}: the evidence manifest records no such figure`);
         const evidence = entry === undefined ? null : {
@@ -460,6 +478,7 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
           composed = composeFigure(declaration, bound);
           expectedHtml = renderFigure(declaration, { idPrefix: `cf-fig-${assignment.figures.indexOf(binding)}`, bound, facts: entry?.facts ?? null });
         } catch (error) { failures.push(`${where}: rule 6 (${FIGURE_RULES[6]}): the committed composition cannot be rebuilt: ${error.message}`); }
+        rendered.push(expectedHtml);
         const ruleFailures = figureRuleFailures({
           wide: observed.wide[index], narrow: observed.narrow[index], wideDark: observed.wideDark[index], narrowDark: observed.narrowDark[index], evidence, composed,
         });
@@ -473,12 +492,183 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
           for (const message of figureDomFailures(observed[`${label}Dom`][index], reading)) failures.push(`${where}: rule 6 (${FIGURE_RULES[6]}): ${label}: ${message}`);
         }
       }
+      // The clean copy of the whole page: the same document, the same site
+      // sheets and the same display state, without page CSS and with each
+      // figure as its pinned declaration renders it.
+      for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
+        await clean.setViewportSize({ width, height: 900 });
+        await clean.goto(observed[`${label}Url`], { waitUntil: "networkidle" });
+        await clean.evaluate(showForReading, { theme: mode, root: observed[`${label}Root`], strip: pinnedSheets.map((sheet) => sheet.path.slice("dist/".length)), expected: rendered });
+        await settle(clean);
+        const baseline = await clean.evaluate(readFigureContext);
+        observed[`${label}Context`].forEach((reading, index) => {
+          for (const message of figureContextFailures(reading, baseline[index])) failures.push(`${wheres[index] ?? assignment.source}: rule 6 (${FIGURE_RULES[6]}): ${label}: ${message}`);
+        });
+      }
     }
   } finally {
     await clean.close();
     await cleanContext?.close();
   }
   return { failures, drawn };
+}
+
+// The stylesheets a build may serve: the CSS files among its recorded
+// artifacts, each with the hash the evidence records for it.
+export function pinnedBuiltSheets(artifacts) {
+  return (Array.isArray(artifacts) ? artifacts : []).filter((artifact) => typeof artifact?.path === "string" && artifact.path.startsWith("dist/") && artifact.path.endsWith(".css")).map((artifact) => ({ path: artifact.path, sha256: artifact.sha256 }));
+}
+
+// Check 1: CSS may reach the page only from the site's own built sheets.
+export async function pageCssFailures(page, pinnedSheets) {
+  const found = await page.evaluate(() => {
+    const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");
+    const scope = new Set(content ? content.querySelectorAll("*") : []);
+    for (const figure of document.querySelectorAll("figure.cf-fig")) for (let node = figure; node; node = node.parentElement) scope.add(node);
+    const carriers = new Set();
+    for (const element of scope) {
+      if (element.localName === "style") carriers.add(`a <style> element in ${content?.contains(element) ? "the page content" : "the page"}`);
+      if (element.localName === "link" && content?.contains(element)) carriers.add("a <link> element in the page content");
+      if (element.hasAttribute("style")) carriers.add(`a style attribute on <${element.localName}${element.classList.length ? ` class="${element.getAttribute("class")}"` : ""}>`);
+      if (element.shadowRoot) carriers.add(`a shadow root on <${element.localName}>`);
+      if (element.localName === "template" && (element.hasAttribute("shadowrootmode") || element.hasAttribute("shadowroot"))) carriers.add("a declarative shadow root");
+    }
+    const sheets = [...document.styleSheets].map((sheet) => {
+      let imports = [];
+      try { imports = [...sheet.cssRules].filter((rule) => rule instanceof CSSImportRule).map((rule) => rule.href); } catch { imports = ["an unreadable rule list"]; }
+      const owner = sheet.ownerNode;
+      return { href: sheet.href, owner: owner?.localName ?? null, inHead: owner?.parentElement === document.head, imports };
+    });
+    return { carriers: [...carriers], sheets, adopted: document.adoptedStyleSheets.length };
+  });
+  const failures = found.carriers.map((carrier) => `${carrier} carries CSS the site's sheets do not`);
+  if (found.adopted) failures.push(`the document adopts ${found.adopted} constructed stylesheet(s)`);
+  const origin = new URL(page.url()).origin;
+  for (const sheet of found.sheets) {
+    if (sheet.owner !== "link" || !sheet.inHead || sheet.href === null) { failures.push(`a stylesheet from ${sheet.owner ? `a <${sheet.owner}> element` : "no element"}${sheet.inHead ? " in the head" : ""} is not a built sheet`); continue; }
+    const url = new URL(sheet.href);
+    const pin = url.origin === origin ? pinnedSheets.find((candidate) => url.pathname.endsWith(`/${candidate.path.slice("dist/".length)}`)) : undefined;
+    if (pin === undefined) { failures.push(`the stylesheet ${url.origin === origin ? url.pathname : url.href} is not a built sheet the evidence records`); continue; }
+    const response = await page.request.get(sheet.href);
+    const served = createHash("sha256").update(await response.body()).digest("hex");
+    if (!response.ok() || served !== pin.sha256) failures.push(`the stylesheet ${url.pathname} is served with sha256 ${served}, not the recorded ${pin.sha256}`);
+    for (const imported of sheet.imports) failures.push(`the stylesheet ${url.pathname} imports ${imported}`);
+  }
+  return failures;
+}
+
+// Runs in the page. Sets the display state to read, and on the clean copy
+// removes every stylesheet that is not a built sheet in the head, every style
+// element, and style attributes in the content and on a figure's ancestors,
+// then puts each figure's pinned rendering in its place.
+function showForReading({ theme, root, strip, expected }) {
+  const html = document.documentElement;
+  if (root !== null) {
+    for (const attribute of [...html.attributes]) if (attribute.name.startsWith("data-")) html.removeAttribute(attribute.name);
+    for (const [name, value] of root) html.setAttribute(name, value);
+  }
+  html.dataset.theme = theme;
+  for (const panel of document.querySelectorAll(".portal-altitude")) panel.hidden = false;
+  if (strip === null) return;
+  const built = (node) => node.localName === "link" && node.parentElement === document.head && strip.some((file) => new URL(node.href, location.href).pathname.endsWith(`/${file}`));
+  for (const node of [...document.querySelectorAll("style, link[rel~='stylesheet']")]) if (!built(node)) node.remove();
+  document.adoptedStyleSheets = [];
+  const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");
+  const scope = new Set(content ? content.querySelectorAll("[style]") : []);
+  for (const figure of document.querySelectorAll("figure.cf-fig")) for (let node = figure.parentElement; node; node = node.parentElement) scope.add(node);
+  for (const node of scope) node.removeAttribute("style");
+  const figures = [...document.querySelectorAll("figure.cf-fig")];
+  expected.forEach((markup, index) => {
+    if (markup === null || !figures[index]) return;
+    const template = document.createElement("template");
+    template.innerHTML = markup;
+    const pristine = template.content.querySelector("figure.cf-fig");
+    if (pristine) figures[index].replaceWith(pristine);
+  });
+}
+
+// Fonts loaded and every finite transition or animation at its end, so two
+// readings of the same page compare settled values.
+async function settle(page) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    for (const animation of document.getAnimations()) {
+      const timing = animation.effect?.getComputedTiming?.();
+      if (timing && Number.isFinite(timing.endTime)) animation.finish();
+    }
+  });
+}
+
+// Runs in the page, self-contained. For each figure in document order: every
+// computed property of its companion, the figure and each descendant, with
+// the ::before and ::after boxes that draw; the geometry and visibility
+// effects of each ancestor to the root; and whether the figure, its caption
+// and its legend are visible.
+export function readFigureContext() {
+  const EFFECTS = ["opacity", "visibility", "display", "content-visibility", "clip-path", "mask-image", "filter", "backdrop-filter", "transform", "translate", "rotate", "scale", "perspective", "offset-path", "zoom"];
+  const name = (element) => `<${element.localName}${element.getAttribute("class") ? ` class="${element.getAttribute("class")}"` : ""}>`;
+  const computed = (element, pseudo = null) => {
+    const style = getComputedStyle(element, pseudo);
+    const values = {};
+    for (let index = 0; index < style.length; index += 1) values[style[index]] = style.getPropertyValue(style[index]);
+    return values;
+  };
+  const visible = (element) => !!element && (typeof element.checkVisibility === "function" ? element.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true }) : element.getClientRects().length > 0);
+  return [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
+    const companion = figure.closest(".cf-companion");
+    const elements = [...(companion ? [companion] : []), figure, ...figure.querySelectorAll("*")];
+    const styles = elements.flatMap((element) => {
+      const entries = [{ element: name(element), values: computed(element) }];
+      for (const pseudo of ["::before", "::after"]) {
+        const values = computed(element, pseudo);
+        if (values.content && values.content !== "none" && values.content !== "normal") entries.push({ element: `${name(element)}${pseudo}`, values });
+      }
+      return entries;
+    });
+    const chain = [];
+    let opacity = 1;
+    for (let node = figure; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      opacity *= Number(style.opacity);
+      if (node !== figure) chain.push({ element: name(node), values: Object.fromEntries(EFFECTS.map((property) => [property, style.getPropertyValue(property)])) });
+    }
+    const box = figure.getBoundingClientRect();
+    return {
+      styles,
+      chain,
+      opacity,
+      visible: { figure: visible(figure) && box.width > 0 && box.height > 0, caption: visible(figure.querySelector(".cf-fig-caption")), legend: visible(figure.querySelector(".cf-legend")) },
+    };
+  });
+}
+
+// Checks 2 and 3 for one figure, against the clean copy of its page.
+export function figureContextFailures(observed, baseline) {
+  if (!observed || !baseline) return ["the figure or its clean copy could not be read"];
+  const failures = [];
+  for (const [part, shown] of Object.entries(observed.visible)) if (!shown && baseline.visible[part]) failures.push(`the ${part} is not visible to a reader`);
+  if (observed.opacity < 1 && !(baseline.opacity < 1)) failures.push(`the figure draws at an effective opacity of ${observed.opacity}`);
+  if (observed.chain.length !== baseline.chain.length) failures.push("the figure sits in a different place in the page from its clean copy");
+  else observed.chain.forEach((ancestor, position) => {
+    const clean = baseline.chain[position];
+    for (const [property, value] of Object.entries(ancestor.values)) {
+      if (value !== clean.values[property]) failures.push(`an ancestor ${ancestor.element} has ${property} ${value} where the clean copy has ${clean.values[property]}`);
+    }
+  });
+  if (observed.styles.length !== baseline.styles.length) {
+    failures.push(`the companion draws ${observed.styles.length} styled boxes where its clean copy draws ${baseline.styles.length}`);
+    return failures;
+  }
+  observed.styles.forEach((entry, position) => {
+    const clean = baseline.styles[position];
+    if (entry.element !== clean.element) { failures.push(`${entry.element} stands where the clean copy has ${clean.element}`); return; }
+    const properties = new Set([...Object.keys(entry.values), ...Object.keys(clean.values)]);
+    const differing = [...properties].filter((property) => entry.values[property] !== clean.values[property]).sort();
+    if (!differing.length) return;
+    const shown = differing.slice(0, 4).map((property) => `${property} ${entry.values[property] ?? "unset"} where the clean copy computes ${clean.values[property] ?? "unset"}`);
+    failures.push(`${entry.element} computes ${shown.join(", ")}${differing.length > 4 ? `, and ${differing.length - 4} more` : ""}`);
+  });
+  return failures;
 }
 
 // One structural read per page: the same observation the declared class rules
