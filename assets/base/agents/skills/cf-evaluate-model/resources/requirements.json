@@ -2448,7 +2448,7 @@
             "1: take it without asking; progress goes in the running report, never in an offer",
             "1: choose from evidence and disclose it",
             "1: classify and continue; fix an assertion-red check, push and poll again",
-            "2: the primary merges without fast forward and reruns the gate",
+            "2: the primary merges it without fast forward or with `codeflow integrate`, then reruns the gate",
             "3: ask for a fresh grant",
             "4: wait for the operator; do not spend",
             "4: report it ready; a human merges"

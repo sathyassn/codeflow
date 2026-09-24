@@ -219,6 +219,16 @@ canaries. A model grader evaluates only the rubric dimensions that deterministic
 checks cannot settle. Give it an `unknown` outcome when evidence is insufficient.
 Calibrate model graders against human decisions and retain disagreements.
 
+A fixture may pin files that its grade depends on, such as a stand-in's
+scenario, a grant or a policy (`state.pinned_files`). `materialize` records
+their SHA-256 in the receipt and in `codeflow-eval-pins.json` in the fixture's
+git directory before the trial, and the `gh` stand-in checks its scenario
+against that pin on every call. After the trial, run
+`eval_kit.py check-trial --record <receipt>`. It fails the trial when a pinned
+file or the pin record changed, when the stand-in logged `scenario_mismatch`,
+or when a `pr checks` poll, including each `--watch` iteration, came less than
+a minute after the last or polling ran past thirty minutes.
+
 For the independent-plan case, record both plan digests and evidence that each
 was completed before the first cross-exposure. Two summaries created after one
 model saw the other's plan do not satisfy the requirement.
