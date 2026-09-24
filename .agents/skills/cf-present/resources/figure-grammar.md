@@ -224,13 +224,21 @@ drawn value differs; present draws facts as declared.
 
 The portal gate checks what a page renders against what its pinned
 declaration draws. `codeflow validate --portal` parses each page as a browser
-would and fails any figure or companion markup that is not a companion equal
-to its rebuild. The browser gate compares each figure's rendered DOM with a
-clean render of the pinned declaration, and its geometry and visibility
-styles with that render under the kit sheets alone. It detects drift and
-hand edits to generated output and to derived values. It does not defend
-against a committer who can also change the validator, the grammar module or
-the kit sheets; review and CI own that boundary.
+would. It fails any figure or companion markup that is not a companion equal
+to its rebuild, and any CSS in page content: a style element, a link element,
+a style attribute or a declarative shadow root. The browser gate refuses any
+stylesheet that is not a built CSS file the evidence records, served with its
+recorded hash, and any style carrier in the content or on a figure's
+ancestors. It compares each figure's DOM with a clean render of the pinned
+declaration, and every computed property of the companion, the figure and its
+descendants with a clean copy of the page that has no page CSS. The figure,
+its caption and its legend must be visible, and no ancestor may move, clip,
+filter or hide the figure unless the clean copy's does too. The gate detects
+drift, hand edits to generated output, page CSS and changed derived values.
+It compares computed styles, not pixels. It trusts the site's built sheets,
+which come from the committed runtime and kit sheets, and it does not defend
+against a committer who can also change the validator, the grammar module,
+the portal runtime or those sheets; review and CI own that boundary.
 
 ## 7. Chat form
 
