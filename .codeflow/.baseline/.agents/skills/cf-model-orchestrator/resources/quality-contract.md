@@ -29,11 +29,23 @@ COVERAGE_PLAN:
 ROLLBACK_OR_RECOVERY:
 CLAUDE_APPROVAL:
 CODEX_APPROVAL:
+SETTLED_DISSENT: <none | item | both verdicts | evidence | why reversible>
 ```
 
 Use a content digest or durable link for the immutable brief. Approvals must name
 the same plan version. A changed plan invalidates both approvals until each seat
-reviews the new version.
+reviews the new version; after a recorded seat loss, the exception in
+[task-graph.md](task-graph.md) says who approves.
+
+After two reconciliation rounds, the Claude judgment primary settles a
+disagreement on a reversible choice inside the accepted outcome as
+`cf-method/references/autonomy.md` "Settled dissent" allows. `SETTLED_DISSENT`
+records the item, both verdicts, the evidence, and why the item is reversible
+and settleable. The dissenting seat's verdict on that item stays as given and is
+never recorded as approval; that seat must still approve the rest of Plan vN.
+Any other open item keeps its gate: an operator-owned item stops only that item
+for the operator, and a safety, security, evidence-adequacy or correctness
+dissent is not settleable and returns to repair.
 
 For multi-task work, `TASK_GRAPH` follows
 [the settled task graph contract](task-graph.md), covers exactly the assigned
@@ -204,8 +216,8 @@ impediment before escalating it:
   repository evidence and the safest durable route, with the choice disclosed;
 - an external dependency or enforced gate is recorded with the exact evidence
   or input that clears it; and
-- a choice that changes desired outcome, public contract, scope or authority,
-  risk tolerance, or an irreversible tradeoff belongs to the operator.
+- a choice that `cf-method/references/autonomy.md` reserves to the operator
+  goes to them as one question with a recommendation.
 
 Record the last failed attempt and what evidence changed. One bounded
 confirmation of a prior failure is allowed when current provenance or freshness
@@ -214,10 +226,11 @@ failure, change hypothesis or strategy and never retry it again unchanged. When
 a bounded tactical cycle fails, move up a level: restate the actual constraint
 and current critical path, compare viable strategies, and reroute only if
 accepted outcome, scope, authority, and every quality/safety gate remain intact.
-Ask the operator only for a real external dependency or owner decision, and
-present verified state, attempts, options with consequences, and a
-recommendation. Gate failure is information to fix or honor, not automatic
-evidence that the operator must decide.
+Ask the operator only what `cf-method/references/autonomy.md` reserves to
+them, including an input only they can supply, and present verified state,
+attempts, options with consequences, and a recommendation. Gate failure is
+information to fix or honor, not automatic evidence that the operator must
+decide.
 
 A **gate** is the verification check (`codeflow test` target, coverage floor,
 OSV/security scan, `validate --docs`, …), not the CI job that happens to run
@@ -235,14 +248,21 @@ it. Classify redness before acting:
    infra death as `track once` (runner capacity or job shape), not a product
    defect. Retrying the same unfinished umbrella job without a new hypothesis
    is orbiting.
-3. **Never ran.** The owed check has no completed result anywhere. That is a
-   missing gate: blocker or declared limitation, never a pass.
+3. **Never ran.** The owed check has no completed result anywhere and no
+   local equivalent. That is a missing gate: name it as the blocker, never a
+   pass. The pull request stays draft where required evidence is missing, and
+   other authorized work continues.
 
 A red job that only restacks already-green checks is (2), not (1). Asking the
 operator to pick an implementation tactic because a job name is red is the
 failure ADR-0038 forbids. Asking them to wait, rerun, or override a host
 required-status that is infra-incomplete *is* operator-owned: it is merge
-authorization on that host, not a failed test. Agents still never merge.
+authorization on that host, not a failed test. "Ready for your merge on local
+evidence" needs a completed green result of every owed required check at the
+pull request head; `cf-ship`'s `references/pr-evidence.md` owns that report.
+Merges follow `cf-ship` step 8: the primary merges only into an `integration/`
+branch no protected-branch policy covers, and a human merges every protected
+target.
 
 Remediation effort is planning input only. It may change sequence or ownership;
 it never lowers severity or justifies choosing an easy cosmetic change over a
@@ -641,12 +661,14 @@ prompt/instruction surface where present.
 
 Completion requires:
 
-- both seats approved the final plan version and task breakdown;
+- both seats approved the final plan version and task breakdown, or it is
+  approved with recorded settled dissent on named reversible items, or the
+  standing seats approved it after a recorded seat loss;
 - every acceptance criterion is evidenced;
 - required deterministic gates are green;
 - when a PR was opened, its required checks were followed within the ship
   poll budget, and the operator received the readiness report with the PR
-  URL the tool printed; no agent merged it;
+  URL the tool printed; no agent merged it into a protected target;
 - coverage meets the applicable floor;
 - UI/design evidence is present or explicitly N/A;
 - every unit has approved cross-lineage review and the selected Claude judgment

@@ -78,7 +78,8 @@ A materially fresh native signal may clear or replace the exclusion.
 
 A change to the responsible primary or cross-lineage reviewer seat or lineage is
 reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
-work continues. A same-seat trigger-based effort escalation, including direct
+work continues, except after a seat loss (see "Review and degradation"). A
+same-seat trigger-based effort escalation, including direct
 high→xhigh, is ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
 high primary stays the orchestrator and spawns same-family workers at that
 effort. Spawn through the harness's native child-effort knob or a `ROLE:
@@ -289,8 +290,15 @@ the primary. The
 the Claude primary.
 
 If a planned seat, route, or required tool is unavailable before approval,
-select another qualified assignment and settle a new plan version. Mid-run loss
-gets one bounded retry and diagnosis; changing a named seat requires
-reassignment and fresh approval. If no cross-lineage route remains, use the
-documented solo fallback with separate read-only review where possible, record
-the missing capability and reduced assurance, and never claim duo completion.
+select another qualified assignment and settle a new plan version. A seat lost
+after approval gets one bounded retry and diagnosis. Then the unit moves to
+that participant's next eligible alternative, which is the recorded fallback
+until the model catalog lands. The reassignment is Plan vN+1, approved by every
+available standing seat under the exception in [task-graph.md](task-graph.md).
+Record the lost seat unavailable with reduced assurance; never wait on it or
+record it as approving, and keep any verdict it gave before the loss as given.
+Buying credits is spend and stays with the operator: do not purchase, name it
+in the report and continue on the fallback. If no cross-lineage route remains,
+use the documented solo fallback with separate read-only review where possible,
+record the missing capability and reduced assurance, and never claim duo
+completion.

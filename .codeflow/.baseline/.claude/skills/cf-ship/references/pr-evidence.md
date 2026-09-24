@@ -68,9 +68,20 @@ Classify each red or stuck check with the quality contract's redness classes:
   completed green run of the same check still counts, as the quality contract
   says. Do not rerun the same job without a new reason.
 
-Never merge. When every required check is green, or the thirty minutes end,
-send one readiness report without being asked. It gives the PR URL exactly as
+When every required check is green, or the thirty minutes end, send one
+readiness report without being asked. It gives the PR URL exactly as
 `gh pr create` or `gh pr view --json url` printed it, never one built from a
 number or guessed. It lists each required check with its state, any missing
-evidence with its reason, and the next action. For a green PR the next action
-is a human merge.
+evidence with its reason, and the next action. Who merges a green PR depends
+on its target, as `cf-ship` step 8 says: the primary merges into an
+`integration/` branch no protected-branch policy covers and says so in the
+report; for every protected target, including a protected `integration/`
+glob, the next action is a human merge.
+
+Say "ready for your merge on local evidence" only when every owed required
+check has a completed green result of the same check at the PR head, locally
+or in a completed hosted job. Paste the local full gate summary with the head
+SHA, and name each hosted job that never ran with the reason the tool gave. A
+required check with no completed result anywhere and no local equivalent is a
+missing gate: name it as the blocker, keep the PR draft where required
+evidence is missing, and continue other authorized work.

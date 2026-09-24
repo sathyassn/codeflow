@@ -332,4 +332,4 @@ content. Do **not** propose auto-running the skill.
 Report completion with the prioritized findings, the tool fixes applied or
 declined (and what each declined fix costs), the artifacts filled, and the gate
 output. Apply `cf-editorial-review` to the substantive report and artifact
-edits, then hand off to `cf-ship` to land the PR — a human merges it.
+edits, then hand off to `cf-ship`, whose step 8 says who merges the PR.

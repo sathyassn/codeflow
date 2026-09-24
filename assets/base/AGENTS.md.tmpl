@@ -218,8 +218,8 @@ or untracked work first. Unproven work is retained, never guessed safe.
 
 Parallelize independent work when it shortens the critical path, but make the
 settled task graph, file ownership, and integration order explicit first. Use
-the orchestrator's canonical node/edge notation for multi-task work; a material
-graph mutation requires a newly dual-approved plan version, while ordinary
+the orchestrator's node/edge notation for multi-task work; a material graph
+mutation needs dual-approved Plan vN+1 (seat loss: see its `task-graph.md`);
 in-node detail does not. Each
 parallel task gets one owner, branch, and worktree; never let two sessions write
 the same worktree or concurrently edit a shared contract, schema, migration, or

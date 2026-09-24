@@ -105,6 +105,15 @@ dependent work continues when evidence requires any of these:
 - change concurrency or integration constraints in a way that alters safe
   isolation, ownership, evidence, or the critical path.
 
+Two recorded exceptions apply to that approval. A reversible item may carry
+`SETTLED_DISSENT` under the [quality contract](quality-contract.md) plan
+record. When a seat is lost after approval, the reassignment that
+[capability-routing.md](capability-routing.md) "Review and degradation"
+describes is Plan vN+1 approved by every available standing seat. The lost
+seat is recorded unavailable with reduced assurance. It is never waited on and
+never recorded as approving, and any verdict it gave before the loss stays as
+given.
+
 These remain execution evidence inside the approved graph unless they cross a
 boundary above:
 

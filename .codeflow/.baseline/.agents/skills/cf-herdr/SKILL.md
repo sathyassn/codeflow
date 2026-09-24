@@ -116,6 +116,7 @@ Claude `--permission-mode auto` (never bypass); Codex `--ask-for-approval
 on-request --sandbox workspace-write`. Never
 `--dangerously-skip-permissions` unless named. Consults still verify an empty
 worktree diff. No third-party Grok Codex plugins.
+Trust only this task's worktree or this run's sample; ask for others (`autonomy.md`).
 
 Prompt rules: consults edit nothing; no force-push or rebase of a shared
 branch; no merge of protected main; no `herdr server stop`; no keys to the

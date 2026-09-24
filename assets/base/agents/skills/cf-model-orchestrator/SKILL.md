@@ -38,12 +38,13 @@ test strength, read
 [resources/verification-selection.md](resources/verification-selection.md).
 For a new or materially reshaped user-facing surface, load `cf-design` before
 settling Plan vN; a bounded change may record its explicit `conform` or `N/A`
-path instead. Staged routes keep startup concise.
+path instead.
 
 ## Outcome modes
 
-Select the smallest complete stage set before starting; do not manufacture an
-implementation stage for an analysis-only request.
+Select the smallest complete stage set. A change request selects implementation
+through the readiness report; research, plan or review alone needs a brief that
+asks only for it.
 
 - **Research/analysis:** independent discovery, evidence comparison, settled
   findings, then stop without edits.
@@ -176,9 +177,8 @@ produces design.
 
 1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
    non-goals. Use `cf-plan`'s clarity gate: discover repository and external
-   facts autonomously, and ask only when a missing answer changes an
-   operator-owned outcome, public behavior, authority, material security
-   boundary, or irreversible action.
+   facts autonomously, and ask the operator only what
+   `cf-method/references/autonomy.md` reserves to them.
    When the brief concerns agentic operating/development estimates, capacity or
    deadlines, route to `cf-estimate` after context discovery: offer a useful
    preview, reuse compatible adoption or respect decline. Do not turn an
@@ -245,8 +245,8 @@ produces design.
 Preflight solo `/cf-develop` requires exhausted qualified `cf-delegate` routes,
 recorded missing seat/reduced assurance, and fresh-context independent review:
 `cf-reviewer` when available, else a separate read-only pass; self-review is not
-review. Auth failure stops; a mid-run failure gets bounded retry/diagnosis, then
-human escalation—never a silent downgrade.
+review. Auth failure stops; a mid-run failure gets one bounded retry, then
+capability-routing's seat-loss route, never a silent downgrade.
 
 ## Workflow
 
@@ -279,8 +279,8 @@ rather than manufacturing design ceremony.
 The host reconciles the two drafts into **Plan v1** using the plan contract in
 the quality resource. Both seats review exactly that version. Amendments create
 v2, v3, and so on; approval of an older version does not carry forward.
-Convergence is bounded to two reconciliation rounds. If both do not explicitly
-approve the same version, stop for the human.
+Convergence is bounded to two reconciliation rounds; past them, the plan
+contract's `SETTLED_DISSENT` rule decides each open item.
 
 For multi-task work, both approvals cover the same canonical task graph. A
 material node, dependency, decision guard, ownership, acceptance, interface, or
@@ -317,9 +317,9 @@ fitness check—or records `none selected`.
 
 Claude reviews design fidelity; Codex reviews executability. Both approve tasks
 and assignments. A responsible-primary/reviewer seat or lineage change creates
-Plan vN+1 and requires both approvals; trigger-based same-seat escalation and a
-permitted executor change within unchanged ownership/scope/isolation are ledger
-evidence, not reassignment.
+Plan vN+1, approved as `resources/task-graph.md` says; trigger-based same-seat
+escalation and a permitted executor change within unchanged
+ownership/scope/isolation are ledger evidence, not reassignment.
 
 If implementation has independent tasks, add an explicit execution graph:
 
@@ -335,7 +335,8 @@ Do not parallelize a short task when coordination costs more than it saves.
 Never use concurrent writers in one worktree or rebase a shared integration
 branch.
 
-After both seats approve the exact Plan vN and task graph, invoke `cf-plan` to
+After both seats approve the exact Plan vN and task graph, or record settled
+dissent, invoke `cf-plan` to
 materialize only the warranted epic/spec/task/ADR records on a `plan/` branch.
 Validate them and merge that planning PR into each task's declared
 `integration_target`. Before implementation, each durable task uses

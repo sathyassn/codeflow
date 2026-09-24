@@ -61,22 +61,23 @@ description: Land finished work — docs and capability updates, then a PR throu
 7. Follow the PR per
    [references/pr-evidence.md](references/pr-evidence.md): poll required
    checks at most once a minute for up to thirty minutes, fix assertion-red
-   without asking, report infra-incomplete as missing evidence, never merge,
-   and report readiness with the PR URL the tool printed.
-8. Land via a PR **merged by a human** when required *checks* are evidenced
-   green (the same `codeflow test` / `validate` / coverage / security targets,
-   locally or in completed CI jobs — a gate is the check, not the job name).
-   Classify CI redness with the quality contract: assertion-red blocks;
-   an infra-killed job that only restacks already-green checks does not. If
-   the host merge UI still requires that unfinished job by name, the human
-   waits, reruns, or overrides — that is merge authorization, not a failed
-   test. Or `codeflow integrate <branch> --into <target>` when there is no
-   remote. An agent never merges into a protected branch — no `gh pr merge`
-   into a protected base, no by-hand merge, never `gh pr merge --delete-branch`.
-   Override envs (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
+   without asking, report infra-incomplete as missing evidence, and report
+   readiness with the PR URL the tool printed.
+8. Merge by target once required *checks* are evidenced green, locally or in
+   completed CI jobs (a gate is the check, not the job name; the quality
+   contract classifies redness). The primary merges a green, reviewed PR into
+   an `integration/` branch no protected-branch policy covers (`main`,
+   `master`, `.codeflow/policy.json` globs) without fast forward or with
+   `codeflow integrate <branch> --into <target>`, then reruns the gate. A
+   protected target, including a protected `integration/` glob, is reported
+   ready (on local evidence only as `pr-evidence.md` allows) and **merged by a
+   human**, through the PR or `codeflow integrate`. An agent never merges
+   into a protected target: no `gh pr merge` or by-hand merge there, never
+   `gh pr merge --delete-branch`, and override envs
+   (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only.
 9. Confirm the landed state with `codeflow status`; report the final epic and
    capability state.
-10. Clean up after the human merge, with proof. From outside the task worktree:
+10. Clean up after either merge, with proof. From outside the task worktree:
     - fetch, then use `codeflow status` as the local worktree/branch inventory;
       its removable/dirty/unproven classification is evidence, not deletion or
       ownership authorization. Confirm the task owner is inactive before
