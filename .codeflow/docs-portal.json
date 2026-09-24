@@ -178,7 +178,7 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "4cafacd21ae1e3386a55750e49c8e88478f856f3101031588acf709a5b6dc6d6"
+      "pristine_sha256": "33c358adda233f994b5ed6373e59048a6f4610af8894d7fe9781e13c5b7e64b8"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",

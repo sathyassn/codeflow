@@ -4,8 +4,9 @@
 // then read in a browser, where the class rules and the twelve figure rules
 // are applied to what actually renders.
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { mkdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "@playwright/test";
@@ -14,7 +15,7 @@ import { figureGateFailures, observePortalPage } from "../scripts/browser-verify
 import { classifyPortalPages, declaredCarrierFailures, pageClassFailures } from "../scripts/page-classes.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { COMPOSED_PAGE, FIGURE_FACTS_PATH, SHELL_PAGE, panelBindings, specimen, writeFigureInputs } from "./page-shapes.mjs";
-import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture } from "./portal-fixture.mjs";
+import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture, starterRoot } from "./portal-fixture.mjs";
 
 const GUIDE = [
   "# Install guide", "",
@@ -228,5 +229,79 @@ test("the mixed fixture renders every class and the gates name only what falls s
       await browser.close();
       await site.close();
     }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// The Rust validator reads what the adapter wrote. With the portal in a
+// folder of its repository, as consumers adopt it, `validate --portal`
+// accepts the illustrated page with its inserted figure, and refuses the
+// route once its body no longer equals the committed source, even with every
+// recorded hash rewritten to match. Runs where this checkout has built the
+// codeflow binary.
+const codeflowBinary = path.join(starterRoot, "..", "target", "debug", process.platform === "win32" ? "codeflow.exe" : "codeflow");
+test("validate --portal accepts the inserted figure and refuses a tampered source", { skip: process.platform === "win32", timeout: 300_000 }, async (context) => {
+  if (!(await stat(codeflowBinary).then(() => true, () => false))) { context.skip("the codeflow binary is not built in this checkout"); return; }
+  const root = await mkdtemp(path.join(starterRoot, ".portal-test-runtime-"));
+  try {
+    const portal = path.join(root, "portal");
+    await mkdir(portal);
+    for (const item of [".gitignore", ".node-version", "astro.config.mjs", "package.json", "package-lock.json", "portal.config.json", "scripts", "src", "public", "tsconfig.json"]) {
+      await cp(path.join(starterRoot, item), path.join(portal, item), { recursive: true });
+    }
+    await mkdir(path.join(root, ".codeflow"));
+    await mkdir(path.join(root, "docs"));
+    await mkdir(path.join(root, "figures"));
+    await writeFile(path.join(root, ".codeflow/project.toml"), "schema_version = 1\n");
+    await writeFile(path.join(root, "docs/guide.md"), GUIDE);
+    await writeFile(path.join(root, "docs/product.md"), "# Product\n\nAn explanatory page left unillustrated.\n");
+    const steps = await specimen("04-sequence.json");
+    steps.figure.id = "install-steps";
+    steps.figure.facts = [{ claim: "The install section lists two steps", source: "docs/guide.md#install", derive: "numbered items in the Install section", check: { kind: "count-items" }, value: 2 }];
+    await writeFile(path.join(root, "figures/install-steps.json"), `${JSON.stringify(steps, null, 2)}\n`);
+    const config = JSON.parse(await readFile(path.join(portal, "portal.config.json"), "utf8"));
+    Object.assign(config, {
+      repository_root: "..", source_roots: ["docs"], exclude: [], primitive_tokens: null, repository_url: null, release_version: null,
+      records: { enabled: false, layer: null, pointers: [] }, layers: LAYERS, base: "/", page_carriers: [],
+      page_classes: [{ source: "docs/guide.md", class: "illustrated" }],
+      figures: [{ declaration: "figures/install-steps.json", route: "reference/guide" }],
+    });
+    const configText = `${JSON.stringify(config, null, 2)}\n`;
+    await writeFile(path.join(portal, "portal.config.json"), configText);
+    const { GENERATOR } = await import("../scripts/generator.mjs");
+    await writeFile(path.join(root, ".codeflow/docs-portal.json"), `${JSON.stringify({
+      schema_version: 2, root: "portal", starter_version: GENERATOR.version, runtime_ownership: "managed", generator: GENERATOR,
+      files: { "portal.config.json": { ownership: "user-owned", pristine_sha256: sha256(configText) } },
+    }, null, 2)}\n`);
+    for (const args of [["init", "-q"], ["config", "user.email", "portal-tests@codeflow.invalid"], ["config", "user.name", "CodeFlow portal tests"], ["add", "-A"], ["commit", "-q", "-m", "nested portal fixture"]]) {
+      const result = spawnSync("git", ["-C", root, ...args], { encoding: "utf8" });
+      assert.equal(result.status, 0, result.stderr);
+    }
+    // The build steps the workflow runs, with the dependencies of this
+    // checkout: adapt, build the site, record the built artifacts.
+    runLocalAdapter(portal);
+    buildFixture(portal);
+    const recorded = spawnSync(process.execPath, ["scripts/evidence.mjs"], { cwd: portal, encoding: "utf8" });
+    assert.equal(recorded.status, 0, recorded.stderr);
+    const validate = () => spawnSync(codeflowBinary, ["validate", "--portal", "portal"], { cwd: root, encoding: "utf8" });
+    const accepted = validate();
+    assert.match(accepted.stdout + accepted.stderr, /validate --portal: 2 page\(s\) clean/, accepted.stdout + accepted.stderr);
+
+    // Rewrite one byte of the committed body inside the rendered region and
+    // every hash that records it: only the source equality can still fail.
+    const evidencePath = path.join(portal, ".portal/generated/evidence.json");
+    const evidence = JSON.parse(await readFile(evidencePath, "utf8"));
+    const guide = evidence.pages.find((page) => page.route === "reference/guide");
+    const rendered = await readFile(path.join(portal, guide.output_markdown));
+    const tampered = Buffer.from(rendered.toString("utf8").replace("2. Check the result.", "2. Chuck the result."));
+    const region = guide.source_region;
+    guide.source_region.region_sha256 = sha256(tampered.subarray(region.output_offset_bytes, region.output_offset_bytes + region.region_bytes));
+    guide.output_markdown_sha256 = sha256(tampered);
+    guide.markdown_twin_sha256 = sha256(tampered);
+    await writeFile(path.join(portal, guide.output_markdown), tampered);
+    await writeFile(path.join(portal, guide.markdown_twin), tampered);
+    await writeFile(evidencePath, `${JSON.stringify(evidence, null, 2)}\n`);
+    const refused = validate();
+    assert.notEqual(refused.status, 0);
+    assert.match(refused.stdout + refused.stderr, /reference\/guide rendered source region does not equal the committed source: the page body no longer equals the committed source/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
