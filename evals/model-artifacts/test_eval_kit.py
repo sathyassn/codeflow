@@ -8,6 +8,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import re
 import subprocess
 import sys
 import tempfile
@@ -121,18 +122,19 @@ VISUAL_DOCTRINE_INVENTORY = {
         "CF-FIG-004", ("narrow_reflows_wide_mark_set",), ("narrow_elongation_above_default_with_stated_reason",)),
     "token-exchange-labels-stay-clear": ("CF-FIG-005", ("label_overprints_label_or_mark",), ()),
     "access-grid-marks-read-at-small-size": ("CF-FIG-006", ("inner_mark_under_floor_at_narrow",), ()),
-    "limits-figure-draws-todays-value": ("CF-FIG-007", ("drawn_value_differs_from_source_today",), ()),
+    "limits-figure-draws-todays-value": (
+        "CF-FIG-007", ("drawn_value_differs_from_source_today", "source_value_edited_to_match_drawing"), ()),
     "planes-figure-claims-only-what-the-repository-holds": (
         "CF-FIG-007", ("fact_asserts_what_source_does_not_hold",), ()),
     "key-rotation-section-is-drawn": (
-        "CF-FIG-008", ("rotation_section_left_without_figure",), ("rotation_figure_in_state_family",)),
+        "CF-FIG-008", ("rotation_section_left_without_figure",), ("rotation_figure_inline_beside_its_section",)),
     "edge-cache-opening-says-what-it-is-not": ("CF-FIG-008", ("opening_panel_drawn_as_request_sequence",), ()),
 }
 EXPLANATION_METHOD_INVENTORY = {
     "guide-page-from-a-policy-source": ("CF-METH-001", ("source_reprinted_under_altitudes_with_box_stage",), ()),
     "enforcement-planes-answered-in-chat": (
-        "CF-METH-002", ("commit_flow_figure_for_planes_question", "remote_plane_marked_active"),
-        ("remote_plane_drawn_with_inactive_mark",)),
+        "CF-METH-002", ("commit_flow_figure_for_planes_question", "ci_plane_marked_active", "remote_plane_marked_unarmed"),
+        ("ci_plane_omitted_with_caption_note",)),
     "display-panel-and-first-paint-take-different-carriers": (
         "CF-METH-002", ("display_panel_drawn_as_ascii_art", "first_paint_shown_as_screenshot"), ()),
     "readme-figure-uses-the-text-form": (
@@ -573,6 +575,54 @@ class SuiteContractTests(unittest.TestCase):
         self.assertTrue(any(s.startswith("first_paint_") for s in display["signals"]))
         self.assertTrue(any(s.startswith("display_panel_") for s in display["must_not"]))
         self.assertTrue(any(s.startswith("first_paint_") for s in display["must_not"]))
+
+    def test_method_controls_grade_committed_answers(self) -> None:
+        # Committed answers for the chat, README and smallest-carrier cases:
+        # the kit computes each recorded decision from the grader's signals,
+        # and every form signal agrees with the answer text itself.
+        directory = ROOT / "evals/model-artifacts/method-controls"
+        controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
+        cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+        method = set(eval_kit.resolve_pack("explanation-method"))
+        self.assertEqual(method, set(controls["cases"]) | set(controls["not_practical"])
+                         | {"complex-review-uses-declarative-presentation"})
+        fence = re.compile(r"^```([^\n]*)\n(.*?)^```", re.M | re.S)
+        for case_id, entries in controls["cases"].items():
+            case = cases[case_id]
+            self.assertEqual({"passing", "faulty"}, {entry["role"] for entry in entries}, case_id)
+            for entry in entries:
+                text = (directory / entry["answer"]).read_text(encoding="utf-8")
+                signals = set(entry["signals"])
+                fences = fence.findall(text)
+                prose = fence.sub("", text)
+                text_figure = any(language.strip() in ("", "text") for language, _ in fences)
+                with self.subTest(case=case_id, answer=entry["answer"]):
+                    trial = control_trial(case, entry["signals"])
+                    self.assertEqual(entry["decision"], eval_kit.computed_trial_status(trial, case))
+                    self.assertEqual(entry["role"] == "passing", entry["decision"] == "pass")
+                    if case_id == "readme-figure-uses-the-text-form":
+                        self.assertEqual(text_figure, "fenced_text_figure_in_readme" in signals)
+                        self.assertEqual(any(language.strip() == "mermaid" for language, _ in fences),
+                                         "mermaid_fence_in_readme" in signals)
+                        self.assertEqual(bool(re.search(r"!\[[^\]]*\]\([^)]*\.svg\)", text)),
+                                         "svg_file_linked_from_readme" in signals)
+                    if case_id == "three-unrelated-rules-take-the-smallest-carrier":
+                        self.assertEqual(not fences, "no_figure" in signals)
+                        self.assertEqual(bool(fences), "figure_for_unrelated_facts" in signals)
+                        bullets = [line for line in prose.splitlines() if line.startswith("- ")]
+                        self.assertEqual(len(bullets) == 3 and not fences, "bullets_or_small_table" in signals)
+                    if case_id == "enforcement-planes-answered-in-chat":
+                        # A terminal surface calls for the fenced text form.
+                        self.assertEqual("terminal", entry["surface"])
+                        if "layering_figure_in_the_form_the_surface_calls_for" not in signals:
+                            continue
+                        self.assertTrue(text_figure)
+                        # One row per plane: CI is a row unless it is omitted,
+                        # and then the prose says why.
+                        rows = [line.split()[0] for _, body in fences for line in body.splitlines() if line.strip()]
+                        self.assertEqual("CI" in rows, "ci_plane_omitted_with_caption_note" not in signals)
+                        if "ci_plane_omitted_with_caption_note" in signals:
+                            self.assertIn("CI", prose)
 
     def test_visual_doctrine_fixtures_ship_the_defect_their_case_grades(self) -> None:
         # Each visual case is graded on the declaration the subject leaves and

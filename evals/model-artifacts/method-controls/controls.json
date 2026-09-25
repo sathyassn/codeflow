@@ -1,0 +1,123 @@
+{
+  "schema_version": 1,
+  "about": "Committed answers for the chat, README and smallest-carrier cases of the explanation-method pack (TSK-062). Each entry records the signals a grader reads off the answer and the decision the kit must compute from them; test_eval_kit.py checks the decision and ties every form signal (fence, language, image link, bullets) to the answer text. Family, placement and caption judgments stay the grader's and are recorded, not re-derived.",
+  "not_practical": {
+    "guide-page-from-a-policy-source": "graded on a whole explanatory page with bound figures; its figures fall under the visual controls' render harness, and altitude answers are rubric judgments",
+    "display-panel-and-first-paint-take-different-carriers": "needs a committed screenshot captured in a browser from the fixture app; a committed image would test the capture, not the carrier choice",
+    "migration-review-leads-with-the-picture": "graded on a present document opened through cf-present; block order is recorded by the grader from the opened document"
+  },
+  "cases": {
+    "enforcement-planes-answered-in-chat": [
+      {
+        "role": "passing",
+        "answer": "planes-terminal-ci-inactive.md",
+        "surface": "terminal",
+        "signals": [
+          "layering_figure_in_the_form_the_surface_calls_for",
+          "each_plane_placed_at_its_moments",
+          "ci_plane_shown_not_active_here",
+          "remote_plane_shown_armed_at_merge",
+          "legend_present",
+          "one_caption_sentence",
+          "short_prose_around_figure",
+          "ci_plane_drawn_with_inactive_mark"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "passing",
+        "answer": "planes-terminal-ci-omitted.md",
+        "surface": "terminal",
+        "signals": [
+          "layering_figure_in_the_form_the_surface_calls_for",
+          "each_plane_placed_at_its_moments",
+          "ci_plane_shown_not_active_here",
+          "remote_plane_shown_armed_at_merge",
+          "legend_present",
+          "one_caption_sentence",
+          "short_prose_around_figure",
+          "ci_plane_omitted_with_caption_note"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "planes-terminal-commit-flow.md",
+        "surface": "terminal",
+        "signals": [
+          "commit_flow_figure_for_planes_question",
+          "one_caption_sentence",
+          "short_prose_around_figure"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "planes-terminal-ci-active.md",
+        "surface": "terminal",
+        "signals": [
+          "layering_figure_in_the_form_the_surface_calls_for",
+          "each_plane_placed_at_its_moments",
+          "remote_plane_shown_armed_at_merge",
+          "legend_present",
+          "one_caption_sentence",
+          "short_prose_around_figure",
+          "ci_plane_marked_active"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "readme-figure-uses-the-text-form": [
+      {
+        "role": "passing",
+        "answer": "readme-text-figure.md",
+        "signals": [
+          "fenced_text_figure_in_readme",
+          "figure_in_a_named_family_with_legend_and_caption",
+          "figure_matches_documented_parts"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "readme-mermaid.md",
+        "signals": [
+          "mermaid_fence_in_readme",
+          "figure_matches_documented_parts"
+        ],
+        "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "readme-svg-link.md",
+        "signals": [
+          "svg_file_linked_from_readme"
+        ],
+        "decision": "fail"
+      }
+    ],
+    "three-unrelated-rules-take-the-smallest-carrier": [
+      {
+        "role": "passing",
+        "answer": "rules-three-bullets.md",
+        "surface": "terminal",
+        "signals": [
+          "every_rule_stated",
+          "no_figure",
+          "bullets_or_small_table"
+        ],
+        "decision": "pass"
+      },
+      {
+        "role": "faulty",
+        "answer": "rules-figure.md",
+        "surface": "terminal",
+        "signals": [
+          "every_rule_stated",
+          "figure_for_unrelated_facts"
+        ],
+        "decision": "fail"
+      }
+    ]
+  }
+}
