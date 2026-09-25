@@ -2,109 +2,94 @@
 
 ## Concept
 
-**A release is one deliberate human decision, taken after the evidence for it
-already exists.**
+**A CodeFlow release is one deliberate decision by a named human, taken after
+the evidence for it already exists.**
 
-```cf-stage
-work PR | curated notes · impact markers · coupled stamps @accent
-->
-release-state check | the actual proposed merge tree, not conflict absence
-->
-human merge | main advances only on a fresh check
-->
-human dispatch | cargo-dist Release workflow, --ref main, vX.Y.Z @warn
-->
-guarded publish | draft · build · recheck · upload · announce @positive
-caption: cargo-dist is the only publisher; no agent merges, tags, or publishes
-```
-
-This page covers how a CodeFlow release is cut, and how a project that
-*consumes* CodeFlow should think about its own versioning.
-
-Use [the release checklist](release-checklist.md) as the evidence-bearing
-approval record for every run of this procedure. Record a link or pasted output
-for each item there; a green job, model agreement, or peer approval is evidence,
-never a substitute for the named human release decision.
-
-Release state has one operative decision record,
-ADR-0062, at the end of a supersession chain: ADR-0012 (git-cliff calculates the
-version) was superseded by ADR-0061 (a maintained candidate PR), which was
-superseded by ADR-0062 (state lives in the normal work PR). Read the earlier two
-as history, never as current procedure.
+Humans merge the normal work PR that carries the release state and dispatch
+the publishing workflow, and no agent merges, tags or publishes. This runbook
+says how a CodeFlow release is cut and how a project that consumes CodeFlow can
+version its own releases. [The release checklist](release-checklist.md)
+is the approval record for each run, with a link or pasted output for every
+item. A green job, model agreement or peer approval counts there as evidence,
+never as the named human release decision.
 
 ## Architecture
 
-The figure's last stage expands into four, so the table runs to eight rows.
-Each row has one actor and one gate, and nothing downstream can reinterpret an
-upstream decision.
+Each release stage has one actor and one gate, and no later stage can
+reinterpret an earlier decision.
+
+- Architecture decision record ADR-0062 (release state lives in the normal
+  work PR) is the one operative record for release state.
+- It superseded ADR-0061 (a maintained candidate PR), which superseded
+  ADR-0012 (git-cliff calculates the version). Read those two as history,
+  never as current procedure.
 
 | Stage | Who acts | Gate it must satisfy |
 |---|---|---|
 | Pending notes and impact | The author of the normal work PR | One `Release impact` section per PR, and one `codeflow:release-impact none\|patch\|minor\|major` HTML marker directly before each new pending entry |
-| Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, actual proposed merge tree, pending annotations, coupled stamps, and conventional-marker floor. It checks known contradictions and watched contracts; it does not infer compatibility |
-| Merge | A human | PR CI checks the actual proposed merge tree, not conflict absence; main-push CI repeats the state check without writing. Without strict branch protection a stale clean merge remains possible, so the human merger must require the fresh check |
-| Dispatch | A human with current write, maintain, or admin permission | `--ref main` and the `vX.Y.Z` tag. The actor and rerunning actor must both be GitHub Users with effective permission. `GITHUB_SHA` must still equal current main and be the result of an ordinary PR human-merged into this repository's main. Contributor forks remain valid. No static allowlist or second-human role is implied |
-| Local-artifact authority job | The generated workflow | Source/version/notes, the latest exact-source GitHub Actions main-push results for `release state`, `codeflow gates`, Rust, Windows, secret scan, and security review, plus write-visible host collisions. It then creates or resumes only an exact empty draft |
-| Global-artifact recheck | The generated workflow | Rechecks main after platform builds. Failed or cancelled guards block host and announce |
-| Upload and announce | cargo-dist | Uploads without `--clobber` and announces last |
-| Post-announce verification | cargo-dist's verifier | Compares tag/source and every asset name, size, and SHA-256 digest to the same-run files |
+| Release-state check | `scripts/release.py check-pr` | Compares the declaration with the current target, the actual proposed merge tree, pending annotations, coupled stamps and the conventional-marker floor. It checks known contradictions and watched contracts; it does not infer compatibility |
+| Merge | A human | PR CI checks the actual proposed merge tree, which is more than the absence of conflicts. Main-push CI repeats the state check without writing. Without strict branch protection a stale clean merge is still possible, so the human merger must require the fresh check |
+| Dispatch | A human with current write, maintain or admin permission | Dispatches with `--ref main` and the `vX.Y.Z` tag. The actor and any rerunning actor must both be GitHub Users with effective permission. `GITHUB_SHA` must still equal current main and be the result of an ordinary PR human-merged into this repository's main. Contributor forks remain valid. No static allowlist or second-human role is implied |
+| Local-artifact authority job | The generated workflow | Records `GITHUB_SHA` on main and checks the dispatch rules above, source, version and notes, the latest exact-source GitHub Actions main-push results for `release state`, `codeflow gates`, Rust, Windows, secret scan and security review, and write-visible host collisions. Its write-scoped token can see draft releases. It fails closed on a wrong tag, source or public release, a foreign draft, or draft assets. It then creates or resumes only the exact source-bound empty draft |
+| Global-artifact recheck | The generated workflow | Rechecks main after platform builds. Failed or cancelled guards block hosting and announcing |
+| Upload and announce | cargo-dist | Uploads without `--clobber`, so a later host conflict is never overwritten, and announces last |
+| Post-announce verification | cargo-dist's verifier | Compares tag and source, and every asset name, size and SHA-256 digest, with the same-run files |
 
-The authority job narrows but cannot atomically close the small
-scheduler/API race before hosting; changed main fails and requires deliberate
-redispatch. Its concurrency group covers the authority job, not the whole
-generated workflow, so operate one deliberate publication at a time;
-no-clobber and partial-attempt checks remain the safety boundary if runs
-overlap.
+- The authority job narrows the small scheduler and API race before hosting,
+  but cannot close it atomically. A changed main fails the run and needs a
+  deliberate redispatch.
+- Its concurrency group covers the authority job only, not the whole generated
+  workflow. Operate one deliberate publication at a time. If runs overlap, the
+  no-clobber and partial-attempt checks remain the safety boundary.
 
 ### codeflow's own releases
 
-Version source of truth: the reviewed impact annotations adjacent to entries in
-the one undated pending CHANGELOG section. The cumulative target is the latest
-verified public version bumped once by the highest remaining pending impact.
-`Cargo.toml [workspace.package] version` and the lock/scaffold stamps must
-match. Conventional markers are conservative mismatch tripwires, not another
-calculator.
+- The version source of truth is the reviewed impact annotations next to the
+  entries in the one undated pending CHANGELOG section.
+- The cumulative target is the latest verified public version, bumped once by
+  the highest remaining pending impact.
+- `Cargo.toml [workspace.package] version` and the lock and scaffold stamps
+  must match it.
+- Conventional markers are conservative mismatch tripwires. They do not
+  calculate a second version.
+- cargo-dist is the only tag, release and artifact publisher. It builds four
+  target binaries plus shell and PowerShell installers. Its generated workflow
+  runs only by explicit human dispatch on `main`.
+- The generated workflow uses the repository's scoped `GITHUB_TOKEN` and
+  provisions no personal access token (PAT) or publication credential. Hosted settings can still
+  prevent exact-source checks, workflow dispatch, drafts, uploads or releases.
+  Treat a zero-step or permission failure as absent evidence and repair the
+  repository setting. Never bypass the source and publication guards.
 
-cargo-dist is the only publisher. It builds four target binaries plus shell and
-PowerShell installers, and it is the only tag, release, and artifact publisher;
-its generated workflow runs only by explicit human dispatch on `main`.
+Release impact rules for each PR:
 
-PRs carry one `Release impact` section with `Impact`, `Breaking`,
-`Rationale`, `Migration`, `Unit` and `Evidence`. `Breaking: yes` holds if and
-only if `Impact: major`, and a break needs substantive migration guidance.
-A nonbreaking refinement of a pending major entry still carries its migration
-reference, and a field left at the template's alternatives fails.
-The legacy `Contract` field is accepted during the transition and must agree
-with `Breaking` when both appear.
-
-Withdrawing a pending entry before release removes that entry and its impact
-marker, and the PR body explains why the remaining net contract permits the
-lower target.
-
-Use a plain `revert:` only when the resulting change has no shipped release
-impact. A revert that changes supported behavior or a public contract must use
-the `fix:`, `feat:`, or breaking marker that describes the resulting release,
-with matching PR impact and curated pending notes.
-
-The generated release workflow uses the repository's scoped `GITHUB_TOKEN`; it
-does not provision a PAT or publication credential. Hosted settings can still
-prevent exact-source checks, workflow dispatch, drafts, uploads, or releases.
-Treat a zero-step or permission failure as absent evidence and repair the
-repository setting; never bypass the source and publication guards.
+- The PR carries one `Release impact` section with `Impact`, `Breaking`,
+  `Rationale`, `Migration`, `Unit` and `Evidence`.
+- `Breaking: yes` holds if and only if `Impact: major`. A break needs
+  substantive migration guidance.
+- A nonbreaking refinement of a pending major entry still carries its
+  migration reference.
+- A field left at the template's alternatives fails.
+- A `Contract` field is still accepted. When it appears with `Breaking`, the
+  two must agree.
+- Withdrawing a pending entry before release removes that entry and its impact
+  marker. The PR body explains why the remaining net contract permits the lower
+  target.
+- Use a plain `revert:` only when the resulting change has no shipped release
+  impact. A revert that changes supported behavior or a public contract uses
+  the `fix:`, `feat:` or breaking marker that describes the resulting release,
+  with matching PR impact and curated pending notes.
 
 ## Technical
 
-The sections below hold the mechanics a release run actually touches: the
-cross-build toolchain, the renderer assets, the portal ownership migration, the
-preparation and publication steps, the historical bridge, and versioning for a
-project that consumes CodeFlow. Work through the ones your release touches.
+Work through each section below that your release touches.
 
 ### Cross-build toolchain
 
-Release CI uses native cargo-dist runners for macOS, Linux, and Windows so each
-binary is linked with the platform SDK and can be exercised there. For an
-earlier host-agnostic target lint and build check, the repository also provides
-Cargo aliases:
+Release CI uses native cargo-dist runners for macOS, Linux and Windows, so each
+binary links against its platform SDK and can be exercised there. For an
+earlier host-agnostic target lint and build check, the repository also
+provides Cargo aliases.
 
 ```sh
 cargo install --locked cargo-xwin --version 0.23.0
@@ -119,18 +104,20 @@ cargo cross-check-linux       # requires Zig on PATH
 cargo cross-build-linux       # requires Zig on PATH
 ```
 
-`cargo-xwin` acquires the Windows CRT/SDK inputs needed to lint and build MSVC
-targets from macOS or Linux. `cargo-zigbuild` uses Zig as the linker for a Linux
-GNU binary with a glibc 2.17 floor. macOS artifacts still build on macOS because
-Apple SDK redistribution/licensing prevents a generic bundled cross toolchain.
-Cross-build success proves compilation and linking only; it never replaces a
-native Windows/Linux/macOS test and installer canary.
+- `cargo-xwin` acquires the Windows CRT and SDK inputs needed to lint and
+  build MSVC targets from macOS or Linux.
+- `cargo-zigbuild` uses Zig as the linker for a Linux GNU binary with a glibc
+  2.17 floor.
+- macOS artifacts still build on macOS, because Apple SDK redistribution and
+  licensing prevent a generic bundled cross toolchain.
+- A cross-build proves compilation and linking only. It never replaces a native
+  Windows, Linux or macOS test and installer canary.
 
 ### Presentation renderer assets
 
-The `cf-present` browser distribution is a release input, not an install-time
-build. Use the exact Node/npm versions declared in
-`crates/codeflow-present/web/package.json`; from that directory run:
+The `cf-present` browser distribution is a release input and is never built at
+install time. Use the exact Node and npm versions declared in
+`crates/codeflow-present/web/package.json`, and run these from that directory.
 
 ```sh
 npm ci
@@ -142,82 +129,95 @@ npm run check:browser
 | Command | What it proves |
 |---|---|
 | `npm run supply-chain` | Refreshes the committed audit, CycloneDX software bill of materials (SBOM), and license inventory |
-| `npm run check` | Proves two clean builds are byte-identical and enforces the raw/Brotli/export budgets and integrity manifest |
-| `npm run check:browser` | Exercises the representative accessible renderer and mode/review behavior in a task-owned browser, including a dense bounded multi-diagram corpus and long-task envelope |
+| `npm run check` | Proves two clean builds are byte-identical and enforces the raw, Brotli and export budgets and the integrity manifest |
+| `npm run check:browser` | Exercises the representative accessible renderer and mode and review behavior in a task-owned browser, including a dense bounded multi-diagram corpus and the long-task envelope |
 
-Review the generated diff; do not hand-edit the distribution or its evidence
+Review the generated diff. Never hand-edit the distribution or its evidence
 files. Release builds consume only the committed assets, and consumer machines
 do not need Node.
 
-Repeat the runtime journey on every claimed native platform. Windows evidence
-must cover Unicode known-folder/profile paths, creation-time ACL hardening,
-read-only rejection of a weakened owner, protected discretionary access control
-list (DACL), trustee, or inheritance state, trusted system tools, exact quoted
-command-line identity, file URLs, and process-tree cleanup. All browser and
-auxiliary tool routes must exclude
-provider-secret environment canaries through the shared restricted environment. Linux/WSL2
-evidence must cover bounded no-follow `/proc` identity and process-group
-cleanup; macOS must prove its equivalent ownership boundary. Cross-compilation
-is useful adapter-shape evidence, but it does not satisfy these native
-qualification cases.
+Repeat the runtime journey on every claimed native platform. Cross-compilation
+is useful adapter-shape evidence but does not satisfy these native cases.
+
+| Platform | Native evidence the journey must cover |
+|---|---|
+| Windows | Unicode known-folder and profile paths, creation-time access control list (ACL) hardening, read-only rejection of a weakened owner or of a protected discretionary access control list (DACL), trustee or inheritance state, trusted system tools, exact quoted command-line identity, file URLs, and process-tree cleanup |
+| Linux and WSL2 | Bounded no-follow `/proc` identity and process-group cleanup |
+| macOS | Its equivalent ownership boundary |
+| Every platform | Every browser route, auxiliary tool route and other external child excludes provider-secret environment canaries through the shared restricted environment |
 
 Measure the stripped release binary against the recorded pre-presentation
-reference build, and record the embedded service/export payload contribution
-using the procedure captured for the release. Enforce the per-payload and
-combined limits in `codeflow_present::limits`; a debug binary, cross-build, or
+reference build. Record the embedded service and export payload contribution
+using the procedure captured for the release, and enforce the per-payload and
+combined limits in `codeflow_present::limits`. A debug binary, cross-build or
 compressed archive size is not equivalent evidence.
 
 ### Portal ownership migration
 
-The bundled portal's ownership lifecycle is defined by ADR-0058 and SPC-008.
-Starter 2.0.0 and adoption schema v2 do not change evidence schema v1. This is a
-breaking change to managed portal update behavior, not to general scaffold
-merging or Markdown authority. No publishing is implied by a successful build.
+Architecture decision record ADR-0058 and spec SPC-008 define the bundled
+portal's ownership lifecycle. The migration breaks managed portal update
+behavior only. General scaffold merging and Markdown authority do not change,
+and a successful build implies no publishing.
 
 | Existing state | Safe next step |
 |---|---|
 | No adoption | Remain unchanged; adopt explicitly only when useful |
-| Managed, unchanged runtime | Setup/update installs the coherent release and migrates state |
-| Missing managed runtime file | Managed setup/update repairs it |
-| Local runtime edits or incoming collision | Preserve work; choose supported customization, reviewed restoration or explicit transfer |
-| Unknown or changed legacy baseline content | Stop and preserve; resolve journal recovery and inspect before manual recovery |
-| Transferred runtime | Project owns maintenance; setup/update preserves edits and intentional deletions |
+| Managed, unchanged runtime | Setup or update installs the coherent release and migrates state |
+| Missing managed runtime file | Managed setup or update repairs it |
+| Local runtime edits or incoming collision | Preserve the work; choose a supported customization, a reviewed restoration or an explicit transfer |
+| Unknown or changed baseline content from an earlier portal version | Stop and preserve; resolve journal recovery and inspect before manual recovery |
+| Transferred runtime | The project owns maintenance; setup and update preserve edits and intentional deletions |
 
-`codeflow portal transfer --confirm` operates on the whole adopted runtime. It
-does not install the new embedded release, repair missing runtime/configuration,
-or waive integrity checks. It freezes the release actually adopted, not the
-release in the current binary. After transfer, update the actual generator and
-its state declaration together for a genuine fork; evidence still must pass
-`codeflow validate --portal <dir>`. A green verifier is not visual, security,
-accessibility or runtime-provenance attestation.
+Transfer rules:
 
-Legacy journals are recovered by the normal portal command under its lease
-before full adoption parsing and migration. Never delete journal, stage or
-lease data to make an error disappear. If a baseline-integrity failure remains,
-the new migration/transfer did not publish; previously journaled recovery may
-have completed and must be reported separately. Preserve and inspect the
-questionable content and repository history. Once
-pending recovery is settled, an explicit reviewed operation may relocate a
-verified preserved copy outside the reserved baseline directory or restore
-exact reviewed bytes. Retain a restore path; do not normalize line endings or
-delete unknown files as a shortcut. Retry the intended command afterwards.
-Absent baselines are benign; they do not waive managed runtime-drift checks.
+- `codeflow portal transfer --confirm` operates on the whole adopted runtime.
+  It does not install the new embedded release, repair missing runtime or
+  configuration, or waive integrity checks.
+- It freezes the release actually adopted, which may differ from the release in
+  the current binary.
+- For a genuine fork after transfer, update the actual generator and its state
+  declaration together. Its evidence must still pass
+  `codeflow validate --portal <dir>`.
+- A green verifier does not attest visual quality, security, accessibility or
+  runtime provenance.
 
-Release evidence includes fresh minimal/standard/full consumers, brownfield and
-repeated updates, project-owned byte preservation, generator/state agreement,
-before/after-transfer locked builds and real browser journeys, current dependency
-and secret scans, and measured unpacked/archive/release-binary size changes.
-Keep native macOS, Linux and Windows execution claims separate from cross-target
-type checking. Missing native platform or installer evidence remains explicit
-and blocks claiming that platform's release qualification.
+Recovery rules:
+
+- The normal portal command recovers any pending journal from an earlier portal
+  version under its lease, before full adoption parsing and migration.
+- Never delete journal, stage or lease data to make an error disappear.
+- If a baseline-integrity failure remains, the new migration or transfer did
+  not publish. Earlier journaled recovery may have completed, and you report it
+  separately.
+- Preserve and inspect the questionable content and the repository history.
+- Once pending recovery is settled, an explicit reviewed operation may move a
+  verified preserved copy outside the reserved baseline directory or restore
+  exact reviewed bytes. Keep a restore path, and never normalize line endings
+  or delete unknown files as a shortcut. Retry the intended command afterwards.
+- Absent baselines are benign. They do not waive managed runtime-drift checks.
+
+Portal release evidence covers:
+
+- fresh minimal, standard and full consumers
+- brownfield and repeated updates
+- preservation of project-owned bytes
+- agreement between the generator and its state declaration
+- locked builds and real browser journeys before and after transfer
+- current dependency and secret scans
+- measured unpacked, archive and release-binary size changes
+
+Keep native macOS, Linux and Windows execution claims separate from
+cross-target type checking. Missing native platform or installer evidence stays
+explicit and blocks claiming that platform's release qualification.
 
 ### Policy key upgrade order
 
 `codeflow update` adds each new `.codeflow/policy.json` key to an existing
 consumer with its default. The git-hook shims run whichever `codeflow` is on
 `PATH`, and a binary older than the key rejects the policy file, so every
-commit fails at `commit-msg`. A release that adds a policy key says in its
-notes: upgrade the `codeflow` on `PATH` first, then run `codeflow update`.
+commit fails at `commit-msg`. A release that adds a policy key tells users in
+its notes to upgrade the `codeflow` on `PATH` first and then run
+`codeflow update`.
 
 | Policy file | Hook binary | Result |
 |---|---|---|
@@ -226,113 +226,94 @@ notes: upgrade the `codeflow` on `PATH` first, then run `codeflow update`.
 | With the new key | newer | rule checked as set |
 | With the new key | older | every commit blocked: unknown key |
 
-Recovery from the last row is to upgrade the binary on `PATH`; do not delete
-the key to make the hook pass.
+To recover from the last row, upgrade the binary on `PATH`. Never delete the
+key to make the hook pass.
 
 ### Same-PR preparation and deliberate publication
 
-1. Add curated notes and adjacent impact markers to the normal work PR's
-   undated pending version section. Run
+1. Add curated notes and adjacent impact markers to the undated pending version
+   section in the normal work PR. Run
    `python3 scripts/release.py sync --repository sathyassn/codeflow`. It
    discovers public state read-only, calculates from the latest verified public
-   release, and updates coupled stamps through Cargo and `codeflow update`
-   only when needed. It never pushes, opens a PR, tags, or publishes.
-   Read-scoped PR/main checks cannot see GitHub draft releases and do not claim
-   that they can; draft absence is checked later inside the write-scoped,
-   read-only-in-behavior publisher guards.
-2. Refresh against the current target before merge. The Merge row in
-   Architecture states what the human merger must require of CI.
-3. When evidence is complete, a human explicitly dispatches cargo-dist's
-   generated Release workflow with `--ref main` and the `vX.Y.Z` tag. The
-   Dispatch row in Architecture states who may dispatch.
-4. The supported local-artifact job checks source/version/notes, the latest
-   exact-source GitHub Actions main-push results for `release state`, `codeflow gates`,
-   Rust, Windows, secret scan, and security review, plus write-visible host collisions,
-   then creates or resumes only an exact empty draft.
-   The supported global-artifact job rechecks main after platform builds.
-5. cargo-dist uploads without `--clobber` and announces last. Its
-   post-announce verifier compares tag/source and every asset name, size, and
-   SHA-256 digest to the same-run files.
+   release, and updates coupled stamps through Cargo and `codeflow update` only
+   when needed. It never pushes, opens a PR, tags or publishes.
+   Read-scoped PR and main checks cannot see GitHub draft releases and do not
+   claim to. The publisher guards check draft absence later with write scope,
+   while behaving read-only.
+2. Refresh against the current target before merge. The human merger requires
+   the fresh check described in the Merge row of Architecture.
+3. When the evidence is complete, a human dispatches cargo-dist's generated
+   Release workflow as the Dispatch row describes.
+4. The local-artifact authority job and the global-artifact recheck run as
+   their Architecture rows describe.
+5. cargo-dist uploads, announces and verifies as the last two Architecture rows
+   describe.
 
-The bootstrap preserves v2.1's historical public-source/tag mismatch as two
-facts. Later baselines advance automatically only from a stable public release
-with an exact-source marker and asset digests. A stable-looking prerelease,
-draft, or tag without a verified public release is not a baseline.
+### Public version baseline
 
-If publication stops, never move/delete its tag or overwrite assets. No tag or
-release means reverify current main and redispatch. An exact empty draft or
-exact tag-only attempt may resume. A draft with assets, mismatched draft, or tag
-with another source needs explicit recovery. A public version is spent forever.
-Material work and withdrawals remain blocked while an attempt is unresolved.
+A baseline advances automatically only from a stable public release with an
+exact-source marker and asset digests. A stable-looking prerelease, a draft, or
+a tag without a verified public release is never a baseline.
 
-Before tagging, re-verify the harness-parity claims against the currently
-installed harness versions. These surfaces move fast, and ADR-0008/ADR-0013/
-ADR-0014 and the parity section of docs/harness-posture.md pin a version that
-decays:
+Until 3.0.0 is published, the baseline is the bounded v2.1.0 bootstrap recorded
+in `.release/config.json`. It keeps v2.1.0's public source and tag mismatch as
+recorded facts.
 
-- The PreToolUse payload contract (`git-guard`/`exec-guard`) still matches
-  what Claude Code and an interactive Codex session send.
-- The Codex `hooks.json` events still fire as documented, and the `cf-guard`
-  permission-profile keys in `.codex/config.toml` still validate. Run
-  `codex --strict-config doctor` from a checkout with the shipped
-  `.codex/config.toml` in place; `--strict-config` errors out on any field
-  the installed Codex no longer recognizes.
-- The Claude settings/hook schema (`.claude/settings.json`) still matches
-  what the installed Claude Code expects.
-- The host-neutral duo contract test passes, and both native interactive
-  lanes complete a scoped canary with the task's required Model Context
-  Protocol (MCP) tools:
-  Claude Code → Codex through the enabled official plugin or qualified native
-  fallback, and Codex → Claude through task-scoped Herdr (tmux degraded)
-  with the qualified tracked Stop/StopFailure lifecycle.
-  Record versions, exact commands, and observed tool access. Do not accept
-  auth status output in place of a working interactive session.
-- The current ensemble record names only bindings qualified for this release;
-  every `capability-supported` harness catalog entry still proves the full
-  capability contract without being mistaken for concrete binding
-  qualification.
-  Run `codeflow doctor --check model-bindings` for retained local promotion
-  records and resolve requested/observed, harness-version, or declared
-  settings drift. Confirm the repository's project selection is absent/empty
-  or resolves atomically to exact stable-role binding IDs; a diagnostic pack
-  or parseable harness name is not promotion evidence.
-- Before the repository is public, confirm no committed CodeQL workflow has
-  entered the scaffold. After it is public, enable GitHub CodeQL default setup
-  for Rust with `security-extended`, verify intended file coverage and zero
-  tool-status errors, and collect five healthy applicable PR runs before
-  considering the check required. Roll back branch-protection requirements
-  before disabling the setup.
-- `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes
-  locally; CI billing/availability never substitutes for this evidence.
-- `cargo dist plan --output-format=json` lists all four archives, both
-  installers, and native runner rows. Canary the shell installer on each
-  macOS/Linux architecture and the PowerShell installer on Windows; confirm
-  WSL2 selects the Linux archive and native Windows installs `codeflow.exe`.
+| Fact | Value |
+|---|---|
+| Live `v2.1.0` tag, the immutable comparison point | `d70c6f17d4bf199a545c843856b3ded4681aff20` |
+| Commit identified by the published `source.tar.gz` | `3c3efdb91009361e18b0fabad699b5e875d4e4dd` |
+| SHA-256 of that `source.tar.gz` | `1501e0d81716dadd3aa4dc1c56348dd7321abd9cdca90b8f5deb89ea20d54beb` |
 
-Record new verification in a current ADR/release note and update
-docs/harness-posture.md if parity drifted; historical ADR bodies remain
-append-only.
+- The release target and the published source agree with each other and
+  differ from the tag. Never move the `v2.1.0` tag.
+- The bootstrap accepts the already-staged 3.0.0 pending section.
+- Once 3.0.0 is published, that verified public release replaces the bootstrap
+  record as the automatic baseline.
 
-### Historical bridge into v3
+### When publication stops
 
-The live `v2.1.0` tag remains at
-`d70c6f17d4bf199a545c843856b3ded4681aff20` and is the immutable historical
-comparison point. The published `source.tar.gz` independently identifies
-commit `3c3efdb91009361e18b0fabad699b5e875d4e4dd` and has SHA-256
-`1501e0d81716dadd3aa4dc1c56348dd7321abd9cdca90b8f5deb89ea20d54beb`.
-The release target and published source agree with each other, not with the
-current tag. The bootstrap records all three facts, does not move the tag, and
-accepts the already-staged `3.0.0` pending section. After that version is
-published, the verified public release, not this bootstrap record, becomes the
-automatic baseline.
+Never move or delete the tag of a stopped publication, and never overwrite its
+assets.
+
+| State after the stop | Next step |
+|---|---|
+| No tag and no release | Reverify current main and redispatch |
+| Exact empty draft, or exact tag-only attempt | Resume, only for the same source and notes |
+| Draft with assets, mismatched draft, or tag with another source | Explicit recovery |
+
+- A public version is spent forever. No tag or version is repurposed.
+- Material work and withdrawals stay blocked while an attempt is unresolved.
+
+### Re-verification before tagging
+
+Before tagging, re-verify these claims against the currently installed harness
+versions. These surfaces move fast, and the versions pinned in ADR-0008,
+ADR-0013, ADR-0014 and the parity section of
+[the harness posture](harness-posture.md) decay.
+
+| Surface | What must still hold |
+|---|---|
+| PreToolUse payload contract | The `git-guard` and `exec-guard` contract still matches what Claude Code and an interactive Codex session send |
+| Codex hooks and permission profile | The Codex `hooks.json` events still fire as documented, and the `cf-guard` permission-profile keys in `.codex/config.toml` still validate. Run `codex --strict-config doctor` from a checkout with the shipped `.codex/config.toml` in place; `--strict-config` errors on any field the installed Codex no longer recognizes |
+| Claude settings and hook schema | `.claude/settings.json` still matches what the installed Claude Code expects |
+| Duo contract and interactive lanes | The host-neutral duo contract test passes. Both native interactive lanes complete a scoped canary with the task's required Model Context Protocol (MCP) tools: Claude Code to Codex through the enabled official plugin or qualified native fallback, and Codex to Claude through task-scoped Herdr (tmux degraded) with the qualified tracked Stop/StopFailure lifecycle. Record versions, effort, exact commands, observed tool access and graceful degradation. Auth status output never replaces a working interactive session |
+| Ensemble and model bindings | The current ensemble record, selectors and effort and worker policy name only bindings qualified for this release. Every `capability-supported` harness catalog entry still proves the full capability contract, and catalog support is never taken as concrete binding qualification. Any changed concrete binding has an approved full native result, not only a diagnostic pack. `codeflow doctor --check model-bindings` passes for each retained local promotion record, or the exact non-probeable native canary needed is recorded; requested and observed identity, harness version and declared settings drift are resolved. The repository's project selection is absent or empty, or resolves atomically to exact stable-role binding IDs; a diagnostic pack or parseable harness name is not promotion evidence |
+| CodeQL | Before the repository is public, no committed CodeQL workflow has entered the portable scaffold and the CodeQL state stays pending. After it is public, enable GitHub CodeQL default setup for Rust with `security-extended`, and confirm tool status shows the intended files analyzed with zero extraction or configuration errors. Treat it as advisory until five consecutive applicable PR runs are healthy, then decide separately whether branch protection should require it. Roll back branch-protection requirements before disabling the setup |
+| Coverage | `cargo llvm-cov --workspace --summary-only --fail-under-lines 90` passes locally. CI billing or availability never substitutes for this evidence |
+| Distribution plan and installers | `cargo dist plan --output-format=json` lists all four archives, both installers and the native runner rows. Canary the shell installer on each macOS and Linux architecture and the PowerShell installer on Windows. Confirm WSL2 selects the Linux archive and native Windows installs `codeflow.exe` |
+
+Record new verification in a current ADR or release note, and update
+[the harness posture](harness-posture.md) if parity drifted. Historical ADR
+bodies stay append-only.
 
 ### Versioning in a project that consumes CodeFlow
 
-CodeFlow gives your repository the substrate for clean releases. The commit-msg gate
-enforces Conventional Commits, so your history is SemVer-derivable. It does
-**not** scaffold a release pipeline. Release/version/changelog tooling is
-stack-specific and stays yours to choose. Because your commits are already
-conventional, any of these has clean input:
+CodeFlow gives your repository the groundwork for clean releases. The
+commit-msg gate enforces Conventional Commits, so your history supports SemVer
+derivation. CodeFlow does **not** scaffold a release pipeline. Release, version
+and changelog tooling is stack-specific and stays yours to choose. Because your
+commits are already conventional, each of these tools gets clean input.
 
 | Situation | Reasonable choice |
 |---|---|
@@ -341,7 +322,6 @@ conventional, any of these has clean input:
 | Any language, PR-based automation | `release-please` |
 | Changelog only | `git-cliff` or `conventional-changelog` |
 
-CodeFlow's job is the discipline; the release mechanism is yours. This split is
-deliberate, because release tooling is as stack-specific as a test runner, so
-CodeFlow records standards and enforces commit hygiene rather than prescribing one
-release tool for every consumer.
+This split is deliberate. Release tooling is as stack-specific as a test
+runner, so CodeFlow records standards and enforces commit hygiene and leaves
+the choice of release tool to each consumer.
