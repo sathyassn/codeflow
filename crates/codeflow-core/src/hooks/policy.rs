@@ -193,8 +193,10 @@ pub struct GitPolicy {
     /// Markdown headings every PR body must carry (matched case-insensitively
     /// at `##`/`###` depth). A present-but-empty section — nothing but HTML
     /// comments and bare `-` bullets before the next heading — counts as
-    /// missing. Defaults: Summary, Changes, Reviews, Release impact.
-    /// Enforced under `pr_sections`; updates preserve existing lists.
+    /// missing. The built-in default (no policy file, or a file without this
+    /// key) stays `["Summary", "Changes"]` so a binary upgrade alone never
+    /// starts blocking; the scaffolded `policy.json` adds Reviews and Release
+    /// impact. Enforced under `pr_sections`; updates preserve existing lists.
     pub pr_required_sections: Vec<String>,
     /// Headings required ONLY when the commit range touches non-docs files
     /// (docs-only = every changed path is `*.md`, `*.txt`, `LICENSE*`,
@@ -253,12 +255,7 @@ impl Default for GitPolicy {
             pr_sections: PolicyLevel::Block,
             pr_release_impact: PolicyLevel::Warn,
             pr_breaking_level: "major".into(),
-            pr_required_sections: vec![
-                "Summary".into(),
-                "Changes".into(),
-                "Reviews".into(),
-                "Release impact".into(),
-            ],
+            pr_required_sections: vec!["Summary".into(), "Changes".into()],
             pr_code_sections: vec!["Testing".into()],
             branch_naming: PolicyLevel::Block,
             branch_prefixes: [
@@ -624,10 +621,9 @@ mod tests {
         assert_eq!(g.policy_characters, PolicyLevel::Block);
         // PR-body structure gate: the doctrine sections ship block-enforced.
         assert_eq!(g.pr_sections, PolicyLevel::Block);
-        assert_eq!(
-            g.pr_required_sections,
-            vec!["Summary", "Changes", "Reviews", "Release impact"]
-        );
+        // The built-in default must not grow: a repository without an explicit
+        // list would start blocking on a binary upgrade alone.
+        assert_eq!(g.pr_required_sections, vec!["Summary", "Changes"]);
         assert_eq!(g.pr_release_impact, PolicyLevel::Warn);
         assert_eq!(g.pr_breaking_level, "major");
         assert_eq!(g.pr_code_sections, vec!["Testing"]);
@@ -697,10 +693,13 @@ mod tests {
         assert_eq!(from_asset.git.pr_sections, defaults.pr_sections);
         assert_eq!(from_asset.git.pr_release_impact, defaults.pr_release_impact);
         assert_eq!(from_asset.git.pr_breaking_level, defaults.pr_breaking_level);
+        // Deliberate divergence: fresh installs require the approved template
+        // sections, while the built-in default keeps the pre-3.0 list.
         assert_eq!(
             from_asset.git.pr_required_sections,
-            defaults.pr_required_sections
+            ["Summary", "Changes", "Reviews", "Release impact"]
         );
+        assert_eq!(defaults.pr_required_sections, ["Summary", "Changes"]);
         assert_eq!(from_asset.git.pr_code_sections, defaults.pr_code_sections);
         assert_eq!(from_asset.git.branch_prefixes, defaults.branch_prefixes);
         assert_eq!(from_asset.git.test_gate_on_push, defaults.test_gate_on_push);

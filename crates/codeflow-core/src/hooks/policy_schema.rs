@@ -345,7 +345,9 @@ pub const SCHEMA: [KeySpec; 42] = [
         valid: "an array of heading names without the leading ## (e.g. Summary)",
         purpose: "Headings every PR body must carry, matched case-insensitively at ##/### depth.",
         notes: "A present-but-empty section (only HTML comments and bare `-` \
-                bullets) counts as missing; enforced under pr_sections.",
+                bullets) counts as missing; enforced under pr_sections. Fresh \
+                installs also list Reviews and Release impact; without this key \
+                the built-in default stays Summary and Changes.",
     },
     KeySpec {
         path: "git.pr_code_sections",

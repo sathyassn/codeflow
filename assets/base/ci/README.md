@@ -50,7 +50,8 @@ heading. A block container that never closes hides nothing: later headings
 still count, and a warning names the unclosed tag. Depth two takes precedence
 over same-name depth-three subsections; setext underlines do not end a section.
 Fresh installs require Summary, Changes, Reviews and Release impact, plus
-Testing for ranges that touch code. Existing section lists and enforcement
+Testing for ranges that touch code. Without an explicit list, the built-in
+default stays Summary and Changes. Existing section lists and enforcement
 levels stay unchanged on update. The PR template
 ships at minimal, standard and full tiers through the usual managed-file merge.
 

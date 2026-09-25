@@ -455,6 +455,25 @@ fn unfilled_installed_templates_fail_only_for_empty_required_sections() {
 }
 
 #[test]
+fn builtin_default_keeps_summary_and_changes_without_explicit_list() {
+    // A body written before Reviews and Release impact existed.
+    let old_body = BODY.split("## Reviews").next().unwrap();
+    for policy in [None, Some(json!({"git": {"pr_sections": "block"}}))] {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_range(dir.path(), "code");
+        if let Some(policy) = &policy {
+            write_policy(dir.path(), policy);
+        }
+        let output = ci_with_body(dir.path(), old_body);
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{policy:?}: {error}");
+        assert!(!error.contains("missing required section"), "{error}");
+        // The generic release check still advises, at its warn default.
+        assert!(error.contains("git.pr_release_impact (warn)"), "{error}");
+    }
+}
+
+#[test]
 fn inline_html_and_unclosed_blocks_keep_every_section() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
