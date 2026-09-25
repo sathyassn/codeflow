@@ -115,10 +115,11 @@ named tmux buffer with a literal paste into the exact pane, wait a bounded
 300 ms for the TUI to attach it, and send one separate Enter. Acceptance
 requires a `UserPromptSubmit` whose prompt matches the digest; one outer
 `<pasted_content id="N">` envelope with a same-id close around the exact bytes,
-bare or after the two LF Claude Code puts before a paste, is tolerated and
-recorded as `delivery: paste_envelope`. If acceptance
-times out, inspect only the dedicated pane; when it explicitly shows the paste
-attachment still waiting in the editor, send Enter once more and re-wait once.
+where N is four lowercase hex digits, bare or after the two LF Claude Code puts
+before a paste, is tolerated and recorded as `delivery: paste_envelope`. If
+acceptance times out, inspect only the dedicated pane; when it explicitly
+shows the paste attachment still waiting in the editor, send Enter once more
+and re-wait once.
 Never send blind or repeated Enter retries. A mismatched, unarmed, or duplicate
 submission is blocked at the harness (hook exit 2) with run state preserved.
 Prompts are capped at 1 MiB.

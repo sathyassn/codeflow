@@ -170,12 +170,13 @@ publication date._
 
 <!-- codeflow:release-impact patch -->
 - **Delegate turns accept a pasted prompt.** Claude Code submits a long or
-  multi-line pasted prompt inside one `<pasted_content id="N">` envelope,
-  often after two line feeds, so the delegate-turn hook used to reject it as a
-  digest mismatch. The hook now accepts the prompt when its bytes match
-  exactly, or when exactly one envelope with matching ids holds the exact
-  armed bytes, bare or after exactly that two-LF prefix; every other prefix or
-  shape still fails, and `accepted.json` records which delivery matched.
+  multi-line pasted prompt inside one `<pasted_content id="N">` envelope with
+  a per-session id of four lowercase hex digits, often after two line feeds,
+  so the delegate-turn hook used to reject it as a digest mismatch. The hook
+  now accepts the prompt when its bytes match exactly, or when exactly one
+  envelope with that id form and matching ids holds the exact armed bytes,
+  bare or after exactly that two-LF prefix; every other prefix, id or shape
+  still fails, and `accepted.json` records which delivery matched.
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
