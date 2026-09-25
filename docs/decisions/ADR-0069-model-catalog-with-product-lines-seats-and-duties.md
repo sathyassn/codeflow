@@ -22,7 +22,7 @@ The operator designated the intended roster on 2026-09-23. Designation is an
 explicit assignment of a seat, not evidence that a native qualification suite
 ran. TSK-079 built the engine and TSK-080 the command and its approved-plan
 lookup. TSK-085 accepted this decision when it switched the managed catalog
-to schema 5 with the roster below.
+to schema 5 with the roster below, accepted 2026-09-25.
 
 ## Decision
 
@@ -193,18 +193,19 @@ The model `grok-4.7-build-fast` is known and not routed.
 ### Roster
 
 The managed catalog carries this roster. The operator designated it for its
-seats on 2026-09-23. Every version's qualification field is empty; a
+seats on 2026-09-23, in the EPC-018 Q2 answer; each designation record
+cites that answer. Every version's qualification field is empty; a
 follow-up that TSK-078 files adds evidence per seat version as its native
 suite passes.
 
 | Family | Line | Version and pinned id | Lifecycle | Seat use and designation |
 |---|---|---|---|---|
 | Claude | `opus` | Opus 5.5, `claude-opus-5-5` | active | `claude-primary` first line; designated 2026-09-23 |
-| Claude | `fable` | Fable 5.1, `claude-fable-5-1` | active | `claude-primary` second line; designated 2026-09-23 |
+| Claude | `fable` | Fable 5.1, `claude-fable-5-1` | active | `claude-primary` second line, a fallback for orchestration, planning and review; design only by OPERATOR_OVERRIDE; designated 2026-09-23 |
 | Codex | `astra` | GPT-6 Astra, `gpt-6-astra` | active | `codex-primary` first line; designated 2026-09-23 |
 | Codex | `sol` | GPT-6 Sol, `gpt-6-sol` | active | `codex-primary` second line; designated 2026-09-23 |
 | Codex | `sol` | GPT-5.6 Sol, `gpt-5.6-sol` | fallback-only | `codex-primary` last fallback; designated 2026-09-23 |
-| Codex | `luna` | GPT-6 Luna, `gpt-6-luna` | active | light execution only; none |
+| Codex | `luna` | GPT-6 Luna, `gpt-6-luna` | active | light execution only, medium effort; none |
 | Codex | `terra` | GPT-5.6 Terra, `gpt-5.6-terra` | retired | none |
 | Grok | `grok` | Grok 4.7, `grok-4.7` | active | `grok-primary`; designated 2026-09-23 |
 | Grok | `grok` | Grok 4.6, `grok-4.6` | retired | none |
