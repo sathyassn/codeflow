@@ -132,7 +132,7 @@ pub fn render_unsupported(raw: &str, schema_version: u32) -> String {
     html
 }
 
-/// A revision stored with a diagram block, which was removed with Mermaid.
+/// A revision stored with the removed diagram block.
 /// It renders read only: the conversion notice, then each diagram's source,
 /// escaped, beside its replacement. Nothing is drawn and no script loads.
 #[must_use]
@@ -147,7 +147,7 @@ pub fn render_retired(document: &serde_json::Value) -> String {
     escape_html_to(title, &mut html);
     html.push_str("</title></head><body><main data-cf-retired-revision><h1>");
     escape_html_to(title, &mut html);
-    html.push_str("</h1><p role=\"note\">This revision holds a diagram block, which was removed with Mermaid, so it is shown read only and nothing else in it is drawn. Convert each diagram below as ");
+    html.push_str("</h1><p role=\"note\">This revision holds a diagram block, which was removed with Mermaid, so it is shown read only: this page shows only the diagram sources, and the rest of the document is kept unchanged, as <code>codeflow present history</code> prints it. Convert each diagram in your document as ");
     escape_html_to(crate::retired::CONVERSION_GUIDE, &mut html);
     html.push_str(
         " shows, then run <code>codeflow present update</code> with the converted document.</p>",
@@ -596,6 +596,10 @@ pub(crate) mod tests {
     pub(crate) fn assert_retired_page(html: &str) {
         assert!(
             html.contains("This revision holds a diagram block, which was removed with Mermaid"),
+            "{html}"
+        );
+        assert!(
+            html.contains("the rest of the document is kept unchanged, as <code>codeflow present history</code> prints it"),
             "{html}"
         );
         assert!(html.contains(

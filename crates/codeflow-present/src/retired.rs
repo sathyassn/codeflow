@@ -1,4 +1,4 @@
-//! The `diagram` block, retired with Mermaid (TSK-087).
+//! The `diagram` block, retired with its renderer (TSK-087).
 //!
 //! New `open` and `update` input that carries one is refused before typed
 //! parsing, with the replacement for its `kind`. A revision that a
@@ -133,8 +133,8 @@ pub fn refuse_retired_blocks(document: &Value) -> Result<()> {
     };
     let others = match found.len() - 1 {
         0 => String::new(),
-        1 => "; 1 more diagram block needs the same conversion".to_string(),
-        more => format!("; {more} more diagram blocks need the same conversion"),
+        1 => "; 1 more diagram block needs converting".to_string(),
+        more => format!("; {more} more diagram blocks need converting"),
     };
     Err(PresentError::InvalidDocument(format!(
         "{named} is a diagram block, which was removed with Mermaid; {conversion}, as {CONVERSION_GUIDE} shows{others}"
@@ -293,7 +293,16 @@ mod tests {
             "{message}"
         );
         assert!(
-            message.ends_with("; 2 more diagram blocks need the same conversion"),
+            message.ends_with("; 2 more diagram blocks need converting"),
+            "{message}"
+        );
+        let pair = document(vec![
+            diagram(Some("first"), "flowchart"),
+            diagram(Some("second"), "timeline"),
+        ]);
+        let message = refusal(&pair);
+        assert!(
+            message.ends_with("; 1 more diagram block needs converting"),
             "{message}"
         );
         assert!(refuse_retired_blocks(&document(vec![])).is_ok());

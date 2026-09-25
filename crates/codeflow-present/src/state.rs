@@ -105,8 +105,8 @@ pub enum RevisionContent {
         schema_version: u32,
         raw: String,
     },
-    /// A revision a pre-release build stored with a diagram block, which was
-    /// removed with Mermaid. Only the stored record reader produces it, from
+    /// A revision a pre-release build stored with the removed diagram block.
+    /// Only the stored record reader produces it, from
     /// a record it never rewrites; it is never read back from disk, and it is
     /// shown read only with the conversion notice.
     #[serde(skip_deserializing)]
