@@ -1,0 +1,566 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "model-change-flow",
+    "family": "flow",
+    "binding": "authored",
+    "question": "What is a model change, and what does it never change?",
+    "idea": "A change stops until a full native run qualifies it, a human approves it into the ensemble a project chooses from, and the doctrine is never rewritten.",
+    "title": "How a model change travels",
+    "kicker": "Model upgrades",
+    "caption": "A new model reaches a project only through a qualified binding a human approved, and nothing on that path edits the doctrine.",
+    "states": [
+      {
+        "name": "change",
+        "mark": "act",
+        "means": "The change"
+      },
+      {
+        "name": "moves",
+        "mark": "trans",
+        "means": "Moves to"
+      },
+      {
+        "name": "stop",
+        "mark": "stop",
+        "means": "Stops until qualified"
+      },
+      {
+        "name": "stage",
+        "mark": "state",
+        "means": "Where a binding lives"
+      },
+      {
+        "name": "human",
+        "mark": "human",
+        "means": "Human approval"
+      },
+      {
+        "name": "fixed",
+        "mark": "layer-remote",
+        "means": "Stable method"
+      },
+      {
+        "name": "rewrite",
+        "mark": "blocked",
+        "means": "Never happens"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a model change is qualified, never assumed",
+        "source": "docs/model-upgrades.md#concept",
+        "derive": "the lead sentence",
+        "check": {
+          "kind": "contains",
+          "text": "**A model change is qualified, never assumed.**"
+        },
+        "value": true
+      },
+      {
+        "claim": "the durable doctrine is not rewritten",
+        "source": "docs/model-upgrades.md#concept",
+        "derive": "the doctrine sentence",
+        "check": {
+          "kind": "contains",
+          "text": "ensemble and a project's choice, and the durable doctrine is not rewritten. Do"
+        },
+        "value": true
+      },
+      {
+        "claim": "promotion needs explicit human approval",
+        "source": "docs/model-upgrades.md#technical",
+        "derive": "step 7",
+        "check": {
+          "kind": "contains",
+          "text": "| 7 | Promote the binding | Explicit human approval,"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 222,
+      "draw": [
+        {
+          "state": "change",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 60,
+          "r": 11,
+          "id": "c"
+        },
+        {
+          "text": "a model change",
+          "x": 16,
+          "y": 32,
+          "style": "strong",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M54 60H196",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 150,
+          "y1": 49,
+          "x2": 150,
+          "y2": 71,
+          "id": "s"
+        },
+        {
+          "text": "until a full native run",
+          "x": 60,
+          "y": 102,
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "stage",
+          "shape": "rect",
+          "x": 198,
+          "y": 40,
+          "w": 160,
+          "h": 40,
+          "rx": 8,
+          "id": "b"
+        },
+        {
+          "text": "qualified binding",
+          "x": 212,
+          "y": 65,
+          "style": "strong",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M360 60H384",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 398,
+          "cy": 60,
+          "r": 10,
+          "id": "h"
+        },
+        {
+          "text": "approval",
+          "x": 398,
+          "y": 26,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M410 60H432",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "state": "stage",
+          "shape": "rect",
+          "x": 434,
+          "y": 40,
+          "w": 104,
+          "h": 40,
+          "rx": 8,
+          "id": "e"
+        },
+        {
+          "text": "ensemble",
+          "x": 448,
+          "y": 65,
+          "style": "strong",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M540 60H564",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "state": "stage",
+          "shape": "rect",
+          "x": 566,
+          "y": 40,
+          "w": 138,
+          "h": 40,
+          "rx": 8,
+          "id": "s2"
+        },
+        {
+          "text": "project choice",
+          "x": 580,
+          "y": 65,
+          "style": "strong",
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "fixed",
+          "shape": "rect",
+          "x": 16,
+          "y": 160,
+          "w": 210,
+          "h": 40,
+          "rx": 8,
+          "cap": "end",
+          "id": "d"
+        },
+        {
+          "text": "durable doctrine",
+          "x": 30,
+          "y": 185,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "fixed",
+          "shape": "rect",
+          "x": 250,
+          "y": 160,
+          "w": 250,
+          "h": 40,
+          "rx": 8,
+          "cap": "end",
+          "id": "k"
+        },
+        {
+          "text": "harness capability contract",
+          "x": 264,
+          "y": 185,
+          "style": "strong",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M300 158V82",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "text": "new harness: earn it first",
+          "x": 312,
+          "y": 130,
+          "style": "mute",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "state": "rewrite",
+          "shape": "path",
+          "d": "M40 74V158",
+          "cross": {
+            "cx": 40,
+            "cy": 118,
+            "size": 12
+          },
+          "id": "x"
+        },
+        {
+          "text": "rewrite the doctrine",
+          "x": 56,
+          "y": 142,
+          "style": "mute",
+          "for": [
+            "x"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 326,
+      "draw": [
+        {
+          "state": "change",
+          "shape": "circle",
+          "cx": 22,
+          "cy": 24,
+          "r": 10,
+          "id": "c"
+        },
+        {
+          "text": "a model change",
+          "x": 42,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M22 36V120",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 11,
+          "y1": 70,
+          "x2": 33,
+          "y2": 70,
+          "id": "s"
+        },
+        {
+          "text": "until a full native run",
+          "x": 42,
+          "y": 75,
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "stage",
+          "shape": "rect",
+          "x": 8,
+          "y": 122,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "b"
+        },
+        {
+          "text": "qualified binding",
+          "x": 20,
+          "y": 145,
+          "style": "strong",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M22 160V180",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 22,
+          "cy": 192,
+          "r": 10,
+          "id": "h"
+        },
+        {
+          "text": "approval",
+          "x": 42,
+          "y": 197,
+          "style": "strong",
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M22 204V222",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "state": "stage",
+          "shape": "rect",
+          "x": 8,
+          "y": 224,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "e"
+        },
+        {
+          "text": "ensemble",
+          "x": 20,
+          "y": 247,
+          "style": "strong",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M22 262V280",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "state": "stage",
+          "shape": "rect",
+          "x": 8,
+          "y": 282,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "s2"
+        },
+        {
+          "text": "project choice",
+          "x": 20,
+          "y": 305,
+          "style": "strong",
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "fixed",
+          "shape": "rect",
+          "x": 200,
+          "y": 122,
+          "w": 152,
+          "h": 56,
+          "rx": 8,
+          "cap": "end",
+          "id": "d"
+        },
+        {
+          "text": "durable",
+          "x": 212,
+          "y": 145,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "doctrine",
+          "x": 212,
+          "y": 166,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "fixed",
+          "shape": "rect",
+          "x": 200,
+          "y": 224,
+          "w": 152,
+          "h": 56,
+          "rx": 8,
+          "cap": "end",
+          "id": "k"
+        },
+        {
+          "text": "harness",
+          "x": 212,
+          "y": 247,
+          "style": "strong",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "contract",
+          "x": 212,
+          "y": 268,
+          "style": "strong",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "state": "moves",
+          "shape": "path",
+          "d": "M198 252H180",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "state": "rewrite",
+          "shape": "path",
+          "d": "M22 13V4H276V120",
+          "cross": {
+            "cx": 276,
+            "cy": 72,
+            "size": 11
+          },
+          "id": "x"
+        },
+        {
+          "text": "rewrite",
+          "x": 264,
+          "y": 52,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "x"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Stage",
+        "What moves a change on"
+      ],
+      "rows": [
+        [
+          "a model change",
+          "nothing, until a full native evaluation qualifies it"
+        ],
+        [
+          "qualified binding",
+          "explicit human approval"
+        ],
+        [
+          "current ensemble",
+          "selects the managed primaries and effort policy"
+        ],
+        [
+          "project choice",
+          "an approved binding ID for a stable role"
+        ],
+        [
+          "durable doctrine",
+          "never rewritten by a model change"
+        ],
+        [
+          "harness capability contract",
+          "a new harness earns every universal capability first"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,443 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "cli-dispatch",
+    "family": "structure",
+    "binding": "authored",
+    "question": "How does a command reach the core library and the presentation runtime?",
+    "idea": "One parser dispatches every subcommand: init and update run the scaffold inline, present goes to its own crate, and the rest go through a handler into core.",
+    "title": "How a command reaches the code that runs it",
+    "kicker": "Dispatch",
+    "caption": "The hooks, CI and the in-session guards call the same handlers you do, so there is no second implementation to drift.",
+    "states": [
+      {
+        "name": "entry",
+        "mark": "layer-remote",
+        "means": "The single entry point"
+      },
+      {
+        "name": "handler",
+        "mark": "optional",
+        "means": "Command handler"
+      },
+      {
+        "name": "library",
+        "mark": "layer",
+        "means": "Library crate"
+      },
+      {
+        "name": "calls",
+        "mark": "trans",
+        "means": "Calls"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "init runs the scaffold inline from main",
+        "source": "crates/codeflow-cli/src/main.rs",
+        "derive": "the init call",
+        "check": {
+          "kind": "contains",
+          "text": "let report = scaffold::init(&assets, &cwd, &options)?;"
+        },
+        "value": true
+      },
+      {
+        "claim": "present dispatches to its own handler",
+        "source": "crates/codeflow-cli/src/main.rs",
+        "derive": "the present arm",
+        "check": {
+          "kind": "contains",
+          "text": "Command::Present(args) => std::process::exit(cmd::present::run(&args)),"
+        },
+        "value": true
+      },
+      {
+        "claim": "the CLI crate depends on core and present",
+        "source": "crates/codeflow-cli/Cargo.toml",
+        "derive": "the present dependency",
+        "check": {
+          "kind": "contains",
+          "text": "codeflow-present = { path = \"../codeflow-present\" }"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 256,
+      "draw": [
+        {
+          "state": "entry",
+          "shape": "rect",
+          "x": 16,
+          "y": 110,
+          "w": 170,
+          "h": 48,
+          "rx": 8,
+          "cap": "end",
+          "id": "d"
+        },
+        {
+          "text": "one parser",
+          "x": 30,
+          "y": 132,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "main.rs",
+          "x": 30,
+          "y": 150,
+          "style": "mono",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M188 122C230 122 236 50 276 50",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M188 134H276",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M188 146C230 146 236 218 276 218",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "handler",
+          "shape": "rect",
+          "x": 278,
+          "y": 28,
+          "w": 190,
+          "h": 44,
+          "rx": 8,
+          "id": "h1"
+        },
+        {
+          "text": "init and update inline",
+          "x": 292,
+          "y": 55,
+          "for": [
+            "h1"
+          ]
+        },
+        {
+          "state": "handler",
+          "shape": "rect",
+          "x": 278,
+          "y": 112,
+          "w": 190,
+          "h": 44,
+          "rx": 8,
+          "id": "h2"
+        },
+        {
+          "text": "one handler per command",
+          "x": 292,
+          "y": 139,
+          "for": [
+            "h2"
+          ]
+        },
+        {
+          "state": "handler",
+          "shape": "rect",
+          "x": 278,
+          "y": 196,
+          "w": 190,
+          "h": 44,
+          "rx": 8,
+          "id": "h3"
+        },
+        {
+          "text": "present handler",
+          "x": 292,
+          "y": 223,
+          "for": [
+            "h3"
+          ]
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M470 50C520 50 520 110 548 118",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M470 134H546",
+          "head": "end",
+          "id": "e5"
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M470 218H546",
+          "head": "end",
+          "id": "e6"
+        },
+        {
+          "state": "library",
+          "shape": "rect",
+          "x": 548,
+          "y": 104,
+          "w": 156,
+          "h": 56,
+          "rx": 8,
+          "id": "c"
+        },
+        {
+          "text": "codeflow-core",
+          "x": 562,
+          "y": 128,
+          "style": "mono",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "text": "scaffold, gates",
+          "x": 562,
+          "y": 148,
+          "style": "mute",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "library",
+          "shape": "rect",
+          "x": 548,
+          "y": 196,
+          "w": 156,
+          "h": 44,
+          "rx": 8,
+          "id": "pr"
+        },
+        {
+          "text": "codeflow-present",
+          "x": 560,
+          "y": 223,
+          "style": "mono",
+          "for": [
+            "pr"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 244,
+      "draw": [
+        {
+          "state": "entry",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 40,
+          "rx": 8,
+          "cap": "end",
+          "id": "d"
+        },
+        {
+          "text": "one parser",
+          "x": 22,
+          "y": 35,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "main.rs",
+          "x": 120,
+          "y": 35,
+          "style": "mono",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M24 52V214",
+          "id": "e1"
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M24 86H38",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M24 140H38",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M24 214H38",
+          "head": "end",
+          "id": "e7"
+        },
+        {
+          "state": "handler",
+          "shape": "rect",
+          "x": 40,
+          "y": 68,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "h1"
+        },
+        {
+          "text": "init, update inline",
+          "x": 52,
+          "y": 91,
+          "for": [
+            "h1"
+          ]
+        },
+        {
+          "state": "handler",
+          "shape": "rect",
+          "x": 40,
+          "y": 122,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "h2"
+        },
+        {
+          "text": "a handler each",
+          "x": 52,
+          "y": 145,
+          "for": [
+            "h2"
+          ]
+        },
+        {
+          "state": "handler",
+          "shape": "rect",
+          "x": 40,
+          "y": 196,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "h3"
+        },
+        {
+          "text": "present handler",
+          "x": 52,
+          "y": 219,
+          "for": [
+            "h3"
+          ]
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M232 86H270V118",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M232 140H248",
+          "head": "end",
+          "id": "e5"
+        },
+        {
+          "state": "library",
+          "shape": "rect",
+          "x": 250,
+          "y": 120,
+          "w": 102,
+          "h": 40,
+          "rx": 8,
+          "id": "c"
+        },
+        {
+          "text": "core",
+          "x": 264,
+          "y": 145,
+          "style": "mono",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "calls",
+          "shape": "path",
+          "d": "M232 214H248",
+          "head": "end",
+          "id": "e6"
+        },
+        {
+          "state": "library",
+          "shape": "rect",
+          "x": 250,
+          "y": 196,
+          "w": 102,
+          "h": 36,
+          "rx": 8,
+          "id": "pr"
+        },
+        {
+          "text": "present",
+          "x": 262,
+          "y": 219,
+          "style": "mono",
+          "for": [
+            "pr"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Command",
+        "Path"
+      ],
+      "rows": [
+        [
+          "`init`, `update`",
+          "the parser calls the scaffold in core directly, with the embedded assets"
+        ],
+        [
+          "`present`",
+          "its handler calls the `codeflow-present` crate"
+        ],
+        [
+          "every other command",
+          "its handler in `cmd/` calls `codeflow-core`"
+        ]
+      ]
+    }
+  }
+}

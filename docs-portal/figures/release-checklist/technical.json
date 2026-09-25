@@ -1,0 +1,313 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "checklist-box-states",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state can a box be in?",
+    "idea": "A box is open until its evidence is linked, then evidenced until a human approves the release; a box ticked without evidence is forbidden.",
+    "title": "The states of a checklist box",
+    "kicker": "Boxes",
+    "caption": "The only way to tick a box is to attach its evidence first, so an approved record never hides an unproven claim.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "State of a box"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Move"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Forbidden move"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "box 1.1 names its evidence",
+        "source": "docs/release-checklist.md#technical",
+        "derive": "box 1.1",
+        "check": {
+          "kind": "contains",
+          "text": "Evidence: the PR link and `release.py check-pr` output."
+        },
+        "value": true
+      },
+      {
+        "claim": "a named human makes the release decision",
+        "source": "docs/release-checklist.md#concept",
+        "derive": "the decision sentence",
+        "check": {
+          "kind": "contains",
+          "text": "A named human makes the"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 180,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 60,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "op"
+        },
+        {
+          "text": "open",
+          "x": 76,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "op"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M138 78H258",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "evidence linked",
+          "x": 198,
+          "y": 50,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 260,
+          "y": 60,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "ev"
+        },
+        {
+          "text": "evidenced",
+          "x": 325,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "ev"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M392 78H518",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "human approves",
+          "x": 455,
+          "y": 50,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 520,
+          "y": 60,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "ap"
+        },
+        {
+          "text": "approved",
+          "x": 585,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "ap"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M76 98V140H585V98",
+          "cross": {
+            "cx": 330,
+            "cy": 140,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "ticked without evidence",
+          "x": 330,
+          "y": 168,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 256,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "op"
+        },
+        {
+          "text": "open",
+          "x": 83,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "op"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 48V96",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "evidence linked",
+          "x": 96,
+          "y": 78,
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 98,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "ev"
+        },
+        {
+          "text": "evidenced",
+          "x": 83,
+          "y": 121,
+          "anchor": "middle",
+          "for": [
+            "ev"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 136V184",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "human approves",
+          "x": 96,
+          "y": 166,
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 186,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "ap"
+        },
+        {
+          "text": "approved",
+          "x": 83,
+          "y": 209,
+          "anchor": "middle",
+          "for": [
+            "ap"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M160 28H300V204H160",
+          "cross": {
+            "cx": 300,
+            "cy": 116,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "ticked without evidence",
+          "x": 352,
+          "y": 246,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "By"
+      ],
+      "rows": [
+        [
+          "open",
+          "evidenced",
+          "a link or pasted output for the box"
+        ],
+        [
+          "evidenced",
+          "approved",
+          "the named human's release decision"
+        ],
+        [
+          "open",
+          "approved",
+          "forbidden: ticked without evidence"
+        ]
+      ]
+    }
+  }
+}

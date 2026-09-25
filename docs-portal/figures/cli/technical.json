@@ -1,0 +1,402 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "cli-exit-states",
+    "family": "state",
+    "binding": "authored",
+    "question": "What does an exit code mean, and how does a run end?",
+    "idea": "A run ends in 0 for success, usually 1 for a failure, and 2 for conflicts, blocks, incomplete checks and bad usage; a hook's 0 alone never proves enforcement.",
+    "title": "How a command run ends",
+    "kicker": "Exit behavior",
+    "caption": "Read 2 as a stop that needs you, and read a hook's stderr, because its exit 0 also covers a payload it could not read.",
+    "states": [
+      {
+        "name": "run",
+        "mark": "optional",
+        "means": "A running command"
+      },
+      {
+        "name": "end",
+        "mark": "state",
+        "means": "End state and its exit code"
+      },
+      {
+        "name": "ends",
+        "mark": "trans",
+        "means": "Ends in"
+      },
+      {
+        "name": "misread",
+        "mark": "blocked",
+        "means": "A wrong reading"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "update left conflicts exits 2",
+        "source": "docs/cli.md#technical",
+        "derive": "the update row",
+        "check": {
+          "kind": "contains",
+          "text": "| `codeflow update` left conflicts | 2 |"
+        },
+        "value": true
+      },
+      {
+        "claim": "an unknown subcommand or invalid flag exits 2",
+        "source": "docs/cli.md#technical",
+        "derive": "the usage row",
+        "check": {
+          "kind": "contains",
+          "text": "| An unknown subcommand or an invalid flag | 2 |"
+        },
+        "value": true
+      },
+      {
+        "claim": "hook exit 0 does not by itself mean enforcement succeeded",
+        "source": "docs/cli.md#technical",
+        "derive": "the hook exit sentence",
+        "check": {
+          "kind": "contains",
+          "text": "does not by itself mean enforcement succeeded."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 292,
+      "draw": [
+        {
+          "state": "run",
+          "shape": "rect",
+          "x": 16,
+          "y": 104,
+          "w": 130,
+          "h": 40,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "a run",
+          "x": 81,
+          "y": 129,
+          "anchor": "middle",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M148 116C220 116 230 44 300 44",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M148 124H300",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M148 132C220 132 230 204 300 204",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "end",
+          "shape": "rect",
+          "x": 302,
+          "y": 18,
+          "w": 402,
+          "h": 52,
+          "rx": 8,
+          "id": "x0"
+        },
+        {
+          "text": "exit 0",
+          "x": 316,
+          "y": 40,
+          "style": "strong",
+          "for": [
+            "x0"
+          ]
+        },
+        {
+          "text": "succeeded, or the check it runs passed",
+          "x": 316,
+          "y": 60,
+          "style": "mute",
+          "for": [
+            "x0"
+          ]
+        },
+        {
+          "state": "end",
+          "shape": "rect",
+          "x": 302,
+          "y": 98,
+          "w": 402,
+          "h": 52,
+          "rx": 8,
+          "id": "x1"
+        },
+        {
+          "text": "exit 1, usually",
+          "x": 316,
+          "y": 120,
+          "style": "strong",
+          "for": [
+            "x1"
+          ]
+        },
+        {
+          "text": "the check failed or the command could not finish",
+          "x": 316,
+          "y": 140,
+          "style": "mute",
+          "for": [
+            "x1"
+          ]
+        },
+        {
+          "state": "end",
+          "shape": "rect",
+          "x": 302,
+          "y": 178,
+          "w": 402,
+          "h": 52,
+          "rx": 8,
+          "id": "x2"
+        },
+        {
+          "text": "exit 2",
+          "x": 316,
+          "y": 200,
+          "style": "strong",
+          "for": [
+            "x2"
+          ]
+        },
+        {
+          "text": "conflicts, block, incomplete check, bad usage",
+          "x": 316,
+          "y": 220,
+          "style": "mute",
+          "for": [
+            "x2"
+          ]
+        },
+        {
+          "state": "misread",
+          "shape": "path",
+          "d": "M160 254H690V232",
+          "cross": {
+            "cx": 420,
+            "cy": 254,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "hook exit 0 read as enforced",
+          "x": 420,
+          "y": 280,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 326,
+      "draw": [
+        {
+          "state": "run",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "a run",
+          "x": 68,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M24 48V240",
+          "id": "e3"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M24 86H38",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M24 158H38",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M24 230H38",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "end",
+          "shape": "rect",
+          "x": 40,
+          "y": 60,
+          "w": 312,
+          "h": 52,
+          "rx": 8,
+          "id": "x0"
+        },
+        {
+          "text": "exit 0",
+          "x": 54,
+          "y": 82,
+          "style": "strong",
+          "for": [
+            "x0"
+          ]
+        },
+        {
+          "text": "succeeded or passed",
+          "x": 54,
+          "y": 102,
+          "style": "mute",
+          "for": [
+            "x0"
+          ]
+        },
+        {
+          "state": "end",
+          "shape": "rect",
+          "x": 40,
+          "y": 132,
+          "w": 312,
+          "h": 52,
+          "rx": 8,
+          "id": "x1"
+        },
+        {
+          "text": "exit 1, usually",
+          "x": 54,
+          "y": 154,
+          "style": "strong",
+          "for": [
+            "x1"
+          ]
+        },
+        {
+          "text": "failed or could not finish",
+          "x": 54,
+          "y": 174,
+          "style": "mute",
+          "for": [
+            "x1"
+          ]
+        },
+        {
+          "state": "end",
+          "shape": "rect",
+          "x": 40,
+          "y": 204,
+          "w": 312,
+          "h": 52,
+          "rx": 8,
+          "id": "x2"
+        },
+        {
+          "text": "exit 2",
+          "x": 54,
+          "y": 226,
+          "style": "strong",
+          "for": [
+            "x2"
+          ]
+        },
+        {
+          "text": "conflicts, block, incomplete",
+          "x": 54,
+          "y": 246,
+          "style": "mute",
+          "for": [
+            "x2"
+          ]
+        },
+        {
+          "state": "misread",
+          "shape": "path",
+          "d": "M60 286H320V258",
+          "cross": {
+            "cx": 190,
+            "cy": 286,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "hook exit 0 read as enforced",
+          "x": 190,
+          "y": 314,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Exit",
+        "Means"
+      ],
+      "rows": [
+        [
+          "0",
+          "the command succeeded, or the check it runs passed"
+        ],
+        [
+          "1, usually",
+          "the check failed, or the command could not complete"
+        ],
+        [
+          "2",
+          "`update` or `portal` left conflicts, a hook asks the harness to block, `ci` could not verify in full, or the usage was invalid"
+        ],
+        [
+          "hook exit 0",
+          "allowed, or a payload the hook could not read; read stderr"
+        ]
+      ]
+    }
+  }
+}

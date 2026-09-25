@@ -1,0 +1,477 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "checklist-flow",
+    "family": "flow",
+    "binding": "authored",
+    "question": "What is the checklist, and what is it not?",
+    "idea": "Five sections run in order to one named human's release decision, and any box without evidence stops the run; the checklist never publishes.",
+    "title": "The checklist, from first box to decision",
+    "kicker": "Release checklist",
+    "caption": "The checklist records evidence for a person to decide on; it publishes nothing and a green job never stands in for the decision.",
+    "states": [
+      {
+        "name": "section",
+        "mark": "state",
+        "means": "Checklist section"
+      },
+      {
+        "name": "flows",
+        "mark": "trans",
+        "means": "Then"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Unevidenced box"
+      },
+      {
+        "name": "stop",
+        "mark": "stop",
+        "means": "Stops the run"
+      },
+      {
+        "name": "human",
+        "mark": "human",
+        "means": "The named human's decision"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the checklist is the approval record",
+        "source": "docs/release-checklist.md#concept",
+        "derive": "the lead sentence",
+        "check": {
+          "kind": "contains",
+          "text": "**This checklist is the approval record for every CodeFlow release.**"
+        },
+        "value": true
+      },
+      {
+        "claim": "tick a box only when its evidence exists",
+        "source": "docs/release-checklist.md#concept",
+        "derive": "the evidence sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Tick a box only when its evidence already exists"
+        },
+        "value": true
+      },
+      {
+        "claim": "five sections are worked in order",
+        "source": "docs/release-checklist.md#concept",
+        "derive": "the order sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Work through the five sections in order."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 150,
+      "draw": [
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 16,
+          "y": 50,
+          "w": 96,
+          "h": 40,
+          "rx": 8,
+          "id": "s0"
+        },
+        {
+          "text": "1. scope",
+          "x": 64,
+          "y": 75,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s0"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M114 70H130",
+          "head": "end",
+          "id": "f0"
+        },
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 132,
+          "y": 50,
+          "w": 96,
+          "h": 40,
+          "rx": 8,
+          "id": "s1"
+        },
+        {
+          "text": "2. gates",
+          "x": 180,
+          "y": 75,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M230 70H246",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 248,
+          "y": 50,
+          "w": 96,
+          "h": 40,
+          "rx": 8,
+          "id": "s2"
+        },
+        {
+          "text": "3. platforms",
+          "x": 296,
+          "y": 75,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M346 70H362",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 364,
+          "y": 50,
+          "w": 96,
+          "h": 40,
+          "rx": 8,
+          "id": "s3"
+        },
+        {
+          "text": "4. models",
+          "x": 412,
+          "y": 75,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s3"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M462 70H478",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 480,
+          "y": 50,
+          "w": 96,
+          "h": 40,
+          "rx": 8,
+          "id": "s4"
+        },
+        {
+          "text": "5. publish",
+          "x": 528,
+          "y": 75,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s4"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M598 70H650",
+          "head": "end",
+          "id": "f4"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 664,
+          "cy": 70,
+          "r": 10,
+          "id": "h"
+        },
+        {
+          "text": "release decision",
+          "x": 704,
+          "y": 108,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M160 92V130H330",
+          "id": "x"
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 330,
+          "y1": 118,
+          "x2": 330,
+          "y2": 142,
+          "id": "st"
+        },
+        {
+          "text": "a box without evidence stops the run",
+          "x": 342,
+          "y": 135,
+          "style": "mute",
+          "for": [
+            "st",
+            "x"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 310,
+      "elongation_max": 2.2,
+      "reason": "The five sections run top to bottom at phone width instead of across.",
+      "draw": [
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "s0"
+        },
+        {
+          "text": "1. scope",
+          "x": 93,
+          "y": 33,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s0"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 48V60",
+          "head": "end",
+          "id": "f0"
+        },
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 8,
+          "y": 62,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "s1"
+        },
+        {
+          "text": "2. gates",
+          "x": 93,
+          "y": 85,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 100V112",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 8,
+          "y": 114,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "s2"
+        },
+        {
+          "text": "3. platforms",
+          "x": 93,
+          "y": 137,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 152V164",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 8,
+          "y": 166,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "s3"
+        },
+        {
+          "text": "4. models",
+          "x": 93,
+          "y": 189,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s3"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 204V216",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "state": "section",
+          "shape": "rect",
+          "x": 8,
+          "y": 218,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "s4"
+        },
+        {
+          "text": "5. publish",
+          "x": 93,
+          "y": 241,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s4"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 256V276",
+          "head": "end",
+          "id": "f4"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 93,
+          "cy": 290,
+          "r": 10,
+          "id": "h"
+        },
+        {
+          "text": "release decision",
+          "x": 114,
+          "y": 295,
+          "style": "strong",
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M180 80H270",
+          "id": "x"
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 270,
+          "y1": 68,
+          "x2": 270,
+          "y2": 92,
+          "id": "st"
+        },
+        {
+          "text": "no evidence: stop",
+          "x": 352,
+          "y": 116,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "st",
+            "x"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Order",
+        "Section"
+      ],
+      "rows": [
+        [
+          "1",
+          "Scope and version"
+        ],
+        [
+          "2",
+          "Source and security gates"
+        ],
+        [
+          "3",
+          "Distribution and platform assurance"
+        ],
+        [
+          "4",
+          "Harness and model qualification"
+        ],
+        [
+          "5",
+          "Publish, canary and rollback"
+        ],
+        [
+          "after 5",
+          "the named human's release decision"
+        ]
+      ]
+    }
+  }
+}

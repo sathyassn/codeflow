@@ -1,0 +1,473 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "model-binding-derivation",
+    "family": "derivation",
+    "binding": "authored",
+    "question": "Where does a binding come from, and what checks it?",
+    "idea": "Graded native trials against the pinned baseline produce a promoted binding, the ensemble and the project's selection build on it, and doctor checks the chain.",
+    "title": "Where a model binding comes from",
+    "kicker": "Bindings",
+    "caption": "A project's selection can only name a binding that trials produced and a human promoted, and doctor fails the whole selection when a link breaks.",
+    "states": [
+      {
+        "name": "source",
+        "mark": "layer-remote",
+        "means": "Evidence"
+      },
+      {
+        "name": "step",
+        "mark": "merge",
+        "means": "Grading and comparison"
+      },
+      {
+        "name": "output",
+        "mark": "state",
+        "means": "Record built on it"
+      },
+      {
+        "name": "derives",
+        "mark": "trans",
+        "means": "Produces"
+      },
+      {
+        "name": "compares",
+        "mark": "todo",
+        "means": "Checked against"
+      },
+      {
+        "name": "check",
+        "mark": "human",
+        "means": "Doctor check"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "every case runs three times in a full suite",
+        "source": "docs/model-upgrades.md#technical",
+        "derive": "step 4",
+        "check": {
+          "kind": "contains",
+          "text": "| 4 | Run the full suite | Every case runs three times;"
+        },
+        "value": true
+      },
+      {
+        "claim": "doctor checks model bindings for drift",
+        "source": "docs/model-upgrades.md#technical",
+        "derive": "step 8",
+        "check": {
+          "kind": "contains",
+          "text": "| 8 | Re-check drift | `codeflow doctor --check model-bindings`"
+        },
+        "value": true
+      },
+      {
+        "claim": "the selection fails closed rather than partly applying",
+        "source": "docs/model-upgrades.md#architecture",
+        "derive": "the fail-closed sentence",
+        "check": {
+          "kind": "contains",
+          "text": "entire selection fails closed rather than partly applying"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 244,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 190,
+          "h": 44,
+          "rx": 4,
+          "cap": "end",
+          "id": "s1"
+        },
+        {
+          "text": "native trials, 3 per case",
+          "x": 30,
+          "y": 67,
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 104,
+          "w": 190,
+          "h": 44,
+          "rx": 4,
+          "cap": "end",
+          "id": "s2"
+        },
+        {
+          "text": "pinned baseline",
+          "x": 30,
+          "y": 131,
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M208 62C240 62 244 88 266 92",
+          "head": "end",
+          "id": "d1"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M208 126C240 126 244 104 266 100",
+          "head": "end",
+          "id": "d2"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 290,
+          "cy": 96,
+          "r": 22,
+          "id": "g"
+        },
+        {
+          "text": "grade, compare",
+          "x": 290,
+          "y": 144,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M314 96H350",
+          "head": "end",
+          "id": "d3"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 352,
+          "y": 74,
+          "w": 170,
+          "h": 44,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "promoted binding",
+          "x": 366,
+          "y": 101,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M524 96H552",
+          "head": "end",
+          "id": "d4"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 554,
+          "y": 74,
+          "w": 150,
+          "h": 44,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "current ensemble",
+          "x": 566,
+          "y": 101,
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M629 120V168",
+          "head": "end",
+          "id": "d5"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 504,
+          "y": 170,
+          "w": 200,
+          "h": 44,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "model-selection.json",
+          "x": 516,
+          "y": 197,
+          "style": "mono",
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M502 192H438",
+          "square": "end",
+          "id": "c1"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 424,
+          "cy": 192,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "text": "doctor --check",
+          "x": 404,
+          "y": 188,
+          "anchor": "end",
+          "style": "mono",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "model-bindings",
+          "x": 404,
+          "y": 210,
+          "anchor": "end",
+          "style": "mono",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 360,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 200,
+          "h": 38,
+          "rx": 4,
+          "cap": "end",
+          "id": "s1"
+        },
+        {
+          "text": "native trials, 3 per case",
+          "x": 20,
+          "y": 34,
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 58,
+          "w": 200,
+          "h": 38,
+          "rx": 4,
+          "cap": "end",
+          "id": "s2"
+        },
+        {
+          "text": "pinned baseline",
+          "x": 20,
+          "y": 82,
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M210 29C250 29 262 40 268 44",
+          "head": "end",
+          "id": "d1"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M210 77C250 77 262 66 268 62",
+          "head": "end",
+          "id": "d2"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 290,
+          "cy": 54,
+          "r": 20,
+          "id": "g"
+        },
+        {
+          "text": "grade",
+          "x": 290,
+          "y": 102,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M290 118V136H200V150",
+          "head": "end",
+          "id": "d3"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 8,
+          "y": 152,
+          "w": 344,
+          "h": 36,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "promoted binding",
+          "x": 20,
+          "y": 175,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M60 190V210",
+          "head": "end",
+          "id": "d4"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 8,
+          "y": 212,
+          "w": 344,
+          "h": 36,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "current ensemble",
+          "x": 20,
+          "y": 235,
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M60 250V270",
+          "head": "end",
+          "id": "d5"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 8,
+          "y": 272,
+          "w": 344,
+          "h": 36,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "model-selection.json",
+          "x": 20,
+          "y": 295,
+          "style": "mono",
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M60 310V326",
+          "square": "end",
+          "id": "c1"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 340,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "text": "doctor --check model-bindings",
+          "x": 82,
+          "y": 345,
+          "style": "mono",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "Step",
+        "To",
+        "Checked by"
+      ],
+      "rows": [
+        [
+          "native trials and the pinned baseline",
+          "grading and comparison, then human approval",
+          "a promoted binding record",
+          "the grader and the evaluator"
+        ],
+        [
+          "promoted bindings",
+          "selection",
+          "`current-ensemble.json`",
+          "`codeflow doctor --check model-bindings`"
+        ],
+        [
+          "the ensemble",
+          "a stable role mapped to a binding ID",
+          "`.codeflow/model-selection.json`",
+          "`codeflow doctor --check model-bindings`"
+        ]
+      ]
+    }
+  }
+}

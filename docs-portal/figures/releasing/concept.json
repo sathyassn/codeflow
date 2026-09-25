@@ -1,0 +1,453 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "release-flow",
+    "family": "flow",
+    "binding": "authored",
+    "question": "What is a release, and who decides it?",
+    "idea": "The release state rides the normal work PR, a human merges it and a human dispatches publication, and no agent acts past the check.",
+    "title": "How a CodeFlow release moves",
+    "kicker": "Releasing",
+    "caption": "Two human acts, the merge and the dispatch, separate prepared evidence from anything published.",
+    "states": [
+      {
+        "name": "step",
+        "mark": "state",
+        "means": "Stage"
+      },
+      {
+        "name": "flows",
+        "mark": "trans",
+        "means": "Leads to"
+      },
+      {
+        "name": "stop",
+        "mark": "stop",
+        "means": "No agent acts past here"
+      },
+      {
+        "name": "human",
+        "mark": "human",
+        "means": "A named human's act"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "no agent merges, tags or publishes",
+        "source": "docs/releasing.md#concept",
+        "derive": "the actor sentence",
+        "check": {
+          "kind": "contains",
+          "text": "the publishing workflow, and no agent merges, tags or publishes."
+        },
+        "value": true
+      },
+      {
+        "claim": "a human merges",
+        "source": "docs/releasing.md#architecture",
+        "derive": "the merge row",
+        "check": {
+          "kind": "contains",
+          "text": "| Merge | A human |"
+        },
+        "value": true
+      },
+      {
+        "claim": "cargo-dist uploads and announces",
+        "source": "docs/releasing.md#architecture",
+        "derive": "the upload row",
+        "check": {
+          "kind": "contains",
+          "text": "| Upload and announce | cargo-dist |"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 124,
+      "draw": [
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 16,
+          "y": 50,
+          "w": 112,
+          "h": 40,
+          "rx": 8,
+          "id": "pr"
+        },
+        {
+          "text": "work PR",
+          "x": 72,
+          "y": 75,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "pr"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M130 70H158",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 160,
+          "y": 50,
+          "w": 110,
+          "h": 40,
+          "rx": 8,
+          "id": "ck"
+        },
+        {
+          "text": "check-pr",
+          "x": 215,
+          "y": 75,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "ck"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M272 70H322",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 298,
+          "y1": 58,
+          "x2": 298,
+          "y2": 82,
+          "id": "s"
+        },
+        {
+          "text": "agents stop",
+          "x": 298,
+          "y": 114,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 336,
+          "cy": 70,
+          "r": 10,
+          "id": "h1"
+        },
+        {
+          "text": "human merges",
+          "x": 336,
+          "y": 38,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "h1"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M348 70H380",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 394,
+          "cy": 70,
+          "r": 10,
+          "id": "h2"
+        },
+        {
+          "text": "human dispatches",
+          "x": 394,
+          "y": 114,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "h2"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M406 70H436",
+          "head": "end",
+          "id": "f4"
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 438,
+          "y": 50,
+          "w": 130,
+          "h": 40,
+          "rx": 8,
+          "id": "au"
+        },
+        {
+          "text": "authority job",
+          "x": 503,
+          "y": 75,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "au"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M570 70H590",
+          "head": "end",
+          "id": "f5"
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 592,
+          "y": 50,
+          "w": 112,
+          "h": 40,
+          "rx": 8,
+          "id": "cd"
+        },
+        {
+          "text": "cargo-dist",
+          "x": 648,
+          "y": 75,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "cd"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 346,
+      "elongation_max": 3,
+      "reason": "Six stages in a row cannot share one line at phone width, so the flow runs top to bottom and grows tall.",
+      "draw": [
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "pr"
+        },
+        {
+          "text": "work PR",
+          "x": 93,
+          "y": 33,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "pr"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 48V66",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 8,
+          "y": 68,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "ck"
+        },
+        {
+          "text": "check-pr",
+          "x": 93,
+          "y": 91,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "ck"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 106V150",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 81,
+          "y1": 124,
+          "x2": 105,
+          "y2": 124,
+          "id": "s"
+        },
+        {
+          "text": "agents stop",
+          "x": 116,
+          "y": 129,
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 93,
+          "cy": 164,
+          "r": 10,
+          "id": "h1"
+        },
+        {
+          "text": "human merges",
+          "x": 114,
+          "y": 169,
+          "style": "strong",
+          "for": [
+            "h1"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 176V196",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 93,
+          "cy": 210,
+          "r": 10,
+          "id": "h2"
+        },
+        {
+          "text": "human dispatches",
+          "x": 114,
+          "y": 215,
+          "style": "strong",
+          "for": [
+            "h2"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 222V240",
+          "head": "end",
+          "id": "f4"
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 8,
+          "y": 242,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "au"
+        },
+        {
+          "text": "authority job",
+          "x": 93,
+          "y": 265,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "au"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M93 280V298",
+          "head": "end",
+          "id": "f5"
+        },
+        {
+          "state": "step",
+          "shape": "rect",
+          "x": 8,
+          "y": 300,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "cd"
+        },
+        {
+          "text": "cargo-dist",
+          "x": 93,
+          "y": 323,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "cd"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Stage",
+        "Who acts"
+      ],
+      "rows": [
+        [
+          "work PR with the release state",
+          "its author"
+        ],
+        [
+          "`scripts/release.py check-pr`",
+          "CI; agents stop after this"
+        ],
+        [
+          "merge",
+          "a human"
+        ],
+        [
+          "dispatch",
+          "a human with write, maintain or admin permission"
+        ],
+        [
+          "authority job",
+          "the generated workflow"
+        ],
+        [
+          "upload and announce",
+          "cargo-dist"
+        ]
+      ]
+    }
+  }
+}

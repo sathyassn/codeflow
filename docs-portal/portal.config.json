@@ -92,7 +92,19 @@
     { "declaration": "docs-portal/figures/harness-posture/technical.json", "route": "system/harness-posture", "panel": "technical" },
     { "declaration": "docs-portal/figures/decision-map/concept.json", "route": "system/decision-map", "panel": "concept" },
     { "declaration": "docs-portal/figures/decision-map/architecture.json", "route": "system/decision-map", "panel": "architecture" },
-    { "declaration": "docs-portal/figures/decision-map/technical.json", "route": "system/decision-map", "panel": "technical" }
+    { "declaration": "docs-portal/figures/decision-map/technical.json", "route": "system/decision-map", "panel": "technical" },
+    { "declaration": "docs-portal/figures/cli/concept.json", "route": "reference/cli", "panel": "concept" },
+    { "declaration": "docs-portal/figures/cli/architecture.json", "route": "reference/cli", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/cli/technical.json", "route": "reference/cli", "panel": "technical" },
+    { "declaration": "docs-portal/figures/model-upgrades/concept.json", "route": "reference/model-upgrades", "panel": "concept" },
+    { "declaration": "docs-portal/figures/model-upgrades/architecture.json", "route": "reference/model-upgrades", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/model-upgrades/technical.json", "route": "reference/model-upgrades", "panel": "technical" },
+    { "declaration": "docs-portal/figures/releasing/concept.json", "route": "reference/releasing", "panel": "concept" },
+    { "declaration": "docs-portal/figures/releasing/architecture.json", "route": "reference/releasing", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/releasing/technical.json", "route": "reference/releasing", "panel": "technical" },
+    { "declaration": "docs-portal/figures/release-checklist/concept.json", "route": "reference/release-checklist", "panel": "concept" },
+    { "declaration": "docs-portal/figures/release-checklist/architecture.json", "route": "reference/release-checklist", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/release-checklist/technical.json", "route": "reference/release-checklist", "panel": "technical" }
   ],
   "base": "/"
 }
