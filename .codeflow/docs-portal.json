@@ -226,7 +226,7 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "72921c3706ba4fd8a313a32ed108c9ce03b8845175256017d3ebe1b01070b709"
+      "pristine_sha256": "663b006403d800d574cf0788449412feab1d54f3f320d466df91dff605a05b62"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
