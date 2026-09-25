@@ -11,7 +11,7 @@ import path from "node:path";
 import test from "node:test";
 import { chromium } from "@playwright/test";
 import { sha256 } from "../scripts/lib.mjs";
-import { figureGateFailures, observePortalPage, pinnedDeclarations, pinnedKitSheets, pinnedRuntimeScripts } from "../scripts/browser-verify.mjs";
+import { figureGateFailures, observePortalPage, pageCssFailures, pinnedBuiltSheets, pinnedDeclarations, pinnedKitSheets, pinnedRuntimeScripts } from "../scripts/browser-verify.mjs";
 import { REGENERATE, builtRuntimeScripts } from "../scripts/runtime-scripts.mjs";
 import { drawnValuesMatch } from "../scripts/figure-grammar.mjs";
 import { GitSnapshot } from "../scripts/git-snapshot.mjs";
@@ -412,6 +412,27 @@ test("the mixed fixture renders every class and the gates name only what falls s
       assert.ok(blockStyle.some((failure) => /page CSS: a <style> element in the page content/.test(failure)), blockStyle.join("\n"));
       const wrapped = await hostile({ inject: () => { const companion = document.querySelector(".cf-companion"); const block = Object.assign(document.createElement("div"), { className: "expressive-code" }); companion.replaceWith(block); block.append(companion); }, css: null });
       assert.ok(wrapped.some((failure) => /page CSS: a figure or companion inside a code block/.test(failure)), wrapped.join("\n"));
+      // Each carrier on an element is judged on its own: an allowed token
+      // attribute does not excuse a style element or a link beside it in the
+      // frame (Codex CB-1, Grok F2). The sheet scopes on the expressive-code
+      // class whatever the tag, so a figure or companion on or inside any
+      // element with that class fails (Codex CB-2, Grok F1). The real page,
+      // a code block beside its companions, is the positive control.
+      const sheets = pinnedBuiltSheets(built.artifacts);
+      const cssAfter = async (inject) => { await visitRoute("reference/guide"); await page.evaluate(inject); return pageCssFailures(page, sheets); };
+      assert.deepEqual(await cssAfter("void 0"), []);
+      for (const [markup, pattern] of [
+        ["<style style=\"--0:#82AAFF\">.cf-fig{opacity:0}</style>", /^a <style> element in the page content carries CSS/],
+        ["<link style=\"--0:#82AAFF\" rel=\"stylesheet\" href=\"/evil.css\">", /^a <link> element in the page content carries CSS/],
+      ]) {
+        const failures = await cssAfter(`document.querySelector(".expressive-code pre").insertAdjacentHTML("beforeend", ${JSON.stringify(markup)})`);
+        assert.ok(failures.some((failure) => pattern.test(failure)), `${markup}: ${failures.join("\n")}`);
+      }
+      const wrap = (tag) => `{ const companion = document.querySelector(".cf-companion"); const wrapper = document.createElement("${tag}"); wrapper.className = "note expressive-code"; companion.replaceWith(wrapper); wrapper.append(companion); }`;
+      for (const inject of [...["div", "section", "article", "span", "aside"].map(wrap), "document.querySelector('.cf-companion').classList.add('expressive-code')", "document.querySelector('figure.cf-fig').classList.add('expressive-code')", "document.querySelector('.cf-legend').classList.add('expressive-code')"]) {
+        const failures = await cssAfter(inject);
+        assert.ok(failures.includes("a figure or companion inside a code block carries CSS the site's sheets do not"), `${inject}: ${failures.join("\n")}`);
+      }
       const imitated = await hostile({ inject: () => [...document.querySelectorAll(".sl-markdown-content p")].find((paragraph) => !paragraph.closest(".cf-companion")).insertAdjacentHTML("afterend", "<div class=\"expressive-code\"><figure><pre><span style=\"--0:#FFFFFF;--0fw:bold\">imitated</span></pre></figure></div>"), css: null });
       assert.deepEqual(pageCss(imitated), [], imitated.join("\n"));
 
@@ -641,6 +662,17 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     ]) {
       assert.match(await builtOnly(builtBytes.replace(blockHead, head)), new RegExp(`${content.source}(?:[^\n]*, )?${kind}`), head);
     }
+    // An allowed token attribute excuses only itself (Codex CB-1, Grok F2),
+    // and no figure may sit in the sheet's class scope whatever the tag
+    // (Codex CB-2, Grok F1), each through the built page.
+    const inFrame = (markup) => builtBytes.replace(`<span style="${token}">`, `${markup}<span style="${token}">`);
+    assert.match(await builtOnly(inFrame(`<style style="${token}">.cf-fig{opacity:0}</style>`)), new RegExp(`${content.source}a <style> element`));
+    assert.match(await builtOnly(inFrame(`<link style="${token}" rel="stylesheet" href="/evil.css">`)), new RegExp(`${content.source}a <link> element`));
+    const companionOpen = builtBytes.match(/<div class="cf-companion not-content"/)[0];
+    for (const tag of ["div", "section", "article", "span"]) {
+      assert.match(await builtOnly(builtBytes.replace(companionOpen, `<${tag} class="expressive-code">${companionOpen}`)), new RegExp(`${content.source}(?:[^\\n]*, )?figure or companion markup inside a code block`), tag);
+    }
+    assert.match(await builtOnly(builtBytes.replace(companionOpen, '<div class="cf-companion not-content expressive-code"')), new RegExp(`${content.source}(?:[^\\n]*, )?figure or companion markup inside a code block`));
     const codeSheet = JSON.parse(pristine).artifacts.find((artifact) => /^dist\/_astro\/ec\.[\w-]+\.css$/.test(artifact.path)).path;
     const sheetBytes = await readFile(path.join(portal, codeSheet));
     await writeFile(evidencePath, pristine);

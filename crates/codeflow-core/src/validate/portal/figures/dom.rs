@@ -61,13 +61,19 @@ pub(super) fn built_page_carriers(html: &str, assets: &CodeBlockAssets) -> Built
             .filter_map(ElementRef::wrap)
             .any(|ancestor| has_class(ancestor, |class| class == "sl-markdown-content"));
         if in_content {
-            if !code_blocks::asset_link(element, assets) && !code_blocks::token_style(element) {
-                found.content.extend(css_carrier(element));
+            // Each carrier is judged on its own: the token exception covers
+            // only the style attribute, and only the recorded asset link is
+            // a link the content may hold.
+            if !code_blocks::asset_link(element, assets) {
+                found.content.extend(element_css(element));
+            }
+            if !code_blocks::token_style(element) {
+                found.content.extend(attribute_css(element));
             }
             if !code_blocks::asset_script(element, assets) {
                 found.content.extend(active_carrier(element));
             }
-            if figure_markup(element) && code_blocks::in_block(element) {
+            if figure_markup(element) && code_blocks::in_sheet_scope(element) {
                 found
                     .content
                     .insert("figure or companion markup inside a code block".to_string());
@@ -116,15 +122,24 @@ pub(super) fn rendered_figures(markdown: &str) -> RenderedFigures {
 /// CSS in rendered content, in any namespace and inside template contents:
 /// a style element, a link element or a style attribute.
 fn css_carrier(element: ElementRef<'_>) -> Option<String> {
-    let value = element.value();
-    let name = value.name();
-    match name {
+    element_css(element).or_else(|| attribute_css(element))
+}
+
+/// A style element or a link element.
+fn element_css(element: ElementRef<'_>) -> Option<String> {
+    match element.value().name() {
         "style" => Some("a <style> element".to_string()),
         "link" => Some("a <link> element".to_string()),
-        _ => value
-            .attr("style")
-            .map(|_| format!("a style attribute on <{name}>")),
+        _ => None,
     }
+}
+
+/// A style attribute, on any element.
+fn attribute_css(element: ElementRef<'_>) -> Option<String> {
+    let value = element.value();
+    value
+        .attr("style")
+        .map(|_| format!("a style attribute on <{}>", value.name()))
 }
 
 /// Executable content, in any namespace and inside template contents: a

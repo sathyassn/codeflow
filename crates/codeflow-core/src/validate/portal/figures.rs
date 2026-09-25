@@ -2417,23 +2417,74 @@ mod tests {
                 "{asset}"
             );
         }
-        // A block, real or imitated, never holds a figure: neither its
-        // custom properties nor its sheet can reach one.
-        let companion = "<div class=\"cf-companion not-content\" data-cf-companion=\"figures/a.json\"><figure class=\"cf-fig\"></figure></div>";
-        for html in [
-            block(
-                head,
-                "",
-                &format!("<span style=\"--0:#82AAFF\">{companion}</span>"),
+        // An allowed token attribute excuses only itself: a style element, a
+        // link that is not the recorded asset link, or a script on the same
+        // element inside the frame still fails (Codex CB-1, Grok F2).
+        for (payload, kind) in [
+            (
+                "<style style=\"--0:#82AAFF\">.cf-fig{opacity:0}</style>",
+                "a <style> element",
             ),
-            format!("<div class=\"expressive-code\">{companion}</div>"),
+            (
+                "<link style=\"--0:#82AAFF\" rel=\"stylesheet\" href=\"/evil.css\">",
+                "a <link> element",
+            ),
+            (
+                "<link style=\"--0:#82AAFF\" rel=\"stylesheet\" href=\"/_astro/ec.w36nc.css\">",
+                "a <link> element",
+            ),
+            (
+                "<script style=\"--0:#82AAFF\">void 0</script>",
+                "a <script> element",
+            ),
         ] {
-            assert!(
-                content(&html, &assets)
-                    .contains(&"figure or companion markup inside a code block".to_string()),
-                "{html}"
+            assert_eq!(
+                content(&block(head, "", &format!("{tokens}{payload}")), &assets),
+                [kind],
+                "{payload}"
             );
         }
+        let styled_head = CODE_BLOCK_HEAD.replace("<link ", "<link style=\"--0:#82AAFF\" ");
+        assert_eq!(
+            content(&block(&styled_head, "", tokens), &assets),
+            ["a <link> element", "a style attribute on <link>"]
+        );
+    }
+
+    /// The Expressive Code sheet scopes its rules on the `expressive-code`
+    /// class whatever the tag, so no figure or companion may sit on or inside
+    /// any element with that class (Codex CB-2, Grok F1). A real block beside
+    /// a figure passes.
+    #[test]
+    fn no_figure_sits_in_the_code_block_sheet_scope() {
+        let assets = CodeBlockAssets::recorded(Some("/"), CODE_BLOCK_ASSETS);
+        let content = code_block_carriers;
+        let companion = "<div class=\"cf-companion not-content\" data-cf-companion=\"figures/a.json\"><figure class=\"cf-fig\"><figcaption class=\"cf-fig-caption\">c</figcaption><ul class=\"cf-legend\"></ul></figure></div>";
+        let inside = "figure or companion markup inside a code block".to_string();
+        let mut wrapped: Vec<String> = ["div", "section", "article", "span", "aside", "main"]
+            .iter()
+            .map(|tag| format!("<{tag} class=\"note expressive-code\">{companion}</{tag}>"))
+            .collect();
+        wrapped.push(code_block(
+            CODE_BLOCK_HEAD,
+            "",
+            &format!("<span style=\"--0:#82AAFF\">{companion}</span>"),
+        ));
+        wrapped.push(companion.replace(
+            "cf-companion not-content",
+            "cf-companion not-content expressive-code",
+        ));
+        wrapped.push(companion.replace("class=\"cf-fig\"", "class=\"cf-fig expressive-code\""));
+        wrapped
+            .push(companion.replace("class=\"cf-legend\"", "class=\"cf-legend expressive-code\""));
+        for html in &wrapped {
+            assert!(content(html, &assets).contains(&inside), "{html}");
+        }
+        let beside = format!(
+            "{}{companion}",
+            code_block(CODE_BLOCK_HEAD, "", CODE_BLOCK_TOKENS)
+        );
+        assert!(content(&beside, &assets).is_empty());
     }
 
     /// Every inline script outside the content is one the runtime emits: the

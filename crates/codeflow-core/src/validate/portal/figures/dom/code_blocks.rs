@@ -14,15 +14,21 @@
 //!   declaration in it is a custom property Expressive Code writes, whose
 //!   value is a hex colour, a fixed keyword or a whole number of `ch`. Any
 //!   other property, `url()`, `var()`, comment or escape fails.
-//! - Figure or companion markup inside a block fails, so neither those
+//! - Each carrier on an element is judged on its own: an allowed token style
+//!   attribute never excuses a style element, a link that is not the
+//!   recorded asset link, or any executable content on the same element.
+//! - Figure or companion markup on or inside any element with the
+//!   `expressive-code` class fails, whatever its tag, because the sheet
+//!   scopes its rules on the class alone. With that exclusion, neither those
 //!   properties nor the Expressive Code sheet can reach a figure: every rule
 //!   of that sheet that styles an element is scoped under `.expressive-code`,
 //!   and its only other rules declare its `--ec-*` theme properties on
 //!   `:root`, which nothing outside a block reads.
 //!
-//! Raw HTML can imitate a block, and that is harmless: a custom property only
-//! reaches the element that declares it and that element's descendants, and
-//! the rule above keeps every figure out of a block. The generated-page check
+//! Raw HTML can imitate a block. That is harmless only because of the rules
+//! above: a custom property reaches just the element that declares it and its
+//! descendants, no other carrier rides on an allowed attribute, and no figure
+//! may sit in the sheet's class scope. The generated-page check
 //! still refuses every style attribute, link and script, so the imitation
 //! cannot come from a Markdown source in the first place.
 
@@ -91,11 +97,14 @@ fn parent_element(element: ElementRef<'_>) -> Option<ElementRef<'_>> {
     element.parent().and_then(ElementRef::wrap)
 }
 
-/// Whether the element is a block or sits inside one.
-pub(super) fn in_block(element: ElementRef<'_>) -> bool {
+/// Whether the Expressive Code sheet can reach the element: the sheet scopes
+/// its rules on the `expressive-code` class whatever the tag, so this is any
+/// element carrying that class, or inside one. The asset and style allowance
+/// above keeps to the exact `div` structure Expressive Code writes.
+pub(super) fn in_sheet_scope(element: ElementRef<'_>) -> bool {
     std::iter::once(element)
         .chain(element.ancestors().filter_map(ElementRef::wrap))
-        .any(is_block)
+        .any(|candidate| has_class(candidate, |class| class == "expressive-code"))
 }
 
 /// The element's attributes are exactly `fixed` plus one URL attribute
@@ -129,7 +138,8 @@ pub(super) fn asset_script(element: ElementRef<'_>, assets: &CodeBlockAssets) ->
 }
 
 /// A style attribute Expressive Code writes: on the `pre` of a block's frame
-/// or inside it, holding only the custom properties it declares.
+/// or inside it, holding only the custom properties it declares. This judges
+/// the attribute alone; the element's own kind is checked separately.
 pub(super) fn token_style(element: ElementRef<'_>) -> bool {
     let Some(style) = element.value().attr("style") else {
         return false;

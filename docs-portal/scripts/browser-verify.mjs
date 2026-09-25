@@ -567,20 +567,26 @@ export function pinnedBuiltSheets(artifacts) {
 // writes into the page content, at the head of the first block, a link and a
 // module script for its own built assets, and custom properties on the
 // highlighted tokens. The content rule lets exactly that through, as
-// `validate --portal` does: the link and script are children of a
-// div.expressive-code block with exactly the attributes Expressive Code
-// writes, pointing at a recorded _astro/ec.<hash> asset that is then served
-// with its hash; a style attribute sits on the pre of a block's frame
-// (div.expressive-code > figure > pre) or inside it and declares only the
-// custom properties Expressive Code writes, with a hex colour, a fixed
-// keyword or a whole number of ch. A figure or companion inside a block fails,
-// so neither the properties, which reach only their element's descendants,
-// nor the block's sheet can touch a figure: every rule of that sheet that
+// `validate --portal` does, judging each carrier on an element on its own:
+// the link and script are children of a div.expressive-code block with
+// exactly the attributes Expressive Code writes, pointing at a recorded
+// _astro/ec.<hash> asset that is then served with its hash; a style attribute
+// sits on the pre of a block's frame (div.expressive-code > figure > pre) or
+// inside it and declares only the custom properties Expressive Code writes,
+// with a hex colour, a fixed keyword or a whole number of ch. That attribute
+// never excuses a style element, another link or a script on the same element.
+// The sheet scopes its rules on the expressive-code class whatever the tag,
+// so figure markup on or inside any element with that class fails. With that
+// exclusion neither the properties, which reach only their element's
+// descendants, nor the sheet can touch a figure: every rule of the sheet that
 // styles an element is scoped to .expressive-code, and its only other rules
 // declare its --ec-* theme properties on :root, which nothing outside a block
-// reads (the clean copy keeps the sheet, so they compare equal). An imitated
-// block is therefore harmless, and a Markdown source cannot write one: the
-// generated-page check refuses its style.
+// reads (the clean copy keeps the sheet, so they compare equal). A Markdown
+// source cannot write an imitated block: the generated-page check refuses its
+// style.
+// This plane matches an asset by the recorded path suffix and the ec. name,
+// then requires its served bytes to equal the recorded hash; validate --portal
+// requires the exact URL under the configured base. A page must pass both.
 export const CODE_BLOCK_ASSET = /^dist\/_astro\/ec\.[A-Za-z0-9_-]{1,32}\.(?:css|js)$/;
 export function codeBlockAssets(pinned) {
   return pinned.filter((asset) => CODE_BLOCK_ASSET.test(asset.path)).map((asset) => asset.path.slice("dist/".length));
@@ -690,7 +696,13 @@ export async function pageCssFailures(page, pinnedSheets, parser = null) {
       });
     };
     const carriers = new Set();
-    for (const figure of document.querySelectorAll("figure.cf-fig, .cf-companion")) if (figure.closest("div.expressive-code")) carriers.add("a figure or companion inside a code block");
+    // The code block sheet scopes its rules on the expressive-code class
+    // whatever the tag, so no figure markup (a kit class or a figure data
+    // attribute, as validate --portal reads it) may sit on or inside any
+    // element with that class.
+    const figureMarkup = (element) => [...element.classList].some((name) => /^(?:cf-companion|cf-fig|cf-m-|cf-f-|cf-t--)/.test(name) || ["cf-t", "cf-legend", "cf-key", "cf-twin", "cf-twin-scroll"].includes(name))
+      || [...element.attributes].some((attribute) => /^data-cf-(?:companion|figure)/.test(attribute.name));
+    for (const element of document.querySelectorAll(".expressive-code, .expressive-code *")) if (figureMarkup(element)) { carriers.add("a figure or companion inside a code block"); break; }
     for (const element of scope) {
       if (element.localName === "style") carriers.add(`a <style> element in ${content?.contains(element) ? "the page content" : "the page"}`);
       if (element.localName === "link" && content?.contains(element) && !codeBlockLink(element)) carriers.add("a <link> element in the page content");
