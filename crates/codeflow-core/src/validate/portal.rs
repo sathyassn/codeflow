@@ -1046,6 +1046,20 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             None
         }
     };
+    // The code block assets a built page may link from its content: the
+    // recorded Expressive Code sheet and script, under the configured base.
+    let portal_base = authoritative_config
+        .as_deref()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(bytes).ok())
+        .and_then(|config| config.get("base")?.as_str().map(str::to_string))
+        .filter(|base| valid_portal_base(base));
+    let code_blocks = figures::CodeBlockAssets::recorded(
+        portal_base.as_deref(),
+        evidence
+            .artifacts
+            .iter()
+            .map(|artifact| artifact.path.as_str()),
+    );
     let mut artifact_bytes_remaining = actual_artifacts.total_bytes;
     for artifact in &evidence.artifacts {
         let Some(bytes) = verify_file_budgeted(
@@ -1067,6 +1081,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                     &artifact.path,
                     html,
                     runtime_scripts.as_ref(),
+                    &code_blocks,
                     &mut report,
                 ),
                 Err(error) => report.issues.push(format!(

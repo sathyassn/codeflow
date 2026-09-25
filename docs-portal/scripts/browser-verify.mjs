@@ -419,7 +419,9 @@ export function pinnedKitSheets(snapshot, commit, portalRelative) {
 //      script must be a built script the evidence records, served with its
 //      hash. Content and a figure's ancestors carry no style element, link,
 //      style attribute, script or shadow root, and no element carries an
-//      event handler, a script URL, a frame or an embedded document.
+//      event handler, a script URL, a frame or an embedded document. The one
+//      exception is a code block exactly as Expressive Code writes it (see
+//      CODE_BLOCK_ASSET), which never holds a figure.
 //   2. Every computed property of each companion, figure and figure
 //      descendant, pseudo-elements included, equals a clean copy of the same
 //      page: loaded afresh, stripped of any CSS the first check refuses, with
@@ -438,6 +440,14 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
   const browser = page.context().browser();
   const cleanContext = browser === null ? null : await browser.newContext();
   const clean = await (cleanContext ?? page.context()).newPage();
+  // A fresh context has its own media preferences, and site sheets read
+  // them: the code block sheet sets its theme properties on :root by colour
+  // scheme, and the portal sheet stops transitions for reduced motion. The
+  // clean copy takes the page's own preferences.
+  await clean.emulateMedia(await page.evaluate(() => ({
+    colorScheme: ["dark", "light"].find((scheme) => matchMedia(`(prefers-color-scheme: ${scheme})`).matches) ?? "no-preference",
+    reducedMotion: matchMedia("(prefers-reduced-motion: reduce)").matches ? "reduce" : "no-preference",
+  })));
   // The clean copy runs only the runtime's scripts: the recorded built
   // scripts by URL and the allowlisted inline scripts by hash.
   let cleanPolicy = null;
@@ -459,7 +469,7 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
       for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
         await page.setViewportSize({ width, height: 900 });
         await visitRoute(assignment.route);
-        await page.evaluate(showForReading, { theme: mode, root: null, strip: null, expected: null });
+        await page.evaluate(showForReading, { theme: mode, root: null, strip: null, code: null, expected: null });
         await settle(page);
         observed[label] = await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx });
         observed[`${label}Dom`] = await page.evaluate(readFigureDom);
@@ -529,7 +539,7 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
       for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
         await clean.setViewportSize({ width, height: 900 });
         await clean.goto(observed[`${label}Url`], { waitUntil: "networkidle" });
-        await clean.evaluate(showForReading, { theme: mode, root: observed[`${label}Root`], strip: pinnedSheets.map((sheet) => sheet.path.slice("dist/".length)), expected: rendered });
+        await clean.evaluate(showForReading, { theme: mode, root: observed[`${label}Root`], strip: pinnedSheets.map((sheet) => sheet.path.slice("dist/".length)), code: codeBlockAssets(pinnedSheets), expected: rendered });
         await settle(clean);
         const baseline = await clean.evaluate(readFigureContext);
         observed[`${label}Context`].forEach((reading, index) => {
@@ -551,6 +561,35 @@ export function pinnedBuiltAssets(artifacts, extension) {
 }
 export function pinnedBuiltSheets(artifacts) {
   return pinnedBuiltAssets(artifacts, ".css");
+}
+
+// Starlight renders every fenced code block with Expressive Code, which
+// writes into the page content, at the head of the first block, a link and a
+// module script for its own built assets, and custom properties on the
+// highlighted tokens. The content rule lets exactly that through, as
+// `validate --portal` does, judging each carrier on an element on its own:
+// the link and script are children of a div.expressive-code block with
+// exactly the attributes Expressive Code writes, pointing at a recorded
+// _astro/ec.<hash> asset that is then served with its hash; a style attribute
+// sits on the pre of a block's frame (div.expressive-code > figure > pre) or
+// inside it and declares only the custom properties Expressive Code writes,
+// with a hex colour, a fixed keyword or a whole number of ch. That attribute
+// never excuses a style element, another link or a script on the same element.
+// The sheet scopes its rules on the expressive-code class whatever the tag,
+// so figure markup on or inside any element with that class fails. With that
+// exclusion neither the properties, which reach only their element's
+// descendants, nor the sheet can touch a figure: every rule of the sheet that
+// styles an element is scoped to .expressive-code, and its only other rules
+// declare its --ec-* theme properties on :root, which nothing outside a block
+// reads (the clean copy keeps the sheet, so they compare equal). A Markdown
+// source cannot write an imitated block: the generated-page check refuses its
+// style.
+// This plane matches an asset by the recorded path suffix and the ec. name,
+// then requires its served bytes to equal the recorded hash; validate --portal
+// requires the exact URL under the configured base. A page must pass both.
+export const CODE_BLOCK_ASSET = /^dist\/_astro\/ec\.[A-Za-z0-9_-]{1,32}\.(?:css|js)$/;
+export function codeBlockAssets(pinned) {
+  return pinned.filter((asset) => CODE_BLOCK_ASSET.test(asset.path)).map((asset) => asset.path.slice("dist/".length));
 }
 
 async function servedSha256(page, url) {
@@ -581,8 +620,12 @@ export async function servedPageFailures(page, route, artifacts) {
 // for one, has a script URL as its action); the built page is read for these
 // before any script runs (servedPageFailures and validate --portal).
 export async function pageScriptFailures(page, pinnedScripts, inlineScripts) {
-  const found = await page.evaluate(() => {
+  const found = await page.evaluate((code) => {
     const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");
+    // A code block's module script, exactly as Expressive Code writes it.
+    const codeBlockScript = (element) => element.parentElement?.localName === "div" && element.parentElement.classList.contains("expressive-code")
+      && element.attributes.length === 2 && element.getAttribute("type") === "module" && element.childNodes.length === 0
+      && /^\/(?!\/)/.test(element.getAttribute("src") ?? "") && code.some((file) => new URL(element.src).pathname.endsWith(`/${file}`));
     const runs = (value) => value.split(";").some((part) => part.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "").replace(/[\t\n\r]/g, "").toLowerCase().startsWith("javascript:"));
     const urls = ["href", "src", "action", "formaction", "xlink:href", "data", "poster", "background"];
     const carriers = new Set();
@@ -590,7 +633,7 @@ export async function pageScriptFailures(page, pinnedScripts, inlineScripts) {
     for (const figure of document.querySelectorAll("figure.cf-fig")) for (let node = figure; node; node = node.parentElement) scope.add(node);
     for (const element of scope) {
       const tag = element.localName;
-      if (tag === "script") carriers.add("a <script> element in the page content");
+      if (tag === "script" && !codeBlockScript(element)) carriers.add("a <script> element in the page content");
       if (["iframe", "frame", "frameset", "object", "embed"].includes(tag)) carriers.add(`an <${tag}> element`);
       if (tag === "template" && (element.hasAttribute("shadowrootmode") || element.hasAttribute("shadowroot"))) carriers.add("a declarative shadow root");
       for (const attribute of element.attributes) {
@@ -604,7 +647,7 @@ export async function pageScriptFailures(page, pinnedScripts, inlineScripts) {
       scripts: [...document.scripts].filter((script) => script.src).map((script) => script.src),
       inline: [...document.scripts].filter((script) => !script.src && !content?.contains(script)).map((script) => script.text),
     };
-  });
+  }, codeBlockAssets(pinnedScripts));
   const failures = [...found.carriers];
   const unknown = [...new Set(found.inline.map(scriptSha256).filter((sha) => !inlineScripts.has(sha)))];
   if (unknown.length) failures.push(`inline scripts outside the content are not ones the site's runtime emits (sha256 ${unknown.map((sha) => sha.slice(0, 12)).join(", ")}); if the runtime changed, regenerate ${RUNTIME_SCRIPTS_FILE}: ${REGENERATE}`);
@@ -623,15 +666,47 @@ export async function pageScriptFailures(page, pinnedScripts, inlineScripts) {
 // each sheet holds exactly the rules its served bytes parse to, read in
 // `parser`, a page no page script reaches.
 export async function pageCssFailures(page, pinnedSheets, parser = null) {
-  const found = await page.evaluate(() => {
+  const found = await page.evaluate((code) => {
     const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");
     const scope = new Set(content ? content.querySelectorAll("*") : []);
     for (const figure of document.querySelectorAll("figure.cf-fig")) for (let node = figure; node; node = node.parentElement) scope.add(node);
+    // A code block exactly as Expressive Code writes it: its stylesheet link
+    // at the head of a block, and custom properties in a block's frame.
+    const isBlock = (node) => node?.localName === "div" && node.classList.contains("expressive-code");
+    const codeBlockLink = (element) => element.localName === "link" && isBlock(element.parentElement) && content?.contains(element)
+      && element.attributes.length === 2 && element.getAttribute("rel") === "stylesheet"
+      && /^\/(?!\/)/.test(element.getAttribute("href") ?? "") && code.some((file) => new URL(element.href).pathname.endsWith(`/${file}`));
+    const trim = (text) => text.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+    const declared = (name, value) => {
+      if (name === "--ecIndent" || name === "--ecMaxLine") return /^\d{1,4}ch$/.test(value);
+      const token = /^--\d{1,2}(bg|fs|fw|td)?$/.exec(name);
+      if (token === null) return false;
+      if (token[1] === "fs") return value === "italic";
+      if (token[1] === "fw") return value === "bold";
+      if (token[1] === "td") return ["underline", "line-through", "underline line-through"].includes(value);
+      return /^#(?:[0-9A-Fa-f]{3,4}|[0-9A-Fa-f]{6}|[0-9A-Fa-f]{8})$/.test(value);
+    };
+    const codeBlockStyle = (element) => {
+      const pre = element.closest("pre");
+      if (pre === null || pre.parentElement?.localName !== "figure" || !isBlock(pre.parentElement.parentElement)) return false;
+      const declarations = element.getAttribute("style").split(";").map(trim).filter(Boolean);
+      return declarations.length > 0 && declarations.every((declaration) => {
+        const colon = declaration.indexOf(":");
+        return colon > 0 && declared(trim(declaration.slice(0, colon)), trim(declaration.slice(colon + 1)));
+      });
+    };
     const carriers = new Set();
+    // The code block sheet scopes its rules on the expressive-code class
+    // whatever the tag, so no figure markup (a kit class or a figure data
+    // attribute, as validate --portal reads it) may sit on or inside any
+    // element with that class.
+    const figureMarkup = (element) => [...element.classList].some((name) => /^(?:cf-companion|cf-fig|cf-m-|cf-f-|cf-t--)/.test(name) || ["cf-t", "cf-legend", "cf-key", "cf-twin", "cf-twin-scroll"].includes(name))
+      || [...element.attributes].some((attribute) => /^data-cf-(?:companion|figure)/.test(attribute.name));
+    for (const element of document.querySelectorAll(".expressive-code, .expressive-code *")) if (figureMarkup(element)) { carriers.add("a figure or companion inside a code block"); break; }
     for (const element of scope) {
       if (element.localName === "style") carriers.add(`a <style> element in ${content?.contains(element) ? "the page content" : "the page"}`);
-      if (element.localName === "link" && content?.contains(element)) carriers.add("a <link> element in the page content");
-      if (element.hasAttribute("style")) carriers.add(`a style attribute on <${element.localName}${element.classList.length ? ` class="${element.getAttribute("class")}"` : ""}>`);
+      if (element.localName === "link" && content?.contains(element) && !codeBlockLink(element)) carriers.add("a <link> element in the page content");
+      if (element.hasAttribute("style") && !(content?.contains(element) && codeBlockStyle(element))) carriers.add(`a style attribute on <${element.localName}${element.classList.length ? ` class="${element.getAttribute("class")}"` : ""}>`);
       if (element.shadowRoot) carriers.add(`a shadow root on <${element.localName}>`);
       if (element.localName === "template" && (element.hasAttribute("shadowrootmode") || element.hasAttribute("shadowroot"))) carriers.add("a declarative shadow root");
     }
@@ -643,15 +718,15 @@ export async function pageCssFailures(page, pinnedSheets, parser = null) {
         rules = [...sheet.cssRules].map((rule) => rule.cssText);
       } catch { imports = ["an unreadable rule list"]; }
       const owner = sheet.ownerNode;
-      return { href: sheet.href, owner: owner?.localName ?? null, inHead: owner?.parentElement === document.head, imports, rules };
+      return { href: sheet.href, owner: owner?.localName ?? null, inHead: owner?.parentElement === document.head, codeBlock: owner ? codeBlockLink(owner) : false, imports, rules };
     });
     return { carriers: [...carriers], sheets, adopted: document.adoptedStyleSheets.length };
-  });
+  }, codeBlockAssets(pinnedSheets));
   const failures = found.carriers.map((carrier) => `${carrier} carries CSS the site's sheets do not`);
   if (found.adopted) failures.push(`the document adopts ${found.adopted} constructed stylesheet(s)`);
   const origin = new URL(page.url()).origin;
   for (const sheet of found.sheets) {
-    if (sheet.owner !== "link" || !sheet.inHead || sheet.href === null) { failures.push(`a stylesheet from ${sheet.owner ? `a <${sheet.owner}> element` : "no element"}${sheet.inHead ? " in the head" : ""} is not a built sheet`); continue; }
+    if (sheet.owner !== "link" || !(sheet.inHead || sheet.codeBlock) || sheet.href === null) { failures.push(`a stylesheet from ${sheet.owner ? `a <${sheet.owner}> element` : "no element"}${sheet.inHead ? " in the head" : ""} is not a built sheet`); continue; }
     const url = new URL(sheet.href);
     const pin = url.origin === origin ? pinnedSheets.find((candidate) => url.pathname.endsWith(`/${candidate.path.slice("dist/".length)}`)) : undefined;
     if (pin === undefined) { failures.push(`the stylesheet ${url.origin === origin ? url.pathname : url.href} is not a built sheet the evidence records`); continue; }
@@ -672,10 +747,11 @@ export async function pageCssFailures(page, pinnedSheets, parser = null) {
 }
 
 // Runs in the page. Sets the display state to read, and on the clean copy
-// removes every stylesheet that is not a built sheet in the head, every style
-// element, and style attributes in the content and on a figure's ancestors,
-// then puts each figure's pinned rendering in its place.
-function showForReading({ theme, root, strip, expected }) {
+// removes every stylesheet that is not a built sheet in the head or a code
+// block's recorded sheet at the head of its block, every style element, and
+// style attributes in the content and on a figure's ancestors, then puts each
+// figure's pinned rendering in its place.
+function showForReading({ theme, root, strip, code, expected }) {
   const html = document.documentElement;
   if (root !== null) {
     for (const attribute of [...html.attributes]) if (attribute.name.startsWith("data-")) html.removeAttribute(attribute.name);
@@ -684,7 +760,9 @@ function showForReading({ theme, root, strip, expected }) {
   html.dataset.theme = theme;
   for (const panel of document.querySelectorAll(".portal-altitude")) panel.hidden = false;
   if (strip === null) return;
-  const built = (node) => node.localName === "link" && node.parentElement === document.head && strip.some((file) => new URL(node.href, location.href).pathname.endsWith(`/${file}`));
+  const served = (node, files) => files.some((file) => new URL(node.href, location.href).pathname.endsWith(`/${file}`));
+  const built = (node) => node.localName === "link" && ((node.parentElement === document.head && served(node, strip))
+    || (node.parentElement?.localName === "div" && node.parentElement.classList.contains("expressive-code") && served(node, code)));
   for (const node of [...document.querySelectorAll("style, link[rel~='stylesheet']")]) if (!built(node)) node.remove();
   document.adoptedStyleSheets = [];
   const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");

@@ -58,7 +58,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "e75ee60b0d12db73bd4db46906574d08c3a2feba184ab012ec36a9274b1bbfd6"
+      "pristine_sha256": "bd3bc81ac36b1029613f3a82952d6c91a87f710fd996a7609949599e32b80cda"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -186,7 +186,7 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "18560b79241863b19b832c8dcc3db60a3c8c3f6ae50aa213fa4e81930acec3c8"
+      "pristine_sha256": "72921c3706ba4fd8a313a32ed108c9ce03b8845175256017d3ebe1b01070b709"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",

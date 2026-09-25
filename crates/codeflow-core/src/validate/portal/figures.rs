@@ -26,6 +26,8 @@ use crate::strict_json::parse_strict_json;
 mod dom;
 mod render;
 
+pub(super) use dom::CodeBlockAssets;
+
 pub(super) const PAGE_CLASSES: [&str; 3] = ["illustrated", "pass-through", "derived-lookup"];
 pub(super) const PAGE_CLASS_REASONS: [&str; 3] =
     ["accepted-record", "governance", "no-relationship"];
@@ -1097,16 +1099,19 @@ pub(super) fn runtime_inline_scripts(
 }
 
 /// A built page, read before a browser consumes its templates: its content
-/// region carries no CSS or executable content, the rest of the page carries
-/// none of what the runtime never emits, and every inline script outside the
-/// content is one the runtime emits.
+/// region carries no CSS or executable content beyond the exact output of a
+/// code block (the recorded Expressive Code assets and its token custom
+/// properties), the rest of the page carries none of what the runtime never
+/// emits, and every inline script outside the content is one the runtime
+/// emits.
 pub(super) fn verify_built_page(
     path: &str,
     html: &str,
     runtime_scripts: Option<&BTreeSet<String>>,
+    code_blocks: &CodeBlockAssets,
     report: &mut PortalValidationReport,
 ) {
-    let found = dom::built_page_carriers(html);
+    let found = dom::built_page_carriers(html, code_blocks);
     if let Some(allowed) = runtime_scripts {
         let unknown: BTreeSet<String> = found
             .inline_scripts
@@ -2141,6 +2146,10 @@ mod tests {
             ("## Concept\n\n<div style=\"opacity:0\">\n\nx\n\n</div>\n", "a style attribute on <div>"),
             ("## Concept\n\nText <span style=\"opacity:0\">inline</span>.\n", "a style attribute on <span>"),
             ("## Concept\n\n<link rel=\"stylesheet\" href=\"/x.css\">\n", "a <link> element"),
+            // A code block imitated in a Markdown source: the built-page
+            // allowance never applies to what the adapter generates.
+            ("## Concept\n\n<div class=\"expressive-code\"><figure><pre><span style=\"--0:#82AAFF\">x</span></pre></figure></div>\n", "a style attribute on <span>"),
+            ("## Concept\n\n<div class=\"expressive-code\"><link rel=\"stylesheet\" href=\"/_astro/ec.w36nc.css\"></div>\n", "a <link> element"),
             ("## Concept\n\n<svg><style>.cf-fig{opacity:0}</style></svg>\n", "a <style> element"),
             ("## Concept\n\n<div><template shadowrootmode=\"open\"><style>p{}</style></template></div>\n", "a <style> element"),
         ] {
@@ -2179,10 +2188,11 @@ mod tests {
     /// root, a handler or a frame.
     #[test]
     fn built_pages_carry_only_what_the_runtime_emits() {
+        let carriers = |html: &str| dom::built_page_carriers(html, &CodeBlockAssets::default());
         let page = |content: &str, chrome: &str| {
             format!("<!doctype html><html><head><script>(function(){{}})();</script><script type=\"module\" src=\"/_astro/page.js\"></script></head><body><template id=\"theme-icons\"><svg></svg></template><nav style=\"--depth: 0;\">{chrome}</nav><main><div class=\"sl-markdown-content\"><p>Text.</p>{content}</div></main></body></html>")
         };
-        let clean = dom::built_page_carriers(&page("", ""));
+        let clean = carriers(&page("", ""));
         assert!(
             clean.content.is_empty() && clean.page.is_empty(),
             "{:?} {:?}",
@@ -2192,27 +2202,289 @@ mod tests {
         let closed = "<div><template shadowrootmode=\"closed\"><style>:host{opacity:0}</style>Shadow</template></div>";
         let open = closed.replace("closed", "open");
         for shadow in [closed.to_string(), open] {
-            assert!(dom::built_page_carriers(&page(&shadow, ""))
+            assert!(carriers(&page(&shadow, ""))
                 .content
                 .contains("a declarative shadow root"));
-            assert!(dom::built_page_carriers(&page("", &shadow))
+            assert!(carriers(&page("", &shadow))
                 .page
                 .contains("a declarative shadow root"));
         }
-        let script = dom::built_page_carriers(&page(
+        let script = carriers(&page(
             "<script>document.styleSheets[0].insertRule(\".cf-fig{opacity:0}\")</script>",
             "",
         ));
         assert!(script.content.contains("a <script> element"));
-        let styled = dom::built_page_carriers(&page("<p style=\"opacity:0\">x</p>", ""));
+        let styled = carriers(&page("<p style=\"opacity:0\">x</p>", ""));
         assert!(styled.content.contains("a style attribute on <p>"));
-        let handler = dom::built_page_carriers(&page("", "<button onclick=\"void 0\">x</button>"));
+        let handler = carriers(&page("", "<button onclick=\"void 0\">x</button>"));
         assert!(handler
             .page
             .contains("an event-handler attribute on <button>"));
-        let style = dom::built_page_carriers(&page("", "<style>.cf-fig{opacity:0}</style>"));
+        let style = carriers(&page("", "<style>.cf-fig{opacity:0}</style>"));
         assert!(style.page.contains("a <style> element"));
         assert_eq!(clean.inline_scripts, ["(function(){})();"]);
+    }
+
+    const CODE_BLOCK_ASSETS: [&str; 5] = [
+        "dist/_astro/ec.w36nc.css",
+        "dist/_astro/ec.0vx5m.js",
+        "dist/_astro/common.DP3CCCu_.css",
+        "dist/_astro/page.LAbJoB63.js",
+        "dist/index.html",
+    ];
+    const CODE_BLOCK_HEAD: &str = "<link rel=\"stylesheet\" href=\"/_astro/ec.w36nc.css\"><script type=\"module\" src=\"/_astro/ec.0vx5m.js\"></script>";
+    const CODE_BLOCK_TOKENS: &str = "<span style=\"--0:#82AAFF;--1:#3B61B0\">curl</span><span style=\"--0:#D6DEEB;--1:#403F53\"> </span><span style=\"--0:#637777;--0fs:italic;--1:#5F636FE3;--1fs:italic\">x</span><span style=\"--0bg:#1D3B53;--0fw:bold;--0td:underline line-through\">y</span>";
+
+    /// A code block as Expressive Code writes it, with `head` before its
+    /// frame, `pre` in the pre tag and `tokens` as its one line.
+    fn code_block(head: &str, pre: &str, tokens: &str) -> String {
+        format!("<div class=\"expressive-code\">{head}<figure class=\"frame is-terminal not-content\"><figcaption class=\"header\"><span class=\"title\"></span></figcaption><pre data-language=\"sh\"{pre}><code><div class=\"ec-line\"><div class=\"code\">{tokens}</div></div></code></pre><div class=\"copy\"><button data-code=\"curl\"><div></div></button></div></figure></div>")
+    }
+
+    /// What a built page with `html` in its content carries there.
+    fn code_block_carriers(html: &str, assets: &CodeBlockAssets) -> Vec<String> {
+        let page = format!("<!doctype html><html><head></head><body><main><div class=\"sl-markdown-content\"><p>Text.</p>{html}</div></main></body></html>");
+        dom::built_page_carriers(&page, assets)
+            .content
+            .into_iter()
+            .collect()
+    }
+
+    /// A fenced code block renders through Expressive Code, which writes a
+    /// link and a script for its recorded assets and custom properties on its
+    /// tokens into the content. Exactly that passes, under the configured
+    /// base; a block imitated in raw HTML with only those properties is
+    /// harmless and passes too.
+    #[test]
+    fn code_blocks_pass_as_expressive_code_writes_them() {
+        let assets = CodeBlockAssets::recorded(Some("/"), CODE_BLOCK_ASSETS);
+        let content = code_block_carriers;
+        let (block, head, tokens) = (code_block, CODE_BLOCK_HEAD, CODE_BLOCK_TOKENS);
+        // Every form Expressive Code writes: token colours for two theme
+        // variants, background, italic, bold and decoration, and the wrapped
+        // block's longest line and a wrapped line's indent.
+        let wrapped = block(
+            head,
+            " class=\"wrap\" style=\"--ecMaxLine:42ch\"",
+            &format!("<div class=\"ec-line\" style=\"--ecIndent:4ch\">{tokens}</div>"),
+        );
+        for html in [block(head, "", tokens), wrapped, block("", "", tokens)] {
+            assert_eq!(content(&html, &assets), Vec::<String>::new(), "{html}");
+        }
+        // The same block under a base path links its assets under that base.
+        let guide = CodeBlockAssets::recorded(Some("/guide/"), CODE_BLOCK_ASSETS);
+        let under_base = block(
+            "<link rel=\"stylesheet\" href=\"/guide/_astro/ec.w36nc.css\"><script type=\"module\" src=\"/guide/_astro/ec.0vx5m.js\"></script>",
+            "",
+            tokens,
+        );
+        assert!(content(&under_base, &guide).is_empty());
+        assert_eq!(
+            content(&block(head, "", tokens), &guide),
+            ["a <link> element", "a <script> element"]
+        );
+        assert_eq!(
+            content(
+                &block(head, "", tokens),
+                &CodeBlockAssets::recorded(None, CODE_BLOCK_ASSETS)
+            ),
+            ["a <link> element", "a <script> element"]
+        );
+    }
+
+    /// A style attribute passes only on a block's frame and only with the
+    /// custom properties Expressive Code writes: a real property, a value
+    /// that loads or computes, another declaration, or an allowed property
+    /// outside a block's frame fails.
+    #[test]
+    fn code_block_styles_hold_only_expressive_code_properties() {
+        let assets = CodeBlockAssets::recorded(Some("/"), CODE_BLOCK_ASSETS);
+        let content = code_block_carriers;
+        let (block, head) = (code_block, CODE_BLOCK_HEAD);
+        // A real property, a value that loads or computes, or a declaration
+        // Expressive Code does not write, inside the frame.
+        for style in [
+            "color:red",
+            "--0:#fff;color:red",
+            "opacity:0",
+            "transform:scale(2)",
+            "display:none",
+            "background:url(/x.png)",
+            "--0:url(/x.png)",
+            "--0bg:var(--x)",
+            "--0:#fff/*;*/",
+            "--0:#ff\\66",
+            "--0:#fff !important",
+            "--0fs:oblique",
+            "--0fw:900",
+            "--ecIndent:1em",
+            "--tmLabel:\"x\"",
+            "--cf-fig:#fff",
+            "--123:#fff",
+            "",
+        ] {
+            let html = block(head, "", &format!("<span style=\"{style}\">x</span>"));
+            assert_eq!(
+                content(&html, &assets),
+                ["a style attribute on <span>"],
+                "{style}"
+            );
+        }
+        // An allowed property outside a block's frame: in plain content, on
+        // the block, in its caption, or in a block with no figure frame.
+        for html in [
+            "<p style=\"--0:#82AAFF\">x</p>".to_string(),
+            "<div class=\"expressive-code\" style=\"--0:#82AAFF\"></div>".to_string(),
+            "<div class=\"expressive-code\"><figure><figcaption><span style=\"--0:#82AAFF\">t</span></figcaption></figure></div>".to_string(),
+            "<div class=\"expressive-code\"><pre><span style=\"--0:#82AAFF\">t</span></pre></div>".to_string(),
+            "<div class=\"note\"><figure><pre><span style=\"--0:#82AAFF\">t</span></pre></figure></div>".to_string(),
+        ] {
+            let found = content(&html, &assets);
+            assert_eq!(found.len(), 1, "{html}");
+            assert!(found[0].starts_with("a style attribute on <"), "{html}");
+        }
+    }
+
+    /// A link or script that is not a recorded asset as Expressive Code
+    /// writes it at the head of a block, a style element, and a figure inside
+    /// a block, real or imitated, all fail.
+    #[test]
+    fn code_block_assets_and_figures_are_refused_otherwise() {
+        let assets = CodeBlockAssets::recorded(Some("/"), CODE_BLOCK_ASSETS);
+        let content = code_block_carriers;
+        let (block, head, tokens) = (code_block, CODE_BLOCK_HEAD, CODE_BLOCK_TOKENS);
+        // A link or script that is not the recorded asset, not as Expressive
+        // Code writes it, or not at the head of a block.
+        for (asset, kind) in [
+            (
+                "<link rel=\"stylesheet\" href=\"/_astro/ec.zzzzz.css\">",
+                "a <link> element",
+            ),
+            (
+                "<link rel=\"stylesheet\" href=\"/_astro/common.DP3CCCu_.css\">",
+                "a <link> element",
+            ),
+            (
+                "<link rel=\"stylesheet\" href=\"/_astro/ec.w36nc.css\" media=\"print\">",
+                "a <link> element",
+            ),
+            (
+                "<link rel=\"preload\" href=\"/_astro/ec.w36nc.css\">",
+                "a <link> element",
+            ),
+            (
+                "<link rel=\"stylesheet\" href=\"https://elsewhere.test/_astro/ec.w36nc.css\">",
+                "a <link> element",
+            ),
+            (
+                "<script type=\"module\" src=\"/_astro/ec.zzzzz.js\"></script>",
+                "a <script> element",
+            ),
+            (
+                "<script type=\"module\" src=\"/_astro/page.LAbJoB63.js\"></script>",
+                "a <script> element",
+            ),
+            (
+                "<script src=\"/_astro/ec.0vx5m.js\"></script>",
+                "a <script> element",
+            ),
+            (
+                "<script type=\"module\" src=\"/_astro/ec.0vx5m.js\">void 0</script>",
+                "a <script> element",
+            ),
+            ("<style>.cf-fig{opacity:0}</style>", "a <style> element"),
+        ] {
+            assert_eq!(
+                content(&block(asset, "", tokens), &assets),
+                [kind],
+                "{asset}"
+            );
+        }
+        for asset in [
+            "<link rel=\"stylesheet\" href=\"/_astro/ec.w36nc.css\">",
+            "<script type=\"module\" src=\"/_astro/ec.0vx5m.js\"></script>",
+        ] {
+            assert_eq!(content(asset, &assets).len(), 1, "{asset}");
+            assert_eq!(
+                content(
+                    &format!(
+                        "<div><div class=\"expressive-code\"><figure>{asset}</figure></div></div>"
+                    ),
+                    &assets
+                )
+                .len(),
+                1,
+                "{asset}"
+            );
+        }
+        // An allowed token attribute excuses only itself: a style element, a
+        // link that is not the recorded asset link, or a script on the same
+        // element inside the frame still fails (Codex CB-1, Grok F2).
+        for (payload, kind) in [
+            (
+                "<style style=\"--0:#82AAFF\">.cf-fig{opacity:0}</style>",
+                "a <style> element",
+            ),
+            (
+                "<link style=\"--0:#82AAFF\" rel=\"stylesheet\" href=\"/evil.css\">",
+                "a <link> element",
+            ),
+            (
+                "<link style=\"--0:#82AAFF\" rel=\"stylesheet\" href=\"/_astro/ec.w36nc.css\">",
+                "a <link> element",
+            ),
+            (
+                "<script style=\"--0:#82AAFF\">void 0</script>",
+                "a <script> element",
+            ),
+        ] {
+            assert_eq!(
+                content(&block(head, "", &format!("{tokens}{payload}")), &assets),
+                [kind],
+                "{payload}"
+            );
+        }
+        let styled_head = CODE_BLOCK_HEAD.replace("<link ", "<link style=\"--0:#82AAFF\" ");
+        assert_eq!(
+            content(&block(&styled_head, "", tokens), &assets),
+            ["a <link> element", "a style attribute on <link>"]
+        );
+    }
+
+    /// The Expressive Code sheet scopes its rules on the `expressive-code`
+    /// class whatever the tag, so no figure or companion may sit on or inside
+    /// any element with that class (Codex CB-2, Grok F1). A real block beside
+    /// a figure passes.
+    #[test]
+    fn no_figure_sits_in_the_code_block_sheet_scope() {
+        let assets = CodeBlockAssets::recorded(Some("/"), CODE_BLOCK_ASSETS);
+        let content = code_block_carriers;
+        let companion = "<div class=\"cf-companion not-content\" data-cf-companion=\"figures/a.json\"><figure class=\"cf-fig\"><figcaption class=\"cf-fig-caption\">c</figcaption><ul class=\"cf-legend\"></ul></figure></div>";
+        let inside = "figure or companion markup inside a code block".to_string();
+        let mut wrapped: Vec<String> = ["div", "section", "article", "span", "aside", "main"]
+            .iter()
+            .map(|tag| format!("<{tag} class=\"note expressive-code\">{companion}</{tag}>"))
+            .collect();
+        wrapped.push(code_block(
+            CODE_BLOCK_HEAD,
+            "",
+            &format!("<span style=\"--0:#82AAFF\">{companion}</span>"),
+        ));
+        wrapped.push(companion.replace(
+            "cf-companion not-content",
+            "cf-companion not-content expressive-code",
+        ));
+        wrapped.push(companion.replace("class=\"cf-fig\"", "class=\"cf-fig expressive-code\""));
+        wrapped
+            .push(companion.replace("class=\"cf-legend\"", "class=\"cf-legend expressive-code\""));
+        for html in &wrapped {
+            assert!(content(html, &assets).contains(&inside), "{html}");
+        }
+        let beside = format!(
+            "{}{companion}",
+            code_block(CODE_BLOCK_HEAD, "", CODE_BLOCK_TOKENS)
+        );
+        assert!(content(&beside, &assets).is_empty());
     }
 
     /// Every inline script outside the content is one the runtime emits: the
@@ -2243,12 +2515,19 @@ mod tests {
             format!("<!doctype html><html><head><script>{pre_paint}</script>{head}</head><body><main><div class=\"sl-markdown-content\"><p>Text.</p></div></main></body></html>")
         };
         let mut report = PortalValidationReport::default();
-        verify_built_page("dist/a/index.html", &built(""), Some(&allowed), &mut report);
+        verify_built_page(
+            "dist/a/index.html",
+            &built(""),
+            Some(&allowed),
+            &CodeBlockAssets::default(),
+            &mut report,
+        );
         assert!(report.issues.is_empty(), "{:?}", report.issues);
         verify_built_page(
             "dist/a/index.html",
             &built("<script>document.styleSheets[0].insertRule(\".cf-fig{opacity:0}\")</script>"),
             Some(&allowed),
+            &CodeBlockAssets::default(),
             &mut report,
         );
         assert_eq!(report.issues.len(), 1, "{:?}", report.issues);

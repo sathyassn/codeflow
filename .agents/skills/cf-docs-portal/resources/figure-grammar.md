@@ -250,6 +250,19 @@ sources. It does not defend
 against a committer who can also change the validator, the grammar module,
 the portal runtime or its sheets; review and CI own that boundary.
 
+Fenced code blocks are the one allowance. In a built page's content both
+planes accept exactly what Expressive Code writes: a link and a module script
+at the head of a `div.expressive-code` block that point at a recorded
+`_astro/ec.<hash>` asset, and style attributes on the `pre` of a block's
+frame or inside it that hold only its custom properties (`--N`, `--Nbg`,
+`--Nfs`, `--Nfw`, `--Ntd`, `--ecIndent`, `--ecMaxLine`) with a hex colour, a
+fixed keyword or a whole number of `ch`. The allowance covers the attribute
+alone: a style element, another link or a script on the same element still
+fails, as do any other property or asset. The block's sheet scopes its rules
+on the `expressive-code` class whatever the tag, so any figure, caption,
+legend or companion on or inside an element with that class fails too. Only
+with that exclusion can neither the properties nor the sheet reach a figure.
+
 ## 7. Chat form
 
 In chat the family choice is the same; the medium changes the marks. Draw an
