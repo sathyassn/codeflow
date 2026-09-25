@@ -494,12 +494,8 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
         ));
     }
     if breaking == "yes" {
-        let migration = fields
-            .get("migration")
-            .copied()
-            .unwrap_or_default()
-            .trim_matches(['"', '\'']);
-        let substantive = if migration.eq_ignore_ascii_case("see Breaking change") {
+        let migration = fields.get("migration").copied().unwrap_or_default();
+        let substantive = if guidance(migration) == "see breaking change" {
             let guidance = matching_sections(&parsed, "Breaking change");
             guidance.len() == 1 && substantive(&visible_text(guidance[0].content(), true))
         } else {
@@ -512,13 +508,39 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
     out
 }
 
+/// Lowercased text without Markdown quoting or repeated whitespace, as
+/// `scripts/release.py` compares guidance.
+fn guidance(value: &str) -> String {
+    value
+        .replace(['`', '"', '\''], "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+        .to_ascii_lowercase()
+}
+
+/// Real migration guidance, not a placeholder or the template's unresolved
+/// alternatives. Only whole-field forms are rejected, so a step containing a
+/// pipe or angle brackets in a command still counts.
 fn substantive(value: &str) -> bool {
-    let value = value.trim();
-    !matches!(
-        value.to_ascii_lowercase().as_str(),
-        "" | "none" | "n/a" | "na" | "tbd" | "todo" | "steps" | "see breaking change"
-    ) && !value.contains(['<', '>', '|'])
-        && value.chars().filter(|c| c.is_alphanumeric()).count() >= 8
+    let value = guidance(value);
+    let whole_placeholder = value.starts_with('<')
+        && value.ends_with('>')
+        && !value[1..value.len() - 1].contains(['<', '>']);
+    !whole_placeholder
+        && value.chars().any(char::is_alphanumeric)
+        && !matches!(
+            value.as_str(),
+            "none"
+                | "n/a"
+                | "na"
+                | "tbd"
+                | "todo"
+                | "steps"
+                | "see breaking change"
+                | "none, steps, or see breaking change"
+                | "none | steps | see breaking change"
+        )
 }
 
 #[cfg(test)]
@@ -886,6 +908,40 @@ mod tests {
         .is_empty());
         let bold = "## Release impact\n- **Impact:** major\n- **Breaking**: yes\n- __Rationale:__ Remove the old flag.\n- *Migration*: Use the new flag.\n";
         assert!(release(&git, bold, false).is_empty(), "{bold}");
+    }
+
+    #[test]
+    fn migration_guidance_matches_the_release_script() {
+        // scripts/test_release.py SUBSTANTIVE_MIGRATIONS, minus the reference
+        // form, which needs a Breaking change section here.
+        for migration in [
+            "Run the new command to convert saved records.",
+            "\"docs/migrate.md\"",
+            "Run `cat old.json | tool migrate` to convert saved records.",
+            "Replace `<name>` with `--name <value>`.",
+        ] {
+            assert!(substantive(migration), "{migration}");
+            let body = declaration("major", "yes", migration);
+            assert!(
+                release(&GitPolicy::default(), &body, false).is_empty(),
+                "{body}"
+            );
+        }
+        // QUOTED_MIGRATION_PLACEHOLDERS and the template's unresolved choice.
+        for placeholder in [
+            "\"none\"",
+            "'TODO'",
+            "`\" N/A \"`",
+            "\"  TBD  \"",
+            "'-'",
+            "\"\"",
+            "'   '",
+            "<steps>",
+            "`none`, steps, or \"see Breaking change\"",
+            "none | steps | \"see Breaking change\"",
+        ] {
+            assert!(!substantive(placeholder), "{placeholder}");
+        }
     }
 
     #[test]
