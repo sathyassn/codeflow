@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
 
 /** Verify the real chrome and submitted anchors, not a replica of its timer. */
 export async function checkSelectionLifecycle(browser, origin) {
@@ -7,6 +8,7 @@ export async function checkSelectionLifecycle(browser, origin) {
   const posts = [];
   try {
     const page = await context.newPage();
+    await recordPolicyViolations(page);
     page.on("pageerror", (error) => errors.push(error.message));
     await page.route("**/app/api/reviews", async (route) => {
       posts.push(route.request().postDataJSON());
@@ -167,6 +169,7 @@ export async function checkSelectionLifecycle(browser, origin) {
     assert.equal(await page.getByTestId("composer").count(), 0, "Oversized live toolbar fallback opened a composer");
     assert.equal(await chip.count(), 0, "Oversized toolbar fallback pinned a stale selection");
     assert.deepEqual(errors, []);
+    await assertNoPolicyViolations(page, "selection lifecycle");
     process.stdout.write("selection lifecycle: invalidation, recovery, limits, occurrence and toolbar anchors passed\n");
   } finally {
     await context.close();

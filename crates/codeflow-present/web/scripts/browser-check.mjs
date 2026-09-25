@@ -8,9 +8,13 @@ import { checkSelectionOccurrences } from "./selection-browser-check.mjs";
 import { checkDocumentExcerpts } from "./excerpt-browser-check.mjs";
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
+import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const assetsRoot = resolve(webRoot, "../assets");
+const repoRoot = resolve(webRoot, "../../..");
+// A figure block the grammar draws with no rule failure (the portal's state specimen).
+const figureDeclaration = await readFile(join(repoRoot, "docs-portal/tests/fixtures/figures/05-state.json"), "utf8");
 const manifest = JSON.parse(await readFile(join(assetsRoot, "manifest.json"), "utf8"));
 const assets = new Map(manifest.service.assets.map((asset) => [asset.request_path, asset]));
 const appPath = manifest.service.entrypoints["present.app"];
@@ -110,7 +114,7 @@ try {
   await checkIframeComments(browser, origin);
   await checkInteractiveSurface(browser, origin, reviewPosts);
   await checkStaticExportModes(browser, origin);
-  process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, diagrams, axe, and 320 px reflow\n");
+  process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, figure blocks, zero CSP violations, axe, and 320 px reflow\n");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
@@ -149,6 +153,7 @@ async function checkStaticExportModes(browser, origin) {
 async function checkProseLazyPath(browser, origin) {
   const context = await browser.newContext({ colorScheme: "dark" });
   const page = await context.newPage();
+  await recordPolicyViolations(page);
   const requests = [];
   page.on("request", (request) => requests.push(new URL(request.url())));
   await page.goto(`${origin}/app?case=prose`, { waitUntil: "networkidle" });
@@ -159,14 +164,15 @@ async function checkProseLazyPath(browser, origin) {
     manifest.service.assets
       .find((asset) => asset.request_path === appPath)
       // The small offline font module is intentionally available on prose
-      // pages; heavyweight syntax/diagram renderers must remain lazy.
+      // pages; the syntax and figure renderers must remain lazy.
       .imports.filter((item) => item.kind === "dynamic-import" && !/\/chunk-fonts-[^/]+\.js$/u.test(item.request_path))
       .map((item) => item.request_path),
   );
   if (requests.some((request) => dynamicPaths.has(request.pathname))) {
-    throw new Error("A prose-only page requested a syntax or Mermaid entry path");
+    throw new Error("A prose-only page requested a syntax or figure entry path");
   }
   assertLoopbackOnly(requests);
+  await assertNoPolicyViolations(page, "prose page");
   await context.close();
 }
 
@@ -180,22 +186,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       consoleErrors.push(message.text());
     }
   });
-  await page.addInitScript(() => {
-    globalThis.__cfPolicyViolations = [];
-    globalThis.__cfLongTasks = [];
-    document.addEventListener("securitypolicyviolation", (event) => {
-      globalThis.__cfPolicyViolations.push({
-        directive: event.effectiveDirective,
-        blocked: event.blockedURI,
-        sample: event.sample,
-      });
-    });
-    if ("PerformanceObserver" in globalThis) {
-      new PerformanceObserver((entries) => {
-        globalThis.__cfLongTasks.push(...entries.getEntries().map((entry) => entry.duration));
-      }).observe({ type: "longtask", buffered: true });
-    }
-  });
+  await recordPolicyViolations(page);
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
   await assertBundledFonts(page);
@@ -208,49 +199,25 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   const code = page.locator("code[data-cf-language='rust']");
   await code.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready");
-  const diagram = page.locator("[data-cf-diagram-title='Request flow']");
-  await diagram.scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector("[data-cf-diagram]")?.getAttribute("data-cf-diagram") !== "pending");
-  if (await diagram.getAttribute("data-cf-diagram") !== "ready") {
-    throw new Error(`Diagram did not render: ${await diagram.locator("[data-cf-diagram-status]").textContent()}`);
+  const figure = page.locator("[data-cf-block-id='block-flow'] [data-cf-figure-block]");
+  await figure.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector("[data-cf-figure-block]")?.getAttribute("data-cf-figure-block") !== "pending");
+  if (await figure.getAttribute("data-cf-figure-block") !== "ready") {
+    throw new Error(`Figure block did not draw: ${await figure.locator("[data-cf-figure-status]").textContent()}`);
   }
-  const diagramSvg = diagram.locator("svg[role='img']");
-  await diagramSvg.waitFor();
-  const diagramEvidence = await diagramSvg.evaluate((svg) => ({
-    text: svg.textContent?.replace(/\s+/gu, " ").trim() ?? "",
-    foreignObjects: svg.querySelectorAll("foreignObject").length,
-    scripts: svg.querySelectorAll("script").length,
-    externalLinks: [...svg.querySelectorAll("a")].filter((link) => {
-      const href = link.getAttribute("href") ?? link.getAttribute("xlink:href") ?? "";
-      return /^(?:https?:)?\/\//iu.test(href);
-    }).length,
-    visibleLabels: [...svg.querySelectorAll("text")].filter((label) => {
-      const box = label.getBoundingClientRect();
-      const style = getComputedStyle(label);
-      return box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-    }).map((label) => label.textContent?.trim() ?? ""),
+  const figureEvidence = await figure.evaluate((block) => ({
+    // The grammar draws a wide and a narrow composition; one shows at a time.
+    figures: [...block.querySelectorAll("figure.cf-fig svg.cf-fig-svg")].filter((svg) => svg.getBoundingClientRect().width > 0).length,
+    states: [...new Set([...block.querySelectorAll("svg [data-state]")].map((node) => node.getAttribute("data-state")))].length,
+    legend: block.querySelectorAll(".cf-legend li").length,
+    styled: block.querySelectorAll("[style]").length,
+    unsafe: block.querySelectorAll("script, foreignObject").length,
   }));
-  if (!diagramEvidence.text.includes("Input") || !diagramEvidence.text.includes("Review")) {
-    throw new Error(`Diagram lost its semantic labels during rendering: ${JSON.stringify(diagramEvidence)}`);
+  if (figureEvidence.figures !== 1 || figureEvidence.states < 2 || figureEvidence.legend < 2 || figureEvidence.styled || figureEvidence.unsafe) {
+    throw new Error(`Figure block drew an unexpected figure: ${JSON.stringify(figureEvidence)}`);
   }
-  if (!diagramEvidence.visibleLabels.includes("Input") || !diagramEvidence.visibleLabels.includes("Review")) {
-    throw new Error(`Diagram labels are present but not visibly rendered: ${JSON.stringify(diagramEvidence)}`);
-  }
-  if (diagramEvidence.foreignObjects || diagramEvidence.scripts || diagramEvidence.externalLinks) {
-    throw new Error(`Diagram hardening left an unsafe node: ${JSON.stringify(diagramEvidence)}`);
-  }
-  const denseDiagram = page.locator("[data-cf-diagram-title='Dense flow']");
-  const denseStarted = Date.now();
-  await denseDiagram.scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector("[data-cf-diagram-title='Dense flow']")?.getAttribute("data-cf-diagram") !== "pending", null, { timeout: 15_000 });
-  if (await denseDiagram.getAttribute("data-cf-diagram") !== "ready") {
-    throw new Error(`Dense diagram did not render: ${await denseDiagram.locator("[data-cf-diagram-status]").textContent()}`);
-  }
-  const denseMetrics = await page.evaluate(() => ({
-    longestTask: Math.max(0, ...globalThis.__cfLongTasks),
-  }));
-  if (Date.now() - denseStarted > 10_000 || denseMetrics.longestTask > 5_000) {
-    throw new Error(`Dense diagram exceeded the responsiveness envelope: ${JSON.stringify(denseMetrics)}`);
+  if (await page.locator("[data-cf-diagram], [data-cf-diagram-source]").count()) {
+    throw new Error("The review surface still carries a diagram hook");
   }
   await page.frameLocator("iframe[title='Sandbox fixture']").getByText("Static sandbox content").waitFor();
   const attackFrame = page.frameLocator("iframe[title='Attack sandbox']");
@@ -267,7 +234,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       .map((element) => ({ tag: element.tagName, id: element.id, className: element.className, right: element.getBoundingClientRect().right, width: element.scrollWidth }))
       .filter((item) => item.right > document.documentElement.clientWidth + 1)
       .slice(0, 8),
-    diagram: (() => {
+    localScroll: (() => {
       const element = document.querySelector(".cf-local-scroll");
       if (!element) return null;
       const style = getComputedStyle(element);
@@ -614,9 +581,11 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     const violations = await page.evaluate(() => globalThis.__cfPolicyViolations);
     throw new Error(`Browser console errors: ${consoleErrors.join(" | ")}; CSP: ${JSON.stringify(violations)}`);
   }
+  await assertNoPolicyViolations(page, "interactive surface");
   assertNetworkStayedLoopback(network);
   await context.close();
 }
+
 
 async function assertBundledFonts(page) {
   const notices = page.locator("body > footer[data-cf-font-licenses]");
@@ -679,7 +648,6 @@ function assertNetworkStayedLoopback({ responses, externalRoutes }) {
 }
 
 function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
-  const denseSource = denseDiagramSource(300);
   const enhancements = proseOnly
     ? ""
     : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation" data-cf-block-digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
@@ -688,18 +656,13 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
         <figure role="img" aria-label="Stage fixture"><svg viewBox="0 0 280 36" width="280" height="36"><text id="stage-label" x="8" y="24">Stage words</text></svg></figure></div>
         <pre tabindex="0" role="region" aria-label="Rust example"><code data-cf-language="rust">fn main() { println!("safe"); }</code></pre>
       </section>
-      <section class="block block--diagram" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
+      <section class="block block--figure" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
         <h2 id="flow">Flow</h2>
-        <div class="cf-local-scroll" tabindex="0" role="region" aria-label="Request flow diagram" data-cf-diagram="pending" data-cf-diagram-title="Request flow" data-cf-diagram-description="A request moves from input to review.">
-          <template data-cf-diagram-source>flowchart LR
-            A[Input] --> B[Review]</template>
-          <div data-cf-diagram-output></div>
-          <p data-cf-diagram-status aria-live="polite">Rendering diagram…</p>
-        </div>
-        <div class="cf-local-scroll" tabindex="0" role="region" aria-label="Dense flow diagram" data-cf-diagram="pending" data-cf-diagram-title="Dense flow" data-cf-diagram-description="A bounded dense flow exercises the renderer responsiveness envelope.">
-          <template data-cf-diagram-source>${denseSource}</template>
-          <div data-cf-diagram-output></div>
-          <p data-cf-diagram-status aria-live="polite">Rendering diagram…</p>
+        <div data-cf-review-text-root data-cf-canonical-text="Figure">
+          <div class="figure-block" data-cf-figure-block="pending" data-cf-figure-declaration="${escapeAttribute(figureDeclaration)}">
+            <div data-cf-figure-output><p class="figure-block__title">Figure</p></div>
+            <p data-cf-figure-status class="sr-only" role="status"></p>
+          </div>
         </div>
       </section>`;
   const sandbox = iframeOnly
@@ -798,8 +761,8 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
 </html>`;
 }
 
-function denseDiagramSource(edges) {
-  return ["flowchart LR", ...Array.from({ length: edges }, (_, index) => `N${index}-->N${index + 1}`)].join("\n");
+function escapeAttribute(value) {
+  return value.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function exportFixture(mode) {

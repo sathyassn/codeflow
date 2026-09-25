@@ -15,12 +15,15 @@ const expectedNpm = "11.17.0";
 // Node version while changing gzip bytes; the full tree check remains the proof.
 const expectedCompression = Object.freeze({ zlib: "1.3.2.1-motley-3246f1b", brotli: "1.2.0" });
 
+// Each budget is the measurement taken when TSK-087 removed the diagram
+// renderer, plus 10% and rounded up to the next 5,000 B, so the room it freed
+// cannot return without a reviewed budget change.
 export const budgets = Object.freeze({
-  raw_corpus_bytes: 5_000_000,
-  largest_raw_chunk_bytes: 850_000,
-  brotli_corpus_bytes: 1_150_000,
-  largest_brotli_chunk_bytes: 150_000,
-  export_gzip_bytes: 1_300_000,
+  raw_corpus_bytes: 1_105_000, // measured 1,001,817 B
+  largest_raw_chunk_bytes: 205_000, // measured 186,275 B
+  brotli_corpus_bytes: 295_000, // measured 263,687 B
+  largest_brotli_chunk_bytes: 145_000, // measured 131,206 B
+  export_gzip_bytes: 295_000, // measured 265,653 B
 });
 
 export async function buildAssets(assetsRoot = defaultAssetsRoot) {
@@ -157,7 +160,6 @@ export async function buildAssets(assetsRoot = defaultAssetsRoot) {
         esbuild: "0.25.9",
         preact: "10.29.8",
         shiki: "4.4.1",
-        mermaid: "11.16.0",
         targets: ["chrome120", "firefox121", "safari17"],
       },
       service: {
