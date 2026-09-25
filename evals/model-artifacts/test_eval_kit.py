@@ -530,7 +530,7 @@ class SuiteContractTests(unittest.TestCase):
                     self.assertEqual("fail", eval_kit.computed_trial_status(missing, case))
         override = cases["design-open-when-first-line-unavailable"]["expected"]["signals"]
         self.assertIn("matching_override_fills_design_for_named_task_only", override)
-        self.assertIn("design_duty_open_for_task_without_anchored_override", override)
+        self.assertIn("design_duty_open_for_task_without_matching_override", override)
 
     def test_catalog_routing_cases_use_fictional_model_names(self) -> None:
         catalog = json.loads((ROOT / "assets/base/agents/skills/cf-model-orchestrator"

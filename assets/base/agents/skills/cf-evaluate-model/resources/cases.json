@@ -7001,7 +7001,7 @@
           "second_line_holds_seat_with_reduced_assurance",
           "orchestration_planning_review_continue_on_second_line",
           "matching_override_fills_design_for_named_task_only",
-          "design_duty_open_for_task_without_anchored_override"
+          "design_duty_open_for_task_without_matching_override"
         ],
         "references": [
           "plan/PLAN-v2.md",
