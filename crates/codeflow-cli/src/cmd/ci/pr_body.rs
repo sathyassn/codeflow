@@ -279,8 +279,29 @@ fn visible_text(body: &str, include_code: bool) -> String {
     text
 }
 
+/// Visible text or raw HTML other than comments; template placeholders are
+/// comments, so an unfilled section stays empty.
 pub(super) fn has_content(body: &str) -> bool {
-    !visible_text(body, true).trim().is_empty()
+    if !visible_text(body, true).trim().is_empty() {
+        return true;
+    }
+    let html: String = Parser::new(body)
+        .filter_map(|event| match event {
+            Event::Html(html) | Event::InlineHtml(html) => Some(html.into_string()),
+            _ => None,
+        })
+        .collect();
+    let mut rest = html.as_str();
+    while let Some(start) = rest.find("<!--") {
+        if !rest[..start].trim().is_empty() {
+            return true;
+        }
+        match rest[start..].find("-->") {
+            Some(end) => rest = &rest[start + end + 3..],
+            None => return false,
+        }
+    }
+    !rest.trim().is_empty()
 }
 
 pub(super) fn find_section(body: &str, name: &str) -> SectionState {
@@ -684,6 +705,36 @@ mod tests {
 
     const FULL_BODY: &str = "## Summary\nMake the command easier to use.\n\n## Changes\n- Explain the result.\n\n## Testing\nRan 3 tests.\nNot tested: Windows.\n\n## Reviews\nNone: pending.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify output.\n- Migration: none\n";
     const NAMES: [&str; 5] = ["Summary", "Changes", "Testing", "Reviews", "Release impact"];
+
+    #[test]
+    fn raw_html_is_content_and_comments_are_not() {
+        for content in [
+            "<p>Ran the suite.</p>",
+            "<img src=\"shot.png\" alt=\"Result\">",
+            "<details><pre>test result: ok</pre></details>",
+            "<p align=\"center\">Ran the suite.",
+            "<!-- note -->\n<p>Ran the suite.</p>",
+        ] {
+            let body = format!("## Testing\n\n{content}\n");
+            assert_eq!(
+                find_section(&body, "Testing"),
+                SectionState::Present,
+                "{content}"
+            );
+        }
+        for content in [
+            "<!-- Name the tested revision. -->",
+            "<!--\n  Name the tested revision,\n  and what was not tested.\n-->",
+            "<!-- one -->\n\n<!-- two -->",
+        ] {
+            let body = format!("## Testing\n\n{content}\n\n## Reviews\n\nNone: docs.\n");
+            assert_eq!(
+                find_section(&body, "Testing"),
+                SectionState::Empty,
+                "{content}"
+            );
+        }
+    }
 
     #[test]
     fn inline_html_and_unclosed_blocks_never_hide_later_sections() {
