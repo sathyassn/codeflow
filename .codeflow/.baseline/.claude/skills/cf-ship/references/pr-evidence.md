@@ -36,8 +36,9 @@ and the rest appear only when their condition holds.
   target-to-head diff; a mixed or epic PR takes the union.
 - Length target, a warning and never a reason to drop evidence: about 65
   rows at 100 columns for a task PR, about 80 for a code PR that carries
-  Whole-flow evidence, and about 90 for an epic into the protected branch. Keep prose lines under about 160 characters and a fenced
-  block to about 12 lines, and link records instead of copying them.
+  Whole-flow evidence, and about 90 for an epic into the protected branch.
+  Keep prose lines under about 160 characters and a fenced block to about
+  12 lines, and link records instead of copying them.
   Migration, unresolved risk and operator actions may overflow.
 - Reviews rows name the reviewer, scope and verdict only. Findings and
   dispositions live in the linked record, and authorship lines belong to the
