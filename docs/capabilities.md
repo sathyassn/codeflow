@@ -139,8 +139,10 @@ content, a code-touching range carries the testing sections, and leftover
 template placeholders draw a warn naming their line). Markdown parsing rejects
 fake headings and duplicate required sections, accepts nested evidence, and
 requires a nonempty supplied body on PR events. Bitbucket without a body
-channel warns and skips that check; an explicitly empty body fails. Fresh defaults also require Reviews and
-Release impact; existing consumers retain their configured section lists.
+channel warns and skips that check; an explicitly empty body fails. Inline
+HTML never hides a heading, and an unclosed HTML block warns instead of hiding
+later sections. Fresh defaults also require Reviews and Release impact;
+existing consumers retain their configured section lists.
 Summary style, missing `Not tested:`, long fences, prose width and approximate
 rendered rows warn under `pr_sections`. The independent `pr_release_impact`
 check defaults to warn: it validates generic fields, compatibility consistency,

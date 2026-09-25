@@ -43,12 +43,15 @@ copy-in wrapper warns that body checks were skipped and explains how to supply
 one. A project-owned retrieval step can export that variable or pass
 `--pr-body-file`. An explicitly empty body still fails the default policy.
 
-The parser recognizes unindented ATX headings outside HTML containers, keeps
-nested evidence, and rejects duplicate required sections at the preferred
-depth. Depth two takes precedence over same-name depth-three subsections;
-setext underlines do not end a section. Fresh installs require Summary, Changes,
-Reviews and Release impact, plus Testing for ranges that touch code. Existing
-section lists and enforcement levels stay unchanged on update. The PR template
+The parser recognizes unindented ATX headings outside closed HTML block
+containers, keeps nested evidence, and rejects duplicate required sections at
+the preferred depth. Inline HTML in prose, such as `Vec<String>`, never hides a
+heading. A block container that never closes hides nothing: later headings
+still count, and a warning names the unclosed tag. Depth two takes precedence
+over same-name depth-three subsections; setext underlines do not end a section.
+Fresh installs require Summary, Changes, Reviews and Release impact, plus
+Testing for ranges that touch code. Existing section lists and enforcement
+levels stay unchanged on update. The PR template
 ships at minimal, standard and full tiers through the usual managed-file merge.
 
 Presentation warnings cover Summary length, code spans and paths, missing

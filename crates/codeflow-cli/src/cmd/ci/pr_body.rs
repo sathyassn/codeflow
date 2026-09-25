@@ -14,47 +14,76 @@ struct Section<'a> {
     body: &'a str,
 }
 
-/// Only document headings count, not examples in lists, quotes, HTML or code.
-/// A subsection belongs to its parent until a sibling or ancestor starts.
+/// Document headings, plus block HTML containers that never closed.
+struct Outline<'a> {
+    sections: Vec<Section<'a>>,
+    unclosed: Vec<String>,
+}
+
+/// Only document headings count, not examples in lists, quotes, code or a
+/// closed HTML container. A subsection belongs to its parent until a sibling
+/// or ancestor starts.
 fn sections(body: &str) -> Vec<Section<'_>> {
-    let mut result: Vec<Section<'_>> = Vec::new();
+    outline(body).sections
+}
+
+/// A heading inside a block HTML container is an example only when that
+/// container closes later. An unclosed container hides nothing: hosts render
+/// the later headings, so they still count, and presentation warns instead.
+fn outline(body: &str) -> Outline<'_> {
+    // (depth, name, heading start, content start, containers open at the heading)
+    let mut candidates: Vec<(HeadingLevel, String, usize, usize, Vec<usize>)> = Vec::new();
     let mut nesting: usize = 0;
     let mut heading: Option<(HeadingLevel, String, usize)> = None;
     let mut html = HtmlContainers::default();
     for (event, span) in Parser::new(body).into_offset_iter() {
         match event {
             Event::Start(Tag::Heading { level, .. })
-                if nesting == 0 && html.open.is_empty() && atx_heading(body, span.start) =>
+                if nesting == 0 && atx_heading(body, span.start) =>
             {
-                for section in &mut result {
-                    if section.end == body.len() && section.depth >= level {
-                        section.end = span.start;
-                    }
-                }
                 heading = Some((level, String::new(), span.start));
             }
             Event::End(TagEnd::Heading(_)) if nesting == 0 => {
                 if let Some((depth, name, heading_start)) = heading.take() {
-                    result.push(Section {
-                        name,
-                        depth,
-                        heading_start,
-                        start: span.end,
-                        end: body.len(),
-                        body,
-                    });
+                    candidates.push((depth, name, heading_start, span.end, html.open_ids()));
                 }
             }
             Event::Text(text) | Event::Code(text) if heading.is_some() => {
                 heading.as_mut().unwrap().1.push_str(&text);
             }
-            Event::Html(value) | Event::InlineHtml(value) => html.observe(&value),
+            // Only document-level HTML blocks can enclose document headings;
+            // inline HTML such as `Vec<String>` or `<path>` in prose never does.
+            Event::Html(value) if nesting == 1 => html.observe(&value),
+            Event::End(TagEnd::HtmlBlock) => {
+                nesting = nesting.saturating_sub(1);
+                html.pending.clear();
+            }
             Event::Start(_) => nesting += 1,
             Event::End(_) => nesting = nesting.saturating_sub(1),
             _ => {}
         }
     }
-    result
+    let visible: Vec<_> = candidates
+        .into_iter()
+        .filter(|candidate| !candidate.4.iter().any(|id| html.closed[*id]))
+        .collect();
+    let sections = visible
+        .iter()
+        .enumerate()
+        .map(|(index, (depth, name, heading_start, start, _))| Section {
+            name: name.clone(),
+            depth: *depth,
+            heading_start: *heading_start,
+            start: *start,
+            end: visible[index + 1..]
+                .iter()
+                .find(|next| next.0 <= *depth)
+                .map_or(body.len(), |next| next.2),
+            body,
+        })
+        .collect();
+    let unclosed = html.open.into_iter().map(|(name, _)| name).collect();
+    Outline { sections, unclosed }
 }
 
 /// ATX section headings must start at column zero. Setext headings are prose
@@ -81,19 +110,70 @@ fn matching_sections<'s, 'b>(sections: &'s [Section<'b>], name: &str) -> Vec<&'s
 
 /// `CommonMark` ends an HTML block at a blank line. Keep the enclosing HTML
 /// containers across that boundary so Markdown examples inside them cannot
-/// declare top-level PR sections. Only parser-emitted HTML is inspected.
+/// declare top-level PR sections. Only document-level HTML blocks are
+/// inspected, and only block containers or custom elements are tracked.
 #[derive(Default)]
 struct HtmlContainers {
-    open: Vec<String>,
+    /// Open containers as (tag name, instance id).
+    open: Vec<(String, usize)>,
+    /// Per instance id: whether a closing tag was seen.
+    closed: Vec<bool>,
     pending: String,
 }
 
+/// Block-level elements that can wrap Markdown content. Custom elements
+/// (a hyphen in the name) are containers too; inline tags never are.
+fn html_container(name: &str) -> bool {
+    name.contains('-')
+        || matches!(
+            name,
+            "address"
+                | "article"
+                | "aside"
+                | "blockquote"
+                | "center"
+                | "dd"
+                | "details"
+                | "dialog"
+                | "div"
+                | "dl"
+                | "dt"
+                | "fieldset"
+                | "figcaption"
+                | "figure"
+                | "footer"
+                | "form"
+                | "header"
+                | "li"
+                | "main"
+                | "nav"
+                | "ol"
+                | "p"
+                | "pre"
+                | "section"
+                | "summary"
+                | "table"
+                | "tbody"
+                | "td"
+                | "tfoot"
+                | "th"
+                | "thead"
+                | "tr"
+                | "ul"
+        )
+}
+
 impl HtmlContainers {
+    fn open_ids(&self) -> Vec<usize> {
+        self.open.iter().map(|(_, id)| *id).collect()
+    }
+
     fn observe(&mut self, html: &str) {
         // The Markdown parser may emit one HTML event per source line, even
         // within a single comment or tag. Keep unfinished tokens across events.
         self.pending.push_str(html);
-        let mut rest = self.pending.as_str();
+        let pending = std::mem::take(&mut self.pending);
+        let mut rest = pending.as_str();
         loop {
             let Some(start) = rest.find('<') else {
                 rest = "";
@@ -106,6 +186,11 @@ impl HtmlContainers {
                 continue;
             }
             let token = &rest[1..];
+            // `a < b` in HTML text is not a tag.
+            if !token.starts_with(|ch: char| ch == '/' || ch.is_ascii_alphabetic()) {
+                rest = token;
+                continue;
+            }
             let mut quote = None;
             let end = token.char_indices().find_map(|(index, ch)| {
                 match (quote, ch) {
@@ -118,7 +203,6 @@ impl HtmlContainers {
             });
             let Some(end) = end else { break };
             let tag = &token[..end];
-            let closing = tag.starts_with('/');
             let name = tag
                 .trim_start_matches('/')
                 .split_whitespace()
@@ -126,31 +210,16 @@ impl HtmlContainers {
                 .unwrap_or_default()
                 .trim_end_matches('/')
                 .to_ascii_lowercase();
-            if closing {
-                if let Some(index) = self.open.iter().rposition(|open| *open == name) {
-                    self.open.truncate(index);
+            if tag.starts_with('/') {
+                if let Some(index) = self.open.iter().rposition(|(open, _)| *open == name) {
+                    // Closing an outer element also ends any inner one left open.
+                    for (_, id) in self.open.drain(index..) {
+                        self.closed[id] = true;
+                    }
                 }
-            } else if !tag.trim_end().ends_with('/')
-                && name.starts_with(|ch: char| ch.is_ascii_alphabetic())
-                && !matches!(
-                    name.as_str(),
-                    "area"
-                        | "base"
-                        | "br"
-                        | "col"
-                        | "embed"
-                        | "hr"
-                        | "img"
-                        | "input"
-                        | "link"
-                        | "meta"
-                        | "param"
-                        | "source"
-                        | "track"
-                        | "wbr"
-                )
-            {
-                self.open.push(name);
+            } else if !tag.trim_end().ends_with('/') && html_container(&name) {
+                self.open.push((name, self.closed.len()));
+                self.closed.push(false);
             }
             rest = &token[end + 1..];
         }
@@ -229,7 +298,13 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
                 .into(),
         ));
     };
-    for section in sections(body) {
+    let outline = outline(body);
+    for tag in &outline.unclosed {
+        warn(format!(
+            "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
+        ));
+    }
+    for section in outline.sections {
         if section.matches("Summary") {
             let text = visible_text(section.content(), false);
             // Advisory heuristic: punctuation ending a word, not dots inside paths.
@@ -544,6 +619,73 @@ mod tests {
         }
         let commented = "<!--\n<details>\n<head>\n-->\n## Summary\nReal summary.";
         assert_eq!(find_section(commented, "Summary"), SectionState::Present);
+    }
+
+    const FULL_BODY: &str = "## Summary\nMake the command easier to use.\n\n## Changes\n- Explain the result.\n\n## Testing\nRan 3 tests.\nNot tested: Windows.\n\n## Reviews\nNone: pending.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify output.\n- Migration: none\n";
+    const NAMES: [&str; 5] = ["Summary", "Changes", "Testing", "Reviews", "Release impact"];
+
+    #[test]
+    fn inline_html_and_unclosed_blocks_never_hide_later_sections() {
+        for (from, to, unclosed) in [
+            (
+                "- Explain the result.",
+                "- Return Vec<String> instead of a joined string.",
+                None,
+            ),
+            (
+                "Make the command easier to use.",
+                "Replace <path> with the real file.",
+                None,
+            ),
+            (
+                "Make the command easier to use.",
+                "Use <details> inline, then prose.",
+                None,
+            ),
+            (
+                "Make the command easier to use.",
+                "<p align=\"center\">\n\nMake it easier.",
+                Some("p"),
+            ),
+            (
+                "- Explain the result.",
+                "- Explain the result.\n\n<details>\n\nMore detail.",
+                Some("details"),
+            ),
+            (
+                "- Explain the result.",
+                "- Explain.\n\n<div>\n<details>\n\n## Example\n\n</details>",
+                Some("div"),
+            ),
+        ] {
+            let body = FULL_BODY.replace(from, to);
+            for name in NAMES {
+                assert_eq!(
+                    find_section(&body, name),
+                    SectionState::Present,
+                    "{name}: {body}"
+                );
+            }
+            assert!(
+                release(&GitPolicy::default(), &body, false).is_empty(),
+                "{body}"
+            );
+            let warnings: Vec<_> = presentation(&GitPolicy::default(), &body, false)
+                .into_iter()
+                .filter(|v| v.message.contains("never closes"))
+                .collect();
+            match unclosed {
+                None => assert!(warnings.is_empty(), "{body}: {warnings:?}"),
+                Some(tag) => {
+                    assert_eq!(warnings.len(), 1, "{body}: {warnings:?}");
+                    assert!(warnings[0].message.contains(&format!("<{tag}>")));
+                    assert_eq!(warnings[0].level, PolicyLevel::Warn);
+                }
+            }
+        }
+        // A closed container inside an unclosed one still hides its example.
+        let nested = "<div>\n<details>\n\n## Summary\nexample\n\n</details>\n\n## Summary\nReal.";
+        assert_eq!(find_section(nested, "Summary"), SectionState::Present);
     }
 
     #[test]

@@ -455,6 +455,43 @@ fn unfilled_installed_templates_fail_only_for_empty_required_sections() {
 }
 
 #[test]
+fn inline_html_and_unclosed_blocks_keep_every_section() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    for (from, to, unclosed) in [
+        (
+            "- Explain the command's result.",
+            "- Return Vec<String> instead of a joined string.",
+            None,
+        ),
+        (
+            "Make the command easier to use.",
+            "Replace <path> with the real file.",
+            None,
+        ),
+        (
+            "Make the command easier to use.",
+            "<p align=\"center\">\n\nMake the command easier to use.",
+            Some("p"),
+        ),
+    ] {
+        let body = BODY.replace(from, to);
+        let output = ci_with_body(dir.path(), &body);
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert_eq!(output.status.code(), Some(0), "{body}\n{error}");
+        assert!(!error.contains("required section"), "{error}");
+        assert!(!error.contains("Release impact section"), "{error}");
+        match unclosed {
+            None => assert!(!error.contains("git.pr_"), "{error}"),
+            Some(tag) => assert!(
+                error.contains(&format!("HTML <{tag}> block that never closes")),
+                "{error}"
+            ),
+        }
+    }
+}
+
+#[test]
 fn bitbucket_missing_channel_warns_but_explicit_empty_bodies_fail() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
