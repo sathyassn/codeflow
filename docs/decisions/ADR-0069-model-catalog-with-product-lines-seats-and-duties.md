@@ -1,7 +1,7 @@
 ---
 id: ADR-0069
 title: "Model catalog with product lines, seats and duties"
-status: proposed
+status: accepted
 date: 2026-09-23
 supersedes: []
 superseded_by: []
@@ -20,9 +20,9 @@ author-relative review and ADR-0056 effort floors.
 
 The operator designated the intended roster on 2026-09-23. Designation is an
 explicit assignment of a seat, not evidence that a native qualification suite
-ran. This proposed decision accompanies TSK-079's engine; TSK-085 accepts it
-when the managed roster switches to schema 5. TSK-080 owns the command and
-its approved-plan lookup.
+ran. TSK-079 built the engine and TSK-080 the command and its approved-plan
+lookup. TSK-085 accepted this decision when it switched the managed catalog
+to schema 5 with the roster below.
 
 ## Decision
 
@@ -190,6 +190,59 @@ authority.
 
 The model `grok-4.7-build-fast` is known and not routed.
 
+### Roster
+
+The managed catalog carries this roster. The operator designated it for its
+seats on 2026-09-23. Every version's qualification field is empty; a
+follow-up that TSK-078 files adds evidence per seat version as its native
+suite passes.
+
+| Family | Line | Version and pinned id | Lifecycle | Seat use and designation |
+|---|---|---|---|---|
+| Claude | `opus` | Opus 5.5, `claude-opus-5-5` | active | `claude-primary` first line; designated 2026-09-23 |
+| Claude | `fable` | Fable 5.1, `claude-fable-5-1` | active | `claude-primary` second line; designated 2026-09-23 |
+| Codex | `astra` | GPT-6 Astra, `gpt-6-astra` | active | `codex-primary` first line; designated 2026-09-23 |
+| Codex | `sol` | GPT-6 Sol, `gpt-6-sol` | active | `codex-primary` second line; designated 2026-09-23 |
+| Codex | `sol` | GPT-5.6 Sol, `gpt-5.6-sol` | fallback-only | `codex-primary` last fallback; designated 2026-09-23 |
+| Codex | `luna` | GPT-6 Luna, `gpt-6-luna` | active | light execution only; none |
+| Codex | `terra` | GPT-5.6 Terra, `gpt-5.6-terra` | retired | none |
+| Grok | `grok` | Grok 4.7, `grok-4.7` | active | `grok-primary`; designated 2026-09-23 |
+| Grok | `grok` | Grok 4.6, `grok-4.6` | retired | none |
+
+Adoption is `manual` on every line (Q1 open). The Grok trigger policy is the
+named `extra-family-review` policy, equal to today's `routing-policy.json`
+triggers (Q4 open). A later roster change is a catalog data edit that this
+table does not track.
+
+### Identity canary record
+
+`~/.codeflow/model-canary.json` records identity canary observations on one
+machine. Schema 1 is strict JSON with exactly two fields: `schema_version`
+(1) and `observed_ids`, a map from a pinned id to the observed id, both
+nonempty. It is diagnostic only: `codeflow doctor --check model-bindings`
+warns about a recorded mismatch, and resolution never reads it, because a
+recorded observation may be stale; launchers pass fresh `--observed` facts.
+The identity canary that TSK-078 runs produces it, and so do later canaries.
+
+### Derived scans and diagnostics
+
+Two scans read their tokens from the catalog: every version's alias, pinned
+id and selectors. No such token may appear in an operative instruction
+surface (skills and their resources, the contract and Claude templates,
+reviewer agents and managed workflow examples), and no retired version's
+token may appear outside history (`docs/decisions/`, `docs/verification/`,
+`project-management/`, `docs/plan/`, `CHANGELOG.md`). Excluded exactly: the
+catalog and its four mirrors, and the evaluation kit fixture files, which
+use fictional names. The `Claude Fable 5` attribution trailers in the
+commit-policy fixtures (`standards.rs`, `git_hook.rs`, `ci.rs`) and
+`"model": "opus"` in the settings tests preserve historical behaviour, are
+not routing, and sit outside both scans.
+
+Doctor takes the user's CodeFlow home and the binding-record directory as
+two explicit options; neither is derived from the other. It keeps the
+harness-version and declared-settings drift checks for binding records, and
+a drifted record that the project selection uses fails.
+
 ## Consequences and verification
 
 A roster change becomes a catalog edit validated against the same eligibility
@@ -200,16 +253,17 @@ participant.
 
 TSK-079 uses fictional catalogs to test every validator boundary, participant
 set, effort obligation, drift case, override match and overlay restriction.
-It also tests schema 1 binding references against schema 5. A transitional
-schema 4 reader keeps the current managed tree working until TSK-085 removes
-it. Native identity canaries, the real roster, command output and final
-qualification are later tasks in EPC-018; these engine tests do not claim
+It also tests schema 1 binding references against schema 5. TSK-085 removed
+the transitional schema 4 reader when it switched the managed catalog; a
+schema 4 file is now rejected. TSK-085's tests derive every structural
+check from the managed catalog and name no model. Native identity canaries
+and final qualification are later tasks in EPC-018; these tests do not claim
 their evidence.
 
 The general-review fictional fixture intentionally lists only the Grok and
 Claude seats as independent alternatives. For Claude-authored work, excluding
 Grok therefore leaves that participant open while the same-lineage second
-opinion remains advisory. TSK-085 must reconcile this fixture-specific
-acceptance example with the epic's broader "another opposite-lineage seat"
-rule: if the real catalog lists Codex, that available seat fills the gap.
-The real roster table is also added when TSK-085 accepts this decision.
+opinion remains advisory. The managed catalog applies the epic's broader
+rule: its independent alternatives are the Grok, Codex and Claude seats in
+that order, filtered by opposite lineage, so for Claude-authored work with
+Grok excluded the Codex seat fills the gap.

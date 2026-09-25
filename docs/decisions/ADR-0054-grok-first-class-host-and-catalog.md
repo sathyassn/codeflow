@@ -130,3 +130,11 @@ schema-v2 (Opus medium after Fable 429; Fable was not the answering seat)
 and Grok-started Codex Herdr (`gpt-6-astra` medium). Catalog Grok is still
 not a promoted qualified binding.
 ---
+
+## Note (2026-09-25)
+
+Item 2 is restated by ADR-0069. The managed catalog is schema 5; the standing
+seats are `claude-primary` and `codex-primary`; seat `grok-primary` serves its
+product line, whose current version is in ADR-0069's roster. The version named
+in item 2 is retired. Grok joins a review as a triggered participant on the
+routing-policy triggers, unchanged until the operator answers Q4.

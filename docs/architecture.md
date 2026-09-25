@@ -366,16 +366,19 @@ Codex or Claude sessions with their configured tools; no engine model router,
 headless peer runner, CI model call, or general-purpose cleanup command is added.
 
 Fast-changing binding facts are isolated from durable orchestration doctrine
-(ADR-0039, ADR-0041, ADR-0054). Stable role duties stay in the orchestrator and
-quality resources. `current-ensemble.json` owns the managed concrete selectors,
-effort policy, permitted worker classes, escalation triggers, and the standing
-pair versus catalog split. `routing-policy.json` names when an extra family
+(ADR-0039, ADR-0041, ADR-0054, ADR-0069). Stable role duties stay in the
+orchestrator and quality resources. `current-ensemble.json` is the schema 5
+model catalog: families, product lines with ordered versions and pinned ids,
+seats with their designations, duties with their participants, effort floors
+and triggers. `codeflow models resolve` is the one read-only command that turns
+it into a duty's participants, pinned ids, efforts and obligations, or names
+the open participant; it launches nothing. `routing-policy.json` names when an extra family
 must be invoked if available: never as a silent third vote. Interactive Grok Build is a first-class
 host; Claude still produces design in its native session. Hermes remains an
 outer coordinator that normally delegates the whole repository task. A consuming project
 may atomically map a stable role to an approved local binding ID in
 `.codeflow/model-selection.json`; it cannot supply selectors, commands, or
-worker routes. An absent/empty file keeps the managed ensemble. Doctor resolves
+worker routes. An absent/empty file keeps the managed catalog. Doctor resolves
 the effective selection and fails closed on malformed, missing, ineligible,
 unsupported, observably drifted, or lineage-collapsing overrides, without
 partially applying the remainder.
