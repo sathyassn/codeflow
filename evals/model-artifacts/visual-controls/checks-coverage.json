@@ -1,0 +1,436 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "checks-by-place",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Which check runs where?",
+    "idea": "Every check runs in CI; only the licence audit waits for the release job.",
+    "title": "Where each check runs",
+    "caption": "CI runs every check, and the licence audit runs only at release.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Runs"
+      },
+      {
+        "name": "part",
+        "mark": "part",
+        "means": "Runs on changed crates only"
+      },
+      {
+        "name": "notrun",
+        "mark": "notrun",
+        "means": "Not run"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the licence audit runs only at release",
+        "source": "docs/checks.md#technical",
+        "derive": "the Technical section",
+        "check": {
+          "kind": "contains",
+          "text": "The licence audit runs only at release"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 250,
+      "draw": [
+        {
+          "text": "Pre-commit hook",
+          "x": 380,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "CI",
+          "x": 480,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Release job",
+          "x": 580,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 0,
+          "y1": 44,
+          "x2": 720,
+          "y2": 44
+        },
+        {
+          "text": "Format",
+          "x": 0,
+          "y": 77
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 368,
+          "y": 60,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 468,
+          "y": 60,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "notrun",
+          "shape": "rect",
+          "x": 568,
+          "y": 60,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Lint",
+          "x": 0,
+          "y": 113
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 368,
+          "y": 96,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 468,
+          "y": 96,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "notrun",
+          "shape": "rect",
+          "x": 568,
+          "y": 96,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Unit tests",
+          "x": 0,
+          "y": 149
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 368,
+          "y": 132,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 468,
+          "y": 132,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 568,
+          "y": 132,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Secret scan",
+          "x": 0,
+          "y": 185
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 368,
+          "y": 168,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 468,
+          "y": 168,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 568,
+          "y": 168,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Licence audit",
+          "x": 0,
+          "y": 221
+        },
+        {
+          "state": "notrun",
+          "shape": "rect",
+          "x": 368,
+          "y": 204,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "notrun",
+          "shape": "rect",
+          "x": 468,
+          "y": 204,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 568,
+          "y": 204,
+          "w": 24,
+          "h": 24
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 220,
+      "draw": [
+        {
+          "text": "Hook",
+          "x": 180,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "CI",
+          "x": 250,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Release",
+          "x": 318,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Format",
+          "x": 0,
+          "y": 63
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 170,
+          "y": 48,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 240,
+          "y": 48,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "notrun",
+          "shape": "rect",
+          "x": 308,
+          "y": 48,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "text": "Lint",
+          "x": 0,
+          "y": 95
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 170,
+          "y": 80,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 240,
+          "y": 80,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "notrun",
+          "shape": "rect",
+          "x": 308,
+          "y": 80,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "text": "Unit tests",
+          "x": 0,
+          "y": 127
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 170,
+          "y": 112,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 240,
+          "y": 112,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 308,
+          "y": 112,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "text": "Secret scan",
+          "x": 0,
+          "y": 159
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 170,
+          "y": 144,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 240,
+          "y": 144,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 308,
+          "y": 144,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "text": "Licence audit",
+          "x": 0,
+          "y": 191
+        },
+        {
+          "state": "notrun",
+          "shape": "rect",
+          "x": 170,
+          "y": 176,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "notrun",
+          "shape": "rect",
+          "x": 240,
+          "y": 176,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 308,
+          "y": 176,
+          "w": 20,
+          "h": 20
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Check",
+        "Pre-commit hook",
+        "CI",
+        "Release job"
+      ],
+      "rows": [
+        [
+          "Format",
+          "runs",
+          "runs",
+          "not run"
+        ],
+        [
+          "Lint",
+          "runs",
+          "runs",
+          "not run"
+        ],
+        [
+          "Unit tests",
+          "changed crates only",
+          "runs",
+          "runs"
+        ],
+        [
+          "Secret scan",
+          "runs",
+          "runs",
+          "runs"
+        ],
+        [
+          "Licence audit",
+          "not run",
+          "not run",
+          "runs"
+        ]
+      ]
+    }
+  }
+}

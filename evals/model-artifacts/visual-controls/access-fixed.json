@@ -1,0 +1,370 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "access-grid",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Which role may take which action, and is any action unclaimed?",
+    "idea": "Only the admin may delete and export; no role is granted export beyond the admin.",
+    "title": "Which role may take which action",
+    "caption": "Only the admin may delete and export, and the crossed cells are grants no policy makes.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Allowed"
+      },
+      {
+        "name": "part",
+        "mark": "part",
+        "means": "Allowed on own items"
+      },
+      {
+        "name": "na",
+        "mark": "na",
+        "means": "Not applicable"
+      },
+      {
+        "name": "nc",
+        "mark": "nc",
+        "means": "Not granted by any policy"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "three roles against four actions",
+        "source": "docs/access.md#roles",
+        "derive": "the Roles section",
+        "check": {
+          "kind": "count-items"
+        },
+        "value": 3
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 180,
+      "draw": [
+        {
+          "text": "read",
+          "x": 312.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "write",
+          "x": 402.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "delete",
+          "x": 492.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "export",
+          "x": 582.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Admin",
+          "x": 0,
+          "y": 67.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 300,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 390,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 480,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 570,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Editor",
+          "x": 0,
+          "y": 107.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 300,
+          "y": 90,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 390,
+          "y": 90,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 480,
+          "y": 90,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 570,
+          "y": 90,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Viewer",
+          "x": 0,
+          "y": 147.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 300,
+          "y": 130,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 390,
+          "y": 130,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 480,
+          "y": 130,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 570,
+          "y": 130,
+          "w": 24,
+          "h": 24
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 150,
+      "draw": [
+        {
+          "text": "read",
+          "x": 165.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "write",
+          "x": 221.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "delete",
+          "x": 277.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "export",
+          "x": 333.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Admin",
+          "x": 0,
+          "y": 60.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 160,
+          "y": 50,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 216,
+          "y": 50,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 272,
+          "y": 50,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 328,
+          "y": 50,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "text": "Editor",
+          "x": 0,
+          "y": 90.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 160,
+          "y": 80,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 216,
+          "y": 80,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 272,
+          "y": 80,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 328,
+          "y": 80,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "text": "Viewer",
+          "x": 0,
+          "y": 120.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 160,
+          "y": 110,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 216,
+          "y": 110,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 272,
+          "y": 110,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 328,
+          "y": 110,
+          "w": 12,
+          "h": 12
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Role",
+        "read",
+        "write",
+        "delete",
+        "export"
+      ],
+      "rows": [
+        [
+          "Admin",
+          "allowed",
+          "allowed",
+          "allowed",
+          "allowed"
+        ],
+        [
+          "Editor",
+          "allowed",
+          "allowed",
+          "own items",
+          "not granted"
+        ],
+        [
+          "Viewer",
+          "allowed",
+          "not applicable",
+          "not applicable",
+          "not granted"
+        ]
+      ]
+    }
+  }
+}

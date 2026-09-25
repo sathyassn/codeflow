@@ -1,0 +1,234 @@
+{
+  "schema_version": 1,
+  "about": "Faulty and passing answers for the visual-doctrine cases, graded by the grammar module. A fixture: path is the declaration the case ships; any other file sits beside this manifest and is never given to a subject. rules is the exact set figureRuleFailures reports at 1280 and 390 px in light and dark with facts re-derived from the case's shipped fixture files; facts says whether every fact re-derives. The key rotation case's faulty answer is an absence (no figure for the rotation), which has no declaration to render.",
+  "cases": {
+    "checks-page-figure-matches-its-question": [
+      {
+        "role": "faulty",
+        "declaration": "checks-flow.json",
+        "family": "flow",
+        "rules": [],
+        "facts": "match"
+      },
+      {
+        "role": "passing",
+        "declaration": "checks-coverage.json",
+        "family": "coverage",
+        "rules": [
+          7
+        ],
+        "facts": "match",
+        "note": "Rule 7 is the grammar module's false positive on a grid of single-rect cells; drop it from rules when fix/figure-module-coverage lands."
+      }
+    ],
+    "release-handoffs-drawn-as-exchanges": [
+      {
+        "role": "faulty",
+        "declaration": "release-grid.json",
+        "family": "coverage",
+        "rules": [
+          7
+        ],
+        "facts": "match"
+      },
+      {
+        "role": "passing",
+        "declaration": "release-sequence.json",
+        "family": "sequence",
+        "rules": [],
+        "facts": "match"
+      }
+    ],
+    "queue-concept-draws-the-relationship": [
+      {
+        "role": "faulty",
+        "declaration": "fixture:docs/figures/queue-concept.json",
+        "family": "structure",
+        "rules": [
+          7
+        ],
+        "facts": "match"
+      },
+      {
+        "role": "passing",
+        "declaration": "queue-structure.json",
+        "family": "structure",
+        "rules": [],
+        "facts": "match"
+      }
+    ],
+    "retry-state-figure-survives-a-review-note": [
+      {
+        "role": "passing",
+        "declaration": "fixture:docs/figures/retry-states.json",
+        "family": "state",
+        "rules": [],
+        "facts": "match"
+      },
+      {
+        "role": "faulty",
+        "declaration": "retry-boxes.json",
+        "family": "state",
+        "rules": [
+          7
+        ],
+        "facts": "match"
+      }
+    ],
+    "deploy-flow-states-read-without-hue": [
+      {
+        "role": "faulty",
+        "declaration": "fixture:docs/figures/deploy-flow.json",
+        "family": "flow",
+        "rules": [
+          3
+        ],
+        "facts": "match"
+      },
+      {
+        "role": "passing",
+        "declaration": "deploy-fixed.json",
+        "family": "flow",
+        "rules": [],
+        "facts": "match"
+      }
+    ],
+    "planes-figure-fits-a-small-screen": [
+      {
+        "role": "faulty",
+        "declaration": "fixture:docs/figures/enforcement-planes.json",
+        "family": "layering",
+        "rules": [
+          5
+        ],
+        "facts": "match"
+      },
+      {
+        "role": "passing",
+        "declaration": "planes-recomposed.json",
+        "family": "layering",
+        "rules": [],
+        "facts": "match"
+      }
+    ],
+    "token-exchange-labels-stay-clear": [
+      {
+        "role": "faulty",
+        "declaration": "fixture:docs/figures/token-exchange.json",
+        "family": "sequence",
+        "rules": [
+          8
+        ],
+        "facts": "match"
+      },
+      {
+        "role": "passing",
+        "declaration": "token-fixed.json",
+        "family": "sequence",
+        "rules": [],
+        "facts": "match"
+      }
+    ],
+    "access-grid-marks-read-at-small-size": [
+      {
+        "role": "faulty",
+        "declaration": "fixture:docs/figures/access-grid.json",
+        "family": "coverage",
+        "rules": [
+          4
+        ],
+        "facts": "match"
+      },
+      {
+        "role": "passing",
+        "declaration": "access-fixed.json",
+        "family": "coverage",
+        "rules": [],
+        "facts": "match"
+      }
+    ],
+    "limits-figure-draws-todays-value": [
+      {
+        "role": "faulty",
+        "declaration": "fixture:docs/figures/request-limits.json",
+        "family": "extent",
+        "rules": [
+          6
+        ],
+        "facts": "mismatch"
+      },
+      {
+        "role": "passing",
+        "declaration": "limits-fixed.json",
+        "family": "extent",
+        "rules": [],
+        "facts": "match"
+      }
+    ],
+    "planes-figure-claims-only-what-the-repository-holds": [
+      {
+        "role": "faulty",
+        "declaration": "fixture:docs/figures/planes-here.json",
+        "family": "layering",
+        "rules": [
+          6
+        ],
+        "facts": "mismatch"
+      },
+      {
+        "role": "passing",
+        "declaration": "planes-three.json",
+        "family": "layering",
+        "rules": [],
+        "facts": "match"
+      }
+    ],
+    "key-rotation-section-is-drawn": [
+      {
+        "role": "context",
+        "declaration": "fixture:docs/figures/signing-lifetime.json",
+        "family": "extent",
+        "rules": [],
+        "facts": "match"
+      },
+      {
+        "role": "context",
+        "declaration": "fixture:docs/figures/signing-boundary.json",
+        "family": "structure",
+        "rules": [],
+        "facts": "match"
+      },
+      {
+        "role": "context",
+        "declaration": "fixture:docs/figures/signed-artifacts.json",
+        "family": "coverage",
+        "rules": [],
+        "facts": "match",
+        "note": "nc stands in for na until fix/figure-module-coverage lands."
+      },
+      {
+        "role": "passing",
+        "declaration": "rotation-states.json",
+        "family": "state",
+        "rules": [],
+        "facts": "match"
+      }
+    ],
+    "edge-cache-opening-says-what-it-is-not": [
+      {
+        "role": "faulty",
+        "declaration": "fixture:docs/figures/edge-cache-opening.json",
+        "family": "sequence",
+        "rules": [],
+        "facts": "match"
+      },
+      {
+        "role": "passing",
+        "declaration": "edge-structure.json",
+        "family": "structure",
+        "rules": [],
+        "facts": "match"
+      }
+    ]
+  }
+}

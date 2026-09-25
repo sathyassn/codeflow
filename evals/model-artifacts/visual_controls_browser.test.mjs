@@ -1,0 +1,52 @@
+// TSK-062 controls on a real render: each faulty answer fails exactly the
+// figure rules recorded for it and each passing answer holds every rule (or
+// only a recorded, dated module false positive), read off Chromium at 1280
+// and 390 px in light and dark with facts re-derived from the case's shipped
+// fixture, the way figure-rules-browser.test.mjs reads the specimens.
+//
+// Run: npm run deps:install --prefix docs-portal
+//      npx --prefix docs-portal playwright install chromium   (once)
+//      node --test evals/model-artifacts/visual_controls_browser.test.mjs
+import assert from "node:assert/strict";
+import { readFile } from "node:fs/promises";
+import test from "node:test";
+import { controls, declarationOf, fixtureOf, grammar, prepare } from "./visual_controls.mjs";
+
+const { chromium } = await import(new URL("../../docs-portal/node_modules/@playwright/test/index.mjs", import.meta.url));
+const { hardenedChildEnvironment } = await import(new URL("../../docs-portal/scripts/process-environment.mjs", import.meta.url));
+
+const styles = new URL("../../docs-portal/src/styles/", import.meta.url);
+const css = (await Promise.all(["utility-tokens.css", "portal.css", "figure-roles.css", "figure.css"].map((name) => readFile(new URL(name, styles), "utf8")))).join("\n");
+
+async function probe(page, html) {
+  const document = (theme) => `<!doctype html><html data-theme="${theme}" data-cfp-skin="instrument"><head><style>${css} body{margin:0;background:var(--cf-canvas);font-family:var(--cf-font-sans)} main{max-width:720px;margin:0 auto;padding:0 16px}</style></head><body><main>${html}</main></body></html>`;
+  const observed = {};
+  for (const [label, width, theme] of [["wide", 1280, "light"], ["narrow", 390, "light"], ["wideDark", 1280, "dark"], ["narrowDark", 390, "dark"]]) {
+    await page.setViewportSize({ width, height: 900 });
+    await page.setContent(document(theme));
+    observed[label] = (await page.evaluate(grammar.probeFigures, { clearance: grammar.THRESHOLDS.labelClearancePx }))[0];
+  }
+  return observed;
+}
+
+test("every control fails exactly the figure rules recorded for it", { skip: process.platform === "win32", timeout: 600_000 }, async () => {
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  const outcome = {};
+  const expected = {};
+  try {
+    const page = await browser.newPage();
+    for (const [caseId, entries] of Object.entries(controls.cases)) {
+      const { readSource } = fixtureOf(caseId);
+      for (const entry of entries) {
+        const { html, evidence, composed } = prepare(await declarationOf(caseId, entry.declaration), readSource);
+        const failures = grammar.figureRuleFailures({ ...(await probe(page, html)), evidence, composed });
+        const key = `${caseId} ${entry.role} ${entry.declaration}`;
+        outcome[key] = [...new Set(failures.map((failure) => failure.rule))].sort((a, b) => a - b);
+        expected[key] = entry.rules;
+      }
+    }
+  } finally { await browser.close(); }
+  assert.equal(Object.keys(outcome).length, Object.values(controls.cases).flat().length);
+  assert.ok(Object.values(outcome).some((rules) => rules.length > 0), "no control failed any rule");
+  assert.deepEqual(outcome, expected);
+});
