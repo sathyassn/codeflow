@@ -250,6 +250,13 @@ async function checkReferenceExample() {
   const agents = await readFile(join(repoRoot, "AGENTS.md"), "utf8");
   const facts = checkFacts(declaration.figure, (path) => (path === "AGENTS.md" ? agents : null));
   if (!facts.every((fact) => fact.matches)) throw new Error(`figure-grammar.md section 6 example facts do not derive: ${JSON.stringify(facts)}`);
+  // The figure block the conversion section points authors at to copy.
+  const review = JSON.parse(await readFile(join(repoRoot, "assets/base/agents/skills/cf-present/assets/review-document.example.json"), "utf8"));
+  const converted = review.blocks.find((block) => block.type === "figure")?.declaration;
+  validateDeclaration(converted, "review-document.example.json figure");
+  renderFigure(converted);
+  const convertedFacts = checkFacts(converted.figure, (path) => (path === "AGENTS.md" ? agents : null));
+  if (!convertedFacts.every((fact) => fact.matches)) throw new Error(`review-document.example.json figure facts do not derive: ${JSON.stringify(convertedFacts)}`);
 }
 
 async function findBrowser() {

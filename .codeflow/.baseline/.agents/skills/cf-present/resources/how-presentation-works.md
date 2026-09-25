@@ -67,18 +67,19 @@ Think in jobs, not tags:
 
 **Important:** `comparison` of three text cards is still **text** if the cards
 only restate chat. Geometry only helps when the **difference between columns**
-is the point. A diagram whose Mermaid is a fig leaf for more sentences is still
-a wall, just with a code block on top. When the governing claim needs geometry,
+is the point. A figure whose geometry only restates more sentences is still a
+wall, just drawn. When the governing claim needs geometry,
 **author a `figure` block**: a declaration in the family whose relationship the
 reader must see (`figure-grammar.md`), which the runtime draws with its legend,
 caption and table twin. A justified `html` stage drawn with utility tokens
-remains only as the flow family's interim form (see the example JSON). Mermaid
-and ASCII are quick supporting forms; they are **never the primary page form**
-when geometry should teach.
+remains only as the flow family's interim form (see the example JSON). ASCII is
+a chat form, **never the primary page form** when geometry should teach.
+Mermaid is unsupported on both surfaces: present refuses a `diagram` block and
+the portal shows a Mermaid fence as code.
 
 The system will not invent a lineage board, a confidence strip, or a stage
 diagram for you. Those exist only if **you** author a carrier whose shape
-encodes them (figure/tree/table/media/diagram), or you stay in chat.
+encodes them (figure/tree/table/media), or you stay in chat.
 
 ---
 

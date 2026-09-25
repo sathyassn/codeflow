@@ -900,3 +900,96 @@ fn broken_stored_revisions_fail_with_their_own_error() {
         close_and_clear(&fixture, &session_id);
     }
 }
+
+fn skill_file(path: &str) -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/base/agents/skills/cf-present")
+            .join(path),
+    )
+    .unwrap()
+}
+
+#[test]
+fn shipped_example_documents_parse_and_match_the_document_schema() {
+    let registry = schema_registry();
+    for path in [
+        "assets/review-document.example.json",
+        "resources/present-document.example.json",
+    ] {
+        let text = skill_file(path);
+        let parsed = codeflow_present::document::parse_document(text.as_bytes())
+            .unwrap_or_else(|error| panic!("{path}: {error}"));
+        assert!(
+            matches!(
+                parsed,
+                codeflow_present::document::ParsedDocument::Supported(_)
+            ),
+            "{path}"
+        );
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            registry.errors("urn:codeflow:schema:present:document:1", &value),
+            Vec::<String>::new(),
+            "{path}"
+        );
+        assert!(
+            !text.contains("\"diagram\""),
+            "{path} still carries a diagram"
+        );
+    }
+    let review: serde_json::Value =
+        serde_json::from_str(&skill_file("assets/review-document.example.json")).unwrap();
+    assert_eq!(review["blocks"][0]["type"], "figure");
+    assert_eq!(
+        review["blocks"][0]["declaration"]["figure"]["family"],
+        "flow"
+    );
+
+    // The narrowed schema refuses the removed block.
+    let mut retired = review.clone();
+    retired["blocks"][0] = serde_json::json!({
+        "type": "diagram", "id": "flow", "kind": "flowchart", "source": "flowchart LR",
+        "acc_title": "Flow", "acc_description": "A flow."
+    });
+    assert!(!registry
+        .errors("urn:codeflow:schema:present:document:1", &retired)
+        .is_empty());
+}
+
+/// The section the refusal names teaches every former kind with the same
+/// replacement the runtime names, and points at a complete figure block and
+/// the family specimens.
+#[test]
+fn the_conversion_section_matches_the_runtime_refusal() {
+    use codeflow_present::retired::{CONVERSIONS, CONVERSION_GUIDE};
+
+    let text = skill_file("references/document-authoring.md");
+    let heading = between(CONVERSION_GUIDE, "the \"", "\" section");
+    assert!(CONVERSION_GUIDE.ends_with("cf-present/references/document-authoring.md"));
+    let section = text
+        .split(&format!("\n## {heading}\n"))
+        .nth(1)
+        .unwrap_or_else(|| panic!("document-authoring.md has no {heading} section"))
+        .split("\n## ")
+        .next()
+        .unwrap()
+        .replace('`', "");
+    for (kind, replacement) in CONVERSIONS {
+        assert!(
+            section.contains(&format!("| {kind} | {replacement} |")),
+            "the conversion section lost {kind}: {replacement}"
+        );
+    }
+    for pointer in [
+        "assets/review-document.example.json",
+        "resources/figure-grammar-specimens.md",
+        "tests/fixtures/figures/*.json",
+    ] {
+        assert!(
+            section.contains(pointer),
+            "the conversion section lost {pointer}"
+        );
+    }
+    assert!(!text.contains("| diagram |") && !text.contains("\"type\": \"diagram\""));
+}

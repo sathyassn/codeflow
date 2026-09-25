@@ -49,7 +49,6 @@ still represents the same conceptual item.
 | verification state | `status` | pass, fail, pending, or not-run evidence |
 | source text | `code` / `diff` | inspectable code or a unified change |
 | hierarchy | `tree` | ownership, composition, or repository structure |
-| supporting relationship or sequence | `diagram` | Mermaid flow, sequence, timeline, state, class, ER, or mind map: a quick supporting form, never the primary carrier when the claim needs a figure |
 | actual visual/audio evidence | `media` | bounded embedded PNG/JPEG/GIF/WebP/MP4/WebM/MP3/Ogg |
 | secondary depth | `disclosure` | detail that should not dominate the first read |
 | true peer views | `tabs` | one-at-a-time alternatives sharing the same context |
@@ -58,8 +57,7 @@ still represents the same conceptual item.
 
 Do not add a block category merely for variety. Repeat a block when the
 information warrants it, but consolidate fragments that form one thought. A
-figure needs its caption, facts and twin; a diagram needs `acc_title` and
-`acc_description`; media needs meaningful `alt`.
+figure needs its caption, facts and twin; media needs meaningful `alt`.
 Colour is never the only carrier of state. Keep the first reading path complete
 without opening disclosures or switching tabs.
 
@@ -102,7 +100,7 @@ surface has not earned its visual claim.
 {"type":"decision","id":"choice","title":"Recovery strategy","status":"open","markdown":"Choose after the failure canary."}
 ```
 
-### Status and diagram
+### Status
 
 ```json
 {
@@ -115,17 +113,6 @@ surface has not earned its visual claim.
 }
 ```
 
-```json
-{
-  "type": "diagram",
-  "id": "delivery-flow",
-  "kind": "flowchart",
-  "source": "flowchart LR\n  Plan --> Build --> Review --> Ship",
-  "acc_title": "Delivery flow",
-  "acc_description": "The approved plan proceeds through implementation and review before shipping."
-}
-```
-
 ### Figure
 
 ```json
@@ -134,13 +121,15 @@ surface has not earned its visual claim.
 
 `declaration` is a figure declaration exactly as `figure-grammar.md` section 6
 defines it, the same file the docs portal binds; the elided fields are filled
-as the specimens in `figure-grammar-specimens.md` show. The service checks the
+as the specimens in `figure-grammar-specimens.md` show. The complete block to
+copy is the first block of `assets/review-document.example.json`: a flow
+figure with its states, facts, wide and narrow compositions and table twin. The service checks the
 envelope (schema version, a family from the nine, the authored binding, a
 title and a caption, at most 64 KiB); the runtime validates the rest with the
 grammar module before it draws and shows the refusal in place of the figure.
 Present draws authored figures only, and it draws each fact as declared: only
 the portal re-derives facts from their sources, so cite sources a reviewer
-can check. Figures share the diagram budget of 24 drawn blocks.
+can check. A document draws at most 24 figure blocks.
 
 ### Progressive depth
 
@@ -161,7 +150,35 @@ loads, reserved runtime identities, and top-layer controls are prohibited.
 Offline exports additionally place authored HTML in a sandboxed frame.
 Never use it as a component SDK, a way around the schema, or a
 place for product runtime code. Prefer a standard block over equivalent custom
-HTML, and never make Mermaid/ASCII stand in for a figure the claim deserves.
+HTML, and never make ASCII stand in for a figure the claim deserves.
+
+## Converting a diagram block
+
+The `diagram` block was removed with its Mermaid renderer, and Mermaid is
+unsupported in present and in the portal. `present open` and `present update`
+refuse a document that still carries one, naming the block and its
+replacement. A revision stored before the removal still opens read only, with
+a notice and each diagram's source to convert from.
+
+| Former `kind` | Replacement |
+|---|---|
+| `flowchart` | a flow figure |
+| `sequence` | a sequence figure |
+| `state` | a state figure |
+| `class` | a structure figure, or a `table` where no relationship must be seen |
+| `entity_relationship` | a structure figure, or a `table` where no relationship must be seen |
+| `mindmap` | a `tree` block |
+| `timeline` | a `table`, or a sequence figure when participants exchange messages |
+
+A figure declaration is longer than a Mermaid line, so start from a complete
+one. The first block of `assets/review-document.example.json` is a flow figure
+converted from a flowchart, and `resources/figure-grammar-specimens.md` draws
+one specimen per family, whose complete declarations are the portal starter's
+`tests/fixtures/figures/*.json`. Carry the old `acc_title` into the figure's
+`title` and the `acc_description` into its `caption` or `description`. Keep the
+block id only when the figure is the same conceptual item; a note anchored on
+the removed diagram stays in the history as orphaned. The `cf-stage` interim is
+a portal form; in present an `html` block keeps only the two uses above.
 
 ## Language and review quality
 
