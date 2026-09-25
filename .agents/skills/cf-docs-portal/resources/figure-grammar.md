@@ -256,9 +256,12 @@ at the head of a `div.expressive-code` block that point at a recorded
 `_astro/ec.<hash>` asset, and style attributes on the `pre` of a block's
 frame or inside it that hold only its custom properties (`--N`, `--Nbg`,
 `--Nfs`, `--Nfw`, `--Ntd`, `--ecIndent`, `--ecMaxLine`) with a hex colour, a
-fixed keyword or a whole number of `ch`. Any other property or asset, a style
-element, and any figure or companion inside a block still fail, so neither
-the properties nor the block's sheet can reach a figure.
+fixed keyword or a whole number of `ch`. The allowance covers the attribute
+alone: a style element, another link or a script on the same element still
+fails, as do any other property or asset. The block's sheet scopes its rules
+on the `expressive-code` class whatever the tag, so any figure, caption,
+legend or companion on or inside an element with that class fails too. Only
+with that exclusion can neither the properties nor the sheet reach a figure.
 
 ## 7. Chat form
 
