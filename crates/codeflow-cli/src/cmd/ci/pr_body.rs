@@ -260,6 +260,16 @@ fn visible_text(body: &str, include_code: bool) -> String {
             }
             Event::End(TagEnd::CodeBlock) if !include_code => excluded -= 1,
             Event::Text(value) | Event::Code(value) if excluded == 0 => text.push_str(&value),
+            Event::End(
+                TagEnd::Emphasis
+                | TagEnd::Strong
+                | TagEnd::Strikethrough
+                | TagEnd::Superscript
+                | TagEnd::Subscript
+                | TagEnd::Link
+                | TagEnd::Image,
+            ) => {}
+            // Block ends and breaks end a line; inline ends such as bold do not.
             Event::SoftBreak | Event::HardBreak | Event::End(_) if excluded == 0 => {
                 text.push('\n');
             }
@@ -765,6 +775,17 @@ mod tests {
         )
         .iter()
         .any(|v| v.message.contains("Not tested:")));
+        for label in [
+            "**Not tested**: Windows.",
+            "**Not tested:** Windows.",
+            "_Not tested_: Windows.",
+        ] {
+            let body = format!("## Testing\nRan 3 tests.\n{label}");
+            assert!(
+                presentation(&GitPolicy::default(), &body, false).is_empty(),
+                "{label}"
+            );
+        }
     }
 
     #[test]
@@ -863,6 +884,8 @@ mod tests {
             false
         )
         .is_empty());
+        let bold = "## Release impact\n- **Impact:** major\n- **Breaking**: yes\n- __Rationale:__ Remove the old flag.\n- *Migration*: Use the new flag.\n";
+        assert!(release(&git, bold, false).is_empty(), "{bold}");
     }
 
     #[test]
