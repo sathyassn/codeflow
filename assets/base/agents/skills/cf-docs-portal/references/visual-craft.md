@@ -32,21 +32,32 @@ as the shape of an explanatory page.
 A page that fails this gate is not craft-complete: fix the source composition
 or refuse decorative chrome.
 
-## 1. How to think about a portal page
+## 1. How a portal page thinks
 
 The reader lands in a **docs shell** (nav, crumbs, search), not a session
-review. Your job is still structural: what do they **see** in the first
-screen of this layer, and does architecture use **layout** (a family
-figure, a table) or only more prose under a heading?
+review. One page taken through `resources/explanation-method.md`: the
+repository's git discipline page. Each panel names its reader, the question
+the reader leaves with, and the family that answers it.
 
-- The **Concept** panel orients: one mental model, not a dump of every capability.
-- The **Architecture** panel must work if sentences thin out: nodes and edges,
-  not caption chips restating paragraphs.
-- The **Technical** panel is for lookup and evidence, not another essay.
+| Panel | Reader | Question | Family and what it draws |
+|---|---|---|---|
+| Concept | someone deciding whether CodeFlow's enforcement fits their repository | what does it enforce, and what does it leave to people | structure: the repository and its remote as two regions, the four planes placed in them, the human merge outside every plane |
+| Architecture | an engineer who will change or add a gate | which plane covers which moment of a change, and which one is the boundary | layering: hooks, git-guard, CI and remote protection over edit to merge |
+| Technical | a reviewer checking a rule | which plane enforces each rule, and is any rule unclaimed | coverage: rules against planes, one mark per cell, with the table twin beside it |
+| How-to: land a change | someone landing a change now | what do I do before the first edit, and what tells me it worked | sequence: worktree list, fetch, `codeflow work start`, first edit |
 
-Same utility craft as present; different job (durable source-linked guide). Do
-not copy present Comment chrome. Shape example:
-[resources/portal-page-shape.example.md](../resources/portal-page-shape.example.md).
+The walk shows what the method's stages decide on a portal:
+
+- Stage 1 gives each panel its own reader; a panel that serves two readers is
+  two panels or a how-to section.
+- Stage 3 picks one family per panel by relationship, so the three panels
+  draw three different families and none restates another.
+- The how-to section carries a sequence, state or extent figure between its
+  lead and its steps.
+- Stage 5's removal check is the gate's item 4: with the sentences gone, the
+  Architecture figure still shows the planes and the boundary.
+
+Same utility craft as present; a different job (a durable source-linked guide).
 
 ## 2. Same craft, different shell
 

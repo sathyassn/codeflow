@@ -1811,6 +1811,73 @@ fn figure_grammar_specimens_carry_a_chat_form_per_family() {
     );
 }
 
+/// The shared doctrine states the screenshot and raster image rules beside
+/// its media carrier, the portal content contract tells authors what a figure
+/// is in each medium, and the portal visual craft walks one page through the
+/// method with a reader, a question and a family per panel.
+#[test]
+fn presentation_doctrine_carries_screenshot_rules_figure_media_and_the_page_walk() {
+    let skills = repo_root().join("assets/base/agents/skills");
+    let read = |path: &str| {
+        normalized_whitespace(
+            &std::fs::read_to_string(skills.join(path))
+                .unwrap_or_else(|error| panic!("{path} is readable: {error}")),
+        )
+    };
+    let mut missing = Vec::new();
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let doctrine = read(&format!("{skill}/resources/utility-presentation-system.md"));
+        for rule in [
+            "### Screenshots and raster images",
+            "| Media (a screenshot) |",
+            "A screenshot shows a surface as it is and never a relationship",
+            "Capture the Graphite skin in light at 2x, unless the subject is a skin or a mode",
+            "Crop to the surface plus one margin unit",
+            "Annotate only with numbered markers keyed in the caption; never draw arrows",
+            "Write alt text that names the surface and its state",
+            "Save chrome as PNG and photographs as WebP, inside the portal's media byte budget",
+            "Commit it beside its source, in a folder named for the page",
+            "Refresh it when the surface changes",
+            "An imported raster diagram is never a carrier: redraw it in a family",
+        ] {
+            if !doctrine.contains(&normalized_whitespace(rule)) {
+                missing.push(format!("{skill} doctrine: {rule}"));
+            }
+        }
+    }
+    let contract = read("cf-docs-portal/references/content-contract.md");
+    for marker in [
+        "SVG/PDF copies, traversal, unsupported schemes, and broken targets fail closed",
+        "For authors: on the portal and in present a figure is inline SVG through the figure block, and in chat and a README it is the ASCII chat form.",
+    ] {
+        if !contract.contains(marker) {
+            missing.push(format!("content contract: {marker}"));
+        }
+    }
+    let craft = read("cf-docs-portal/references/visual-craft.md");
+    for marker in [
+        "## 1. How a portal page thinks",
+        "| Panel | Reader | Question | Family and what it draws |",
+        "| Concept | someone deciding",
+        "| Architecture | an engineer",
+        "| Technical | a reviewer",
+        "| How-to: land a change | someone landing a change now",
+        "| structure:",
+        "| layering:",
+        "| coverage:",
+        "| sequence:",
+    ] {
+        if !craft.contains(marker) {
+            missing.push(format!("portal visual craft: {marker}"));
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "presentation doctrine lost:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
 /// Presentation JSON contracts are public consumer inputs and exported state.
 /// Pin the authored copies to the deployed and three-way-merge baseline files,
 /// and reject an accidentally open or malformed root contract.

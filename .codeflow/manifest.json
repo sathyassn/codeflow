@@ -89,7 +89,7 @@
     ".agents/skills/cf-docs-portal/references/content-contract.md": {
       "src": "agents/skills/cf-docs-portal/references/content-contract.md",
       "ownership": "managed",
-      "sha256": "c4305322c98452e67801f999fe2cfc5606c264430fbade7287b44cf58c5c4fc0",
+      "sha256": "bfebd6b58bf27b65fbf9a4c18c765ba5314dc0328f0327d784f1c812c0a9cc6a",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/references/information-architecture.md": {
@@ -107,7 +107,7 @@
     ".agents/skills/cf-docs-portal/references/visual-craft.md": {
       "src": "agents/skills/cf-docs-portal/references/visual-craft.md",
       "ownership": "managed",
-      "sha256": "4eccf6b59f3e91e81af4cbf2ce434ead7712301d60cc93c767e982121d3748c7",
+      "sha256": "f2ed444bfdd1b6039409760f2162af9a7311b88951011725bfe8f42a0f6a1c5f",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/resources/design-system/README.md": {
@@ -185,7 +185,7 @@
     ".agents/skills/cf-docs-portal/resources/utility-presentation-system.md": {
       "src": "agents/skills/cf-docs-portal/resources/utility-presentation-system.md",
       "ownership": "managed",
-      "sha256": "46df17681848d90ed9af81316caf6bebe5650fd9412e1c8e6aa07be7e577aae5",
+      "sha256": "b419e18ec4cdc2b585a363b4f2f1eeb43446a44050def3a8f56362d9f4ee5d0a",
       "exec": false
     },
     ".agents/skills/cf-editorial-review/SKILL.md": {
@@ -563,7 +563,7 @@
     ".agents/skills/cf-present/resources/utility-presentation-system.md": {
       "src": "agents/skills/cf-present/resources/utility-presentation-system.md",
       "ownership": "managed",
-      "sha256": "46df17681848d90ed9af81316caf6bebe5650fd9412e1c8e6aa07be7e577aae5",
+      "sha256": "b419e18ec4cdc2b585a363b4f2f1eeb43446a44050def3a8f56362d9f4ee5d0a",
       "exec": false
     },
     ".agents/skills/cf-ship/SKILL.md": {
@@ -695,7 +695,7 @@
     ".claude/skills/cf-docs-portal/references/content-contract.md": {
       "src": "agents/skills/cf-docs-portal/references/content-contract.md",
       "ownership": "managed",
-      "sha256": "c4305322c98452e67801f999fe2cfc5606c264430fbade7287b44cf58c5c4fc0",
+      "sha256": "bfebd6b58bf27b65fbf9a4c18c765ba5314dc0328f0327d784f1c812c0a9cc6a",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/references/information-architecture.md": {
@@ -713,7 +713,7 @@
     ".claude/skills/cf-docs-portal/references/visual-craft.md": {
       "src": "agents/skills/cf-docs-portal/references/visual-craft.md",
       "ownership": "managed",
-      "sha256": "4eccf6b59f3e91e81af4cbf2ce434ead7712301d60cc93c767e982121d3748c7",
+      "sha256": "f2ed444bfdd1b6039409760f2162af9a7311b88951011725bfe8f42a0f6a1c5f",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/resources/design-system/README.md": {
@@ -791,7 +791,7 @@
     ".claude/skills/cf-docs-portal/resources/utility-presentation-system.md": {
       "src": "agents/skills/cf-docs-portal/resources/utility-presentation-system.md",
       "ownership": "managed",
-      "sha256": "46df17681848d90ed9af81316caf6bebe5650fd9412e1c8e6aa07be7e577aae5",
+      "sha256": "b419e18ec4cdc2b585a363b4f2f1eeb43446a44050def3a8f56362d9f4ee5d0a",
       "exec": false
     },
     ".claude/skills/cf-editorial-review/SKILL.md": {
@@ -1169,7 +1169,7 @@
     ".claude/skills/cf-present/resources/utility-presentation-system.md": {
       "src": "agents/skills/cf-present/resources/utility-presentation-system.md",
       "ownership": "managed",
-      "sha256": "46df17681848d90ed9af81316caf6bebe5650fd9412e1c8e6aa07be7e577aae5",
+      "sha256": "b419e18ec4cdc2b585a363b4f2f1eeb43446a44050def3a8f56362d9f4ee5d0a",
       "exec": false
     },
     ".claude/skills/cf-ship/SKILL.md": {

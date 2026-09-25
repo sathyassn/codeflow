@@ -127,7 +127,7 @@ not be promised in a source or a document.
 | Table | Markdown table | `table` |
 | Hierarchy | **unsupported** in the portal (use a structure figure) | `tree` |
 | Code, diff, evidence | fenced code | `code` / `diff` / `status` |
-| Media | image with committed source | `media` |
+| Media (a screenshot) | a committed PNG, JPEG, GIF or WebP image; an SVG file fails closed | `media` |
 | Callout | not a carrier | `callout`, sparingly |
 | Reading and framing | Markdown prose and lists | `narrative` / `bullets` / `comparison` / `decision` / `disclosure` / `feedback_prompt` |
 | Mermaid | **unsupported**: a Mermaid fence renders as plain code | `diagram` block, supporting form only, never the primary carrier |
@@ -135,6 +135,24 @@ not be promised in a source or a document.
 Unsupported on both surfaces: arbitrary diagram syntaxes beyond the forms
 above. In the portal, hierarchy trees and Mermaid are also unsupported; use a
 family figure there.
+
+### Screenshots and raster images
+
+A screenshot shows a surface as it is and never a relationship; a
+relationship is drawn in a family.
+
+- Capture the Graphite skin in light at 2x, unless the subject is a skin or a
+  mode.
+- Crop to the surface plus one margin unit.
+- Annotate only with numbered markers keyed in the caption; never draw arrows
+  on it.
+- Write alt text that names the surface and its state.
+- Save chrome as PNG and photographs as WebP, inside the portal's media byte
+  budget.
+- Commit it beside its source, in a folder named for the page.
+- Refresh it when the surface changes.
+
+An imported raster diagram is never a carrier: redraw it in a family.
 
 ---
 
