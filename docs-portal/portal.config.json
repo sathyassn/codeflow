@@ -10,9 +10,10 @@
   "source_roots": ["docs"],
   "exclude": ["docs/verification", "docs/plan"],
   "layers": [
-    { "id": "orient", "label": "Orient", "description": "What CodeFlow is, what it does, and how a repository adopts it.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md"], "prefixes": ["docs/capabilities"] },
-    { "id": "system", "label": "System", "description": "How the binary is built, what enforces the rules, and the boundaries each harness and surface runs under.", "paths": ["docs/architecture.md", "docs/architecture/enforcement-planes.md", "docs/architecture/present.md", "docs/architecture/utility-presentation.md", "docs/harness-posture.md"], "prefixes": ["docs/architecture"] },
-    { "id": "reference", "label": "Reference", "description": "Operating CodeFlow: model and harness upgrades, the release runbook and checklist, and the command surface.", "paths": ["docs/model-upgrades.md", "docs/releasing.md", "docs/release-checklist.md", "docs/cli.md"], "fallback": true },
+    { "id": "orient", "label": "Orient", "description": "What CodeFlow is, what it does, how a repository adopts it, and the terms the guide uses.", "paths": ["docs/product.md", "docs/capabilities.md", "docs/adoption.md", "docs/glossary.md"], "prefixes": ["docs/capabilities"] },
+    { "id": "guides", "label": "Guides", "description": "Task guides: reviewing work in a present session, handing a turn to a peer model, and fixing what doctor reports.", "paths": ["docs/present-guide.md", "docs/delegation.md", "docs/troubleshooting.md"] },
+    { "id": "system", "label": "System", "description": "How the binary is built, what enforces the rules, the boundaries each harness and surface runs under, and the decisions behind them.", "paths": ["docs/architecture.md", "docs/architecture/enforcement-planes.md", "docs/architecture/present.md", "docs/architecture/utility-presentation.md", "docs/harness-posture.md", "docs/decision-map.md"], "prefixes": ["docs/architecture"] },
+    { "id": "reference", "label": "Reference", "description": "Operating CodeFlow: the command surface, the skills and policy it ships, model and harness upgrades, and the release runbook and checklist.", "paths": ["docs/cli.md", "docs/skills.md", "docs/policy-reference.md", "docs/model-upgrades.md", "docs/releasing.md", "docs/release-checklist.md"], "fallback": true},
     { "id": "project", "label": "Project", "description": "How to contribute, report a vulnerability and take part, and the license the code ships under.", "paths": ["docs/CONTRIBUTING.md", "docs/SECURITY.md", "docs/CODE_OF_CONDUCT.md", "docs/LICENSE.md"] }
   ],
   "records": {
@@ -29,6 +30,7 @@
     { "source": "docs/release-checklist.md", "technical": "list" }
   ],
   "page_classes": [
+    { "source": "docs/glossary.md", "class": "pass-through", "reason": "no-relationship", "note": "A table of term definitions with links; no relationship between terms needs drawing." },
     { "source": "docs/skills.md", "class": "derived-lookup", "derive": "skill-catalog" },
     { "source": "docs/policy-reference.md", "class": "derived-lookup", "derive": "policy-reference" },
     { "source": "docs/CONTRIBUTING.md", "class": "pass-through", "reason": "governance" },

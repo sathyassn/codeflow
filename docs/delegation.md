@@ -1,0 +1,123 @@
+# Delegation and Herdr
+
+<!-- Guide layer. Reader: an operator who wants a second model's opinion or
+     work. Sources: docs/capabilities.md (cross-vendor-delegation,
+     transport-neutral-delegate-lifecycle),
+     docs/capabilities/CAP-010-duo-model-orchestration.md, docs/adoption.md
+     (Delegation quickstart), cf-consult, cf-herdr and cf-delegate skills,
+     crates/codeflow-cli/src/cmd/delegate.rs, crates/codeflow-core/src/delegate.rs,
+     crates/codeflow-cli/src/cmd/hook.rs. -->
+
+## Concept
+
+Consult and delegate let your agent bring in a model from another vendor,
+either for an opinion or for a piece of work.
+
+A consult is read-only, so the peer reads, tests and reasons, then ends its
+reply with a verdict line that your agent checks against its own analysis. A
+delegate gets a scoped piece of implementation and does it in its own worktree
+on a feature branch, where CodeFlow's gates judge its commits exactly as they
+judge yours. This is for an operator who wants an independent check or
+parallel work, with each model running in its own interactive session under
+your own login. It never runs a peer headless, so `codex exec` and `claude -p`
+are prohibited, and it never logs in for you or counts a same-vendor model as
+an independent reviewer.
+
+## Architecture
+
+The host you start in decides the route to the peer, and every route ends in
+the same gates.
+
+- **Claude Code to Codex** goes through the official Codex plugin for Claude
+  Code, `codex@openai-codex`. `/codex:review` and `/codex:adversarial-review`
+  consult, `/codex:rescue` delegates, and `/codex:transfer` keeps one thread
+  across several rounds. A reply counts as Codex only with its native thread
+  id.
+- **Codex to Claude** runs the interactive `claude` CLI in a Herdr tab, and
+  CodeFlow's delegate lifecycle proves each turn started, was accepted and
+  ended. Outside Herdr, a dedicated tmux session is the degraded host.
+- **Grok Build** reaches Codex through the official `codex` CLI and its local
+  app-server daemon, and reaches Claude through Herdr and the delegate
+  lifecycle.
+- **Herdr** is a terminal host with named tabs. Each peer gets its own tab
+  labelled `cf/<repo>/<work>/<kind>/<nn>`, where the kind is `claude`, `codex`
+  or `grok`. Your agent never types into your pane and never closes a tab it
+  did not create.
+- A Herdr `idle` or `done` status is not turn completion. Completion comes
+  from the plugin's thread result or from the lifecycle records.
+- CodeFlow never launches a harness or delivers a prompt itself. It writes the
+  lifecycle records and waits on them, and the host does the rest.
+- A delegate edits only in a worktree on a feature branch. The git hooks bind
+  it like any agent, and a human lands its work.
+
+The [command reference](cli.md) lists every delegate flag, and the
+[adoption guide](adoption.md) covers the one-time setup.
+
+## Technical
+
+The delegate lifecycle keeps owner-only records for one run in a state
+directory outside every Git worktree, and each record marks one state of a
+turn.
+
+| State | Record in the state directory | What moves the turn here | What the host runs |
+|---|---|---|---|
+| Initialized | `settings.json` and `turns/` | `codeflow delegate init --run-id <ID> --state-dir <DIR>` | Launches `claude --settings <DIR>/settings.json`; the file wires `SessionStart`, `UserPromptSubmit`, `Stop` and `StopFailure` to `codeflow hook delegate-turn --run-id <ID> --state-dir <DIR>` |
+| Ready | `ready.json` | A `SessionStart` hook with source `startup` | `codeflow delegate wait --run-id <ID> --state-dir <DIR> --until ready --timeout-seconds <N>` |
+| Armed | `turns/<turn>/request.json`, holding the prompt's SHA-256 | `codeflow delegate arm --run-id <ID> --state-dir <DIR> --turn-id <TURN> --prompt-file <FILE>` | Pastes the same file into the session, then presses Enter |
+| Accepted | `turns/<turn>/accepted.json` | A `UserPromptSubmit` hook whose prompt matches the armed digest | `codeflow delegate wait ... --until accepted --turn-id <TURN> --timeout-seconds <N>` |
+| Completed | `turns/<turn>/result.json` with status `completed` and the last assistant message | A `Stop` hook | `codeflow delegate wait ... --until terminal --turn-id <TURN> --timeout-seconds <N>` exits 0 and prints the record |
+| Failed | `turns/<turn>/result.json` with status `failed` and the bounded error | A `StopFailure` hook | The terminal wait exits 10 and prints the record |
+| Poisoned | `poison.json` | A restarted, resumed or compacted session, an event that matches no accepted turn, or a wait interrupted after acceptance | Any wait exits 11. Start again with a new run id in a fresh directory |
+| Timed out or interrupted | no new record | The wait deadline passes, or the waiter gets Ctrl+C | The wait exits 124 on timeout and 130 on interrupt |
+| Hook rejected | no new record | `codeflow hook delegate-turn` cannot accept an event | The hook exits 2 to block a rejected prompt or unreadable input, and 1 on other failures |
+
+### Consult or delegate once
+
+Ask your agent for a consult or a delegate in plain words, and it runs the
+matching skill for the host you are in.
+
+1. Use a standard or full tier project. The minimal tier does not install
+   these skills.
+2. Check the prerequisites with `codeflow doctor --check delegates`, and the
+   lifecycle itself with `codeflow doctor --check delegate-roundtrip`.
+3. Log in yourself with `codex login`, and log in to `claude` in its own
+   session. CodeFlow never automates login.
+4. In Claude Code, install the plugin once with
+   `/plugin marketplace add openai/codex-plugin-cc`, then
+   `/plugin install codex@openai-codex`, `/reload-plugins` and `/codex:setup`.
+5. For an opinion, run `/cf-consult` and name the paths, diff or question and
+   the criteria to judge by.
+6. For work, start a worktree on a feature branch first, then run
+   `/cf-delegate` scoped to it. From Claude Code this uses `/codex:rescue`.
+7. Read your agent's synthesis. It lists where it agrees and disagrees with
+   the peer, each point backed by its own evidence.
+
+A consult worked when the reply ends in `VERDICT: approved` or
+`VERDICT: changes_requested` with a Codex thread id or lifecycle records behind
+it and the worktree diff unchanged, and a delegate worked when its commits sit
+on the feature branch and pass the same gates.
+
+### Host a peer in Herdr
+
+When your agent runs inside Herdr, it hosts the peer in a new named tab beside
+yours.
+
+1. Start your agent inside Herdr and check that `echo $HERDR_ENV` prints `1`.
+   Outside Herdr, the agent uses tmux and reports that path as degraded.
+2. Ask for the consult or delegate. The agent first lists what exists with
+   `herdr workspace list`, `herdr tab list --workspace "$HERDR_WORKSPACE_ID"`
+   and `herdr agent list`.
+3. It creates the tab without taking focus with
+   `herdr tab create --workspace "$HERDR_WORKSPACE_ID" --label "cf/<repo>/<work>/<kind>/<nn>" --cwd "$PWD" --no-focus`.
+4. It starts the peer with
+   `herdr agent start "cf-<repo>-<work>-<k><nn>" --kind <claude|codex|grok> --pane <pane-id> -- <native-args>`.
+5. For a Claude peer, it arms the prompt, sends it with
+   `herdr pane send-text <pane-id> "$(cat <prompt-file>)"`, pauses briefly,
+   presses Enter with `herdr pane send-keys <pane-id> Enter`, then waits with
+   `codeflow delegate wait ... --until terminal`.
+6. A follow-up on the same work reuses the same tab. When the work is done,
+   the agent closes only the tab it created.
+
+It worked when a `cf/` tab appears beside yours with the peer running, your
+own pane keeps focus, and the agent reports the tab label, agent name and the
+peer's native thread or session id.
