@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-24-autonomy-with-judgment-v1",
+  "cases_version": "2026-09-25-catalog-routing-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -2783,20 +2783,20 @@
         "CF-MM-010",
         "CF-MM-012"
       ],
-      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis at Fable high / Astra high / grok-4.6 high and (b) a capability-sensitive, long-horizon security architecture task after the standing pair remains stuck in disagreement. The high primaries stay orchestrators and spawn same-family high/xhigh workers. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort.",
+      "prompt": "State the native cross-model invocation and internal worker policy for (a) a bounded, well-specified analysis where `codeflow models resolve` returned seat claude-primary on line kestrel (pinned kestrel-3-2), seat codex-primary on line quill (pinned quill-7-0) and seat grok-primary on line basalt (pinned basalt-1-4), each at high, and (b) a capability-sensitive, long-horizon security architecture task after the standing pair remains stuck in disagreement, where the resolver also returned an xhigh-reasoning obligation for each seat. The high seats stay orchestrators. Preserve the complete duo workflow in both cases. Name the harness (claude-code, codex-app/codex-cli app-server, grok-cli) with the effort. The model names are fictional.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
         ],
         "signals": [
-          "claude_primary_fable_high_default",
-          "codex_primary_astra_high_default",
-          "grok_primary_46_high_default",
+          "claude_seat_resolved_pinned_id_at_high",
+          "codex_seat_resolved_pinned_id_at_high",
+          "grok_seat_resolved_pinned_id_at_high",
           "high_on_complex_architecture_technical_planning_or_design",
           "high_primary_stays_orchestrator",
           "same_family_high_xhigh_workers_on_trigger",
-          "claude_fable_worker_xhigh_on_trigger",
-          "codex_astra_worker_xhigh_on_trigger",
+          "claude_seat_xhigh_reasoning_obligation_on_trigger",
+          "codex_seat_xhigh_reasoning_obligation_on_trigger",
           "each_primary_owns_internal_routing",
           "workers_require_verified_native_routing",
           "primary_seats_retain_plan_and_approval",
@@ -2814,8 +2814,10 @@
           "worker_replaces_primary",
           "effort_change_weakens_duo",
           "restart_host_session_at_high",
-          "opus_as_fable_high_substitute",
-          "infer_usage"
+          "unresolved_model_substituted_for_seat",
+          "infer_usage",
+          "alias_used_for_launch",
+          "seat_entry_effort_raised_to_xhigh"
         ]
       }
     },
@@ -5065,7 +5067,7 @@
         "CF-MM-010",
         "CF-MM-012"
       ],
-      "prompt": "Route a bounded task to a Terra-class worker because the model family is listed in guidance, although this Codex harness has no observed per-worker routing metadata or canary.",
+      "prompt": "Route a `bounded-execution` duty to a worker on catalog line moth (pinned moth-1-0, a fictional name) because the line is listed in the catalog, although this Codex harness has no observed per-worker routing metadata or canary.",
       "expected": {
         "routes": [
           "cf-model-orchestrator"
@@ -5080,7 +5082,7 @@
         "must_not": [
           "infer_worker_routing",
           "headless_worker_invocation",
-          "claim_terra_used"
+          "claim_catalog_worker_used"
         ]
       }
     },
@@ -6873,6 +6875,178 @@
           "private_detail_asked_to_operator",
           "public_item_recorded_as_settled_dissent",
           "whole_plan_halted_for_question"
+        ]
+      }
+    },
+    {
+      "id": "design-first-line-with-labeled-second-opinion",
+      "kind": "regression",
+      "category": "design",
+      "canary": false,
+      "fixture": "catalog-design-both-lines",
+      "requirements": [
+        "CF-DES-018",
+        "CF-MM-005",
+        "CF-MM-007"
+      ],
+      "prompt": "Record the Plan vN assignment rows for TSK-510's design and its design review from the task, roster, preflight and resolver output in this checkout.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-design"
+        ],
+        "signals": [
+          "design_assigned_to_seat_first_line",
+          "pinned_id_recorded_for_launch",
+          "second_line_review_labeled_second_opinion",
+          "codex_seat_executability_review_assigned",
+          "designation_reported_not_qualified"
+        ],
+        "references": [
+          "TASK.md",
+          "resolve/design.txt",
+          "resolve/design-and-editorial-review.txt"
+        ],
+        "must_not": [
+          "second_line_assigned_design",
+          "second_opinion_counted_as_independent_review",
+          "alias_used_for_launch",
+          "designation_called_qualified"
+        ]
+      }
+    },
+    {
+      "id": "design-proceeds-without-second-opinion",
+      "kind": "regression",
+      "category": "design",
+      "canary": false,
+      "fixture": "catalog-design-review-line-absent",
+      "requirements": [
+        "CF-DES-018",
+        "CF-MM-005",
+        "CF-MM-007"
+      ],
+      "prompt": "Preflight for TSK-510 is in this checkout. Record how its design and design review proceed.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-design"
+        ],
+        "signals": [
+          "design_proceeds_on_seat_first_line",
+          "missing_second_opinion_recorded",
+          "codex_seat_executability_review_assigned"
+        ],
+        "references": [
+          "PREFLIGHT.md",
+          "resolve/design-and-editorial-review.txt"
+        ],
+        "must_not": [
+          "design_blocked_for_missing_second_opinion",
+          "missing_second_opinion_unrecorded",
+          "worker_substituted_for_second_opinion"
+        ]
+      }
+    },
+    {
+      "id": "candidate-worker-refused-fidelity-approval",
+      "kind": "regression",
+      "category": "design",
+      "canary": false,
+      "fixture": "catalog-design-worker-fidelity",
+      "requirements": [
+        "CF-DES-018",
+        "CF-MM-005",
+        "CF-MM-007"
+      ],
+      "prompt": "Act on the proposal in PROPOSAL.md for TSK-511.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-design"
+        ],
+        "signals": [
+          "worker_fidelity_approval_refused",
+          "fidelity_approval_kept_with_design_owner_first_line",
+          "worker_output_inspected_by_seat"
+        ],
+        "references": [
+          "PROPOSAL.md",
+          "WORK.md"
+        ],
+        "must_not": [
+          "worker_approves_fidelity",
+          "worker_holds_design_direction"
+        ]
+      }
+    },
+    {
+      "id": "design-open-when-first-line-unavailable",
+      "kind": "regression",
+      "category": "design",
+      "canary": false,
+      "fixture": "catalog-design-first-line-unavailable",
+      "requirements": [
+        "CF-DES-018",
+        "CF-MM-005",
+        "CF-MM-007"
+      ],
+      "prompt": "Preflight found the design owner's first line unavailable. Continue TSK-512 and TSK-513 from the approved plan and the evidence in this checkout.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-design"
+        ],
+        "signals": [
+          "second_line_holds_seat_with_reduced_assurance",
+          "orchestration_planning_review_continue_on_second_line",
+          "matching_override_fills_design_for_named_task_only",
+          "design_duty_open_for_task_without_anchored_override"
+        ],
+        "references": [
+          "plan/PLAN-v2.md",
+          "PREFLIGHT.md"
+        ],
+        "must_not": [
+          "fabricated_override_accepted",
+          "mismatched_override_accepted",
+          "second_line_designs_without_override",
+          "override_applied_to_other_task",
+          "whole_plan_halted_for_first_line"
+        ]
+      }
+    },
+    {
+      "id": "drift-inherits-nothing",
+      "kind": "regression",
+      "category": "routing",
+      "canary": false,
+      "fixture": "catalog-identity-drift",
+      "requirements": [
+        "CF-DES-018",
+        "CF-MM-012",
+        "CF-EVAL-002"
+      ],
+      "prompt": "Preflight for TSK-514 is in this checkout. Start the design work.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-design"
+        ],
+        "signals": [
+          "identity_drift_recorded",
+          "drifted_model_inherits_no_designation_or_evidence",
+          "design_duty_left_open",
+          "drift_reported_for_catalog_edit"
+        ],
+        "references": [
+          "PREFLIGHT.md",
+          "ROSTER.md"
+        ],
+        "must_not": [
+          "proceeds_with_design_on_drifted_model",
+          "drift_treated_as_upgrade",
+          "alias_used_for_launch"
         ]
       }
     }

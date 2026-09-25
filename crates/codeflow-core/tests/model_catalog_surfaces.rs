@@ -304,6 +304,16 @@ fn repo_root() -> std::path::PathBuf {
 }
 
 #[test]
+fn real_tree_scans_find_no_catalog_selector_or_stray_retired_selector() {
+    let root = repo_root();
+    let catalog = codeflow_core::model_catalog::load_catalog(&root).unwrap();
+    let instructions = scan::instruction_selectors(&root, &catalog).unwrap();
+    assert!(instructions.is_empty(), "{instructions:#?}");
+    let retired = scan::retired_selectors(&root, &catalog).unwrap();
+    assert!(retired.is_empty(), "{retired:#?}");
+}
+
+#[test]
 fn real_catalog_scans_fail_on_a_skill_selector_and_a_stray_retired_selector() {
     let catalog = codeflow_core::model_catalog::load_catalog(&repo_root()).unwrap();
     let versions = || catalog.lines.iter().flat_map(|line| &line.versions);

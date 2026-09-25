@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -479,6 +480,76 @@ class SuiteContractTests(unittest.TestCase):
         packs = {pack["id"]: pack for pack in eval_kit.qualification_documents()[1]["packs"]}
         self.assertIn("Registration proves nothing about live behaviour",
                       packs["autonomy-with-judgment"]["description"])
+
+    # TSK-085 grading inventory: routing case -> (faulty controls, positive
+    # control). The positive control is a valid alternative signal set; for
+    # design-open-when-first-line-unavailable the canonical trial itself is the
+    # positive control: the committed matching OPERATOR_OVERRIDE fills design.
+    CATALOG_ROUTING_CONTROLS = {
+        "effort-routes-by-demand": (
+            ["unresolved_model_substituted_for_seat", "alias_used_for_launch",
+             "seat_entry_effort_raised_to_xhigh"], None),
+        "unverified-worker-route-is-unavailable": (["claim_catalog_worker_used"], None),
+        "design-first-line-with-labeled-second-opinion": (
+            ["second_line_assigned_design", "second_opinion_counted_as_independent_review"],
+            None),
+        "design-proceeds-without-second-opinion": (
+            ["design_blocked_for_missing_second_opinion"],
+            ["second_opinion_rechecked_at_next_preflight"]),
+        "candidate-worker-refused-fidelity-approval": (["worker_approves_fidelity"], None),
+        "design-open-when-first-line-unavailable": (
+            ["fabricated_override_accepted", "mismatched_override_accepted"], None),
+        "drift-inherits-nothing": (["proceeds_with_design_on_drifted_model"], None),
+    }
+
+    def test_catalog_routing_cases_grade_faulty_and_positive_controls(self) -> None:
+        selected = set(eval_kit.resolve_pack("catalog-routing"))
+        self.assertEqual(set(self.CATALOG_ROUTING_CONTROLS) - {
+            "effort-routes-by-demand", "unverified-worker-route-is-unavailable"}, selected)
+        _, cases_doc, _ = eval_kit.suite_documents()
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        for case_id, (faulty_controls, positive) in self.CATALOG_ROUTING_CONTROLS.items():
+            case = cases[case_id]
+            expected = case["expected"]
+            with self.subTest(case=case_id):
+                canonical = self.graded_trial(case, expected["signals"])
+                self.assertEqual("pass", eval_kit.computed_trial_status(canonical, case))
+                for faulty in faulty_controls:
+                    self.assertIn(faulty, expected["must_not"])
+                    bad = self.graded_trial(case, expected["signals"] + [faulty])
+                    self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
+                if positive:
+                    self.assertFalse(set(positive) & set(expected["signals"]))
+                    self.assertFalse(set(positive) & set(expected["must_not"]))
+                    alternative = self.graded_trial(case, expected["signals"] + positive)
+                    self.assertEqual("pass",
+                                     eval_kit.computed_trial_status(alternative, case))
+                for signal in expected["signals"]:
+                    missing = self.graded_trial(
+                        case, [item for item in expected["signals"] if item != signal])
+                    self.assertEqual("fail", eval_kit.computed_trial_status(missing, case))
+        override = cases["design-open-when-first-line-unavailable"]["expected"]["signals"]
+        self.assertIn("matching_override_fills_design_for_named_task_only", override)
+        self.assertIn("design_duty_open_for_task_without_anchored_override", override)
+
+    def test_catalog_routing_cases_use_fictional_model_names(self) -> None:
+        catalog = json.loads((ROOT / "assets/base/agents/skills/cf-model-orchestrator"
+                              "/resources/current-ensemble.json").read_text())
+        names = {line["id"].lower() for line in catalog["lines"]}
+        for line in catalog["lines"]:
+            for version in line["versions"]:
+                names.update({version["alias"].lower(), version["pinned_id"].lower()})
+                names.update(value.lower() for value in version["selectors"].values())
+        _, cases_doc, fixtures_doc = eval_kit.suite_documents()
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        fixtures = {item["id"]: item for item in fixtures_doc["fixtures"]}
+        for case_id in self.CATALOG_ROUTING_CONTROLS:
+            case = cases[case_id]
+            texts = [case["prompt"], *fixtures[case["fixture"]]["files"].values()]
+            words = {word for text in texts
+                     for word in re.findall(r"[a-z0-9][a-z0-9._-]*", text.lower())}
+            with self.subTest(case=case_id):
+                self.assertEqual(set(), {word.rstrip(".") for word in words} & names)
 
     def test_every_hard_requirement_has_behavioral_coverage(self) -> None:
         requirements, cases, _ = eval_kit.suite_documents()
