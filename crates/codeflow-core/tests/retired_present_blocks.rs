@@ -1,8 +1,8 @@
 //! The present `diagram` block and its Mermaid renderer were removed
 //! (TSK-087). No skill tree, evaluation kit resource or recorded model
 //! artifact may teach either again: a present block typed `diagram` fails,
-//! and every line that names Mermaid must be one this file lists, where the
-//! line says Mermaid is unsupported or uses it as a faulty control.
+//! and every mention of Mermaid must be one this file lists, where the text
+//! says Mermaid is unsupported or forbidden, or uses it as a faulty control.
 
 use std::path::{Path, PathBuf};
 
@@ -23,10 +23,12 @@ const ROOTS: [(&str, &str); 4] = [
     ("evals/model-artifacts", "evals/model-artifacts/"),
 ];
 
-/// Every permitted line that names Mermaid, by path relative to its root.
-/// Each says Mermaid is unsupported; a faulty control that names it belongs
-/// here too, with the case that fails on it.
-const ALLOWED: [(&str, &str); 12] = [
+/// Every permitted mention of Mermaid, by path relative to its root: a whole
+/// line or the clause of a longer line that carries the mention. Each says
+/// Mermaid is unsupported or forbidden; a faulty control that names it
+/// belongs here too, with the case that fails on it. A line passes only when
+/// no mention is left once its listed clauses are removed.
+const ALLOWED: [(&str, &str); 20] = [
     (
         "cf-present/references/document-authoring.md",
         "The `diagram` block was removed with its Mermaid renderer, and Mermaid is",
@@ -61,19 +63,45 @@ const ALLOWED: [(&str, &str); 12] = [
     ),
     (
         "cf-present/resources/explanation-method.md",
-        "file and a Mermaid fence are not README figures: the portal rejects SVG",
+        "Mermaid fence are not README figures: the portal rejects SVG media and",
     ),
     (
         "cf-present/resources/explanation-method.md",
-        "media and shows a Mermaid fence as code, and GitHub shows a `cf-stage`",
+        "shows a Mermaid fence as code, and GitHub shows a `cf-stage` fence as code.",
     ),
     (
         "cf-docs-portal/resources/explanation-method.md",
-        "file and a Mermaid fence are not README figures: the portal rejects SVG",
+        "Mermaid fence are not README figures: the portal rejects SVG media and",
     ),
     (
         "cf-docs-portal/resources/explanation-method.md",
-        "media and shows a Mermaid fence as code, and GitHub shows a `cf-stage`",
+        "shows a Mermaid fence as code, and GitHub shows a `cf-stage` fence as code.",
+    ),
+    (
+        "cf-method/references/workflow-lifecycle.md",
+        "- Never use Mermaid for a reply figure.",
+    ),
+    ("cf-ship/references/pr-evidence.md", "Mermaid is never used."),
+    (
+        "cf-evaluate-model/resources/requirements.json",
+        "and never a Mermaid block;",
+    ),
+    (
+        "cf-evaluate-model/resources/requirements.json",
+        "Never use Mermaid for a reply figure",
+    ),
+    (
+        "cf-evaluate-model/resources/fixtures.json",
+        "mermaid_figure_in_reply: the reply carries a Mermaid block as its figure, on any surface.",
+    ),
+    ("cf-evaluate-model/resources/cases.json", "\"mermaid_figure_in_reply\""),
+    (
+        "evals/model-artifacts/test_eval_kit.py",
+        "a Mermaid block fails on any surface.",
+    ),
+    (
+        "evals/model-artifacts/test_eval_kit.py",
+        "\"mermaid_figure_in_reply\"",
     ),
 ];
 
@@ -95,10 +123,13 @@ fn violations(relative: &str, text: &str, diagram: &Regex) -> Vec<String> {
             continue;
         }
         let trimmed = line.trim();
-        if !ALLOWED
+        let rest = ALLOWED
             .iter()
-            .any(|(path, allowed)| *path == relative && *allowed == trimmed)
-        {
+            .filter(|(path, _)| *path == relative)
+            .fold(trimmed.to_owned(), |rest, (_, allowed)| {
+                rest.replace(allowed, "")
+            });
+        if rest.to_ascii_lowercase().contains("mermaid") {
             found.push(format!(
                 "{relative}:{}: names Mermaid outside the allowed list: {trimmed}",
                 number + 1
@@ -150,7 +181,7 @@ fn no_skill_or_evaluation_resource_teaches_the_removed_diagram_block() {
             );
             for (allowed_path, line) in ALLOWED {
                 if allowed_path == relative
-                    && text.lines().any(|candidate| candidate.trim() == line)
+                    && text.lines().any(|candidate| candidate.contains(line))
                 {
                     allowed_seen.insert((allowed_path, line));
                 }
@@ -199,6 +230,11 @@ fn the_guard_fails_a_diagram_block_and_an_unlisted_mermaid_line() {
         violations("cf-present/SKILL.md", &format!("{line}\n"), &diagram).len(),
         1
     );
+    // A listed clause covers only itself: a second mention on its line fails.
+    let (path, clause) = ALLOWED[13];
+    assert!(violations(path, &format!("  {clause}\n"), &diagram).is_empty());
+    let extended = format!("{clause} Otherwise draw it as a Mermaid flowchart.\n");
+    assert_eq!(violations(path, &extended, &diagram).len(), 1);
     // Figure blocks and the diagram-line token are not the removed block.
     let figure = "{\"type\": \"figure\", \"id\": \"flow\"} --cf-diagram-line\n";
     assert!(violations("cf-present/assets/x.json", figure, &diagram).is_empty());
