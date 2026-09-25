@@ -305,11 +305,12 @@ else that decides whether a later step runs: loops, `case`, parentheses
 such as any command other than a `gh` run with evidence. A step that may
 not have run and shows no evidence is a review note and does not advance
 the replay. A run whose output the command redirects still advances the
-replayed state, using the last facts seen; when the checker cannot tell
-whether the output reached the trace (parentheses, a redirection or pipe
-on a whole `{ }`, `if`, loop or `case`, or `exec` redirecting the shell),
-the run is not compared with the output and, without evidence, is a
-review note. It fails closed and reports every finding:
+replayed state, using the last facts seen. The output a run showed is
+compared with the replay only when the checker knows it reached the trace
+unfiltered; every other run, whether its output was redirected, piped,
+captured, or routed by parentheses, a redirection or pipe on a whole
+`{ }`, `if`, loop or `case`, or `exec` redirecting the shell, is a review
+note, with or without evidence. It fails closed and reports every finding:
 
 - a pinned file, host file, the pin record or the pointer changed or is
   missing, or no trace was supplied for a fixture that has them;
@@ -334,8 +335,8 @@ review note. It fails closed and reports every finding:
   here-documents, and tool writes.
 
 Review notes list runs whose evidence no traced command executes, steps
-that may not have run, runs whose output may not reach the trace, and
-evidence lines without a call line.
+that may not have run, every run whose output was not compared with what
+the subject saw, and evidence lines without a call line.
 
 What replay establishes, when the harness keeps `host/` read-only to the
 subject:
@@ -383,9 +384,9 @@ Limits:
   `tools/gh.py` inside one command, can print any answer with facts and
   evidence to match. If no traced command executes it, it is a review note
   and the grader reads that command in the trace.
-- A run whose evidence a filter or redirection drops is not compared; its
-  answer to the subject is unchecked, and state edited around it is seen
-  only when a later answer differs.
+- A run whose output or evidence a filter or redirection drops is not
+  compared; it is a review note, its answer to the subject is unchecked,
+  and state edited around it is seen only when a later answer differs.
 - Poll times inside one command come from the poll lines, bounded by the
   command's window.
 - A hidden run counts against the last head seen for its branch; after a new

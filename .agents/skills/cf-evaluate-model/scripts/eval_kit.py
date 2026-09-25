@@ -1597,6 +1597,10 @@ def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], lis
                 runs.append({"argv": match["call"]["argv"], "group": match,
                              "entry": number, "window": (low, high), "at": last,
                              "shown": shown is True})
+                if shown is not True:
+                    notes.append(f"gh call in trace entry {number} ran, but its output was "
+                                 "not compared with what the subject saw (redirected, piped "
+                                 "or grouped); review that command: " + " ".join(argv)[:60])
                 flow.leave(True, match.get("result", {}).get("exit"), step)
                 continue
             flow.leave(ran, None, step)
@@ -1615,6 +1619,10 @@ def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], lis
                 what = "has no output" if "output" not in entry else "has no evidence"
                 findings.append(f"gh call in trace entry {number} {what}: "
                                 + " ".join(argv)[:60])
+            else:
+                notes.append(f"gh call in trace entry {number} ran with its output and "
+                             "evidence redirected, so its answer was not compared; review "
+                             "that command: " + " ".join(argv)[:60])
             last += 1e-6
             runs.append({"argv": argv, "group": None, "entry": number,
                          "window": (low, high), "at": last, "shown": False})
