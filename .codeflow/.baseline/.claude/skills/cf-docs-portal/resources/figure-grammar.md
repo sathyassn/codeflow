@@ -258,6 +258,10 @@ family the relationship names: lanes and bars for flow, a grid for coverage,
 bars to length for extent, ranked nodes and arrows for graph. One idea, every
 mark explained in a legend line, one caption line, no box of text.
 
+Each specimen in `figure-grammar-specimens.md` ends with its chat form, drawn
+on the same facts as its SVG. A README figure is this chat form; the medium
+rule is `explanation-method.md` stage 3.
+
 ## 8. Self-check before publishing a figure
 
 - Which family, and which relationship does the reader see first?

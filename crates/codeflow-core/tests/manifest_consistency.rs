@@ -1735,6 +1735,82 @@ fn presentation_skills_load_the_explanation_method_first() {
     );
 }
 
+/// Every specimen family carries a chat form (TSK-072): a fenced text block
+/// with one legend line and one caption line, every line printable ASCII and
+/// under 78 columns, so it renders unwrapped in an 80-column terminal.
+#[test]
+fn figure_grammar_specimens_carry_a_chat_form_per_family() {
+    let skills = repo_root().join("assets/base/agents/skills");
+    let specimens =
+        std::fs::read_to_string(skills.join("cf-present/resources/figure-grammar-specimens.md"))
+            .expect("specimens are readable");
+    let sections: Vec<&str> = specimens.split("\n## ").skip(1).collect();
+    assert_eq!(
+        sections.len(),
+        FIGURE_FAMILIES.len(),
+        "one section per family"
+    );
+    let mut problems = Vec::new();
+    for (section, family) in sections.iter().zip(FIGURE_FAMILIES) {
+        let Some(chat) = section.split("\n### Chat form\n").nth(1) else {
+            problems.push(format!("{family}: no Chat form section"));
+            continue;
+        };
+        if section.matches("\n### Chat form\n").count() != 1 {
+            problems.push(format!("{family}: more than one Chat form section"));
+        }
+        let Some(block) = chat
+            .split("```text\n")
+            .nth(1)
+            .and_then(|rest| rest.split("\n```").next())
+        else {
+            problems.push(format!(
+                "{family}: the chat form is not a fenced text block"
+            ));
+            continue;
+        };
+        let lines: Vec<&str> = block.lines().collect();
+        let legends = lines
+            .iter()
+            .filter(|line| line.starts_with("Legend: "))
+            .count();
+        let captions = lines
+            .iter()
+            .filter(|line| line.starts_with("Caption: "))
+            .count();
+        if legends != 1 || captions != 1 {
+            problems.push(format!(
+                "{family}: {legends} legend lines and {captions} caption lines, want one each"
+            ));
+        }
+        if lines
+            .last()
+            .is_none_or(|line| !line.starts_with("Caption: "))
+        {
+            problems.push(format!("{family}: the caption is not the last line"));
+        }
+        for line in &lines {
+            if line.chars().count() >= 78 {
+                problems.push(format!(
+                    "{family}: {} columns: {line}",
+                    line.chars().count()
+                ));
+            }
+            if !line.chars().all(|c| (' '..='~').contains(&c)) {
+                problems.push(format!("{family}: not printable ASCII: {line}"));
+            }
+            if line.contains('\u{2013}') || line.contains('\u{2014}') {
+                problems.push(format!("{family}: en or em dash: {line}"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "chat forms are incomplete:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
 /// Presentation JSON contracts are public consumer inputs and exported state.
 /// Pin the authored copies to the deployed and three-way-merge baseline files,
 /// and reject an accidentally open or malformed root contract.

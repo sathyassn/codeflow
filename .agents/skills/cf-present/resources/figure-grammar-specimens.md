@@ -12,6 +12,10 @@ one-sentence caption and a table twin. The declaration beside each specimen
 states the narrow recomposition. Labels are 14 units, so at the 646 px break
 they render at 12.5 px. Facts are this repository's own.
 
+Each specimen ends with its chat form: the same facts drawn as a fenced
+ASCII figure for chat and a README, with one legend line and one caption
+line, every line printable ASCII and under 78 columns.
+
 The YAML beside each specimen sketches its intent; the module loads only the
 JSON declarations of `figure-grammar.md` section 6, and the complete ones for
 these specimens are the portal starter's `tests/fixtures/figures/*.json`. The
@@ -69,6 +73,19 @@ figure:
 Narrow: rotate; the four columns become four rows read downward, path labels
 move to the right of each node, the stop bars turn horizontal.
 
+### Chat form
+
+```text
+ Branch          Review             Gate               Land
+ Task branch     Pull request       Required checks    Human merge
+ o===============o==================o=========|========(H)
+                                                        ^
+ o===============<>=================o - - - - | - - - - +
+ Task in epic    codeflow integrate Integration branch
+Legend: = travelled  - - not yet  o agent  <> agent merge  (H) human  | stop
+Caption: Both landing paths end at a human merge behind green checks.
+```
+
 ## 2. structure
 
 ```yaml
@@ -122,6 +139,17 @@ figure:
 Narrow: stack; the three regions sit one under another with the copy arrows
 turned downward, and the parity line runs down the left edge.
 
+### Chat form
+
+```text
+ owner: assets/base    live: repository root   baseline: .codeflow/.baseline/
+ [# skill source #]-+->[ .claude/skills ]---->[ .claude/skills ]
+                    +->[ .agents/skills ]---->[ .agents/skills ]
+ <.......... the parity test compares every copy with the source ..........>
+Legend: [# #] owner, edited  [ ] managed copy  -> copies to  <...> compares
+Caption: Edit only the source under assets/base; any drift fails the build.
+```
+
 ## 3. layering
 
 ```yaml
@@ -171,6 +199,19 @@ figure:
 
 Narrow: rotate; planes become columns with short heads (Hooks, Guard, CI,
 Remote) expanded in the caption, moments become rows, the bars stand vertical.
+
+### Chat form
+
+```text
+              edit    commit  push    PR      merge
+ Git hooks           [*--------]
+ git-guard   [----------------*]
+ CI                          [--------*]
+ Remote                              [########*]|
+ One change   o=======o=======o=======o=======o
+Legend: [--] local plane  [##]| remote plane  * acts here  o==o one change
+Caption: Local planes give fast feedback, and only Remote is a boundary.
+```
 
 ## 4. sequence
 
@@ -229,6 +270,23 @@ figure:
 Narrow: stack; one lifeline, calls and answers become labelled rows, the
 participant is named in each row's label.
 
+### Chat form
+
+```text
+ agent                     git                  codeflow
+   |-- git worktree list -->|                       |
+   |<== paths, branches ====|                       |
+  (H) identity and intent   |                       |
+   |-- git fetch origin --->|                       |
+  (H) currency              |                       |
+   |-- codeflow work start TSK-NNN ---------------->|
+   |<== anchored ===================================|
+   |                        |                      X| or refused
+   |  first edit
+Legend: ---> call  <=== answer  (H) decision the agent makes  X| refusal
+Caption: The agent edits nothing until codeflow answers anchored.
+```
+
 ## 5. state
 
 ```yaml
@@ -283,6 +341,17 @@ figure:
 Narrow: stack; states run top to bottom, checks red sits beside PR open, the
 return arc runs up the left margin.
 
+### Chat form
+
+```text
+ [editing]->[committed]->[pushed]->[PR open]->[checks green]->[merged]
+     ^                                 |                          :
+     |                                 v                          x
+     +<==== fix the cause ========[checks red] - - bypass - - - - +
+Legend: [ ] state  -> transition  <== only route out of red  - x forbidden
+Caption: A red check sends the change back to editing, never on to merged.
+```
+
 ## 6. coverage
 
 ```yaml
@@ -335,6 +404,19 @@ figure:
 
 Narrow: list; the grid becomes one row per rule naming its planes with the
 same five cell marks inline, so no cell shrinks below 14 px.
+
+### Chat form
+
+```text
+                            Hooks  Guard   CI   Remote
+ Secret scan                  #      #     #      #
+ Protected branch push        #      #     .      #
+ No AI attribution            #      #     #      .
+ Breaking change footer       :      /     #      .
+ Ticket reference             #      .     :      X
+Legend: # covered  : partial  / not run  . not applicable  X not claimed
+Caption: Every rule has a plane; the crossed cell is a claim no plane makes.
+```
 
 ## 7. extent
 
@@ -391,6 +473,21 @@ figure:
 
 Narrow: stack; each part becomes its own ruler under its label with the same
 scale, and the two subject limit labels move under their bars.
+
+### Chat form
+
+```text
+ 2 characters per column  0    10   20   30   40   50   60   70
+ subject description      ################---------|
+ subject line             ################--------------------|
+ bullet 1                 #######################-------------|
+ bullet 2                 ##############################------|
+ bullet 3                 ###################-----------------|
+ bullet 4                 [xxxx]
+ BREAKING CHANGE footer   (........)
+Legend: # used  - room left  | limit  [xx] not allowed  (..) optional
+Caption: Every part fits its limit, and a fourth bullet is refused.
+```
 
 ## 8. derivation
 
@@ -454,6 +551,19 @@ figure:
 Narrow: stack; sources, adapter, page and manifest run top to bottom, the
 validator sits at the foot with its three comparison lines drawn upward.
 
+### Chat form
+
+```text
+ repository sources ===> adapter ===> generated page
+                            :
+                            + - - -> evidence manifest
+ (v) validator
+     checks the manifest <~> the repository bytes
+     checks the manifest <~> the output bytes
+Legend: ===> derives  - -> declares  <~> compares bytes  (v) check that fails
+Caption: Only the adapter derives; the validator proves it from bytes.
+```
+
 ## 9. graph
 
 ```yaml
@@ -496,3 +606,19 @@ figure:
 
 Narrow: list; each task becomes a row with its dependencies named and the
 critical path rows marked with the heavy accent rule, no arcs drawn.
+
+### Chat form
+
+```text
+ rank 1     2          3          4          5          6
+ (058)====>(070)====>(059)====>(060)====>(061)====>(064)
+                                          <-058      <-062
+                                          <-059      <-063
+                                                     <-071
+            (062)                         (063)
+            <-058                         <-058 <-059 <-060
+                                          (071)
+                                          <-059 <-060
+Legend: (n) task TSK-n  ==> critical path  <-n depends on task n
+Caption: The critical path runs 058, 070, 059, 060, 061 and 064.
+```
