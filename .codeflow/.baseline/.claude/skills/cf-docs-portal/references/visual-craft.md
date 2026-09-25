@@ -35,16 +35,22 @@ or refuse decorative chrome.
 ## 1. How a portal page thinks
 
 The reader lands in a **docs shell** (nav, crumbs, search), not a session
-review. One page taken through `resources/explanation-method.md`: the
-repository's git discipline page. Each panel names its reader, the question
-the reader leaves with, and the family that answers it.
+review. One page taken through `resources/explanation-method.md`: the git
+discipline page of a consuming repository whose remote protection has been
+verified active. Each panel names its reader, the question the reader leaves
+with, and the family that answers it.
 
 | Panel | Reader | Question | Family and what it draws |
 |---|---|---|---|
-| Concept | someone deciding whether CodeFlow's enforcement fits their repository | what does it enforce, and what does it leave to people | structure: the repository and its remote as two regions, the four planes placed in them, the human merge outside every plane |
+| Concept | someone deciding whether CodeFlow's enforcement fits their repository | what does it enforce, and what does it leave to people | structure: the repository and its remote as two regions, the four planes placed in them, the human merge as the one decision no plane makes |
 | Architecture | an engineer who will change or add a gate | which plane covers which moment of a change, and which one is the boundary | layering: hooks, git-guard, CI and remote protection over edit to merge |
 | Technical | a reviewer checking a rule | which plane enforces each rule, and is any rule unclaimed | coverage: rules against planes, one mark per cell, with the table twin beside it |
 | How-to: land a change | someone landing a change now | what do I do before the first edit, and what tells me it worked | sequence: worktree list, fetch, `codeflow work start`, first edit |
+
+Substitute your repository's verified enforcement state before drawing these
+panels. CodeFlow's own repository has remote protection unavailable (its
+`AGENTS.md`, project-specific instructions), so its page draws three planes and
+says in the captions that no remote plane is armed.
 
 The walk shows what the method's stages decide on a portal:
 

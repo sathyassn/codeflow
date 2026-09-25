@@ -127,7 +127,7 @@ not be promised in a source or a document.
 | Table | Markdown table | `table` |
 | Hierarchy | **unsupported** in the portal (use a structure figure) | `tree` |
 | Code, diff, evidence | fenced code | `code` / `diff` / `status` |
-| Media (a screenshot) | a committed PNG, JPEG, GIF or WebP image; an SVG file fails closed | `media` |
+| Media (a screenshot or photograph) | a committed PNG, JPEG, GIF or WebP image; an SVG file fails closed | `media` |
 | Callout | not a carrier | `callout`, sparingly |
 | Reading and framing | Markdown prose and lists | `narrative` / `bullets` / `comparison` / `decision` / `disclosure` / `feedback_prompt` |
 | Mermaid | **unsupported**: a Mermaid fence renders as plain code | `diagram` block, supporting form only, never the primary carrier |
@@ -141,14 +141,19 @@ family figure there.
 A screenshot shows a surface as it is and never a relationship; a
 relationship is drawn in a family.
 
-- Capture the Graphite skin in light at 2x, unless the subject is a skin or a
-  mode.
-- Crop to the surface plus one margin unit.
+- Capture CodeFlow utility chrome (a portal or present screen) in the
+  Graphite skin in light at 2x, unless the subject is a skin or a mode. A
+  screenshot of a consuming project's own product keeps that product's
+  default appearance.
+- Crop to the surface plus a margin of 16 CSS px on every side (32 image
+  pixels at 2x); this doctrine owns that margin.
 - Annotate only with numbered markers keyed in the caption; never draw arrows
   on it.
 - Write alt text that names the surface and its state.
-- Save chrome as PNG and photographs as WebP, inside the portal's media byte
-  budget.
+- Save chrome as PNG and photographs as WebP, inside the adapter's media
+  limits (`scripts/adapter.mjs` in the portal): 8 MiB per file
+  (`MAX_MEDIA_BYTES`), 64 MiB in all (`MAX_TOTAL_MEDIA_BYTES`), and the
+  dimension and pixel checks `content-contract.md` records.
 - Commit it beside its source, in a folder named for the page.
 - Refresh it when the surface changes.
 

@@ -1465,10 +1465,54 @@ fn presentation_skill_markdown(skill: &str) -> BTreeMap<String, String> {
         .collect()
 }
 
+/// The number of paragraphs in `text` that state the evidence board rule: a
+/// paragraph that names the board and carries a prohibition verb. A
+/// paraphrase that avoids both the board's names and these verbs is not
+/// detected; review owns that case.
+fn board_rule_paragraphs(text: &str) -> usize {
+    text.split("\n\n")
+        .map(|paragraph| normalized_whitespace(paragraph).to_lowercase())
+        .filter(|paragraph| {
+            ["evidence board", "tsk-014-w5", "the board"]
+                .iter()
+                .any(|name| paragraph.contains(name))
+                && ["clone", "re-render", "reproduce"]
+                    .iter()
+                    .any(|verb| paragraph.contains(verb))
+        })
+        .count()
+}
+
+/// The board-rule predicate ignores an unrelated clone command and counts a
+/// second statement of the rule, however it is worded among its verbs.
+#[test]
+fn board_rule_predicate_ignores_clone_commands_and_counts_duplicates() {
+    assert_eq!(
+        board_rule_paragraphs("Run `git clone <url>` to fetch the repository."),
+        0
+    );
+    assert_eq!(
+        board_rule_paragraphs("How the board may be used is the shared doctrine's section 0."),
+        0
+    );
+    let doctrine = std::fs::read_to_string(
+        repo_root()
+            .join("assets/base/agents/skills/cf-present/resources/utility-presentation-system.md"),
+    )
+    .expect("shared doctrine is readable");
+    assert_eq!(board_rule_paragraphs(&doctrine), 1);
+    let duplicated =
+        format!("{doctrine}\n\nThe evidence board is evidence only; never reproduce its cases.\n");
+    assert_eq!(board_rule_paragraphs(&duplicated), 2);
+}
+
 /// TSK-072 dedupe: in each presentation skill the altitude contract table
 /// header is stated once, in the figure grammar; the evidence board path
-/// appears only in the doctrine and the grammar; and the rule not to clone
-/// the board is stated once, in the doctrine's section 0.
+/// appears only in the doctrine and the grammar; and exactly one paragraph,
+/// in the doctrine, states the rule not to clone the board. The rule count
+/// uses `board_rule_paragraphs`, so it proves no second statement names the
+/// board with a prohibition verb; it does not prove the absence of every
+/// paraphrase.
 #[test]
 fn presentation_skills_state_the_altitude_table_and_board_rule_once() {
     let mut problems = Vec::new();
@@ -1505,7 +1549,7 @@ fn presentation_skills_state_the_altitude_table_and_board_rule_once() {
                 "{skill}: evidence board path in {board:?}, want {expected_board:?}"
             ));
         }
-        let board_rule = count_where(&|text| text.to_lowercase().matches("clone").count());
+        let board_rule = count_where(&board_rule_paragraphs);
         let expected_rule =
             BTreeMap::from([("resources/utility-presentation-system.md".to_string(), 1)]);
         if board_rule != expected_rule {
@@ -1547,7 +1591,7 @@ fn explanation_method_is_shared_and_carries_its_stages_readers_and_carriers() {
         "| Technical | an operator or a reviewer |",
         "| How-to section | someone doing the task now |",
         "| Reply | the operator who asked |",
-        "A pull request body takes the reply row's reader, and an ADR takes the Architecture row's",
+        "A pull request body takes the reply row's reader, an ADR takes the Architecture row's, and a README takes the Concept row's",
     ] {
         if !method.contains(reader) {
             missing.push(reader.to_string());
@@ -1571,10 +1615,21 @@ fn explanation_method_is_shared_and_carries_its_stages_readers_and_carriers() {
         "nothing asks a page or a document to record the stages",
         "The method never rewrites a source it must leave alone",
         "declared `illustrated` with a companion figure bound in configuration or `pass-through`",
+        "`governance` for governance text, and `no-relationship`, with the design primary's note",
+        "lists for the altitude; when it is not, the relationship belongs at another altitude, so go back to stage 2",
+        "with Architecture only when a second structural view is needed",
+        "The second draws the supported architecture of a consuming repository whose remote protection has been verified active",
+        "**Substitute:** draw your own repository's verified enforcement state",
+        "Derivation is the rival and loses here",
+        "rules 1 and 7 partial on the gate surfaces and covered in the review column",
+        "A figure also passes the grammar's self-check, `figure-grammar.md` section 8",
     ] {
         if !method.contains(&normalized_whitespace(marker)) {
             missing.push(marker.to_string());
         }
+    }
+    if method.contains("marked not claimed") {
+        missing.push("rules decided by review are not marked not claimed".to_string());
     }
     let decisions: Vec<&str> = method.split("### ").skip(1).collect();
     if decisions.len() != 3 {
@@ -1601,6 +1656,94 @@ fn explanation_method_is_shared_and_carries_its_stages_readers_and_carriers() {
         "explanation method lost:\n  {}",
         missing.join("\n  ")
     );
+}
+
+/// The rows of the first Markdown table under `heading` in `text`, each a
+/// list of trimmed cells, header and rule rows dropped.
+fn table_rows_under(text: &str, heading: &str) -> Vec<Vec<String>> {
+    let section = text
+        .split(heading)
+        .nth(1)
+        .unwrap_or_else(|| panic!("no section {heading}"));
+    let section = section.split("\n## ").next().unwrap_or(section);
+    section
+        .lines()
+        .skip_while(|line| !line.starts_with('|'))
+        .take_while(|line| line.starts_with('|'))
+        .skip(2)
+        .map(|line| {
+            line.trim_matches('|')
+                .split(" | ")
+                .map(|cell| cell.trim().to_string())
+                .collect()
+        })
+        .collect()
+}
+
+/// Codex R1 controls: stages 4 and 5 apply by carrier, so an answer with no
+/// figure and a table lookup draft only the universal parts and pass on the
+/// universal checks, while every figure check still holds for a figure.
+#[test]
+fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
+    let method = std::fs::read_to_string(
+        repo_root().join("assets/base/agents/skills/cf-present/resources/explanation-method.md"),
+    )
+    .expect("explanation method is readable");
+    let parts = table_rows_under(&method, "## 4. Draft");
+    let checks = table_rows_under(&method, "## 5. Check");
+    let named = |rows: &[Vec<String>], scope: &str| -> BTreeSet<String> {
+        rows.iter()
+            .filter(|row| row.get(1).map(String::as_str) == Some(scope))
+            .map(|row| row[0].clone())
+            .collect()
+    };
+    let universal_parts = named(&parts, "every answer");
+    let universal_checks = named(&checks, "every answer");
+    // An answer with no figure and a table lookup take only the universal rows.
+    for carrier in ["an answer with no figure", "a table lookup"] {
+        assert_eq!(
+            universal_parts,
+            BTreeSet::from(["Lead".to_string(), "Acting text".to_string()]),
+            "{carrier} must draft only the lead and the acting text"
+        );
+        assert_eq!(
+            universal_checks,
+            BTreeSet::from([
+                "Sources".to_string(),
+                "Copy".to_string(),
+                "Policy characters".to_string()
+            ]),
+            "{carrier} must pass on the universal checks alone"
+        );
+    }
+    assert_eq!(
+        named(&checks, "a figure"),
+        BTreeSet::from([
+            "Masked title".to_string(),
+            "Removal".to_string(),
+            "State channels".to_string()
+        ]),
+        "every figure check still holds for a figure"
+    );
+    for part in ["Declaration", "Twin"] {
+        assert!(
+            parts
+                .iter()
+                .any(|row| row[0] == part && row[1] == "a figure on the portal or in present"),
+            "{part} is drafted only for a figure on the portal or in present"
+        );
+    }
+    let normalized = normalized_whitespace(&method);
+    for marker in [
+        "An answer with no figure, a table lookup included, passes on the universal checks alone",
+        "a chat form: every pair of marks differs in glyph and each is keyed in the legend line",
+        "A chat form has no declaration file or twin",
+    ] {
+        assert!(
+            normalized.contains(marker),
+            "explanation method lost: {marker}"
+        );
+    }
 }
 
 /// Each presentation skill carries its only load list in `SKILL.md`; the
@@ -1735,6 +1878,66 @@ fn presentation_skills_load_the_explanation_method_first() {
     );
 }
 
+/// One measured count per family, read off the SVG specimen's facts: stop
+/// bars, copies, act markers, calls, states, covered cells, compares and
+/// critical edges.
+fn chat_form_measures(family: &str) -> &'static [(&'static str, usize)] {
+    match family {
+        "flow" => &[("|", 2), ("(H)", 1)],
+        "structure" => &[("[ .", 4)],
+        "layering" => &[("*", 4)],
+        "sequence" => &[("->|", 3), ("<==", 2)],
+        "state" => &[("[", 7)],
+        "coverage" => &[("#", 12), ("X", 1)],
+        "derivation" => &[("<~>", 2)],
+        "graph" => &[("==>", 5), ("<-", 11)],
+        _ => &[],
+    }
+}
+
+/// Measured counts in one chat form against its specimen's facts.
+fn chat_form_measure_problems(family: &str, lines: &[&str]) -> Vec<String> {
+    let mut problems = Vec::new();
+    let drawing: Vec<&str> = lines
+        .iter()
+        .copied()
+        .filter(|line| !line.starts_with("Legend: ") && !line.starts_with("Caption: "))
+        .collect();
+    let measured = |needle: &str| {
+        drawing
+            .iter()
+            .map(|line| line.matches(needle).count())
+            .sum::<usize>()
+    };
+    for (needle, want) in chat_form_measures(family) {
+        let got = measured(needle);
+        if got != *want {
+            problems.push(format!(
+                "{family}: {got} of {needle:?} drawn, the specimen has {want}"
+            ));
+        }
+    }
+    if family == "extent" {
+        // Two characters a column, odd lengths rounded up: the used runs of
+        // the subject, the subject line and the three bullets.
+        let runs: Vec<usize> = drawing
+            .iter()
+            .filter_map(|line| {
+                let start = line.find('#')?;
+                Some(line[start..].chars().take_while(|c| *c == '#').count())
+            })
+            .collect();
+        let want: Vec<usize> = [31, 31, 46, 60, 38]
+            .iter()
+            .map(|n: &usize| n.div_ceil(2))
+            .collect();
+        if runs != want {
+            problems.push(format!("extent: used runs {runs:?}, want {want:?}"));
+        }
+    }
+    problems
+}
+
 /// Every specimen family carries a chat form (TSK-072): a fenced text block
 /// with one legend line and one caption line, every line printable ASCII and
 /// under 78 columns, so it renders unwrapped in an 80-column terminal.
@@ -1803,6 +2006,7 @@ fn figure_grammar_specimens_carry_a_chat_form_per_family() {
                 problems.push(format!("{family}: en or em dash: {line}"));
             }
         }
+        problems.extend(chat_form_measure_problems(family, &lines));
     }
     assert!(
         problems.is_empty(),
@@ -1829,13 +2033,15 @@ fn presentation_doctrine_carries_screenshot_rules_figure_media_and_the_page_walk
         let doctrine = read(&format!("{skill}/resources/utility-presentation-system.md"));
         for rule in [
             "### Screenshots and raster images",
-            "| Media (a screenshot) |",
+            "| Media (a screenshot or photograph) |",
             "A screenshot shows a surface as it is and never a relationship",
-            "Capture the Graphite skin in light at 2x, unless the subject is a skin or a mode",
-            "Crop to the surface plus one margin unit",
+            "Capture CodeFlow utility chrome (a portal or present screen) in the Graphite skin in light at 2x, unless the subject is a skin or a mode",
+            "A screenshot of a consuming project's own product keeps that product's default appearance",
+            "Crop to the surface plus a margin of 16 CSS px on every side (32 image pixels at 2x)",
             "Annotate only with numbered markers keyed in the caption; never draw arrows",
             "Write alt text that names the surface and its state",
-            "Save chrome as PNG and photographs as WebP, inside the portal's media byte budget",
+            "Save chrome as PNG and photographs as WebP, inside the adapter's media limits",
+            "8 MiB per file (`MAX_MEDIA_BYTES`), 64 MiB in all (`MAX_TOTAL_MEDIA_BYTES`)",
             "Commit it beside its source, in a folder named for the page",
             "Refresh it when the surface changes",
             "An imported raster diagram is never a carrier: redraw it in a family",
@@ -1862,6 +2068,9 @@ fn presentation_doctrine_carries_screenshot_rules_figure_media_and_the_page_walk
         "| Architecture | an engineer",
         "| Technical | a reviewer",
         "| How-to: land a change | someone landing a change now",
+        "the human merge as the one decision no plane makes",
+        "the git discipline page of a consuming repository whose remote protection has been verified active",
+        "Substitute your repository's verified enforcement state before drawing these panels",
         "| structure:",
         "| layering:",
         "| coverage:",

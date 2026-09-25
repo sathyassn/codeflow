@@ -10,7 +10,12 @@ One specimen per family, the wide composition at 720 units, drawn with the
 Every state mark carries `data-state`; every specimen carries a title, a description, a legend, a
 one-sentence caption and a table twin. The declaration beside each specimen
 states the narrow recomposition. Labels are 14 units, so at the 646 px break
-they render at 12.5 px. Facts are this repository's own.
+they render at 12.5 px. Facts are this repository's own, except in the
+layering and coverage specimens, which draw the supported architecture of a
+consuming repository whose remote protection has been verified active.
+CodeFlow's own repository has remote protection unavailable (its
+`AGENTS.md`, project-specific instructions); substitute your repository's
+verified enforcement state before drawing either.
 
 Each specimen ends with its chat form: the same facts drawn as a fenced
 ASCII figure for chat and a README, with one legend line and one caption
@@ -200,6 +205,9 @@ figure:
 Narrow: rotate; planes become columns with short heads (Hooks, Guard, CI,
 Remote) expanded in the caption, moments become rows, the bars stand vertical.
 
+The Remote plane is drawn as verified active; a repository without armed
+remote protection draws the three planes it has and says so in the caption.
+
 ### Chat form
 
 ```text
@@ -283,7 +291,7 @@ participant is named in each row's label.
    |<== anchored ===================================|
    |                        |                      X| or refused
    |  first edit
-Legend: ---> call  <=== answer  (H) decision the agent makes  X| refusal
+Legend: --> call  <== answer  (H) decision the agent makes  X| refusal
 Caption: The agent edits nothing until codeflow answers anchored.
 ```
 
@@ -405,6 +413,9 @@ figure:
 Narrow: list; the grid becomes one row per rule naming its planes with the
 same five cell marks inline, so no cell shrinks below 14 px.
 
+The Remote column assumes remote protection verified active; without it, each
+covered Remote cell becomes not claimed.
+
 ### Chat form
 
 ```text
@@ -477,7 +488,7 @@ scale, and the two subject limit labels move under their bars.
 ### Chat form
 
 ```text
- 2 characters per column  0    10   20   30   40   50   60   70
+ 2 per column, round up   0    10   20   30   40   50   60   70
  subject description      ################---------|
  subject line             ################--------------------|
  bullet 1                 #######################-------------|
@@ -612,13 +623,13 @@ critical path rows marked with the heavy accent rule, no arcs drawn.
 ```text
  rank 1     2          3          4          5          6
  (058)====>(070)====>(059)====>(060)====>(061)====>(064)
-                                          <-058      <-062
-                                          <-059      <-063
-                                                     <-071
-            (062)                         (063)
-            <-058                         <-058 <-059 <-060
-                                          (071)
-                                          <-059 <-060
+                                         <-058      <-062
+                                         <-059      <-063
+                                                    <-071
+           (062)                         (063)
+           <-058                         <-058 <-059 <-060
+                                         (071)
+                                         <-059 <-060
 Legend: (n) task TSK-n  ==> critical path  <-n depends on task n
 Caption: The critical path runs 058, 070, 059, 060, 061 and 064.
 ```
