@@ -78,7 +78,7 @@
     },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "b02959ab2c84c0168ae88d4e95a587b670fee0abcfec132c322310b33374d83f"
+      "pristine_sha256": "4116cbba750620fe9b4261ca2af7cab8545ca4a084cf232adf565ebfcb0513a0"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -302,7 +302,7 @@
     },
     "tests/fixtures/figures/rendered/01-flow.html": {
       "ownership": "managed",
-      "pristine_sha256": "6f6b14e0a0862049404f1b3f1f3831b09b5b97ac028fdc4854c167c0220f9c56"
+      "pristine_sha256": "0be8321c9ac5dc9868daf1fdb2b38e26705bd9f5cd188e7524ca615b42e49892"
     },
     "tests/fixtures/figures/rendered/02-structure.html": {
       "ownership": "managed",
@@ -314,7 +314,7 @@
     },
     "tests/fixtures/figures/rendered/04-sequence.html": {
       "ownership": "managed",
-      "pristine_sha256": "6ec59e24a7b9b1f71af07c7565809a9cf60b3d24dc7c924303be6fc7a0304cd3"
+      "pristine_sha256": "d1b3d2748903577f7e9f0b1811925f492efd675555e10fe6a6142ce3c63819a3"
     },
     "tests/fixtures/figures/rendered/05-state.html": {
       "ownership": "managed",

@@ -881,7 +881,9 @@ function legendKey(state, sample, id) {
       const cross = hasPart("cross") ? `<path class="cf-m-cross" d="${crossPath(14, 8, 9)}"/>` : "";
       return svg(`<path class="${cls}" d="M3 8H${head || open || square ? 20 : 25}"/>${head}${open}${square}${cross}`);
     }
-    case "bar-v": return svg(`<line class="${cls}" x1="14" y1="1" x2="14" y2="15"/>`);
+    // A square-capped stop bar inks half its width past each end, so its key
+    // line is shorter to ink the same 1 to 15 as a limit bar.
+    case "bar-v": return svg(state.mark === "stop" ? `<line class="${cls}" x1="14" y1="3" x2="14" y2="13"/>` : `<line class="${cls}" x1="14" y1="1" x2="14" y2="15"/>`);
     case "ring": return svg(`<circle class="${cls}" cx="14" cy="8" r="6"/>${hasPart("tick") ? `<path class="cf-m-done" d="M10.5 8L13 11L18 5"/>` : ""}`);
     case "disc": return svg(`<circle class="${cls}" cx="14" cy="8" r="6.5"/>`);
     case "diamond": return svg(`<path class="${cls}" d="M14 1.5L20.5 8L14 14.5L7.5 8Z"/>`);

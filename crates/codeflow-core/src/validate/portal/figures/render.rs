@@ -1325,6 +1325,11 @@ fn legend_key(mark_name: &str, sample: Option<&Value>, id: &str) -> Rendered {
                 "<path class=\"{class}\" d=\"M3 8H{stop}\"/>{head}{open}{square}{cross}"
             ))
         }
+        // A square-capped stop bar inks half its width past each end, so its
+        // key line is shorter to ink the same 1 to 15 as a limit bar.
+        "bar-v" if mark_name == "stop" => svg(format!(
+            "<line class=\"{class}\" x1=\"14\" y1=\"3\" x2=\"14\" y2=\"13\"/>"
+        )),
         "bar-v" => svg(format!(
             "<line class=\"{class}\" x1=\"14\" y1=\"1\" x2=\"14\" y2=\"15\"/>"
         )),
