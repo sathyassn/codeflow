@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import copy
 import hashlib
 import importlib.util
@@ -63,7 +64,7 @@ class VirtualWatchFacts:
         return True
 
 
-def run_bounded_watch(fixture_id: str, interval: int) -> list[float]:
+def run_bounded_watch(fixture_id: str, interval: int, flag: str = "--interval") -> list[float]:
     """Run a bounded watch through the fixture's own stand-in answer; return poll times."""
     _, _, fixtures_doc = eval_kit.suite_documents()
     fixture = next(item for item in fixtures_doc["fixtures"] if item["id"] == fixture_id)
@@ -76,7 +77,7 @@ def run_bounded_watch(fixture_id: str, interval: int) -> list[float]:
     state = module["initial_state"](scenario)
     facts, io = VirtualWatchFacts(), eval_kit.Collected()
     assert module["respond"](["pr", "create"], state, scenario, facts, io) == 0
-    argv = ["pr", "checks", scenario["pr_url"], "--watch", "--interval", str(interval)]
+    argv = ["pr", "checks", scenario["pr_url"], "--watch", flag, str(interval)]
     module["respond"](argv, state, scenario, facts, io)
     return facts.polls
 
@@ -692,6 +693,18 @@ class SuiteContractTests(unittest.TestCase):
                     self.assertEqual(30, len(polls))
                     self.assertEqual([], findings)
 
+    def test_both_stand_in_families_wait_the_interval_either_flag_names(self) -> None:
+        # Codex sync review, finding M1: the autonomy stand-in read only
+        # `--interval`, so `-i 60` waited ten seconds.
+        for fixture_id in ("pr-follow-up-queued-forever", "autonomy-change-brief"):
+            for flag in ("--interval", "-i"):
+                with self.subTest(fixture=fixture_id, flag=flag):
+                    polls = run_bounded_watch(fixture_id, 60, flag)
+                    self.assertGreater(len(polls), 1)
+                    self.assertEqual({60.0}, {later - earlier for earlier, later
+                                              in zip(polls, polls[1:])})
+                    self.assertEqual([], eval_kit.spacing_findings(polls, "replayed polls"))
+
     def test_every_hard_requirement_has_behavioral_coverage(self) -> None:
         requirements, cases, _ = eval_kit.suite_documents()
         hard = {
@@ -1270,14 +1283,15 @@ class StandInBehaviourTests(unittest.TestCase):
         self.trace: list[dict] = []
         return root, {"path": str(root), "fixture_id": fixture_id, **host}
 
-    def run_traced(self, root: Path, command: str) -> subprocess.CompletedProcess:
+    def run_traced(self, root: Path, command: str,
+                   trace: list[dict] | None = None) -> subprocess.CompletedProcess:
         """Run a subject command and record it, with its output, as the harness would."""
 
         started = time.time()
         path = os.path.dirname(sys.executable) + os.pathsep + os.environ.get("PATH", "")
         done = subprocess.run(["bash", "-c", command], cwd=root, capture_output=True,
-                              text=True, timeout=60, env={**os.environ, "PATH": path})
-        self.trace.append({"at": started, "end": time.time(), "kind": "command",
+                              text=True, timeout=120, env={**os.environ, "PATH": path})
+        (self.trace if trace is None else trace).append({"at": started, "end": time.time(), "kind": "command",
                            "command": command, "cwd": str(root),
                            "exit": done.returncode, "output": done.stdout + done.stderr})
         return done
@@ -1405,12 +1419,43 @@ class StandInBehaviourTests(unittest.TestCase):
             self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
 
     def test_interval_without_watch_is_refused_like_gh(self) -> None:
-        root, record = self.stand_in_repo("pr-follow-up-green")
-        self.run_traced(root, "python3 tools/gh.py pr create")
-        refused = self.run_traced(root, "python3 tools/gh.py pr checks -i 60")
-        self.assertEqual(1, refused.returncode)
-        self.assertIn("cannot use `--interval` flag without `--watch` flag", refused.stderr)
-        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+        for fixture_id in ("pr-follow-up-green", "autonomy-change-brief"):
+            for flag in ("--interval", "-i"):
+                with self.subTest(fixture=fixture_id, flag=flag):
+                    root, record = self.stand_in_repo(fixture_id)
+                    self.run_traced(root, "python3 tools/gh.py pr create")
+                    refused = self.run_traced(root, f"python3 tools/gh.py pr checks {flag} 60")
+                    self.assertEqual(1, refused.returncode)
+                    self.assertIn("cannot use `--interval` flag without `--watch` flag",
+                                  refused.stderr)
+                    self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
+    def test_both_stand_in_families_watch_at_the_requested_minute(self) -> None:
+        # Codex sync review, finding M1. Each scenario stays pending for one
+        # poll, so a watch sleeps once; the four watches run side by side.
+        # The bare repository has no tests, so the finished checks fail.
+        cases = []
+        for fixture_id in ("pr-follow-up-green", "autonomy-change-brief"):
+            for flag in ("--interval", "-i"):
+                root, record = self.stand_in_repo(fixture_id)
+                self.run_traced(root, "python3 tools/gh.py pr create")
+                cases.append((fixture_id, flag, root, record, self.trace))
+        with ThreadPoolExecutor(len(cases)) as pool:
+            watches = list(pool.map(
+                lambda case: self.run_traced(
+                    case[2], f"python3 tools/gh.py pr checks --watch {case[1]} 60", case[4]),
+                cases))
+        for (fixture_id, flag, _, record, trace), watch in zip(cases, watches):
+            with self.subTest(fixture=fixture_id, flag=flag):
+                self.assertEqual(1, watch.returncode, watch.stderr)
+                polls = [event["at"] for event in (
+                    json.loads(line.removeprefix(eval_kit.EVIDENCE_PREFIX))
+                    for line in watch.stderr.splitlines()
+                    if line.startswith(eval_kit.EVIDENCE_PREFIX)) if event["event"] == "poll"]
+                self.assertEqual(2, len(polls))
+                self.assertGreaterEqual(polls[1] - polls[0], 60)
+                self.assertLess(polls[1] - polls[0], 75)
+                self.assertEqual(([], []), eval_kit.trial_review(record, trace))
 
     def test_real_merge_then_view_replays_clean(self) -> None:
         # The merge and merged facts are read from checked objects (round six).
