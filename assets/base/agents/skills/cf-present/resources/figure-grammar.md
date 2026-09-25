@@ -118,7 +118,7 @@ value and the legend key.
 | human | line stroke 2.5 on ground fill | ring | none | 9 px radius ring | a human decision |
 | agent | accent fill | disc | none | 8 px radius disc | an agent step |
 | merge | accent stroke 2.5 on ground fill | outline | none | diamond | an agent merge point |
-| stop | stop | 3 | none | 22 px bar across the edge | a gate that stops travel |
+| stop | stop | 4 | none | 22 px bar across the edge, square caps | a gate that stops travel |
 | cross | stop | 2 | none | 12 px cross | denied, not claimed |
 | warn | warn | 2 | 5 3 | butt caps | room left before a limit |
 | layer | fill with line-soft edge 1.5 | bar | none | rounded rect | a plane covers this span, local |
