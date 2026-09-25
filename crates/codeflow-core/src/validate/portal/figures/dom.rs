@@ -11,11 +11,16 @@
 //! embedded object, or a declarative shadow root anywhere in it is recorded,
 //! so only the site's own built sheets and runtime can style or script a page.
 //! A built page is read the same way before a browser consumes any template:
-//! its content region carries none of these, and the rest of the page carries
-//! no style element, event handler, `javascript:` URL, frame or shadow root.
+//! its content region carries none of these, except the exact output of a
+//! code block (see `code_blocks`), and the rest of the page carries no style
+//! element, event handler, `javascript:` URL, frame or shadow root.
 
 use pulldown_cmark::{html, CowStr, Event, Parser, Tag, TagEnd};
 use scraper::{ElementRef, Html, Node};
+
+mod code_blocks;
+
+pub(in crate::validate::portal) use code_blocks::CodeBlockAssets;
 
 /// The companions a page renders and the figure markup outside them.
 pub(super) struct RenderedFigures {
@@ -43,7 +48,7 @@ pub(super) struct BuiltCarriers {
     pub inline_scripts: Vec<String>,
 }
 
-pub(super) fn built_page_carriers(html: &str) -> BuiltCarriers {
+pub(super) fn built_page_carriers(html: &str, assets: &CodeBlockAssets) -> BuiltCarriers {
     let document = Html::parse_document(html);
     let mut found = BuiltCarriers::default();
     for element in document
@@ -56,8 +61,17 @@ pub(super) fn built_page_carriers(html: &str) -> BuiltCarriers {
             .filter_map(ElementRef::wrap)
             .any(|ancestor| has_class(ancestor, |class| class == "sl-markdown-content"));
         if in_content {
-            found.content.extend(css_carrier(element));
-            found.content.extend(active_carrier(element));
+            if !code_blocks::asset_link(element, assets) && !code_blocks::token_style(element) {
+                found.content.extend(css_carrier(element));
+            }
+            if !code_blocks::asset_script(element, assets) {
+                found.content.extend(active_carrier(element));
+            }
+            if figure_markup(element) && code_blocks::in_block(element) {
+                found
+                    .content
+                    .insert("figure or companion markup inside a code block".to_string());
+            }
         } else {
             if element.value().name() == "style" {
                 found.page.insert("a <style> element".to_string());

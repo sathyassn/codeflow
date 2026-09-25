@@ -29,7 +29,13 @@ const GUIDE = [
   "2. Check the result.", "",
   "## Verify", "",
   "Run the check and read its report.", "",
+  "```sh",
+  "codeflow validate --portal portal",
+  "```", "",
 ].join("\n");
+// A fenced code block renders through Expressive Code, which writes its own
+// sheet link, module script and token custom properties into the content.
+const CODE_FENCE = "```sh\ncodeflow validate --portal portal\n```\n\n";
 const BARE = "# Bare source\n\nAn illustrated source with nothing bound to it.\n";
 const BROKEN = "# Broken figure\n\nA source whose bound figure breaks a rule.\n";
 const ADR = "---\nid: ADR-0001\nstatus: accepted\n---\n\n# ADR-0001: first decision\n\nThe decision, recorded as it was accepted.\n";
@@ -58,7 +64,7 @@ async function mixedFixture() {
   await rm(path.join(root, "docs/seed.md"));
   await mkdir(path.join(root, "docs/decisions"));
   const sources = {
-    "docs/product.md": COMPOSED_PAGE,
+    "docs/product.md": COMPOSED_PAGE.replace("The controls, then", `${CODE_FENCE}The controls, then`),
     "docs/plain.md": SHELL_PAGE,
     "docs/guide.md": GUIDE,
     "docs/bare.md": BARE,
@@ -222,6 +228,13 @@ test("the mixed fixture renders every class and the gates name only what falls s
     const html = await readFile(path.join(root, "dist/reference/guide/index.html"), "utf8");
     assert.match(html, /&lt;div class=(?:"|&quot;)raw(?:"|&quot;)&gt;Raw markup stays text\.&lt;\/div&gt;/);
     assert.match(html, /<a href="\/orient\/product\/">the product page<\/a>/);
+    // Both the illustrated guide and the explanatory product page carry a
+    // code block as Expressive Code writes it.
+    for (const route of ["reference/guide", "orient/product"]) {
+      const builtHtml = await readFile(path.join(root, `dist/${route}/index.html`), "utf8");
+      assert.match(builtHtml, /<div class="expressive-code"><link rel="stylesheet" href="\/_astro\/ec\.[\w-]+\.css"><script type="module" src="\/_astro\/ec\.[\w-]+\.js"><\/script>/, route);
+      assert.match(builtHtml, /<span style="--0:#[0-9A-F]{6};--1:#[0-9A-F]{6}">/, route);
+    }
 
     const config = JSON.parse(await readFile(path.join(root, "portal.config.json"), "utf8"));
     const assignments = classifyPortalPages(config, evidence.pages);
@@ -356,6 +369,73 @@ test("the mixed fixture renders every class and the gates name only what falls s
         const shadowed = await onDisk(`<div><template shadowrootmode="${mode}"><style>:host{opacity:0}</style>Shadow</template></div>`);
         assert.ok(shadowed.some((failure) => /served page: the served page declares a shadow root/.test(failure)), `${mode}: ${shadowed.join("\n")}`);
         assert.ok(shadowed.some((failure) => /served page: dist\/reference\/guide\/index\.html is served with sha256/.test(failure)), `${mode}: ${shadowed.join("\n")}`);
+      }
+
+      // Code blocks. The clean control above holds the real build, whose
+      // blocks link their recorded sheet and script and carry token custom
+      // properties. A real property on a token, a custom property outside a
+      // block's frame, a style element, and a figure inside a block, real or
+      // imitated, are refused; an imitated block holding only the properties
+      // Expressive Code writes is harmless and passes.
+      const pageCss = (failures) => failures.filter((failure) => /page CSS|executable content/.test(failure));
+      // The block's sheet reaches only blocks: each rule that styles an
+      // element is scoped to .expressive-code, the rest declare only custom
+      // properties, and no other built sheet reads those properties.
+      const codeSheet = built.artifacts.find((artifact) => /^dist\/_astro\/ec\.[\w-]+\.css$/.test(artifact.path)).path;
+      const codeScript = built.artifacts.find((artifact) => /^dist\/_astro\/ec\.[\w-]+\.js$/.test(artifact.path)).path;
+      const reach = await page.evaluate((text) => {
+        const sheet = new CSSStyleSheet();
+        sheet.replaceSync(text);
+        const parts = (selector) => { const found = []; let depth = 0; let current = ""; for (const character of selector) { if (character === "(") depth += 1; if (character === ")") depth -= 1; if (character === "," && depth === 0) { found.push(current.trim()); current = ""; } else current += character; } return [...found, current.trim()]; };
+        const outside = [];
+        const walk = (rules) => { for (const rule of rules) {
+          if (rule instanceof CSSStyleRule) {
+            const scoped = parts(rule.selectorText).every((part) => /(?:^|[\s>+~])(?:[\w-]*|\*)\.expressive-code(?![\w-])/.test(part.replace(/:(?:not|is|where|has)\([^)]*\)/g, "")));
+            if (!scoped && ![...rule.style].every((name) => name.startsWith("--"))) outside.push(rule.selectorText);
+          } else if (rule.cssRules) walk(rule.cssRules);
+        } };
+        walk(sheet.cssRules);
+        return outside;
+      }, await readFile(path.join(root, codeSheet), "utf8"));
+      assert.deepEqual(reach, []);
+      for (const other of built.artifacts.filter((artifact) => artifact.path.endsWith(".css") && artifact.path !== codeSheet)) {
+        assert.doesNotMatch(await readFile(path.join(root, other.path), "utf8"), /var\(\s*--ec-/, other.path);
+      }
+      assert.doesNotMatch(kitSheets, /--ec-/);
+      for (const css of ["color: red", "opacity: 0", "transform: scale(2)", "display: none", "background: url(/x.png)", "--0:#82AAFF;color:red", "--0:url(/x.png)"]) {
+        const failures = await hostile({ inject: (style) => document.querySelector(".expressive-code pre span[style]").setAttribute("style", style), css });
+        assert.ok(failures.some((failure) => /page CSS: a style attribute on <span> carries CSS the site's sheets do not/.test(failure)), `${css}: ${failures.join("\n")}`);
+      }
+      const outside = await hostile({ inject: () => [...document.querySelectorAll(".sl-markdown-content p")].find((paragraph) => !paragraph.closest(".cf-companion")).setAttribute("style", "--0:#82AAFF"), css: null });
+      assert.ok(outside.some((failure) => /page CSS: a style attribute on <p> carries CSS the site's sheets do not/.test(failure)), outside.join("\n"));
+      const blockStyle = await hostile({ inject: () => document.querySelector(".expressive-code").append(Object.assign(document.createElement("style"), { textContent: ".cf-fig{opacity:0}" })), css: null });
+      assert.ok(blockStyle.some((failure) => /page CSS: a <style> element in the page content/.test(failure)), blockStyle.join("\n"));
+      const wrapped = await hostile({ inject: () => { const companion = document.querySelector(".cf-companion"); const block = Object.assign(document.createElement("div"), { className: "expressive-code" }); companion.replaceWith(block); block.append(companion); }, css: null });
+      assert.ok(wrapped.some((failure) => /page CSS: a figure or companion inside a code block/.test(failure)), wrapped.join("\n"));
+      const imitated = await hostile({ inject: () => [...document.querySelectorAll(".sl-markdown-content p")].find((paragraph) => !paragraph.closest(".cf-companion")).insertAdjacentHTML("afterend", "<div class=\"expressive-code\"><figure><pre><span style=\"--0:#FFFFFF;--0fw:bold\">imitated</span></pre></figure></div>"), css: null });
+      assert.deepEqual(pageCss(imitated), [], imitated.join("\n"));
+
+      // An Expressive Code link or script to an asset the evidence does not
+      // record, or a recorded asset served with other bytes, fails.
+      const astro = path.join(root, "dist/_astro");
+      await writeFile(path.join(astro, "ec.zzzzz.css"), ".expressive-code{}\n");
+      await writeFile(path.join(astro, "ec.zzzzz.js"), "void 0;\n");
+      try {
+        const link = await hostile({ inject: () => document.querySelector(".expressive-code").prepend(Object.assign(document.createElement("link"), { rel: "stylesheet", href: "/_astro/ec.zzzzz.css" })), css: null });
+        assert.ok(link.some((failure) => /page CSS: a <link> element in the page content carries CSS the site's sheets do not/.test(failure)), link.join("\n"));
+        const script = await hostile({ inject: () => { const element = document.createElement("script"); element.type = "module"; element.src = "/_astro/ec.zzzzz.js"; document.querySelector(".expressive-code").prepend(element); }, css: null });
+        assert.ok(script.some((failure) => /executable content: a <script> element in the page content/.test(failure)), script.join("\n"));
+        assert.ok(script.some((failure) => /executable content: the script \/_astro\/ec\.zzzzz\.js is not a built script the evidence records/.test(failure)), script.join("\n"));
+      } finally {
+        await rm(path.join(astro, "ec.zzzzz.css"));
+        await rm(path.join(astro, "ec.zzzzz.js"));
+      }
+      for (const [asset, pattern] of [[codeSheet, /page CSS: the stylesheet \/_astro\/ec\.[\w-]+\.css is served with sha256 \w+, not the recorded \w+/], [codeScript, /executable content: the script \/_astro\/ec\.[\w-]+\.js is served with sha256 \w+, not the recorded \w+/]]) {
+        const original = await readFile(path.join(root, asset));
+        await writeFile(path.join(root, asset), Buffer.concat([original, Buffer.from("\n/* edited */\n")]));
+        let failures;
+        try { failures = (await figureGateFailures(page, visitRoute, guideOnly, built, declarations, kitSheets, inlineScripts)).failures; } finally { await writeFile(path.join(root, asset), original); }
+        assert.ok(failures.some((failure) => pattern.test(failure)), `${asset}: ${failures.join("\n")}`);
       }
     } finally {
       await browser.close();
@@ -539,6 +619,37 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     assert.match(await builtOnly(builtBytes.replace("</head>", "<script>void 0</script></head>")), regenerate);
     assert.ok(builtBytes.includes("window.StarlightThemeProvider = (() => {"));
     assert.match(await builtOnly(builtBytes.replace("window.StarlightThemeProvider = (() => {", "window.StarlightThemeProvider = (() => { ")), regenerate);
+
+    // The guide's code block passed above as Expressive Code writes it. A
+    // real property on a token, a custom property outside a block's frame, a
+    // link or script to an asset the evidence does not record, a style
+    // element in a block and a figure inside a block each fail; a recorded
+    // asset whose bytes changed fails its artifact hash.
+    const content = /built page dist\/reference\/guide\/index\.html carries CSS or executable content in its content: /;
+    assert.match(builtBytes, /<span style="--0:#[0-9A-F]{6};--1:#[0-9A-F]{6}">/);
+    const token = builtBytes.match(/<span style="(--0:#[0-9A-F]{6};--1:#[0-9A-F]{6})">/)[1];
+    for (const css of ["color:red", "opacity:0", "transform:scale(2)", "display:none", "background:url(/x.png)", `${token};color:red`]) {
+      assert.match(await builtOnly(builtBytes.replace(`<span style="${token}">`, `<span style="${css}">`)), new RegExp(`${content.source}a style attribute on <span>`), css);
+    }
+    assert.match(await builtOnly(builtBytes.replace(/(<div class="sl-markdown-content"[^>]*>)/, `$1<p style="${token}">x</p>`)), new RegExp(`${content.source}a style attribute on <p>`));
+    const blockHead = builtBytes.match(/<div class="expressive-code"><link rel="stylesheet" href="\/_astro\/ec\.[\w-]+\.css"><script type="module" src="\/_astro\/ec\.[\w-]+\.js"><\/script>/)[0];
+    for (const [head, kind] of [
+      [blockHead.replace(/ec\.[\w-]+\.css/, "ec.zzzzz.css"), "a <link> element"],
+      [blockHead.replace(/ec\.[\w-]+\.js/, "ec.zzzzz.js"), "a <script> element"],
+      [`${blockHead}<style>.cf-fig{opacity:0}</style>`, "a <style> element"],
+      [`${blockHead}<div class="cf-companion not-content"></div>`, "figure or companion markup inside a code block"],
+    ]) {
+      assert.match(await builtOnly(builtBytes.replace(blockHead, head)), new RegExp(`${content.source}(?:[^\n]*, )?${kind}`), head);
+    }
+    const codeSheet = JSON.parse(pristine).artifacts.find((artifact) => /^dist\/_astro\/ec\.[\w-]+\.css$/.test(artifact.path)).path;
+    const sheetBytes = await readFile(path.join(portal, codeSheet));
+    await writeFile(evidencePath, pristine);
+    await writeFile(path.join(portal, codeSheet), Buffer.concat([sheetBytes, Buffer.from("\n/* edited */\n")]));
+    try {
+      const edited = validate();
+      assert.notEqual(edited.status, 0, edited.stdout);
+      assert.match(edited.stdout + edited.stderr, new RegExp(`built artifact hash mismatch: ${codeSheet.replaceAll(".", "\\.")}`));
+    } finally { await writeFile(path.join(portal, codeSheet), sheetBytes); }
     await writeFile(evidencePath, pristine);
     const restored = validate();
     assert.match(restored.stdout + restored.stderr, /validate --portal: 2 page\(s\) clean/, restored.stdout + restored.stderr);
