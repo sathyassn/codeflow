@@ -426,8 +426,12 @@ fn fill_installed_template(template: &str) -> String {
         )
 }
 
+/// The approved format blocks only missing or empty always-present sections;
+/// template remnants and release contradictions warn. An unfilled template
+/// therefore blocks for Summary and Changes alone, and the unfilled Reviews
+/// row and Release impact choices surface as warnings.
 #[test]
-fn unfilled_installed_templates_fail_only_for_empty_required_sections() {
+fn unfilled_installed_templates_block_empty_summary_and_changes_and_warn_on_remnants() {
     for tier in [Tier::Minimal, Tier::Standard, Tier::Full] {
         let dir = tempfile::tempdir().unwrap();
         repo_with_range(dir.path(), "code");
@@ -442,15 +446,33 @@ fn unfilled_installed_templates_fail_only_for_empty_required_sections() {
             "{tier:?}: {error}"
         );
         let lines: Vec<_> = error.lines().collect();
-        let mut blocks = 0;
+        let mut blocked = Vec::new();
         for (index, line) in lines.iter().enumerate() {
             if line.contains("policy rule") && line.contains("(block)") {
-                blocks += 1;
                 assert!(line.contains("git.pr_sections"), "{error}");
-                assert!(lines[index + 1].contains("present but empty"), "{error}");
+                blocked.push(lines[index + 1].trim());
             }
         }
-        assert!(blocks > 0, "{error}");
+        assert_eq!(
+            blocked,
+            [
+                "PR body section '## Summary' is present but empty",
+                "PR body section '## Changes' is present but empty",
+            ],
+            "{tier:?}: {error}"
+        );
+        for warning in [
+            "template remnant (a table row of empty cells): '|  |  |  |'",
+            "template remnant (unresolved template alternatives or placeholders): '- Impact:",
+            "template remnant (unresolved template alternatives or placeholders): '- Breaking:",
+            "PR Impact must be none, patch, minor or major",
+            "PR Breaking must be yes or no",
+        ] {
+            assert!(
+                error.contains(warning),
+                "{tier:?}: missing {warning}: {error}"
+            );
+        }
     }
 }
 
