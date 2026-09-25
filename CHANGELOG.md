@@ -827,7 +827,7 @@ publication date._
   keyed, and quota bounded; browser-owned profile/cache and small runtime
   controls use a separate derived owner-private root. Cleanup is identity-
   scoped; event recovery uses one bounded
-  opened handle, figure count is capped, and native
+  opened handle, diagram count/source/enhancement are capped, and native
   adapters use trusted platform paths, exact process identity, a shared
   allowlist-only child environment, creation-only Windows ACL hardening, and
   read-only owner/DACL verification. No daemon, remote viewer, product UI
