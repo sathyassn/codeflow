@@ -365,7 +365,7 @@
     ".agents/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "735f5414b20e3f42bff0ce078d1ba290895aca02d07fac417c3ddd4b2f90edaa",
+      "sha256": "635eb7d5b0b51e2c3ab94d730cc946978d956a72297787cd31b9724ddec7045f",
       "exec": false
     },
     ".agents/skills/cf-method/references/project-organization.md": {
@@ -569,7 +569,7 @@
     ".agents/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "89ff72659c0112570a75d4b82636f004084c9f3a235cb5d250e6eba83ff52bab",
+      "sha256": "30426501b606171af85743d75c80d766f454ffaf92663065a1202704df6627e5",
       "exec": false
     },
     ".agents/skills/cf-ship/references/pr-evidence.md": {
@@ -587,7 +587,7 @@
     ".agents/skills/cf-stack/SKILL.md": {
       "src": "agents/skills/cf-stack/SKILL.md",
       "ownership": "managed",
-      "sha256": "8ccfa78566491b03bf4577e2b48febc965378839c4812b40fac9d4b7430d4f5f",
+      "sha256": "0051c13894515238fe7efd3777ad7b98a5122e61ad30cfca0598b3801cd4400a",
       "exec": false
     },
     ".claude/agents/cf-reviewer.md": {
@@ -971,7 +971,7 @@
     ".claude/skills/cf-method/SKILL.md": {
       "src": "claude/skills/cf-method/SKILL.md",
       "ownership": "managed",
-      "sha256": "735f5414b20e3f42bff0ce078d1ba290895aca02d07fac417c3ddd4b2f90edaa",
+      "sha256": "635eb7d5b0b51e2c3ab94d730cc946978d956a72297787cd31b9724ddec7045f",
       "exec": false
     },
     ".claude/skills/cf-method/references/project-organization.md": {
@@ -1175,7 +1175,7 @@
     ".claude/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "89ff72659c0112570a75d4b82636f004084c9f3a235cb5d250e6eba83ff52bab",
+      "sha256": "30426501b606171af85743d75c80d766f454ffaf92663065a1202704df6627e5",
       "exec": false
     },
     ".claude/skills/cf-ship/references/pr-evidence.md": {
@@ -1193,7 +1193,7 @@
     ".claude/skills/cf-stack/SKILL.md": {
       "src": "agents/skills/cf-stack/SKILL.md",
       "ownership": "managed",
-      "sha256": "8ccfa78566491b03bf4577e2b48febc965378839c4812b40fac9d4b7430d4f5f",
+      "sha256": "0051c13894515238fe7efd3777ad7b98a5122e61ad30cfca0598b3801cd4400a",
       "exec": false
     },
     ".claude/workflows/pipeline.workflow.js": {

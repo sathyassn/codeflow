@@ -1,6 +1,6 @@
 ---
 name: cf-ship
-description: Land finished work — docs and capability updates, then a PR through the gates. Use when a change is reviewed and green and ready to merge.
+description: Land finished work (docs and capability updates, then a PR through the gates). Use when a change is reviewed and green and ready to merge.
 ---
 
 # cf-ship — land finished work
