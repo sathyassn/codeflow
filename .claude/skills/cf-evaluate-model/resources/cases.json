@@ -7005,6 +7005,8 @@
         ],
         "references": [
           "plan/PLAN-v2.md",
+          "project-management/tasks/TSK-512.md",
+          "project-management/tasks/TSK-513.md",
           "PREFLIGHT.md"
         ],
         "must_not": [
