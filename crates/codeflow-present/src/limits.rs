@@ -7,8 +7,8 @@ pub const MAX_NESTING: usize = 12;
 pub const MAX_TITLE_BYTES: usize = 512;
 pub const MAX_PROSE_BYTES: usize = 512 * 1024;
 pub const MAX_CODE_BYTES: usize = 1024 * 1024;
-pub const MAX_DIAGRAM_BYTES: usize = 64 * 1024;
-pub const MAX_DIAGRAM_BLOCKS: usize = 24;
+/// The drawn block budget: figure blocks across the whole nested tree.
+pub const MAX_FIGURE_BLOCKS: usize = 24;
 pub const MAX_FIGURE_DECLARATION_BYTES: usize = 64 * 1024;
 pub const MAX_HTML_BYTES: usize = 512 * 1024;
 pub const MAX_MEDIA_BYTES: usize = 4 * 1024 * 1024;
