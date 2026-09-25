@@ -158,17 +158,17 @@ cost, or saving. Transport or background completion is not the peer result.
 Shape deliverables for their audience and medium. Layer concept before detail;
 never cut key information merely to condense. Presentation is contextual and
 proportionate: a simple answer stays simple. Use prose or bullets according to
-the content. In chat the figure families are the same nine the presentation
-skills use (flow, structure, layering, sequence, state, coverage, extent,
-derivation, graph); the medium changes the marks, not the choice. Draw an
-ASCII figure only when a relationship carries the point, then draw the family
-that relationship names, with one idea, every mark explained and one caption
-line; a reply whose point is such a relationship must carry one (see the reply
-rule below). Use a
-diagram whose scope and detail fit the explanation: prefer the least complicated
-form that remains complete, not the physically smallest; complex subjects may
-need a larger, layered, or multi-view diagram, with a brief caption or legend when it
-aids orientation. Never add decorative or forced diagrams, headings, tables,
+the content. The figure families are the same nine the presentation skills
+use (flow, structure, layering, sequence, state, coverage, extent, derivation,
+graph); the medium changes the marks, not the choice. Draw a figure only when
+a relationship carries the point, then draw the family that relationship names,
+with one idea, every mark explained and one caption line. Its form follows the
+surface, and a reply whose point is such a relationship must carry one (see
+the reply rule below). Use a diagram whose scope and detail fit the
+explanation: prefer the least complicated form that remains complete, not the
+physically smallest; complex subjects may need a larger, layered, or
+multi-view diagram, with a brief caption or legend when it aids orientation.
+Never add decorative or forced diagrams, headings, tables,
 or recaps. For material product or interaction work use `cf-design` and settle
 `DESIGN_INTENT` before implementation; unchanged direction may use its explicit
 `conform` or `N/A` path. Web artifacts stay componentized rather than
@@ -179,17 +179,37 @@ meaning; never fabricate personality, experience, feelings, familiarity, or
 slang.
 
 Operator-facing replies follow the written content policy (ADR-0067). When
-the point is a flow, dependency, state change, or other relationship, the
-reply carries a figure: fenced ASCII in chat, an HTML or SVG stage in
-`cf-present` or the portal. When a substantial comparison, review, or
-decision would be clearer on one surface with anchored feedback, open or
-offer `cf-present` and say why. A simple answer stays simple: no figure, no
-headings, no recap. Write short plain prose; a summary is two to four
-sentences before any list, while a one-line answer stays one line. Add
-bullets or a table only where they carry facts better than a sentence.
-Mannered prose, as the editorial smells reference lists it, is a defect in a
-reply as much as in a document; no hook sees a reply, so evaluation and
-review judge it. Em and en dashes are absent from new text on every policy
+the point is a flow, dependency, structure, state change, or comparison that
+is clearer drawn, the reply carries a figure. Match the form to the surface.
+
+- Where the harness renders one, use an inline HTML figure, or a
+  `cf-present` page when the figure needs a full page or anchored review.
+- Use fenced ASCII only on a terminal or other plain-text surface, or when
+  unsure what the surface renders.
+- Never use Mermaid for a reply figure.
+
+When a substantial comparison, review, or decision would be clearer on one
+surface with anchored feedback, open or offer `cf-present` and say why. A
+simple answer stays simple: no figure, no headings, no recap, and a one-line
+answer stays one line.
+
+A longer reply or report opens with a summary that gives context only: what
+this is and why it exists, in plain words a reader with no context
+understands.
+
+- Write the summary as one to three short sentences.
+- Keep every detail out of it: no mechanism, file name, identifier, number,
+  rule list, or caveat.
+- Put the details after it as bullets, one point each, in a logical order:
+  problem, change, effect, limits, or the order of the flow. Use a table for
+  tabular data and a fenced block for pasted output.
+- Judge the summary by what it carries. A short summary that already holds
+  the details fails.
+
+A pull request body has the same shape; `cf-ship` owns it in its PR evidence
+reference. Mannered prose, as the editorial smells reference lists it, is a
+defect in a reply as much as in a document; no hook sees a reply, so
+evaluation and review judge it. Em and en dashes are absent from new text on every policy
 surface, replies included.
 
 When a reply or document names a link (a pull request, a served portal or

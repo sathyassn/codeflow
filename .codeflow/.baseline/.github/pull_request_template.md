@@ -1,111 +1,92 @@
-<!-- PR bodies are linted by CI (`codeflow ci`): no AI attribution, no emoji.
-
-     FORMAT RULES — match the presentation to the SHAPE of the data:
-     - TABLES for tabular data: coverage metrics, test→what-it-pins lists,
-       exit-code or before/after matrices. Never force these into sentences.
-     - Fenced blocks for pasted output. Numbered lists for sequences.
-     - Bullets for genuinely enumerable points; keep one coherent point per
-       bullet. Do not split a necessary explanation just to meet a line count.
-     - PLAIN language in Summary: a reader with zero context must understand
-       it — no jargon, no internal shorthand; say what it means for the user.
-     - Evidence over claims, numbers over adjectives.
-
-     Follow the project's release policy for impact declarations and notes.
-     Conventional commits — `type(scope): …` and the `!` / `BREAKING CHANGE:`
-     footer — must agree with its authoritative release input. They calculate
-     versions only if that project uses a commit-driven release tool; do not
-     introduce a second calculator alongside fragments or another policy.
-
-     Delete unused tables and `## Notes` when empty. Keep evidence gaps explicit;
-     blank placeholders and invented numbers are not completed evidence. -->
+<!-- Linted by `codeflow ci`: no AI attribution, no emoji, no em or en dash.
+     The five sections below are always present, in this order. Conditional
+     sections are listed at the end. Aim for about 65 rows wrapped at 100
+     columns for a task PR, about 80 with Whole-flow evidence, and about 90
+     for an epic; never drop evidence to fit. A figure here is a fenced
+     ASCII block, never Mermaid. -->
 
 ## Summary
 
-<!-- Two to four sentences of plain prose: what this does and why, in words
-     someone who has never seen this repo understands. Add bullets or a table
-     after the prose only where they carry facts better than a sentence; a
-     summary of bullets alone is incomplete. Derive from
-     `git log --oneline <base>..<head>` and `git diff --stat <base>...<head>`.
-     Cover every logical change on the branch. Do not write from the last
-     conversation turn, last review round, or latest commit subject. Inspect
-     the full diff too; refresh the title/body after substantive branch updates. -->
+<!-- One to three short sentences of context: what this is, why, and the
+     outcome, for a reader with no context. No file names, identifiers,
+     numbers or caveats; details go in Changes. Cover the whole branch:
+     derive from `git log --oneline <base>..<head>` and
+     `git diff --stat <base>...<head>`, and inspect the full diff. Do not
+     write from the last conversation turn, review round or commit. -->
 
 ## Changes
 
-<!-- One SHORT line per logical change. If the list is long, the PR is
-     probably too big — consider splitting it. -->
+<!-- One bullet per logical change, most important first; number them only
+     for a sequence. About eight for a task PR; one line per task for an
+     epic. -->
 
 -
 
 ## Testing
 
-<!-- REQUIRED for any code change — a code PR without real test evidence is
-     not reviewable. Paste actual output; put tabular data in the tables.
+<!-- Evidence already run: the tested revision and command, then the gate's
+     summary lines in a fenced block (about twelve lines, never a full log).
+     Coverage when the range is code: the measured TOTAL from the project's
+     command; name revision, command, metric, and scope; CI PASS alone is
+     insufficient; unmeasured is a stated gap. New tests: count and suites.
+     Missing required checks keep the PR draft. Docs only: say so and name
+     the doc checks run; scripts, hook settings, shipped templates and agent
+     instructions are not docs only. -->
 
-     Identify the tested revision and exact commands. Attribute prior or CI
-     evidence to its revision and scope; do not imply it covers later changes.
-     Missing required checks keep the PR draft.
-
-     Docs-only PR? State "Docs-only — no code paths changed" plus doc checks
-     and relevant instruction evaluations actually run. Scripts, hook settings,
-     generated runtime assets, and executable examples require behavioral checks
-     even when stored under docs. Shipped templates and agent instructions also
-     need behavioral evidence even when written in Markdown. Added eval cases
-     are not completed trials. -->
-
-- Results:
+- Revision and command:
 
 ```text
 (paste the real test summary output here)
 ```
 
-- Coverage (measured TOTAL from the project's command; name revision, command, metric, and scope; CI PASS alone is insufficient):
+- Coverage:
+- New tests:
+- Not tested:
 
-| Metric and scope | Measured result | Required floor | Evidence revision / command |
-|---|---|---|---|
-| Line coverage |  |  |  |
+## Reviews
 
-<!-- Unsupported coverage: replace with N/A and the technical reason. Unrun,
-     stale, or unavailable required coverage is a gap, not N/A or a pass.
-     Never present focused-target coverage as whole-project coverage. -->
+<!-- One row per current review: reviewer (human or tool), scope (commit
+     range), verdict. Findings live in the linked record. A row is review
+     provenance, not authorship attribution. "None: reason" if unreviewed. -->
 
-- New / changed tests:
+| Reviewer | Scope | Verdict |
+|---|---|---|
+|  |  |  |
 
-| Test | What it pins |
-|---|---|
-|  |  |
+## Release impact
 
-- Manual / e2e verification:
+<!-- Impact is the change level a consumer sees; the project's release
+     policy maps it to a version and names the level a break takes.
+     Breaking states compatibility. Choose each value; never leave the
+     alternatives. Migration is normally `none` for nonbreaking work; it
+     names steps when Breaking is yes, and a refinement of a pending breaking
+     entry keeps that entry's migration reference. Project fields go after
+     Migration. -->
 
-| What was run | Observed result |
-|---|---|
-|  |  |
+- Impact: `none | patch | minor | major`
+- Breaking: `yes | no`
+- Rationale:
+- Migration: `none`, steps, or "see Breaking change"
 
-- Whole-flow evidence:
+<!-- Conditional sections: add each as a `##` sibling after its parent only
+     when its condition holds. A PR type never cancels a condition; a mixed
+     or epic PR takes the union.
 
-<!-- For every materially changed user or operator journey (including CLI,
-     install/update, hooks, and harness delegation), show the affected
-     boundaries exercised together. Name controlled doubles and any boundary not
-     exercised. If no journey changed, replace the table with one reasoned
-     `N/A — ...` line. -->
-
-| Changed journey | Boundaries exercised | Exact run and observed result | Controlled or unverified boundaries |
-|---|---|---|---|
-|  |  |  |  |
-
-- Not tested: <!-- plainly state the gaps -->
-
-## Linked work
-
-<!-- The IDs this PR serves: capability (CAP-###) and epic (EPC-###), plus
-     any ADR whose decision shipped here. A behavior change links at least
-     one — it is how the traceability spine stays intact. -->
-
-- CAP-
-- EPC-
-
-## Notes
-
-<!-- Optional. What the sections above don't carry: breaking-change callout
-     and migration, risk and rollback, screenshots for UI changes, follow-ups
-     deliberately left out. -->
+     Screenshots          after Changes: a rendered surface changed.
+     Tests                after Testing: an added or renamed test's name
+                          does not state what it pins. Test and Pins table,
+                          about six rows.
+     Whole-flow evidence  after Testing: a CLI command's behavior, flags or
+                          output; install, update or scaffold; a hook or
+                          guard; an automation handoff; or a rendered UI
+                          changed. One bullet per journey: what ran, what
+                          was observed, what was not exercised.
+     Breaking change      after Release impact: Breaking is yes and the
+                          migration needs more than one line.
+     Risk and follow-up   after Release impact: Impact is the breaking level,
+                          a watched contract path changed, a hook, guard,
+                          secret scan, sandbox or permission surface changed,
+                          or landing needs a human step. Bullets: what can go
+                          wrong, how to back out, steps after merge.
+     Links                last: the issue, ticket, decision or record this
+                          serves. Omit it when there is nothing to link. -->

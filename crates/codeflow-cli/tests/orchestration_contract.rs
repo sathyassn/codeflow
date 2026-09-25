@@ -995,11 +995,12 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
         "Preserve technical meaning",
         "never fabricate personality",
         // The chat rule of the figure grammar (ADR-0068): same nine families,
-        // the medium changes the marks, an ASCII figure only when a
-        // relationship carries the point.
+        // the medium changes the marks, a figure only when a relationship
+        // carries the point, in the form its surface takes.
         "the same nine the presentation skills use (flow, structure, layering, sequence, state, coverage, extent, derivation, graph)",
         "the medium changes the marks, not the choice",
-        "Draw an ASCII figure only when a relationship carries the point",
+        "Draw a figure only when a relationship carries the point",
+        "Its form follows the surface",
     ] {
         assert!(
             lifecycle.contains(required),

@@ -363,7 +363,7 @@ class SuiteContractTests(unittest.TestCase):
             13: ("CF-OUT-002", {"simple-answer-not-overformatted": "one_line_answer_padded"}),
             5: ("CF-OUT-002", {"operator-reply-is-plain-prose-and-bullets": "policy_character_in_reply"}),
             6: ("CF-OUT-002", {"editorial-legitimate-punctuation-terms-and-lists-pass": "punctuation_blacklist"}),
-            7: ("CF-OUT-003", {"flow-reply-carries-fenced-figure": "prose_only_flow_explanation"}),
+            7: ("CF-OUT-003", {"flow-reply-carries-figure": "prose_only_flow_explanation"}),
             8: ("CF-OUT-003", {"simple-answer-not-overformatted": "forced_diagram"}),
             9: ("CF-OUT-003", {"six-way-comparison-opens-or-offers-review-surface": "comparison_without_present_offer"}),
             10: ("CF-OUT-004", {"printed-pr-url-is-reproduced-verbatim": "invented_pr_number"}),
@@ -371,8 +371,14 @@ class SuiteContractTests(unittest.TestCase):
                 "identifier-only-title-gets-words": "identifier_only_title_kept",
                 "bare-acronym-title-gets-words": "bare_acronym_title_kept",
             }),
+            # Operator direction 2026-09-24: the summary gives context only.
+            14: ("CF-OUT-002", {"operator-reply-is-plain-prose-and-bullets": "summary_carries_details"}),
+            # Operator direction 2026-09-24: the figure follows the surface,
+            # and a Mermaid block fails on any surface.
+            15: ("CF-OUT-003", {"flow-reply-carries-figure": "unrendered_figure_on_plain_text_surface"}),
+            16: ("CF-OUT-003", {"flow-reply-carries-figure": "mermaid_figure_in_reply"}),
         }
-        self.assertEqual(set(range(1, 14)), set(inventory))
+        self.assertEqual(set(range(1, 17)), set(inventory))
         graded = {case_id for _, cases in inventory.values() for case_id in cases}
         selected = eval_kit.resolve_pack("operating-doctrine")
         self.assertEqual(len(selected), len(set(selected)))
@@ -424,6 +430,41 @@ class SuiteContractTests(unittest.TestCase):
                 "punctuation_blacklist", "forced_diagram", "one_line_answer_padded",
             }
             self.assertEqual(set(), doctrine_only & set(cases[canary]["expected"]["must_not"]))
+
+    def test_flow_figure_status_computation_is_surface_neutral(self) -> None:
+        # Operator direction 2026-09-24: an inline HTML figure or cf-present
+        # page where HTML renders and fenced ASCII on a plain-text surface both
+        # satisfy the same surface-neutral signal; a form the surface cannot
+        # show fails, and a Mermaid block fails on any surface.
+        _, cases_doc, fixtures_doc = eval_kit.suite_documents()
+        case = next(c for c in cases_doc["cases"] if c["id"] == "flow-reply-carries-figure")
+        self.assertNotIn("fenced_ascii_figure_in_reply", case["expected"]["signals"])
+        self.assertIn("figure_in_form_surface_renders", case["expected"]["signals"])
+        fixture = next(f for f in fixtures_doc["fixtures"] if f["id"] == case["fixture"])
+        note = fixture["state"]["grading"]
+        for surface_form in ("an inline HTML figure passes", "a cf-present page opened or offered",
+                             "fenced ASCII passes on a terminal"):
+            self.assertIn(surface_form, note)
+        for surface in ("html-rendering", "plain-text"):
+            with self.subTest(surface=surface):
+                trial = {
+                    "outcome": "completed",
+                    "observed": {
+                        "route": case["expected"]["routes"][0],
+                        "signals": list(case["expected"]["signals"]),
+                        "references": list(case["expected"]["references"]),
+                        "violations": [],
+                    },
+                    "evidence": [{"kind": "session", "ref": f"figure-{surface}",
+                                  "digest": "sha256:" + "d" * 64}],
+                    "trace_ref": f"figure-{surface}-trace",
+                    "validity_flags": [],
+                }
+                self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
+                for faulty in ("unrendered_figure_on_plain_text_surface", "mermaid_figure_in_reply"):
+                    bad = copy.deepcopy(trial)
+                    bad["observed"]["signals"].append(faulty)
+                    self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
 
     def test_bounded_watch_controls_grade_poll_cadence_from_the_stand_in_log(self) -> None:
         # Codex EPC-017 review, finding 6. The stand-in runs on a virtual clock

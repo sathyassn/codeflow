@@ -89,7 +89,7 @@ fn task_branch_ci(dir: &Path, branch: &str, valid_body: bool) -> Output {
     if valid_body {
         command.args([
             "--pr-body",
-            "## Summary\nBounded task.\n\n## Changes\n- implementation\n\n## Testing\n- focused test",
+            "## Summary\nBounded task.\n\n## Changes\n- implementation\n\n## Testing\n- focused test\nNot tested: Windows.\n\n## Reviews\nNone: pending review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve the public contract.\n- Migration: none",
         ]);
     }
     command.output().unwrap()

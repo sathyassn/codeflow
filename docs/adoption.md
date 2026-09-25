@@ -321,7 +321,7 @@ caption: every step has a plane that catches the mistake it can make
    protected-branch rules, test gate). Keep `codeflow test` and `codeflow
    validate --docs` green before push.
 4. **Land by PR, merged by a human.** Push the branch, open a PR from the
-   template (summary, changes, testing, linked epic/capability IDs); a
+   template (summary, changes, testing, reviews, release impact); a
    human merges it when required checks are evidenced green (an infra-killed
    duplicate CI job is not a failed check; an agent-performed `gh pr merge`
    into a protected base is blocked, and that is the boundary). With no remote, `codeflow
