@@ -169,11 +169,11 @@ for the check, validate, preview, and cleanup details.
 
 ## Contributing
 
-Contributions are welcome; see [CONTRIBUTING.md](CONTRIBUTING.md). In short:
+Contributions are welcome; see [CONTRIBUTING.md](docs/CONTRIBUTING.md). In short:
 format, tests, clippy, and rustdoc green; conventional commits; no AI
 attribution (codeflow's own hooks enforce it). Please read
-[SECURITY.md](SECURITY.md) before reporting a vulnerability, and be mindful of the
-[Code of Conduct](CODE_OF_CONDUCT.md).
+[SECURITY.md](docs/SECURITY.md) before reporting a vulnerability, and be mindful of the
+[Code of Conduct](docs/CODE_OF_CONDUCT.md).
 
 ## License
 

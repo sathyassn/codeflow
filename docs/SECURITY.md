@@ -20,7 +20,7 @@ unmaintained, including the archived `1.x` implementation kept at tag
 
 ## A note on the enforcement model
 
-codeflow enforces repository discipline across four planes — local git hooks, an
+codeflow enforces repository discipline across four planes: local git hooks, an
 in-session guard, CI, and remote branch protection. **By design, the local
 planes are fast feedback, not a hard boundary** against a determined actor who
 shares the host; the authoritative perimeter is remote branch protection + CI.
