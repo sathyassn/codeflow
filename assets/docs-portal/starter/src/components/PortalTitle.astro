@@ -1,0 +1,24 @@
+---
+const { entry, sidebar, siteTitleHref } = Astro.locals.starlightRoute;
+type Item = typeof sidebar[number];
+function ancestors(items: Item[]): Item[] | null {
+  for (const item of items) {
+    if (item.type === "link" && item.isCurrent) return [];
+    if (item.type === "group") {
+      const nested = ancestors(item.entries);
+      if (nested) return [item, ...nested];
+    }
+  }
+  return null;
+}
+function landing(item: Item): string | undefined {
+  if (item.type === "link") return item.href;
+  for (const child of item.entries) {
+    const href = landing(child);
+    if (href) return href;
+  }
+}
+const parents = (ancestors(sidebar) ?? []).map(item => ({ label: item.label, href: landing(item) }));
+---
+<nav class="cf-crumbs" aria-label="Breadcrumb"><ol><li><a href={siteTitleHref}>Guide</a></li>{parents.map((parent, index) => parent.href && <li class={index === parents.length - 1 ? "cf-crumb-parent" : undefined}><a href={parent.href}>{parent.label}</a></li>)}<li><span aria-current="page">{entry.data.title}</span></li></ol></nav>
+<h1 class="cf-title" id="_top">{entry.data.title}</h1>

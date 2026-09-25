@@ -1,3 +1,4 @@
+import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { access, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
@@ -122,11 +123,11 @@ try {
 
 async function checkStaticExportModes(browser, origin) {
   for (const { mode, preference, expected } of [
-    // The export page defaults to the editorial skin: cool slate, #eef2f6 light and #0f141a dark.
-    { mode: "system", preference: "dark", expected: "rgb(15, 20, 26)" },
-    { mode: "system", preference: "light", expected: "rgb(238, 242, 246)" },
-    { mode: "dark", preference: "light", expected: "rgb(15, 20, 26)" },
-    { mode: "light", preference: "dark", expected: "rgb(238, 242, 246)" },
+    // The retained export default resolves to Slate in either appearance.
+    { mode: "system", preference: "dark", expected: "rgb(18, 23, 29)" },
+    { mode: "system", preference: "light", expected: "rgb(234, 238, 243)" },
+    { mode: "dark", preference: "light", expected: "rgb(18, 23, 29)" },
+    { mode: "light", preference: "dark", expected: "rgb(234, 238, 243)" },
   ]) {
     const context = await browser.newContext({ colorScheme: preference, javaScriptEnabled: false });
     const page = await context.newPage();
@@ -259,6 +260,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Pass10 Comment SM: arm → pin → float → composer → rail → speech markers
   await page.getByRole("button", { name: /Comment/ }).click();
   await page.locator(".cf-hint.on").waitFor();
+  assert.equal(await page.locator(".cf-hint.on").innerText(), "Comment: select words, click a figure part, or drag a box. Esc leaves.");
   await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
   await page.getByText("Nothing noted yet").waitFor();
 
@@ -329,7 +331,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
         tools.scrollIntoView({ block: "end" });
       }
     });
-    await page.getByTestId(testId).click({ force: true });
+    await page.getByTestId(testId).click();
   }
   async function saveComposerNote(body, { viaFloat = false } = {}) {
     if (viaFloat) {
@@ -552,7 +554,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   );
 
   await page.getByTestId("settings-btn").click();
-  await page.locator("[data-testid=skin-pills] [data-skin=instrument]").click();
+  await page.locator("[data-testid=skin-pills] [data-skin=graphite]").click();
   const identityPreserved = await page.evaluate(() => globalThis.__cfDocumentRoot === document.getElementById("cf-present-document"));
   if (!identityPreserved) throw new Error("Review chrome replaced the Rust-owned document root");
 
@@ -563,9 +565,9 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     && document.documentElement.dataset.cfTypeface === "plex"
   );
   await page.locator("[data-testid=scale-pills] [data-scale=default]").click();
-  await page.locator("[data-testid=typeface-pills] [data-typeface=instrument]").click();
+  await page.locator("[data-testid=typeface-pills] [data-typeface=archivo]").click();
 
-  for (const theme of ["editorial", "instrument", "ink"]) {
+  for (const theme of ["slate", "graphite", "sage"]) {
     await page.locator(`[data-testid=skin-pills] [data-skin=${theme}]`).click();
     for (const mode of ["Light", "Dark"]) {
       await page.getByRole("button", { name: mode, exact: true }).click();
@@ -767,7 +769,7 @@ function escapeAttribute(value) {
 
 function exportFixture(mode) {
   const resolved = mode === "dark" ? "dark" : "light";
-  return `<!doctype html><html data-cf-theme="editorial" data-cf-mode="${mode}" data-cf-mode-resolved="${resolved}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src data:; frame-src 'self' blob:; form-action 'none'"><style>${sourceStyles}\n${exportFallback}</style></head><body><main id="cf-present-document"><h1>Static export</h1><iframe sandbox title="Static export sandbox" srcdoc="&lt;p&gt;Static export sandbox content&lt;/p&gt;"></iframe><iframe sandbox title="Static export attack" style="width:1px;height:1px;position:fixed;left:0;top:0;opacity:0" srcdoc="&lt;meta http-equiv='refresh' content='0;url=https://example.invalid/export-escape'&gt;&lt;img src='https://example.invalid/export-pixel.png'&gt;&lt;p&gt;Static export attack stayed local&lt;/p&gt;"></iframe></main></body></html>`;
+  return `<!doctype html><html data-cf-theme="slate" data-cf-mode="${mode}" data-cf-mode-resolved="${resolved}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src data:; frame-src 'self' blob:; form-action 'none'"><style>${sourceStyles}\n${exportFallback}</style></head><body><main id="cf-present-document"><h1>Static export</h1><iframe sandbox title="Static export sandbox" srcdoc="&lt;p&gt;Static export sandbox content&lt;/p&gt;"></iframe><iframe sandbox title="Static export attack" style="width:1px;height:1px;position:fixed;left:0;top:0;opacity:0" srcdoc="&lt;meta http-equiv='refresh' content='0;url=https://example.invalid/export-escape'&gt;&lt;img src='https://example.invalid/export-pixel.png'&gt;&lt;p&gt;Static export attack stayed local&lt;/p&gt;"></iframe></main></body></html>`;
 }
 
 function assertLoopbackOnly(requests) {

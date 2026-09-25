@@ -1,7 +1,7 @@
 (() => {
-  const themes = new Set(["instrument", "editorial", "ink", "technical"]);
+  const themes = new Set(["graphite", "slate", "sage"]);
   const modes = new Set(["system", "light", "dark"]);
-  const typefaces = new Set(["instrument", "editorial", "plex"]);
+  const typefaces = new Set(["archivo", "inter", "plex"]);
   const scales = new Set(["compact", "default", "large"]);
   let storedTheme: string | null = null;
   let storedMode: string | null = null;
@@ -15,9 +15,9 @@
   } catch {
     // Defaults below remain usable when storage is unavailable.
   }
-  const theme = storedTheme && themes.has(storedTheme) ? storedTheme : "instrument";
+  const theme = storedTheme && themes.has(storedTheme) ? storedTheme : "graphite";
   const mode = storedMode && modes.has(storedMode) ? storedMode : "system";
-  const typeface = storedTypeface && typefaces.has(storedTypeface) ? storedTypeface : "instrument";
+  const typeface = storedTypeface && typefaces.has(storedTypeface) ? storedTypeface : "inter";
   const scale = storedScale && scales.has(storedScale) ? storedScale : "default";
   const resolved =
     mode === "system"

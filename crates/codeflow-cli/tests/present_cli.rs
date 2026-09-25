@@ -393,12 +393,74 @@ fn verify_runtime_boundaries(fixture: &TestProject, running: &RunningPresentatio
     assert!(history.contains("\"event\": \"addressed\""));
 }
 
-fn canonical_theme_name_matches_the_alias(
+fn export_theme_aliases_match_canonical_bytes(
     fixture: &TestProject,
     running: &RunningPresentation,
-    alias_export: &str,
+    graphite_export: &str,
 ) {
-    let path = fixture.project.join("review-instrument.html");
+    let mut canonical = std::collections::BTreeMap::new();
+    for skin in ["graphite", "slate", "sage"] {
+        let path = fixture.project.join(format!("review-{skin}.html"));
+        require_success(&codeflow(
+            &fixture.project,
+            &fixture.home,
+            &[
+                "present",
+                "export",
+                &running.session_id,
+                "--out",
+                path.to_str().unwrap(),
+                "--theme",
+                skin,
+                "--mode",
+                "dark",
+            ],
+        ));
+        let html = fs::read_to_string(&path).unwrap();
+        assert!(html.contains(&format!("data-cf-theme=\"{skin}\"")));
+        assert!(
+            !html
+                .split("<html")
+                .nth(1)
+                .unwrap()
+                .split('>')
+                .next()
+                .unwrap()
+                .contains("data-cf-typeface"),
+            "a skin must not select a typeface"
+        );
+        canonical.insert(skin, html);
+    }
+    assert_eq!(canonical["graphite"], graphite_export);
+    for (alias, skin) in [
+        ("instrument", "graphite"),
+        ("technical", "graphite"),
+        ("editorial", "slate"),
+        ("ink", "sage"),
+    ] {
+        let path = fixture.project.join(format!("review-alias-{alias}.html"));
+        require_success(&codeflow(
+            &fixture.project,
+            &fixture.home,
+            &[
+                "present",
+                "export",
+                &running.session_id,
+                "--out",
+                path.to_str().unwrap(),
+                "--theme",
+                alias,
+                "--mode",
+                "dark",
+            ],
+        ));
+        assert_eq!(
+            fs::read_to_string(path).unwrap(),
+            canonical[skin],
+            "{alias} maps to {skin}"
+        );
+    }
+    let path = fixture.project.join("review-default.html");
     require_success(&codeflow(
         &fixture.project,
         &fixture.home,
@@ -408,17 +470,14 @@ fn canonical_theme_name_matches_the_alias(
             &running.session_id,
             "--out",
             path.to_str().unwrap(),
-            "--theme",
-            "instrument",
             "--mode",
             "dark",
         ],
     ));
-    let canonical = fs::read_to_string(&path).unwrap();
-    assert!(canonical.contains("data-cf-theme=\"instrument\""));
     assert_eq!(
-        canonical, alias_export,
-        "technical and instrument export the same skin"
+        fs::read_to_string(path).unwrap(),
+        canonical["slate"],
+        "the retained default resolves to Slate"
     );
 }
 
@@ -480,12 +539,11 @@ fn update_export_close_and_clear(
     ));
     let exported = fs::read_to_string(&exported_path).unwrap();
     assert!(exported.contains("Second revision"));
-    // `technical` is the documented alias of the instrument skin: it stays
-    // accepted and resolves to the same skin the canonical name resolves to.
-    assert!(exported.contains("data-cf-theme=\"instrument\""));
+    // The retained CLI alias resolves to the canonical skin.
+    assert!(exported.contains("data-cf-theme=\"graphite\""));
     assert!(exported.contains("data-cf-mode=\"dark\""));
 
-    canonical_theme_name_matches_the_alias(fixture, running, &exported);
+    export_theme_aliases_match_canonical_bytes(fixture, running, &exported);
     for private in [
         running.capability.as_str(),
         running.cookie.as_str(),

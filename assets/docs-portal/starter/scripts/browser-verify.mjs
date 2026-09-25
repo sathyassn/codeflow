@@ -1,3 +1,4 @@
+import { verifyChrome } from "./chrome-verify.mjs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
 import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
@@ -26,14 +27,9 @@ const MAX_RUNTIME_DIAGNOSTICS = 128;
 const MAX_RUNTIME_DIAGNOSTIC_BYTES = 4 * 1024;
 const runId = process.env.PORTAL_BROWSER_RUN ?? "local";
 if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId)) throw new Error("PORTAL_BROWSER_RUN is invalid");
-// The skins the utility tokens actually define, read from the token contract
-// rather than repeated here, and the Display panels Starlight renders on a
-// guide page: the header panel and the mobile menu panel. Both palette pill
-// groups are verified, so a swatch that is correct in one panel cannot cover
-// the other. The splash landing has no mobile menu and so no second panel,
-// which is why this check runs on a generated page and not on the landing.
+// One shared Display panel serves the header at every viewport.
 const PORTAL_SKINS = Object.freeze(Object.keys(PORTAL_ACCENT_BACKGROUNDS));
-export const PALETTE_PILL_GROUPS = 2;
+export const PALETTE_PILL_GROUPS = 1;
 
 async function verifyPortal(lifecycle) {
   const configBytes = await readBoundedRegularFile(path.join(root, "portal.config.json"), 64 * 1024, "portal configuration");
@@ -207,6 +203,11 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     const figureResult = await assertFigureGate(page, name, origin, config, assignments, generated, declarations, kitSheets, inlineScripts);
     const previewResult = await assertStrictIdPreview(page, name, origin, config, surfaces.strictPreview);
     await assertSourceLink(page, name, origin, config, generated);
+    const chromeRoutes = generated.artifacts.filter((artifact) => artifact.path.endsWith(".html"))
+      .map((artifact) => new URL(config.base + artifact.path.replace(/^dist\//, "").replace(/index\.html$/, ""), origin).href);
+    const altitudeAssignment = assignments.find((assignment) => assignment.pageClass === PAGE_CLASSES.explanatory.id);
+    const chromeResult = await verifyChrome(page, chromeRoutes, name,
+      altitudeAssignment ? routeUrl(origin, config.base, altitudeAssignment.route) : null);
     await visit(page, siteRoot);
     await assertThemeMatrix(page, name, output);
     await assertKeyboardPath(page, name);
@@ -230,7 +231,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     return {
       engine: name,
       status: "passed",
-      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search-slash-hit-and-follow", "system-and-mode-persistence-before-paint", "display-settings-persist", "palette-pill-swatches-from-live-tokens", "layer-journey", "deep-link", compositionResult, figureResult, previewResult, "source-link", "keyboard-traversal-and-focus", "skins-light-dark", "target-size", "responsive", "console", "network-isolation"],
+      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search-slash-hit-and-follow", "system-and-mode-persistence-before-paint", "display-settings-persist", "palette-pill-swatches-from-live-tokens", "layer-journey", "deep-link", compositionResult, figureResult, previewResult, chromeResult, "source-link", "keyboard-traversal-and-focus", "skins-light-dark", "target-size", "responsive", "console", "network-isolation"],
     };
   } catch (error) {
     lifecycle.throwIfInterrupted();
@@ -277,13 +278,13 @@ async function assertBeforePaintTheme(page, engine, expected) {
 }
 
 async function searchForResult(page, engine, config, pages) {
-  const search = page.getByRole("button", { name: "Search" }).first();
+  const search = page.locator(".cf-search-trigger");
   await search.waitFor({ state: "visible" });
-  await page.waitForFunction(() => !document.querySelector("button[data-open-modal]")?.disabled);
+  await page.locator("[data-cf-mounted]").waitFor();
   // "/" is first-class portal chrome: it must open the dialog with the query
   // focused, and a portal-owned term must return a followable Pagefind hit.
   await page.keyboard.press("/");
-  const input = page.getByRole("dialog", { name: "Search" }).locator("input");
+  const input = page.getByRole("dialog", { name: "Search the guide", exact: true }).locator("input");
   await input.waitFor({ state: "visible" });
   if (!await input.evaluate((element) => element === document.activeElement)) throw new Error(`${engine}: "/" did not focus the search input`);
   const corpus = [config.title, config.description, ...pages.slice(0, 16).flatMap((item) => [item?.title, item?.source_path])].filter((value) => typeof value === "string").join(" ");
@@ -291,9 +292,9 @@ async function searchForResult(page, engine, config, pages) {
   if (!candidates.length) candidates.push(config.title);
   for (const candidate of candidates) {
     await input.fill(candidate);
-    const hit = page.locator("dialog[open] a").first();
+    const hit = page.locator(".cf-hit").first();
     if (await hit.waitFor({ state: "visible", timeout: 2_000 }).then(() => true, () => false)) {
-      const href = await hit.getAttribute("href");
+      const href = await hit.getAttribute("data-href");
       const target = new URL(href, page.url());
       if (target.origin !== new URL(page.url()).origin) throw new Error(`${engine}: search hit left the portal origin: ${href}`);
       await hit.click();
@@ -320,15 +321,15 @@ async function assertDisplaySettings(page, engine) {
   }
   const before = { accent: await accentOf(), font: await fontOf() };
   await open();
-  await page.locator('[data-testid="skin-editorial"]').first().click();
-  const editorialAccent = await accentOf();
-  if (!editorialAccent || editorialAccent === before.accent) throw new Error(`${engine}: Palette Cool did not change the accent token`);
+  await page.locator('[data-testid="skin-slate"]').first().click();
+  const slateAccent = await accentOf();
+  if (!slateAccent || slateAccent === before.accent) throw new Error(`${engine}: Palette Slate did not change the accent token`);
   await page.locator('[data-testid="typeface-plex"]').first().click();
   if (!(await fontOf()).includes("IBM Plex Sans")) throw new Error(`${engine}: Font Plex Sans did not change the sans stack`);
   await page.reload({ waitUntil: "networkidle" });
   const persisted = await page.evaluate(() => ({ skin: document.documentElement.dataset.cfpSkin, typeface: document.documentElement.dataset.cfpTypeface }));
-  if (persisted.skin !== "editorial" || persisted.typeface !== "plex") throw new Error(`${engine}: display settings did not persist across reload: ${JSON.stringify(persisted)}`);
-  if (await accentOf() !== editorialAccent) throw new Error(`${engine}: persisted skin did not reapply its accent token`);
+  if (persisted.skin !== "slate" || persisted.typeface !== "plex") throw new Error(`${engine}: display settings did not persist across reload: ${JSON.stringify(persisted)}`);
+  if (await accentOf() !== slateAccent) throw new Error(`${engine}: persisted skin did not reapply its accent token`);
   await page.evaluate(() => { for (const key of ["cf-portal-skin", "cf-portal-typeface", "cf-portal-scale"]) localStorage.removeItem(key); });
   await page.reload({ waitUntil: "networkidle" });
   if (await accentOf() !== before.accent) throw new Error(`${engine}: clearing display settings did not restore the configured theme`);
@@ -1016,7 +1017,8 @@ async function assertPaletteSwatches(page, engine, origin, config, assignment) {
   // The panel paints its swatches in the same call that marks the selected
   // pill, so waiting for that mark proves the component ran without waiting on
   // the swatches this check is about.
-  await page.locator('.pills[data-group="skin"] button[aria-pressed]').first().waitFor({ state: "attached" });
+  await page.locator('[data-testid="portal-display-btn"]').click();
+  await page.locator('.cf-pills[data-pref="skin"] button[aria-checked]').first().waitFor({ state: "attached" });
   const tokens = await page.evaluate((skins) => {
     const root = document.documentElement;
     const computed = getComputedStyle(root);
@@ -1048,12 +1050,12 @@ async function assertPaletteSwatches(page, engine, origin, config, assignment) {
     // A reader opens one panel at a time, and the component closes the others,
     // so each panel is opened, read and closed in turn.
     if (await buttons.nth(index).isVisible() && await panels.nth(index).isHidden()) await buttons.nth(index).click();
-    groups.push(await panels.nth(index).evaluate((panel) => [...panel.querySelectorAll('.pills[data-group="skin"] button')].map((pill) => {
+    groups.push(await panels.nth(index).evaluate((panel) => [...panel.querySelectorAll('.cf-pills[data-pref="skin"] button')].map((pill) => {
       const swatch = (name) => {
         const element = pill.querySelector(`.${name}`);
         return element === null ? "" : getComputedStyle(element).backgroundColor;
       };
-      return { skin: pill.dataset.value, canvas: swatch("sw-canvas"), accent: swatch("sw-accent") };
+      return { skin: pill.dataset.value, canvas: swatch("cf-dot-canvas"), accent: swatch("cf-dot-accent") };
     })));
     await page.keyboard.press("Escape");
   }
@@ -1167,6 +1169,8 @@ async function assertSourceLink(page, engine, origin, config, generated) {
 // way a reader sets it, and where a page does not expose the control write the
 // same preferences the control writes.
 export async function applyDisplayState(page, skin, mode) {
+  const display = page.locator('[data-testid="portal-display-btn"]').first();
+  if (await display.isVisible() && await page.locator('[data-testid="portal-display-panel"]').first().isHidden()) await display.click();
   const skinPill = page.locator(`[data-testid="skin-${skin}"]`).first();
   const appearancePill = page.locator(`[data-testid="appearance-${mode}"]`).first();
   if (await skinPill.count() > 0 && await appearancePill.count() > 0) {

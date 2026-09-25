@@ -748,3 +748,66 @@ fn kit_files_carry_no_en_or_em_dash() {
         );
     }
 }
+
+/// Product CSS carries every kit role, rather than a second palette table.
+#[test]
+fn product_sheets_match_every_kit_role_and_measured_floor() {
+    let root = repo_root();
+    let expected = tokens();
+    let pair = Regex::new(r#"(?s)\[data-(?:cfp-skin|cf-theme)="(graphite|slate|sage)"\]\[data-(?:theme|cf-mode-resolved)="(light|dark)"\] \{(.*?)\}"#).unwrap();
+    let property = Regex::new(r"--cf-([a-z-]+):\s*([^;]+);").unwrap();
+    for path in [
+        "docs-portal/src/styles/utility-tokens.css",
+        "assets/docs-portal/starter/src/styles/utility-tokens.css",
+        "crates/codeflow-present/web/src/styles.css",
+    ] {
+        let css = std::fs::read_to_string(root.join(path)).unwrap();
+        for retired in ["instrument", "editorial", "ink", "technical"] {
+            assert!(
+                !css.contains(&format!("=\"{retired}\"")),
+                "{path} keeps a retired skin"
+            );
+        }
+        let mut actual = BTreeMap::new();
+        for capture in pair.captures_iter(&css) {
+            let key = format!("{}-{}", &capture[1], &capture[2]);
+            let roles: BTreeMap<String, String> = property
+                .captures_iter(&capture[3])
+                .map(|value| (value[1].to_owned(), value[2].trim().to_owned()))
+                .collect();
+            assert!(
+                actual.insert(key, roles).is_none(),
+                "{path} has duplicate pair blocks"
+            );
+        }
+        assert_eq!(actual.len(), 6, "{path} must carry six pairs");
+        for (key, roles) in &expected {
+            for (role, value) in roles {
+                assert_eq!(actual[key].get(role), Some(value), "{path} {key} {role}");
+            }
+            for foreground in ["text", "text-muted"] {
+                for ground in ["canvas", "surface"] {
+                    let ratio = contrast(&actual[key][foreground], &actual[key][ground]);
+                    println!("{path} | {key} | {foreground}/{ground} | {ratio:.2}:1");
+                    assert!(ratio >= 4.5);
+                }
+            }
+        }
+        for mode in ["light", "dark"] {
+            let [red, green, blue] = rgb(&actual[&format!("graphite-{mode}")]["canvas"]);
+            assert!((red - green).abs() < f64::EPSILON && (green - blue).abs() < f64::EPSILON);
+            for (first, second) in [
+                ("graphite", "slate"),
+                ("graphite", "sage"),
+                ("slate", "sage"),
+            ] {
+                let a = &actual[&format!("{first}-{mode}")];
+                let b = &actual[&format!("{second}-{mode}")];
+                let canvas = delta_e_2000(&a["canvas"], &b["canvas"]);
+                let surface = delta_e_2000(&a["surface"], &b["surface"]);
+                println!("{path} | {mode} | {first}/{second} | canvas {canvas:.2} | surface {surface:.2}");
+                assert!(canvas >= 3.0 && surface >= 1.5);
+            }
+        }
+    }
+}

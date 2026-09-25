@@ -16,8 +16,12 @@ const EXPORT_BOOTSTRAP: &str = "(async()=>{const e=document.getElementById('cf-p
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportTheme {
+    Graphite,
+    Slate,
+    Sage,
+    /// Compatibility name for Slate.
     Editorial,
-    /// The instrument skin. `technical` is the documented CLI alias for it.
+    /// Compatibility name for Graphite.
     Instrument,
 }
 
@@ -126,8 +130,9 @@ fn enhance_export(
     );
     let marker = "</head>";
     let theme = match theme {
-        ExportTheme::Editorial => "editorial",
-        ExportTheme::Instrument => "instrument",
+        ExportTheme::Slate | ExportTheme::Editorial => "slate",
+        ExportTheme::Graphite | ExportTheme::Instrument => "graphite",
+        ExportTheme::Sage => "sage",
     };
     let (mode, resolved) = match mode {
         ExportMode::System => ("system", "light"),

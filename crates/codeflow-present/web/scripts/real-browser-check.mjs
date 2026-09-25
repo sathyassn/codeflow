@@ -301,7 +301,7 @@ try {
   await openAuthenticatedPresentation(revisedPage, secondBootstrapPath, port);
   await revisedPage.locator("#cf-present-document").getByText("Second revision").waitFor();
   const exportPath = join(output, "review.html");
-  run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "technical", "--mode", "dark"], project);
+  run(codeflow, ["present", "export", sessionId, "--out", exportPath, "--theme", "graphite", "--mode", "dark"], project);
   const exportPage = await context.newPage();
   await exportPage.goto(pathToFileURL(exportPath).href);
   await exportPage.locator("#cf-present-document").getByText("Second revision").waitFor();

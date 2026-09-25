@@ -27,8 +27,10 @@ function fidelity(declaration) {
   return { bound, composed, evidence: { facts, data: bound === null ? null : { drawn: composed.drawnValues, derived: POLICY } } };
 }
 
+// Keep the established 720 px content-width specimen harness independent of
+// the shell reset. Padding belongs outside that width in this isolated probe.
 async function probe(page, css, html, breakage = null, argument = undefined) {
-  const document = (theme) => `<!doctype html><html data-theme="${theme}" data-cfp-skin="instrument"><head><style>${css} body{margin:0;background:var(--cf-canvas);font-family:var(--cf-font-sans)} main{max-width:720px;margin:0 auto;padding:0 16px}</style></head><body><main>${html}</main></body></html>`;
+  const document = (theme) => `<!doctype html><html data-theme="${theme}" data-cfp-skin="graphite"><head><style>${css} body{margin:0;background:var(--cf-canvas);font-family:var(--cf-font-sans)} main{box-sizing:content-box;max-width:720px;margin:0 auto;padding:0 16px}</style></head><body><main>${html}</main></body></html>`;
   const observed = {};
   for (const [label, width, theme] of [["wide", 1280, "light"], ["narrow", 390, "light"], ["wideDark", 1280, "dark"], ["narrowDark", 390, "dark"]]) {
     await page.setViewportSize({ width, height: 900 });
@@ -163,7 +165,7 @@ test("a figure that is not its clean render fails, whatever changed it", { skip:
     const page = await browser.newPage();
     const read = async (width, change = null, argument = undefined) => {
       await page.setViewportSize({ width, height: 900 });
-      await page.setContent(`<!doctype html><html data-theme="light" data-cfp-skin="instrument"><head><style>${css}</style></head><body><main>${html}</main></body></html>`);
+      await page.setContent(`<!doctype html><html data-theme="light" data-cfp-skin="graphite"><head><style>${css}</style></head><body><main>${html}</main></body></html>`);
       if (change) await page.evaluate(change, argument);
       return (await page.evaluate(readFigureDom))[0];
     };

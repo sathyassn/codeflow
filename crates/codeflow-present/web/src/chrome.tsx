@@ -85,17 +85,16 @@ function captureQuote(captured: CapturedTarget): string {
   return captured.summary.replace(/^(Text|Element|Area):\s*/, "").slice(0, 48);
 }
 
-const skinPills: readonly UtilityTheme[] = ["instrument", "editorial", "ink"];
+const skinPills: readonly UtilityTheme[] = ["graphite", "slate", "sage"];
 const themeLabels: Readonly<Record<UtilityTheme, string>> = {
-  instrument: "Neutral",
-  editorial: "Cool",
-  ink: "Warm",
-  technical: "Technical",
+  graphite: "Graphite",
+  slate: "Slate",
+  sage: "Sage",
 };
-const typefacePills: readonly Typeface[] = ["instrument", "editorial", "plex"];
+const typefacePills: readonly Typeface[] = ["archivo", "inter", "plex"];
 const typefaceLabels: Readonly<Record<Typeface, string>> = {
-  instrument: "Archivo",
-  editorial: "Inter",
+  archivo: "Archivo",
+  inter: "Inter",
   plex: "Plex Sans",
 };
 const scalePills: readonly TypeScale[] = ["compact", "default", "large"];
@@ -920,25 +919,27 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       </a>
 
       <header class="cf-topbar">
-        {config.identity ? <img class="cf-project-identity" src={config.identity.src} alt={config.identity.alt} /> : null}
+        {config.identity ? <img class="cf-project-identity" src={config.identity.src} alt={config.identity.alt} /> : <span class="cf-brand-mark" aria-hidden="true" />}
         <div class="cf-title-group">
           <span class="cf-kicker">Review document</span>
-          <strong>{config.title}</strong>
-          <span class="cf-revision">Revision {config.revision}</span>
+          <div class="cf-title-line"><strong>{config.title}</strong><span class="cf-revision">Revision {config.revision}</span></div>
         </div>
         <div class="cf-appearance" aria-label="Appearance">
-          <span class={`cf-note-count-meta${notes.length > 0 ? " has" : ""}`} data-testid="note-count">
+          <span class={`cf-note-count-meta${notes.length > 0 ? " has" : ""}`} data-testid="note-count" hidden={notes.length === 0}>
             {notes.length} {notes.length === 1 ? "note" : "notes"}
           </span>
           <button
             type="button"
             class="cf-settings-btn"
             data-testid="settings-btn"
+            aria-label="Settings"
+            title="Settings"
+            aria-haspopup="dialog"
             aria-expanded={settingsOpen}
             aria-controls="cf-settings-panel"
             onClick={() => setSettingsOpen((open) => !open)}
           >
-            Settings
+            <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><path d="m10 3-1 3-3 1-2-1-2 4 2 2v3l-2 1 2 4 3-1 3 1 1 3h4l1-3 3-1 2 1 2-4-2-2v-3l2-1-2-4-3 1-3-1-1-3Z"/></svg>
           </button>
           <button
             id="cf-comment-toggle"
@@ -965,16 +966,28 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             </span>
           </button>
           {settingsOpen ? (
-            <div id="cf-settings-panel" class="cf-settings-panel open" data-testid="settings-panel">
-              <h3>Display</h3>
+            <div id="cf-settings-panel" class="cf-settings-panel open" data-testid="settings-panel" role="dialog" aria-label="Display" onKeyDown={(event) => {
+              if (!(event.target instanceof HTMLButtonElement)) return;
+              const group = event.target.closest(".pills");
+              if (!group) return;
+              const buttons = Array.from(group.querySelectorAll("button"));
+              const index = buttons.indexOf(event.target);
+              const next = event.key === "ArrowRight" || event.key === "ArrowDown" ? index + 1
+                : event.key === "ArrowLeft" || event.key === "ArrowUp" ? index - 1
+                : event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : null;
+              if (next === null) return;
+              event.preventDefault();
+              const button = buttons[(next + buttons.length) % buttons.length];
+              button?.focus(); button?.click();
+            }}>
               <div class="preview" aria-hidden="true">
-                <span class="swatch" />
+                <span class="swatch swatch-canvas" /><span class="swatch swatch-surface" /><span class="swatch swatch-accent" />
                 <span class="body">Body Aa</span>
                 <span class="mono">Mono 012</span>
               </div>
               <div>
                 <div class="lbl">
-                  Font<span class="d">typeface for prose and UI</span>
+                  Font<span class="d">Body and headings</span>
                 </div>
                 <div class="pills" data-testid="typeface-pills">
                   {typefacePills.map((face) => (
@@ -992,7 +1005,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               </div>
               <div>
                 <div class="lbl">
-                  Size<span class="d">type scale, floors held</span>
+                  Size<span class="d">Text and controls</span>
                 </div>
                 <div class="pills" data-testid="scale-pills">
                   {scalePills.map((scale) => (
@@ -1009,7 +1022,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               </div>
               <div>
                 <div class="lbl">
-                  Palette<span class="d">colour family</span>
+                  Palette<span class="d">Surfaces and accent</span>
                 </div>
                 <div class="pills" data-testid="skin-pills">
                   {skinPills.map((t) => (
@@ -1030,7 +1043,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
               </div>
               <div>
                 <div class="lbl">
-                  Appearance<span class="d">light, dark, or follow OS</span>
+                  Appearance<span class="d">Light, dark or the system</span>
                 </div>
                 <div class="pills">
                   {(Object.keys(modeLabels) as AppearanceMode[]).map((m) => (
@@ -1051,21 +1064,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       </header>
 
       {commentMode ? (
-        <div class="cf-hint on" data-testid="comment-hint" role="status">
-          <span class="mode" data-active={hintMode === "text" ? "true" : "false"}>
-            <b>Text</b> select
-          </span>
-          <span class="mode" data-active={hintMode === "element" ? "true" : "false"}>
-            <b>Click</b> figure
-          </span>
-          <span class="mode" data-active={hintMode === "region" ? "true" : "false"}>
-            <b>Drag</b> area
-          </span>
-          <span class="esc-note">Shift+drag only on text · Esc</span>
+        <div class="cf-hint on" data-testid="comment-hint" data-capture-mode={hintMode} role="status">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z" /></svg>
+          <span>Comment: select words, click a figure part, or drag a box. Esc leaves.</span>
         </div>
       ) : null}
 
       <nav class="cf-section-route" aria-label="Document sections" data-rail={railVisible ? "open" : "closed"}>
+        <span class="cf-kicker">Sections</span>
         <ol>
           {sections.map((section) => (
             <li data-level={section.level} data-active={section.id === activeSection ? "true" : "false"}>

@@ -55,6 +55,18 @@ publication date._
 
 ### Changed
 
+<!-- codeflow:release-impact minor -->
+- **Shared portal and present chrome.** Graphite, Slate and Sage use the
+  approved design kit in both utilities and the installed portal starter.
+  Search, Display, panel controls and narrow layouts follow the shared shell.
+  Existing export values remain aliases: instrument and technical select
+  Graphite, editorial selects Slate, and ink selects Sage. Portal signal
+  selects Graphite and folio selects Sage. These values select a skin only;
+  Inter is now the independent typeface default, replacing the portal's
+  Archivo or Plex defaults for signal or folio. Present also starts in Inter;
+  exports previously used a system-first sans stack. The export default stays
+  editorial, resolving to Slate. No existing CLI or config value is removed.
+
 <!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty

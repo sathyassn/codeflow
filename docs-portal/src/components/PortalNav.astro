@@ -1,0 +1,10 @@
+---
+interface Props { items: typeof Astro.locals.starlightRoute.sidebar; prefix?: string; }
+const { items, prefix = "nav" } = Astro.props;
+---
+{items.map((item, index) => item.type === "group" ? (
+  <div class="cf-nav-group" data-group={`${prefix}-${index}`}>
+    <div class="cf-nav-group-head"><span class="cf-kicker" id={`${prefix}-${index}-label`}>{item.label} <span class="cf-row-count">{item.entries.length}</span></span><button class="cf-icon-btn cf-nav-chev" type="button" aria-expanded="true" aria-controls={`${prefix}-${index}-body`} aria-labelledby={`${prefix}-${index}-label`}><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m6 9 6 6 6-6"/></svg></button></div>
+    <div class="cf-nav-group-body" id={`${prefix}-${index}-body`}><div><Astro.self items={item.entries} prefix={`${prefix}-${index}`} /></div></div>
+  </div>
+) : <ul class="cf-nav-list"><li><a class="cf-row" href={item.href} aria-current={item.isCurrent ? "page" : undefined}>{item.label}</a></li></ul>)}

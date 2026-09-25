@@ -20,12 +20,16 @@ export default defineConfig({
       description: config.description,
       customCss: ["./src/styles/utility-tokens.css", "./src/styles/portal.css", "./src/styles/figure-roles.css", "./src/styles/figure.css", "./.portal/generated/project-tokens.css"],
       components: {
-        ThemeSelect: "./src/components/PortalDisplay.astro",
+        SkipLink: "./src/components/PortalSkipLink.astro",
+        PageFrame: "./src/components/PortalFrame.astro",
+        TwoColumnContent: "./src/components/PortalColumns.astro",
+        PageTitle: "./src/components/PortalTitle.astro",
+        Footer: "./src/components/PortalFooter.astro",
       },
       head: [
         {
           // Pre-paint display state: the configured theme is the fallback
-          // (signal -> instrument skin, folio -> ink + plex), stored Display
+          // (compatible aliases resolve a skin only), stored Display
           // choices win. Inline so there is no wrong-skin flash; its text
           // lives in scripts/runtime-scripts.json, where the gate reads it.
           tag: "script",
@@ -33,6 +37,7 @@ export default defineConfig({
         },
         { tag: "script", attrs: { src: `${base}portal-preview.js`, defer: true } },
         { tag: "script", attrs: { src: `${base}portal-tabs.js`, defer: true } },
+        { tag: "script", attrs: { src: `${base}portal-chrome.js`, defer: true } },
       ],
       sidebar: config.layers.map((layer) => ({ label: layer.label, items: [{ autogenerate: { directory: layer.id } }] })),
       favicon: "/favicon.svg",
