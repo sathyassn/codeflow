@@ -231,7 +231,7 @@ specimen per family, when authoring a figure. In brief:
   text or over a mark; one-sentence caption; `--cf-fig-*` tokens only; a
   description and a table twin.
 - A labelled stage is one flow-family form, not the default; ASCII `text`
-  figures draw the same families in chat.
+  figures draw the same families in plain-text chat.
 
 ### Anti-patterns (fail closed)
 

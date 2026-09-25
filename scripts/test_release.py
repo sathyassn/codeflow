@@ -164,20 +164,30 @@ class Repository:
     def body(
         impact: str,
         *,
-        contract: str = "compatible",
-        migration: str = "",
+        breaking: str | None = None,
+        contract: str | None = None,
+        migration: str | None = "none",
         withdrawal: str = "",
     ) -> str:
-        return (
-            "## Release impact\n\n"
-            "- Unit: codeflow\n"
-            f"- Impact: {impact}\n"
-            "- Rationale: reviewed fixture.\n"
-            "- Evidence: CHANGELOG.md pending entry.\n"
-            f"- Contract: {contract}\n"
-            f"- Migration: {migration}\n"
-            f"- Withdrawal: {withdrawal}\n"
-        )
+        """A Release impact block. With neither Breaking nor the legacy
+        Contract given, Breaking follows Impact; None omits a field."""
+        if breaking is None and contract is None:
+            breaking = "yes" if impact == "major" else "no"
+        lines = [
+            "## Release impact\n\n",
+            "- Unit: codeflow\n",
+            f"- Impact: {impact}\n",
+            "- Rationale: reviewed fixture.\n",
+            "- Evidence: CHANGELOG.md pending entry.\n",
+        ]
+        if breaking is not None:
+            lines.append(f"- Breaking: {breaking}\n")
+        if contract is not None:
+            lines.append(f"- Contract: {contract}\n")
+        if migration is not None:
+            lines.append(f"- Migration: {migration}\n")
+        lines.append(f"- Withdrawal: {withdrawal}\n")
+        return "".join(lines)
 
 
 class PendingVersionTests(unittest.TestCase):
@@ -514,6 +524,152 @@ class BaselineTests(unittest.TestCase):
         self.assertEqual(pages.call_count, 2)
 
 
+TEMPLATE = SCRIPT.parent.parent / ".github" / "pull_request_template.md"
+UNRESOLVED_MIGRATION = '`none`, steps, or "see Breaking change"'
+
+
+QUOTED_MIGRATION_PLACEHOLDERS = [
+    '"none"', "'TODO'", '`" N/A "`', '"  TBD  "', "'-'", '""', "'   '",
+]
+SUBSTANTIVE_MIGRATIONS = [
+    "Run the new command to convert saved records.",
+    '"docs/migrate.md"',
+    "see Breaking change",
+    "Run `cat old.json | tool migrate` to convert saved records.",
+]
+
+
+def filled_template(
+    impact: str, breaking: str, migration: str = UNRESOLVED_MIGRATION
+) -> str:
+    """The repository's own PR template with its Release impact fields filled
+    in the way an author would, leaving Migration as given."""
+    values = {
+        "Impact": impact,
+        "Breaking": breaking,
+        "Rationale": "reviewed fixture.",
+        "Migration": migration,
+        "Unit": "`codeflow`",
+        "Evidence": "CHANGELOG.md pending entry.",
+    }
+    lines = []
+    for line in TEMPLATE.read_text(encoding="utf-8").splitlines():
+        for key, value in values.items():
+            if line.startswith(f"- {key}:"):
+                line = f"- {key}: {value}"
+        lines.append(line)
+    return "\n".join(lines) + "\n"
+
+
+class ReleaseImpactFieldTests(unittest.TestCase):
+    """Breaking replaces the legacy Contract field (operator direction,
+    2026-09-24); both are accepted during the transition."""
+
+    body = staticmethod(Repository.body)
+
+    def parse(self, body: str) -> dict[str, str]:
+        return release.parse_release_impact(body)
+
+    def test_new_breaking_field_alone_is_accepted(self) -> None:
+        fields = self.parse(self.body("minor", breaking="no"))
+        self.assertEqual(("minor", "no"), (fields["impact"], fields["breaking"]))
+        self.assertNotIn("contract", fields)
+
+    def test_legacy_contract_alone_is_accepted_and_mapped(self) -> None:
+        for contract, breaking, impact in [
+            ("not-applicable", "no", "none"),
+            ("compatible", "no", "minor"),
+            ("breaking", "yes", "major"),
+        ]:
+            with self.subTest(contract=contract):
+                fields = self.parse(
+                    self.body(impact, contract=contract, migration="docs/migrate.md")
+                )
+                self.assertEqual(breaking, fields["breaking"])
+
+    def test_agreeing_dual_fields_are_accepted(self) -> None:
+        self.parse(self.body("minor", breaking="no", contract="compatible"))
+        self.parse(self.body("none", breaking="no", contract="not-applicable"))
+        self.parse(
+            self.body("major", breaking="yes", contract="breaking", migration="docs/migrate.md")
+        )
+
+    def test_disagreeing_dual_fields_are_rejected(self) -> None:
+        for breaking, contract, impact in [
+            ("no", "breaking", "major"),
+            ("yes", "compatible", "major"),
+            ("yes", "not-applicable", "major"),
+        ]:
+            with self.subTest(breaking=breaking, contract=contract):
+                with self.assertRaisesRegex(release.ReleaseError, "disagrees"):
+                    self.parse(
+                        self.body(
+                            impact,
+                            breaking=breaking,
+                            contract=contract,
+                            migration="docs/migrate.md",
+                        )
+                    )
+
+    def test_major_with_breaking_no_is_rejected(self) -> None:
+        with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
+            self.parse(self.body("major", breaking="no", migration="docs/migrate.md"))
+        with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
+            self.parse(self.body("major", contract="compatible", migration="docs/migrate.md"))
+
+    def test_breaking_yes_below_major_is_rejected(self) -> None:
+        for impact in ["none", "patch", "minor"]:
+            with self.subTest(impact=impact):
+                with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
+                    self.parse(self.body(impact, breaking="yes", migration="docs/migrate.md"))
+
+    def test_migration_is_required_and_substantive_when_breaking(self) -> None:
+        with self.assertRaisesRegex(release.ReleaseError, "migration is required"):
+            self.parse(self.body("minor", breaking="no", migration=None))
+        for placeholder in ["none", "", "N/A"]:
+            with self.subTest(migration=placeholder):
+                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                    self.parse(self.body("major", breaking="yes", migration=placeholder))
+        self.parse(self.body("major", breaking="yes", migration="see Breaking change"))
+
+    def test_unresolved_migration_alternatives_are_rejected(self) -> None:
+        for impact, breaking in [("minor", "no"), ("major", "yes")]:
+            for value in [UNRESOLVED_MIGRATION, "none, steps, or see Breaking change", "steps"]:
+                with self.subTest(impact=impact, migration=value):
+                    with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+                        self.parse(self.body(impact, breaking=breaking, migration=value))
+
+    def test_breaking_rejects_empty_and_placeholder_migration(self) -> None:
+        for value in ["``", " NONE ", "n/a", "TODO", "TBD", "-", "`none`"]:
+            with self.subTest(migration=value):
+                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                    self.parse(self.body("major", breaking="yes", migration=value))
+
+    def test_quoted_migration_placeholders_are_rejected(self) -> None:
+        for value in QUOTED_MIGRATION_PLACEHOLDERS:
+            with self.subTest(migration=value):
+                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                    self.parse(self.body("major", breaking="yes", migration=value))
+
+    def test_filled_template_parses_for_every_ordinary_level(self) -> None:
+        for impact in ["none", "patch", "minor"]:
+            with self.subTest(impact=impact):
+                fields = release.parse_release_impact(filled_template(impact, "no", "none"))
+                self.assertEqual(("no", "none"), (fields["breaking"], fields["migration"]))
+        fields = release.parse_release_impact(
+            filled_template("major", "yes", "see Breaking change")
+        )
+        self.assertEqual("yes", fields["breaking"])
+        with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+            release.parse_release_impact(filled_template("major", "yes"))
+
+    def test_missing_or_unresolved_breaking_is_rejected(self) -> None:
+        with self.assertRaisesRegex(release.ReleaseError, "breaking is required"):
+            self.parse(self.body("minor", breaking="no").replace("- Breaking: no\n", ""))
+        with self.assertRaisesRegex(release.ReleaseError, "yes or no"):
+            self.parse(self.body("minor", breaking="`yes | no`"))
+
+
 class PullRequestTests(unittest.TestCase):
     def setUp(self) -> None:
         self.repo = Repository()
@@ -644,6 +800,70 @@ class PullRequestTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "migration"):
             self.run_check(base, head, self.repo.body("major", contract="breaking"))
         self.run_check(base, head, self.repo.body("major", contract="breaking", migration="docs/migrate.md"))
+
+    def test_watched_path_needs_an_explicit_breaking_assessment(self) -> None:
+        base = self.repo.target
+        self.repo.pending("2.1.0", [("minor", "watched addition")])
+        self.repo.write("docs/releasing.md", "changed\n")
+        head = self.repo.commit("feat: watched addition")
+        with self.assertRaisesRegex(release.ReleaseError, "watched contract"):
+            self.run_check(base, head, self.repo.body("minor", contract="not-applicable"))
+        self.run_check(base, head, self.repo.body("minor", breaking="no"))
+
+    def test_filled_template_major_needs_a_chosen_migration(self) -> None:
+        base = self.repo.target
+        self.repo.pending("3.0.0", [("major", "replace old command")])
+        head = self.repo.commit("feat!: replace old command")
+        with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+            self.run_check(base, head, filled_template("major", "yes"))
+        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+            self.run_check(base, head, filled_template("major", "yes", "``"))
+        self.run_check(base, head, filled_template("major", "yes", "run the new command"))
+
+    def test_declared_breaking_normalizes_quoted_migration_guidance(self) -> None:
+        base = self.repo.target
+        self.repo.pending("3.0.0", [("major", "replace old command")])
+        head = self.repo.commit("feat!: replace old command")
+        for value in QUOTED_MIGRATION_PLACEHOLDERS:
+            with self.subTest(migration=value):
+                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                    self.run_check(base, head, filled_template("major", "yes", value))
+        for value in SUBSTANTIVE_MIGRATIONS:
+            with self.subTest(migration=value):
+                self.run_check(base, head, filled_template("major", "yes", value))
+
+    def test_reconciled_major_normalizes_quoted_migration_guidance(self) -> None:
+        self.repo.pending("3.0.0", [("major", "replace old command")])
+        base = self.repo.commit("feat!: pending break")
+        self.repo.pending("3.0.0", [("major", "replace old command after migration")])
+        head = self.repo.commit("docs: clarify breaking note")
+        for value in QUOTED_MIGRATION_PLACEHOLDERS:
+            with self.subTest(migration=value):
+                with self.assertRaisesRegex(release.ReleaseError, "added major entry"):
+                    self.run_check(base, head, filled_template("none", "no", value))
+        for value in SUBSTANTIVE_MIGRATIONS:
+            with self.subTest(migration=value):
+                self.run_check(base, head, filled_template("none", "no", value))
+
+    def test_filled_template_refinement_of_pending_major_keeps_migration(self) -> None:
+        self.repo.pending("3.0.0", [("major", "replace old command")])
+        base = self.repo.commit("feat!: pending break")
+        self.repo.pending("3.0.0", [("major", "replace old command after migration")])
+        head = self.repo.commit("docs: clarify breaking note")
+        with self.assertRaisesRegex(release.ReleaseError, "added major entry"):
+            self.run_check(base, head, filled_template("none", "no", "none"))
+        with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
+            self.run_check(base, head, filled_template("none", "no"))
+        self.run_check(base, head, filled_template("none", "no", "docs/migrate.md"))
+
+    def test_additive_task_on_cumulative_major_pending_declares_minor(self) -> None:
+        self.repo.pending("3.0.0", [("major", "earlier break")])
+        base = self.repo.commit("feat!: earlier break")
+        self.repo.pending("3.0.0", [("major", "earlier break"), ("minor", "new command")])
+        head = self.repo.commit("feat: new command")
+        self.run_check(base, head, self.repo.body("minor", breaking="no"))
+        with self.assertRaisesRegex(release.ReleaseError, "if and only if"):
+            self.run_check(base, head, self.repo.body("minor", breaking="yes"))
 
     def test_concurrent_clean_stale_merges_fail_in_both_orders(self) -> None:
         for work_name, target_name in [("alpha", "beta"), ("beta", "alpha")]:

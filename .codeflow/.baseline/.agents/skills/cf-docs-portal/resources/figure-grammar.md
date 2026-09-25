@@ -60,8 +60,9 @@ project, never by the figure.
 | 11 | A description | `<title>` and `<desc>` on the SVG; the description names every state and states every drawn fact in words | grammar module |
 | 12 | A table twin | A disclosure below the caption holding the same facts as a table, inline or derived from the declaration | grammar module |
 
-The chat form of a figure obeys the same rules where the medium allows: one
-idea, every mark explained, a caption line, and no box of text.
+A figure in chat, whatever form its surface takes, obeys the same rules
+where the medium allows: one idea, every mark explained, a caption line, and
+no box of text.
 
 ## 3. Altitude contract
 
@@ -265,11 +266,13 @@ with that exclusion can neither the properties nor the sheet reach a figure.
 
 ## 7. Chat form
 
-In chat the family choice is the same; the medium changes the marks. Draw an
-ASCII figure only when a relationship carries the point, and then draw the
-family the relationship names: lanes and bars for flow, a grid for coverage,
-bars to length for extent, ranked nodes and arrows for graph. One idea, every
-mark explained in a legend line, one caption line, no box of text.
+In chat the family choice is the same; the medium changes the marks. The
+surface rule in `cf-method/references/workflow-lifecycle.md` picks a reply's
+form; this section is its plain-text form. Draw an ASCII figure only when a
+relationship carries the point, and then draw the family the relationship
+names: lanes and bars for flow, a grid for coverage, bars to length for
+extent, ranked nodes and arrows for graph. One idea, every mark explained in
+a legend line, one caption line, no box of text.
 
 Each specimen in `figure-grammar-specimens.md` ends with its chat form, drawn
 on the same facts as its SVG. A README figure is this chat form; the medium

@@ -1448,7 +1448,7 @@ tiers = ["minimal", "standard", "full"]
 src = "ci/pull_request_template.md"
 dest = ".github/pull_request_template.md"
 ownership = "managed"
-tiers = ["standard", "full"]
+tiers = ["minimal", "standard", "full"]
 
 # --- project management templates (--full tier) ------------------------------
 

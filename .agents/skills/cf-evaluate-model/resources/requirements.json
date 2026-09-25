@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-23-operating-doctrine-v1",
+  "requirements_version": "2026-09-24-summary-and-figure-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -1256,7 +1256,7 @@
     {
       "id": "CF-OUT-002",
       "level": "hard",
-      "statement": "Substantial prose and every operator-facing reply are reviewed in their full project, audience, medium, and task context; preserve technical meaning and credible documented voice; remove unsupported certainty, sycophancy, inflation, obstructive formatting, and mannered prose (slogans, contrast turns, dramatic fragments, paragraph walls) without fabricating personality. A summary opens with two to four sentences of plain prose before any bullets or table; a one-line answer stays one line and is never padded to meet that count. The only fixed exclusions are the em and en dash in new text that ADR-0067 names; there is otherwise no lexical, punctuation, list, or emoji blacklist, and legitimate punctuation on existing lines is preserved.",
+      "statement": "Substantial prose and every operator-facing reply are reviewed in their full project, audience, medium, and task context; preserve technical meaning and credible documented voice; remove unsupported certainty, sycophancy, inflation, obstructive formatting, and mannered prose (slogans, contrast turns, dramatic fragments, paragraph walls) without fabricating personality. A reply, report, or pull request body opens with a summary that gives context only: one to three short sentences on what this is and why, with no mechanism, file name, identifier, number, rule list, or caveat. Every detail follows as bullets, one point each, in a logical order, with tables for tabular data and fenced blocks for pasted output. The summary is judged by what it carries as well as its length: a short summary that already holds the details fails. A one-line answer stays one line and is never padded into a summary. The only fixed exclusions are the em and en dash in new text that ADR-0067 names; there is otherwise no lexical, punctuation, list, or emoji blacklist, and legitimate punctuation on existing lines is preserved.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
@@ -1279,8 +1279,10 @@
           "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
           "markers": [
             "Operator-facing replies follow the written content policy (ADR-0067)",
-            "a summary is two to four sentences before any list",
-            "while a one-line answer stays one line",
+            "opens with a summary that gives context only",
+            "Write the summary as one to three short sentences",
+            "Judge the summary by what it carries",
+            "a one-line answer stays one line",
             "is a defect in a reply as much as in a document",
             "Em and en dashes are absent from new text on every policy surface, replies included"
           ]
@@ -1291,7 +1293,17 @@
             "Mannered prose performs instead of informing",
             "It is a defect in any operator-facing text, a chat reply included",
             "A reply or summary runs as a paragraph wall",
+            "A summary carries details where it should give context only",
+            "Details sit in prose paragraphs after the summary",
             "Do not rewrite merely because text uses an em dash on a line that predates ADR-0067"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "**Summary** gives context only: what the PR is and why it exists",
+            "Write it as one to three short sentences",
+            "Judge it by what it carries"
           ]
         }
       ]
@@ -1299,7 +1311,7 @@
     {
       "id": "CF-OUT-003",
       "level": "hard",
-      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use an ASCII diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects. A reply whose point is a flow or relationship carries the figure itself (fenced ASCII in chat), not only the recognition that one would help, and a substantial comparison or review that one surface with anchored feedback would make clearer opens or offers cf-present with the reason.",
+      "statement": "Presentation is contextual and proportionate: simple answers stay simple; when relationships, hierarchy, state, timelines, mappings, or decisions are materially clearer visually, use a diagram whose scope and detail fit the explanation; prefer the least complicated complete representation rather than the physically smallest, allow larger, layered, or multi-view diagrams when complexity warrants them, and add a brief caption or legend when it aids orientation; decorative or forced diagrams, headings, tables, and recaps are defects. A reply whose point is a flow, structure, state, or comparison carries the figure itself, not only the recognition that one would help, in a form matched to its surface: an inline HTML figure where the harness renders one, or a cf-present page when the figure needs a full page or anchored review; fenced ASCII only on a terminal or other plain-text surface or when the surface is unknown; and never a Mermaid block; and a substantial comparison or review that one surface with anchored feedback would make clearer opens or offers cf-present with the reason.",
       "sources": [
         {
           "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
@@ -1330,7 +1342,10 @@
         {
           "path": ".agents/skills/cf-method/references/workflow-lifecycle.md",
           "markers": [
-            "the reply carries a figure: fenced ASCII in chat",
+            "the reply carries a figure. Match the form to the surface",
+            "Where the harness renders one, use an inline HTML figure, or a `cf-present` page",
+            "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders",
+            "Never use Mermaid for a reply figure",
             "open or offer `cf-present` and say why",
             "A simple answer stays simple: no figure, no headings, no recap"
           ]

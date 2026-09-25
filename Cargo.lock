@@ -258,6 +258,7 @@ dependencies = [
  "codeflow-present",
  "libc",
  "portable-pty",
+ "pulldown-cmark",
  "rust-embed",
  "serde_json",
  "tempfile",

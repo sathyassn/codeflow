@@ -69,6 +69,14 @@ cargo-dist is the only publisher. It builds four target binaries plus shell and
 PowerShell installers, and it is the only tag, release, and artifact publisher;
 its generated workflow runs only by explicit human dispatch on `main`.
 
+PRs carry one `Release impact` section with `Impact`, `Breaking`,
+`Rationale`, `Migration`, `Unit` and `Evidence`. `Breaking: yes` holds if and
+only if `Impact: major`, and a break needs substantive migration guidance.
+A nonbreaking refinement of a pending major entry still carries its migration
+reference, and a field left at the template's alternatives fails.
+The legacy `Contract` field is accepted during the transition and must agree
+with `Breaking` when both appear.
+
 Withdrawing a pending entry before release removes that entry and its impact
 marker, and the PR body explains why the remaining net contract permits the
 lower target.

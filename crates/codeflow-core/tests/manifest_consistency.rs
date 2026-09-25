@@ -1607,7 +1607,8 @@ fn explanation_method_is_shared_and_carries_its_stages_readers_and_carriers() {
         "| a surface as it is | screenshot |",
         "| facts to look up, with no relationship | table |",
         "| a distribution, or a series over time | no family draws it today |",
-        "In chat and in a README, a figure is the fenced ASCII chat form",
+        "In a chat reply, the surface rule in `cf-method/references/workflow-lifecycle.md` picks the form; the fenced ASCII chat form is its plain-text form.",
+        "In a README, a figure is the fenced ASCII chat form",
         "An SVG file and a Mermaid fence are not README figures",
         "GitHub shows a `cf-stage` fence as code",
         "The smallest carrier that keeps the depth wins",
@@ -1744,6 +1745,73 @@ fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
             "explanation method lost: {marker}"
         );
     }
+}
+
+/// The paragraphs of `text` that tie a chat figure to the ASCII form without
+/// deferring to the lifecycle's surface rule: the paragraph names ASCII and a
+/// chat medium, and neither scopes it to a plain-text surface nor points at
+/// `workflow-lifecycle.md`. A paraphrase that avoids these words is not
+/// detected; review owns that case.
+fn unconditional_ascii_chat_paragraphs(text: &str) -> Vec<String> {
+    text.split("\n\n")
+        .map(normalized_whitespace)
+        .filter(|paragraph| {
+            let lower = paragraph.to_lowercase();
+            lower.contains("ascii")
+                && ["in chat", "for chat", "chat reply"]
+                    .iter()
+                    .any(|medium| lower.contains(medium))
+                && !lower.contains("plain-text")
+                && !lower.contains("workflow-lifecycle.md")
+        })
+        .collect()
+}
+
+/// The lifecycle owns the reply surface rule: an inline HTML figure where
+/// the harness renders one, a `cf-present` page for a full page, and fenced
+/// ASCII only on a plain-text or unknown surface. While it does, no Markdown
+/// file of either presentation skill (the explanation method, the figure
+/// grammar and the portal content contract included) may state that a chat
+/// figure is ASCII without deferring to that rule.
+#[test]
+fn presentation_chat_figures_defer_to_the_lifecycle_surface_rule() {
+    let lifecycle = normalized_whitespace(
+        &std::fs::read_to_string(
+            repo_root()
+                .join("assets/base/claude/skills/cf-method/references/workflow-lifecycle.md"),
+        )
+        .expect("workflow lifecycle is readable"),
+    );
+    for rule in [
+        "Where the harness renders one, use an inline HTML figure, or a `cf-present` page when the figure needs a full page or anchored review.",
+        "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders.",
+    ] {
+        assert!(
+            lifecycle.contains(rule),
+            "workflow lifecycle lost the reply surface rule: {rule}"
+        );
+    }
+    assert_eq!(
+        unconditional_ascii_chat_paragraphs(
+            "In chat and in a README, a figure is the fenced ASCII chat form."
+        )
+        .len(),
+        1,
+        "the predicate must flag an unconditional ASCII chat rule"
+    );
+    let mut problems = Vec::new();
+    for skill in ["cf-present", "cf-docs-portal"] {
+        for (path, text) in presentation_skill_markdown(skill) {
+            for paragraph in unconditional_ascii_chat_paragraphs(&text) {
+                problems.push(format!("{skill}/{path}: {paragraph}"));
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "chat figure rules must defer to the lifecycle surface rule:\n  {}",
+        problems.join("\n  ")
+    );
 }
 
 /// Each presentation skill carries its only load list in `SKILL.md`; the
@@ -2054,7 +2122,7 @@ fn presentation_doctrine_carries_screenshot_rules_figure_media_and_the_page_walk
     let contract = read("cf-docs-portal/references/content-contract.md");
     for marker in [
         "SVG/PDF copies, traversal, unsupported schemes, and broken targets fail closed",
-        "For authors: on the portal and in present a figure is inline SVG through the figure block, and in chat and a README it is the ASCII chat form.",
+        "For authors: on the portal and in present a figure is inline SVG through the figure block, in a README it is the ASCII chat form, and in a chat reply the surface rule in `cf-method/references/workflow-lifecycle.md` picks the form.",
     ] {
         if !contract.contains(marker) {
             missing.push(format!("content contract: {marker}"));
