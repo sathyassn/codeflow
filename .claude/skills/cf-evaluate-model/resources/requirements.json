@@ -2604,7 +2604,7 @@
     {
       "id": "CF-METH-003",
       "level": "hard",
-      "statement": "The smallest carrier that keeps the depth wins: facts with no relationship between them take bullets or a table and no figure, and such an answer is graded on completeness and proportionate form alone, with no lead or explanation of the formatting required.",
+      "statement": "The smallest carrier that keeps the depth wins: facts with no relationship between them take bullets or a table and no figure, and such an answer passes on the universal checks alone.",
       "sources": [
         {
           "path": ".agents/skills/cf-docs-portal/resources/explanation-method.md",

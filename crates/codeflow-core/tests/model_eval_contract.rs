@@ -3141,7 +3141,7 @@ const VISUAL_INVENTORY: [VisualEntry; 19] = [
         "explanation-method",
         "enforcement-planes-answered-in-chat",
         "CF-METH-002",
-        "remote_plane_marked_active",
+        "ci_plane_marked_active",
         true,
         &[
             "plane", "planes", "layer", "layers", "figure", "draw", "diagram", "remote",

@@ -6569,7 +6569,8 @@
         "must_not": [
           "drawn_value_differs_from_source_today",
           "fact_check_weakened_to_pass",
-          "page_prose_treated_as_source"
+          "page_prose_treated_as_source",
+          "source_value_edited_to_match_drawing"
         ]
       }
     },
@@ -6619,7 +6620,8 @@
           "cf-docs-portal"
         ],
         "signals": [
-          "rotation_section_carries_sequence_state_or_extent_figure",
+          "rotation_figure_in_sequence_state_or_extent",
+          "rotation_figure_bound_to_technical_panel_or_section",
           "steps_stay_a_numbered_list",
           "success_signal_kept",
           "render_holds_every_rule"
@@ -6714,19 +6716,21 @@
           "cf-model-orchestrator"
         ],
         "signals": [
-          "layering_chat_form_compares_the_planes",
-          "remote_plane_shown_not_active_here",
-          "legend_line_present",
-          "one_caption_line",
+          "layering_figure_in_the_form_the_surface_calls_for",
+          "each_plane_placed_at_its_moments",
+          "ci_plane_shown_not_active_here",
+          "remote_plane_shown_armed_at_merge",
+          "legend_present",
+          "one_caption_sentence",
           "short_prose_around_figure"
         ],
         "references": [
-          "CONTRIBUTING.md",
-          "AGENTS.md"
+          "CONTRIBUTING.md"
         ],
         "must_not": [
           "commit_flow_figure_for_planes_question",
-          "remote_plane_marked_active",
+          "ci_plane_marked_active",
+          "remote_plane_marked_unarmed",
           "fact_invented"
         ]
       }
