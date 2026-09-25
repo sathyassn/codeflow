@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-23-operating-doctrine-v1",
+  "requirements_version": "2026-09-24-autonomy-with-judgment-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -2421,6 +2421,83 @@
           "path": "AGENTS.md",
           "markers": [
             "never unilaterally cross an ethical, authority, or privacy boundary to finish"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-AUTO-001",
+      "level": "hard",
+      "statement": "A change request runs from its settled outcome to the readiness report. Discoverable facts, reversible choices, a repeated safe step, a red job, a missing seat or credit, a green reviewed merge into an integration branch no protected-branch policy covers, a trust prompt for the task's own project or this run's sample, and a reversible seat dissent are settled from evidence and disclosed without asking; a settled dissent keeps the dissenting verdict as given. Only intent, public behavior, taste, and authority or scope beyond the brief are asked, and hard gates (spend, credentials, sending outside the conversation or to a changed recipient, a merge into a protected target including a protected integration glob, an unrestorable delete) wait for a human for that action only; a trust prompt for any other path goes to the operator. Ready on local evidence needs a completed green result of every owed check and names the hosted gap; a check that never ran anywhere is a missing gate.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-method/references/autonomy.md",
+          "markers": [
+            "A brief that asks for a change selects implementation through the readiness report.",
+            "Do not stop to offer the next step, to confirm a safe step you already have authority for",
+            "A stop holds only that one action",
+            "Record a missing seat, tool or credit as reduced assurance and continue on the recorded fallback.",
+            "intent or public behavior the brief does not fix;",
+            "spend, including buying credits;",
+            "anything sent outside the conversation, as or for the operator;",
+            "every protected glob in `.codeflow/policy.json`, including a protected `integration/` glob;",
+            "a delete that version control, a backup or a scratch area cannot restore;",
+            "Decide by authorization and path identity",
+            "A folder that another run created, or a path that only resembles yours, is foreign.",
+            "The dissenting verdict stays as given and is never recorded as approval",
+            "1: take it without asking; progress goes in the running report, never in an offer",
+            "1: choose from evidence and disclose it",
+            "1: classify and continue; fix an assertion-red check, push and poll again",
+            "2: the primary merges it without fast forward or with `codeflow integrate`, then reruns the gate",
+            "3: ask for a fresh grant",
+            "4: wait for the operator; do not spend",
+            "4: report it ready; a human merges"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "A change request selects implementation through the readiness report",
+            "contract's `SETTLED_DISSENT` rule governs each open item"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+          "markers": [
+            "The dissenting seat's verdict on that item stays as given and is never recorded as approval",
+            "needs a completed green result of every owed required check at the pull request head"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/task-graph.md",
+          "markers": [
+            "It is never waited on and never recorded as approving"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "Buying credits is spend and stays with the operator: do not purchase, name it in the report and continue on the fallback."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/SKILL.md",
+          "markers": [
+            "The primary merges a green, reviewed PR into an `integration/` branch no protected-branch policy covers",
+            "A protected target, including a protected `integration/` glob, is reported ready"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-ship/references/pr-evidence.md",
+          "markers": [
+            "Paste the local full gate summary with the head SHA, and name each hosted job that never ran with the reason the tool gave.",
+            "is a missing gate: name it as the blocker, keep the PR draft where required evidence is missing"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-herdr/SKILL.md",
+          "markers": [
+            "Trust this task's project/worktree or this run's sample; ask for others (`autonomy.md`)."
           ]
         }
       ]

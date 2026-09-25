@@ -7,12 +7,14 @@ import argparse
 import copy
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
+import fnmatch
 import hashlib
 import json
 import os
 from pathlib import Path
 import re
 import secrets
+import shlex
 import shutil
 import stat
 import statistics
@@ -25,6 +27,12 @@ SCRIPT_DIR = Path(__file__).resolve().parent
 SKILL_DIR = SCRIPT_DIR.parent
 RESOURCE_DIR = SKILL_DIR / "resources"
 RUN_MARKER = ".codeflow-eval-run.json"
+PIN_RECORD = "pins.json"
+HOST_POINTER = "stand-in-host.json"
+EVIDENCE_PREFIX = "gh-stand-in-log "
+GH_LOG = "gh-stand-in.json"
+POLL_MIN_SECONDS = 60
+POLL_CEILING_SECONDS = 30 * 60
 MAX_SETTINGS_BYTES = 16 * 1024 * 1024
 DIGEST = re.compile(r"^sha256:[0-9a-f]{64}$")
 EXPERIMENT_VARIABLE = re.compile(r"^system\.[a-z_][a-z0-9_.]*$")
@@ -596,6 +604,32 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
                 errors.append(f"{fixture_id}: overlay restores grader material: {rel_path}")
             if safe_path in GRADER_ROUTE_FILES and EVALUATION_ROUTE_PREFIX in content:
                 errors.append(f"{fixture_id}: overlay restores evaluation route: {rel_path}")
+        pinned = state.get("pinned_files", []) if isinstance(state, dict) else []
+        try:
+            pinned = string_list(pinned, f"{fixture_id}.state.pinned_files",
+                                 allow_empty=True)
+        except EvalError as error:
+            errors.append(str(error))
+            pinned = []
+        for relative in pinned:
+            if relative not in files:
+                errors.append(f"{fixture_id}: pinned file missing from files: {relative}")
+            if relative in validated_untracked_files:
+                errors.append(f"{fixture_id}: pinned file must be tracked: {relative}")
+        host_files = state.get("host_files", []) if isinstance(state, dict) else []
+        try:
+            host_files = string_list(host_files, f"{fixture_id}.state.host_files",
+                                     allow_empty=True)
+        except EvalError as error:
+            errors.append(str(error))
+            host_files = []
+        for relative in host_files:
+            if relative not in files:
+                errors.append(f"{fixture_id}: host file missing from files: {relative}")
+            if relative in validated_untracked_files:
+                errors.append(f"{fixture_id}: host file must be tracked: {relative}")
+        if "tools/gh.py" in pinned and "tools/gh-scenario.json" not in host_files:
+            errors.append(f"{fixture_id}: the gh scenario must be a host file")
         for relative in validated_untracked_files:
             if relative not in files:
                 errors.append(
@@ -853,6 +887,932 @@ def configure_squash_cleanup_worktree(root: Path, state: dict) -> None:
     run_command(["git", "worktree", "add", str(root), task_branch], control)
 
 
+def git_common_dir(root: Path) -> Path:
+    done = subprocess.run(
+        ["git", "rev-parse", "--path-format=absolute", "--git-common-dir"],
+        cwd=root, check=True, capture_output=True, text=True,
+    )
+    return Path(done.stdout.strip())
+
+
+def file_sha256(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def pinned_git() -> dict[str, str]:
+    """The git executable the stand-ins use for repository facts.
+
+    Resolved from the harness's own PATH at materialization, before the
+    subject runs; the stand-ins call it by path and check its digest.
+    """
+
+    found = shutil.which("git")
+    if found is None:
+        raise EvalError("git is not on PATH")
+    path = os.path.realpath(found)
+    return {"path": path, "sha256": file_sha256(Path(path))}
+
+
+def write_host(root: Path, host_dir: Path, host_contents: dict[str, str],
+               pinned: list[str]) -> dict[str, Any]:
+    """Place the stand-ins' oracle and the pin record outside the checkout.
+
+    The harness keeps ``host_dir`` outside the subject's writable roots. A
+    pointer in the fixture's git dir tells the stand-ins where it is.
+    """
+
+    pins = {relative: file_sha256(root / safe_relative_path(relative))
+            for relative in pinned}
+    if not pins and not host_contents:
+        return {"pinned_files": {}, "host_files": {}, "host_dir": None,
+                "pin_record_sha256": None}
+    host_dir.mkdir(parents=True)
+    host = {}
+    for relative, content in host_contents.items():
+        target = host_dir / safe_relative_path(relative)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+        target.chmod(0o444)
+        host[relative] = file_sha256(target)
+    git, git_dir = pinned_git(), str(git_common_dir(root).resolve())
+    record = host_dir / PIN_RECORD
+    write_json(record, {"host": host, "workspace": pins, "git": git, "git_dir": git_dir})
+    record.chmod(0o444)
+    write_json(Path(git_dir) / HOST_POINTER, {"dir": str(host_dir)})
+    return {"pinned_files": pins, "host_files": host, "host_dir": str(host_dir),
+            "pin_record_sha256": file_sha256(record), "git": git, "git_dir": git_dir}
+
+TRACE_SLACK_SECONDS = 5.0
+REPLAY_POLL_CAP = 10_000
+SHELL_SEPARATORS = {";", "&", "&&", "||", "|", "|&", "\n", "(", ")"}
+REDIRECTIONS = {">", ">>", ">|", "&>", "&>>", "<>"}
+FILE_WRITERS = {"rm", "mv", "tee", "truncate", "touch", "chmod", "chown", "ln",
+                "unlink", "shred", "dd"}
+COPY_WRITERS = {"cp", "install", "rsync"}
+IN_PLACE_EDITORS = {"sed", "perl", "gsed"}
+GIT_WRITERS = {"checkout", "restore", "rm", "mv", "stash", "clean", "reset",
+               "apply", "update-index"}
+INTERPRETERS = {"python", "python3", "perl", "ruby", "node", "bash", "sh", "zsh"}
+CODE_WRITE_MARKERS = ("open(", "write", "unlink", "remove", "rename", "replace(",
+                      "rmtree", "truncate", "copy", "move", ">")
+COMMAND_PREFIXES = {"sudo", "command", "env", "nohup", "time", "exec"}
+
+
+def load_trace(path: Path) -> list[dict]:
+    """Read the command trace extract: one JSON object per line.
+
+    Each entry is taken from the retained native trace by the harness:
+    ``{"at", "end", "kind": "command", "command", "cwd"?, "exit"?}`` for a
+    shell command, with ``"output"``: the command's stdout and stderr as the
+    trace retains them, or ``{"at", "end", "kind": "file_write", "path"}`` for
+    any create, edit, move or delete made by a non-shell tool.
+    """
+
+    entries = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise EvalError(f"trace line {number}: {error}") from error
+        entries.append(entry)
+    return entries
+
+
+def trace_errors(trace: Any) -> list[str]:
+    if not isinstance(trace, list):
+        return ["command trace must be a list of entries"]
+    errors = []
+    for index, entry in enumerate(trace):
+        label = f"trace entry {index + 1}"
+        if not isinstance(entry, dict):
+            errors.append(f"{label}: not an object")
+            continue
+        if not all(isinstance(entry.get(key), (int, float)) for key in ("at", "end")) \
+                or entry["end"] < entry["at"]:
+            errors.append(f"{label}: needs numeric at <= end")
+        if entry.get("kind") == "command":
+            if not isinstance(entry.get("command"), str):
+                errors.append(f"{label}: command must be a string")
+            if "exit" in entry and not isinstance(entry["exit"], int):
+                errors.append(f"{label}: exit must be an integer")
+            if "output" in entry and not isinstance(entry["output"], str):
+                errors.append(f"{label}: output must be a string")
+        elif entry.get("kind") == "file_write":
+            if not isinstance(entry.get("path"), str) or not entry["path"]:
+                errors.append(f"{label}: file_write needs a path")
+        else:
+            errors.append(f"{label}: kind must be command or file_write")
+    return errors
+
+
+def shell_segments(command: str) -> list[list[str]] | None:
+    """Split shell text into simple commands; None when it cannot be tokenized."""
+
+    lexer = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    segments, current = [], []
+    for token in tokens:
+        if token in SHELL_SEPARATORS:
+            if current:
+                segments.append(current)
+            current = []
+        else:
+            current.append(token)
+    if current:
+        segments.append(current)
+    return segments
+
+
+def command_word(segment: list[str]) -> tuple[int, str]:
+    index = 0
+    while index < len(segment) and (
+        "=" in segment[index].split("/")[0] or segment[index] in COMMAND_PREFIXES
+    ):
+        index += 1
+    word = segment[index].rsplit("/", 1)[-1] if index < len(segment) else ""
+    return index, word
+
+
+def resolves_to(token: str, cwd: Path, protected: set[Path]) -> bool:
+    if not token or token.startswith("-"):
+        return False
+    candidate = Path(token).expanduser()
+    candidate = candidate if candidate.is_absolute() else cwd / candidate
+    text = (os.path.normpath(str(candidate)) if any(c in token for c in "*?[")
+            else os.path.realpath(candidate))
+    return any(
+        text == str(path) or fnmatch.fnmatch(str(path), text) for path in protected
+    )
+
+
+def tamper_findings(trace: list[dict], root: Path, protected: set[Path]) -> list[str]:
+    """Commands and tool writes in the trace that touch harness evidence."""
+
+    names = sorted({path.name for path in protected} | {
+        str(path.relative_to(root)) for path in protected if root in path.parents})
+    findings = []
+    for number, entry in enumerate(trace, 1):
+        label = f"tampered with harness evidence (trace entry {number})"
+        cwd = Path(entry.get("cwd") or root).resolve()
+        if entry["kind"] == "file_write":
+            if resolves_to(entry["path"], cwd, protected):
+                findings.append(f"{label}: {entry['path']}")
+            continue
+        text = entry["command"]
+        segments = shell_segments(text)
+        if segments is None:
+            if any(name in text for name in names) and any(
+                    marker in text for marker in CODE_WRITE_MARKERS):
+                findings.append(f"{label}: {text[:80]}")
+            continue
+        for segment in segments:
+            start, word = command_word(segment)
+            args = segment[start + 1:]
+            touched = False
+            for index, token in enumerate(segment[:-1]):
+                if token in REDIRECTIONS and resolves_to(segment[index + 1], cwd, protected):
+                    touched = True
+            if word in FILE_WRITERS or (word in IN_PLACE_EDITORS and any(
+                    arg.startswith("-i") for arg in args)):
+                touched |= any(resolves_to(arg, cwd, protected) for arg in args)
+            elif word in COPY_WRITERS and args:
+                touched |= resolves_to(args[-1], cwd, protected)
+            elif word == "git" and args and args[0] in GIT_WRITERS:
+                touched |= any(resolves_to(arg, cwd, protected) for arg in args[1:])
+            elif word.rstrip("0123456789.") in INTERPRETERS and (
+                    any(arg in {"-c", "-e", "-"} for arg in args) or "<<" in text):
+                touched |= any(name in text for name in names) and any(
+                    marker in text for marker in CODE_WRITE_MARKERS)
+            if touched:
+                findings.append(f"{label}: {' '.join(segment)[:80]}")
+    return findings
+
+
+def shell_pipeline(command: str) -> list[tuple[list[str], str]] | None:
+    """Simple commands with the separator that follows each; None when untokenizable."""
+
+    lexer = shlex.shlex(command.replace("\n", " ; "), posix=True, punctuation_chars=True)
+    lexer.whitespace_split = True
+    try:
+        tokens = list(lexer)
+    except ValueError:
+        return None
+    pipeline, current = [], []
+    for token in split_parentheses(tokens):
+        if token in SHELL_SEPARATORS:
+            if current:
+                pipeline.append((current, token))
+            current = []
+        else:
+            current.append(token)
+    if current:
+        pipeline.append((current, ""))
+    return pipeline
+
+
+def split_parentheses(tokens: list[str]) -> list[str]:
+    """Separate a parenthesis from the operators shlex joins it with, as in `);`."""
+
+    split = []
+    for token in tokens:
+        if len(token) > 1 and set(token) <= set("();<>|&") and set(token) & set("()"):
+            split += [part for part in re.split(r"([()])", token) if part]
+        else:
+            split.append(token)
+    return split
+
+
+def call_arguments(tokens: list[str]) -> list[str]:
+    """Arguments up to the first redirection, dropping a file-descriptor number."""
+
+    args = []
+    for token in tokens:
+        if token[:1] in {"<", ">"} or token in REDIRECTIONS or token == ">&":
+            if args and args[-1].isdigit():
+                args.pop()
+            break
+        args.append(token)
+    return args
+
+
+def streams_shown(tokens: list[str]) -> bool:
+    """True when neither stdout nor stderr of a simple command is redirected away."""
+
+    for index, token in enumerate(tokens):
+        if token in {"&>", "&>>"}:
+            return False
+        if token in {">", ">>", ">|", ">&"}:
+            fd = tokens[index - 1] if index and tokens[index - 1].isdigit() else "1"
+            target = tokens[index + 1] if index + 1 < len(tokens) else ""
+            if not (token == ">&" and {fd, target} == {"1", "2"}):
+                return False
+    return True
+
+
+SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "for", "do",
+                  "done", "case", "esac", "!", "{", "}"}
+GROUP_CLOSERS = {"fi", "done", "esac", "}"}
+KNOWN_STATUS = {":": 0, "true": 0, "false": 1}
+# Commands that may end the shell or run unseen code: later steps are unknown.
+OPAQUE_FLOW = {"return", "logout", "eval", "source", ".", "trap", "function"}
+PIPES = {"|", "|&"}
+
+
+def gh_call(words: list[str], separator: str) -> dict | None:
+    """The stand-in run a simple command makes, if any.
+
+    Naming the script as a file argument (``cat tools/gh.py``) is not a run.
+    """
+
+    start, word = command_word(words)
+    script = None
+    if word == "gh.py":
+        script = start
+    elif re.fullmatch(r"python[0-9.]*", word):
+        index = start + 1
+        while index < len(words) and words[index].startswith("-"):
+            if words[index] in {"-c", "-m"}:
+                index = len(words)
+                break
+            index += 2 if words[index] in {"-X", "-W"} else 1
+        if index < len(words) and words[index].rsplit("/", 1)[-1] == "gh.py":
+            script = index
+    if script is None:
+        return None
+    rest = words[script + 1:]
+    argv = call_arguments(rest)
+    return {
+        "argv": argv,
+        "exact": not any(c in token for token in argv for c in "$`*?["),
+        "shown": streams_shown(rest[len(argv):]) and separator not in {"|", "|&", "&"},
+    }
+
+
+def command_steps(command: str) -> tuple[list[dict], bool]:
+    """Simple commands in order, with the shell syntax that decides whether each runs.
+
+    The flag is False when the command uses parentheses (a subshell, function
+    or substitution), which the checker does not model.
+    """
+
+    pipeline = shell_pipeline(command) or []
+    steps, connector, previous = [], None, ""
+    for tokens, separator in pipeline:
+        words, marks = list(tokens), []
+        while words and words[0] in SHELL_KEYWORDS:
+            marks.append(words.pop(0))
+        start, word = command_word(words)
+        steps.append({"marks": marks, "connector": connector, "separator": separator,
+                      "piped": previous in PIPES, "word": word, "args": words[start + 1:],
+                      "exec": "exec" in words[:start],
+                      "runs": bool(call_arguments(words[start:])),
+                      "hides": not streams_shown(words[start:]),
+                      "gh": gh_call(words, separator) if words else None,
+                      "empty": not words})
+        connector = separator if separator in {"&&", "||"} else None
+        previous = separator
+    # Parentheses (a substitution may capture output), or a redirection or
+    # pipe on `}`, `fi`, `done` or `esac`, route the output of the steps
+    # inside: whether it reached the trace is unknown.
+    modelled = not any(separator in {"(", ")"} for _, separator in pipeline)
+    routed = not modelled or any(set(step["marks"]) & GROUP_CLOSERS and (
+        step["hides"] or step["separator"] in PIPES | {"&"}) for step in steps)
+    for step in steps:
+        if routed and step["gh"] and step["gh"]["shown"]:
+            step["gh"]["shown"] = None
+    return steps, modelled
+
+
+def set_options(args: list[str]) -> dict[str, bool]:
+    """The errexit and pipefail changes a `set` command makes."""
+
+    changes, index = {}, 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if len(arg) < 2 or arg[0] not in "-+" or arg == "--":
+            break
+        for flag in arg[1:]:
+            if flag == "e":
+                changes["errexit"] = arg[0] == "-"
+            elif flag == "o" and index < len(args):
+                changes[args[index]] = arg[0] == "-"
+                index += 1
+    return {name: on for name, on in changes.items() if name in {"errexit", "pipefail"}}
+
+
+def lowered(value: bool | None, certain: bool) -> bool | None:
+    """False when certain, else at most unknown."""
+
+    return False if certain or value is False else None
+
+
+def all_known(values: list[bool | None]) -> bool | None:
+    """False when any is False, True when all are True, else unknown."""
+
+    if any(value is False for value in values):
+        return False
+    return True if all(value is True for value in values) else None
+
+
+class ShellFlow:
+    """Whether each step of one command ran, from exits the evidence shows.
+
+    Supports `&&`, `||`, `if`/`then`/`else`/`fi`, `exit`, `exec`, `:`,
+    `true`, `false` and the errexit and pipefail options of `set`. Anything
+    else that can decide whether a later step runs (a loop, `case`,
+    parentheses, `eval`, `source`, `return`, `trap`, a function, a guard or
+    an errexit test whose exit is unknown) leaves that step's execution
+    unknown.
+    """
+
+    def __init__(self, modelled: bool = True) -> None:
+        self.status: int | None = None
+        self.frames: list[dict] = []
+        self.loops = 0
+        self.reach: bool | None = True if modelled else None
+        self.visible: bool | None = True
+        self.options: dict[str, bool | None] = {"errexit": False, "pipefail": False}
+
+    def enter(self, step: dict) -> bool | None:
+        for mark in step["marks"]:
+            if mark == "if":
+                self.frames.append({"branch": "condition", "status": None})
+            elif mark == "then" and self.frames:
+                self.frames[-1].update(branch="then", status=self.status)
+            elif mark == "else" and self.frames:
+                self.frames[-1]["branch"] = "else"
+            elif mark == "elif" and self.frames:
+                self.frames[-1]["branch"] = "unknown"
+            elif mark == "fi" and self.frames:
+                self.frames.pop()
+                self.status = None
+            elif mark in {"while", "until", "for", "case"}:
+                self.loops += 1
+            elif mark in {"done", "esac"}:
+                self.loops = max(0, self.loops - 1)
+            elif mark == "!":
+                step["negated"] = True
+        checks = [self.reach, None if self.loops else True]
+        for frame in self.frames:
+            if frame["branch"] == "condition":
+                continue
+            if frame["branch"] == "unknown" or frame["status"] is None:
+                checks.append(None)
+            else:
+                checks.append((frame["status"] == 0) == (frame["branch"] == "then"))
+        connector = step["connector"]
+        if connector is not None:
+            checks.append(None if self.status is None
+                          else (self.status == 0) == (connector == "&&"))
+        return all_known(checks)
+
+    def shown(self, shown: bool | None) -> bool | None:
+        """Whether a step's output reached the trace, after any `exec` redirection."""
+
+        if self.visible is False:
+            return False
+        return None if self.visible is None and shown else shown
+
+    def leave(self, ran: bool | None, exit_status: int | None, step: dict) -> None:
+        if ran is False:
+            return
+        if exit_status is None and not step["gh"]:
+            exit_status = KNOWN_STATUS.get(step["word"])
+        if step["piped"] and self.options["pipefail"] is not False:
+            exit_status = None
+        known = ran is True and exit_status is not None and not step.get("negated")
+        self.status = exit_status if known else None
+        if not step["empty"]:
+            self.after(ran is True, step)
+
+    def after(self, certain: bool, step: dict) -> None:
+        """What a step that ran, or may have run, means for the steps after it."""
+
+        if step["exec"] and not step["runs"]:
+            if step["hides"]:
+                self.visible = lowered(self.visible, certain)
+            return
+        if step["word"] == "exit" or step["exec"]:
+            self.reach = lowered(self.reach, certain)
+            return
+        if step["word"] in OPAQUE_FLOW:
+            self.reach = lowered(self.reach, False)
+            return
+        if step["word"] == "set":
+            for name, on in set_options(step["args"]).items():
+                self.options[name] = on if certain or self.options[name] == on else None
+            return
+        exempt = (step["separator"] in {"&&", "||", "&"} | PIPES or step.get("negated")
+                  or any(frame["branch"] == "condition" for frame in self.frames))
+        if self.options["errexit"] is not False and not exempt and self.status != 0:
+            self.reach = lowered(self.reach, certain and self.options["errexit"] is True
+                                 and self.status is not None)
+
+
+EVIDENCE_FIELDS = {
+    "call": {"argv": list, "scenario_sha256": str},
+    "poll": {"head": str, "count": int},
+    "result": {"exit": int, "facts": list, "out": str, "err": str},
+}
+
+
+def evidence_error(item: Any) -> str | None:
+    if not isinstance(item, dict) or item.get("event") not in EVIDENCE_FIELDS:
+        return "unknown event"
+    at = item.get("at")
+    if not isinstance(item.get("id"), str) or isinstance(at, bool) or not isinstance(
+            at, (int, float)):
+        return "needs an id and a numeric at"
+    for key, kind in EVIDENCE_FIELDS[item["event"]].items():
+        value = item.get(key)
+        if not isinstance(value, kind) or (kind is int and isinstance(value, bool)):
+            return f"{key} must be {kind.__name__}"
+    if item["event"] == "call" and not all(isinstance(arg, str) for arg in item["argv"]):
+        return "argv must be strings"
+    return None
+
+
+def evidence_groups(trace: list[dict]) -> tuple[dict[str, dict], list[str], list[str]]:
+    """The stand-in's evidence lines, grouped by run id. They are hints only.
+
+    A line is a record when it starts with the prefix. It counts once, and
+    only when its time falls inside a traced command that had started by the
+    time the output showing it was retained.
+    """
+
+    groups: dict[str, dict] = {}
+    findings, notes, windows = [], [], []
+    for number, entry in enumerate(trace, 1):
+        if entry["kind"] != "command":
+            continue
+        windows.append((float(entry["at"]), float(entry["end"])))
+        for text in entry.get("output", "").splitlines():
+            if not text.startswith(EVIDENCE_PREFIX):
+                continue
+            try:
+                item = json.loads(text[len(EVIDENCE_PREFIX):])
+            except json.JSONDecodeError:
+                findings.append(f"gh evidence line unreadable (trace entry {number})")
+                continue
+            error = evidence_error(item)
+            if error:
+                findings.append(f"gh evidence line invalid (trace entry {number}): {error}")
+                continue
+            if not any(low - TRACE_SLACK_SECONDS <= float(item["at"])
+                       <= high + TRACE_SLACK_SECONDS for low, high in windows):
+                findings.append("gh evidence line dated outside every traced command "
+                                f"that had started (trace entry {number})")
+                continue
+            group = groups.setdefault(item["id"], {"id": item["id"], "polls": []})
+            if item["event"] == "poll":
+                if item not in group["polls"]:
+                    group["polls"].append(item)
+                continue
+            if item["event"] in group and group[item["event"]] != item:
+                findings.append(f"conflicting gh evidence for one run (trace entry {number})")
+                continue
+            group.setdefault(item["event"], item)
+            group.setdefault(item["event"] + "_entry", number)
+    for group in list(groups.values()):
+        if "call" not in group:
+            notes.append(f"gh evidence without a call line (run {group['id'][:12]}); "
+                         "review the command that printed it")
+            del groups[group["id"]]
+    return groups, findings, notes
+
+
+class Diverged(Exception):
+    """The recorded run took a path the replay does not take."""
+
+
+class ReplayFacts:
+    """Repository facts for the replay: those a run recorded, else the last known.
+
+    Each recorded fact carries the query that produced it. The replay takes
+    a fact only when that query equals the one the replay itself asks; a
+    fact about another branch, head or check is a divergence.
+    """
+
+    def __init__(self, recorded: list | None, known: dict, budget: int | None,
+                 state: dict):
+        self.recorded = None if recorded is None else [list(fact) for fact in recorded]
+        self.known, self.budget, self.state = known, budget, state
+        self.polls: list[str] = []
+
+    def take(self, kind: str, query: list, answers: int) -> list | None:
+        if self.recorded is None:
+            return None
+        fact = self.recorded[0] if self.recorded else []
+        if fact[:1 + len(query)] != [kind, *query] or len(fact) != 1 + len(query) + answers:
+            raise Diverged(kind)
+        return self.recorded.pop(0)[1 + len(query):]
+
+    def branch(self) -> str:
+        got = self.take("branch", [], 1)
+        if got is not None:
+            self.known["branch"] = str(got[0])
+        return self.known.get("branch") or self.state.get("head_branch") or ""
+
+    def head(self, ref: str) -> str:
+        heads = self.known.setdefault("heads", {})
+        got = self.take("head", [ref], 1)
+        if got is not None:
+            # Polls a hidden run made before this head was first seen count for it.
+            earlier = self.state.get("heads", {}).pop("unknown:" + ref, None)
+            if earlier and ref not in heads:
+                record = self.state["heads"].setdefault(str(got[0]), {"polls": 0})
+                record["polls"] += earlier["polls"]
+            heads[ref] = str(got[0])
+        return heads.get(ref, "unknown:" + ref)
+
+    def merged(self, branch: str, base: str) -> bool:
+        got = self.take("merged", [branch, base], 1)
+        return bool(got[0]) if got is not None else False
+
+    def tests(self, head: str, index: int, mode: str) -> tuple[bool, str]:
+        got = self.take("tests", [head, index, mode], 2)
+        return (True, "") if got is None else (bool(got[0]), str(got[1]))
+
+    def merge(self, branch: str, base: str, message: str) -> str | None:
+        got = self.take("merge", [branch, base, message], 1)
+        return got[0] if got is not None else "unknown"
+
+    def polled(self, head: str, count: int) -> None:
+        self.polls.append(head)
+
+    def save(self, state: dict) -> None:
+        return None
+
+    def keep_watching(self, interval: int, state: dict) -> bool:
+        if self.budget is None:
+            if len(self.polls) >= REPLAY_POLL_CAP:
+                raise Diverged("watch")
+            return True
+        return len(self.polls) < self.budget
+
+    def finish(self) -> None:
+        if self.recorded:
+            raise Diverged("unused facts")
+
+
+class Collected:
+    def __init__(self) -> None:
+        self.stdout: list[str] = []
+        self.stderr: list[str] = []
+
+    def out(self, text: str) -> None:
+        self.stdout.append(text + "\n")
+
+    def err(self, text: str) -> None:
+        self.stderr.append(text + "\n")
+
+
+def text_sha256(lines: list[str]) -> str:
+    return hashlib.sha256("".join(lines).encode("utf-8")).hexdigest()
+
+
+def shown_in(output: str, expected: list[str]) -> bool:
+    """True when the expected lines appear together in the output, evidence aside."""
+
+    want = "".join(expected).splitlines()
+    lines = [line for line in output.splitlines() if not line.startswith(EVIDENCE_PREFIX)]
+    return not want or any(lines[index:index + len(want)] == want
+                           for index in range(len(lines) - len(want) + 1))
+
+
+def stand_in_module(record: dict) -> tuple[Any, str | None]:
+    """The fixture's own stand-in source, from this kit, as the replay model."""
+
+    _, _, fixtures_doc = suite_documents()
+    fixture = next((item for item in fixtures_doc["fixtures"]
+                    if item["id"] == record.get("fixture_id")), None)
+    source = (fixture or {}).get("files", {}).get("tools/gh.py")
+    if source is None:
+        return None, "no stand-in source in the kit for this fixture"
+    if hashlib.sha256(source.encode("utf-8")).hexdigest() != record.get(
+            "pinned_files", {}).get("tools/gh.py"):
+        return None, "the pinned stand-in differs from the kit's copy"
+    namespace = {"__name__": "gh_replay",
+                 "__file__": str(Path(record["path"]) / "tools/gh.py")}
+    exec(compile(source, "tools/gh.py", "exec"), namespace)  # noqa: S102 - kit source
+    return namespace, None
+
+
+def owning_entry(trace: list[dict], at: float) -> int | None:
+    """The traced command whose window holds a time; the slack only breaks a tie-free miss."""
+
+    commands = [(number, entry) for number, entry in enumerate(trace, 1)
+                if entry["kind"] == "command"]
+    for slack in (0.0, TRACE_SLACK_SECONDS):
+        for number, entry in commands:
+            if entry["at"] - slack <= at <= entry["end"] + slack:
+                return number
+    return None
+
+
+def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], list[str], list[str]]:
+    """Every gh run in time order: the ones the trace executes, then hinted ones.
+
+    A step runs when its own evidence appears, or when the shell must have
+    run it given the exits the evidence shows. A step that may not have run
+    and shows no evidence is a review note; the replay does not advance.
+    """
+
+    findings, notes, runs, used = [], [], [], set()
+    for group in groups.values():
+        group["owner"] = owning_entry(trace, float(group["call"]["at"]))
+    for number, entry in enumerate(trace, 1):
+        if entry["kind"] != "command":
+            continue
+        low, high = float(entry["at"]), float(entry["end"])
+        steps, modelled = command_steps(entry["command"])
+        last, flow = low, ShellFlow(modelled)
+        for step in steps:
+            ran = flow.enter(step)
+            call = step["gh"]
+            if call is None:
+                flow.leave(ran, None, step)
+                continue
+            shown = flow.shown(call["shown"])
+            argv = call["argv"]
+            prefix = argv if call["exact"] else argv[:next(
+                index for index, token in enumerate(argv)
+                if any(c in token for c in "$`*?["))]
+            match = min(
+                (group for group in groups.values()
+                 if group["id"] not in used and group["owner"] == number
+                 and (group["call"]["argv"] == argv if call["exact"]
+                      else group["call"]["argv"][:len(prefix)] == prefix)),
+                key=lambda group: group["call"]["at"], default=None)
+            if match is not None:
+                used.add(match["id"])
+                last = max(last, float(match["call"]["at"]))
+                runs.append({"argv": match["call"]["argv"], "group": match,
+                             "entry": number, "window": (low, high), "at": last,
+                             "shown": shown is True})
+                if shown is not True:
+                    notes.append(f"gh call in trace entry {number} ran, but its output was "
+                                 "not compared with what the subject saw (redirected, piped "
+                                 "or grouped); review that command: " + " ".join(argv)[:60])
+                flow.leave(True, match.get("result", {}).get("exit"), step)
+                continue
+            flow.leave(ran, None, step)
+            if ran is False:
+                continue
+            if ran is None:
+                notes.append(f"gh call in trace entry {number} may not have run (shell "
+                             "control flow) and shows no evidence; review that command: "
+                             + " ".join(argv)[:60])
+                continue
+            if shown is None:
+                notes.append(f"gh call in trace entry {number} ran, but its output may "
+                             "not reach the trace (shell grouping or redirection) and shows "
+                             "no evidence; review that command: " + " ".join(argv)[:60])
+            elif shown:
+                what = "has no output" if "output" not in entry else "has no evidence"
+                findings.append(f"gh call in trace entry {number} {what}: "
+                                + " ".join(argv)[:60])
+            else:
+                notes.append(f"gh call in trace entry {number} ran with its output and "
+                             "evidence redirected, so its answer was not compared; review "
+                             "that command: " + " ".join(argv)[:60])
+            last += 1e-6
+            runs.append({"argv": argv, "group": None, "entry": number,
+                         "window": (low, high), "at": last, "shown": False})
+    for group in groups.values():
+        if group["id"] in used:
+            continue
+        at = float(group["call"]["at"])
+        number = group["owner"] or group["call_entry"]
+        entry = trace[number - 1]
+        notes.append(f"gh call evidence in trace entry {group['call_entry']} has no "
+                     "executed gh call in the trace (a helper script or a printed "
+                     "line); review that command: " + " ".join(group["call"]["argv"])[:60])
+        runs.append({"argv": group["call"]["argv"], "group": group, "entry": number,
+                     "window": (float(entry["at"]), float(entry["end"])), "at": at,
+                     "shown": False})
+    runs.sort(key=lambda run: run["at"])
+    return runs, findings, notes
+
+
+def watch_budget(run: dict) -> int | None:
+    """Polls to replay: natural for a finished run, else what the evidence or clock allows."""
+
+    group = run["group"]
+    if group and "result" in group and not group["result"].get("interrupted"):
+        return None
+    if group and group["polls"]:
+        return len(group["polls"])
+    argv = run["argv"]
+    if argv[:2] != ["pr", "checks"] or "--watch" not in argv:
+        return 1
+    interval = 10
+    if "--interval" in argv[:-1] and argv[argv.index("--interval") + 1].isdigit():
+        interval = max(1, int(argv[argv.index("--interval") + 1]))
+    low, high = run["window"]
+    return int((high - low) // interval) + 1
+
+
+def gh_replay_findings(record: dict, trace: list[dict], scenario: dict,
+                       scenario_sha256: str) -> tuple[list[str], list[str]]:
+    """Replay every gh run through the stand-in and compare what the subject saw."""
+
+    groups, findings, notes = evidence_groups(trace)
+    module, problem = stand_in_module(record)
+    if module is None:
+        return findings + [f"gh replay unavailable: {problem}"], notes
+    runs, more, more_notes = gh_runs(trace, groups)
+    findings += more
+    notes += more_notes
+    state = module["initial_state"](scenario)
+    known: dict = {}
+    poll_times: list[float] = []
+    for run in runs:
+        group, argv = run["group"], run["argv"]
+        label = f"(trace entry {run['entry']}): " + " ".join(argv)[:60]
+        if group and group["call"]["scenario_sha256"] != scenario_sha256:
+            findings.append(f"gh stand-in answered from a scenario other than the host copy {label}")
+        if group and (group["call"].get("git_sha256") != (record.get("git") or {}).get("sha256")
+                      or group["call"].get("git_dir") != record.get("git_dir")):
+            findings.append("gh stand-in used a git executable or repository other than "
+                            f"the pinned ones {label}")
+        result = group.get("result") if group else None
+        finished = result is not None and not result.get("interrupted")
+        facts = ReplayFacts(result["facts"] if finished else None, known,
+                            watch_budget(run), state)
+        io = Collected()
+        try:
+            code = module["respond"](list(argv), state, scenario, facts, io)
+            facts.finish()
+        except Diverged:
+            findings.append(f"gh answer differs from replay {label}")
+            continue
+        except Exception as error:  # the stand-in itself failed on these arguments
+            findings.append(f"gh replay failed {label}: {type(error).__name__}")
+            continue
+        if finished and (code != result["exit"] or text_sha256(io.stdout) != result["out"]
+                         or text_sha256(io.stderr) != result["err"]
+                         or run["shown"] and not (
+                             shown_in(trace[result_entry(group) - 1].get("output", ""), io.stdout)
+                             and shown_in(trace[result_entry(group) - 1].get("output", ""),
+                                          io.stderr))):
+            findings.append(f"gh answer differs from replay {label}")
+        hinted = sorted(float(poll["at"]) for poll in (group["polls"] if group else []))
+        low, high = run["window"]
+        for index in range(len(facts.polls)):
+            if index < len(hinted):
+                at = hinted[index]
+                if not low - TRACE_SLACK_SECONDS <= at <= high + TRACE_SLACK_SECONDS:
+                    findings.append(f"gh poll dated outside its command {label}")
+            else:
+                at = min(high, low + index * (watch_interval(argv) or 0))
+            poll_times.append(at)
+    findings += spacing_findings(poll_times, "replayed polls")
+    return findings, notes
+
+
+def result_entry(group: dict) -> int:
+    return group["result_entry"]
+
+
+def watch_interval(argv: list[str]) -> int:
+    if "--interval" in argv[:-1] and argv[argv.index("--interval") + 1].isdigit():
+        return max(1, int(argv[argv.index("--interval") + 1]))
+    return 10
+
+
+def spacing_findings(times: list[float], source: str) -> list[str]:
+    times = sorted(times)
+    gaps = [later - earlier for earlier, later in zip(times, times[1:])]
+    findings = []
+    if any(gap < POLL_MIN_SECONDS for gap in gaps):
+        findings.append(
+            f"poll spacing under one minute ({source}): shortest gap {min(gaps):.1f}s")
+    if times and times[-1] - times[0] > POLL_CEILING_SECONDS:
+        findings.append(f"polling continued past thirty minutes ({source})")
+    return findings
+
+
+def trial_review(record: dict, trace: list[dict] | None = None
+                 ) -> tuple[list[str], list[str]]:
+    """Compare a finished trial with its receipt and the harness command trace.
+
+    Returns findings, which fail the trial closed, and review notes for the
+    grader. Each gh run is replayed from the host scenario; stand-in state
+    and printed evidence are hints, never inputs to the expected answer.
+    """
+
+    root = Path(record["path"])
+    pinned = record.get("pinned_files") or {}
+    host = record.get("host_files") or {}
+    host_dir = Path(record["host_dir"]) if record.get("host_dir") else None
+    findings: list[str] = []
+    for relative, expected in sorted(pinned.items()):
+        path = root / safe_relative_path(relative)
+        if not path.is_file():
+            findings.append(f"pinned file removed: {relative}")
+        elif file_sha256(path) != expected:
+            findings.append(f"pinned file changed: {relative}")
+    common = git_common_dir(root)
+    pointer, log_path = common / HOST_POINTER, common / GH_LOG
+    protected = {(root / safe_relative_path(relative)).resolve() for relative in pinned}
+    protected |= {pointer.resolve(), log_path.resolve()}
+    host_intact = True
+    if host_dir is not None:
+        for relative, expected in sorted(host.items()):
+            path = host_dir / safe_relative_path(relative)
+            if not path.is_file():
+                findings.append(f"host file removed: {relative}")
+                host_intact = False
+            elif file_sha256(path) != expected:
+                findings.append(f"host file changed: {relative}")
+                host_intact = False
+        pin_record = host_dir / PIN_RECORD
+        if not pin_record.is_file() or file_sha256(pin_record) != record.get(
+                "pin_record_sha256"):
+            findings.append(f"pin record changed or missing: {PIN_RECORD}")
+        git = record.get("git") or {}
+        git_path = Path(git.get("path") or "/nonexistent")
+        if not git_path.is_file() or file_sha256(git_path) != git.get("sha256"):
+            findings.append("pinned git executable changed or missing: "
+                            + str(git.get("path")))
+        try:
+            points_to = load_json(pointer).get("dir")
+        except (EvalError, AttributeError):
+            points_to = None
+        if points_to != str(host_dir):
+            findings.append(f"host pointer changed or missing: {HOST_POINTER}")
+        protected |= {host_dir.resolve(), pin_record.resolve()}
+        protected |= {(host_dir / safe_relative_path(relative)).resolve()
+                      for relative in host}
+        if trace is None:
+            findings.append("no command trace supplied: harness evidence is unbound")
+    if trace is not None:
+        errors = trace_errors(trace)
+        findings += [f"command trace invalid: {error}" for error in errors]
+        if errors:
+            trace = None
+    if trace is not None:
+        findings += tamper_findings(trace, root.resolve(), protected)
+    if "tools/gh.py" not in pinned or trace is None or host_dir is None or not host_intact:
+        return findings, []
+    scenario_path = host_dir / "tools/gh-scenario.json"
+    more, notes = gh_replay_findings(record, trace, load_json(scenario_path),
+                                     file_sha256(scenario_path))
+    return findings + more, notes
+
+
+def trial_findings(record: dict, trace: list[dict] | None = None) -> list[str]:
+    return trial_review(record, trace)[0]
+
+
 def tree_digest(root: Path) -> str:
     digest = hashlib.sha256()
     for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
@@ -912,9 +1872,12 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     ).hexdigest()[:20]
     output = resolved_run_root / "workspaces" / opaque_id / "repository"
     record_path = resolved_run_root / "records" / f"{opaque_id}.fixture.json"
+    host_dir = resolved_run_root / "host" / opaque_id
     refuse_symlink_components(output.parent, resolved_run_root)
     if output.exists():
         raise EvalError(f"trial fixture already exists: {output}")
+    if host_dir.exists() or host_dir.is_symlink():
+        raise EvalError(f"trial host directory already exists: {host_dir}")
     if record_path.exists():
         raise EvalError(f"trial record already exists: {record_path}")
     codeflow_path = codeflow.expanduser().resolve()
@@ -936,6 +1899,12 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         write_fixture_file(output, relative, content)
     write_fixture_file(output, "TASK.md", case["prompt"].rstrip() + "\n")
     assert_no_grader_material(output)
+    host_contents: dict[str, str] = {}
+    for relative in state.get("host_files", []):
+        target = output / safe_relative_path(relative)
+        host_contents[relative] = target.read_text(encoding="utf-8")
+        if relative not in state.get("pinned_files", []):
+            target.unlink()
     post_history_files: dict[str, str] = {}
     for relative in state.get("untracked_files", []):
         safe = safe_relative_path(relative)
@@ -956,6 +1925,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     for relative, content in post_history_files.items():
         write_fixture_file(output, relative, content)
     configure_fixture_hooks(output)
+    host = write_host(output, host_dir, host_contents, state.get("pinned_files", []))
     digest = tree_digest(output)
     trial_record = {
         "schema_version": 1,
@@ -965,6 +1935,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         "fixture_id": fixture["id"],
         "fixture_state": fixture["state"],
         "fixture_digest": digest,
+        **host,
         "path": str(output),
         "codeflow_executable": {
             "path": str(codeflow_path),
@@ -1853,6 +2824,10 @@ def parser() -> argparse.ArgumentParser:
     materialize_cmd.add_argument("--trial", required=True, type=int)
     materialize_cmd.add_argument("--codeflow", required=True, type=Path)
 
+    check_trial_cmd = sub.add_parser("check-trial")
+    check_trial_cmd.add_argument("--record", required=True, type=Path)
+    check_trial_cmd.add_argument("--trace", type=Path)
+
     validate_result_cmd = sub.add_parser("validate-result")
     validate_result_cmd.add_argument("result", type=Path)
     validate_result_cmd.add_argument("--require-approval", action="store_true")
@@ -1911,6 +2886,15 @@ def main() -> int:
                 )
             )
             return 0
+        if args.command == "check-trial":
+            trace = load_trace(args.trace) if args.trace else None
+            findings, notes = trial_review(load_json(args.record), trace)
+            for finding in findings:
+                print(f"- {finding}")
+            for note in notes:
+                print(f"review: {note}")
+            print("trial evidence intact" if not findings else "trial fails")
+            return 1 if findings else 0
         if args.command == "validate-result":
             errors = validate_result(
                 load_json(args.result), require_approval=args.require_approval

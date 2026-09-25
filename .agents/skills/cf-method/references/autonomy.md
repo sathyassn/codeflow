@@ -86,7 +86,7 @@ inside your task's own authorized project or worktree, or for a disposable
 sample your own harness created in this run. Any other path goes to the
 operator. Decide by authorization and path identity: compare the resolved
 path with the task's worktree or with the sample path your harness recorded.
-A folder that another run or tool created, or a path that only resembles
+A folder that another run created, or a path that only resembles
 yours, is foreign.
 
 ## Settled dissent
@@ -122,7 +122,7 @@ to repair.
 | A credit is missing, or a seat or tool is refused or unavailable after preflight | 2: do not purchase; name the gap, record reduced assurance and continue on the recorded fallback | `AGENTS.md` Entry points; `capability-routing.md` |
 | A seat is lost mid-run after approval | 2: move the unit to the recorded fallback; the available standing seats approve the reassignment as Plan vN+1; the lost seat's actual verdict stays recorded | CodeFlow ADR-0070, amending ADR-0035 |
 | Two seats still disagree after two rounds | 2 on a reversible item: the Claude judgment primary settles it and records `SETTLED_DISSENT`, never approval; 3 on an operator-owned item: ask; not settleable on safety, security, correctness or evidence adequacy: keep the gate closed and repair | Settled dissent above; CodeFlow ADR-0070 |
-| A green, reviewed pull request into an `integration/` branch that policy does not protect | 2: the primary merges without fast forward and reruns the gate | `AGENTS.md` Git rules, Bodies of work; `codeflow integrate`; `.codeflow/policy.json` |
+| A green, reviewed pull request into an `integration/` branch that policy does not protect | 2: the primary merges it without fast forward or with `codeflow integrate`, then reruns the gate | `AGENTS.md` Git rules, Bodies of work; `codeflow integrate`; `.codeflow/policy.json` |
 | Local evidence is green and hosted jobs never ran | 2: report "ready for your merge on local evidence" only with a completed green result of every owed check, local or hosted, and name each hosted job that did not run and why | `quality-contract.md` redness classes |
 | An owed check has no completed result anywhere | a missing gate: name it as the blocker, keep the pull request draft, continue other work | `quality-contract.md` redness classes |
 | An external dependency the agent cannot clear | 2: name it as the blocker with the input that clears it; ask (3) only when the operator is the one who can supply that input | `quality-contract.md` blocker navigation |
