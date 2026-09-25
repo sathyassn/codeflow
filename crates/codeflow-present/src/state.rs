@@ -3193,8 +3193,13 @@ fn read_revision_record(path: &Path) -> Result<RevisionRecord> {
         Ok(record) => return Ok(record),
         Err(error) => PresentError::from(error),
     };
-    let Ok(stored) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
-        return Err(error);
+    // A plain `Value` keeps only the last of duplicate keys, which typed
+    // parsing refuses, so the fallback reads the bytes with duplicates
+    // refused at every depth: a corrupt record never loads as retired.
+    let stored = match serde_json::from_slice::<UniqueKeys>(&bytes) {
+        Ok(UniqueKeys(stored)) => stored,
+        Err(duplicate) if duplicate.is_data() => return Err(PresentError::from(duplicate)),
+        Err(_) => return Err(error),
     };
     let Some(document) = stored
         .pointer("/content/document")
@@ -3215,6 +3220,85 @@ fn read_revision_record(path: &Path) -> Result<RevisionRecord> {
         },
         ..checked
     })
+}
+
+/// A JSON value read with duplicate object keys refused at every depth.
+struct UniqueKeys(serde_json::Value);
+
+impl<'de> Deserialize<'de> for UniqueKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        deserializer
+            .deserialize_any(UniqueKeysVisitor)
+            .map(UniqueKeys)
+    }
+}
+
+struct UniqueKeysVisitor;
+
+impl<'de> serde::de::Visitor<'de> for UniqueKeysVisitor {
+    type Value = serde_json::Value;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON value")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_f64<E>(self, value: f64) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(
+        self,
+        mut items: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
+        let mut values = Vec::new();
+        while let Some(UniqueKeys(value)) = items.next_element()? {
+            values.push(value);
+        }
+        Ok(serde_json::Value::Array(values))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(
+        self,
+        mut entries: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
+        let mut object = serde_json::Map::new();
+        while let Some(key) = entries.next_key::<String>()? {
+            if object.contains_key(&key) {
+                return Err(serde::de::Error::custom(format_args!(
+                    "duplicate field `{key}`"
+                )));
+            }
+            let UniqueKeys(value) = entries.next_value()?;
+            object.insert(key, value);
+        }
+        Ok(serde_json::Value::Object(object))
+    }
 }
 
 fn read_state_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
@@ -4908,6 +4992,24 @@ mod tests {
         let malformed_diagram = variant(&|record| {
             record["content"]["document"]["blocks"][1]["theme"] = "dark".into();
         });
+        // Duplicate keys beside a valid legacy diagram: typed parsing refuses
+        // them, and the fallback must not keep only the last one.
+        let duplicate = |old: &str, new: &str| {
+            assert_eq!(retired_fixture::REVISION.matches(old).count(), 1, "{old}");
+            retired_fixture::REVISION.replacen(old, new, 1)
+        };
+        let duplicate_revision = duplicate(
+            "\n  \"revision\": 1,",
+            "\n  \"revision\": 2,\n  \"revision\": 1,",
+        );
+        let duplicate_title = duplicate(
+            "\"title\": \"Qualification review\",",
+            "\"title\": \"Forged\", \"title\": \"Qualification review\",",
+        );
+        let duplicate_source = duplicate(
+            "\"source\": \"flowchart LR",
+            "\"source\": \"graph TD\", \"source\": \"flowchart LR",
+        );
         for (name, revision, expected) in [
             ("truncated", truncated, "EOF while parsing"),
             ("unknown block", unknown_only, "unknown variant `sketch`"),
@@ -4920,6 +5022,21 @@ mod tests {
                 "malformed diagram",
                 malformed_diagram,
                 "unknown variant `diagram`",
+            ),
+            (
+                "duplicate revision",
+                duplicate_revision,
+                "duplicate field `revision`",
+            ),
+            (
+                "duplicate document title",
+                duplicate_title,
+                "duplicate field `title`",
+            ),
+            (
+                "duplicate diagram source",
+                duplicate_source,
+                "duplicate field `source`",
             ),
         ] {
             let (_temp, store) = store();

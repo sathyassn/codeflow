@@ -854,7 +854,37 @@ fn broken_stored_revisions_fail_with_their_own_error() {
         change(&mut record);
         serde_json::to_string_pretty(&record).unwrap()
     };
+    // Duplicate keys beside a valid legacy diagram, in the envelope, the
+    // document and the diagram block.
+    let duplicate = |old: &str, new: &str| {
+        assert_eq!(RETIRED_REVISION.matches(old).count(), 1, "{old}");
+        RETIRED_REVISION.replacen(old, new, 1)
+    };
     for (name, revision, expected) in [
+        (
+            "duplicate revision",
+            duplicate(
+                "\n  \"revision\": 1,",
+                "\n  \"revision\": 2,\n  \"revision\": 1,",
+            ),
+            "duplicate field `revision`",
+        ),
+        (
+            "duplicate title",
+            duplicate(
+                "\"title\": \"Qualification review\",",
+                "\"title\": \"Forged\", \"title\": \"Qualification review\",",
+            ),
+            "duplicate field `title`",
+        ),
+        (
+            "duplicate source",
+            duplicate(
+                "\"source\": \"flowchart LR",
+                "\"source\": \"graph TD\", \"source\": \"flowchart LR",
+            ),
+            "duplicate field `source`",
+        ),
         (
             "truncated",
             RETIRED_REVISION[..RETIRED_REVISION.len() / 2].to_string(),
