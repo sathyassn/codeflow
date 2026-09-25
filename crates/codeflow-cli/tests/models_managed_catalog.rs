@@ -290,6 +290,12 @@ fn design_override_fills_the_seat_second_line_only_from_the_anchored_block() {
     );
     assert!(open["participants"].as_array().unwrap().is_empty());
     assert_eq!(open["open"][0]["label"], "required");
+    // The open reason names the one sanctioned way to fill the duty.
+    let reasons = open["open"][0]["reasons"].to_string();
+    assert!(
+        reasons.contains("committed OPERATOR_OVERRIDE block"),
+        "{reasons}"
+    );
 
     // The matching committed block fills design with the seat's second line at high.
     let filled = repo.resolved(

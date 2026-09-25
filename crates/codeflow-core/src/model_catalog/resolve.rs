@@ -160,6 +160,11 @@ impl Resolution {
     }
 }
 
+/// The only sanctioned way to fill `design` without the owner's first line.
+const DESIGN_OVERRIDE_PATH: &str = "design waits for the design owner's first line; a \
+    committed OPERATOR_OVERRIDE block (task, duty, route, effort, plan, instruction) in the \
+    task record's Execution contract may name another seat line for that task";
+
 fn candidate_duty(duty: &str) -> bool {
     matches!(
         duty,
@@ -223,7 +228,7 @@ impl Catalog {
             if request.duty == "design"
                 && (seat.id != self.design_owner || seat.lines.first() != Some(&line.id))
             {
-                return Err("design requires the design owner's first line".into());
+                return Err(DESIGN_OVERRIDE_PATH.into());
             }
         } else if matches!(
             request.duty,
@@ -474,6 +479,9 @@ impl Catalog {
                 candidates
                     .reasons
                     .push("no eligible version at the adopted effort".into());
+            }
+            if request.duty == "design" {
+                candidates.reasons.push(DESIGN_OVERRIDE_PATH.into());
             }
             result.open.push(OpenParticipant {
                 participant: participant.id.clone(),
