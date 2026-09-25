@@ -1176,18 +1176,33 @@ export function probeFigures(options) {
       }
       for (const [state, entry] of Object.entries(record.states)) record.states[state] = Object.fromEntries(Object.entries(entry).map(([key, values]) => [key, [...values].sort()]));
       record.drawn = [...new Set(record.drawn)].sort();
-      // Rule 7: every mark is a lone box with text in it. A box holds a label
-      // when a text's ink overlaps it by 1px or more, the depth rule 8 counts
-      // as overprint. A label beside its mark, bound to it or not, is not text
-      // in a box, and a cell or bar with no text in it is a mark.
-      const holdsText = (node) => {
+      // Rule 7: text boxes as the primary form. Each mark is classified on
+      // its own: it is a text box when its primary is a rect and a label is
+      // in it, either a text whose ink overlaps it by 1px or more (the depth
+      // rule 8 counts as overprint) or, for a container mark (state, optional,
+      // denied) tall enough to hold it, a text bound to it with data-cf-for
+      // wherever it sits. A cell, or a bar too thin to hold its label, is a
+      // mark with its label beside it, not a text box. The figure
+      // fails when two or more marks are text boxes and it draws no travel or
+      // transition mark between them, whatever other empty shapes it draws.
+      const CONTAINERS = ["cf-m-state", "cf-m-optional", "cf-m-denied"];
+      const CONNECTORS = ["cf-m-done", "cf-m-todo", "cf-m-blocked", "cf-m-trans", "cf-m-return"];
+      const primaryOf = (group) => (group.tagName.toLowerCase() === "g" ? [...group.children].find((node) => DRAWN.includes(node.tagName.toLowerCase())) : group);
+      const inkIn = (node) => {
         const box = node.getBoundingClientRect();
         return record.texts.some(({ box: [left, top, right, bottom] }) => Math.min(box.right, right) - Math.max(box.left, left) >= 1 && Math.min(box.bottom, bottom) - Math.max(box.top, top) >= 1);
       };
-      record.boxedText = [...svg.querySelectorAll("[data-state]")].length > 0 && [...svg.querySelectorAll("[data-state]")].every((group) => {
-        const primary = group.tagName.toLowerCase() === "g" ? [...group.children].find((node) => DRAWN.includes(node.tagName.toLowerCase())) : group;
-        return primary?.tagName.toLowerCase() === "rect" && group.querySelectorAll("*").length <= 1 && holdsText(primary);
+      const groups = [...svg.querySelectorAll("[data-state]")];
+      const textBoxes = groups.filter((group) => {
+        const primary = primaryOf(group);
+        if (primary?.tagName.toLowerCase() !== "rect") return false;
+        const container = CONTAINERS.includes(primary.getAttribute("class"));
+        if (!container && group.querySelectorAll("*").length > 1) return false;
+        const height = primary.getBoundingClientRect().height;
+        return inkIn(primary) || (container && group.id !== "" && record.texts.some((text) => text.labels.includes(group.id) && height >= text.box[3] - text.box[1]));
       });
+      const connected = groups.some((group) => CONNECTORS.includes(primaryOf(group)?.getAttribute("class")));
+      record.boxedText = textBoxes.length >= 2 && !connected;
     }
     figures.push(record);
   }
@@ -1275,7 +1290,7 @@ export function figureRuleFailures({ wide, narrow, wideDark = null, narrowDark =
       else if (collision.kind === "overprint") add(8, `${label}: text "${collision.a}" overprints a ${collision.b} mark by ${collision.depth}px`);
       else add(8, `${label}: text "${collision.a}" sits ${collision.distance}px from a ${collision.b} mark it does not label, under ${THRESHOLDS.labelClearancePx}px`);
     }
-    if (record.boxedText) add(7, `${label}: every mark is a box with text in it and nothing drawn between them`);
+    if (record.boxedText) add(7, `${label}: labels sit in boxes with nothing drawn between them`);
     for (const [a, b] of pairs(Object.keys(record.states))) {
       const differing = channelDifferences(record.states[a], record.states[b]);
       if (differing.length < THRESHOLDS.minChannels) add(3, `${label}: states ${a} and ${b} differ on ${differing.length ? differing.join(", ") : "no channel"}, need ${THRESHOLDS.minChannels}`);
