@@ -537,26 +537,29 @@ fn coverage_layout(layout: &Value) -> Result<Composed, String> {
             wide.push(serde_json::json!({ "state": state, "shape": "rect", "x": round(label_width + col_step * column_index as f64 + col_step / 2.0 - cell / 2.0, 0.01), "y": y, "w": cell, "h": cell, "rx": 2 }));
         }
     }
-    // The narrow list: each column name bound to its cell and set LABEL_GAP
-    // past it, budgeted at the worst-case advance, the next column LABEL_GAP
-    // further on, and a column that would run past the width on a new line.
+    // The narrow grid: every column takes one slot (its cell, the label gap
+    // and the widest name at the value face's advance), slots LABEL_GAP
+    // apart, as many to a line as the width allows, so every line shares the
+    // same column positions; each name is bound to its cell.
     let narrow_cell = 16.0;
     let narrow_line = 28.0;
-    let mut slots: Vec<(f64, f64)> = Vec::new();
-    let mut line = 0.0;
-    let mut cursor = 0.0;
-    for column in &columns {
-        let width = narrow_cell
-            + LABEL_GAP
-            + column.encode_utf16().count() as f64 * MONO_ADVANCE
-            + TEXT_OVERHANG;
-        if cursor > 0.0 && cursor + width > COVERAGE_NARROW_WIDTH {
-            line += 1.0;
-            cursor = 0.0;
-        }
-        slots.push((round(cursor, 0.01), line));
-        cursor += width + LABEL_GAP;
-    }
+    let widest = columns
+        .iter()
+        .map(|column| column.encode_utf16().count())
+        .max()
+        .unwrap_or(0) as f64;
+    let slot = narrow_cell + LABEL_GAP + widest * MONO_ADVANCE + TEXT_OVERHANG;
+    let per_line = ((COVERAGE_NARROW_WIDTH + LABEL_GAP) / (slot + LABEL_GAP)).floor();
+    let slots: Vec<(f64, f64)> = (0..columns.len())
+        .map(|index| {
+            let index = index as f64;
+            (
+                round((index % per_line) * (slot + LABEL_GAP), 0.01),
+                (index / per_line).floor(),
+            )
+        })
+        .collect();
+    let line = (columns.len() as f64 / per_line).ceil() - 1.0;
     let row_pitch = 64.0 + line * narrow_line;
     let mut narrow = Vec::new();
     for (row_index, row) in rows.iter().enumerate() {

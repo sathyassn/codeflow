@@ -78,7 +78,7 @@
     },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "9c4698744cffc5c7d3c1fa4ddcf4d28e79eaa0e9b40bba0cc4f9be3fcd87ab06"
+      "pristine_sha256": "b02959ab2c84c0168ae88d4e95a587b670fee0abcfec132c322310b33374d83f"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -230,7 +230,7 @@
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "93d71a8299ebf502342bf0e03115a272da18fea08fb6420cfcb643288a5699f3"
+      "pristine_sha256": "d01a182012f3f095e42464efde617f9cec52f208acf8b259639714189a912f71"
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
@@ -346,7 +346,7 @@
     },
     "tests/fixtures/figures/rendered/controls/coverage-wrapped.html": {
       "ownership": "managed",
-      "pristine_sha256": "cedb2fc65d934c89179b2419ed2776c6fa559b9216211bf435de332eea576feb"
+      "pristine_sha256": "3e0967e152479afa4bf8f1393882e82663c3321a00f6973cf0a0f604e73a7dc2"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",

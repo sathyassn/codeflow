@@ -241,7 +241,7 @@ function validateLayout(figure, fail) {
     if (figure.family !== "coverage") fail("the coverage layout draws the coverage family");
     onlyKeys(layout, ["kind", "columns", "rows"], "layout", fail);
     if (!Array.isArray(layout.columns) || layout.columns.length < 1 || layout.columns.length > 8) fail("layout.columns must list 1 to 8 columns");
-    for (const column of layout.columns ?? []) text(column, "layout column", fail, 24);
+    for (const column of layout.columns ?? []) text(column, "layout column", fail, COVERAGE_COLUMN_CHARACTERS);
     if (!Array.isArray(layout.rows) || layout.rows.length < 1 || layout.rows.length > 16) fail("layout.rows must list 1 to 16 rows");
     for (const row of layout.rows ?? []) {
       if (!isObject(row) || !Array.isArray(row.cells) || row.cells.length !== (layout.columns ?? []).length) { fail("each coverage row needs one cell per column"); continue; }
@@ -481,6 +481,7 @@ const LABEL_GAP = Math.ceil(THRESHOLDS.labelClearancePx / MIN_RENDER_SCALE + LIM
 // layout whose labels would leave less is refused, never drawn reversed.
 const EXTENT_NARROW_WIDTH = 360;
 const COVERAGE_NARROW_WIDTH = 360;
+export const COVERAGE_COLUMN_CHARACTERS = 24;
 export const MIN_PLOT_WIDTH = 160;
 function extentReserve(widestCharacters) {
   return Math.max(40, LABEL_GAP + widestCharacters * MONO_ADVANCE + TEXT_OVERHANG);
@@ -558,24 +559,22 @@ function layoutCompositions(figure, bound) {
     wideDraw.push({ text: row.label, x: 0, y: y + 14 });
     row.cells.forEach((state, columnIndex) => wideDraw.push({ state, shape: "rect", x: round(labelWidth + colStep * columnIndex + colStep / 2 - cell / 2), y, w: cell, h: cell, rx: 2 }));
   });
-  // The narrow composition lists each row's cells, each with its column name
-  // bound to it and set LABEL_GAP past it, as the extent layout sets its value
-  // labels. A column takes its cell, that gap and its name at the worst-case
-  // advance (the label face is budgeted as the value face is); the next
-  // column starts LABEL_GAP further on, so a name clears the next cell, and a
-  // column that would run past the width starts a new line. Every row places
-  // its columns the same way.
+  // The narrow composition lists each row's cells on a grid, each with its
+  // column name bound to it and set LABEL_GAP past it, as the extent layout
+  // sets its value labels. Every column takes one slot: its cell, that gap and
+  // the widest name at the value face's advance. That advance is a budget,
+  // not a bound for the label face (a sans name of wide glyphs can run past
+  // it); rule 8 in the browser gate is the bound. Slots sit LABEL_GAP apart,
+  // so a name clears the next cell, and as many fit a line as the width
+  // allows, so every line shares the same column positions. A column name
+  // is at most COVERAGE_COLUMN_CHARACTERS long, so one slot always fits the
+  // width (a test holds that bound).
   const narrowCell = 16;
   const narrowLine = 28;
-  const slots = [];
-  let line = 0;
-  let cursor = 0;
-  for (const column of columns) {
-    const width = narrowCell + LABEL_GAP + column.length * MONO_ADVANCE + TEXT_OVERHANG;
-    if (cursor > 0 && cursor + width > COVERAGE_NARROW_WIDTH) { line += 1; cursor = 0; }
-    slots.push({ x: round(cursor), line });
-    cursor += width + LABEL_GAP;
-  }
+  const slot = narrowCell + LABEL_GAP + Math.max(...columns.map((column) => column.length)) * MONO_ADVANCE + TEXT_OVERHANG;
+  const perLine = Math.floor((COVERAGE_NARROW_WIDTH + LABEL_GAP) / (slot + LABEL_GAP));
+  const slots = columns.map((_, index) => ({ x: round((index % perLine) * (slot + LABEL_GAP)), line: Math.floor(index / perLine) }));
+  const line = Math.ceil(columns.length / perLine) - 1;
   const rowPitch = 64 + line * narrowLine;
   const narrowDraw = [];
   rows.forEach((row, rowIndex) => {
