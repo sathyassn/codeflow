@@ -897,7 +897,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                     type="button"
                     class="cf-marker"
                     data-testid="note-marker"
-                    style={`left:${at.left}px;top:${at.top}px`}
+                    style={`left:${at.left}px;top:${at.top}px;width:${38 + 8 * (String(index + 1).length - 1)}px`}
                     aria-label={`Note ${index + 1} on ${targetKindOf(note)}: ${note.target_summary ?? note.block_label}`}
                     title={`#${index + 1} ${targetKindOf(note)}: ${noteQuote(note)}`}
                     onClick={(e) => openNoteEditor(note, { x: e.clientX, y: e.clientY })}
@@ -1441,13 +1441,13 @@ function markerPlacement(
   const left = rect.left - root.left;
   const top = rect.top - root.top;
   const kind = targetKindOf(note);
-  if (kind === "region") return { left: left + 8, top: top + 8 };
-  // Chip width by digit count — a two-digit number widens the marker.
-  const width = index + 1 >= 10 ? 42 : 34;
+  const width = 38 + 8 * (String(index + 1).length - 1);
+  const clamp = (x: number): number => Math.max(2 - root.left, Math.min(x, innerWidth - root.left - width * 1.03 - 8));
+  if (kind === "region") return { left: clamp(left + 8), top: top + 8 };
   const y = kind === "text" ? top + (meta?.ay ?? 0) * rect.height - 4 : top;
   const gutter = left - width - 8;
   const x = gutter >= 2 ? gutter : Math.min(left + rect.width + 8, root.width - width - 2);
-  return { left: Math.max(2, x), top: Math.max(2, y) };
+  return { left: clamp(Math.max(2, x)), top: Math.max(2, y) };
 }
 
 function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpoch: number): DOMRect | null {

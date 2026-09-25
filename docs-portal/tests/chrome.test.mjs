@@ -57,3 +57,18 @@ test('canonical and compatibility portal themes build the same skin order', { ti
     assert.throws(() => validatePortalConfig({ ...original, theme: 'unknown' }), /theme must be/);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+for (const [old, skin] of [['instrument', 'graphite'], ['editorial', 'slate'], ['ink', 'sage'], ['technical', 'graphite']]) {
+  test(`saved ${old} skin normalizes before paint without selecting a font`, () => {
+    assert.equal(paint('sage', { 'cf-portal-skin': old })['data-cfp-skin'], skin);
+    assert.equal(paint('sage', { 'cf-portal-skin': old })['data-cfp-typeface'], 'inter');
+    assert.equal(paint('sage', { 'cf-portal-skin': old, 'cf-portal-typeface': 'plex' })['data-cfp-typeface'], 'plex');
+  });
+}
+for (const [old, face] of [['instrument', 'archivo'], ['editorial', 'inter'], ['plex', 'plex']]) {
+  test(`saved ${old} font normalizes before paint without selecting a skin`, () => {
+    const actual = paint('sage', { 'cf-portal-typeface': old });
+    assert.equal(actual['data-cfp-typeface'], face);
+    assert.equal(actual['data-cfp-skin'], 'sage');
+  });
+}

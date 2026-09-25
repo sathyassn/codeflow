@@ -57,12 +57,12 @@ The referenced project-owned file supplies only an accent for each appearance:
 ```json
 {
   "schema_version": 1,
-  "light": {"accent": "#1f6fb2"},
-  "dark": {"accent": "#6aaee8"}
+  "light": {"accent": "#12766e"},
+  "dark": {"accent": "#63cbbf"}
 }
 ```
 
-These illustrative values are the instrument accents; choose the actual accent
+These illustrative values are the Graphite accents; choose the actual accent
 for the repository and verify it against all three utility skins in both modes. Each opaque six-digit color
 must meet 4.5:1 contrast against every reader-selectable skin's surface and
 selected background. The portal import does not

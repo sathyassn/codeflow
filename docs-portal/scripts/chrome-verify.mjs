@@ -48,6 +48,23 @@ export async function verifyChrome(page, urls, engine, altitudeRoute = null) {
   const paints = await page.evaluate(() => window.__chromePaints);
   assert.ok(paints.length > 0);
   assert.ok(paints.every((value) => JSON.stringify(value) === JSON.stringify(['graphite', 'dark', 'plex', 'large'])), `${engine}: preferences flashed`);
+  // Update-state controls cover every old skin and explicit font independently.
+  for (const [key, saved, skin, face] of [
+    ...[['instrument', 'graphite'], ['editorial', 'slate'], ['ink', 'sage'], ['technical', 'graphite']].map(([old, skin]) => ['cf-portal-skin', old, skin, 'plex']),
+    ...[['instrument', 'archivo'], ['editorial', 'inter'], ['plex', 'plex']].map(([old, face]) => ['cf-portal-typeface', old, 'sage', face]),
+  ]) {
+    await page.evaluate(({ key, saved }) => {
+      localStorage.clear(); localStorage.setItem('cf-portal-skin', 'sage'); localStorage.setItem('cf-portal-typeface', 'plex'); localStorage.setItem(key, saved);
+    }, { key, saved });
+    await page.reload();
+    await page.locator('[data-cf-mounted]').waitFor();
+    const paints = await page.evaluate(() => window.__chromePaints);
+    assert.ok(paints.length > 0 && paints.every(p => p[0] === skin && p[2] === face), `${engine}: ${key}=${saved} first paint`);
+    await page.locator('[data-cf-open="display"]').click();
+    assert.equal(await page.getByTestId(`skin-${skin}`).getAttribute('aria-checked'), 'true');
+    assert.equal(await page.getByTestId(`typeface-${face}`).getAttribute('aria-checked'), 'true');
+    await page.keyboard.press('Escape');
+  }
   await page.evaluate(() => localStorage.clear());
   await page.goto(route);
   await page.locator('[data-cf-mounted]').waitFor();
@@ -130,8 +147,24 @@ export async function verifyChrome(page, urls, engine, altitudeRoute = null) {
   const idle = await tabs.nth(2).evaluate((el) => { const s = getComputedStyle(el); return [s.backgroundColor, s.borderWidth === "0px" ? "none" : s.borderColor, s.boxShadow, s.fontWeight]; });
   await tabs.nth(2).hover();
   const hovered = await tabs.nth(2).evaluate((el) => { const s = getComputedStyle(el); return [s.backgroundColor, s.borderWidth === "0px" ? "none" : s.borderColor, s.boxShadow, s.fontWeight]; });
+  assert.equal(idle[3], '500', 'idle tabs use the kit medium weight');
   assert.deepEqual(hovered, idle, 'tab hover changes text color only');
   await tabs.nth(2).click();
+  }
+  // The outline retains headings outside panels, in document order.
+  assert.deepEqual(await page.locator('#cf-toc .cf-toc-link').evaluateAll(links => links.map(a => a.dataset.target)), await page.locator('main').evaluate(main => [...main.querySelectorAll('h2[id], h3[id]')].filter(h => !h.closest('.portal-altitude') || !h.closest('.portal-altitude').hidden).map(h => h.id)));
+  for (const group of await page.locator('#cf-nav .cf-nav-group .cf-nav-group').all()) {
+    const hierarchy = await group.evaluate(g => {
+      const parent = g.parentElement.closest('.cf-nav-group');
+      const label = g.querySelector('.cf-kicker');
+      return { delta: g.getBoundingClientRect().left - parent.getBoundingClientRect().left, gap: parseFloat(getComputedStyle(g).marginTop), weight: getComputedStyle(label).fontWeight, transform: getComputedStyle(label).textTransform };
+    });
+    assert.ok(hierarchy.delta >= 12 && hierarchy.gap >= 8, 'nested groups have an inset and a top gap');
+    assert.equal(hierarchy.weight, '500'); assert.equal(hierarchy.transform, 'none');
+  }
+  const crumbs = page.locator('.cf-crumbs a');
+  for (const crumb of await crumbs.all()) {
+    assert.notEqual(new URL(await crumb.getAttribute('href'), page.url()).pathname, new URL(page.url()).pathname, 'ancestor breadcrumbs do not link to the current page');
   }
   const outline = page.locator('#cf-toc .cf-toc-link');
   if (await outline.count() > 1) {
@@ -185,6 +218,19 @@ export async function verifyChrome(page, urls, engine, altitudeRoute = null) {
     await page.goto(url);
     await page.locator('[data-cf-mounted]').waitFor();
     assert.equal(await page.evaluate(() => document.documentElement.scrollWidth), 375, `${engine}: overflow ${url}`);
+    const breadcrumbState = await page.evaluate(() => {
+      const current = document.querySelector('#cf-nav a[aria-current="page"]');
+      const labels = [];
+      for (let group = current?.closest('.cf-nav-group'); group; group = group.parentElement.closest('.cf-nav-group')) {
+        labels.push(group.querySelector(':scope > .cf-nav-group-head .cf-kicker').firstChild.textContent.trim());
+      }
+      return { labels, crumbs: [...document.querySelectorAll('.cf-crumbs li')].slice(1, -1).map(li => ({ label: li.textContent.trim(), href: li.querySelector('a')?.href })) };
+    });
+    for (const crumb of breadcrumbState.crumbs) {
+      assert.ok(breadcrumbState.labels.some(label => label === crumb.label || label.replace(/[-_]/g, ' ').replace(/\b\w/g, c => c.toUpperCase()) === crumb.label), 'breadcrumb uses the configured group label or a readable folder label');
+      if (crumb.href) assert.notEqual(new URL(crumb.href).pathname, new URL(page.url()).pathname, 'no ancestor self-link');
+    }
+
   }
   for (const name of ['nav', 'toc']) {
     await page.locator(`[data-cf-toggle="${name}"]`).click();
@@ -213,5 +259,5 @@ export async function verifyChrome(page, urls, engine, altitudeRoute = null) {
     assert.equal(companionGeometry.wide, true);
     assert.equal(companionGeometry.narrow, false);
   }
-  return { controls: 'pass', hasAltitudes, routesAt375: urls.length, desktopColumnMinimum: 646, companionGeometry };
+  return { nestedGroups: await page.locator('#cf-nav .cf-nav-group .cf-nav-group').count(), headingsOutsidePanels: await page.locator('main').evaluate(main => [...main.querySelectorAll('h2[id], h3[id]')].filter(h => !h.closest('.portal-altitude')).length), controls: 'pass', hasAltitudes, routesAt375: urls.length, desktopColumnMinimum: 646, companionGeometry };
 }

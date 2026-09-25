@@ -131,13 +131,15 @@ code { font-size: 0.92em; padding: 1px 5px; border-radius: var(--cf-radius-chip)
 
 /* Nav */
 .cf-nav-group { margin: 0 0 14px; }
+.cf-nav-group .cf-nav-group { margin: 8px 0 8px 12px; }
+.cf-nav-group .cf-nav-group > .cf-nav-group-head .cf-kicker { font-weight: 500; text-transform: none; letter-spacing: normal; }
 .cf-nav-group-head { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 4px 10px; }
 .cf-nav-chev { width: 24px; height: 24px; }
 .cf-nav-chev svg { transition: transform var(--cf-dur-select) var(--cf-ease); }
-.cf-nav-group.is-collapsed .cf-nav-chev svg { transform: rotate(-90deg); }
+.cf-nav-group.is-collapsed > .cf-nav-group-head .cf-nav-chev svg { transform: rotate(-90deg); }
 .cf-nav-group-body { display: grid; grid-template-rows: 1fr; transition: grid-template-rows var(--cf-dur-select) var(--cf-ease); }
 .cf-nav-group-body > div { min-height: 0; overflow: hidden; }
-.cf-nav-group.is-collapsed .cf-nav-group-body { grid-template-rows: 0fr; }
+.cf-nav-group.is-collapsed > .cf-nav-group-body { grid-template-rows: 0fr; }
 .cf-nav-list { list-style: none; margin: 0; padding: 0; }
 .cf-row {
   display: flex; align-items: center; gap: 8px; margin: 1px 0; padding: 6px 10px; border-radius: var(--cf-radius-ctl);
@@ -688,7 +690,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--cf-focus); outl
 .cf-main h1 { margin: 0 0 10px; font-size: var(--cf-fs-display); }
 .cf-main .sl-markdown-content { font-family: var(--cf-font-sans); font-size: var(--cf-fs-body); }
 .portal-altitude-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--cf-border); margin-block: 24px; }
-.portal-altitude-tabs [role="tab"] { position: relative; border: 0; border-radius: 0; padding: 10px 0; font-family: var(--cf-font-sans); font-size: var(--cf-fs-ui); text-transform: none; letter-spacing: normal; color: var(--cf-text-muted); background: transparent; }
+.portal-altitude-tabs [role="tab"] { position: relative; border: 0; border-radius: 0; padding: 10px 0; font-family: var(--cf-font-sans); font-size: var(--cf-fs-ui); font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--cf-text-muted); background: transparent; }
 .portal-altitude-tabs [role="tab"]:hover { color: var(--cf-text); background: transparent; }
 .portal-altitude-tabs [role="tab"][aria-selected="true"] { color: var(--cf-text); background: transparent; font-weight: 600; box-shadow: inset 0 -2px var(--cf-accent); }
 .portal-provenance::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--cf-positive); }

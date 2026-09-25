@@ -42,7 +42,7 @@
     },
     "public/portal-chrome.js": {
       "ownership": "managed",
-      "pristine_sha256": "ec708978b5f2abca9a1bea66be2935ce0a30a3dabedc7e1af469d4990d076eb2"
+      "pristine_sha256": "6daa5664769185201c7bdb5360146d71196f83c9cd96aa7c41896734edb03e17"
     },
     "public/portal-preview.js": {
       "ownership": "managed",
@@ -70,7 +70,7 @@
     },
     "scripts/chrome-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "720b278f3aee7f2c73c25923ef989e7af8f95c9f50d38b94a3b81d044164a588"
+      "pristine_sha256": "f0fc5bd8d7ff2b63f6f19f3ee87a22f170d5d47af4acde59f38fd1b9c33d3d16"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
@@ -114,7 +114,7 @@
     },
     "scripts/runtime-scripts.json": {
       "ownership": "managed",
-      "pristine_sha256": "b33759dc478b1e5d3bf5757bad0b763dabcab96dd1bec72b5feb0dfe5980ac7e"
+      "pristine_sha256": "377bf7976030cbd796d22ff47955a14b7b3d03304ce99cbddb305bc56bc160f5"
     },
     "scripts/runtime-scripts.mjs": {
       "ownership": "managed",
@@ -146,7 +146,7 @@
     },
     "src/components/PortalNav.astro": {
       "ownership": "managed",
-      "pristine_sha256": "285196e498d277b4397b2f37f253ed53f80554997955d062579c44a5f0120eb3"
+      "pristine_sha256": "5389f554608cb49db3f82c27e1c6c0e5f5cfde6236228dacc86248fb46ee4749"
     },
     "src/components/PortalSkipLink.astro": {
       "ownership": "managed",
@@ -154,7 +154,7 @@
     },
     "src/components/PortalTitle.astro": {
       "ownership": "managed",
-      "pristine_sha256": "5b2428ba41b160d6846f2525febbdad7d08afa9facb1c8d72c549a995cc80552"
+      "pristine_sha256": "59119adef7276880edc6fb74a006b2343a40c8ae6b20c2ad6802ca15571874b4"
     },
     "src/content.config.ts": {
       "ownership": "managed",
@@ -198,7 +198,7 @@
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "b11236fd802e37b2eccc85b297e58ad22423e7e297048a0f18f2a0fdb9e57a31"
+      "pristine_sha256": "3c8a94d42bf350fff95d8b68c932147a38290e338baf691bcdc43729bcbd5f4f"
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
@@ -214,7 +214,7 @@
     },
     "tests/chrome.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "2819cdef205f581d8afae74e633d0eed966ce997a9b2d49dc175f4908b2b616e"
+      "pristine_sha256": "fb2d76085e078740bc28432bae42d74501ea77617e0584fec46601fa48b39cf8"
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",

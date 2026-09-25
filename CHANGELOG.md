@@ -65,7 +65,9 @@ publication date._
   Inter is now the independent typeface default, replacing the portal's
   Archivo or Plex defaults for signal or folio. Present also starts in Inter;
   exports previously used a system-first sans stack. The export default stays
-  editorial, resolving to Slate. No existing CLI or config value is removed.
+  editorial, resolving to Slate. Old saved Display skin and explicit font
+  choices normalize independently before first paint and in the controls.
+  No existing CLI or config value is removed.
 
 <!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,

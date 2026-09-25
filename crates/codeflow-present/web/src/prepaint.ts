@@ -1,3 +1,5 @@
+import { normalizeSkin, normalizeTypeface } from "./appearance-values";
+
 (() => {
   const themes = new Set(["graphite", "slate", "sage"]);
   const modes = new Set(["system", "light", "dark"]);
@@ -8,9 +10,9 @@
   let storedTypeface: string | null = null;
   let storedScale: string | null = null;
   try {
-    storedTheme = localStorage.getItem("cf-present-theme");
+    storedTheme = normalizeSkin(localStorage.getItem("cf-present-theme"));
     storedMode = localStorage.getItem("cf-present-mode");
-    storedTypeface = localStorage.getItem("cf-present-typeface");
+    storedTypeface = normalizeTypeface(localStorage.getItem("cf-present-typeface"));
     storedScale = localStorage.getItem("cf-present-scale");
   } catch {
     // Defaults below remain usable when storage is unavailable.

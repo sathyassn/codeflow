@@ -120,7 +120,7 @@ Page shape:
   the adapter's records switch stays off.
 - **Type roles:** display / prose / label / mono-evidence; themes own faces and
   scale. Content ships no ad-hoc font stacks.
-- **Themes:** `signal`/`folio` map to utility skins instrument/ink; readers
+- **Themes:** Graphite, Slate and Sage are independent of font; readers
   switch skin, face, scale, and appearance in the Display panel. A project may
   adapt the utility once from its brand; never feed portal palette/type/
   components back into the product design system.

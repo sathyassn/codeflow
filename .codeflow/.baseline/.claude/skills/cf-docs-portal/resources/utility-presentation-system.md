@@ -187,24 +187,23 @@ in `figure-grammar.md` section 3; the reader of each altitude is named in
 
 ### Appearance
 
-Three utility skins, each in light and dark, selectable at runtime through the
-Display panel on both surfaces. The portal's bundled theme names map to skins
-at build time: `signal` → instrument, `folio` → ink.
+Three kit skins, Graphite, Slate and Sage, each in light and dark, selectable
+through Display on both surfaces. Skin and font are independent preferences;
+the unset font defaults to Inter. The kit's `design-system/tokens.json` owns
+all 27 semantic colour roles, including figure roles and on-accent text.
 
 | Display control | Values | Token effect |
 |-----------------|--------|--------------|
-| Font | Archivo (instrument), Inter (editorial), IBM Plex Sans (ink) | `--cf-font-sans`; bundled Latin variable faces, system fallbacks, no remote fonts |
+| Font | Archivo, Inter, IBM Plex Sans | `--cf-font-sans`; bundled Latin variable faces, system fallbacks, no remote fonts |
 | Size | Compact 0.94 · Default 1.00 · Large 1.12 | `--cf-ui-scale`; floors below are never crossed |
-| Palette | Neutral = instrument · Cool = editorial · Warm = ink | full semantic role set per skin |
-| Appearance | Light · Dark · System | `data-theme`; no wrong-mode flash before first paint |
+| Palette | Graphite, Slate, Sage | full semantic role set per skin |
+| Appearance | Light, Dark, System | root attributes; no wrong-mode flash before first paint |
 
 Type floors (px, held under Compact): micro 12.5 · caption 13 · ui 13.5 ·
-body 15. Reading measure 68ch. Radius 0.5rem. Semantic colour roles: canvas,
-surface, surface-raised, surface-subtle, text, text-muted, border,
-border-strong, accent, accent-strong, accent-soft, focus, positive, warning,
-danger, diagram-line. Colour is never the only carrier of state. The portal
-token sheet and the present stylesheet must be value-identical per role; a
-Rust contract test fails the build on drift.
+body 15. Reading measure 68ch. Radius 0.5rem. Colour is never the only carrier
+of state. The portal token sheet and present stylesheet must match the kit
+for every role in all six skin/mode pairs; the shared palette test rejects
+drift and also checks the three independent font stacks.
 
 ### Motion
 

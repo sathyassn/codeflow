@@ -39,7 +39,9 @@
     theme: { key: 'starlight-theme', attr: null, label: 'Appearance', desc: 'Light, dark or the system', def: 'system', options: [['light', 'Light'], ['dark', 'Dark'], ['system', 'System']] }
   };
   function getPref(name) {
-    const p = PREFS[name], v = store.get(p.key);
+    const p = PREFS[name], saved = store.get(p.key);
+    const aliases = name === 'skin' ? {instrument: 'graphite', technical: 'graphite', editorial: 'slate', ink: 'sage'} : name === 'typeface' ? {instrument: 'archivo', editorial: 'inter'} : {};
+    const v = Object.hasOwn(aliases, saved) ? aliases[saved] : saved;
     return p.options.some(o => o[0] === v) ? v : (p.attr && root.getAttribute(p.attr)) || p.def;
   }
   function applyTheme() {
@@ -521,7 +523,7 @@
     let heads = [], activeId = '';
     function buildToc() {
       const panel = $('.portal-altitude:not([hidden])', el) || view.mainEl;
-      heads = $$('h2[id], h3[id]', panel);
+      heads = $$('h2[id], h3[id]', view.mainEl).filter(h => !h.closest('.portal-altitude') || h.closest('.portal-altitude') === panel);
       const html = heads.map(h => `<li><a class="cf-toc-link${h.tagName === 'H3' ? ' is-l3' : ''}" href="#${h.id}" data-target="${h.id}">${esc(h.textContent.trim())}</a></li>`).join('');
       tocLists.forEach(l => { l.innerHTML = html; });
       activeId = '';

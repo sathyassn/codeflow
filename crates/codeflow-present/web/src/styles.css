@@ -930,10 +930,11 @@ code { font-family: var(--cf-font-mono); }
   color: var(--cf-text-muted);
 }
 .cf-composer .row .pri {
-  background: var(--cf-text);
-  color: var(--cf-surface);
-  border-color: var(--cf-text);
+  background: var(--cf-accent);
+  color: var(--cf-on-accent);
+  border-color: var(--cf-accent);
   font-weight: 600;
+  font-family: var(--cf-font-sans);
 }
 .cf-composer .row .danger {
   color: var(--cf-danger);
@@ -1140,19 +1141,19 @@ code { font-family: var(--cf-font-mono); }
   padding: 8px 10px;
 }
 .cf-dock .ft button.pri {
-  font-family: var(--cf-font-mono);
+  font-family: var(--cf-font-sans);
   font-size: 0.82rem;
   padding: 11px 12px;
   border-radius: 10px;
-  border: 1px solid var(--cf-text);
-  background: var(--cf-text);
-  color: var(--cf-surface);
+  border: 1px solid var(--cf-accent);
+  background: var(--cf-accent);
+  color: var(--cf-on-accent);
   cursor: pointer;
   width: 100%;
   font-weight: 600;
 }
 .cf-dock .ft button.pri:hover:not(:disabled) {
-  background: color-mix(in srgb, var(--cf-text) 88%, var(--cf-accent));
+  background: var(--cf-accent-strong);
 }
 .cf-dock .ft button.pri:disabled,
 .cf-dock .ft button.pri.is-empty {

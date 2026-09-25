@@ -1,3 +1,4 @@
+import { normalizeSkin, normalizeTypeface } from "./appearance-values";
 import type { AppearanceMode, ResolvedMode, TypeScale, Typeface, UtilityTheme } from "./contracts";
 
 const MODE_KEY = "cf-present-mode";
@@ -17,9 +18,9 @@ export interface AppearanceState {
 }
 
 export function initialAppearance(): AppearanceState {
-  const theme = readChoice(readStorage(THEME_KEY), THEMES) ?? "graphite";
+  const theme = readChoice(normalizeSkin(readStorage(THEME_KEY)), THEMES) ?? "graphite";
   const mode = readChoice(readStorage(MODE_KEY), MODES) ?? "system";
-  const typeface = readChoice(readStorage(TYPEFACE_KEY), TYPEFACES) ?? "inter";
+  const typeface = readChoice(normalizeTypeface(readStorage(TYPEFACE_KEY)), TYPEFACES) ?? "inter";
   const scale = readChoice(readStorage(SCALE_KEY), SCALES) ?? "default";
   return { theme, mode, typeface, scale };
 }

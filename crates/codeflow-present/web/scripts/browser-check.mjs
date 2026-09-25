@@ -4,7 +4,7 @@ import { access, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import axe from "axe-core";
-import { chromium } from "playwright-core";
+import { chromium, firefox, webkit } from "playwright-core";
 import { checkSelectionOccurrences } from "./selection-browser-check.mjs";
 import { checkDocumentExcerpts } from "./excerpt-browser-check.mjs";
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
@@ -108,6 +108,11 @@ const executablePath = await findBrowser();
 const browser = await chromium.launch({ executablePath, headless: true });
 
 try {
+  for (const [name, engine] of [['chromium', chromium], ['firefox', firefox], ['webkit', webkit]]) {
+    const chromeBrowser = name === 'chromium' ? browser : await engine.launch();
+    try { await checkSavedAppearance(chromeBrowser, origin, name); }
+    finally { if (chromeBrowser !== browser) await chromeBrowser.close(); }
+  }
   await checkSelectionOccurrences(browser);
   await checkDocumentExcerpts(browser);
   await checkProseLazyPath(browser, origin);
@@ -119,6 +124,42 @@ try {
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
+}
+
+async function checkSavedAppearance(browser, origin, engine) {
+  for (const [key, saved, skin, face] of [
+    ...[['instrument', 'graphite'], ['editorial', 'slate'], ['ink', 'sage'], ['technical', 'graphite']].map(([old, skin]) => ['cf-present-theme', old, skin, 'plex']),
+    ...[['instrument', 'archivo'], ['editorial', 'inter'], ['plex', 'plex']].map(([old, face]) => ['cf-present-typeface', old, 'sage', face]),
+  ]) {
+    const context = await browser.newContext();
+    try {
+      await context.addInitScript(({ key, saved }) => {
+        localStorage.setItem('cf-present-theme', 'sage'); localStorage.setItem('cf-present-typeface', 'plex'); localStorage.setItem(key, saved);
+        window.__appearancePaints = [];
+        new MutationObserver(() => {
+          const root = document.documentElement;
+          if (root?.dataset.cfTheme && root.dataset.cfTypeface) window.__appearancePaints.push([root.dataset.cfTheme, root.dataset.cfTypeface]);
+        }).observe(document, { subtree: true, childList: true, attributes: true });
+      }, { key, saved });
+      const page = await context.newPage();
+      await page.goto(`${origin}/app?case=prose`);
+      await page.getByTestId('settings-btn').click();
+      const paints = await page.evaluate(() => window.__appearancePaints);
+      assert.ok(paints.length && paints.every(p => p[0] === skin && p[1] === face), `${engine}: ${key}=${saved} first paint`);
+      assert.equal(await page.locator(`[data-testid=skin-pills] [data-skin=${skin}]`).getAttribute('aria-pressed'), 'true');
+      assert.equal(await page.getByTestId(`typeface-${face}`).getAttribute('aria-pressed'), 'true');
+    } finally { await context.close(); }
+  }
+  process.stdout.write(`${engine}: saved appearance first-paint and selected-pill controls passed (7 values)\n`);
+}
+
+async function assertPrimary(button) {
+  assert.deepEqual(await button.evaluate(el => {
+    const s = getComputedStyle(el);
+    const probe = document.createElement('span'); probe.style.fontFamily = 'var(--cf-font-sans)'; probe.style.color = 'var(--cf-on-accent)'; probe.style.backgroundColor = 'var(--cf-accent)'; document.body.append(probe);
+    const p = getComputedStyle(probe);
+    const result = [s.fontFamily === p.fontFamily, s.fontWeight, s.backgroundColor === p.backgroundColor, s.color === p.color]; probe.remove(); return result;
+  }), [true, '600', true, true]);
 }
 
 async function checkStaticExportModes(browser, origin) {
@@ -344,6 +385,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       throw new Error("Composer did not expose the server-provided length limit");
     }
     await box.fill(body, { force: true });
+    await assertPrimary(page.getByTestId("composer-save"));
     await page.getByTestId("composer-save").click({ force: true });
     await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10000 });
   }
@@ -354,6 +396,13 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await saveComposerNote("Keep this exact wording.");
   if ((await page.locator(".cf-note-row").count()) !== 1) throw new Error("Text note did not land in the rail");
   if ((await page.locator(".cf-marker").count()) !== 1) throw new Error("Speech marker missing for text note");
+
+  const desktop = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.mouse.move(0, 0);
+  await page.waitForFunction(() => [...document.querySelectorAll('.cf-marker')].every(el => el.getBoundingClientRect().right <= innerWidth - 8));
+  assert.equal(await page.locator('.cf-marker').evaluateAll(nodes => nodes.every(el => el.getBoundingClientRect().left >= 0 && el.getBoundingClientRect().right <= innerWidth - 8)), true);
+  await page.setViewportSize(desktop);
 
   // Limit
   await selectFixtureText(page);
@@ -412,6 +461,8 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Harness excerpts: intercept the actual review POST, not the rail labels.
   async function submitCapturedReview() {
     capturedReviews.length = 0;
+    await page.mouse.move(0, 0);
+    await assertPrimary(page.getByTestId("submit-all"));
     await page.getByTestId("submit-all").click();
     await page.getByTestId("toast").getByText(/Review received/).waitFor({ timeout: 10000 });
     if (capturedReviews.length !== 1) {
