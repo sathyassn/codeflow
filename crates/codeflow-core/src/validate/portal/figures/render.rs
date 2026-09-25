@@ -40,6 +40,8 @@ const LABEL_GAP: f64 = 14.0;
 /// An extent layout keeps at least this much to plot in its 360-unit narrow
 /// composition; one whose value labels would leave less is refused.
 const EXTENT_NARROW_WIDTH: f64 = 360.0;
+/// The coverage layout's narrow composition width.
+const COVERAGE_NARROW_WIDTH: f64 = 360.0;
 const MIN_PLOT_WIDTH: f64 = 160.0;
 const LINE: [&str; 3] = ["path", "line", "polyline"];
 
@@ -535,15 +537,37 @@ fn coverage_layout(layout: &Value) -> Result<Composed, String> {
             wide.push(serde_json::json!({ "state": state, "shape": "rect", "x": round(label_width + col_step * column_index as f64 + col_step / 2.0 - cell / 2.0, 0.01), "y": y, "w": cell, "h": cell, "rx": 2 }));
         }
     }
+    // The narrow list: each column name bound to its cell and set LABEL_GAP
+    // past it, budgeted at the worst-case advance, the next column LABEL_GAP
+    // further on, and a column that would run past the width on a new line.
+    let narrow_cell = 16.0;
+    let narrow_line = 28.0;
+    let mut slots: Vec<(f64, f64)> = Vec::new();
+    let mut line = 0.0;
+    let mut cursor = 0.0;
+    for column in &columns {
+        let width = narrow_cell
+            + LABEL_GAP
+            + column.encode_utf16().count() as f64 * MONO_ADVANCE
+            + TEXT_OVERHANG;
+        if cursor > 0.0 && cursor + width > COVERAGE_NARROW_WIDTH {
+            line += 1.0;
+            cursor = 0.0;
+        }
+        slots.push((round(cursor, 0.01), line));
+        cursor += width + LABEL_GAP;
+    }
+    let row_pitch = 64.0 + line * narrow_line;
     let mut narrow = Vec::new();
     for (row_index, row) in rows.iter().enumerate() {
-        let y = 20.0 + row_index as f64 * 64.0;
+        let y = 20.0 + row_index as f64 * row_pitch;
         narrow.push(serde_json::json!({ "text": label(row), "x": 0, "y": y, "style": "strong" }));
-        let step = f64::min(88.0, 360.0 / columns.len() as f64);
         for (column_index, state) in cells(row).into_iter().enumerate() {
-            let x = column_index as f64 * step;
-            narrow.push(serde_json::json!({ "state": state, "shape": "rect", "x": x, "y": y + 14.0, "w": 16, "h": 16, "rx": 2 }));
-            narrow.push(serde_json::json!({ "text": columns.get(column_index).cloned().unwrap_or_default(), "x": x + 22.0, "y": y + 27.0, "style": "mute" }));
+            let (x, slot_line) = slots.get(column_index).copied().unwrap_or((0.0, 0.0));
+            let cell_y = y + 14.0 + slot_line * narrow_line;
+            let id = format!("cell-{row_index}-{column_index}");
+            narrow.push(serde_json::json!({ "state": state, "shape": "rect", "x": x, "y": cell_y, "w": narrow_cell, "h": narrow_cell, "rx": 2, "id": id }));
+            narrow.push(serde_json::json!({ "text": columns.get(column_index).cloned().unwrap_or_default(), "x": round(x + narrow_cell + LABEL_GAP, 0.01), "y": cell_y + 13.0, "style": "mute", "for": [id] }));
         }
     }
     Ok((
@@ -554,8 +578,8 @@ fn coverage_layout(layout: &Value) -> Result<Composed, String> {
             drops: Vec::new(),
         },
         Composition {
-            width: 360.0,
-            height: 20.0 + rows.len() as f64 * 64.0,
+            width: COVERAGE_NARROW_WIDTH,
+            height: 20.0 + rows.len() as f64 * row_pitch,
             draw: narrow,
             drops: Vec::new(),
         },
@@ -1764,6 +1788,9 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names.len(), 10, "{names:?}");
+        // The coverage controls pin the narrow coverage layout on one line and
+        // wrapped onto a second.
+        names.extend(["controls/coverage-derived", "controls/coverage-wrapped"].map(str::to_owned));
         let derived = serde_json::json!({"commit_desc_max_len": 50, "commit_subject_max_len": 72});
         for name in names {
             let declaration: serde_json::Value = serde_json::from_slice(

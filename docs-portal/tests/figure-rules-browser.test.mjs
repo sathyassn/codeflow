@@ -92,20 +92,27 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
 
 // Rule 7 is about text in boxes: a coverage cell is a state mark with no text
 // in it, so a grid of cells with no crossed cell is not boxed text, and boxes
-// that each hold a label still are.
+// that each hold a label still are. The narrow coverage composition binds
+// each column label to its cell and budgets its width, so the label clears
+// every cell it does not label (rule 8) at 390 px, on one line or wrapped,
+// in Chromium, WebKit and Firefox.
 const SIGNING = JSON.stringify({ channels: { release: ["binaries", "archives", "images"], nightly: ["binaries", "archives"] } });
-test("a coverage grid is not boxed text, and boxes that each hold a label are", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+test("a coverage grid is not boxed text and its narrow labels clear the cells they do not label", { skip: process.platform === "win32", timeout: 300_000 }, async () => {
   const css = await sheet();
-  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
-  try {
-    const page = await browser.newPage();
-    const declaration = await specimen("controls/coverage-derived.json");
-    const bound = bindDerivedData(declaration.figure, (relative) => (relative === "config/signing.json" ? SIGNING : null));
-    const failures = figureRuleFailures(await probe(page, css, renderFigure(declaration, { idPrefix: "c", bound })));
-    assert.deepEqual(failures.filter((failure) => failure.rule === 7), [], canonicalJson(failures));
-    const boxed = figureRuleFailures(await probe(page, css, renderFigure(await specimen("controls/boxed-text.json"), { idPrefix: "b" })));
-    assert.deepEqual(boxed.filter((failure) => failure.rule === 7).map((failure) => failure.message.split(":")[0]), ["wide", "narrow", "wide dark", "narrow dark"], canonicalJson(boxed));
-  } finally { await browser.close(); }
+  for (const [engineName, engine] of Object.entries({ chromium, webkit, firefox })) {
+    const browser = await engine.launch({ headless: true, env: hardenedChildEnvironment() });
+    try {
+      const page = await browser.newPage();
+      for (const name of ["coverage-derived.json", "coverage-wrapped.json"]) {
+        const declaration = await specimen(`controls/${name}`);
+        const bound = declaration.figure.binding === "derived" ? bindDerivedData(declaration.figure, (relative) => (relative === "config/signing.json" ? SIGNING : null)) : null;
+        const failures = figureRuleFailures(await probe(page, css, renderFigure(declaration, { idPrefix: "c", bound })));
+        assert.deepEqual(failures, [], `${engineName}, ${name}: ${canonicalJson(failures)}`);
+      }
+      const boxed = figureRuleFailures(await probe(page, css, renderFigure(await specimen("controls/boxed-text.json"), { idPrefix: "b" })));
+      assert.deepEqual(boxed.filter((failure) => failure.rule === 7).map((failure) => failure.message.split(":")[0]), ["wide", "narrow", "wide dark", "narrow dark"], `${engineName}: ${canonicalJson(boxed)}`);
+    } finally { await browser.close(); }
+  }
 });
 
 // Rule 6 reads the bars and limits themselves: a render whose marks or value

@@ -480,6 +480,7 @@ const LABEL_GAP = Math.ceil(THRESHOLDS.labelClearancePx / MIN_RENDER_SCALE + LIM
 // and keeps at least this much to plot in the 360-unit narrow composition; a
 // layout whose labels would leave less is refused, never drawn reversed.
 const EXTENT_NARROW_WIDTH = 360;
+const COVERAGE_NARROW_WIDTH = 360;
 export const MIN_PLOT_WIDTH = 160;
 function extentReserve(widestCharacters) {
   return Math.max(40, LABEL_GAP + widestCharacters * MONO_ADVANCE + TEXT_OVERHANG);
@@ -557,20 +558,40 @@ function layoutCompositions(figure, bound) {
     wideDraw.push({ text: row.label, x: 0, y: y + 14 });
     row.cells.forEach((state, columnIndex) => wideDraw.push({ state, shape: "rect", x: round(labelWidth + colStep * columnIndex + colStep / 2 - cell / 2), y, w: cell, h: cell, rx: 2 }));
   });
+  // The narrow composition lists each row's cells, each with its column name
+  // bound to it and set LABEL_GAP past it, as the extent layout sets its value
+  // labels. A column takes its cell, that gap and its name at the worst-case
+  // advance (the label face is budgeted as the value face is); the next
+  // column starts LABEL_GAP further on, so a name clears the next cell, and a
+  // column that would run past the width starts a new line. Every row places
+  // its columns the same way.
+  const narrowCell = 16;
+  const narrowLine = 28;
+  const slots = [];
+  let line = 0;
+  let cursor = 0;
+  for (const column of columns) {
+    const width = narrowCell + LABEL_GAP + column.length * MONO_ADVANCE + TEXT_OVERHANG;
+    if (cursor > 0 && cursor + width > COVERAGE_NARROW_WIDTH) { line += 1; cursor = 0; }
+    slots.push({ x: round(cursor), line });
+    cursor += width + LABEL_GAP;
+  }
+  const rowPitch = 64 + line * narrowLine;
   const narrowDraw = [];
   rows.forEach((row, rowIndex) => {
-    const y = 20 + rowIndex * 64;
+    const y = 20 + rowIndex * rowPitch;
     narrowDraw.push({ text: row.label, x: 0, y, style: "strong" });
-    const step = Math.min(88, 360 / columns.length);
     row.cells.forEach((state, columnIndex) => {
-      const x = columnIndex * step;
-      narrowDraw.push({ state, shape: "rect", x, y: y + 14, w: 16, h: 16, rx: 2 });
-      narrowDraw.push({ text: columns[columnIndex], x: x + 22, y: y + 27, style: "mute" });
+      const { x, line: slotLine } = slots[columnIndex];
+      const cellY = y + 14 + slotLine * narrowLine;
+      const id = `cell-${rowIndex}-${columnIndex}`;
+      narrowDraw.push({ state, shape: "rect", x, y: cellY, w: narrowCell, h: narrowCell, rx: 2, id });
+      narrowDraw.push({ text: columns[columnIndex], x: round(x + narrowCell + LABEL_GAP), y: cellY + 13, style: "mute", for: [id] });
     });
   });
   return {
     wide: { width: THRESHOLDS.wideMaxWidth, height: 48 + rows.length * 36 + 4, draw: wideDraw },
-    narrow: { width: 360, height: 20 + rows.length * 64, draw: narrowDraw },
+    narrow: { width: COVERAGE_NARROW_WIDTH, height: 20 + rows.length * rowPitch, draw: narrowDraw },
     drawnValues: null,
   };
 }

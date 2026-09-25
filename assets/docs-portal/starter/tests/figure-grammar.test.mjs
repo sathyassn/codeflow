@@ -6,7 +6,7 @@ import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
 import { checkFacts, composeFigure, drawnValuesMatch, FAMILIES, MARKS, markdownSections, MIN_PLOT_WIDTH, renderFigure, SHAPE_CLASSES, slugHeading, TEXT_CLASSES, validateDeclaration } from "../scripts/figure-grammar.mjs";
 
-import { specimens } from "./page-shapes.mjs";
+import { specimen, specimens } from "./page-shapes.mjs";
 
 // A committed source for each fact, written so the fact holds: the anchored
 // section carries the text, the items or the JSON value the fact asserts.
@@ -104,8 +104,11 @@ test("two states that draw the same legend key are refused", async () => {
 // reconstruction of a companion is pinned to the same bytes (see
 // figures/render.rs in codeflow-core). CODEFLOW_UPDATE_FIGURE_FIXTURES=1
 // rewrites them after a deliberate change to the drawing.
+// The two coverage controls pin the narrow coverage layout on one line and
+// wrapped onto a second.
 test("the committed rendered specimens are what the grammar draws", async () => {
-  for (const { name, declaration } of await specimens()) {
+  const controls = await Promise.all(["controls/coverage-derived.json", "controls/coverage-wrapped.json"].map(async (name) => ({ name, declaration: await specimen(name) })));
+  for (const { name, declaration } of [...await specimens(), ...controls]) {
     const bound = declaration.figure.binding === "derived" ? { source: declaration.figure.source, derived: { commit_desc_max_len: 50, commit_subject_max_len: 72 } } : null;
     const html = `${renderFigure(declaration, { idPrefix: "cf-fig-0", bound })}\n`;
     const file = new URL(`./fixtures/figures/rendered/${name.replace(/\.json$/, ".html")}`, import.meta.url);

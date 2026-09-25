@@ -78,7 +78,7 @@
     },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "5bfbc118ea9a0f9bef0092283cc8e70518164b8440150712c89259da498131cf"
+      "pristine_sha256": "a52f7c56b22139903f9edab36e55791c6d81897bf606fac161033a9d5a0ade70"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -230,11 +230,11 @@
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "e07c030f4db7e174373fe6a2dd0e54af55e965d4624a314a55a4c1461e0c7aa8"
+      "pristine_sha256": "93d71a8299ebf502342bf0e03115a272da18fea08fb6420cfcb643288a5699f3"
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "3cbfc875f7ac7126d42be33000a46aa9ed3e7527df57fc3c9b63c70e83d4b5bf"
+      "pristine_sha256": "c8fe7e6ef35e42eac60d557aae3c1be699ff2f15987b5cbd6e8987fa5d15bfd3"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
@@ -292,6 +292,10 @@
       "ownership": "managed",
       "pristine_sha256": "4e8d466184aad2f928fa5c83fc47ac209a42743b328a6cd9afa853f795827dc2"
     },
+    "tests/fixtures/figures/controls/coverage-wrapped.json": {
+      "ownership": "managed",
+      "pristine_sha256": "a632c7d9eeefd9b4cb39b07a60be4b174c3dea056f5a744177d3068a87518a2c"
+    },
     "tests/fixtures/figures/rendered/01-flow.html": {
       "ownership": "managed",
       "pristine_sha256": "6f6b14e0a0862049404f1b3f1f3831b09b5b97ac028fdc4854c167c0220f9c56"
@@ -331,6 +335,14 @@
     "tests/fixtures/figures/rendered/10-extent-derived.html": {
       "ownership": "managed",
       "pristine_sha256": "e98c0e3dead42e20bafe5fd148009abcaa76f91027f24430fb8fc78afca51595"
+    },
+    "tests/fixtures/figures/rendered/controls/coverage-derived.html": {
+      "ownership": "managed",
+      "pristine_sha256": "8ee0e72a1fe3296c0f10a8b099a2d3fd1cad1fe4d501b6e68c7497bc3e99f539"
+    },
+    "tests/fixtures/figures/rendered/controls/coverage-wrapped.html": {
+      "ownership": "managed",
+      "pristine_sha256": "cedb2fc65d934c89179b2419ed2776c6fa559b9216211bf435de332eea576feb"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",
