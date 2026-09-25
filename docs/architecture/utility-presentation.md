@@ -84,8 +84,9 @@ to the instrument skin and produce the same artifact.
 | Page classes | orient, architecture and reference: the altitude trio with a family figure in every panel and in every how-to section, chosen by the altitude contract; record pointer: one table of folders; records are not portal pages (ADR-0064) | rendered review per class; portal composition gate |
 | Precedence | shared resource is normative; ADR-0053's design-intent note is historical evidence | ADR-0063 |
 
-Unsupported carriers (tree and arbitrary diagram syntaxes on both surfaces;
-Mermaid in the portal, where a fence renders as plain code) are not promised
+Unsupported carriers (tree, Mermaid and any other diagram syntax on both
+surfaces: the portal renders a Mermaid fence as plain code and present refuses
+a `diagram` block) are not promised
 anywhere; adding one requires an adapter or runtime change and an ADR. The
 family figure is the default form (ADR-0068) and a rendered carrier on both
 surfaces. A portal page binds a declaration in `portal.config.json` and the

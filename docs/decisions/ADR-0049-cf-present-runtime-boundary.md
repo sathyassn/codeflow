@@ -184,3 +184,28 @@ kill.
 `docs/architecture.md` gains the `cf-present` crate, immutable renderer-asset
 pipeline, per-session loopback service, tokenless browser bootstrap, isolated
 profile, sandbox document, platform-state authority, and cleanup boundaries.
+
+## Update 2026-09-25: Mermaid retired (TSK-087)
+
+The operator decided on 2026-09-24 that figures are HTML and never Mermaid
+(ADR-0068, update of that date). TSK-087 carries the removal in 3.0.0, the
+first release of present, so no released consumer holds a diagram document.
+
+- The `diagram` block, its Mermaid 11.16.0 renderer, the sanitizer and the
+  packages they bundled leave the build. The renderer paragraph above, which
+  lazy-loads Mermaid for diagram blocks, describes the runtime before this
+  update. The lazy chunks are now figure, fonts and syntax, and the SBOM,
+  license inventory and size budgets were regenerated.
+- The v1 document schema narrows: the `diagram` definition leaves its block
+  catalog, and a document draws at most 24 figure blocks. New `present open`
+  and `update` input that carries a `diagram` block is refused before typed
+  parsing, with the replacement for its kind and the conversion section of
+  the `cf-present` authoring reference.
+- A revision stored with a `diagram` block by a pre-release build still
+  loads, as the `retired` revision kind of the history schema. It is read
+  only and never rewritten: the page and a new export show a notice and each
+  diagram's escaped source with its conversion, and feedback on it is
+  refused until `present update` stores a converted revision. A record that
+  is broken in any other way keeps its own error.
+- The consequence above that export enhancement covers diagrams no longer
+  applies; export enhancement covers syntax highlighting and figures.
