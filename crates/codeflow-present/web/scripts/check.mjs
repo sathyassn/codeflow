@@ -66,15 +66,18 @@ function checkManifest(manifest) {
   const app = assets.find((asset) => asset.request_path === appPath);
   if (!app) throw new Error("Canonical app entrypoint is missing");
   assertLazyEntryPaths(app);
-  // Negative control: one extra dynamic import must fail the pin.
-  const widened = { ...app, imports: [...app.imports, { request_path: "/app/assets/chunk-extra-AAAAAAAA.js", kind: "dynamic-import" }] };
-  let widenedRefused = false;
-  try {
-    assertLazyEntryPaths(widened);
-  } catch {
-    widenedRefused = true;
+  // Negative controls: an extra dynamic import must fail the pin, whether its
+  // prefix is new or repeats an allowed one.
+  for (const extra of ["/app/assets/chunk-extra-AAAAAAAA.js", "/app/assets/chunk-syntax-ZZZZZZZZ.js"]) {
+    const widened = { ...app, imports: [...app.imports, { request_path: extra, kind: "dynamic-import" }] };
+    let widenedRefused = false;
+    try {
+      assertLazyEntryPaths(widened);
+    } catch {
+      widenedRefused = true;
+    }
+    if (!widenedRefused) throw new Error(`The lazy entry pin accepted an extra dynamic import ${extra}`);
   }
-  if (!widenedRefused) throw new Error("The lazy entry pin accepted an extra dynamic import");
   const grammarChunks = assets.filter((asset) => /bash|diff|javascript|json|python|rust|toml|typescript|yaml/iu.test(asset.request_path));
   if (grammarChunks.length < 9) throw new Error("The nine curated grammar paths were not emitted separately");
   const exportAsset = manifest.export["present.export"];
@@ -90,11 +93,14 @@ function checkManifest(manifest) {
 // figure grammar and the bundled fonts. Anything else is a new lazy path to
 // review, not a silent addition.
 function assertLazyEntryPaths(app) {
-  const lazy = [...new Set(app.imports
+  const paths = [...new Set(app.imports
     .filter((item) => item.kind === "dynamic-import")
-    .map((item) => item.request_path.match(/^\/app\/assets\/chunk-([a-z]+)-[A-Z0-9]+\.js$/u)?.[1] ?? item.request_path))].sort();
+    .map((item) => item.request_path))].sort();
+  const lazy = paths
+    .map((path) => path.match(/^\/app\/assets\/chunk-([a-z]+)-[A-Z0-9]+\.js$/u)?.[1] ?? path)
+    .sort();
   if (lazy.join(",") !== "figure,fonts,syntax") {
-    throw new Error(`The app entry's dynamic imports must be exactly the syntax, figure and fonts chunks; found ${lazy.join(", ")}`);
+    throw new Error(`The app entry's dynamic imports must be exactly one syntax, one figure and one fonts chunk; found ${paths.join(", ")}`);
   }
 }
 
