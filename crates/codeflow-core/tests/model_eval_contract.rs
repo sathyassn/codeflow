@@ -3011,3 +3011,358 @@ fn operating_doctrine_pr_fixtures_share_one_pinned_stand_in_and_grading_note() {
         }
     }
 }
+
+/// The visual-doctrine and explanation-method grading inventory (TSK-062,
+/// EPC-016, ADR-0068): (pack, case, owning requirement, faulty control, new
+/// case, words that would name this case's rule in its prompt).
+type VisualEntry = (
+    &'static str,
+    &'static str,
+    &'static str,
+    &'static str,
+    bool,
+    &'static [&'static str],
+);
+
+const VISUAL_INVENTORY: [VisualEntry; 19] = [
+    (
+        "visual-doctrine",
+        "checks-page-figure-matches-its-question",
+        "CF-FIG-001",
+        "flow_family_for_set_against_set",
+        true,
+        &["grid", "matrix", "cell", "cells"],
+    ),
+    (
+        "visual-doctrine",
+        "release-handoffs-drawn-as-exchanges",
+        "CF-FIG-001",
+        "grid_family_for_ordered_exchanges",
+        true,
+        &["lifeline", "lifelines", "order", "ordered", "participants"],
+    ),
+    (
+        "visual-doctrine",
+        "queue-concept-draws-the-relationship",
+        "CF-FIG-002",
+        "labelled_boxes_kept_as_figure",
+        true,
+        &["label", "labels", "relationship", "edges", "arrows"],
+    ),
+    (
+        "visual-doctrine",
+        "retry-state-figure-survives-a-review-note",
+        "CF-FIG-002",
+        "valid_state_figure_reworked_away",
+        true,
+        &["keep", "valid", "correct", "transitions"],
+    ),
+    (
+        "visual-doctrine",
+        "deploy-flow-states-read-without-hue",
+        "CF-FIG-003",
+        "state_pair_differs_on_one_rendered_channel",
+        true,
+        &["dash", "width", "shape", "dark", "light", "contrast"],
+    ),
+    (
+        "visual-doctrine",
+        "planes-figure-fits-a-small-screen",
+        "CF-FIG-004",
+        "narrow_reflows_wide_mark_set",
+        true,
+        &[
+            "phone", "mobile", "screen", "small", "width", "tall", "height",
+        ],
+    ),
+    (
+        "visual-doctrine",
+        "token-exchange-labels-stay-clear",
+        "CF-FIG-005",
+        "label_overprints_label_or_mark",
+        true,
+        &["label", "labels", "text", "clear", "clash"],
+    ),
+    (
+        "visual-doctrine",
+        "access-grid-marks-read-at-small-size",
+        "CF-FIG-006",
+        "inner_mark_under_floor_at_narrow",
+        true,
+        &[
+            "small", "size", "cross", "crosses", "cell", "cells", "readable",
+        ],
+    ),
+    (
+        "visual-doctrine",
+        "limits-figure-draws-todays-value",
+        "CF-FIG-007",
+        "drawn_value_differs_from_source_today",
+        true,
+        &[
+            "value", "values", "config", "source", "current", "today", "64",
+        ],
+    ),
+    (
+        "visual-doctrine",
+        "planes-figure-claims-only-what-the-repository-holds",
+        "CF-FIG-007",
+        "fact_asserts_what_source_does_not_hold",
+        true,
+        &["remote", "protection", "armed", "fact", "facts", "true"],
+    ),
+    (
+        "visual-doctrine",
+        "key-rotation-section-is-drawn",
+        "CF-FIG-008",
+        "rotation_section_left_without_figure",
+        true,
+        &["figure", "drawing", "draw", "how-to", "steps"],
+    ),
+    (
+        "visual-doctrine",
+        "edge-cache-opening-says-what-it-is-not",
+        "CF-FIG-008",
+        "opening_panel_drawn_as_request_sequence",
+        true,
+        &["concept", "who", "cdn", "store"],
+    ),
+    (
+        "explanation-method",
+        "guide-page-from-a-policy-source",
+        "CF-METH-001",
+        "source_reprinted_under_altitudes_with_box_stage",
+        true,
+        &[
+            "concept", "reader", "readers", "question", "figure", "cf-stage",
+        ],
+    ),
+    (
+        "explanation-method",
+        "enforcement-planes-answered-in-chat",
+        "CF-METH-002",
+        "remote_plane_marked_active",
+        true,
+        &[
+            "plane", "planes", "layer", "layers", "figure", "draw", "diagram", "remote",
+        ],
+    ),
+    (
+        "explanation-method",
+        "display-panel-and-first-paint-take-different-carriers",
+        "CF-METH-002",
+        "first_paint_shown_as_screenshot",
+        true,
+        &["image", "capture", "figure", "picture", "order"],
+    ),
+    (
+        "explanation-method",
+        "readme-figure-uses-the-text-form",
+        "CF-METH-002",
+        "mermaid_fence_in_readme",
+        true,
+        &["text", "fenced", "fence", "code", "block", "image"],
+    ),
+    (
+        "explanation-method",
+        "three-unrelated-rules-take-the-smallest-carrier",
+        "CF-METH-003",
+        "figure_for_unrelated_facts",
+        true,
+        &["figure", "diagram", "draw", "list", "short", "brief"],
+    ),
+    (
+        "explanation-method",
+        "migration-review-leads-with-the-picture",
+        "CF-METH-004",
+        "narrative_first_text_cards_ask_last",
+        true,
+        &[
+            "picture",
+            "first",
+            "comparison",
+            "figure",
+            "narrative",
+            "decide",
+            "decision",
+        ],
+    ),
+    (
+        "explanation-method",
+        "complex-review-uses-declarative-presentation",
+        "CF-PRES-004",
+        "visuals_as_decorative_text_cards",
+        false,
+        &[],
+    ),
+];
+
+/// Words that would name a figure or method rule inside any new blind prompt.
+const VISUAL_PROMPT_LEAKS: [&str; 47] = [
+    "family",
+    "families",
+    "box",
+    "boxes",
+    "boxed",
+    "card",
+    "cards",
+    "channel",
+    "channels",
+    "hue",
+    "colour",
+    "color",
+    "reflow",
+    "recompose",
+    "narrow",
+    "overprint",
+    "overlap",
+    "overlapping",
+    "collide",
+    "floor",
+    "legible",
+    "fidelity",
+    "stale",
+    "altitude",
+    "altitudes",
+    "grammar",
+    "doctrine",
+    "legend",
+    "caption",
+    "twin",
+    "carrier",
+    "ascii",
+    "mermaid",
+    "svg",
+    "screenshot",
+    "png",
+    "bullet",
+    "bullets",
+    "table",
+    "coverage",
+    "layering",
+    "extent",
+    "derivation",
+    "sequence",
+    "flow",
+    "lead",
+    "smallest",
+];
+
+/// TSK-062. Each pack registers exactly its graded inventory and says that
+/// registration is not behavioural evidence; native trials are.
+#[test]
+fn visual_packs_register_the_graded_inventory_and_disclaim_proof() {
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    for pack_id in ["visual-doctrine", "explanation-method"] {
+        let pack = packs["packs"]
+            .as_array()
+            .expect("packs")
+            .iter()
+            .find(|pack| pack["id"] == pack_id)
+            .unwrap_or_else(|| panic!("missing pack {pack_id}"));
+        let registered: BTreeSet<&str> = pack["cases"]
+            .as_array()
+            .expect("pack cases")
+            .iter()
+            .map(|case| case.as_str().expect("case id"))
+            .collect();
+        let graded: BTreeSet<&str> = VISUAL_INVENTORY
+            .iter()
+            .filter(|entry| entry.0 == pack_id)
+            .map(|entry| entry.1)
+            .collect();
+        assert_eq!(registered, graded, "{pack_id}: pack and inventory drifted");
+        assert!(
+            pack["description"]
+                .as_str()
+                .expect("pack description")
+                .contains("Registration proves nothing about live behaviour"),
+            "{pack_id} must say registration is not behavioural evidence"
+        );
+    }
+    let visual: BTreeSet<&str> = VISUAL_INVENTORY
+        .iter()
+        .filter(|entry| entry.0 == "visual-doctrine")
+        .map(|entry| entry.2)
+        .collect();
+    assert_eq!(visual.len(), 8, "one requirement per figure rule group");
+}
+
+/// TSK-062. Each case keeps its owning requirement and faulty control; a new
+/// case's prompt names neither a figure or method rule nor its own rule, is
+/// not a canary, and the existing present case stays a canary.
+#[test]
+fn visual_cases_keep_controls_and_blind_prompts() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    for (_, case_id, requirement, faulty, new_case, leaks) in VISUAL_INVENTORY {
+        let case = indexed
+            .get(case_id)
+            .unwrap_or_else(|| panic!("missing case {case_id}"));
+        assert!(
+            case["requirements"]
+                .as_array()
+                .expect("case requirements")
+                .iter()
+                .any(|linked| linked == requirement),
+            "{case_id} lost {requirement}"
+        );
+        assert!(
+            case["expected"]["must_not"]
+                .as_array()
+                .expect("must_not")
+                .iter()
+                .any(|guard| guard == faulty),
+            "{case_id} lost its faulty control {faulty}"
+        );
+        if new_case {
+            assert_eq!(case["canary"], false, "{case_id} is not a canary");
+            let prompt = case["prompt"].as_str().expect("prompt").to_lowercase();
+            for word in prompt.split(|c: char| !(c.is_alphanumeric() || c == '-')) {
+                assert!(
+                    !VISUAL_PROMPT_LEAKS.contains(&word) && !leaks.contains(&word),
+                    "{case_id} prompt names the rule under test: {word}"
+                );
+            }
+        } else {
+            assert_eq!(case["canary"], true, "{case_id} must remain a canary");
+        }
+    }
+}
+
+/// TSK-062. The eight figure requirements are hard and owned by the figure
+/// grammar; the method requirements are hard and owned by the method.
+#[test]
+fn visual_requirements_are_hard_and_owned_by_the_grammar_and_method() {
+    let requirements =
+        json("assets/base/agents/skills/cf-evaluate-model/resources/requirements.json");
+    let entries = requirements["requirements"]
+        .as_array()
+        .expect("requirements");
+    let owned = |prefix: &str, owner: &str| -> usize {
+        let matching: Vec<&Value> = entries
+            .iter()
+            .filter(|entry| entry["id"].as_str().expect("id").starts_with(prefix))
+            .collect();
+        for entry in &matching {
+            assert_eq!(entry["level"], "hard", "{} must be hard", entry["id"]);
+            assert!(
+                entry["sources"]
+                    .as_array()
+                    .expect("sources")
+                    .iter()
+                    .any(|source| source["path"].as_str().expect("path").ends_with(owner)),
+                "{} is not owned by {owner}",
+                entry["id"]
+            );
+        }
+        matching.len()
+    };
+    assert_eq!(owned("CF-FIG-", "/resources/figure-grammar.md"), 8);
+    assert_eq!(owned("CF-METH-", "/resources/explanation-method.md"), 4);
+}

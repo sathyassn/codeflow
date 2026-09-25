@@ -106,6 +106,63 @@ def watch_cadence_signals(calls: list[dict]) -> set[str]:
     return signals
 
 
+# TSK-062 grading inventories: case -> (requirement, faulty controls,
+# positive control extras). Registration and these grader checks prove the
+# cases are well formed; only native trials show model behaviour.
+VISUAL_DOCTRINE_INVENTORY = {
+    "checks-page-figure-matches-its-question": ("CF-FIG-001", ("flow_family_for_set_against_set",), ()),
+    "release-handoffs-drawn-as-exchanges": ("CF-FIG-001", ("grid_family_for_ordered_exchanges",), ()),
+    "queue-concept-draws-the-relationship": (
+        "CF-FIG-002", ("labelled_boxes_kept_as_figure",), ("boxes_drawn_as_regions_with_crossing_connectors",)),
+    "retry-state-figure-survives-a-review-note": (
+        "CF-FIG-002", ("valid_state_figure_reworked_away",), ("declaration_left_unchanged",)),
+    "deploy-flow-states-read-without-hue": ("CF-FIG-003", ("state_pair_differs_on_one_rendered_channel",), ()),
+    "planes-figure-fits-a-small-screen": (
+        "CF-FIG-004", ("narrow_reflows_wide_mark_set",), ("narrow_elongation_above_default_with_stated_reason",)),
+    "token-exchange-labels-stay-clear": ("CF-FIG-005", ("label_overprints_label_or_mark",), ()),
+    "access-grid-marks-read-at-small-size": ("CF-FIG-006", ("inner_mark_under_floor_at_narrow",), ()),
+    "limits-figure-draws-todays-value": ("CF-FIG-007", ("drawn_value_differs_from_source_today",), ()),
+    "planes-figure-claims-only-what-the-repository-holds": (
+        "CF-FIG-007", ("fact_asserts_what_source_does_not_hold",), ()),
+    "key-rotation-section-is-drawn": (
+        "CF-FIG-008", ("rotation_section_left_without_figure",), ("rotation_figure_in_state_family",)),
+    "edge-cache-opening-says-what-it-is-not": ("CF-FIG-008", ("opening_panel_drawn_as_request_sequence",), ()),
+}
+EXPLANATION_METHOD_INVENTORY = {
+    "guide-page-from-a-policy-source": ("CF-METH-001", ("source_reprinted_under_altitudes_with_box_stage",), ()),
+    "enforcement-planes-answered-in-chat": (
+        "CF-METH-002", ("commit_flow_figure_for_planes_question", "remote_plane_marked_active"),
+        ("remote_plane_drawn_with_inactive_mark",)),
+    "display-panel-and-first-paint-take-different-carriers": (
+        "CF-METH-002", ("display_panel_drawn_as_ascii_art", "first_paint_shown_as_screenshot"), ()),
+    "readme-figure-uses-the-text-form": (
+        "CF-METH-002", ("svg_file_linked_from_readme", "mermaid_fence_in_readme"), ()),
+    "three-unrelated-rules-take-the-smallest-carrier": (
+        "CF-METH-003", ("figure_for_unrelated_facts",),
+        ("answer_is_three_bullets_only", "no_lead_sentence", "formatting_choice_not_explained")),
+    "migration-review-leads-with-the-picture": ("CF-METH-004", ("narrative_first_text_cards_ask_last",), ()),
+    # The existing present case, registered in the pack unchanged.
+    "complex-review-uses-declarative-presentation": (
+        "CF-PRES-004", ("visuals_as_decorative_text_cards", "same_chat_answer_repackaged_in_panels"), ()),
+}
+
+
+def control_trial(case: dict, signals: list[str]) -> dict:
+    return {
+        "outcome": "completed",
+        "observed": {
+            "route": case["expected"]["routes"][0],
+            "signals": list(signals),
+            "references": list(case["expected"]["references"]),
+            "violations": [],
+        },
+        "evidence": [{"kind": "file", "ref": "rendered-declaration",
+                      "digest": "sha256:" + "d" * 64}],
+        "trace_ref": "visual-control-trace",
+        "validity_flags": [],
+    }
+
+
 def valid_result(suite: str = "canary") -> dict:
     _, cases_doc, _ = eval_kit.suite_documents()
     cases = {case["id"]: case for case in cases_doc["cases"]}
@@ -465,6 +522,143 @@ class SuiteContractTests(unittest.TestCase):
                     bad = copy.deepcopy(trial)
                     bad["observed"]["signals"].append(faulty)
                     self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
+    def test_visual_doctrine_and_method_cases_grade_faulty_and_positive_controls(self) -> None:
+        # TSK-062 inventory: pack -> case -> (requirement, faulty controls,
+        # positive control extras). The extras are what a correct answer the
+        # grader might wrongly penalise also shows; it must still pass.
+        requirements_doc, cases_doc, _ = eval_kit.suite_documents()
+        requirements = {item["id"]: item for item in requirements_doc["requirements"]}
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        for pack, inventory in (("visual-doctrine", VISUAL_DOCTRINE_INVENTORY),
+                                ("explanation-method", EXPLANATION_METHOD_INVENTORY)):
+            selected = eval_kit.resolve_pack(pack)
+            self.assertEqual(len(selected), len(set(selected)), pack)
+            self.assertEqual(set(inventory), set(selected), pack)
+            for case_id, (requirement_id, faulty, extras) in inventory.items():
+                case = cases[case_id]
+                with self.subTest(case=case_id):
+                    self.assertEqual("hard", requirements[requirement_id]["level"])
+                    self.assertIn(requirement_id, case["requirements"])
+                    self.assertTrue(faulty, "every case names a faulty control")
+                    trial = control_trial(case, case["expected"]["signals"])
+                    self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
+                    # Positive control: the correct answer with the traits a
+                    # careless grader might count against it still passes.
+                    self.assertEqual(set(), set(extras) & set(case["expected"]["must_not"]))
+                    positive = control_trial(case, [*case["expected"]["signals"], *extras])
+                    self.assertEqual("pass", eval_kit.computed_trial_status(positive, case))
+                    for signal in faulty:
+                        self.assertIn(signal, case["expected"]["must_not"])
+                        # Faulty control: fails even beside every good signal,
+                        # and on its own.
+                        bad = control_trial(case, [*case["expected"]["signals"], signal])
+                        self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
+                        alone = control_trial(case, [signal])
+                        self.assertEqual("fail", eval_kit.computed_trial_status(alone, case))
+                    for signal in case["expected"]["signals"]:
+                        missing = control_trial(case, [s for s in case["expected"]["signals"] if s != signal])
+                        self.assertEqual("fail", eval_kit.computed_trial_status(missing, case))
+        # At least two visual cases carry a positive control a short or
+        # conservative answer could otherwise lose.
+        self.assertGreaterEqual(sum(1 for _, _, extras in VISUAL_DOCTRINE_INVENTORY.values() if extras), 2)
+        self.assertGreaterEqual(len({requirement for requirement, _, _ in VISUAL_DOCTRINE_INVENTORY.values()}), 8)
+        self.assertGreaterEqual(len(VISUAL_DOCTRINE_INVENTORY), 12)
+        # The smallest carrier: a complete three-bullet answer with no lead
+        # passes, so no expected signal may ask for a lead or a formatting note.
+        smallest = cases["three-unrelated-rules-take-the-smallest-carrier"]["expected"]["signals"]
+        self.assertFalse([signal for signal in smallest if "lead" in signal or "explain" in signal])
+        # The two-sided screenshot case is graded on both sides.
+        display = cases["display-panel-and-first-paint-take-different-carriers"]["expected"]
+        self.assertTrue(any(s.startswith("display_panel_") for s in display["signals"]))
+        self.assertTrue(any(s.startswith("first_paint_") for s in display["signals"]))
+        self.assertTrue(any(s.startswith("display_panel_") for s in display["must_not"]))
+        self.assertTrue(any(s.startswith("first_paint_") for s in display["must_not"]))
+
+    def test_visual_doctrine_fixtures_ship_the_defect_their_case_grades(self) -> None:
+        # Each visual case is graded on the declaration the subject leaves and
+        # its render. These pins keep the shipped drafts carrying the defect
+        # (or, for the over-correction and context drafts, none of it), so a
+        # green trial cannot come from a fixture that was already correct.
+        _, cases_doc, fixtures_doc = eval_kit.suite_documents()
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        fixtures = {item["id"]: item for item in fixtures_doc["fixtures"]}
+
+        def fixture_of(case_id: str) -> dict:
+            return fixtures[cases[case_id]["fixture"]]
+
+        def figure(case_id: str, name: str) -> dict:
+            files = fixture_of(case_id)["files"]
+            declaration = json.loads(files[f"docs/figures/{name}.json"])
+            self.assertEqual(1, declaration["schema_version"])
+            return declaration["figure"]
+
+        for case_id in VISUAL_DOCTRINE_INVENTORY:
+            grading = fixture_of(case_id)["state"]["grading"]
+            with self.subTest(case=case_id):
+                self.assertIn("never the reply", grading)
+                self.assertIn("figureRuleFailures", grading)
+                self.assertIn("1280 and 390 px in light and dark", grading)
+
+        def drawn(composition: dict) -> list[dict]:
+            return [item for item in composition["draw"] if "state" in item]
+
+        # Text in boxes: every drawn mark is a box, nothing drawn between.
+        queue = figure("queue-concept-draws-the-relationship", "queue-concept")
+        self.assertTrue(all(item["shape"] == "rect" for item in drawn(queue["wide"]) + drawn(queue["narrow"])))
+        # Over-correction control: a real state figure with its transitions.
+        retry = figure("retry-state-figure-survives-a-review-note", "retry-states")
+        self.assertEqual("state", retry["family"])
+        self.assertEqual({"state", "trans", "return", "blocked"}, {item["state"] for item in drawn(retry["wide"])})
+        # Two channels: travelled and stopped differ on shape alone.
+        deploy = figure("deploy-flow-states-read-without-hue", "deploy-flow")
+        self.assertEqual({"shipped": "done", "pending": "todo", "halted": "stop"},
+                         {state["name"]: state["mark"] for state in deploy["states"]})
+        self.assertFalse([item for item in drawn(deploy["wide"]) if "head" in item or "cross" in item])
+        # Narrow: the wide marks stacked into a column past the ceiling.
+        planes = figure("planes-figure-fits-a-small-screen", "enforcement-planes")
+        self.assertEqual("same", planes["narrow"]["marks"])
+        self.assertNotIn("elongation_max", planes["narrow"])
+        self.assertGreater(planes["narrow"]["height"], 1.5 * planes["wide"]["height"])
+        self.assertEqual(sorted((i["state"], i.get("w"), i.get("r")) for i in drawn(planes["wide"])),
+                         sorted((i["state"], i.get("w"), i.get("r")) for i in drawn(planes["narrow"])))
+        # Overprint: two narrow labels share a line.
+        token = figure("token-exchange-labels-stay-clear", "token-exchange")
+        labels = {item["text"]: item for item in token["narrow"]["draw"] if "text" in item}
+        self.assertLessEqual(abs(labels["authorize request"]["y"] - labels["code via redirect"]["y"]), 8)
+        # Inner mark floor: the not-claimed cross inside a 10 unit cell is
+        # 8.8 units, under 9 px, while the cell itself clears it.
+        grid = figure("access-grid-marks-read-at-small-size", "access-grid")
+        crossed = [item for item in drawn(grid["narrow"]) if item["state"] == "nc"]
+        self.assertTrue(crossed)
+        for item in crossed:
+            self.assertGreaterEqual(min(item["w"], item["h"]), 9)
+            self.assertLess(min(item["w"], item["h"]) * 0.88, 9)
+        # Fidelity: the drawn body limit is last quarter's, not the config's.
+        limits = figure("limits-figure-draws-todays-value", "request-limits")
+        config = json.loads(fixture_of("limits-figure-draws-todays-value")["files"]["config/limits.json"])
+        body = next(fact for fact in limits["facts"] if fact["check"].get("select") == "http.max_body_mib")
+        self.assertNotEqual(config["http"]["max_body_mib"], body["value"])
+        self.assertIn(f"{body['value']} MiB", fixture_of("limits-figure-draws-todays-value")["files"]["docs/limits.md"])
+        # Fidelity: the remote plane is drawn as the armed boundary and its
+        # fact reads a sentence the contract does not hold.
+        remote = figure("planes-figure-claims-only-what-the-repository-holds", "planes-here")
+        contributing = fixture_of("planes-figure-claims-only-what-the-repository-holds")["files"]["CONTRIBUTING.md"]
+        self.assertIn("layer-remote", {state["mark"] for state in remote["states"]})
+        self.assertNotIn(remote["facts"][0]["check"]["text"], contributing)
+        self.assertIn("Remote branch protection is unavailable", contributing)
+        # Altitude: the rotation section has no figure bound to it.
+        signing = fixture_of("key-rotation-section-is-drawn")["files"]
+        bindings = json.loads(signing["docs-portal/portal.config.json"])["figures"]
+        self.assertEqual({"concept", "architecture", "technical"}, {binding["panel"] for binding in bindings})
+        self.assertIn("### Rotate the signing key", signing["docs/signing.md"])
+        # Altitude: the opening panel answers a Technical question and the
+        # page says what the cache is not only under Architecture.
+        opening = figure("edge-cache-opening-says-what-it-is-not", "edge-cache-opening")
+        self.assertEqual("sequence", opening["family"])
+        page = fixture_of("edge-cache-opening-says-what-it-is-not")["files"]["docs/edge-cache.md"]
+        concept = page.split("## Concept", 1)[1].split("## Architecture", 1)[0]
+        self.assertNotIn(" not ", concept)
+        self.assertIn("It is not a CDN", page.split("## Architecture", 1)[1])
 
     def test_bounded_watch_controls_grade_poll_cadence_from_the_stand_in_log(self) -> None:
         # Codex EPC-017 review, finding 6. The stand-in runs on a virtual clock

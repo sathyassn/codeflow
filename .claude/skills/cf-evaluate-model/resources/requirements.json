@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "requirements_version": "2026-09-24-summary-and-figure-v1",
+  "requirements_version": "2026-09-25-visual-doctrine-v1",
   "requirements": [
     {
       "id": "CF-REL-004",
@@ -2446,6 +2446,191 @@
           "path": "AGENTS.md",
           "markers": [
             "never unilaterally cross an ethical, authority, or privacy boundary to finish"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-001",
+      "level": "hard",
+      "statement": "A figure's family is chosen by the relationship its reader must see, never by the data's shape or by habit; one figure encodes one family, and a point with no relationship takes a table or a sentence instead of a figure.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Choose the family by the relationship the reader must see, never by the data's shape or by habit. One figure encodes one family.",
+            "When no family fits, the point is not a relationship, and a table or a sentence carries it."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-002",
+      "level": "hard",
+      "statement": "Text arranged in boxes is not a figure: a box is drawn only where its edges mean containment, a state or a boundary, and a relationship is drawn with the marks between the parts, so a correct state or structure figure whose boxes carry meaning is kept.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Text arranged in boxes is not a figure.",
+            "A box is drawn only where its edges mean containment, a state or a boundary. Labels in boxes with nothing between them are not a figure"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-003",
+      "level": "hard",
+      "statement": "Every pair of drawn states differs on at least two rendered channels other than hue, measured off the render in light and dark, whatever the declaration claims about its channels.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Every pair of drawn states differs on at least two of: paint kind (fill, stroke, none), stroke width by 0.5 px or more, dash ratio, shape vocabulary, overlay (cap, cross, ring). Hue is not counted.",
+            "Measured from the rendered DOM in light and dark"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-004",
+      "level": "hard",
+      "statement": "At narrow width a figure recomposes with its own declared mark set and drops, inside the elongation ceiling or with a stated reason, and never reflows the wide marks into a long column.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Under a 646 px container the narrow composition shows; it declares its own mark set and what it drops, and its height is at most 1.5 times the wide height unless the declaration states why more is needed and what the reader gets",
+            "Narrow recomposes with its declared mark set inside the elongation ceiling."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-005",
+      "level": "hard",
+      "statement": "No text prints over text or over a mark it does not label, and text keeps its clearance from every mark it does not label, at both widths; labels are moved or the composition changed, not dropped at the cost of the facts they carry.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "text overlapping text, or a mark it does not label, at a depth of 1 px or more fails; text keeps 8 px clear of any mark it does not label",
+            "No text box carries the form; no text overprints text or a mark."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-006",
+      "level": "hard",
+      "statement": "Every drawn state mark meets the mark floor on its information-bearing dimension at both widths, measured on the inner mark such as the cross of a crossed cell, never on the container around it.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Every drawn state mark 9 px or larger on its information-bearing dimension: length for a line, diameter for a disc, the cross for a crossed box, never the container around it",
+            "every inner mark 9 px or larger at both widths"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-007",
+      "level": "hard",
+      "statement": "Every fact a figure declares names a repository source and a derivation that the build re-derives, and the drawn value is what the source holds today; a value is corrected from its source, never by weakening the check or copying stale prose.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "Every `facts` entry names a repository source and a derivation; the verifier re-derives the value and compares it exactly with the drawn value",
+            "Every fact names its source and matches what the source says today."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-FIG-008",
+      "level": "hard",
+      "statement": "Figures lead every altitude with a family the altitude contract lists: Concept owns what the subject is, who it is for and what it is not, and an ordinary how-to section carries a sequence, state or extent figure between its lead and its steps.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/figure-grammar.md",
+          "markers": [
+            "A figure leads every altitude panel and every ordinary how-to section",
+            "Figures lead at every altitude. Concept owns what the subject is, who it is for and what it is not.",
+            "sequence, state or extent | one lead sentence, the steps as a list, the figure between them"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-METH-001",
+      "level": "hard",
+      "statement": "An explanation names the reader and the one question of each altitude it carries, answers each altitude's own question without repeating another's, and lets only Concept say what the subject is not.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/explanation-method.md",
+          "markers": [
+            "Name the reader of each altitude the deliverable carries, and the one question that reader must be able to answer afterwards.",
+            "Each altitude answers its own question and does not repeat another's. Only Concept says what the subject is not.",
+            "A portal explanatory page carries Concept, Architecture and Technical in that order"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-METH-002",
+      "level": "hard",
+      "statement": "The carrier is chosen by the relationship the reader must see first and by the medium: a family's inline figure on the portal and in present, in chat the form the surface rule picks, with the fenced ASCII chat form as its plain-text form, the fenced ASCII chat form in a README (never an SVG file or a Mermaid fence), a screenshot only for a surface as it is, captured and annotated under the doctrine's rules, and never for a relationship.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/explanation-method.md",
+          "markers": [
+            "Name the relationship the reader must see first, then choose the carrier by that relationship and by the medium.",
+            "In a chat reply, the surface rule in `cf-method/references/workflow-lifecycle.md` picks the form; the fenced ASCII chat form is its plain-text form.",
+            "In a README, a figure is the fenced ASCII chat form. An SVG file and a Mermaid fence are not README figures",
+            "A screenshot shows a surface as it is and never a relationship."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/utility-presentation-system.md",
+          "markers": [
+            "Annotate only with numbered markers keyed in the caption; never draw arrows on it.",
+            "Write alt text that names the surface and its state."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-METH-003",
+      "level": "hard",
+      "statement": "The smallest carrier that keeps the depth wins: facts with no relationship between them take bullets or a table and no figure, and such an answer is graded on completeness and proportionate form alone, with no lead or explanation of the formatting required.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-docs-portal/resources/explanation-method.md",
+          "markers": [
+            "The smallest carrier that keeps the depth wins. Facts with no relationship between them take bullets or a table and no figure.",
+            "An answer with no figure, a table lookup included, passes on the universal checks alone"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-METH-004",
+      "level": "hard",
+      "statement": "A present document puts its governing carrier first so the reader sees the relationship before reading, walks the altitudes as a path, and ends with one ask.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-present/resources/explanation-method.md",
+          "markers": [
+            "A present document walks the same altitudes as a path, with Architecture only when a second structural view is needed, and ends with one ask."
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-present/resources/how-presentation-works.md",
+          "markers": [
+            "order of `blocks[]` = order of attention",
+            "A structural figure first means they start by *seeing* a relationship."
           ]
         }
       ]
