@@ -508,9 +508,11 @@ fn accept_prompt(
 /// The prompt matches `exact` when its bytes are the armed bytes. Claude Code
 /// wraps a long or multi-line paste as one envelope, so it also matches
 /// `paste_envelope` when removing exactly one outer envelope leaves the armed
-/// bytes. The accepted grammar is `<pasted_content id="N">` LF, the inner
-/// bytes, LF, `</pasted_content id="N">`, then at most one LF, where both N are
-/// the same non-empty ASCII digit string. Anything else does not match.
+/// bytes. The accepted grammar is an optional prefix of exactly two LF, then
+/// `<pasted_content id="N">` LF, the inner bytes, LF, `</pasted_content
+/// id="N">`, then at most one LF, where both N are the same non-empty ASCII
+/// digit string. Claude Code submits a paste into an empty input box with that
+/// two-LF prefix and the trailing LF. Anything else does not match.
 fn submitted_delivery(prompt: &str, armed_sha256: &str) -> Option<&'static str> {
     if hex_sha256(prompt.as_bytes()) == armed_sha256 {
         return Some("exact");
@@ -520,6 +522,7 @@ fn submitted_delivery(prompt: &str, armed_sha256: &str) -> Option<&'static str> 
 }
 
 fn strip_paste_envelope(prompt: &str) -> Option<&str> {
+    let prompt = prompt.strip_prefix("\n\n").unwrap_or(prompt);
     let rest = prompt.strip_prefix("<pasted_content id=\"")?;
     let id_len = rest.find(|character: char| !character.is_ascii_digit())?;
     if id_len == 0 {
@@ -1667,6 +1670,16 @@ mod tests {
                 format!("<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">\n"),
                 "paste_envelope",
             ),
+            (
+                format!(
+                    "\n\n<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">\n"
+                ),
+                "paste_envelope",
+            ),
+            (
+                format!("\n\n<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">"),
+                "paste_envelope",
+            ),
         ] {
             let (_temp, path) = state();
             ready(&path);
@@ -1705,6 +1718,16 @@ mod tests {
             format!("{open}\n{differs}\n{close}"),
             format!("{open}\n{ARMED} \n{close}"),
             format!("{open}\nsomething else entirely\n{close}"),
+            // Near misses of the two-LF prefix Claude Code really sends.
+            format!("\n\n\n{open}\n{ARMED}\n{close}\n"),
+            format!("\n\n\n\n{open}\n{ARMED}\n{close}\n"),
+            format!("\r\n\r\n{open}\n{ARMED}\n{close}\n"),
+            format!(" \n\n{open}\n{ARMED}\n{close}\n"),
+            format!("\n \n{open}\n{ARMED}\n{close}\n"),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\n"),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\n\n{open}\n{ARMED}\n{close}\n"),
+            format!("\n\n{ARMED}"),
+            format!("\n\n{open}\n{differs}\n{close}\n"),
         ] {
             let (_temp, path) = state();
             ready(&path);
@@ -1715,6 +1738,77 @@ mod tests {
                 error.message.contains("does not match the armed prompt digest"),
                 "{submitted:?}"
             );
+            assert!(!path.join("turns/turn-1/accepted.json").exists());
+        }
+    }
+
+    /// The pipeline prompt the release-qualification harness arms, and the
+    /// `UserPromptSubmit` stdin a live Claude Code session sent after
+    /// `herdr pane send-text` pasted it and `send-keys Enter` submitted it.
+    const CAPTURED_ARMED: &[u8] = include_bytes!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/delegate/pipeline-prompt-armed.txt"
+    ));
+    const CAPTURED_SUBMIT: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/delegate/pipeline-prompt-submitted.json"
+    ));
+
+    /// Arm the captured prompt behind a session that matches the captured
+    /// stdin, so the hook sees the payload exactly as Claude Code sent it.
+    fn arm_captured() -> (TempDir, PathBuf, serde_json::Value) {
+        let captured: serde_json::Value = serde_json::from_str(CAPTURED_SUBMIT).unwrap();
+        let (temp, path) = state();
+        handle_hook(
+            "run-1",
+            &path,
+            &serde_json::json!({
+                "hook_event_name": "SessionStart",
+                "source": "startup",
+                "session_id": captured["session_id"],
+                "cwd": captured["cwd"]
+            })
+            .to_string(),
+        )
+        .unwrap();
+        arm("run-1", &path, "turn-1", CAPTURED_ARMED).unwrap();
+        (temp, path, captured)
+    }
+
+    #[test]
+    fn accepts_the_captured_claude_code_paste() {
+        let (_temp, path, _captured) = arm_captured();
+        handle_hook("run-1", &path, CAPTURED_SUBMIT).unwrap();
+        let text = std::fs::read_to_string(path.join("turns/turn-1/accepted.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value["prompt_sha256"],
+            "a70978989a1e5d4eed4509ec269ff193419a6698b9acc35cdf9ff4acb654ebdb"
+        );
+        assert_eq!(value["delivery"], "paste_envelope");
+    }
+
+    #[test]
+    fn rejects_near_misses_of_the_captured_paste() {
+        let prompt = serde_json::from_str::<serde_json::Value>(CAPTURED_SUBMIT).unwrap()["prompt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        assert!(prompt.starts_with("\n\n<pasted_content id=\"2888\">\n"));
+        for near_miss in [
+            prompt.replacen("\n\n", "\n\n\n", 1),
+            prompt.replacen("\n\n", "\n", 1),
+            prompt.replacen("<the exact reason>", "&lt;the exact reason&gt;", 1),
+            prompt.replacen("verbatim, as a single", "verbatim, as a\nsingle", 1),
+            prompt.replacen("Then stop.", "Then stop. ", 1),
+            prompt.replace('\n', "\r\n"),
+            prompt.replacen("id=\"2888\">\n", "id=\"2889\">\n", 1),
+        ] {
+            assert_ne!(near_miss, prompt);
+            let (_temp, path, mut captured) = arm_captured();
+            captured["prompt"] = serde_json::Value::String(near_miss.clone());
+            let error = handle_hook("run-1", &path, &captured.to_string()).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Invalid, "{near_miss:?}");
             assert!(!path.join("turns/turn-1/accepted.json").exists());
         }
     }

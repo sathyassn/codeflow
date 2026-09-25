@@ -8,3 +8,5 @@
 # normalization, text diffs, and automatic merge drivers from corrupting them.
 crates/codeflow-present/assets/service/*.br binary
 crates/codeflow-present/assets/export/*.gz binary
+# Captured delegate prompts are compared byte for byte; never convert line ends.
+crates/codeflow-core/tests/fixtures/delegate/* -text
