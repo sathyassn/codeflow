@@ -367,14 +367,8 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
             _ => {}
         }
     }
-    for (event, span) in Parser::new(body).into_offset_iter() {
-        if matches!(event, Event::Start(Tag::Paragraph))
-            && body[span]
-                .lines()
-                .any(|line| !line.trim_start().starts_with('|') && line.chars().count() > 160)
-        {
-            warn("PR prose line exceeds about 160 characters; wrap or shorten it".into());
-        }
+    if long_prose_line(body) {
+        warn("PR prose line exceeds about 160 characters; wrap or shorten it".into());
     }
     // A portable approximation to wrapped Markdown at 100 columns. Comments
     // consume no rows; source blank lines and Markdown syntax remain conservative.
@@ -387,6 +381,27 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
         ));
     }
     out
+}
+
+/// Source lines of prose, list items and headings; code blocks, HTML blocks
+/// and table rows are exempt. Tight list items have no paragraph, so lines are
+/// read from the source rather than from paragraph spans.
+fn long_prose_line(body: &str) -> bool {
+    let exempt: Vec<_> = Parser::new(body)
+        .into_offset_iter()
+        .filter(|(event, _)| matches!(event, Event::Start(Tag::CodeBlock(_) | Tag::HtmlBlock)))
+        .map(|(_, span)| span)
+        .collect();
+    let mut offset = 0;
+    body.split_inclusive('\n').any(|line| {
+        let range = offset..offset + line.len();
+        offset = range.end;
+        line.trim_end().chars().count() > 160
+            && !line.trim_start().starts_with('|')
+            && !exempt
+                .iter()
+                .any(|span| span.start < range.end && range.start < span.end)
+    })
 }
 
 /// A file path, not a word pair such as read/write, I/O or GitHub/GitLab:
@@ -846,6 +861,28 @@ mod tests {
             "(src\\main.rs).",
         ] {
             assert!(looks_like_path(word), "{word}");
+        }
+    }
+
+    #[test]
+    fn long_line_check_reads_tight_items_but_not_code_html_or_tables() {
+        let long = "word ".repeat(40);
+        for flagged in [
+            format!("- {long}"),
+            format!("{long}\n"),
+            format!("1. {long}"),
+            format!("> {long}"),
+        ] {
+            assert!(long_prose_line(&flagged), "{flagged}");
+        }
+        for exempt in [
+            format!("```\n{long}\n```"),
+            format!("    {long}"),
+            format!("| {long} |"),
+            format!("<!-- {long} -->"),
+            format!("- item\n\n  ```\n  {long}\n  ```"),
+        ] {
+            assert!(!long_prose_line(&exempt), "{exempt}");
         }
     }
 
