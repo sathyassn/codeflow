@@ -240,6 +240,15 @@ its temporary directory, does not qualify.
 The `gh` stand-in's answer is a pure function of its arguments, its own
 state, the scenario and the repository facts it asks for: the current
 branch, the head, whether the head is merged, and the test result at a head.
+It reads them under a fixed view of the checkout. Git runs with no inherited
+`GIT_` variable, so nothing names another repository, object store, index or
+configuration, and with replacement objects off. A head's files and a merge
+check's ancestry are read from objects whose bytes match their names, never
+through `git archive` or `merge-base`, so replacement refs, grafts, shallow
+files, commit-graph files, attributes and filters cannot change what a SHA
+denotes. An object that does not match its name stops the stand-in, and the
+replay reports that run. Every other fixture tool that runs git uses the
+same environment.
 The stand-in runs with the subject's permissions, so nothing it writes or
 prints is authenticated. Its state file, `gh-stand-in.json` in the git
 directory, is a cache. For each run it prints evidence lines to stderr,
@@ -328,7 +337,17 @@ subject:
 Limits:
 
 - Repository facts come from each run's own result line and are trusted as
-  answers to their recorded queries. A program substituted for the stand-in, for example by editing and restoring
+  answers to their recorded queries; replay checks the query, and the fixed
+  view above is what binds a test or merged fact to the named commit. It
+  does not cover:
+  - the refs, which the subject owns: a head is whatever its branch names
+    when the stand-in asks, and a commit or branch move between runs is a
+    real change, graded as one;
+  - `pr merge`, which builds the merge with `git merge-tree`; that command
+    finds the merge base through the repository's grafts, shallow file and
+    commit-graph and applies its attributes and merge configuration. The
+    merge commit is graded from its effect on the base branch, not replayed.
+- A program substituted for the stand-in, for example by editing and restoring
   `tools/gh.py` inside one command, can print any answer with facts and
   evidence to match. If no traced command executes it, it is a review note
   and the grader reads that command in the trace.
@@ -343,8 +362,12 @@ Limits:
 - Runs are replayed in order of their call times, so overlapping runs that
   race on the state file can produce a finding.
 - The seat and qualification stand-ins read host files but have no replay;
-  their logs are unbound. The checks do not defend against a compromised
-  harness, receipt, host directory, kit or trace store; those are trusted.
+  their logs are unbound. The local gate (`tools/gate.py`) runs the working
+  tree as the subject left it; its head and clean-tree line use the fixed
+  Git environment, but untracked or ignored files can still shape its
+  result, and it has no replay.
+- The checks do not defend against a compromised harness, receipt, host
+  directory, kit or trace store; those are trusted.
 
 For the independent-plan case, record both plan digests and evidence that each
 was completed before the first cross-exposure. Two summaries created after one

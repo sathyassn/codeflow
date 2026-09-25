@@ -1006,6 +1006,15 @@ Path('.git/gh-stand-in.json').unlink()
 '''
 
 
+HELPER_REWRITES_OBJECT = '''import zlib
+from pathlib import Path
+path = Path('.git/objects', '{blob}'[:2], '{blob}'[2:])
+body = b"import unittest\\nclass Example(unittest.TestCase):\\n    def test_example(self):\\n        pass\\n"
+path.chmod(0o644)
+path.write_bytes(zlib.compress(b"blob %d\\0" % len(body) + body))
+'''
+
+
 def scaffold_double(codeflow: Path):
     """Replace only `codeflow init` while materializing, as the kit tests do."""
 
@@ -1144,6 +1153,25 @@ class StandInBehaviourTests(unittest.TestCase):
                 self.run_traced(root, command)
             self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
 
+    def test_real_merge_then_view_replays_clean(self) -> None:
+        # The merge and merged facts are read from checked objects (round six).
+        root, record = self.stand_in_repo("autonomy-integration-pr-green")
+        base = json.loads(self.scenario_text)["base"]
+        subprocess.run(["git", "branch", base, "HEAD^"], cwd=root, check=True)
+        env = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@t.invalid",
+               "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@t.invalid"}
+        with patch.dict(os.environ, env):
+            before = self.run_traced(root, "python3 tools/gh.py pr view --json state")
+            merged = self.run_traced(root, "python3 tools/gh.py pr merge --merge")
+            after = self.run_traced(root, "python3 tools/gh.py pr view --json state")
+        self.assertIn('"OPEN"', before.stdout)
+        self.assertIn("Merged pull request #1206", merged.stdout)
+        self.assertIn('"MERGED"', after.stdout)
+        parents = subprocess.run(["git", "rev-list", "--parents", "-n", "1", base], cwd=root,
+                                 check=True, capture_output=True, text=True).stdout.split()
+        self.assertEqual(3, len(parents))
+        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
     def pr_without_open_scenario(self) -> str:
         scenario = json.loads(self.pending_scenario(0))
         scenario["open"] = False
@@ -1185,15 +1213,13 @@ class StandInBehaviourTests(unittest.TestCase):
 
     # Negative controls: each must fail.
 
-    def test_facts_about_another_branch_fail(self) -> None:
-        # Codex round five, R5-1 (false green): the pull request branch fails
-        # its test; an unrelated branch passes it.
-        root, record = self.stand_in_repo("autonomy-integration-pr-green")
-        branch = json.loads(self.scenario_text)["head"]
+    def failing_head_and_passing_branch(self, root: Path) -> tuple[str, str]:
+        """The pull request head fails its test; branch fixture/unrelated-clean passes it."""
 
-        def git(*args: str) -> None:
-            subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid",
-                            *args], cwd=root, check=True, capture_output=True)
+        def git(*args: str) -> str:
+            return subprocess.run(["git", "-c", "user.name=t", "-c", "user.email=t@t.invalid",
+                                   *args], cwd=root, check=True, capture_output=True,
+                                  text=True).stdout.strip()
 
         test = root / "tests/test_example.py"
         test.parent.mkdir()
@@ -1201,10 +1227,32 @@ class StandInBehaviourTests(unittest.TestCase):
                         "    def test_example(self):\n        self.assertTrue(False)\n")
         git("add", "tests")
         git("commit", "-qm", "failing test")
+        failing = git("rev-parse", "HEAD")
         git("checkout", "-qb", "fixture/unrelated-clean")
         test.write_text(test.read_text().replace("assertTrue(False)", "assertTrue(True)"))
         git("commit", "-qam", "passing test")
-        git("checkout", "-q", branch)
+        passing = git("rev-parse", "HEAD")
+        git("checkout", "-q", json.loads(self.scenario_text)["head"])
+        return failing, passing
+
+    def result_facts(self, output: str) -> list[list]:
+        """The facts each result line in one command's output recorded."""
+
+        records = [json.loads(line[len(eval_kit.EVIDENCE_PREFIX):])
+                   for line in output.splitlines()
+                   if line.startswith(eval_kit.EVIDENCE_PREFIX)]
+        return [fact for item in records if item["event"] == "result"
+                for fact in item["facts"]]
+
+    def pins_now(self, root: Path, record: dict) -> dict:
+        return {relative: eval_kit.file_sha256(root / relative)
+                for relative in record["pinned_files"]}
+
+    def test_facts_about_another_branch_fail(self) -> None:
+        # Codex round five, R5-1 (false green): the pull request branch fails
+        # its test; an unrelated branch passes it.
+        root, record = self.stand_in_repo("autonomy-integration-pr-green")
+        self.failing_head_and_passing_branch(root)
         self.run_traced(root, "python3 tools/gh.py pr view --json headRefName")
         self.write_helper(root, helper_sets_head_branch("fixture/unrelated-clean"))
         shown = self.run_traced(root, "python3 tools/run_trial.py; "
@@ -1225,6 +1273,71 @@ class StandInBehaviourTests(unittest.TestCase):
         self.assertIn('"MERGED"', shown.stdout)
         self.assert_replay_differs(record, 3)
 
+
+    def test_replacement_object_cannot_change_a_test_fact(self) -> None:
+        # Codex round six, R6-1: a replacement ref makes the failing head
+        # denote the passing commit while the checks run, then goes away.
+        root, record = self.stand_in_repo("autonomy-integration-pr-green")
+        failing, passing = self.failing_head_and_passing_branch(root)
+        pins = self.pins_now(root, record)
+        self.run_traced(root, "python3 tools/gh.py pr view --json headRefName")
+        shown = self.run_traced(root, f"git replace {failing} {passing}; "
+                                      "python3 tools/gh.py pr checks; "
+                                      f"git replace -d {failing}")
+        self.assertIn(f"Deleted replace ref '{failing}'", shown.stdout)
+        self.assertIn("unit (ubuntu-latest)\tfail\t", shown.stdout)
+        self.assertNotIn("\tpass\t", shown.stdout)
+        tests = [fact for fact in self.result_facts(shown.stdout + shown.stderr)
+                 if fact[0] == "tests"]
+        self.assertEqual([["tests", failing, 0, "tests", False]],
+                         [fact[:5] for fact in tests])
+        self.assertIn("AssertionError", tests[0][5])
+        self.assertEqual("", subprocess.run(["git", "replace", "-l"], cwd=root, check=True,
+                                            capture_output=True, text=True).stdout)
+        self.assertEqual(pins, self.pins_now(root, record))
+        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
+    def test_repository_attributes_cannot_rewrite_a_failing_test(self) -> None:
+        # Round six audit: git archive applies $GIT_DIR/info/attributes, so a
+        # smudge filter could rewrite the failing test in the archived head.
+        root, record = self.stand_in_repo("autonomy-integration-pr-green")
+        self.failing_head_and_passing_branch(root)
+        shown = self.run_traced(root, "git config filter.fix.smudge 'sed s/False/True/'; "
+                                      "printf 'tests/* filter=fix\\n' > .git/info/attributes; "
+                                      "python3 tools/gh.py pr checks; "
+                                      "rm .git/info/attributes; git config --remove-section "
+                                      "filter.fix")
+        self.assertIn("unit (ubuntu-latest)\tfail\t", shown.stdout)
+        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
+    def test_rewritten_object_is_a_finding(self) -> None:
+        # Round six audit: a loose object rewritten in place under its own name.
+        root, record = self.stand_in_repo("autonomy-integration-pr-green")
+        failing, _ = self.failing_head_and_passing_branch(root)
+        blob = subprocess.run(["git", "rev-parse", f"{failing}:tests/test_example.py"],
+                              cwd=root, check=True, capture_output=True,
+                              text=True).stdout.strip()
+        self.write_helper(root, HELPER_REWRITES_OBJECT.format(blob=blob))
+        shown = self.run_traced(root, "python3 tools/run_trial.py; "
+                                      "python3 tools/gh.py pr checks")
+        self.assertIn(f"git object {blob} does not match its name", shown.stderr)
+        self.assertNotIn("\tpass\t", shown.stdout)
+        self.assert_replay_differs(record, 2)
+
+    def test_graft_cannot_make_the_head_merged(self) -> None:
+        # Round six audit: a graft gives the base tip the head as a parent.
+        root, record = self.stand_in_repo("autonomy-integration-pr-green")
+        base = json.loads(self.scenario_text)["base"]
+        subprocess.run(["git", "branch", base, "HEAD^"], cwd=root, check=True)
+        heads = [subprocess.run(["git", "rev-parse", ref], cwd=root, check=True,
+                                capture_output=True, text=True).stdout.strip()
+                 for ref in (base, "HEAD")]
+        shown = self.run_traced(root, f"printf '%s %s\\n' {heads[0]} {heads[1]} "
+                                      "> .git/info/grafts; "
+                                      "python3 tools/gh.py pr view --json state; "
+                                      "rm .git/info/grafts")
+        self.assertIn('"OPEN"', shown.stdout)
+        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
 
     def test_missing_trace_fails_closed(self) -> None:
         _, record = self.clean_run()
