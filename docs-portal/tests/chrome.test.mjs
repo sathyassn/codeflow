@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import vm from "node:vm";
-import { readFile, rm } from "node:fs/promises";
+import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { portalSkinOrder, validatePortalConfig } from "../scripts/lib.mjs";
 import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture } from "./portal-fixture.mjs";
@@ -72,3 +72,25 @@ for (const [old, face] of [['instrument', 'archivo'], ['editorial', 'inter'], ['
     assert.equal(actual['data-cfp-skin'], 'sage');
   });
 }
+
+test('nested navigation and breadcrumbs share readable labels without recasing custom labels', { timeout: 60_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    await mkdir(path.join(root, 'docs/architecture/release_notes'), { recursive: true });
+    await writeFile(path.join(root, 'docs/architecture/release_notes/entry.md'), '# Release entry\n');
+    const config = JSON.parse(await readFile(path.join(root, 'portal.config.json'), 'utf8'));
+    await configureFixture(root, { layers: config.layers.map(layer => layer.id === 'reference' ? { ...layer, label: 'API docs' } : layer) });
+    commitFixture(root, 'add nested navigation fixture');
+    runLocalAdapter(root);
+    buildFixture(root);
+    const html = await readFile(path.join(root, 'dist/reference/architecture/release_notes/entry/index.html'), 'utf8');
+    const nav = html.match(/<nav[^>]*id="cf-nav"[\s\S]*?<\/nav>/)?.[0] ?? html;
+    const crumbs = html.match(/<nav class="cf-crumbs"[\s\S]*?<\/nav>/)?.[0];
+    assert.ok(crumbs, 'rendered breadcrumb');
+    for (const label of ['API docs', 'Architecture', 'Release Notes']) {
+      assert.match(nav, new RegExp(`class="cf-kicker"[^>]*>${label} <span class="cf-row-count">`));
+      assert.ok(crumbs.includes(`>${label}</`), `breadcrumb label ${label}`);
+    }
+    assert.doesNotMatch(nav, /class="cf-kicker"[^>]*>(?:architecture|release_notes|Api Docs) /);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

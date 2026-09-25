@@ -146,7 +146,7 @@
     },
     "src/components/PortalNav.astro": {
       "ownership": "managed",
-      "pristine_sha256": "5389f554608cb49db3f82c27e1c6c0e5f5cfde6236228dacc86248fb46ee4749"
+      "pristine_sha256": "e24c2b5c9a9b247cdda57d8d223ddd1510fce4609b294be52cea43d24020547f"
     },
     "src/components/PortalSkipLink.astro": {
       "ownership": "managed",
@@ -214,7 +214,7 @@
     },
     "tests/chrome.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "fb2d76085e078740bc28432bae42d74501ea77617e0584fec46601fa48b39cf8"
+      "pristine_sha256": "771822f257533ab48ac3d4e47017ccd7320af22df1b39e43ef557e489d8eed54"
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",

@@ -118,8 +118,8 @@ Page shape:
   more than one panel or an explanatory page with no trio.
 - **Records** are one generated pointer page of folders, not portal pages;
   the adapter's records switch stays off.
-- **Type roles:** display / prose / label / mono-evidence; themes own faces and
-  scale. Content ships no ad-hoc font stacks.
+- **Type roles:** display / prose / label / mono-evidence. Display controls
+  face and scale independently of skin; content adds no ad-hoc font stacks.
 - **Themes:** Graphite, Slate and Sage are independent of font; readers
   switch skin, face, scale, and appearance in the Display panel. A project may
   adapt the utility once from its brand; never feed portal palette/type/
