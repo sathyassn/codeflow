@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
 
 /** Exercise native hit-testing, rather than a programmatic annotation click. */
 export async function checkIframeComments(browser, origin) {
@@ -6,6 +7,7 @@ export async function checkIframeComments(browser, origin) {
   context.setDefaultTimeout(5000);
   try {
     const page = await context.newPage();
+    await recordPolicyViolations(page);
     const reviews = [];
     await page.route("**/app/api/reviews", async (route) => {
       reviews.push(route.request().postDataJSON());
@@ -96,6 +98,7 @@ export async function checkIframeComments(browser, origin) {
       await page.keyboard.press("c");
       await page.waitForFunction(() => document.querySelector("iframe").style.getPropertyValue("pointer-events") === "");
     }
+    await assertNoPolicyViolations(page, "iframe comments");
     process.stdout.write("cf-present iframe comment checks passed: figure targeting, clipping, transforms, reflow, and reversible cleanup\n");
   } finally {
     await context.close();

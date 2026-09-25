@@ -62,7 +62,7 @@ true.
 | Engine surface | interactive presentation is a separate bounded engine surface, `codeflow-present` (ADR-0049, ADR-0050, ADR-0052) |
 | Schemas | the closed versioned document, primitive-token, and public-history contracts are represented by matching Rust types and managed JSON Schemas installed under `.codeflow/schemas/present/` |
 | Rust ownership | validation, immutable revisions, append-only feedback, retention, export, and the per-session loopback service |
-| Embedded distribution | one content-addressed Preact/Shiki/Mermaid bundle built reproducibly from its exact lockfile, software bill of materials (SBOM), license inventory, integrity manifest, audit, and size budgets; consumer builds and runtime use require no Node toolchain |
+| Embedded distribution | one content-addressed Preact/Shiki bundle with the figure grammar, built reproducibly from its exact lockfile, software bill of materials (SBOM), license inventory, integrity manifest, audit, and size budgets; consumer builds and runtime use require no Node toolchain |
 
 ### State, quotas, and bounded growth
 
@@ -72,7 +72,7 @@ true.
 | Serialization | one project mutation lease serializes every durable growth path before the per-session lock |
 | Headroom | creation, immutable revisions, feedback transitions, and runtime identity publication reserve exact bounded disk headroom before publication; they never commit over quota and then invoke retention |
 | Recovery reserve | a control reserve and a separate non-growth path keep close, runtime identity release, and clear available for recovery even when legacy active state is already over its configured bound |
-| Cardinalities | block, diagram, per-collection, and whole-document collection cardinalities bound renderer amplification in addition to encoded byte limits |
+| Cardinalities | block, figure, per-collection, and whole-document collection cardinalities bound renderer amplification in addition to encoded byte limits |
 
 ### Session surface and export
 
@@ -95,12 +95,8 @@ Every state read and recovery path is self-bounded.
 | Idempotence | exact receipt, delivery, and identical terminal retries append nothing, while conflicts remain loud |
 | Event tails | read from the same opened handle used for size and repair decisions |
 | Explicit limits | aggregate history, records, revisions, media, and state entries each have one |
-| Mermaid corpus | at most 24 diagrams per document, at most 64 KiB each |
-| Mermaid rendering | the browser pins Mermaid's text and edge limits, enhances diagrams serially, yields between items, and gives the eager fallback a cumulative time budget |
-
-One accepted residual remains explicit: Mermaid rendering is synchronous within
-one bounded diagram, so TSK-007 must qualify a dense adversarial corpus in real
-browsers.
+| Figure count | at most 24 figure blocks per document, counted inside disclosures and tabs |
+| Retired diagram block | new `open` and `update` input with a `diagram` block is refused with its conversion named; a revision stored with one loads read only, as the `retired` history kind, with a notice and its escaped source, and is never rewritten |
 
 ### Platform boundaries
 

@@ -16,6 +16,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { build } from "esbuild";
 import { chromium } from "playwright-core";
+import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
 import { canonicalJson, checkFacts, composeFigure, figureRuleFailures, probeFigures, renderFigure, THRESHOLDS, validateDeclaration } from "../src/figure-grammar.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
@@ -77,6 +78,7 @@ try {
   browser = await chromium.launch({ executablePath: await findBrowser(), headless: true });
   await checkGuard(browser);
   const page = await browser.newPage();
+  await recordPolicyViolations(page);
   const consoleErrors = [];
   page.on("console", (message) => { if (message.type() === "error") consoleErrors.push(message.text()); });
   page.on("pageerror", (error) => consoleErrors.push(error.message));
@@ -97,6 +99,7 @@ try {
       if (states.refused?.state !== "failed" || !/rule 9: the caption must be exactly one sentence/u.test(states.refused.status)) {
         throw new Error(`the refused declaration did not show its reason: ${JSON.stringify(states.refused)}`);
       }
+      await assertNoPolicyViolations(page, `${mode} export at ${width}`);
       const probes = await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx });
       if (probes.length !== names.length) throw new Error(`${mode} at ${width}: probed ${probes.length} figures, expected ${names.length}`);
       probes.forEach((probe, index) => {
@@ -247,6 +250,13 @@ async function checkReferenceExample() {
   const agents = await readFile(join(repoRoot, "AGENTS.md"), "utf8");
   const facts = checkFacts(declaration.figure, (path) => (path === "AGENTS.md" ? agents : null));
   if (!facts.every((fact) => fact.matches)) throw new Error(`figure-grammar.md section 6 example facts do not derive: ${JSON.stringify(facts)}`);
+  // The figure block the conversion section points authors at to copy.
+  const review = JSON.parse(await readFile(join(repoRoot, "assets/base/agents/skills/cf-present/assets/review-document.example.json"), "utf8"));
+  const converted = review.blocks.find((block) => block.type === "figure")?.declaration;
+  validateDeclaration(converted, "review-document.example.json figure");
+  renderFigure(converted);
+  const convertedFacts = checkFacts(converted.figure, (path) => (path === "AGENTS.md" ? agents : null));
+  if (!convertedFacts.every((fact) => fact.matches)) throw new Error(`review-document.example.json figure facts do not derive: ${JSON.stringify(convertedFacts)}`);
 }
 
 async function findBrowser() {
