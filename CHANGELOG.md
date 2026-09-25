@@ -123,6 +123,17 @@ publication date._
   the candidate branch, follow-up release PR, and git-cliff authority are
   retired without moving the historical v2.1 tag.
 
+<!-- codeflow:release-impact major -->
+- **Model catalog schema 5 (ADR-0069).** The managed
+  `current-ensemble.json` becomes a catalog of families, product lines,
+  seats and duties carrying the 2026-09-23 roster, and
+  `codeflow models resolve` returns each duty's pinned ids and efforts.
+  The binary no longer reads schema 4: until you run `codeflow update`,
+  `codeflow doctor --check model-bindings` fails and `codeflow models
+  resolve` refuses on an older tree. After the update, the check reports
+  a standing warning on every scaffold until a designated version has a
+  full-suite qualification record.
+
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
 - **Optional agentic operating and estimation method (ADR-0057).** Standard and
