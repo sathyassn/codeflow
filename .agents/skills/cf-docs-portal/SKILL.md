@@ -20,13 +20,15 @@ or lifecycle.
 
 **Before theming, layering, or authoring portal pages, load in order:**
 
-1. [resources/utility-presentation-system.md](resources/utility-presentation-system.md):
+1. [resources/explanation-method.md](resources/explanation-method.md):
+   reader, altitude, carrier, draft, check
+2. [resources/utility-presentation-system.md](resources/utility-presentation-system.md):
    shared doctrine (ADR-0063)
-2. [resources/figure-grammar.md](resources/figure-grammar.md): families,
+3. [resources/figure-grammar.md](resources/figure-grammar.md): families,
    rules, altitude (ADR-0068)
-3. [resources/design-system/](resources/design-system/README.md): the kit
-4. [references/visual-craft.md](references/visual-craft.md): portal profile
-5. Other references as the task requires
+4. [resources/design-system/](resources/design-system/README.md): the kit
+5. [references/visual-craft.md](references/visual-craft.md): portal profile
+6. Other references as the task requires
 
 Pass the page composition gate in `references/visual-craft.md`. A prose-card
 wall, a marketing layout, or a page that is the source Markdown re-rendered

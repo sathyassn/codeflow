@@ -41,7 +41,7 @@
     ".agents/skills/cf-design/SKILL.md": {
       "src": "agents/skills/cf-design/SKILL.md",
       "ownership": "managed",
-      "sha256": "e90a8fee5cd0bfde61d77bc67a3eaa19728c01a432d3c5b210a9a33faf20e94e",
+      "sha256": "962c6a2a3fb8fecc19f722a3728bcc50cd3de8cc0b2e92058da28b18157aeb74",
       "exec": false
     },
     ".agents/skills/cf-design/agents/openai.yaml": {
@@ -77,7 +77,7 @@
     ".agents/skills/cf-docs-portal/SKILL.md": {
       "src": "agents/skills/cf-docs-portal/SKILL.md",
       "ownership": "managed",
-      "sha256": "95545689f43a65bc9d2637cf90d951224ed143cea0eec32c1363e114dd3e5d9d",
+      "sha256": "206c4be7b1d257a722076f60da674f7fc9abc001a730f84980d0edb4d55a7394",
       "exec": false
     },
     ".agents/skills/cf-docs-portal/agents/openai.yaml": {
@@ -443,7 +443,7 @@
     ".agents/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "e3352c9c983ad779765a96d1f63bbfd75291d7d5a3f2a9a03b32632407753967",
+      "sha256": "8bf9808046727027f8b89b30e46d8ee88b0f0384bafeada2bfd3dde123e49c01",
       "exec": false
     },
     ".agents/skills/cf-present/agents/openai.yaml": {
@@ -647,7 +647,7 @@
     ".claude/skills/cf-design/SKILL.md": {
       "src": "agents/skills/cf-design/SKILL.md",
       "ownership": "managed",
-      "sha256": "e90a8fee5cd0bfde61d77bc67a3eaa19728c01a432d3c5b210a9a33faf20e94e",
+      "sha256": "962c6a2a3fb8fecc19f722a3728bcc50cd3de8cc0b2e92058da28b18157aeb74",
       "exec": false
     },
     ".claude/skills/cf-design/agents/openai.yaml": {
@@ -683,7 +683,7 @@
     ".claude/skills/cf-docs-portal/SKILL.md": {
       "src": "agents/skills/cf-docs-portal/SKILL.md",
       "ownership": "managed",
-      "sha256": "95545689f43a65bc9d2637cf90d951224ed143cea0eec32c1363e114dd3e5d9d",
+      "sha256": "206c4be7b1d257a722076f60da674f7fc9abc001a730f84980d0edb4d55a7394",
       "exec": false
     },
     ".claude/skills/cf-docs-portal/agents/openai.yaml": {
@@ -1049,7 +1049,7 @@
     ".claude/skills/cf-present/SKILL.md": {
       "src": "agents/skills/cf-present/SKILL.md",
       "ownership": "managed",
-      "sha256": "e3352c9c983ad779765a96d1f63bbfd75291d7d5a3f2a9a03b32632407753967",
+      "sha256": "8bf9808046727027f8b89b30e46d8ee88b0f0384bafeada2bfd3dde123e49c01",
       "exec": false
     },
     ".claude/skills/cf-present/agents/openai.yaml": {

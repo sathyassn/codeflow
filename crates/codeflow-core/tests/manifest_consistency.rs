@@ -1692,6 +1692,49 @@ fn how_presentation_works_keeps_only_present_content() {
     }
 }
 
+/// Both presentation skills load the explanation method as item 1, before
+/// the shared doctrine, and `cf-design` routes utility surfaces to them.
+#[test]
+fn presentation_skills_load_the_explanation_method_first() {
+    let skills = repo_root().join("assets/base/agents/skills");
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let text = std::fs::read_to_string(skills.join(skill).join("SKILL.md"))
+            .expect("skill is readable");
+        let list = text
+            .split("load in order:**")
+            .nth(1)
+            .unwrap_or_else(|| panic!("{skill}/SKILL.md has no load list"));
+        let first = list
+            .lines()
+            .find(|line| line.starts_with("1. "))
+            .unwrap_or_else(|| panic!("{skill}/SKILL.md load list has no item 1"));
+        assert!(
+            first.contains("(resources/explanation-method.md)"),
+            "{skill}/SKILL.md must load resources/explanation-method.md as item 1, found {first}"
+        );
+        let method = list.find("resources/explanation-method.md");
+        let doctrine = list.find("resources/utility-presentation-system.md");
+        assert!(
+            method.is_some() && doctrine.is_some() && method < doctrine,
+            "{skill}/SKILL.md must load the method before the shared doctrine"
+        );
+    }
+    let design = normalized_whitespace(
+        &std::fs::read_to_string(skills.join("cf-design/SKILL.md")).expect("cf-design is readable"),
+    );
+    let section_one = design
+        .split("## 1. Select the process weight")
+        .nth(1)
+        .and_then(|rest| rest.split("## 2.").next())
+        .expect("cf-design has section 1");
+    assert!(
+        section_one.contains(
+            "Utility surfaces (portal, present) load `cf-docs-portal` or `cf-present` instead."
+        ),
+        "cf-design section 1 must route utility surfaces to their skills"
+    );
+}
+
 /// Presentation JSON contracts are public consumer inputs and exported state.
 /// Pin the authored copies to the deployed and three-way-merge baseline files,
 /// and reject an accidentally open or malformed root contract.
