@@ -12,33 +12,22 @@ supported harness ships with a preset that grants the access ordinary work
 needs and refuses the rest; widening it is an operator act, and the enforcement
 floor stays underneath either way.
 
-```cf-stage
-Claude Code | fail-closed OS sandbox · sandboxed Bash @accent
-Codex | guarded workspace permission profile
-Grok Build | project hooks, loaded once trusted
-->
-shipped preset | the autonomy the scaffold enables
-->
-operator widening | private destinations · unsandboxed retry · raw tokens @warn
-->
-enforcement floor | git-guard · exec-guard · git hooks · CI @positive
-caption: the preset is the default, only the operator widens it, and the floor never moves
-```
-
-The preset is enabled in runtime settings as well as described in the skills
-(ADR-0025). Approval policy and sandbox authority are separate controls
-([Codex security](https://learn.chatgpt.com/docs/security)). What each preset
-grants and what it holds back is the table in Architecture.
+The starters are executable policy, not prompt-only guidance: the preset is
+enabled in runtime settings as well as described in the skills (architecture
+decision record ADR-0025). Approval policy and sandbox authority are separate
+controls ([Codex security](https://learn.chatgpt.com/docs/security)).
 
 ## Architecture
 
-Read a row as the boundary for one harness: the left column is what the
-scaffold turns on, the right column is what an operator still has to decide.
+Each harness reads its own configuration files, and all three hand the same
+payload to the same two guards. Read a row of the table as the boundary for one
+harness: the left column is what the scaffold turns on, the right column is
+what an operator still has to decide.
 
 | Harness | What the shipped preset enables | What stays gated |
 |---|---|---|
-| Claude Code | Fail-closed OS sandbox, sandbox-contained Bash, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; unsandboxed retry only when auto-classified for a trusted installed tool that needs host state; auto mode and classifier policy are never taken from the repository |
-| Codex | Guarded workspace permission profile (no legacy `sandbox_mode`), live search, `approval_policy = "never"`, `model_reasoning_effort = "high"`, production `--sandbox danger-full-access`, which turns the OS sandbox off for that process | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
+| Claude Code | Fail-closed OS sandbox on macOS, Linux and WSL2, sandbox-contained Bash with raw model and cloud credentials removed, web search/fetch, wildcard public-domain egress for dependency and tool subprocesses, local port binding for dev/UI tests, ask rules for destructive source-control operations; plugin turns pass the current ensemble's model and effort explicitly | Private, link-local, and internal-name destinations; destructive, privileged, publish, and secret-read boundaries; unsandboxed retry only when auto-classified for a trusted installed tool that needs host state, which enables the official Codex plugin without a general bypass; auto mode and classifier policy are never taken from the repository, so project `acceptEdits` remains the ordinary fallback (ADR-0026, ADR-0029) |
+| Codex | Guarded workspace permission profile (no `sandbox_mode` key), live search, reviewer-subagent escalation review, workspace key-file denies, the current primary seat's configured fallback, the default secret-bearing environment filter, `approval_policy = "never"`, `model_reasoning_effort = "high"`, production `--sandbox danger-full-access`, which turns the OS sandbox off for that process | Catastrophic work still stops for the operator; git-guard, exec-guard, git hooks, and CI remain the floor; `never` grants no access of its own, so operations outside the effective sandbox fail instead of asking |
 | Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload | The hooks load only after the one-time `/hooks-trust` (or `--trust`); the doctor check reports structural wiring, not trust state (ADR-0054) |
 
 The catastrophic classifier is a non-relaxable floor, not a complete endpoint
@@ -83,7 +72,7 @@ own tokens.
 
 | Key | Value | Why |
 |---|---|---|
-| `default_permissions` | `cf-guard`, extending `:workspace` | the profile is the only sandbox configuration, because legacy `sandbox_mode` would shadow it |
+| `default_permissions` | `cf-guard`, extending `:workspace` | the profile is the only sandbox configuration, because a `sandbox_mode` key would shadow it |
 | egress | broad public egress, exact loopback for local UI tests, live search | private destinations and arbitrary Unix sockets stay closed when a session is launched without `--sandbox danger-full-access` |
 | `approval_policy` | `never`, with production `--sandbox danger-full-access` (ADR-0055) | that OS sandbox is off for the process; git-guard, exec-guard, git hooks, and CI remain the floor |
 | environment | Codex's default `KEY`/`SECRET`/`TOKEN` scrub is kept (ADR-0025, ADR-0026) | the shell does not inherit provider secrets |
@@ -98,9 +87,12 @@ enforcement floor, shipped from `--minimal` up. Codex loads a project's
 hooks. Codex's hook payload is byte-compatible with Claude's, so the same
 binaries run unchanged.
 
-`session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
-interactive Codex session opens with the same orientation digest Claude gets,
-and re-orients to it after a compaction.
+`session-orient` is wired for Codex `SessionStart` too, for all sources
+(ADR-0013), so an interactive Codex session opens with the same orientation
+digest Claude gets, and re-orients to it after a compaction
+(`source=compact`). One handler serves both harnesses with plain-text stdout
+that each injects as session context. The `codex_hooks` test pins the JSON
+wiring, while live firing rests on Codex's documented hooks contract.
 
 ### Credentials and tools
 
@@ -114,7 +106,7 @@ credential-bearing and tighten that task's tool boundary.
 
 | Concern | Rule |
 |---|---|
-| Tool inventory | a settings file cannot install or authenticate every task-specific tool. `/cf-customize` inventories and canaries authoritative-doc research, GitHub, the stack format/lint/test/coverage/security toolchain, browser/Playwright, Computer Use or a surface driver, design tooling, and project-specific MCPs, and proposes only the missing pieces |
+| Tool inventory | a settings file cannot install or authenticate every task-specific tool. `/cf-customize` inventories and canaries authoritative-doc research, GitHub, the stack format/lint/test/coverage/security toolchain, browser/Playwright, Computer Use or a surface driver, design tooling, and project-specific Model Context Protocol (MCP) servers, and proposes only the missing pieces |
 | Where authentication lives | OAuth, keychain, app/MCP, or supported credential-broker paths; raw tokens do not enter the repository, prompts, logs, or arbitrary commands |
 | GitHub and Docker configuration | permitted for autonomous tool use only after `/cf-customize` proves secure keychain or credential-helper storage; on a keyring-less inline-credential host it adds a file deny until a broker is configured |
 | Claude's credential mask | the shipped sandbox removes the exact Anthropic, OpenAI, and AWS raw credentials named in ADR-0026 from Bash without stripping credentials from every hook or stdio MCP, and leaves brokered tools and MCP processes available. When a project needs a raw GitHub, npm, Cargo, or provider token, prefer a broker or keychain; otherwise configure Claude's user/managed credential mask with TLS termination and exact `injectHosts` |
@@ -138,7 +130,7 @@ an experimental, manual opt-in snippet for those who want it. As a *delegate*,
 `agy` is retired: its only documented drive shape is headless one-shot, which
 ADR-0018 prohibits.
 
-### Verification stamps are historical
+### Dated verification stamps
 
 Hook payload contracts and config schemas move fast on both sides, so every
 stamp below records what was true on its date, not a current guarantee. The
