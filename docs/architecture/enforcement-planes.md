@@ -3,42 +3,49 @@
 <!-- HOW layer. Graduated area page: the plane detail that outgrew
      docs/architecture.md and docs/adoption.md, with a pointer left behind in
      each. Sources: ADR-0007, ADR-0008, ADR-0016, ADR-0017, ADR-0018,
-     ADR-0019, ADR-0020, the v2 charter. Runtime posture per harness lives in
+     ADR-0019, ADR-0020. Runtime posture per harness lives in
      docs/harness-posture.md. -->
 
 ## Concept
 
-**One policy file arms four planes, so no single harness is a required trust
-anchor.** `.codeflow/policy.json` is the only place a rule is written; each of
-the four complementary planes reads that one source and acts where it can see
-the work, with no inline drift and thin per-platform CI wrappers for
-portability (ADR-0017).
+`.codeflow/policy.json` is the only place a rule is written, and four planes
+read it where each can see the work.
 
-```cf-stage
-.codeflow/policy.json | one source of truth @accent
-->
-git client hooks | five shims on git operations
-in-session guards | git-guard · exec-guard on PreToolUse
-codeflow ci | the same git standards, server-side
-remote protection | where the host arms it
-->
-protected branches | human-merged PRs on evidenced-green checks @positive
-caption: local planes are fast feedback, CI and remote protection are the authoritative perimeter
-```
-
-Local planes are fast feedback; CI and remote protection are the authoritative
-perimeter (the v2 charter, `docs/plan/v2/00-charter.md`, §6.5). This
-four-plane floor is the **minimal** tier: it installs from `--minimal` up,
-before any of the method or project-management scaffolding, and the tiers scale
-project-management, not enforcement (ADR-0019). Which plane catches which
-action is the matrix below.
+No single harness is a required trust anchor. The git client hooks and the
+in-session guards give fast local feedback and can be edited;
+CI and remote protection are the authoritative perimeter where they are armed.
+This
+four-plane floor installs from the minimal tier up, and the tiers scale
+project management, never enforcement (architecture decision record ADR-0019).
+The planes read one source with no inline drift, through thin per-platform CI
+wrappers (ADR-0017).
 
 ## Architecture
 
-Read one row for a protected action and the columns say which planes see it.
-Minimal installs the local floor and the CI scaffold, not remote branch
-protection (ADR-0019), so a row's remote column is coverage the host still has
-to arm.
+Each plane acts at a different moment of a change, and only the remote plane
+at merge is a boundary.
+
+- Minimal installs the local floor and the CI scaffold, not remote branch
+  protection (ADR-0019), so the remote plane is coverage the host still has to
+  arm.
+- PR-content checks are git-guard and CI by design. A git hook never sees
+  `gh pr create` or `gh pr merge`, so attribution and emoji scans and the
+  protected-base check live in the Claude layer and in CI, not in the hooks.
+- The human override (`CODEFLOW_HUMAN_OVERRIDE=1`) and the integrate token
+  apply to the git-hook plane only. The git-guard never trusts them, because an
+  agent in a session cannot prove it is a human.
+- Host attribution has a fourth brake that is not a plane: the shipped Claude
+  settings preset turns the host's own injection off at the source
+  (`includeCoAuthoredBy`, `attribution`), so the `commit-msg` hook catches only
+  what a changed or absent preset lets through.
+
+The planes describe available coverage, not proof that every plane is active.
+Verify hook execution, harness trust, policy severity, CI results, and actual
+remote rules and bypass permissions.
+
+## Technical
+
+One row per protected action; the columns say which planes see it.
 
 | Protection | git hooks | in-session guard | CI | remote |
 |---|---|---|---|---|
@@ -51,28 +58,6 @@ to arm.
 | Commit format, no-attribution, no-emoji, secrets | commit-msg / pre-commit | partial | yes | none |
 | Host attribution injection (`Co-Authored-By`, "Generated with") | commit-msg | git-guard (PR body) | yes | none |
 | Override-token laundering, `--no-verify` bypass | none | git-guard (structural) | none | none |
-
-Host attribution has a fourth brake that is not a plane: the shipped Claude
-settings preset turns the host's own injection off at the source
-(`includeCoAuthoredBy`, `attribution`), so the `commit-msg` hook catches only
-what a changed or absent preset lets through.
-
-Two facts the matrix encodes. **PR-content checks are git-guard/CI by design.**
-A git hook never sees `gh pr create` or `gh pr merge`, so attribution and emoji
-scans and the protected-base check live in the Claude layer and in CI, not in
-the hooks. **The human override (`CODEFLOW_HUMAN_OVERRIDE=1`) and the integrate
-token apply to the git-hook plane only.** The git-guard never trusts them,
-because an agent in a session cannot prove it is a human.
-
-The matrix describes available coverage, not proof that every plane is active.
-Verify hook execution, harness trust, policy severity, CI results, and actual
-remote rules and bypass permissions. Local checks are required feedback, but
-they remain editable.
-
-## Technical
-
-The four planes, then how far each reaches on a harness CodeFlow does not
-integrate.
 
 ### git client hooks
 
@@ -122,10 +107,8 @@ The deterministic shell plane accepts both Bash and PowerShell payloads and
 keeps its catastrophic classifier non-relaxable across Unix and macOS roots and
 Windows drive, system, profile, disk, recovery, and permission operations.
 Another harness needs its own qualified event contract before it gets this
-plane. Historical headless hook gaps motivated ADR-0018, but they are not a
-universal claim about every current harness; the consult, delegate and duo
-flows remain interactive-only independently of whether a headless mode can run
-hooks.
+plane. The consult, delegate and duo flows are interactive only, whether or not a
+headless mode can run hooks (ADR-0018).
 
 ### CI
 
@@ -143,7 +126,8 @@ per-platform wrappers (ADR-0017).
 | breaking footer, branch naming | the declared footer and branch conventions |
 
 CI also carries the **security-review** plane (ADR-0016): a `security-review`
-job whose deterministic floor is `osv-scanner`, stack-agnostic SCA across every
+job whose deterministic floor is `osv-scanner`, stack-agnostic software
+composition analysis (SCA) across every
 lockfile ecosystem and the universal floor today, with the
 `cf-security-reviewer` dual-vendor red-team layered on top. Per-stack scanners
 such as `cargo audit`, `pip-audit`, `govulncheck` or `semgrep` are an optional
@@ -178,7 +162,7 @@ distances, so be precise about what a given harness actually gets.
 | In-session guards | Claude, interactive Codex, Grok Build | qualified harness integration and, for Codex and Grok, trust of the project layer |
 | Guidance: `AGENTS.md` and the `cf-*` skills | Claude and Codex | the skills ship to `.claude/skills/` and `.agents/skills/`; both read the repo `AGENTS.md` operating contract |
 | Workflow runtime (`pipeline.workflow.js`) | Claude Code only | |
-| A harness CodeFlow does not integrate, for example Google's Antigravity `agy` | the git-hook plane and CI, because those are harness-agnostic | it does not receive the in-session guards, the skills, or (historically verified on `agy` 1.0.15) the `AGENTS.md` instructions; its reliable coverage is the configured, verified hook and CI plane, not assumed guidance |
+| A harness CodeFlow does not integrate, for example Google's Antigravity `agy` | the git-hook plane and CI, because those are harness-agnostic | it does not receive the in-session guards, the skills, or the `AGENTS.md` instructions (verified on `agy` 1.0.15); its reliable coverage is the configured, verified hook and CI plane |
 
 The one-line version: CodeFlow shares policy across harness-neutral checks;
 native guidance and in-session guards depend on the installed integration.
