@@ -306,7 +306,7 @@ test("the specimens that hold every rule, and the doctrine conflicts the gate na
     }
   } finally { await browser.close(); }
   assert.deepEqual(outcome, {
-    "01-flow.json": [3],
+    "01-flow.json": [],
     "02-structure.json": [],
     "03-layering.json": [],
     "04-sequence.json": [],

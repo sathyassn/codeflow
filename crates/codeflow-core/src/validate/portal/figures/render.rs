@@ -1345,7 +1345,7 @@ fn legend_key(mark_name: &str, sample: Option<&Value>, id: &str) -> Rendered {
             "<circle class=\"{class}\" cx=\"14\" cy=\"8\" r=\"6.5\"/>"
         )),
         "diamond" => svg(format!(
-            "<path class=\"{class}\" d=\"M14 1.5L20.5 8L14 14.5L7.5 8Z\"/>"
+            "<path class=\"{class}\" d=\"M14 2.5L19.5 8L14 13.5L8.5 8Z\"/>"
         )),
         "cross" => svg(format!(
             "<path class=\"{class}\" d=\"{}\"/>",

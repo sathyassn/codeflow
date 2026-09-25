@@ -29,7 +29,7 @@ const screenshots = screenshotIndex > 0 ? resolve(process.argv[screenshotIndex +
 // The portal's specimen outcome table (docs-portal/tests/figure-rules-browser.test.mjs),
 // for the authored specimens present can draw.
 const EXPECTED = {
-  "01-flow.json": [3],
+  "01-flow.json": [],
   "02-structure.json": [],
   "03-layering.json": [],
   "04-sequence.json": [],

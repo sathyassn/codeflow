@@ -24,8 +24,8 @@ caption line, every line printable ASCII and under 78 columns.
 The YAML beside each specimen sketches its intent; the module loads only the
 JSON declarations of `figure-grammar.md` section 6, and the complete ones for
 these specimens are the portal starter's `tests/fixtures/figures/*.json`. The
-gate still fails three of them: flow on rule 3, derivation on rule 8 and graph
-on rules 3 and 8, so check a figure built from those against the gate.
+gate still fails two of them: derivation on rule 8 and graph on rules 3 and 8,
+so check a figure built from those against the gate.
 
 ## 1. flow
 
@@ -55,7 +55,7 @@ figure:
 <path data-state="todo" d="M459 180H540C590 180 630 150 630 111" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="2" stroke-dasharray="6 4" stroke-linecap="round"/>
 <g data-state="stop" stroke="var(--cf-fig-stop)" stroke-width="4" stroke-linecap="square"><line x1="516" y1="89" x2="516" y2="111"/><line x1="516" y1="169" x2="516" y2="191"/></g>
 <g data-state="agent" fill="var(--cf-fig-accent)" stroke="var(--cf-fig-ground)" stroke-width="2"><circle cx="90" cy="100" r="8"/><circle cx="270" cy="100" r="8"/><circle cx="450" cy="100" r="8"/><circle cx="90" cy="180" r="8"/><circle cx="450" cy="180" r="8"/></g>
-<path data-state="merge" d="M270 169L281 180L270 191L259 180Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-accent)" stroke-width="2.5" stroke-linejoin="round"/>
+<path data-state="merge" d="M270 169L281 180L270 191L259 180Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-accent)" stroke-width="3.5" stroke-linejoin="round"/>
 <circle data-state="human" cx="630" cy="100" r="9" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line)" stroke-width="2.5"/>
 <g text-anchor="middle"><text x="90" y="76">Task branch</text><text x="270" y="76">Pull request</text><text x="450" y="76">Required checks</text><text x="630" y="76" font-weight="600">Human merge</text><text x="90" y="156">Task in an epic</text><text x="270" y="156" font-family="var(--cf-fig-mono)" font-weight="400">codeflow integrate</text><text x="450" y="156">Integration branch</text></g>
 </svg>
@@ -63,7 +63,7 @@ figure:
 <li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M3 8H25" fill="none" stroke="var(--cf-fig-accent)" stroke-width="3" stroke-linecap="round"/></svg>Travel completed</li>
 <li data-state="todo"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H26" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="2" stroke-dasharray="6 4" stroke-linecap="round"/></svg>Travel not yet made</li>
 <li data-state="agent"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle cx="14" cy="8" r="6.5" fill="var(--cf-fig-accent)"/></svg>Agent step</li>
-<li data-state="merge"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M14 1.5L20.5 8L14 14.5L7.5 8Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-accent)" stroke-width="2.5"/></svg>Agent merge point</li>
+<li data-state="merge"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M14 2.5L19.5 8L14 13.5L8.5 8Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-accent)" stroke-width="3.5"/></svg>Agent merge point</li>
 <li data-state="human"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle cx="14" cy="8" r="6" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line)" stroke-width="2.5"/></svg>Human decision</li>
 <li data-state="stop"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line x1="14" y1="3" x2="14" y2="13" stroke="var(--cf-fig-stop)" stroke-width="4" stroke-linecap="square"/></svg>Gate that stops travel</li>
 </ul>
@@ -528,7 +528,7 @@ figure:
 <g data-state="compares" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="1.5" stroke-dasharray="2 4" marker-end="url(#fg-der-s)"><path d="M652 150H588"/><path d="M664 154V206H100V112"/><path d="M664 130V80H588"/></g>
 <rect data-state="source" x="20" y="56" width="156" height="48" rx="4" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line)" stroke-width="2"/>
 <text x="98" y="85" text-anchor="middle">repository sources</text>
-<path data-state="transform" d="M300 52L338 80L300 108L262 80Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-accent)" stroke-width="2.5" stroke-linejoin="round"/>
+<path data-state="transform" d="M300 52L338 80L300 108L262 80Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-accent)" stroke-width="3.5" stroke-linejoin="round"/>
 <text x="300" y="36" text-anchor="middle">adapter</text>
 <rect data-state="product" x="426" y="56" width="152" height="48" rx="4" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line)" stroke-width="1.5"/>
 <text x="502" y="85" text-anchor="middle">generated page</text>
@@ -541,7 +541,7 @@ figure:
 </svg>
 <ul class="cf-legend" aria-label="Legend">
 <li data-state="source"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="2" y="2" width="24" height="12" rx="2" fill="var(--cf-fig-fill)" stroke="var(--cf-fig-line)" stroke-width="2"/></svg>Source of truth</li>
-<li data-state="transform"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M14 1.5L20.5 8L14 14.5L7.5 8Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-accent)" stroke-width="2.5"/></svg>Transform</li>
+<li data-state="transform"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M14 2.5L19.5 8L14 13.5L8.5 8Z" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-accent)" stroke-width="3.5"/></svg>Transform</li>
 <li data-state="product"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="2" y="2" width="24" height="12" rx="2" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line)" stroke-width="1.5"/></svg>Product</li>
 <li data-state="declared"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="2" y="2" width="24" height="12" rx="2" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="1.5" stroke-dasharray="6 4"/></svg>Declared claims</li>
 <li data-state="derives"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H20" fill="none" stroke="var(--cf-fig-line)" stroke-width="2"/><path d="M19 4L26 8L19 12Z" fill="var(--cf-fig-line)"/></svg>Derives</li>

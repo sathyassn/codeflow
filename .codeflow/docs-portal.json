@@ -78,7 +78,7 @@
     },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "4116cbba750620fe9b4261ca2af7cab8545ca4a084cf232adf565ebfcb0513a0"
+      "pristine_sha256": "f07dac1e297263137f948193de1b8ea023cb2ea100c20ec4fd4c4ed6a6a50aad"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -194,7 +194,7 @@
     },
     "src/styles/figure.css": {
       "ownership": "managed",
-      "pristine_sha256": "9cda65105b1eb45f3f588f0beabd5dc9d9f030fe7f1ba5b1c0bdb11556ea8f25"
+      "pristine_sha256": "e6927dddf670bbeb9e546c50d533c1fff48dadf8b35e0243981c39df2de5f2ef"
     },
     "src/styles/portal.css": {
       "ownership": "managed",
@@ -234,7 +234,7 @@
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "354636d9ae3993e68d092c2a762c4d56556244c95591d9e7c7801594d4918384"
+      "pristine_sha256": "8f06985931dc5be5281742c1b031cf8ee171d2e2510338b3242c802ddb95d035"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
@@ -302,7 +302,7 @@
     },
     "tests/fixtures/figures/rendered/01-flow.html": {
       "ownership": "managed",
-      "pristine_sha256": "0be8321c9ac5dc9868daf1fdb2b38e26705bd9f5cd188e7524ca615b42e49892"
+      "pristine_sha256": "17a69784e6457d79bea7b1d7adb545171eca0a414d50b4554a0d9733a082bf5c"
     },
     "tests/fixtures/figures/rendered/02-structure.html": {
       "ownership": "managed",
@@ -330,7 +330,7 @@
     },
     "tests/fixtures/figures/rendered/08-derivation.html": {
       "ownership": "managed",
-      "pristine_sha256": "2e35a96c21170f188a7949b7ee8225bac8052c44fb0257ef6c69c278c69a52c2"
+      "pristine_sha256": "b160aa9dcf349946301a439de8af06fda3fb4290405a1c180283c0182964150b"
     },
     "tests/fixtures/figures/rendered/09-graph.html": {
       "ownership": "managed",

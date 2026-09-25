@@ -886,7 +886,7 @@ function legendKey(state, sample, id) {
     case "bar-v": return svg(state.mark === "stop" ? `<line class="${cls}" x1="14" y1="3" x2="14" y2="13"/>` : `<line class="${cls}" x1="14" y1="1" x2="14" y2="15"/>`);
     case "ring": return svg(`<circle class="${cls}" cx="14" cy="8" r="6"/>${hasPart("tick") ? `<path class="cf-m-done" d="M10.5 8L13 11L18 5"/>` : ""}`);
     case "disc": return svg(`<circle class="${cls}" cx="14" cy="8" r="6.5"/>`);
-    case "diamond": return svg(`<path class="${cls}" d="M14 1.5L20.5 8L14 14.5L7.5 8Z"/>`);
+    case "diamond": return svg(`<path class="${cls}" d="M14 2.5L19.5 8L14 13.5L8.5 8Z"/>`);
     case "cross": return svg(`<path class="${cls}" d="${crossPath(14, 8, 10)}"/>`);
     case "bar": return svg(`<rect class="${cls}" x="2" y="3" width="24" height="10" rx="3"/>${hasPart("cap") ? `<path class="cf-m-cap" d="M19 3H23Q26 3 26 6V10Q26 13 23 13H19Z"/>` : ""}${hasPart("cross") ? `<path class="cf-m-cross" d="${crossPath(14, 8, 9)}"/>` : ""}`);
     case "box": return svg(`<rect class="${cls}" x="2" y="2" width="24" height="12" rx="3"/>${hasPart("cross") ? `<path class="cf-m-cross" d="${crossPath(14, 8, 9)}"/>` : ""}`);
