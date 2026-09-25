@@ -24,8 +24,11 @@ publication date._
   Fresh installs include Reviews and Release impact in the required sections
   and ship the PR template at every tier. Without an explicit list, the
   built-in default stays Summary and Changes. Updates preserve existing policy
-  values and customized templates. Upgrade the binary before adding the new
-  policy keys; older binaries do not recognize them.
+  values and customized templates. Upgrade order matters: `codeflow update`
+  adds `git.pr_release_impact` and `git.pr_breaking_level`, and an older
+  binary then fails every `codeflow ci` run with exit 2 and
+  `unknown key git.pr_release_impact`. Upgrade the local and CI binaries
+  first, then commit the policy change from `codeflow update`.
 
 <!-- codeflow:release-impact minor -->
 - **Written content policy check (ADR-0067).** The commit-msg hook and

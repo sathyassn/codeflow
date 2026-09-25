@@ -66,7 +66,9 @@ extra project fields. Value tokens are case-insensitive. Breaking yes requires
 Impact at or above `git.pr_breaking_level` (default major) and substantive
 migration guidance. A breaking commit marker requires both Breaking yes and
 that impact floor. Pre-1.0 projects declare their own minimum breaking level. No release calculator, changelog, task tracker or language
-is assumed. Upgrade the binary before adding the new keys to a policy file.
+is assumed. Upgrade the local and CI binaries before committing the new keys
+from `codeflow update`: an older binary fails every `codeflow ci` run with exit
+2 and `unknown key git.pr_release_impact`.
 
 ## What `codeflow init` scaffolds
 
