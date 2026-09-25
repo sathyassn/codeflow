@@ -541,6 +541,7 @@ fn bitbucket_missing_channel_warns_but_explicit_empty_bodies_fail() {
         assert!(warning.contains(text), "{warning}");
     }
     assert!(!String::from_utf8_lossy(&missing.stdout).contains("PR-body"));
+    assert!(warning.contains("skipped: PR-body"), "{warning}");
     let empty_file = dir.path().join("empty-body.md");
     std::fs::write(&empty_file, "").unwrap();
     for output in [

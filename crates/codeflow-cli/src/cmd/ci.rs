@@ -228,6 +228,11 @@ pub fn run(args: &CiArgs) -> i32 {
     }
 
     // --- PR-body check ----------------------------------------------------
+    // A Bitbucket PR without a body channel was warned about when resolving
+    // the body; record it so the summary never reads as a full pass.
+    if pr_body.is_none() && std::env::var("BITBUCKET_PR_ID").is_ok_and(|value| !value.is_empty()) {
+        skipped.push("PR-body");
+    }
     if let Some(body) = &pr_body {
         tagged.extend(evaluate_pr_checks(
             git,
