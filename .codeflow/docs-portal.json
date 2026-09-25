@@ -54,7 +54,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "180fd8c1c57d2f1d883c9087f18840ba5a3dc376a570d77b6a97ade950656f6f"
+      "pristine_sha256": "5fa2f968c34b46861ddf3df6abd8f5a9ad68fb9d41d891417ad0f958b7af55e5"
     },
     "scripts/as-is-markdown.mjs": {
       "ownership": "managed",
@@ -94,7 +94,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "6b797ace07aaffee354474b955facc20399f0b18b8af6a731ca41d8e81429bc7"
+      "pristine_sha256": "fb1dd567c4346dc6abea6a253d7230946c035289be8c663a86ea0abffb34e5fb"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -222,7 +222,7 @@
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "300c8b4a20b31421eb2b04ac408f27ef947ae5689429cc514248c2ab83913d27"
+      "pristine_sha256": "ed7f1b1ae904b3df033c98c93f9e2ee77b419de237101744f6d9079adc6f237c"
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
@@ -235,6 +235,10 @@
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
       "pristine_sha256": "1dd68d3e2f2a9818dca86e3d45cfac3af6a0d40bdb007da7d51289bbe5b8b9e2"
+    },
+    "tests/fixtures/altitude-words.json": {
+      "ownership": "managed",
+      "pristine_sha256": "7e4e4a003903d0378ebffa2800b9786b34244ed6d293b6b625f2cee2ce198327"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",

@@ -23,6 +23,8 @@ use crate::strict_json::parse_strict_json;
 
 mod figures;
 
+pub use figures::{altitude_words, AltitudeWords};
+
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 /// The themes a portal configuration may name, exactly the starter's
 /// `PORTAL_THEMES` in `scripts/lib.mjs`: the three skins, then `signal` and
@@ -225,6 +227,8 @@ struct Page {
     source_region: Option<figures::SourceRegion>,
     #[serde(default)]
     lookup: Option<figures::Lookup>,
+    #[serde(default)]
+    altitude_words: Option<figures::AltitudeWords>,
 }
 
 #[derive(Clone)]
@@ -4187,6 +4191,7 @@ mod tests {
             figures: Vec::new(),
             source_region: None,
             lookup: None,
+            altitude_words: None,
         }
     }
 

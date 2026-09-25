@@ -123,6 +123,88 @@ pub(super) struct Lookup {
     rows: usize,
 }
 
+/// The prose words an explanatory page carries in each altitude panel, as the
+/// adapter counted them; the validator recounts the committed source.
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AltitudeWords {
+    pub concept: usize,
+    pub architecture: usize,
+    pub technical: usize,
+}
+
+/// The prose words in each altitude panel of an explanatory source, by the
+/// rule `altitudeWords` in the starter's `scripts/lib.mjs` states: a line
+/// `## Concept`, `## Architecture` or `## Technical` opens that panel and any
+/// other level-two heading closes it; lines inside a fence, inside an HTML
+/// comment (a line starting `<!--` through the line holding `-->`), headings
+/// and table rows are skipped; every other line in a panel adds its ASCII
+/// whitespace-separated tokens.
+#[must_use]
+pub fn altitude_words(text: &str) -> AltitudeWords {
+    static FENCE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^ {0,3}(`{3,}|~{3,})(.*)$").expect("fence pattern"));
+    let normalized = normalize_markdown_source(text);
+    let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
+    let mut words = AltitudeWords::default();
+    let mut panel: Option<&str> = None;
+    let mut fence: Option<(char, usize)> = None;
+    let mut comment = false;
+    for line in normalized.split('\n') {
+        let marker = FENCE.captures(line);
+        if let Some((character, length)) = fence {
+            if let Some(marker) = &marker {
+                let run = &marker[1];
+                if run.starts_with(character) && run.len() >= length && marker[2].trim().is_empty()
+                {
+                    fence = None;
+                }
+            }
+            continue;
+        }
+        if let Some(marker) = &marker {
+            let run = &marker[1];
+            if !(run.starts_with('`') && marker[2].contains('`')) {
+                fence = Some((run.chars().next().unwrap_or('`'), run.len()));
+                continue;
+            }
+        }
+        let trimmed = line.trim_ascii();
+        if comment {
+            if trimmed.contains("-->") {
+                comment = false;
+            }
+            continue;
+        }
+        if trimmed.starts_with("<!--") {
+            if !trimmed.contains("-->") {
+                comment = true;
+            }
+            continue;
+        }
+        if let Some(label) = line.strip_prefix("## ") {
+            panel = ALTITUDE_PANELS
+                .iter()
+                .copied()
+                .find(|panel| *panel == label.trim_ascii().to_lowercase());
+            continue;
+        }
+        let Some(current) = panel else {
+            continue;
+        };
+        if trimmed.starts_with('#') || trimmed.starts_with('|') {
+            continue;
+        }
+        let count = trimmed.split_ascii_whitespace().count();
+        match current {
+            "concept" => words.concept += count,
+            "architecture" => words.architecture += count,
+            _ => words.technical += count,
+        }
+    }
+    words
+}
+
 pub(super) fn deserialize_figures<'de, D>(
     deserializer: D,
 ) -> Result<Option<Vec<FigureEvidence>>, D::Error>
@@ -889,6 +971,7 @@ fn verify_page_class(
             || !page.figures.is_empty()
             || page.source_region.is_some()
             || page.lookup.is_some()
+            || page.altitude_words.is_some()
         {
             report
                 .issues
@@ -947,6 +1030,7 @@ fn verify_page_class(
             "{route} bound figures do not match the configuration and the pinned declarations"
         ));
     }
+    verify_altitude_words(page, class, source, report);
     let rendered = context.rendered.get(route);
     match class {
         EXPLANATORY => {
@@ -975,6 +1059,27 @@ fn verify_page_class(
             )),
             (Some(_), None) => {}
         },
+    }
+}
+
+/// An explanatory page records the prose words in each altitude panel, which
+/// must equal a recount of its committed source; any other page records none.
+fn verify_altitude_words(
+    page: &Page,
+    class: &str,
+    source: Option<&str>,
+    report: &mut PortalValidationReport,
+) {
+    let recounted = if class == EXPLANATORY {
+        source.map(altitude_words)
+    } else {
+        None
+    };
+    if page.altitude_words != recounted {
+        report.issues.push(format!(
+            "{} altitude word counts do not match its committed source",
+            page.route
+        ));
     }
 }
 
@@ -1818,6 +1923,31 @@ mod tests {
     }
 
     const ALTITUDES: &str = "# Adoption\n\n## Concept\n\nWhat it is.\n\n### Scope\n\nWhat it covers.\n\n## Technical\n\nHow it runs.\n\n### Install\n\n1. Run it.\n2. Check it.\n\n### Check\n\nConfirm it.\n\n## Technical notes\n\n### Later\n\nNot a panel.\n";
+
+    /// The shared cases the starter's `altitudeWords` is tested against too.
+    #[test]
+    fn altitude_words_match_the_shared_cases() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs-portal/tests/fixtures/altitude-words.json");
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let cases = fixture["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let words = &case["words"];
+            let expected = AltitudeWords {
+                concept: usize::try_from(words["concept"].as_u64().unwrap()).unwrap(),
+                architecture: usize::try_from(words["architecture"].as_u64().unwrap()).unwrap(),
+                technical: usize::try_from(words["technical"].as_u64().unwrap()).unwrap(),
+            };
+            assert_eq!(
+                altitude_words(case["text"].as_str().unwrap()),
+                expected,
+                "{}",
+                case["name"]
+            );
+        }
+    }
 
     #[test]
     fn an_anchor_belongs_to_the_panel_above_it() {
@@ -2710,6 +2840,15 @@ mod tests {
         expect(
             &unbound,
             "reference/guide bound figures do not match the configuration",
+        );
+        // Only an explanatory page carries word counts, recounted from its
+        // committed source; an illustrated page claiming any is refused.
+        let mut counted = portal.evidence.clone();
+        counted["pages"][0]["altitude_words"] =
+            serde_json::json!({ "concept": 0, "architecture": 0, "technical": 4 });
+        expect(
+            &counted,
+            "reference/guide altitude word counts do not match its committed source",
         );
         let mut legacy = portal.evidence.clone();
         legacy.as_object_mut().unwrap().remove("figures");

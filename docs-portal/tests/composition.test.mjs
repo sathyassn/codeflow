@@ -11,7 +11,7 @@ import {
 } from "../scripts/page-classes.mjs";
 import { markdownToHtml } from "satteri";
 import { asIsMarkdownPlugin, DEMOTE_HEADINGS } from "../scripts/as-is-markdown.mjs";
-import { asIsHeadingsDemoted, asIsRegionStart, insertPanelFigures } from "../scripts/lib.mjs";
+import { altitudeWords, asIsHeadingsDemoted, asIsRegionStart, insertPanelFigures } from "../scripts/lib.mjs";
 import { COMPOSED_PAGE, SHELL_PAGE, panelBindings } from "./page-shapes.mjs";
 import { commitFixture, configureFixture, portalFixture, runAdapter, starterRoot } from "./portal-fixture.mjs";
 
@@ -32,6 +32,14 @@ const POINTER_OBSERVATION = Object.freeze({
   pointerColumns: [...RECORD_POINTER_COLUMNS], pointerRows: 4,
 });
 const PROSE_PANEL = Object.freeze({ figure: 0, stage: 0, table: 0, list: 0, pre: 0 });
+
+// The Rust validator recounts the same cases (figures.rs), so the two
+// counters cannot drift.
+test("altitude words are counted by the rule the validator recounts", async () => {
+  const fixture = JSON.parse(await readFile(new URL("./fixtures/altitude-words.json", import.meta.url), "utf8"));
+  assert.ok(fixture.cases.length > 0);
+  for (const item of fixture.cases) assert.deepEqual(altitudeWords(item.text), item.words, item.name);
+});
 
 // An as-is page keeps the page title as its only h1: a level-one heading left
 // in the region after the dropped title renders one level lower, with every

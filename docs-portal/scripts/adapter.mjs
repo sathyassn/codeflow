@@ -7,7 +7,7 @@ import {
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown, placeCapabilityTable,
   pinnedSourceUrl as providerSourceUrl, recordFilesFor, referencedIds, renderCapabilityFences, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
-  asIsHeadingsDemoted, asIsRegionStart, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks,
+  altitudeWords, asIsHeadingsDemoted, asIsRegionStart, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks,
 } from "./lib.mjs";
 import { bindDerivedData, checkFacts, composeFigure, GRAMMAR_VERSION, markdownSections, parseFactSource, renderFigure, validateDeclaration } from "./figure-grammar.mjs";
 import { ALTITUDE_PANELS, PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
@@ -194,7 +194,7 @@ for (const sourcePath of sources) {
     if (sourcePath === CAPABILITY_REGISTRY) capabilityRows.push(...capabilityFenceRecords(body, sourcePath));
     const excerpt = excerptFor(text);
     const pageClass = pageClassFor(config, sourcePath);
-    pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, unavailable_ids: [], lookup_ids: ids, relationships, backlinks: [], stale: false, searchable: true, excerpt, page_class: pageClass.pageClass, class_reason: pageClass.reason, class_note: pageClass.note, derive: pageClass.derive });
+    pages.push({ source_path: sourcePath, source_sha256: sourceHash, built_from_commit: commit, route, layer: layer.id, title, frontmatter, body, ids, unavailable_ids: [], lookup_ids: ids, relationships, backlinks: [], stale: false, searchable: true, excerpt, page_class: pageClass.pageClass, class_reason: pageClass.reason, class_note: pageClass.note, derive: pageClass.derive, altitude_words: pageClass.pageClass === PAGE_CLASSES.explanatory.id ? altitudeWords(text) : null });
   } catch (error) {
     sourceAnchors.delete(sourcePath);
     pages.push(staleStubPage(sourcePath, sourceHash, bytes, error));
@@ -297,6 +297,7 @@ for (const page of pages) {
   page.status = typeof page.frontmatter?.status === "string" ? page.frontmatter.status : null;
   page.source_region ??= null;
   if (page.stale) Object.assign(page, { page_class: null, class_reason: null, class_note: null });
+  page.altitude_words ??= null;
   delete page.frontmatter; delete page.body; delete page.excerpt; delete page.layer; delete page.lookup_ids; delete page.derive;
 }
 

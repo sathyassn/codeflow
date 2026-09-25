@@ -956,6 +956,38 @@ export function asIsRegionStart(body, title) {
   return offset;
 }
 
+// The prose words in each altitude panel of an explanatory source, counted by
+// a rule simple enough that the Rust validator recounts it byte for byte: on
+// the committed text, a line `## Concept`, `## Architecture` or `## Technical`
+// opens that panel and any other level-two heading closes it; lines inside a
+// fence (the markdownSections fence rule), inside an HTML comment (from a line
+// starting `<!--` through the line holding `-->`), headings (`#`) and table
+// rows (`|`) are skipped; every other line in a panel adds its ASCII
+// whitespace-separated tokens.
+export function altitudeWords(text) {
+  const words = { concept: 0, architecture: 0, technical: 0 };
+  const trim = (line) => line.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+  let panel = null;
+  let fence = null;
+  let comment = false;
+  for (const line of String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n")) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence !== null) {
+      if (marker && marker[1][0] === fence.char && marker[1].length >= fence.length && marker[2].trim() === "") fence = null;
+      continue;
+    }
+    if (marker && !(marker[1][0] === "`" && marker[2].includes("`"))) { fence = { char: marker[1][0], length: marker[1].length }; continue; }
+    const trimmed = trim(line);
+    if (comment) { if (trimmed.includes("-->")) comment = false; continue; }
+    if (trimmed.startsWith("<!--")) { if (!trimmed.includes("-->")) comment = true; continue; }
+    const level2 = line.match(/^## (.*)$/);
+    if (level2) { const label = trim(level2[1]).toLowerCase(); panel = Object.hasOwn(words, label) ? label : null; continue; }
+    if (panel === null || trimmed.startsWith("#") || trimmed.startsWith("|")) continue;
+    words[panel] += trimmed.split(/[\t\n\f\r ]+/).filter(Boolean).length;
+  }
+  return words;
+}
+
 // Whether an as-is region still carries a level-one heading once the title
 // the adapter drops is gone: a second title, a title under a leading comment,
 // or deliberate h1 sections. The site's Markdown step then renders every
