@@ -240,15 +240,25 @@ its temporary directory, does not qualify.
 The `gh` stand-in's answer is a pure function of its arguments, its own
 state, the scenario and the repository facts it asks for: the current
 branch, the head, whether the head is merged, and the test result at a head.
-It reads them under a fixed view of the checkout. Git runs with no inherited
-`GIT_` variable, so nothing names another repository, object store, index or
-configuration, and with replacement objects off. A head's files and a merge
-check's ancestry are read from objects whose bytes match their names, never
-through `git archive` or `merge-base`, so replacement refs, grafts, shallow
-files, commit-graph files, attributes and filters cannot change what a SHA
-denotes. An object that does not match its name stops the stand-in, and the
-replay reports that run. Every other fixture tool that runs git uses the
-same environment.
+It reads them under a fixed view of the checkout. `materialize` resolves
+Git from the harness's own `PATH` before the subject runs and records its
+real path and sha256, with the repository's git directory, in the pin
+record. The stand-in calls that path, checks its digest before each use,
+and runs it with a fixed `PATH` and only home, locale and identity
+variables: no other `GIT_` variable, so nothing names another repository,
+object store, index or configuration, and no loader variable such as
+`DYLD_*` or `LD_*`. Replacement objects are off. Each call line names the
+Git digest and git directory the run used; `check-trial` requires both to
+match the receipt and the pinned executable to be unchanged. A head's
+files and a merge check's ancestry are read from objects whose bytes match
+their names, never through `git archive` or `merge-base`, so replacement
+refs, grafts, shallow files, commit-graph files, attributes and filters
+cannot change what a SHA denotes. An object that does not match its name,
+or a Git executable that does not match its digest, stops the stand-in,
+and the replay reports that run. The stand-in runs a head's tests with the
+interpreter that runs it, in isolated mode (`-I`). Every other fixture
+tool that runs git clears inherited `GIT_` variables and turns replacement
+objects off, but takes Git from `PATH`; those tools are not replayed.
 The stand-in runs with the subject's permissions, so nothing it writes or
 prints is authenticated. Its state file, `gh-stand-in.json` in the git
 directory, is a cache. For each run it prints evidence lines to stderr,
@@ -344,6 +354,17 @@ subject:
   line of a compound command.
 - A run with hidden output still advances the replayed state, and the next
   answer is checked against it.
+
+Threat boundary (decision by the primary, 2026-09-25). The fact-integrity
+claim covers the pinned stand-in, the pinned Git executable, hash-checked
+raw objects, the scrubbed Git environment, and replay against the retained
+evidence. These are named residuals, review-only and never findings: a
+subject that controls the Python interpreter that runs the stand-in, or its
+import path beyond isolated mode (the subject launches the stand-in, so
+its interpreter, `PYTHON*` variables and site or user packages are the
+subject's), the dynamic loader or the libraries Git loads, the operating
+system, the harness, or the trace store. A bypass that needs one of those
+is a residual, not a defect.
 
 Limits:
 

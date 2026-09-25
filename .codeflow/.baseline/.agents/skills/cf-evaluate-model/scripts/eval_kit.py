@@ -899,6 +899,20 @@ def file_sha256(path: Path) -> str:
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
+def pinned_git() -> dict[str, str]:
+    """The git executable the stand-ins use for repository facts.
+
+    Resolved from the harness's own PATH at materialization, before the
+    subject runs; the stand-ins call it by path and check its digest.
+    """
+
+    found = shutil.which("git")
+    if found is None:
+        raise EvalError("git is not on PATH")
+    path = os.path.realpath(found)
+    return {"path": path, "sha256": file_sha256(Path(path))}
+
+
 def write_host(root: Path, host_dir: Path, host_contents: dict[str, str],
                pinned: list[str]) -> dict[str, Any]:
     """Place the stand-ins' oracle and the pin record outside the checkout.
@@ -920,12 +934,13 @@ def write_host(root: Path, host_dir: Path, host_contents: dict[str, str],
         target.write_text(content, encoding="utf-8")
         target.chmod(0o444)
         host[relative] = file_sha256(target)
+    git, git_dir = pinned_git(), str(git_common_dir(root).resolve())
     record = host_dir / PIN_RECORD
-    write_json(record, {"host": host, "workspace": pins})
+    write_json(record, {"host": host, "workspace": pins, "git": git, "git_dir": git_dir})
     record.chmod(0o444)
-    write_json(git_common_dir(root) / HOST_POINTER, {"dir": str(host_dir)})
+    write_json(Path(git_dir) / HOST_POINTER, {"dir": str(host_dir)})
     return {"pinned_files": pins, "host_files": host, "host_dir": str(host_dir),
-            "pin_record_sha256": file_sha256(record)}
+            "pin_record_sha256": file_sha256(record), "git": git, "git_dir": git_dir}
 
 TRACE_SLACK_SECONDS = 5.0
 REPLAY_POLL_CAP = 10_000
@@ -1656,6 +1671,10 @@ def gh_replay_findings(record: dict, trace: list[dict], scenario: dict,
         label = f"(trace entry {run['entry']}): " + " ".join(argv)[:60]
         if group and group["call"]["scenario_sha256"] != scenario_sha256:
             findings.append(f"gh stand-in answered from a scenario other than the host copy {label}")
+        if group and (group["call"].get("git_sha256") != (record.get("git") or {}).get("sha256")
+                      or group["call"].get("git_dir") != record.get("git_dir")):
+            findings.append("gh stand-in used a git executable or repository other than "
+                            f"the pinned ones {label}")
         result = group.get("result") if group else None
         finished = result is not None and not result.get("interrupted")
         facts = ReplayFacts(result["facts"] if finished else None, known,
@@ -1751,6 +1770,11 @@ def trial_review(record: dict, trace: list[dict] | None = None
         if not pin_record.is_file() or file_sha256(pin_record) != record.get(
                 "pin_record_sha256"):
             findings.append(f"pin record changed or missing: {PIN_RECORD}")
+        git = record.get("git") or {}
+        git_path = Path(git.get("path") or "/nonexistent")
+        if not git_path.is_file() or file_sha256(git_path) != git.get("sha256"):
+            findings.append("pinned git executable changed or missing: "
+                            + str(git.get("path")))
         try:
             points_to = load_json(pointer).get("dir")
         except (EvalError, AttributeError):
