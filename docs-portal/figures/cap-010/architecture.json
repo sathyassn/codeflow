@@ -1,0 +1,546 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "duo-hosts",
+    "family": "structure",
+    "binding": "authored",
+    "question": "How does each host reach the other seat?",
+    "idea": "The host a session starts in picks the transport: the plugin from Claude Code, Herdr from Codex, and both from Grok Build.",
+    "title": "How each host reaches the other seat",
+    "kicker": "Hosts and transports",
+    "caption": "Every route runs through a vendor's own interactive harness, so changing host changes the transport and never the contract.",
+    "states": [
+      {
+        "name": "seat",
+        "mark": "layer-remote",
+        "means": "Standing seat"
+      },
+      {
+        "name": "extra",
+        "mark": "optional",
+        "means": "Extra family, on trigger"
+      },
+      {
+        "name": "transport",
+        "mark": "trans",
+        "means": "Native transport"
+      },
+      {
+        "name": "fallback",
+        "mark": "todo",
+        "means": "Degraded transport"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "Claude Code reaches Codex through the plugin and app-server",
+        "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
+        "derive": "the Claude Code row",
+        "check": {
+          "kind": "contains",
+          "text": "| Claude Code | Reaches Codex through the official plugin/app-server |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Codex reaches Claude through Herdr, with tmux as the degraded host",
+        "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
+        "derive": "the Codex row",
+        "check": {
+          "kind": "contains",
+          "text": "with tmux as the degraded host |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Grok Build reaches Codex through the codex CLI and Claude through Herdr",
+        "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#architecture",
+        "derive": "the Grok Build row",
+        "check": {
+          "kind": "contains",
+          "text": "| Grok Build | Reaches Codex through the official `codex` CLI and local app-server daemon, and Claude through Herdr |"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 286,
+      "draw": [
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 180,
+          "h": 104,
+          "rx": 8,
+          "id": "cl"
+        },
+        {
+          "text": "Claude Code",
+          "x": 30,
+          "y": 64,
+          "style": "strong",
+          "for": [
+            "cl"
+          ]
+        },
+        {
+          "text": "seat and host",
+          "x": 30,
+          "y": 84,
+          "for": [
+            "cl"
+          ]
+        },
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 524,
+          "y": 40,
+          "w": 180,
+          "h": 104,
+          "rx": 8,
+          "id": "cx"
+        },
+        {
+          "text": "Codex",
+          "x": 538,
+          "y": 64,
+          "style": "strong",
+          "for": [
+            "cx"
+          ]
+        },
+        {
+          "text": "App or CLI",
+          "x": 538,
+          "y": 84,
+          "for": [
+            "cx"
+          ]
+        },
+        {
+          "state": "transport",
+          "shape": "path",
+          "d": "M198 60H522",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "text": "Codex plugin, app-server",
+          "x": 360,
+          "y": 50,
+          "anchor": "middle",
+          "for": [
+            "e1"
+          ]
+        },
+        {
+          "state": "transport",
+          "shape": "path",
+          "d": "M522 98H198",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "text": "Herdr named tab",
+          "x": 360,
+          "y": 88,
+          "anchor": "middle",
+          "for": [
+            "e2"
+          ]
+        },
+        {
+          "state": "fallback",
+          "shape": "path",
+          "d": "M522 134H198",
+          "id": "e3"
+        },
+        {
+          "text": "tmux, degraded",
+          "x": 360,
+          "y": 124,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e3"
+          ]
+        },
+        {
+          "state": "extra",
+          "shape": "rect",
+          "x": 270,
+          "y": 204,
+          "w": 180,
+          "h": 56,
+          "rx": 8,
+          "id": "g"
+        },
+        {
+          "text": "Grok Build",
+          "x": 284,
+          "y": 228,
+          "style": "strong",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "extra family",
+          "x": 284,
+          "y": 248,
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "transport",
+          "shape": "path",
+          "d": "M452 232C590 232 614 196 614 148",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "text": "codex CLI, app-server",
+          "x": 470,
+          "y": 272,
+          "for": [
+            "e4"
+          ]
+        },
+        {
+          "state": "transport",
+          "shape": "path",
+          "d": "M268 232C130 232 106 196 106 148",
+          "head": "end",
+          "id": "e5"
+        },
+        {
+          "text": "Herdr",
+          "x": 250,
+          "y": 272,
+          "anchor": "end",
+          "for": [
+            "e5"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 384,
+      "draw": [
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 8,
+          "y": 8,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n1a"
+        },
+        {
+          "text": "Claude Code",
+          "x": 64,
+          "y": 30,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n1a"
+          ]
+        },
+        {
+          "state": "transport",
+          "shape": "path",
+          "d": "M122 25H236",
+          "head": "end",
+          "id": "n1"
+        },
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 240,
+          "y": 8,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n1b"
+        },
+        {
+          "text": "Codex",
+          "x": 296,
+          "y": 30,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n1b"
+          ]
+        },
+        {
+          "text": "via the Codex plugin, app-server",
+          "x": 8,
+          "y": 66,
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 8,
+          "y": 84,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n2a"
+        },
+        {
+          "text": "Codex",
+          "x": 64,
+          "y": 106,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n2a"
+          ]
+        },
+        {
+          "state": "transport",
+          "shape": "path",
+          "d": "M122 101H236",
+          "head": "end",
+          "id": "n2"
+        },
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 240,
+          "y": 84,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n2b"
+        },
+        {
+          "text": "Claude",
+          "x": 296,
+          "y": 106,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n2b"
+          ]
+        },
+        {
+          "text": "via a Herdr named tab",
+          "x": 8,
+          "y": 142,
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 8,
+          "y": 160,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n3a"
+        },
+        {
+          "text": "Codex",
+          "x": 64,
+          "y": 182,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n3a"
+          ]
+        },
+        {
+          "state": "fallback",
+          "shape": "path",
+          "d": "M122 177H236",
+          "id": "n3"
+        },
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 240,
+          "y": 160,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n3b"
+        },
+        {
+          "text": "Claude",
+          "x": 296,
+          "y": 182,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n3b"
+          ]
+        },
+        {
+          "text": "via tmux, degraded",
+          "x": 8,
+          "y": 218,
+          "style": "mute",
+          "for": [
+            "n3"
+          ]
+        },
+        {
+          "state": "extra",
+          "shape": "rect",
+          "x": 8,
+          "y": 236,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n4a"
+        },
+        {
+          "text": "Grok Build",
+          "x": 64,
+          "y": 258,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n4a"
+          ]
+        },
+        {
+          "state": "transport",
+          "shape": "path",
+          "d": "M122 253H236",
+          "head": "end",
+          "id": "n4"
+        },
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 240,
+          "y": 236,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n4b"
+        },
+        {
+          "text": "Codex",
+          "x": 296,
+          "y": 258,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n4b"
+          ]
+        },
+        {
+          "text": "via the codex CLI, app-server",
+          "x": 8,
+          "y": 294,
+          "for": [
+            "n4"
+          ]
+        },
+        {
+          "state": "extra",
+          "shape": "rect",
+          "x": 8,
+          "y": 312,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n5a"
+        },
+        {
+          "text": "Grok Build",
+          "x": 64,
+          "y": 334,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n5a"
+          ]
+        },
+        {
+          "state": "transport",
+          "shape": "path",
+          "d": "M122 329H236",
+          "head": "end",
+          "id": "n5"
+        },
+        {
+          "state": "seat",
+          "shape": "rect",
+          "x": 240,
+          "y": 312,
+          "w": 112,
+          "h": 34,
+          "rx": 8,
+          "id": "n5b"
+        },
+        {
+          "text": "Claude",
+          "x": 296,
+          "y": 334,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "n5b"
+          ]
+        },
+        {
+          "text": "via Herdr",
+          "x": 8,
+          "y": 370,
+          "for": [
+            "n5"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Host",
+        "Reaches",
+        "Through"
+      ],
+      "rows": [
+        [
+          "Claude Code",
+          "Codex",
+          "the official plugin and app-server"
+        ],
+        [
+          "Codex App or CLI",
+          "Claude",
+          "a Herdr named tab, or tmux when degraded"
+        ],
+        [
+          "Grok Build",
+          "Codex",
+          "the official `codex` CLI and local app-server daemon"
+        ],
+        [
+          "Grok Build",
+          "Claude",
+          "Herdr"
+        ]
+      ]
+    }
+  }
+}

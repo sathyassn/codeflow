@@ -1,0 +1,349 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "capability-status",
+    "family": "state",
+    "binding": "authored",
+    "question": "What status can an entry hold, and how does it move?",
+    "idea": "An entry moves from planned to building to shipped to deprecated, and is never deleted.",
+    "title": "How a capability's status moves",
+    "kicker": "Status",
+    "caption": "A capability that stops being useful is deprecated, so its history and the tests that proved it stay findable.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "Status"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Move"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Forbidden move"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "statuses run planned, building, shipped, deprecated",
+        "source": "docs/capabilities.md#architecture",
+        "derive": "the status sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Statuses run planned, then building, then shipped, then deprecated."
+        },
+        "value": true
+      },
+      {
+        "claim": "entries are deprecated, never deleted",
+        "source": "docs/capabilities.md#architecture",
+        "derive": "the deletion sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Entries are\ndeprecated, never deleted."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 214,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 60,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "pl"
+        },
+        {
+          "text": "planned",
+          "x": 76,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "pl"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M138 78H198",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 60,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "bu"
+        },
+        {
+          "text": "building",
+          "x": 260,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "bu"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M322 78H382",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 384,
+          "y": 60,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "sh"
+        },
+        {
+          "text": "shipped",
+          "x": 444,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "sh"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M506 78H566",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 568,
+          "y": 60,
+          "w": 136,
+          "h": 36,
+          "rx": 8,
+          "id": "de"
+        },
+        {
+          "text": "deprecated",
+          "x": 636,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "de"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M636 98V150H440",
+          "cross": {
+            "cx": 636,
+            "cy": 128,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "delete the entry",
+          "x": 430,
+          "y": 155,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "text": "a shipped entry needs a non-empty verified_by",
+          "x": 16,
+          "y": 200,
+          "style": "mute",
+          "for": [
+            "sh"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 268,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 140,
+          "h": 36,
+          "rx": 8,
+          "id": "pl"
+        },
+        {
+          "text": "planned",
+          "x": 78,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "pl"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 48V74",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 76,
+          "w": 140,
+          "h": 36,
+          "rx": 8,
+          "id": "bu"
+        },
+        {
+          "text": "building",
+          "x": 78,
+          "y": 99,
+          "anchor": "middle",
+          "for": [
+            "bu"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 114V140",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 142,
+          "w": 140,
+          "h": 36,
+          "rx": 8,
+          "id": "sh"
+        },
+        {
+          "text": "shipped",
+          "x": 78,
+          "y": 165,
+          "anchor": "middle",
+          "for": [
+            "sh"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 180V206",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 208,
+          "w": 140,
+          "h": 36,
+          "rx": 8,
+          "id": "de"
+        },
+        {
+          "text": "deprecated",
+          "x": 78,
+          "y": 231,
+          "anchor": "middle",
+          "for": [
+            "de"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M150 226H250V190",
+          "cross": {
+            "cx": 250,
+            "cy": 208,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "delete the entry",
+          "x": 160,
+          "y": 254,
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "text": "shipped needs verified_by",
+          "x": 164,
+          "y": 166,
+          "style": "mute",
+          "for": [
+            "sh"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "Allowed"
+      ],
+      "rows": [
+        [
+          "planned",
+          "building",
+          "yes"
+        ],
+        [
+          "building",
+          "shipped",
+          "yes, with a non-empty `verified_by`"
+        ],
+        [
+          "shipped",
+          "deprecated",
+          "yes"
+        ],
+        [
+          "any status",
+          "deleted",
+          "no, entries are deprecated instead"
+        ]
+      ]
+    }
+  }
+}

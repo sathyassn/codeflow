@@ -1,0 +1,922 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "capabilities-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What does CodeFlow do, and is the capability I need already here?",
+    "idea": "Seventeen capabilities sit in six groups by what they are for; all but two have shipped.",
+    "title": "What CodeFlow does, by group",
+    "kicker": "Capability registry",
+    "caption": "Look for your feature in its group before building it; only delegate lifecycle and present review are still building.",
+    "states": [
+      {
+        "name": "group",
+        "mark": "layer",
+        "means": "A reading group"
+      },
+      {
+        "name": "shipped",
+        "mark": "agent",
+        "means": "Shipped"
+      },
+      {
+        "name": "building",
+        "mark": "node",
+        "means": "Building"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the delegate lifecycle is building",
+        "source": "docs/capabilities.md#architecture",
+        "derive": "the CAP-014 row",
+        "check": {
+          "kind": "contains",
+          "text": "| CAP-014 | transport-neutral-delegate-lifecycle | engine | building |"
+        },
+        "value": true
+      },
+      {
+        "claim": "interactive presentation review is building",
+        "source": "docs/capabilities.md#architecture",
+        "derive": "the CAP-016 row",
+        "check": {
+          "kind": "contains",
+          "text": "| CAP-016 | interactive-presentation-review | engine | building |"
+        },
+        "value": true
+      },
+      {
+        "claim": "the documentation portal has shipped",
+        "source": "docs/capabilities.md#architecture",
+        "derive": "the CAP-015 row",
+        "check": {
+          "kind": "contains",
+          "text": "| CAP-015 | opt-in-documentation-portal | scaffold | shipped |"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 312,
+      "draw": [
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 16,
+          "y": 24,
+          "w": 224,
+          "h": 138,
+          "rx": 8,
+          "id": "g0"
+        },
+        {
+          "text": "Scaffold",
+          "x": 30,
+          "y": 48,
+          "style": "strong",
+          "for": [
+            "g0"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 72,
+          "r": 6,
+          "id": "g0c0"
+        },
+        {
+          "text": "init",
+          "x": 56,
+          "y": 77,
+          "for": [
+            "g0c0",
+            "g0"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 96,
+          "r": 6,
+          "id": "g0c1"
+        },
+        {
+          "text": "update",
+          "x": 56,
+          "y": 101,
+          "for": [
+            "g0c1",
+            "g0"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 120,
+          "r": 6,
+          "id": "g0c2"
+        },
+        {
+          "text": "customize",
+          "x": 56,
+          "y": 125,
+          "for": [
+            "g0c2",
+            "g0"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 144,
+          "r": 6,
+          "id": "g0c3"
+        },
+        {
+          "text": "estimate",
+          "x": 56,
+          "y": 149,
+          "for": [
+            "g0c3",
+            "g0"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 248,
+          "y": 24,
+          "w": 224,
+          "h": 138,
+          "rx": 8,
+          "id": "g1"
+        },
+        {
+          "text": "Enforce",
+          "x": 262,
+          "y": 48,
+          "style": "strong",
+          "for": [
+            "g1"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 72,
+          "r": 6,
+          "id": "g1c0"
+        },
+        {
+          "text": "git gates",
+          "x": 288,
+          "y": 77,
+          "for": [
+            "g1c0",
+            "g1"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 96,
+          "r": 6,
+          "id": "g1c1"
+        },
+        {
+          "text": "protect, doctor",
+          "x": 288,
+          "y": 101,
+          "for": [
+            "g1c1",
+            "g1"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 120,
+          "r": 6,
+          "id": "g1c2"
+        },
+        {
+          "text": "red-team review",
+          "x": 288,
+          "y": 125,
+          "for": [
+            "g1c2",
+            "g1"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 480,
+          "y": 24,
+          "w": 224,
+          "h": 138,
+          "rx": 8,
+          "id": "g2"
+        },
+        {
+          "text": "Verify",
+          "x": 494,
+          "y": 48,
+          "style": "strong",
+          "for": [
+            "g2"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 504,
+          "cy": 72,
+          "r": 6,
+          "id": "g2c0"
+        },
+        {
+          "text": "test gate",
+          "x": 520,
+          "y": 77,
+          "for": [
+            "g2c0",
+            "g2"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 504,
+          "cy": 96,
+          "r": 6,
+          "id": "g2c1"
+        },
+        {
+          "text": "integrate",
+          "x": 520,
+          "y": 101,
+          "for": [
+            "g2c1",
+            "g2"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 16,
+          "y": 174,
+          "w": 224,
+          "h": 138,
+          "rx": 8,
+          "id": "g3"
+        },
+        {
+          "text": "Remember",
+          "x": 30,
+          "y": 198,
+          "style": "strong",
+          "for": [
+            "g3"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 222,
+          "r": 6,
+          "id": "g3c0"
+        },
+        {
+          "text": "orient, summary",
+          "x": 56,
+          "y": 227,
+          "for": [
+            "g3c0",
+            "g3"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 246,
+          "r": 6,
+          "id": "g3c1"
+        },
+        {
+          "text": "recall",
+          "x": 56,
+          "y": 251,
+          "for": [
+            "g3c1",
+            "g3"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 248,
+          "y": 174,
+          "w": 224,
+          "h": 138,
+          "rx": 8,
+          "id": "g4"
+        },
+        {
+          "text": "Delegate",
+          "x": 262,
+          "y": 198,
+          "style": "strong",
+          "for": [
+            "g4"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 222,
+          "r": 6,
+          "id": "g4c0"
+        },
+        {
+          "text": "delegation",
+          "x": 288,
+          "y": 227,
+          "for": [
+            "g4c0",
+            "g4"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 246,
+          "r": 6,
+          "id": "g4c1"
+        },
+        {
+          "text": "duo",
+          "x": 288,
+          "y": 251,
+          "for": [
+            "g4c1",
+            "g4"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 270,
+          "r": 6,
+          "id": "g4c2"
+        },
+        {
+          "text": "model bindings",
+          "x": 288,
+          "y": 275,
+          "for": [
+            "g4c2",
+            "g4"
+          ]
+        },
+        {
+          "state": "building",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 294,
+          "r": 6,
+          "id": "g4c3"
+        },
+        {
+          "text": "delegate lifecycle",
+          "x": 288,
+          "y": 299,
+          "for": [
+            "g4c3",
+            "g4"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 480,
+          "y": 174,
+          "w": 224,
+          "h": 138,
+          "rx": 8,
+          "id": "g5"
+        },
+        {
+          "text": "Present",
+          "x": 494,
+          "y": 198,
+          "style": "strong",
+          "for": [
+            "g5"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 504,
+          "cy": 222,
+          "r": 6,
+          "id": "g5c0"
+        },
+        {
+          "text": "portal",
+          "x": 520,
+          "y": 227,
+          "for": [
+            "g5c0",
+            "g5"
+          ]
+        },
+        {
+          "state": "building",
+          "shape": "circle",
+          "cx": 504,
+          "cy": 246,
+          "r": 6,
+          "id": "g5c1"
+        },
+        {
+          "text": "present review",
+          "x": 520,
+          "y": 251,
+          "for": [
+            "g5c1",
+            "g5"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 384,
+      "draw": [
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 168,
+          "h": 138,
+          "rx": 8,
+          "id": "g0"
+        },
+        {
+          "text": "Scaffold",
+          "x": 20,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "g0"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 56,
+          "r": 6,
+          "id": "g0c0"
+        },
+        {
+          "text": "init",
+          "x": 42,
+          "y": 61,
+          "for": [
+            "g0c0",
+            "g0"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 80,
+          "r": 6,
+          "id": "g0c1"
+        },
+        {
+          "text": "update",
+          "x": 42,
+          "y": 85,
+          "for": [
+            "g0c1",
+            "g0"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 104,
+          "r": 6,
+          "id": "g0c2"
+        },
+        {
+          "text": "customize",
+          "x": 42,
+          "y": 109,
+          "for": [
+            "g0c2",
+            "g0"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 128,
+          "r": 6,
+          "id": "g0c3"
+        },
+        {
+          "text": "estimate",
+          "x": 42,
+          "y": 133,
+          "for": [
+            "g0c3",
+            "g0"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 8,
+          "y": 158,
+          "w": 168,
+          "h": 114,
+          "rx": 8,
+          "id": "g1"
+        },
+        {
+          "text": "Enforce",
+          "x": 20,
+          "y": 182,
+          "style": "strong",
+          "for": [
+            "g1"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 204,
+          "r": 6,
+          "id": "g1c0"
+        },
+        {
+          "text": "git gates",
+          "x": 42,
+          "y": 209,
+          "for": [
+            "g1c0",
+            "g1"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 228,
+          "r": 6,
+          "id": "g1c1"
+        },
+        {
+          "text": "protect, doctor",
+          "x": 42,
+          "y": 233,
+          "for": [
+            "g1c1",
+            "g1"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 252,
+          "r": 6,
+          "id": "g1c2"
+        },
+        {
+          "text": "red-team review",
+          "x": 42,
+          "y": 257,
+          "for": [
+            "g1c2",
+            "g1"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 8,
+          "y": 282,
+          "w": 168,
+          "h": 90,
+          "rx": 8,
+          "id": "g2"
+        },
+        {
+          "text": "Verify",
+          "x": 20,
+          "y": 306,
+          "style": "strong",
+          "for": [
+            "g2"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 328,
+          "r": 6,
+          "id": "g2c0"
+        },
+        {
+          "text": "test gate",
+          "x": 42,
+          "y": 333,
+          "for": [
+            "g2c0",
+            "g2"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 352,
+          "r": 6,
+          "id": "g2c1"
+        },
+        {
+          "text": "integrate",
+          "x": 42,
+          "y": 357,
+          "for": [
+            "g2c1",
+            "g2"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 184,
+          "y": 10,
+          "w": 168,
+          "h": 90,
+          "rx": 8,
+          "id": "g3"
+        },
+        {
+          "text": "Remember",
+          "x": 196,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "g3"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 56,
+          "r": 6,
+          "id": "g3c0"
+        },
+        {
+          "text": "orient, summary",
+          "x": 218,
+          "y": 61,
+          "for": [
+            "g3c0",
+            "g3"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 80,
+          "r": 6,
+          "id": "g3c1"
+        },
+        {
+          "text": "recall",
+          "x": 218,
+          "y": 85,
+          "for": [
+            "g3c1",
+            "g3"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 184,
+          "y": 110,
+          "w": 168,
+          "h": 138,
+          "rx": 8,
+          "id": "g4"
+        },
+        {
+          "text": "Delegate",
+          "x": 196,
+          "y": 134,
+          "style": "strong",
+          "for": [
+            "g4"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 156,
+          "r": 6,
+          "id": "g4c0"
+        },
+        {
+          "text": "delegation",
+          "x": 218,
+          "y": 161,
+          "for": [
+            "g4c0",
+            "g4"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 180,
+          "r": 6,
+          "id": "g4c1"
+        },
+        {
+          "text": "duo",
+          "x": 218,
+          "y": 185,
+          "for": [
+            "g4c1",
+            "g4"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 204,
+          "r": 6,
+          "id": "g4c2"
+        },
+        {
+          "text": "model bindings",
+          "x": 218,
+          "y": 209,
+          "for": [
+            "g4c2",
+            "g4"
+          ]
+        },
+        {
+          "state": "building",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 228,
+          "r": 6,
+          "id": "g4c3"
+        },
+        {
+          "text": "delegate lifecycle",
+          "x": 218,
+          "y": 233,
+          "for": [
+            "g4c3",
+            "g4"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 184,
+          "y": 258,
+          "w": 168,
+          "h": 90,
+          "rx": 8,
+          "id": "g5"
+        },
+        {
+          "text": "Present",
+          "x": 196,
+          "y": 282,
+          "style": "strong",
+          "for": [
+            "g5"
+          ]
+        },
+        {
+          "state": "shipped",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 304,
+          "r": 6,
+          "id": "g5c0"
+        },
+        {
+          "text": "portal",
+          "x": 218,
+          "y": 309,
+          "for": [
+            "g5c0",
+            "g5"
+          ]
+        },
+        {
+          "state": "building",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 328,
+          "r": 6,
+          "id": "g5c1"
+        },
+        {
+          "text": "present review",
+          "x": 218,
+          "y": 333,
+          "for": [
+            "g5c1",
+            "g5"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Group",
+        "Shipped",
+        "Building"
+      ],
+      "rows": [
+        [
+          "Scaffold",
+          "init, update, customize, estimate",
+          "none"
+        ],
+        [
+          "Enforce",
+          "git gates, protect, doctor, red-team review",
+          "none"
+        ],
+        [
+          "Verify",
+          "test gate, integrate",
+          "none"
+        ],
+        [
+          "Remember",
+          "orient, summary, recall",
+          "none"
+        ],
+        [
+          "Delegate",
+          "delegation, duo, model bindings",
+          "delegate lifecycle"
+        ],
+        [
+          "Present",
+          "portal",
+          "present review"
+        ]
+      ]
+    }
+  }
+}

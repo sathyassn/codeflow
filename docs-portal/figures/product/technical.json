@@ -1,0 +1,181 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "product-technical",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Which commitment does each tier deliver?",
+    "idea": "The hard gates are the same at every tier; the method and the records arrive with the higher tiers, and no tier arms remote protection.",
+    "title": "What each tier delivers",
+    "kicker": "Commitments by tier",
+    "caption": "Every tier carries the binary and the hard gates, and remote branch protection is left for the host to arm.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Installed at this tier"
+      },
+      {
+        "name": "na",
+        "mark": "na",
+        "means": "Not installed at this tier"
+      },
+      {
+        "name": "nc",
+        "mark": "nc",
+        "means": "Not installed by any tier"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "minimal installs the complete enforcement floor",
+        "source": "docs/adoption.md#architecture",
+        "derive": "the minimal row",
+        "check": {
+          "kind": "contains",
+          "text": "The complete git-discipline enforcement floor"
+        },
+        "value": true
+      },
+      {
+        "claim": "standard adds the method and the six-layer docs spine",
+        "source": "docs/adoption.md#architecture",
+        "derive": "the standard row",
+        "check": {
+          "kind": "contains",
+          "text": "+ the develop-loop method (cf-* skills, reviewer agents, the pipeline), the six-layer `docs/` spine"
+        },
+        "value": true
+      },
+      {
+        "claim": "full adds project-management records",
+        "source": "docs/adoption.md#architecture",
+        "derive": "the full row",
+        "check": {
+          "kind": "contains",
+          "text": "+ `project-management/` (epics, tasks, specs, templates)"
+        },
+        "value": true
+      },
+      {
+        "claim": "no tier installs remote branch protection",
+        "source": "docs/adoption.md#concept",
+        "derive": "the sentence on remote protection",
+        "check": {
+          "kind": "contains",
+          "text": "no tier installs remote branch protection"
+        },
+        "value": true
+      }
+    ],
+    "layout": {
+      "kind": "coverage",
+      "columns": [
+        "minimal",
+        "standard",
+        "full"
+      ],
+      "rows": [
+        {
+          "label": "One binary, offline",
+          "cells": [
+            "cov",
+            "cov",
+            "cov"
+          ]
+        },
+        {
+          "label": "Hard gates and policy",
+          "cells": [
+            "cov",
+            "cov",
+            "cov"
+          ]
+        },
+        {
+          "label": "Knowledge model",
+          "cells": [
+            "na",
+            "cov",
+            "cov"
+          ]
+        },
+        {
+          "label": "Duo skills and agents",
+          "cells": [
+            "na",
+            "cov",
+            "cov"
+          ]
+        },
+        {
+          "label": "Durable work records",
+          "cells": [
+            "na",
+            "na",
+            "cov"
+          ]
+        },
+        {
+          "label": "Remote branch protection",
+          "cells": [
+            "nc",
+            "nc",
+            "nc"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same"
+    },
+    "twin": {
+      "columns": [
+        "Commitment",
+        "minimal",
+        "standard",
+        "full"
+      ],
+      "rows": [
+        [
+          "One binary, offline",
+          "yes",
+          "yes",
+          "yes"
+        ],
+        [
+          "Hard gates and policy",
+          "yes",
+          "yes",
+          "yes"
+        ],
+        [
+          "Knowledge model",
+          "no",
+          "yes",
+          "yes"
+        ],
+        [
+          "Duo skills and agents",
+          "no",
+          "yes",
+          "yes"
+        ],
+        [
+          "Durable work records",
+          "no",
+          "no",
+          "yes"
+        ],
+        [
+          "Remote branch protection",
+          "never",
+          "never",
+          "never"
+        ]
+      ]
+    }
+  }
+}

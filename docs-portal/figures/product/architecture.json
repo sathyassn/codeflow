@@ -1,0 +1,738 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "product-architecture",
+    "family": "layering",
+    "binding": "authored",
+    "question": "Which record answers which question, and how often does each change?",
+    "idea": "Each knowledge layer changes at its own cadence, and one spine links a capability through its work and decisions to what happened.",
+    "title": "The six knowledge layers by how often they change",
+    "kicker": "The knowledge model",
+    "caption": "Read a bar's length as how often that layer changes; the spine is the path from a capability to the ledger.",
+    "states": [
+      {
+        "name": "layer",
+        "mark": "layer",
+        "means": "Layer, drawn to how often it changes"
+      },
+      {
+        "name": "act",
+        "mark": "act",
+        "means": "Its cadence"
+      },
+      {
+        "name": "done",
+        "mark": "done",
+        "means": "Traceability spine"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the product layer changes rarely",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the WHY row",
+        "check": {
+          "kind": "contains",
+          "text": "`docs/product.md` | rarely; human-owned"
+        },
+        "value": true
+      },
+      {
+        "claim": "the capability registry changes every ship",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the WHAT row",
+        "check": {
+          "kind": "contains",
+          "text": "(CAP-### registry) | every ship"
+        },
+        "value": true
+      },
+      {
+        "claim": "architecture and ADRs change per decision",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the HOW row",
+        "check": {
+          "kind": "contains",
+          "text": "(ADRs) | per decision"
+        },
+        "value": true
+      },
+      {
+        "claim": "planned work changes daily",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the WORK row",
+        "check": {
+          "kind": "contains",
+          "text": "allocated by the CLI) | daily"
+        },
+        "value": true
+      },
+      {
+        "claim": "the ledger changes automatically",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the TRACE row",
+        "check": {
+          "kind": "contains",
+          "text": "ledger + `codeflow recall` | automatic"
+        },
+        "value": true
+      },
+      {
+        "claim": "the spine runs from capability through work and decisions to the ledger",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the spine sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The traceability spine runs downward: capability"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 330,
+      "draw": [
+        {
+          "text": "rarely",
+          "x": 290,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "per decision",
+          "x": 385,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "every ship",
+          "x": 480,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "daily",
+          "x": 575,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "automatic",
+          "x": 670,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 250,
+          "y1": 36,
+          "x2": 712,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 290,
+          "y1": 30,
+          "x2": 290,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 385,
+          "y1": 30,
+          "x2": 385,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 480,
+          "y1": 30,
+          "x2": 480,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 575,
+          "y1": 30,
+          "x2": 575,
+          "y2": 36
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 670,
+          "y1": 30,
+          "x2": 670,
+          "y2": 36
+        },
+        {
+          "text": "WHY",
+          "x": 0,
+          "y": 69,
+          "style": "strong",
+          "for": [
+            "b0"
+          ]
+        },
+        {
+          "text": "docs/product.md",
+          "x": 58,
+          "y": 69,
+          "style": "mono",
+          "for": [
+            "b0"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 250,
+          "y": 53,
+          "w": 60,
+          "h": 22,
+          "rx": 6,
+          "id": "b0"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 290,
+          "cy": 64,
+          "r": 8,
+          "id": "a0"
+        },
+        {
+          "text": "RULES",
+          "x": 0,
+          "y": 113,
+          "style": "strong",
+          "for": [
+            "b1"
+          ]
+        },
+        {
+          "text": "AGENTS.md, skills",
+          "x": 58,
+          "y": 113,
+          "style": "mono",
+          "for": [
+            "b1"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 250,
+          "y": 97,
+          "w": 60,
+          "h": 22,
+          "rx": 6,
+          "id": "b1"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 290,
+          "cy": 108,
+          "r": 8,
+          "id": "a1"
+        },
+        {
+          "text": "WHAT",
+          "x": 0,
+          "y": 157,
+          "style": "strong",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "text": "docs/capabilities.md",
+          "x": 58,
+          "y": 157,
+          "style": "mono",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 250,
+          "y": 141,
+          "w": 250,
+          "h": 22,
+          "rx": 6,
+          "id": "b2"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 480,
+          "cy": 152,
+          "r": 8,
+          "id": "a2"
+        },
+        {
+          "text": "WORK",
+          "x": 0,
+          "y": 201,
+          "style": "strong",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "project-management/",
+          "x": 58,
+          "y": 201,
+          "style": "mono",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 250,
+          "y": 185,
+          "w": 345,
+          "h": 22,
+          "rx": 6,
+          "id": "b3"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 575,
+          "cy": 196,
+          "r": 8,
+          "id": "a3"
+        },
+        {
+          "text": "HOW",
+          "x": 0,
+          "y": 245,
+          "style": "strong",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "text": "architecture, ADRs",
+          "x": 58,
+          "y": 245,
+          "style": "mono",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 250,
+          "y": 229,
+          "w": 155,
+          "h": 22,
+          "rx": 6,
+          "id": "b4"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 385,
+          "cy": 240,
+          "r": 8,
+          "id": "a4"
+        },
+        {
+          "text": "TRACE",
+          "x": 0,
+          "y": 289,
+          "style": "strong",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "ledger",
+          "x": 58,
+          "y": 289,
+          "style": "mono",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 250,
+          "y": 273,
+          "w": 440,
+          "h": 22,
+          "rx": 6,
+          "id": "b5"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 670,
+          "cy": 284,
+          "r": 8,
+          "id": "a5"
+        },
+        {
+          "state": "done",
+          "shape": "polyline",
+          "points": [
+            [
+              480,
+              152
+            ],
+            [
+              575,
+              196
+            ],
+            [
+              385,
+              240
+            ],
+            [
+              670,
+              284
+            ]
+          ],
+          "id": "s"
+        },
+        {
+          "text": "traceability spine",
+          "x": 700,
+          "y": 318,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 336,
+      "draw": [
+        {
+          "text": "rarely",
+          "x": 204,
+          "y": 18,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "automatic",
+          "x": 352,
+          "y": 18,
+          "anchor": "end",
+          "style": "mute"
+        },
+        {
+          "text": "WHY",
+          "x": 8,
+          "y": 44,
+          "style": "strong",
+          "for": [
+            "b0"
+          ]
+        },
+        {
+          "text": "docs/product.md",
+          "x": 8,
+          "y": 64,
+          "style": "mono",
+          "for": [
+            "b0"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 188,
+          "y": 38,
+          "w": 30,
+          "h": 20,
+          "rx": 6,
+          "id": "b0"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 48,
+          "r": 8,
+          "id": "a0"
+        },
+        {
+          "text": "RULES",
+          "x": 8,
+          "y": 94,
+          "style": "strong",
+          "for": [
+            "b1"
+          ]
+        },
+        {
+          "text": "AGENTS.md, skills",
+          "x": 8,
+          "y": 114,
+          "style": "mono",
+          "for": [
+            "b1"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 188,
+          "y": 88,
+          "w": 30,
+          "h": 20,
+          "rx": 6,
+          "id": "b1"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 98,
+          "r": 8,
+          "id": "a1"
+        },
+        {
+          "text": "WHAT",
+          "x": 8,
+          "y": 144,
+          "style": "strong",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "text": "docs/capabilities.md",
+          "x": 8,
+          "y": 164,
+          "style": "mono",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 188,
+          "y": 138,
+          "w": 94,
+          "h": 20,
+          "rx": 6,
+          "id": "b2"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 268,
+          "cy": 148,
+          "r": 8,
+          "id": "a2"
+        },
+        {
+          "text": "WORK",
+          "x": 8,
+          "y": 194,
+          "style": "strong",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "project-management/",
+          "x": 8,
+          "y": 214,
+          "style": "mono",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 188,
+          "y": 188,
+          "w": 126,
+          "h": 20,
+          "rx": 6,
+          "id": "b3"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 300,
+          "cy": 198,
+          "r": 8,
+          "id": "a3"
+        },
+        {
+          "text": "HOW",
+          "x": 8,
+          "y": 244,
+          "style": "strong",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "text": "architecture, ADRs",
+          "x": 8,
+          "y": 264,
+          "style": "mono",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 188,
+          "y": 238,
+          "w": 62,
+          "h": 20,
+          "rx": 6,
+          "id": "b4"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 236,
+          "cy": 248,
+          "r": 8,
+          "id": "a4"
+        },
+        {
+          "text": "TRACE",
+          "x": 8,
+          "y": 294,
+          "style": "strong",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "ledger",
+          "x": 8,
+          "y": 314,
+          "style": "mono",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 188,
+          "y": 288,
+          "w": 158,
+          "h": 20,
+          "rx": 6,
+          "id": "b5"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 332,
+          "cy": 298,
+          "r": 8,
+          "id": "a5"
+        },
+        {
+          "state": "done",
+          "shape": "polyline",
+          "points": [
+            [
+              268,
+              148
+            ],
+            [
+              300,
+              198
+            ],
+            [
+              236,
+              248
+            ],
+            [
+              332,
+              298
+            ]
+          ],
+          "id": "s"
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Layer",
+        "Lives in",
+        "Changes",
+        "On the spine"
+      ],
+      "rows": [
+        [
+          "WHY",
+          "docs/product.md",
+          "rarely",
+          "no"
+        ],
+        [
+          "RULES",
+          "AGENTS.md, skills",
+          "rarely",
+          "no"
+        ],
+        [
+          "WHAT",
+          "docs/capabilities.md",
+          "every ship",
+          "yes"
+        ],
+        [
+          "WORK",
+          "project-management/",
+          "daily",
+          "yes"
+        ],
+        [
+          "HOW",
+          "architecture, ADRs",
+          "per decision",
+          "yes"
+        ],
+        [
+          "TRACE",
+          "ledger",
+          "automatic",
+          "yes"
+        ]
+      ]
+    }
+  }
+}

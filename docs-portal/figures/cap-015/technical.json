@@ -1,0 +1,451 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "portal-ownership",
+    "family": "state",
+    "binding": "authored",
+    "question": "What ownership state is the portal runtime in, and what may update do?",
+    "idea": "Setup makes the runtime managed, a local edit stops updates until it is reverted, and only a deliberate transfer hands it to the project.",
+    "title": "The ownership states of a portal runtime",
+    "kicker": "Ownership",
+    "caption": "A stopped update is cleared by reverting the edit, never by transferring the runtime to make the conflict go away.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "Ownership state"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Deliberate move"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Way back to managed"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Forbidden move"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "local runtime edits stop all portal writes",
+        "source": "docs/capabilities/CAP-015-opt-in-documentation-portal.md#technical",
+        "derive": "the locally edited row",
+        "check": {
+          "kind": "contains",
+          "text": "| Managed, locally edited | local runtime edits or unknown collisions stop all portal writes |"
+        },
+        "value": true
+      },
+      {
+        "claim": "never transfer automatically to clear a conflict",
+        "source": "docs/capabilities/CAP-015-opt-in-documentation-portal.md#technical",
+        "derive": "the transfer rule",
+        "check": {
+          "kind": "contains",
+          "text": "Never transfer automatically to clear a conflict."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 256,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 90,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "na"
+        },
+        {
+          "text": "not adopted",
+          "x": 76,
+          "y": 113,
+          "anchor": "middle",
+          "for": [
+            "na"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M138 108H198",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "setup",
+          "x": 168,
+          "y": 96,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 90,
+          "w": 122,
+          "h": 36,
+          "rx": 8,
+          "id": "m"
+        },
+        {
+          "text": "managed",
+          "x": 261,
+          "y": 113,
+          "anchor": "middle",
+          "for": [
+            "m"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M324 108H558",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "portal transfer --confirm",
+          "x": 441,
+          "y": 96,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 560,
+          "y": 90,
+          "w": 134,
+          "h": 36,
+          "rx": 8,
+          "id": "tr"
+        },
+        {
+          "text": "transferred",
+          "x": 627,
+          "y": 113,
+          "anchor": "middle",
+          "for": [
+            "tr"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M236 128V186",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "text": "local edit",
+          "x": 226,
+          "y": 162,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "t3"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 188,
+          "w": 150,
+          "h": 56,
+          "rx": 8,
+          "id": "ed"
+        },
+        {
+          "text": "locally edited",
+          "x": 275,
+          "y": 211,
+          "anchor": "middle",
+          "for": [
+            "ed"
+          ]
+        },
+        {
+          "text": "update stops",
+          "x": 275,
+          "y": 232,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "ed"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M300 186V128",
+          "open": "end",
+          "id": "t4"
+        },
+        {
+          "text": "revert, then update",
+          "x": 312,
+          "y": 162,
+          "style": "mute",
+          "for": [
+            "t4"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M352 216H627V128",
+          "cross": {
+            "cx": 500,
+            "cy": 216,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "automatic transfer",
+          "x": 500,
+          "y": 244,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 268,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "na"
+        },
+        {
+          "text": "not adopted",
+          "x": 83,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "na"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M40 48V88",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "setup",
+          "x": 52,
+          "y": 72,
+          "style": "mono",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 90,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "m"
+        },
+        {
+          "text": "managed",
+          "x": 83,
+          "y": 113,
+          "anchor": "middle",
+          "for": [
+            "m"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M160 108H198",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "transfer --confirm",
+          "x": 200,
+          "y": 76,
+          "style": "mono",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 90,
+          "w": 152,
+          "h": 36,
+          "rx": 8,
+          "id": "tr"
+        },
+        {
+          "text": "transferred",
+          "x": 276,
+          "y": 113,
+          "anchor": "middle",
+          "for": [
+            "tr"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M40 128V196",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "text": "local edit",
+          "x": 52,
+          "y": 166,
+          "style": "mute",
+          "for": [
+            "t3"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 198,
+          "w": 150,
+          "h": 56,
+          "rx": 8,
+          "id": "ed"
+        },
+        {
+          "text": "locally edited",
+          "x": 83,
+          "y": 221,
+          "anchor": "middle",
+          "for": [
+            "ed"
+          ]
+        },
+        {
+          "text": "update stops",
+          "x": 83,
+          "y": 242,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "ed"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M120 196V128",
+          "open": "end",
+          "id": "t4"
+        },
+        {
+          "text": "revert, update",
+          "x": 132,
+          "y": 172,
+          "style": "mute",
+          "for": [
+            "t4"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M160 226H276V128",
+          "cross": {
+            "cx": 276,
+            "cy": 182,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "automatic transfer",
+          "x": 352,
+          "y": 258,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "By"
+      ],
+      "rows": [
+        [
+          "not adopted",
+          "managed",
+          "`codeflow portal setup`"
+        ],
+        [
+          "managed",
+          "transferred",
+          "`codeflow portal transfer --confirm`, deliberately"
+        ],
+        [
+          "managed",
+          "locally edited",
+          "an edit to managed runtime files; update then stops"
+        ],
+        [
+          "locally edited",
+          "managed",
+          "reverting the edit, then update"
+        ],
+        [
+          "locally edited",
+          "transferred",
+          "forbidden as an automatic way to clear the conflict"
+        ]
+      ]
+    }
+  }
+}

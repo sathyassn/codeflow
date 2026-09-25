@@ -1,0 +1,495 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "capabilities-derivation",
+    "family": "derivation",
+    "binding": "authored",
+    "question": "Where does each rendered row come from, and what checks it?",
+    "idea": "Each capability's yaml fence is read by the portal, status, orient and validate, and validate checks that its references resolve.",
+    "title": "Where a registry row comes from",
+    "kicker": "Registry",
+    "caption": "A rendered row cannot disagree with its entry, because every reader parses the same yaml fence.",
+    "states": [
+      {
+        "name": "source",
+        "mark": "layer-remote",
+        "means": "Machine-read authority"
+      },
+      {
+        "name": "reader",
+        "mark": "state",
+        "means": "Reads the fence"
+      },
+      {
+        "name": "reads",
+        "mark": "trans",
+        "means": "Reads or derives"
+      },
+      {
+        "name": "compares",
+        "mark": "todo",
+        "means": "Checked against"
+      },
+      {
+        "name": "check",
+        "mark": "human",
+        "means": "Referential check"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "each rendered row is generated from its yaml fence",
+        "source": "docs/capabilities.md#architecture",
+        "derive": "the first bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- Each rendered row is generated from that capability's yaml fence in"
+        },
+        "value": true
+      },
+      {
+        "claim": "status and orient also parse the fences",
+        "source": "docs/capabilities.md#architecture",
+        "derive": "the last bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- `codeflow status` and `codeflow orient` also parse the fences."
+        },
+        "value": true
+      },
+      {
+        "claim": "validate --docs checks that epics and ADRs resolve",
+        "source": "docs/capabilities.md#architecture",
+        "derive": "the validate bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- `codeflow validate --docs` checks referential integrity"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 250,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 96,
+          "w": 170,
+          "h": 48,
+          "rx": 4,
+          "cap": "end",
+          "id": "f"
+        },
+        {
+          "text": "yaml fence",
+          "x": 30,
+          "y": 118,
+          "style": "strong",
+          "for": [
+            "f"
+          ]
+        },
+        {
+          "text": "one per capability",
+          "x": 30,
+          "y": 136,
+          "style": "mute",
+          "for": [
+            "f"
+          ]
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M188 106C240 106 250 44 302 44",
+          "head": "end",
+          "id": "r1"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M188 114C240 114 250 100 302 100",
+          "head": "end",
+          "id": "r2"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M188 126C240 126 250 156 302 156",
+          "head": "end",
+          "id": "r3"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M188 134C240 134 250 212 302 212",
+          "head": "end",
+          "id": "r4"
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 304,
+          "y": 24,
+          "w": 196,
+          "h": 40,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "portal adapter",
+          "x": 318,
+          "y": 49,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 304,
+          "y": 80,
+          "w": 196,
+          "h": 40,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "codeflow status",
+          "x": 318,
+          "y": 105,
+          "style": "mono",
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 304,
+          "y": 136,
+          "w": 196,
+          "h": 40,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "codeflow orient",
+          "x": 318,
+          "y": 161,
+          "style": "mono",
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 304,
+          "y": 192,
+          "w": 196,
+          "h": 40,
+          "rx": 4,
+          "id": "o4"
+        },
+        {
+          "text": "validate --docs",
+          "x": 318,
+          "y": 217,
+          "style": "mono",
+          "for": [
+            "o4"
+          ]
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M502 44H560",
+          "head": "end",
+          "id": "r5"
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 562,
+          "y": 24,
+          "w": 142,
+          "h": 40,
+          "rx": 4,
+          "id": "o5"
+        },
+        {
+          "text": "registry rows",
+          "x": 576,
+          "y": 49,
+          "for": [
+            "o5"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M502 212H560",
+          "square": "end",
+          "id": "c1"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 574,
+          "cy": 212,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "text": "epics and ADRs",
+          "x": 594,
+          "y": 208,
+          "style": "strong",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "resolve",
+          "x": 594,
+          "y": 228,
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 302,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 44,
+          "rx": 4,
+          "cap": "end",
+          "id": "f"
+        },
+        {
+          "text": "yaml fence",
+          "x": 22,
+          "y": 37,
+          "style": "strong",
+          "for": [
+            "f"
+          ]
+        },
+        {
+          "text": "one per capability",
+          "x": 130,
+          "y": 37,
+          "style": "mute",
+          "for": [
+            "f"
+          ]
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M24 56V272",
+          "id": "r1"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M24 88H38",
+          "head": "end",
+          "id": "r2"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M24 140H38",
+          "head": "end",
+          "id": "r3"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M24 192H38",
+          "head": "end",
+          "id": "r4"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M24 244H38",
+          "head": "end",
+          "id": "r6"
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 40,
+          "y": 70,
+          "w": 150,
+          "h": 36,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "portal adapter",
+          "x": 52,
+          "y": 93,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M192 88H212",
+          "head": "end",
+          "id": "r5"
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 214,
+          "y": 70,
+          "w": 138,
+          "h": 36,
+          "rx": 4,
+          "id": "o5"
+        },
+        {
+          "text": "registry rows",
+          "x": 226,
+          "y": 93,
+          "for": [
+            "o5"
+          ]
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 40,
+          "y": 122,
+          "w": 200,
+          "h": 36,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "codeflow status",
+          "x": 52,
+          "y": 145,
+          "style": "mono",
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 40,
+          "y": 174,
+          "w": 200,
+          "h": 36,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "codeflow orient",
+          "x": 52,
+          "y": 197,
+          "style": "mono",
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "reader",
+          "shape": "rect",
+          "x": 40,
+          "y": 226,
+          "w": 200,
+          "h": 36,
+          "rx": 4,
+          "id": "o4"
+        },
+        {
+          "text": "validate --docs",
+          "x": 52,
+          "y": 249,
+          "style": "mono",
+          "for": [
+            "o4"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M242 244H270",
+          "square": "end",
+          "id": "c1"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 284,
+          "cy": 244,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "text": "epics and ADRs resolve",
+          "x": 40,
+          "y": 290,
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Reader",
+        "Uses the fence for",
+        "Checks"
+      ],
+      "rows": [
+        [
+          "portal adapter",
+          "the registry rows and definition tables",
+          "none"
+        ],
+        [
+          "`codeflow status`",
+          "the status overview",
+          "none"
+        ],
+        [
+          "`codeflow orient`",
+          "the session digest",
+          "none"
+        ],
+        [
+          "`codeflow validate --docs`",
+          "referential integrity",
+          "every epic and ADR resolves; a shipped entry has `verified_by`"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,590 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "adoption-update",
+    "family": "state",
+    "binding": "authored",
+    "question": "What happens to each file when I run update?",
+    "idea": "Update replaces what you never touched, merges what you edited, writes a .new file on conflict, and removes only files that cannot hold your content.",
+    "title": "What update does to each file",
+    "kicker": "How-to",
+    "caption": "No path through update overwrites an edit of yours: a conflict becomes a .new file for you to resolve.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "State of a file"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Update moves it"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Handed back to you"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Never happens"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "an unmodified managed file is replaced",
+        "source": "docs/adoption.md#technical",
+        "derive": "the unmodified row",
+        "check": {
+          "kind": "contains",
+          "text": "| Unmodified managed file | Replaced |"
+        },
+        "value": true
+      },
+      {
+        "claim": "an unmergeable edit is written beside it as .new, never clobbered",
+        "source": "docs/adoption.md#technical",
+        "derive": "the edited row",
+        "check": {
+          "kind": "contains",
+          "text": "as `<name>.new` with a report entry, never clobbered or skipped"
+        },
+        "value": true
+      },
+      {
+        "claim": "a file that could hold your content is kept and left unmanaged",
+        "source": "docs/adoption.md#technical",
+        "derive": "the no longer shipped row",
+        "check": {
+          "kind": "contains",
+          "text": "| Kept and left unmanaged, never deleted |"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 326,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 16,
+          "w": 290,
+          "h": 36,
+          "rx": 8,
+          "id": "a0"
+        },
+        {
+          "text": "unmodified managed",
+          "x": 32,
+          "y": 39,
+          "for": [
+            "a0"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M308 34H434",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 436,
+          "y": 16,
+          "w": 268,
+          "h": 36,
+          "rx": 8,
+          "id": "b0"
+        },
+        {
+          "text": "replaced",
+          "x": 452,
+          "y": 39,
+          "for": [
+            "b0"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 68,
+          "w": 290,
+          "h": 36,
+          "rx": 8,
+          "id": "a1"
+        },
+        {
+          "text": "managed, you edited it",
+          "x": 32,
+          "y": 91,
+          "for": [
+            "a1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M308 86H434",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 436,
+          "y": 68,
+          "w": 268,
+          "h": 36,
+          "rx": 8,
+          "id": "b1"
+        },
+        {
+          "text": "3-way merged",
+          "x": 452,
+          "y": 91,
+          "for": [
+            "b1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 120,
+          "w": 290,
+          "h": 36,
+          "rx": 8,
+          "id": "a2"
+        },
+        {
+          "text": "merge conflict",
+          "x": 32,
+          "y": 143,
+          "for": [
+            "a2"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M308 138H434",
+          "open": "end",
+          "id": "e2"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 436,
+          "y": 120,
+          "w": 268,
+          "h": 36,
+          "rx": 8,
+          "id": "b2"
+        },
+        {
+          "text": "<name>.new beside it",
+          "x": 452,
+          "y": 143,
+          "style": "mono",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 172,
+          "w": 290,
+          "h": 36,
+          "rx": 8,
+          "id": "a3"
+        },
+        {
+          "text": "no longer shipped, untouched",
+          "x": 32,
+          "y": 195,
+          "for": [
+            "a3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M308 190H434",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 436,
+          "y": 172,
+          "w": 268,
+          "h": 36,
+          "rx": 8,
+          "id": "b3"
+        },
+        {
+          "text": "removed",
+          "x": 452,
+          "y": 195,
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 224,
+          "w": 290,
+          "h": 36,
+          "rx": 8,
+          "id": "a4"
+        },
+        {
+          "text": "no longer shipped, may hold yours",
+          "x": 32,
+          "y": 247,
+          "for": [
+            "a4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M308 242H434",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 436,
+          "y": 224,
+          "w": 268,
+          "h": 36,
+          "rx": 8,
+          "id": "b4"
+        },
+        {
+          "text": "kept, unmanaged",
+          "x": 452,
+          "y": 247,
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M160 290H570V282",
+          "cross": {
+            "cx": 365,
+            "cy": 290,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "your edit overwritten",
+          "x": 365,
+          "y": 316,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 450,
+      "elongation_max": 1.45,
+      "reason": "Each file case keeps its own before and after row at phone width.",
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 30,
+          "rx": 8,
+          "id": "a0"
+        },
+        {
+          "text": "unmodified managed",
+          "x": 20,
+          "y": 30,
+          "for": [
+            "a0"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M40 44V54",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 40,
+          "y": 56,
+          "w": 312,
+          "h": 26,
+          "rx": 8,
+          "id": "b0"
+        },
+        {
+          "text": "replaced",
+          "x": 52,
+          "y": 74,
+          "for": [
+            "b0"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 88,
+          "w": 344,
+          "h": 30,
+          "rx": 8,
+          "id": "a1"
+        },
+        {
+          "text": "managed, you edited it",
+          "x": 20,
+          "y": 108,
+          "for": [
+            "a1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M40 122V132",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 40,
+          "y": 134,
+          "w": 312,
+          "h": 26,
+          "rx": 8,
+          "id": "b1"
+        },
+        {
+          "text": "3-way merged",
+          "x": 52,
+          "y": 152,
+          "for": [
+            "b1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 166,
+          "w": 344,
+          "h": 30,
+          "rx": 8,
+          "id": "a2"
+        },
+        {
+          "text": "merge conflict",
+          "x": 20,
+          "y": 186,
+          "for": [
+            "a2"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M40 200V210",
+          "open": "end",
+          "id": "e2"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 40,
+          "y": 212,
+          "w": 312,
+          "h": 26,
+          "rx": 8,
+          "id": "b2"
+        },
+        {
+          "text": "<name>.new beside it",
+          "x": 52,
+          "y": 230,
+          "style": "mono",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 244,
+          "w": 344,
+          "h": 30,
+          "rx": 8,
+          "id": "a3"
+        },
+        {
+          "text": "no longer shipped, untouched",
+          "x": 20,
+          "y": 264,
+          "for": [
+            "a3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M40 278V288",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 40,
+          "y": 290,
+          "w": 312,
+          "h": 26,
+          "rx": 8,
+          "id": "b3"
+        },
+        {
+          "text": "removed",
+          "x": 52,
+          "y": 308,
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 322,
+          "w": 344,
+          "h": 30,
+          "rx": 8,
+          "id": "a4"
+        },
+        {
+          "text": "no longer shipped, may hold yours",
+          "x": 20,
+          "y": 342,
+          "for": [
+            "a4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M40 356V366",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 40,
+          "y": 368,
+          "w": 312,
+          "h": 26,
+          "rx": 8,
+          "id": "b4"
+        },
+        {
+          "text": "kept, unmanaged",
+          "x": 52,
+          "y": 386,
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M24 412H300",
+          "cross": {
+            "cx": 162,
+            "cy": 412,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "your edit overwritten",
+          "x": 162,
+          "y": 440,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "File before update",
+        "After update"
+      ],
+      "rows": [
+        [
+          "unmodified managed",
+          "replaced"
+        ],
+        [
+          "managed, you edited it",
+          "3-way merged"
+        ],
+        [
+          "merge conflict",
+          "<name>.new beside it"
+        ],
+        [
+          "no longer shipped, untouched",
+          "removed"
+        ],
+        [
+          "no longer shipped, may hold yours",
+          "kept, unmanaged"
+        ],
+        [
+          "an edit of yours",
+          "never overwritten"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,342 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "adoption-body-of-work",
+    "family": "state",
+    "binding": "authored",
+    "question": "Where does a task land, and where does the epic land?",
+    "idea": "Tasks land one at a time on the integration branch, and only one human-merged pull request moves the finished body to main.",
+    "title": "Where a body of work lands",
+    "kicker": "How-to",
+    "caption": "The integration branch is never a backdoor: main still changes only through one pull request a person merges.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "Branch the work is on"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Lands on"
+      },
+      {
+        "name": "human",
+        "mark": "human",
+        "means": "Human merge"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Forbidden route"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the integration branch is never a backdoor to main",
+        "source": "docs/adoption.md#technical",
+        "derive": "the backdoor bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- The integration branch is never a backdoor to `main`, which stays"
+        },
+        "value": true
+      },
+      {
+        "claim": "one human-reviewed PR goes from the integration branch into main",
+        "source": "docs/adoption.md#technical",
+        "derive": "step 5",
+        "check": {
+          "kind": "contains",
+          "text": "5. Raise one human-reviewed PR from the integration branch into `main`."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 192,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 60,
+          "w": 160,
+          "h": 36,
+          "rx": 8,
+          "id": "tk"
+        },
+        {
+          "text": "task/TSK-NNN",
+          "x": 96,
+          "y": 83,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "tk"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M178 78H280",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "integrate, one at a time",
+          "x": 229,
+          "y": 44,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 282,
+          "y": 60,
+          "w": 190,
+          "h": 36,
+          "rx": 8,
+          "id": "ig"
+        },
+        {
+          "text": "integration/<epic>",
+          "x": 377,
+          "y": 83,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "ig"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M474 78H574",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 524,
+          "cy": 78,
+          "r": 9,
+          "id": "h"
+        },
+        {
+          "text": "one human-merged PR",
+          "x": 524,
+          "y": 44,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "h",
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 576,
+          "y": 60,
+          "w": 128,
+          "h": 36,
+          "rx": 8,
+          "id": "mn"
+        },
+        {
+          "text": "main",
+          "x": 640,
+          "y": 83,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "mn"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M96 98V150H640V98",
+          "cross": {
+            "cx": 370,
+            "cy": 150,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "a task straight to main",
+          "x": 370,
+          "y": 178,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 268,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 180,
+          "h": 36,
+          "rx": 8,
+          "id": "tk"
+        },
+        {
+          "text": "task/TSK-NNN",
+          "x": 98,
+          "y": 33,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "tk"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M60 48V98",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "integrate, one at a time",
+          "x": 72,
+          "y": 78,
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 100,
+          "w": 220,
+          "h": 36,
+          "rx": 8,
+          "id": "ig"
+        },
+        {
+          "text": "integration/<epic>",
+          "x": 118,
+          "y": 123,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "ig"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M60 138V198",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 166,
+          "r": 9,
+          "id": "h"
+        },
+        {
+          "text": "one human-merged PR",
+          "x": 78,
+          "y": 171,
+          "style": "mute",
+          "for": [
+            "h",
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 200,
+          "w": 180,
+          "h": 36,
+          "rx": 8,
+          "id": "mn"
+        },
+        {
+          "text": "main",
+          "x": 98,
+          "y": 223,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "mn"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M190 28H300V218H190",
+          "cross": {
+            "cx": 300,
+            "cy": 124,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "straight to main",
+          "x": 352,
+          "y": 258,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "By"
+      ],
+      "rows": [
+        [
+          "`task/TSK-NNN-<slug>`",
+          "`integration/<epic>`",
+          "`codeflow integrate` or a PR, one task at a time, with affected gates after each"
+        ],
+        [
+          "`integration/<epic>`",
+          "`main`",
+          "one human-reviewed, human-merged PR"
+        ],
+        [
+          "`task/TSK-NNN-<slug>`",
+          "`main`",
+          "forbidden"
+        ]
+      ]
+    }
+  }
+}

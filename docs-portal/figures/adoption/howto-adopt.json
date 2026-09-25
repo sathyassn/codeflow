@@ -1,0 +1,410 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "adoption-adopt",
+    "family": "state",
+    "binding": "authored",
+    "question": "Which state is my repository in after each adoption step?",
+    "idea": "Init takes an empty directory or an existing repository to initialized, customize takes it to customized, and a higher tier is another additive init.",
+    "title": "The states of a repository while adopting",
+    "kicker": "How-to",
+    "caption": "An existing repository reaches initialized on a branch you review, never by forcing past a collision.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "Repository state"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Step"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Forbidden step"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "do not use --force to get past a collision",
+        "source": "docs/adoption.md#technical",
+        "derive": "step 5",
+        "check": {
+          "kind": "contains",
+          "text": "Do not use `--force` to get past a collision."
+        },
+        "value": true
+      },
+      {
+        "claim": "moving up a tier is additive and idempotent",
+        "source": "docs/adoption.md#technical",
+        "derive": "the tier upgrade bullet",
+        "check": {
+          "kind": "contains",
+          "text": "Each step is additive and idempotent."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 222,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 30,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "em"
+        },
+        {
+          "text": "empty directory",
+          "x": 91,
+          "y": 53,
+          "anchor": "middle",
+          "for": [
+            "em"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 150,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "ex"
+        },
+        {
+          "text": "existing repository",
+          "x": 91,
+          "y": 173,
+          "anchor": "middle",
+          "for": [
+            "ex"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M168 48C230 48 240 90 290 90",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "init, commits for you",
+          "x": 176,
+          "y": 34,
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M168 160C230 160 240 104 290 104",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "on a branch, you commit",
+          "x": 16,
+          "y": 136,
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 292,
+          "y": 80,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "in"
+        },
+        {
+          "text": "initialized",
+          "x": 352,
+          "y": 103,
+          "anchor": "middle",
+          "for": [
+            "in"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M414 98H538",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "text": "/cf-customize",
+          "x": 476,
+          "y": 88,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "t3"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 540,
+          "y": 80,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "cu"
+        },
+        {
+          "text": "customized",
+          "x": 605,
+          "y": 103,
+          "anchor": "middle",
+          "for": [
+            "cu"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M605 78V50H352V78",
+          "head": "end",
+          "id": "t4"
+        },
+        {
+          "text": "re-run init at a higher tier",
+          "x": 478,
+          "y": 40,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t4"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M168 178H330V118",
+          "cross": {
+            "cx": 250,
+            "cy": 178,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "--force past a collision",
+          "x": 250,
+          "y": 210,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 256,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 160,
+          "h": 36,
+          "rx": 8,
+          "id": "em"
+        },
+        {
+          "text": "empty directory",
+          "x": 88,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "em"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 192,
+          "y": 10,
+          "w": 160,
+          "h": 36,
+          "rx": 8,
+          "id": "ex"
+        },
+        {
+          "text": "existing repository",
+          "x": 272,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "ex"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M88 48V90C88 104 120 104 140 118",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "init",
+          "x": 26,
+          "y": 84,
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M272 48V90C272 104 240 104 220 118",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "init on a branch",
+          "x": 262,
+          "y": 84,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M344 48V138H262",
+          "cross": {
+            "cx": 344,
+            "cy": 94,
+            "size": 11
+          },
+          "id": "f1"
+        },
+        {
+          "text": "--force past a collision",
+          "x": 352,
+          "y": 184,
+          "anchor": "end",
+          "style": "mono",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 100,
+          "y": 120,
+          "w": 160,
+          "h": 36,
+          "rx": 8,
+          "id": "in"
+        },
+        {
+          "text": "initialized",
+          "x": 180,
+          "y": 143,
+          "anchor": "middle",
+          "for": [
+            "in"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M130 158V206",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "text": "/cf-customize",
+          "x": 8,
+          "y": 186,
+          "style": "mono",
+          "for": [
+            "t3"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 60,
+          "y": 208,
+          "w": 160,
+          "h": 36,
+          "rx": 8,
+          "id": "cu"
+        },
+        {
+          "text": "customized",
+          "x": 140,
+          "y": 231,
+          "anchor": "middle",
+          "for": [
+            "cu"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "By"
+      ],
+      "rows": [
+        [
+          "empty directory",
+          "initialized",
+          "`codeflow init`, which makes the scaffold commit"
+        ],
+        [
+          "existing repository",
+          "initialized",
+          "`codeflow init` on an adoption branch; you review and commit"
+        ],
+        [
+          "existing repository",
+          "initialized",
+          "forbidden: `--force` past a collision"
+        ],
+        [
+          "initialized",
+          "customized",
+          "`/cf-customize`, at standard or full"
+        ],
+        [
+          "customized",
+          "initialized at a higher tier",
+          "re-running `init` at a higher tier"
+        ]
+      ]
+    }
+  }
+}

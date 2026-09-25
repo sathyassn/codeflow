@@ -38,5 +38,29 @@
     { "source": "docs/CODE_OF_CONDUCT.md", "class": "pass-through", "reason": "governance" },
     { "source": "docs/LICENSE.md", "class": "pass-through", "reason": "governance" }
   ],
+  "figures": [
+    { "declaration": "docs-portal/figures/product/concept.json", "route": "orient/product", "panel": "concept" },
+    { "declaration": "docs-portal/figures/product/architecture.json", "route": "orient/product", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/product/technical.json", "route": "orient/product", "panel": "technical" },
+    { "declaration": "docs-portal/figures/capabilities/concept.json", "route": "orient/capabilities", "panel": "concept" },
+    { "declaration": "docs-portal/figures/capabilities/architecture.json", "route": "orient/capabilities", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/capabilities/technical.json", "route": "orient/capabilities", "panel": "technical" },
+    { "declaration": "docs-portal/figures/adoption/concept.json", "route": "orient/adoption", "panel": "concept" },
+    { "declaration": "docs-portal/figures/adoption/architecture.json", "route": "orient/adoption", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/adoption/technical.json", "route": "orient/adoption", "panel": "technical" },
+    { "declaration": "docs-portal/figures/adoption/howto-adopt.json", "route": "orient/adoption", "panel": "technical", "anchor": "adopt-a-new-or-existing-repository" },
+    { "declaration": "docs-portal/figures/adoption/howto-body.json", "route": "orient/adoption", "panel": "technical", "anchor": "a-body-of-work-the-integration-branch" },
+    { "declaration": "docs-portal/figures/adoption/howto-daily.json", "route": "orient/adoption", "panel": "technical", "anchor": "the-daily-flow" },
+    { "declaration": "docs-portal/figures/adoption/howto-install.json", "route": "orient/adoption", "panel": "technical", "anchor": "install-the-binary" },
+    { "declaration": "docs-portal/figures/adoption/howto-tests.json", "route": "orient/adoption", "panel": "technical", "anchor": "configure-test-targets" },
+    { "declaration": "docs-portal/figures/adoption/howto-update.json", "route": "orient/adoption", "panel": "technical", "anchor": "update" },
+    { "declaration": "docs-portal/figures/cap-010/concept.json", "route": "orient/capabilities/CAP-010-duo-model-orchestration", "panel": "concept" },
+    { "declaration": "docs-portal/figures/cap-010/architecture.json", "route": "orient/capabilities/CAP-010-duo-model-orchestration", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/cap-010/technical.json", "route": "orient/capabilities/CAP-010-duo-model-orchestration", "panel": "technical" },
+    { "declaration": "docs-portal/figures/cap-015/concept.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "concept" },
+    { "declaration": "docs-portal/figures/cap-015/architecture.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/cap-015/technical.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "technical" },
+    { "declaration": "docs-portal/figures/cap-015/howto-adopt.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "technical", "anchor": "adopt-and-build-the-portal" }
+  ],
   "base": "/"
 }
