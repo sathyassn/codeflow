@@ -15,20 +15,20 @@ This is a supporting flow inside `cf-model-orchestrator` for non-trivial work.
 
 Docs for **this or any consuming repo** reuse the same utility design
 system as `cf-present`: author repository sources; the portal applies
-tokens, altitude and the figure grammar. Do not clone the evidence board
-(`docs/verification/tsk-014-w5/`) or copy present Comment chrome or lifecycle.
+tokens, altitude and the figure grammar. Do not copy present Comment chrome
+or lifecycle.
 
 **Before theming, layering, or authoring portal pages, load in order:**
 
-1. [resources/utility-presentation-system.md](resources/utility-presentation-system.md):
-   shared doctrine, byte-identical with `cf-present` (ADR-0063)
-2. [resources/figure-grammar.md](resources/figure-grammar.md): families,
+1. [resources/explanation-method.md](resources/explanation-method.md):
+   reader, altitude, carrier, draft, check
+2. [resources/utility-presentation-system.md](resources/utility-presentation-system.md):
+   shared doctrine (ADR-0063)
+3. [resources/figure-grammar.md](resources/figure-grammar.md): families,
    rules, altitude (ADR-0068)
-3. [resources/design-system/](resources/design-system/README.md): the
-   reference kit
-4. [references/visual-craft.md](references/visual-craft.md): portal
-   profile and page composition gate
-5. Other references as the task requires
+4. [resources/design-system/](resources/design-system/README.md): the kit
+5. [references/visual-craft.md](references/visual-craft.md): portal profile
+6. Other references as the task requires
 
 Pass the page composition gate in `references/visual-craft.md`. A prose-card
 wall, a marketing layout, or a page that is the source Markdown re-rendered

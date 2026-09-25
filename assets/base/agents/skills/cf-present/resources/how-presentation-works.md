@@ -1,6 +1,11 @@
-# How presentation works (how to think)
+# How presentation works (what the human sees)
 
-**Required.** Read this before writing any present JSON.
+**Load order:** the one list in [SKILL.md](../SKILL.md).
+
+The way to think before any explanation is `explanation-method.md`: reader
+and question, altitude, carrier, draft, check. This file adds what is
+particular to present: what the human sees when the surface opens, why block
+order is attention order, and a worked contrast.
 
 You are not “filling a schema.” You are staging **what a human will see** when
 the review surface opens. The JSON is only the handoff format. The operator
@@ -33,13 +38,10 @@ means they start by *seeing* a relationship.
 
 Chrome does not fix weak content. It only frames it.
 
-The evidence board that settled utility craft, `docs/verification/tsk-014-w5/`,
-is **evidence**, not a document to clone; its baselines are the plain chat,
-Markdown and HTML controls a figure must beat. Do not reproduce its cases,
-portal families or sample comments. Author **this session's** subject into
-catalog blocks so the same chrome, tokens, and Comment system can be used
-again, and draw figures to `figure-grammar.md`. Portal work is a different
-skill (`cf-docs-portal`) on the same craft.
+Author **this session's** subject into catalog blocks so the same chrome,
+tokens, and Comment system can be used again, and draw figures to
+`figure-grammar.md`. Portal work is a different skill (`cf-docs-portal`) on the
+same craft.
 
 ---
 
@@ -80,75 +82,17 @@ encodes them (figure/tree/table/media/diagram), or you stay in chat.
 
 ---
 
-## 3. How you should think (before any JSON)
+## 3. Before any JSON
 
-Work **backward from the open page**, not forward from your notes.
-
-### Step A — Name the job
-
-In one sentence: what should the human be able to **do or decide** after this
-surface that they could not do from chat? If you cannot name it, do not open
-present.
-
-### Step B — Name the 5‑second picture
-
-With almost no reading, what should still be true?
-
-Examples of real 5‑second pictures:
-
-- “Two lanes only meet at settle.”
-- “Ship vs hold—these two options, this one open risk.”
-- “This diff is the whole dispute.”
-
-If your honest answer is “they’ll need to read the bullets,” you do not have a
-presentation yet. You have a memo.
-
-### Step C — Choose one primary carrier
-
-Pick the **single** instrument that makes that 5‑second picture true **without
-depending on sentences**. That block goes **first** (or immediately after a
-one-line frame if the figure needs a title in prose—still keep prose short).
-
-Ask: *If I delete every sentence on the page and leave only this carrier’s
-structure, is the governing idea still there?*  
-If no → wrong carrier, or the idea is not ready to present.
-
-### Step D — Support, then prove, then ask
-
-Altitude is a **reading path**, not section labels:
-
-1. **Concept** — primary carrier + at most a short frame of prose  
-2. **Architecture / mechanism** — only if the claim needs a second structural
-   view (not a second essay)  
-3. **Technical** — status, diff, code, table: things someone can verify or mark  
-4. **Ask** — one `feedback_prompt` that matches the job from Step A  
-
-Do not “cover everything you know.” Present is expensive. Every block is another
-band of attention. Prefer fewer, heavier instruments over many light ones.
-
-### Step E — Mentally walk the page
-
-Top to bottom, say out loud what the eye hits:
-
-1. …  
-2. …  
-3. …  
-
-If the walk is “paragraph, list, list, three cards, paragraph,” you have
-restyled chat. Stop. Rebuild from Step B.
-
-If the walk is “figure of the dispute → two options → evidence rows → one ask,”
-you are thinking correctly—even before JSON exists.
-
-### Step F — Only then encode
-
-Now write JSON as a **faithful encoding** of that walk. Stable `id`s for blocks
-that will persist across revisions (so comments stay meaningful). No secrets,
-no paths, no performance of thoroughness.
+Work through `explanation-method.md` first: its stages settle the reader, the
+altitudes and the carrier, and its check decides whether the page opens. On
+present, the stage 3 carrier is the first block, and the draft is the page
+walked top to bottom in plain words before JSON encodes it, with stable `id`s
+for blocks that persist across revisions.
 
 ---
 
-## 4. Mental models that prevent stupid presents
+## 4. Mental models for present blocks
 
 ### “Blocks are not headings”
 
@@ -216,18 +160,6 @@ Same facts. Different **responsibility** for structure. Only the second is a
 present.
 
 ---
-
-## 6. Self-check (judgment, not ceremony)
-
-Before `present open`:
-
-1. Can I describe the **5‑second picture** without listing bullets?  
-2. Is the **first** block the instrument that creates that picture?  
-3. If sentences vanished, would the **structure** still argue?  
-4. Does each block earn its place on the walk, or is it leftover chat?  
-5. Does the final ask match the job—and can a human mark the page to disagree?
-
-If any answer is weak, do not open. Restructure or stay in chat.
 
 Catalog fields and envelope rules:
 [references/document-authoring.md](../references/document-authoring.md).  

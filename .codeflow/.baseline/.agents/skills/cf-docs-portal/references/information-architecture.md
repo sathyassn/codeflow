@@ -9,16 +9,10 @@ stay in the repository: the portal points to their folders from one generated
 pointer page and does not list them page by page. A portal is a reading and
 navigation view, not another documentation authority and not a folder browser.
 
-Use progressive depth where the source material supports it:
-
-```text
-concept and purpose
-  -> capability or user journey
-    -> system, surface, or owned area
-      -> technical reference, code, and evidence; records pointed to
-```
-
-Collapse a layer when it adds no useful distinction. A tiny repository with a
+Use progressive depth where the source material supports it: the layer order
+is `visual-craft.md` section 3, and the altitudes inside a page, with the
+reader of each, are `resources/explanation-method.md` stage 1. Collapse a
+layer when it adds no useful distinction. A tiny repository with a
 README and a few short notes usually needs better Markdown, not a portal.
 
 ## Single-project repository

@@ -72,6 +72,8 @@ blobs whose signatures, headers, dimensions, and aggregate pixel/byte budgets
 are verified and recorded in evidence. Remote images, active
 SVG/PDF copies, traversal, unsupported schemes, and broken targets fail closed;
 ordinary HTTPS and mail links remain links and are never fetched.
+For authors: on the portal and in present a figure is inline SVG through the
+figure block, and in chat and a README it is the ASCII chat form.
 Pin source links to the evidenced commit on known GitHub, GitLab, and Bitbucket
 HTTPS repository URLs. A committed document excluded from the portal remains a
 pinned provider file link. A relative link to a committed directory uses the

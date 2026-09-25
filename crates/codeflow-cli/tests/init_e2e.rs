@@ -14,6 +14,7 @@ const PRESENT_SKILL_FILES: &[&str] = &[
     "SKILL.md",
     "references/document-authoring.md",
     "references/visual-craft.md",
+    "resources/explanation-method.md",
     "resources/how-presentation-works.md",
     "resources/utility-presentation-system.md",
     "resources/figure-grammar.md",

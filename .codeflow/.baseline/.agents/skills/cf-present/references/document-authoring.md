@@ -1,11 +1,10 @@
 # `cf-present` document authoring reference
 
-**Thinking first:**  
-[../resources/how-presentation-works.md](../resources/how-presentation-works.md)
-explains what the human sees and how to choose instruments. Load it **before**
-this page. This file is the **encoding** reference (envelope, fields, limits)—
-not a substitute for judgment about structure. Encode **this session's**
-subject. Do not clone the evidence board (`docs/verification/tsk-014-w5/`).
+**Load order:** the one list in [SKILL.md](../SKILL.md).
+
+This file is the **encoding** reference (envelope, fields, limits) and comes
+last: judgment about structure is settled before it. Encode **this session's**
+subject.
 
 The machine contract is
 `.codeflow/schemas/present/document-v1.schema.json`. The runtime is
@@ -73,15 +72,6 @@ nothing. Use figures, trees, tables, diffs, media, or a justified bounded HTML
 composition only when their position, connection, scale, state, or actual image
 carries meaning. If removing the sentences leaves no useful relationship, the
 surface has not earned its visual claim.
-
-**Required first:**
-[../resources/how-presentation-works.md](../resources/how-presentation-works.md),
-then
-[../resources/utility-presentation-system.md](../resources/utility-presentation-system.md),
-then [visual-craft.md](visual-craft.md). Encode only after the page walk is
-clear. Prefer
-[../resources/present-document.example.json](../resources/present-document.example.json)
-as shape (carrier first)—not a narrative-only bar.
 
 ## Useful shapes
 

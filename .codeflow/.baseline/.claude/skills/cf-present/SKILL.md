@@ -11,8 +11,7 @@ page application per response.
 
 Each invocation **reuses the utility design system**. Author **this session's**
 subject into catalog blocks; the runtime owns chrome, themes, and Comment. Do
-not clone the design-exploration board at `docs/verification/tsk-014-w5/`,
-rebuild Comment UI, or invent a second visual language.
+not rebuild Comment UI or invent a second visual language.
 
 A supporting flow inside `cf-model-orchestrator` for non-trivial repository
 work: it changes how a result is reviewed, never the accepted plan, model
@@ -53,15 +52,16 @@ Block order is attention order; block **type** sets how a claim is
 perceived.
 **Before writing blocks or calling `present open`, load in order:**
 
-1. [how-presentation-works](resources/how-presentation-works.md): what
-   the human sees, instrument choice
-2. [utility-presentation-system](resources/utility-presentation-system.md):
-   system craft, Comment lifecycle, fail-closed anti-patterns
-3. [figure-grammar](resources/figure-grammar.md): families, rules
-4. [design-system kit](resources/design-system/README.md)
-5. [visual-craft](references/visual-craft.md): checklist
-6. [document-authoring](references/document-authoring.md): fields **after**
-   the page walk settles
+1. [explanation-method](resources/explanation-method.md): reader,
+   altitude, carrier, draft, check
+2. [how-presentation-works](resources/how-presentation-works.md): what
+   the human sees
+3. [utility-presentation-system](resources/utility-presentation-system.md):
+   craft, Comment lifecycle, anti-patterns
+4. [figure-grammar](resources/figure-grammar.md): families, rules
+5. [design-system kit](resources/design-system/README.md)
+6. [visual-craft](references/visual-craft.md): checklist
+7. [document-authoring](references/document-authoring.md): fields last
 
 **Choose blocks by information shape.** A visual must communicate one
 relationship in one grammar family under its twelve rules, never decorate

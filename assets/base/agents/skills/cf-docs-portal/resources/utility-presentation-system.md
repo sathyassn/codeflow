@@ -1,11 +1,12 @@
 # Utility presentation system (shared skill resource)
 
 **Status:** normative for every `cf-present` and `cf-docs-portal` invocation.
-This file is byte-identical in both skills; the figure doctrine it points to is
-`figure-grammar.md` beside it, also byte-identical; the profile-specific rules
-live in each skill's `references/visual-craft.md`. The durable architecture
-record is `docs/architecture/utility-presentation.md` (ADR-0053, ADR-0063,
-ADR-0068).
+This file is byte-identical in both skills; the explanation method that comes
+before it is `explanation-method.md` beside it, and the figure doctrine it
+points to is `figure-grammar.md`, both also byte-identical; the
+profile-specific rules live in each skill's `references/visual-craft.md`. The
+durable architecture record is `docs/architecture/utility-presentation.md`
+(ADR-0053, ADR-0063, ADR-0068).
 **Product name:** CodeFlow **utility presentation system**.
 **Not:** product brand, consuming-app design system, free-form agent HTML, or
 internal exploration codenames.
@@ -29,10 +30,11 @@ The evidence board that settled this system is `docs/verification/tsk-014-w5/`:
 its `shared/svg.js` is the mark vocabulary the figure grammar distils, and its
 `baselines/` (plain chat, plain Markdown and plain HTML for every scorable
 surface) are the negative controls every figure must beat. It is **evidence
-only**: never re-render its cases, portal families or comments as a present
-session, a portal page, or product HTML. Each invocation applies the same craft
-to **new** subject matter. Comment is present-only chrome the runtime already
-owns; the portal has **no** Comment lifecycle.
+only**. Do not clone it: never re-render its cases, portal families or
+comments as a present session, a portal page, or product HTML. Each
+invocation applies the same craft to **new** subject matter. Comment is
+present-only chrome the runtime already owns; the portal has **no** Comment
+lifecycle.
 
 `cf-design` stays product-generic. It does not own this utility.
 
@@ -125,7 +127,7 @@ not be promised in a source or a document.
 | Table | Markdown table | `table` |
 | Hierarchy | **unsupported** in the portal (use a structure figure) | `tree` |
 | Code, diff, evidence | fenced code | `code` / `diff` / `status` |
-| Media | image with committed source | `media` |
+| Media (a screenshot or photograph) | a committed PNG, JPEG, GIF or WebP image; an SVG file fails closed | `media` |
 | Callout | not a carrier | `callout`, sparingly |
 | Reading and framing | Markdown prose and lists | `narrative` / `bullets` / `comparison` / `decision` / `disclosure` / `feedback_prompt` |
 | Mermaid | **unsupported**: a Mermaid fence renders as plain code | `diagram` block, supporting form only, never the primary carrier |
@@ -133,6 +135,29 @@ not be promised in a source or a document.
 Unsupported on both surfaces: arbitrary diagram syntaxes beyond the forms
 above. In the portal, hierarchy trees and Mermaid are also unsupported; use a
 family figure there.
+
+### Screenshots and raster images
+
+A screenshot shows a surface as it is and never a relationship; a
+relationship is drawn in a family.
+
+- Capture CodeFlow utility chrome (a portal or present screen) in the
+  Graphite skin in light at 2x, unless the subject is a skin or a mode. A
+  screenshot of a consuming project's own product keeps that product's
+  default appearance.
+- Crop to the surface plus a margin of 16 CSS px on every side (32 image
+  pixels at 2x); this doctrine owns that margin.
+- Annotate only with numbered markers keyed in the caption; never draw arrows
+  on it.
+- Write alt text that names the surface and its state.
+- Save chrome as PNG and photographs as WebP, inside the adapter's media
+  limits (`scripts/adapter.mjs` in the portal): 8 MiB per file
+  (`MAX_MEDIA_BYTES`), 64 MiB in all (`MAX_TOTAL_MEDIA_BYTES`), and the
+  dimension and pixel checks `content-contract.md` records.
+- Commit it beside its source, in a folder named for the page.
+- Refresh it when the surface changes.
+
+An imported raster diagram is never a carrier: redraw it in a family.
 
 ---
 
@@ -146,16 +171,10 @@ a teaser dump.
 
 ### Altitude grammar
 
-Figures lead at every altitude and in every how-to section; the full contract
-(reader question, families, prose role per altitude) is `figure-grammar.md`
-section 3.
-
-| Altitude | Job | Figure families |
-|----------|-----|-----------------|
-| **Concept** | What it is, who it is for, what it is not, in ~5s | structure, flow, extent |
-| **Architecture** | How the parts relate and where the boundaries are, in ~20s | structure, layering, derivation, graph |
-| **Technical** | What exactly holds, in what order, how far; evidence and gates | sequence, state, coverage, extent, with status, tables, code and diff for lookup |
-| **How-to section** | What to do, in what order, what proves it worked | sequence, state or extent |
+Figures lead at every altitude and in every how-to section. The altitude
+contract (reader question, families, prose role per altitude) is stated once,
+in `figure-grammar.md` section 3; the reader of each altitude is named in
+`explanation-method.md` stage 1.
 
 ### Type roles (author roles, not font names)
 

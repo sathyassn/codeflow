@@ -469,6 +469,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/explanation-method.md"
+dest = ".claude/skills/cf-present/resources/explanation-method.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/resources/utility-presentation-system.md"
 dest = ".claude/skills/cf-present/resources/utility-presentation-system.md"
 ownership = "managed"
@@ -594,6 +600,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-docs-portal/references/visual-craft.md"
 dest = ".claude/skills/cf-docs-portal/references/visual-craft.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/explanation-method.md"
+dest = ".claude/skills/cf-docs-portal/resources/explanation-method.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -1012,6 +1024,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-present/resources/explanation-method.md"
+dest = ".agents/skills/cf-present/resources/explanation-method.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-present/resources/utility-presentation-system.md"
 dest = ".agents/skills/cf-present/resources/utility-presentation-system.md"
 ownership = "managed"
@@ -1134,6 +1152,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-docs-portal/references/visual-craft.md"
 dest = ".agents/skills/cf-docs-portal/references/visual-craft.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-docs-portal/resources/explanation-method.md"
+dest = ".agents/skills/cf-docs-portal/resources/explanation-method.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

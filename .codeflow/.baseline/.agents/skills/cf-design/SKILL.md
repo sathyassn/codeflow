@@ -41,7 +41,8 @@ does not settle how a surface must be composed, and an established system does
 not settle a genuinely new explanation, collection, comparison, journey, or
 interaction. Resolve each at the rung its own evidence requires. Do not promote
 a tweak into a redesign, and do not use an existing system as an excuse to
-avoid resolving something genuinely new.
+avoid resolving something genuinely new. Utility surfaces (portal, present)
+load `cf-docs-portal` or `cf-present` instead.
 
 ## 2. Inspect before inventing
 

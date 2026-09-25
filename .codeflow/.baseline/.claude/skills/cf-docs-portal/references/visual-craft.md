@@ -1,25 +1,17 @@
 # `cf-docs-portal` visual craft
 
-**Required load order (do not skip):**
-
-1. [resources/utility-presentation-system.md](../resources/utility-presentation-system.md)
-   is the shared doctrine: composition rule, page classes, supported carriers, tokens
-2. This file is the portal profile: page composition gate, layers, verification
-3. [information-architecture.md](information-architecture.md) before source roots / layers
-4. [content-contract.md](content-contract.md) before source interpretation changes
-5. [operations.md](operations.md) before install / publish / acceptance evidence
-6. Prefer [resources/portal-page-shape.example.md](../resources/portal-page-shape.example.md)
-   as the shape of an explanatory page
+**Load order:** the one list in [SKILL.md](../SKILL.md).
 
 If a page violates the canonical resource’s anti-patterns or fails the portal
 composition gate, **do not** treat it as craft-complete. Fix sources or refuse
 decorative portal chrome.
 
 `cf-design` stays product-generic. This skill is **utility portal** only.
-Author repository sources for this project or any consuming project. Do not
-clone the evidence board (`docs/verification/tsk-014-w5/`, whose baselines are
-the negative controls) or copy present Comment chrome; draw figures to
-`resources/figure-grammar.md`.
+Author repository sources for this project or any consuming project, do not
+copy present Comment chrome, and draw figures to
+`resources/figure-grammar.md`. Prefer
+[resources/portal-page-shape.example.md](../resources/portal-page-shape.example.md)
+as the shape of an explanatory page.
 
 ---
 
@@ -40,21 +32,38 @@ the negative controls) or copy present Comment chrome; draw figures to
 A page that fails this gate is not craft-complete: fix the source composition
 or refuse decorative chrome.
 
-## 1. How to think about a portal page
+## 1. How a portal page thinks
 
 The reader lands in a **docs shell** (nav, crumbs, search), not a session
-review. Your job is still structural: what do they **see** in the first
-screen of this layer, and does architecture use **layout** (a family
-figure, a table) or only more prose under a heading?
+review. One page taken through `resources/explanation-method.md`: the git
+discipline page of a consuming repository whose remote protection has been
+verified active. Each panel names its reader, the question the reader leaves
+with, and the family that answers it.
 
-- The **Concept** panel orients: one mental model, not a dump of every capability.
-- The **Architecture** panel must work if sentences thin out: nodes and edges,
-  not caption chips restating paragraphs.
-- The **Technical** panel is for lookup and evidence, not another essay.
+| Panel | Reader | Question | Family and what it draws |
+|---|---|---|---|
+| Concept | someone deciding whether CodeFlow's enforcement fits their repository | what does it enforce, and what does it leave to people | structure: the repository and its remote as two regions, the four planes placed in them, the human merge as the one decision no plane makes |
+| Architecture | an engineer who will change or add a gate | which plane covers which moment of a change, and which one is the boundary | layering: hooks, git-guard, CI and remote protection over edit to merge |
+| Technical | a reviewer checking a rule | which plane enforces each rule, and is any rule unclaimed | coverage: rules against planes, one mark per cell, with the table twin beside it |
+| How-to: land a change | someone landing a change now | what do I do before the first edit, and what tells me it worked | sequence: worktree list, fetch, `codeflow work start`, first edit |
 
-Same utility craft as present; different job (durable source-linked guide). Do
-not copy present Comment chrome. Shape example:
-[resources/portal-page-shape.example.md](../resources/portal-page-shape.example.md).
+Substitute your repository's verified enforcement state before drawing these
+panels. CodeFlow's own repository has remote protection unavailable (its
+`AGENTS.md`, project-specific instructions), so its page draws three planes and
+says in the captions that no remote plane is armed.
+
+The walk shows what the method's stages decide on a portal:
+
+- Stage 1 gives each panel its own reader; a panel that serves two readers is
+  two panels or a how-to section.
+- Stage 3 picks one family per panel by relationship, so the three panels
+  draw three different families and none restates another.
+- The how-to section carries a sequence, state or extent figure between its
+  lead and its steps.
+- Stage 5's removal check is the gate's item 4: with the sentences gone, the
+  Architecture figure still shows the planes and the boundary.
+
+Same utility craft as present; a different job (a durable source-linked guide).
 
 ## 2. Same craft, different shell
 
