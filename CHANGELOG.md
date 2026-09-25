@@ -17,6 +17,20 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Portable pull request checks.** `codeflow ci` reads Markdown sections,
+  rejects explicitly empty PR bodies and ambiguous headings, and warns about
+  summary detail, missing testing limits and oversized evidence. Generic release
+  checks default to warn, with a project-owned breaking level and commit floor.
+  Fresh installs include Reviews and Release impact in the required sections
+  and ship the PR template at every tier. Without an explicit list, the
+  built-in default stays Summary and Changes. Updates preserve existing policy
+  values and customized templates. Upgrade order matters: `codeflow update`
+  adds `git.pr_release_impact` and `git.pr_breaking_level`, and an older
+  binary then fails every `codeflow ci` run with exit 2 and
+  `unknown key git.pr_release_impact`. Upgrade the local and CI binaries
+  first, then commit the policy change from `codeflow update`.
+
+<!-- codeflow:release-impact minor -->
 - **Written content policy check (ADR-0067).** The commit-msg hook and
   `codeflow ci` block em and en dashes in new commit messages, pull request
   bodies and lines a change adds under `docs/`, `project-management/` and the
@@ -50,6 +64,23 @@ publication date._
   a figure when the point is a relationship and give only printed or
   verified links; mannered prose and bare-identifier titles are editorial
   defects. The evaluation kit adds an `operating-doctrine` pack.
+
+<!-- codeflow:release-impact patch -->
+- **Summary shape and reply figures.** A pull request body, report or reply
+  opens with one to three short sentences of context only, and every detail
+  follows as bullets in a logical order. A reply figure matches its surface:
+  an inline HTML figure where the harness renders one, a `cf-present` page
+  when it needs a full page, fenced ASCII on a terminal or other plain-text
+  surface, and never Mermaid. The operating-doctrine evaluation cases grade
+  both with faulty controls.
+
+<!-- codeflow:release-impact minor -->
+- **Pull request template.** The shipped template has five fixed sections
+  (Summary, Changes, Testing, Reviews, Release impact) with short comments,
+  and lists its conditional sections with the exact condition for each. The
+  Release impact block states `Breaking: yes | no` and always carries
+  `Migration`. Existing policies are unchanged: the required headings are
+  still Summary, Changes and, for code, Testing.
 
 <!-- codeflow:release-impact patch -->
 - **Claude Code preset prompts.** The shipped preset sets no permission mode
@@ -125,6 +156,17 @@ publication date._
   release, while cargo-dist remains the sole explicitly dispatched publisher;
   the candidate branch, follow-up release PR, and git-cliff authority are
   retired without moving the historical v2.1 tag.
+
+<!-- codeflow:release-impact patch -->
+- **Git-guard reads data as data.** The in-session git-guard no longer blocks
+  reading the hook path (`git config core.hooksPath`, `--get`, `--list`,
+  `--show-origin`); it still blocks every write form in every scope, and now
+  also `git config --edit` and removing the `core` section. Heredoc bodies,
+  comments and quoted text are no longer read as commands when only data
+  tools such as `cat`, `git commit -F -` or `gh pr create` read them; a body
+  or substitution that a shell or any other program can run is still checked.
+  A `cd` or `-C` chain that switches to a new branch before committing is
+  judged on that branch.
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
@@ -296,17 +338,6 @@ publication date._
 > reduce the release to a minor version.
 
 ### Fixed
-
-<!-- codeflow:release-impact patch -->
-- **Git-guard reads data as data.** The in-session git-guard no longer blocks
-  reading the hook path (`git config core.hooksPath`, `--get`, `--list`,
-  `--show-origin`); it still blocks every write form in every scope, and now
-  also `git config --edit` and removing the `core` section. Heredoc bodies,
-  comments and quoted text are no longer read as commands when only data
-  tools such as `cat`, `git commit -F -` or `gh pr create` read them; a body
-  or substitution that a shell or any other program can run is still checked.
-  A `cd` or `-C` chain that switches to a new branch before committing is
-  judged on that branch.
 
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
   the official pinned Node distribution's compression libraries and explain

@@ -471,11 +471,12 @@ every short response, and do not let tone override truth, policy, or precision.
 
 Presentation is graded for proportionality in both directions: simple content
 stays simply formatted, while a structure that is materially clearer visually
-— relationships, hierarchy, state, timelines, mappings, decisions — uses an
-ASCII diagram whose scope and detail fit the explanation. Prefer the least
-complicated form that remains complete, not the physically smallest; complex
-subjects may need a larger, layered, or multi-view diagram. Add a brief caption
-or legend when it aids orientation. Decorative or forced diagrams, headings,
+(relationships, hierarchy, state, timelines, mappings, decisions) uses a
+diagram whose scope and detail fit the explanation, in the form the surface
+renders as the lifecycle reply rule sets out. Prefer the least complicated
+form that remains complete, not the physically smallest; complex subjects may
+need a larger, layered, or multi-view diagram. Add a brief caption or legend
+when it aids orientation. Decorative or forced diagrams, headings,
 tables, and recaps are findings, not polish. A reply whose point is a flow,
 dependency, state change, or other relationship carries a figure, so a
 prose-only answer there is a finding too.

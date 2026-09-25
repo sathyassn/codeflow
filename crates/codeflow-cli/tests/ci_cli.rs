@@ -9,6 +9,9 @@
 //! repo (the `policy_cli.rs` pattern), pinning the exit-code and message
 //! contracts a consumer of the binary (no source) relies on.
 
+#[path = "ci_cli/pr_body_fixtures.rs"]
+mod pr_body_fixtures;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -28,6 +31,11 @@ fn codeflow() -> Command {
         // The structure check reads this when no --pr-body flag is given; the
         // developer's shell must not leak a body into the no-body tests.
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_NAME")
+        .env_remove("GITHUB_HEAD_REF")
+        .env_remove("CI_PIPELINE_SOURCE")
+        .env_remove("CI_MERGE_REQUEST_IID")
+        .env_remove("BITBUCKET_PR_ID")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE");
@@ -123,7 +131,7 @@ fn ci_blocks_task_whose_planning_record_is_not_on_target() {
             "--branch",
             "task/TSK-001-unanchored",
             "--pr-body",
-            "## Summary\nUnanchored work.\n\n## Changes\n- add work\n\n## Testing\n```text\nnot run\n```",
+            "## Summary\nUnanchored work.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- add work\n\n## Testing\n```text\nnot run\n```",
         ],
     );
     assert_eq!(output.status.code(), Some(1));
@@ -170,7 +178,7 @@ fn ci_blocks_an_invalid_visible_workgraph_on_a_task_branch() {
             "--branch",
             "task/TSK-001-repair",
             "--pr-body",
-            "## Summary\nRepair.\n\n## Changes\n- repair work\n\n## Testing\n- focused test",
+            "## Summary\nRepair.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- repair work\n\n## Testing\n- focused test",
         ],
     );
     assert_eq!(output.status.code(), Some(1));
@@ -197,7 +205,7 @@ fn ci_keeps_task_prefix_available_without_durable_work_tracking() {
             "--branch",
             "task/tidy-the-logger",
             "--pr-body",
-            "## Summary\nBounded task.\n\n## Changes\n- tidy logger\n\n## Testing\n- focused test",
+            "## Summary\nBounded task.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- tidy logger\n\n## Testing\n- focused test",
         ],
     );
     assert_eq!(
@@ -270,8 +278,8 @@ fn ci_recognizes_nested_only_historical_task() {
 }
 
 /// A body satisfying every default-required section with real content.
-const FULL_BODY: &str = "## Summary\n\n- adds a thing\n\n## Changes\n\n- one change\n\n\
-                         ## Testing\n\n- cargo test: 12 passed\n";
+const FULL_BODY: &str = "## Summary\n\n- adds a thing\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n\n\
+                         ## Testing\n\n- cargo test: 12 passed\nNot tested: Windows.\n";
 
 #[test]
 fn ci_absent_pr_body_skips_structure_check() {
@@ -303,7 +311,7 @@ fn ci_blocks_lazy_pr_body_naming_the_section() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
     // No Summary, and Testing missing while the range touches code.
-    let out = ci_with_body(dir.path(), "## Changes\n\n- one change\n");
+    let out = ci_with_body(dir.path(), "## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n");
     assert_eq!(out.status.code(), Some(1), "a lazy body must fail CI");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("git.pr_sections"), "{stderr}");
@@ -316,7 +324,7 @@ fn ci_blocks_lazy_pr_body_naming_the_section() {
 fn ci_empty_section_reported_as_present_but_empty() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
-    let body = "## Summary\n\n<!-- template comment -->\n\n-\n\n## Changes\n\n- one change\n\n\
+    let body = "## Summary\n\n<!-- template comment -->\n\n-\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n\n\
                 ## Testing\n\n- ran the tests\n";
     let out = ci_with_body(dir.path(), body);
     assert_eq!(out.status.code(), Some(1));
@@ -330,7 +338,7 @@ fn ci_docs_only_range_does_not_require_code_sections() {
     repo_with_range(dir.path(), "docs");
     let out = ci_with_body(
         dir.path(),
-        "## Summary\n\n- docs\n\n## Changes\n\n- reword a guide\n",
+        "## Summary\n\n- docs\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- reword a guide\n",
     );
     assert_eq!(
         out.status.code(),
@@ -361,7 +369,7 @@ fn ci_executable_documentation_requires_testing_for_the_entire_range() {
 
     let missing = ci_with_body(
         dir.path(),
-        "## Summary\n\nUpdate installation.\n\n## Changes\n\n- Update example.\n",
+        "## Summary\n\nUpdate installation.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- Update example.\n",
     );
     assert_eq!(missing.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&missing.stderr).contains("'## Testing'"));
@@ -380,7 +388,7 @@ fn ci_warn_level_structure_reports_and_proceeds() {
         r#"{"schema_version":1,"git":{"pr_sections":"warn"}}"#,
     )
     .unwrap();
-    let out = ci_with_body(dir.path(), "## Changes\n\n- one change\n");
+    let out = ci_with_body(dir.path(), "## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n");
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -395,7 +403,9 @@ fn ci_warn_level_structure_reports_and_proceeds() {
 fn ci_template_remnants_warn_but_pass() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
-    let body = format!("{FULL_BODY}\n(paste the real test summary output here)\n|  |  |\n- CAP-\n");
+    let body = format!(
+        "{FULL_BODY}\n(paste the real test summary output here)\n|  |  |\n- Breaking: yes | no\n"
+    );
     let out = ci_with_body(dir.path(), &body);
     assert_eq!(
         out.status.code(),
@@ -406,7 +416,10 @@ fn ci_template_remnants_warn_but_pass() {
     assert!(stderr.contains("template remnant"), "{stderr}");
     assert!(stderr.contains("paste-your-output"), "{stderr}");
     assert!(stderr.contains("empty cells"), "{stderr}");
-    assert!(stderr.contains("linked-work"), "{stderr}");
+    assert!(
+        stderr.contains("unresolved template alternatives"),
+        "{stderr}"
+    );
 }
 
 #[test]
