@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 
 // Exercise the production shell on built routes, not a second chrome fixture.
 export async function verifyChrome(page, urls, engine, altitudeRoute = null) {
+  const originalReducedMotion = await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches);
   const route = altitudeRoute ?? urls.find((url) => /\/architecture\/$/.test(url)) ?? urls[0];
   assert.ok(route, `${engine}: chrome needs a built route`);
   await page.setViewportSize({ width: 1440, height: 1000 });
@@ -195,7 +196,7 @@ export async function verifyChrome(page, urls, engine, altitudeRoute = null) {
   assert.equal(await page.locator('.cf-display').evaluate((el) => getComputedStyle(el).transitionDuration.split(',').every((v) => parseFloat(v) === 0)), true);
   await page.keyboard.press('Escape');
   assert.equal(await page.evaluate(() => document.getAnimations().filter((animation) => animation.effect?.getKeyframes().some((frame) => frame.transform !== undefined) && animation.effect.getComputedTiming().activeDuration > 0).length), 0);
-  await page.emulateMedia({ reducedMotion: 'no-preference' });
+  await page.emulateMedia({ reducedMotion: originalReducedMotion ? 'reduce' : 'no-preference' });
   await page.setViewportSize({ width: 1280, height: 900 });
   await page.goto(route);
   await page.locator('[data-cf-mounted]').waitFor();

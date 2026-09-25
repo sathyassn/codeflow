@@ -62,7 +62,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "cf271d40a2cf3a37132d4f3376b3eda8751492000c2413fa6dfc90f929fd2c25"
+      "pristine_sha256": "c220c74cbba6fb426baf2231f33e1696f687ac33ee77582b30919cd54c3d28d8"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -70,7 +70,7 @@
     },
     "scripts/chrome-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "4975231859537a919b92188712a8cf460bea3276607aa2f3b47fac76627b742c"
+      "pristine_sha256": "720b278f3aee7f2c73c25923ef989e7af8f95c9f50d38b94a3b81d044164a588"
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",

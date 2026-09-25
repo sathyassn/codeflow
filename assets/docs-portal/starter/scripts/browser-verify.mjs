@@ -208,6 +208,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     const altitudeAssignment = assignments.find((assignment) => assignment.pageClass === PAGE_CLASSES.explanatory.id);
     const chromeResult = await verifyChrome(page, chromeRoutes, name,
       altitudeAssignment ? routeUrl(origin, config.base, altitudeAssignment.route) : null);
+    if (!await page.evaluate(() => matchMedia("(prefers-reduced-motion: reduce)").matches)) throw new Error(`${name}: chrome verification changed the motion preference`);
     await visit(page, siteRoot);
     await assertThemeMatrix(page, name, output);
     await assertKeyboardPath(page, name);
