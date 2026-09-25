@@ -6731,7 +6731,9 @@
           "commit_flow_figure_for_planes_question",
           "ci_plane_marked_active",
           "remote_plane_marked_unarmed",
-          "fact_invented"
+          "fact_invented",
+          "unrendered_figure_on_plain_text_surface",
+          "mermaid_figure_in_reply"
         ]
       }
     },

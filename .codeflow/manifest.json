@@ -263,7 +263,7 @@
     ".agents/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "d2131897ce26dc510642d810e7056a92c94287ab6ec4d8c57edd4c85ff912184",
+      "sha256": "3c46d8b1d480968bb78805ccc18a87182dc721b19bf69598ed4beff5a8704a62",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -275,7 +275,7 @@
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "daab64560bc6538a02f7e4d39e589fe45bc3bb3a9b5aeb5ebfc6ddba4c251cf7",
+      "sha256": "e0257d7c4d1fcf11c241b554a447649db9a89c7cdcb98428b12d692c787be735",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -869,7 +869,7 @@
     ".claude/skills/cf-evaluate-model/resources/cases.json": {
       "src": "agents/skills/cf-evaluate-model/resources/cases.json",
       "ownership": "managed",
-      "sha256": "d2131897ce26dc510642d810e7056a92c94287ab6ec4d8c57edd4c85ff912184",
+      "sha256": "3c46d8b1d480968bb78805ccc18a87182dc721b19bf69598ed4beff5a8704a62",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/fake-effects.md": {
@@ -881,7 +881,7 @@
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "daab64560bc6538a02f7e4d39e589fe45bc3bb3a9b5aeb5ebfc6ddba4c251cf7",
+      "sha256": "e0257d7c4d1fcf11c241b554a447649db9a89c7cdcb98428b12d692c787be735",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/harness-evidence.md": {

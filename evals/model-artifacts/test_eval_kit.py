@@ -612,8 +612,11 @@ class SuiteContractTests(unittest.TestCase):
                         bullets = [line for line in prose.splitlines() if line.startswith("- ")]
                         self.assertEqual(len(bullets) == 3 and not fences, "bullets_or_small_table" in signals)
                     if case_id == "enforcement-planes-answered-in-chat":
-                        # A terminal surface calls for the fenced text form.
+                        # A terminal surface calls for the fenced text form;
+                        # a Mermaid block fails on any surface.
                         self.assertEqual("terminal", entry["surface"])
+                        self.assertEqual(any(language.strip() == "mermaid" for language, _ in fences),
+                                         "mermaid_figure_in_reply" in signals)
                         if "layering_figure_in_the_form_the_surface_calls_for" not in signals:
                             continue
                         self.assertTrue(text_figure)

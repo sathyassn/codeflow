@@ -65,6 +65,20 @@
           "ci_plane_marked_active"
         ],
         "decision": "fail"
+      },
+      {
+        "role": "faulty",
+        "answer": "planes-mermaid.md",
+        "surface": "terminal",
+        "signals": [
+          "each_plane_placed_at_its_moments",
+          "ci_plane_shown_not_active_here",
+          "remote_plane_shown_armed_at_merge",
+          "one_caption_sentence",
+          "short_prose_around_figure",
+          "mermaid_figure_in_reply"
+        ],
+        "decision": "fail"
       }
     ],
     "readme-figure-uses-the-text-form": [
