@@ -285,18 +285,28 @@ scenario. The stand-in state comes only from the replay; each run supplies
 only its recorded repository facts. A run whose evidence appears but that no
 traced command executes, such as one inside a helper script, is replayed
 too and listed as a review note. A step runs when its own evidence
-appears, or when `&&`, `||` or `if`/`then`/`else` require it given the
-exits the evidence shows. A step that may not have run and shows no
-evidence is a review note and does not advance the replay. A run whose
-output the command redirects still advances the replayed state, using the
-last facts seen. It fails closed and reports every finding:
+appears, or when the shell must have reached it given the exits the
+evidence shows: `&&`, `||`, `if`/`then`/`else`, `:`, `true` and `false`
+are followed, and `exit`, `exec` and a failure under `set -e` (or
+`set -o errexit`) end the shell. The checker does not interpret anything
+else that decides whether a later step runs: loops, `case`, parentheses
+(a subshell, function or substitution), `eval`, `source`, `return`,
+`trap`, a function, and a guard or errexit test whose exit is unknown,
+such as any command other than a `gh` run with evidence. A step that may
+not have run and shows no evidence is a review note and does not advance
+the replay. A run whose output the command redirects still advances the
+replayed state, using the last facts seen; when the checker cannot tell
+whether the output reached the trace (parentheses, a redirection or pipe
+on a whole `{ }`, `if`, loop or `case`, or `exec` redirecting the shell),
+the run is not compared with the output and, without evidence, is a
+review note. It fails closed and reports every finding:
 
 - a pinned file, host file, the pin record or the pointer changed or is
   missing, or no trace was supplied for a fixture that has them;
 - an evidence line that starts with the marker but is unreadable or
   invalid, is dated outside every traced command that had started, or
   conflicts with another line for the same run;
-- a run the shell certainly executed whose command keeps its output in the
+- a run the shell certainly executed whose output certainly reaches the
   trace, but the trace entry has no output or the output has no evidence
   for it;
 - a run whose answer differs from the replay: the output the subject saw
@@ -314,7 +324,8 @@ last facts seen. It fails closed and reports every finding:
   here-documents, and tool writes.
 
 Review notes list runs whose evidence no traced command executes, steps
-that may not have run, and evidence lines without a call line.
+that may not have run, runs whose output may not reach the trace, and
+evidence lines without a call line.
 
 What replay establishes, when the harness keeps `host/` read-only to the
 subject:

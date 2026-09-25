@@ -1089,7 +1089,7 @@ def shell_pipeline(command: str) -> list[tuple[list[str], str]] | None:
     except ValueError:
         return None
     pipeline, current = [], []
-    for token in tokens:
+    for token in split_parentheses(tokens):
         if token in SHELL_SEPARATORS:
             if current:
                 pipeline.append((current, token))
@@ -1099,6 +1099,18 @@ def shell_pipeline(command: str) -> list[tuple[list[str], str]] | None:
     if current:
         pipeline.append((current, ""))
     return pipeline
+
+
+def split_parentheses(tokens: list[str]) -> list[str]:
+    """Separate a parenthesis from the operators shlex joins it with, as in `);`."""
+
+    split = []
+    for token in tokens:
+        if len(token) > 1 and set(token) <= set("();<>|&") and set(token) & set("()"):
+            split += [part for part in re.split(r"([()])", token) if part]
+        else:
+            split.append(token)
+    return split
 
 
 def call_arguments(tokens: list[str]) -> list[str]:
@@ -1130,6 +1142,11 @@ def streams_shown(tokens: list[str]) -> bool:
 
 SHELL_KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "for", "do",
                   "done", "case", "esac", "!", "{", "}"}
+GROUP_CLOSERS = {"fi", "done", "esac", "}"}
+KNOWN_STATUS = {":": 0, "true": 0, "false": 1}
+# Commands that may end the shell or run unseen code: later steps are unknown.
+OPAQUE_FLOW = {"return", "logout", "eval", "source", ".", "trap", "function"}
+PIPES = {"|", "|&"}
 
 
 def gh_call(words: list[str], separator: str) -> dict | None:
@@ -1162,19 +1179,63 @@ def gh_call(words: list[str], separator: str) -> dict | None:
     }
 
 
-def command_steps(command: str) -> list[dict]:
-    """Simple commands in order, with the shell syntax that decides whether each runs."""
+def command_steps(command: str) -> tuple[list[dict], bool]:
+    """Simple commands in order, with the shell syntax that decides whether each runs.
 
-    steps, connector = [], None
-    for tokens, separator in shell_pipeline(command) or []:
+    The flag is False when the command uses parentheses (a subshell, function
+    or substitution), which the checker does not model.
+    """
+
+    pipeline = shell_pipeline(command) or []
+    steps, connector, previous = [], None, ""
+    for tokens, separator in pipeline:
         words, marks = list(tokens), []
         while words and words[0] in SHELL_KEYWORDS:
             marks.append(words.pop(0))
-        steps.append({"marks": marks, "connector": connector,
+        start, word = command_word(words)
+        steps.append({"marks": marks, "connector": connector, "separator": separator,
+                      "piped": previous in PIPES, "word": word, "args": words[start + 1:],
+                      "exec": "exec" in words[:start],
+                      "runs": bool(call_arguments(words[start:])),
+                      "hides": not streams_shown(words[start:]),
                       "gh": gh_call(words, separator) if words else None,
                       "empty": not words})
         connector = separator if separator in {"&&", "||"} else None
-    return steps
+        previous = separator
+    # Parentheses (a substitution may capture output), or a redirection or
+    # pipe on `}`, `fi`, `done` or `esac`, route the output of the steps
+    # inside: whether it reached the trace is unknown.
+    modelled = not any(separator in {"(", ")"} for _, separator in pipeline)
+    routed = not modelled or any(set(step["marks"]) & GROUP_CLOSERS and (
+        step["hides"] or step["separator"] in PIPES | {"&"}) for step in steps)
+    for step in steps:
+        if routed and step["gh"] and step["gh"]["shown"]:
+            step["gh"]["shown"] = None
+    return steps, modelled
+
+
+def set_options(args: list[str]) -> dict[str, bool]:
+    """The errexit and pipefail changes a `set` command makes."""
+
+    changes, index = {}, 0
+    while index < len(args):
+        arg = args[index]
+        index += 1
+        if len(arg) < 2 or arg[0] not in "-+" or arg == "--":
+            break
+        for flag in arg[1:]:
+            if flag == "e":
+                changes["errexit"] = arg[0] == "-"
+            elif flag == "o" and index < len(args):
+                changes[args[index]] = arg[0] == "-"
+                index += 1
+    return {name: on for name, on in changes.items() if name in {"errexit", "pipefail"}}
+
+
+def lowered(value: bool | None, certain: bool) -> bool | None:
+    """False when certain, else at most unknown."""
+
+    return False if certain or value is False else None
 
 
 def all_known(values: list[bool | None]) -> bool | None:
@@ -1188,14 +1249,21 @@ def all_known(values: list[bool | None]) -> bool | None:
 class ShellFlow:
     """Whether each step of one command ran, from exits the evidence shows.
 
-    Supports `&&`, `||` and `if`/`then`/`else`/`fi`; anything else, or a
-    guard whose exit is unknown, leaves a step's execution unknown.
+    Supports `&&`, `||`, `if`/`then`/`else`/`fi`, `exit`, `exec`, `:`,
+    `true`, `false` and the errexit and pipefail options of `set`. Anything
+    else that can decide whether a later step runs (a loop, `case`,
+    parentheses, `eval`, `source`, `return`, `trap`, a function, a guard or
+    an errexit test whose exit is unknown) leaves that step's execution
+    unknown.
     """
 
-    def __init__(self) -> None:
+    def __init__(self, modelled: bool = True) -> None:
         self.status: int | None = None
         self.frames: list[dict] = []
         self.loops = 0
+        self.reach: bool | None = True if modelled else None
+        self.visible: bool | None = True
+        self.options: dict[str, bool | None] = {"errexit": False, "pipefail": False}
 
     def enter(self, step: dict) -> bool | None:
         for mark in step["marks"]:
@@ -1216,7 +1284,7 @@ class ShellFlow:
                 self.loops = max(0, self.loops - 1)
             elif mark == "!":
                 step["negated"] = True
-        checks = [None if self.loops else True]
+        checks = [self.reach, None if self.loops else True]
         for frame in self.frames:
             if frame["branch"] == "condition":
                 continue
@@ -1230,11 +1298,47 @@ class ShellFlow:
                           else (self.status == 0) == (connector == "&&"))
         return all_known(checks)
 
+    def shown(self, shown: bool | None) -> bool | None:
+        """Whether a step's output reached the trace, after any `exec` redirection."""
+
+        if self.visible is False:
+            return False
+        return None if self.visible is None and shown else shown
+
     def leave(self, ran: bool | None, exit_status: int | None, step: dict) -> None:
         if ran is False:
             return
+        if exit_status is None and not step["gh"]:
+            exit_status = KNOWN_STATUS.get(step["word"])
+        if step["piped"] and self.options["pipefail"] is not False:
+            exit_status = None
         known = ran is True and exit_status is not None and not step.get("negated")
         self.status = exit_status if known else None
+        if not step["empty"]:
+            self.after(ran is True, step)
+
+    def after(self, certain: bool, step: dict) -> None:
+        """What a step that ran, or may have run, means for the steps after it."""
+
+        if step["exec"] and not step["runs"]:
+            if step["hides"]:
+                self.visible = lowered(self.visible, certain)
+            return
+        if step["word"] == "exit" or step["exec"]:
+            self.reach = lowered(self.reach, certain)
+            return
+        if step["word"] in OPAQUE_FLOW:
+            self.reach = lowered(self.reach, False)
+            return
+        if step["word"] == "set":
+            for name, on in set_options(step["args"]).items():
+                self.options[name] = on if certain or self.options[name] == on else None
+            return
+        exempt = (step["separator"] in {"&&", "||", "&"} | PIPES or step.get("negated")
+                  or any(frame["branch"] == "condition" for frame in self.frames))
+        if self.options["errexit"] is not False and not exempt and self.status != 0:
+            self.reach = lowered(self.reach, certain and self.options["errexit"] is True
+                                 and self.status is not None)
 
 
 EVIDENCE_FIELDS = {
@@ -1453,13 +1557,15 @@ def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], lis
         if entry["kind"] != "command":
             continue
         low, high = float(entry["at"]), float(entry["end"])
-        last, flow = low, ShellFlow()
-        for step in command_steps(entry["command"]):
+        steps, modelled = command_steps(entry["command"])
+        last, flow = low, ShellFlow(modelled)
+        for step in steps:
             ran = flow.enter(step)
             call = step["gh"]
             if call is None:
                 flow.leave(ran, None, step)
                 continue
+            shown = flow.shown(call["shown"])
             argv = call["argv"]
             prefix = argv if call["exact"] else argv[:next(
                 index for index, token in enumerate(argv)
@@ -1475,7 +1581,7 @@ def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], lis
                 last = max(last, float(match["call"]["at"]))
                 runs.append({"argv": match["call"]["argv"], "group": match,
                              "entry": number, "window": (low, high), "at": last,
-                             "shown": call["shown"]})
+                             "shown": shown is True})
                 flow.leave(True, match.get("result", {}).get("exit"), step)
                 continue
             flow.leave(ran, None, step)
@@ -1486,7 +1592,11 @@ def gh_runs(trace: list[dict], groups: dict[str, dict]) -> tuple[list[dict], lis
                              "control flow) and shows no evidence; review that command: "
                              + " ".join(argv)[:60])
                 continue
-            if call["shown"]:
+            if shown is None:
+                notes.append(f"gh call in trace entry {number} ran, but its output may "
+                             "not reach the trace (shell grouping or redirection) and shows "
+                             "no evidence; review that command: " + " ".join(argv)[:60])
+            elif shown:
                 what = "has no output" if "output" not in entry else "has no evidence"
                 findings.append(f"gh call in trace entry {number} {what}: "
                                 + " ".join(argv)[:60])

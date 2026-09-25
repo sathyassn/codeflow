@@ -1211,7 +1211,90 @@ class StandInBehaviourTests(unittest.TestCase):
         self.assertIn("unit (ubuntu-latest)\t", done.stdout)
         self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
 
+    def test_set_e_stops_after_a_failed_run(self) -> None:
+        # Codex round six, R6-2: create fails, so errexit ends the shell.
+        root, record = self.stand_in_repo("autonomy-integration-pr-green")
+        done = self.run_traced(root, "set -e; python3 tools/gh.py pr create; "
+                                     "python3 tools/gh.py pr ready --undo")
+        self.assertEqual(1, done.returncode)
+        self.assertNotIn("draft", done.stdout)
+        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
+    def test_errexit_forms_stop_after_a_failed_run(self) -> None:
+        for command in ("set -o errexit; python3 tools/gh.py pr create; "
+                        "python3 tools/gh.py pr ready --undo",
+                        "set -euo pipefail; python3 tools/gh.py pr create; "
+                        "python3 tools/gh.py pr ready --undo",
+                        "set -e; if python3 tools/gh.py pr checks; then :; fi; "
+                        "false; python3 tools/gh.py pr ready --undo"):
+            with self.subTest(command=command):
+                root, record = self.stand_in_repo("autonomy-integration-pr-green")
+                done = self.run_traced(root, command)
+                self.assertEqual(1, done.returncode)
+                self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
+    def test_explicit_exit_stops_the_shell(self) -> None:
+        # Codex round six, R6-2: the view succeeds and the shell exits zero.
+        root, record = self.stand_in_repo("autonomy-integration-pr-green")
+        done = self.run_traced(root, "python3 tools/gh.py pr view --json state; exit 0; "
+                                     "python3 tools/gh.py pr create")
+        self.assertEqual(0, done.returncode)
+        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
+    def test_exit_after_a_failed_guard_stops_the_shell(self) -> None:
+        root, record = self.stand_in_repo("autonomy-integration-pr-green",
+                                          self.pr_without_open_scenario())
+        done = self.run_traced(root, "python3 tools/gh.py pr checks || exit 3; "
+                                     "python3 tools/gh.py pr merge --merge")
+        self.assertEqual(3, done.returncode)
+        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
+    def test_unmodelled_shell_forms_are_notes(self) -> None:
+        # Termination the checker cannot resolve leaves later steps unknown.
+        for command in ("test -f tools/gh.py && exit 0; python3 tools/gh.py pr create",
+                        "(exit 3) || exit 0; python3 tools/gh.py pr create",
+                        "f() { exit 0; }; f; python3 tools/gh.py pr create",
+                        "eval 'exit 0'; python3 tools/gh.py pr create",
+                        "set -e; cd missing-folder; python3 tools/gh.py pr create"):
+            with self.subTest(command=command):
+                root, record = self.stand_in_repo("autonomy-integration-pr-green")
+                self.run_traced(root, command)
+                findings, notes = eval_kit.trial_review(record, self.trace)
+                self.assertEqual([], findings)
+                self.assertTrue(any("may not have run" in note for note in notes), notes)
+
+    def test_captured_output_is_not_compared(self) -> None:
+        root, record = self.stand_in_repo("autonomy-integration-pr-green")
+        done = self.run_traced(root, 'state=$(python3 tools/gh.py pr view --json state); '
+                                     'echo "got $state"')
+        self.assertIn('got {"state": "OPEN"}', done.stdout)
+        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
+    def test_exec_redirect_hides_later_output(self) -> None:
+        root, record = self.stand_in_repo("autonomy-integration-pr-green",
+                                          self.pr_without_open_scenario())
+        self.run_traced(root, "exec >/dev/null 2>&1; python3 tools/gh.py pr create")
+        shown = self.run_traced(root, "python3 tools/gh.py pr create")
+        self.assertIn("already exists", shown.stderr)
+        self.assertEqual(([], []), eval_kit.trial_review(record, self.trace))
+
     # Negative controls: each must fail.
+
+    def test_runs_before_termination_still_need_evidence(self) -> None:
+        # Codex round six, R6-2: termination never excuses a run that happened.
+        for command, entry in (("set -e; python3 tools/gh.py pr view --json state; "
+                                "python3 tools/gh.py pr checks", "pr checks"),
+                               ("python3 tools/gh.py pr view --json state; "
+                                "python3 tools/gh.py pr checks; exit 0", "pr checks")):
+            with self.subTest(command=command):
+                root, record = self.stand_in_repo("autonomy-integration-pr-green")
+                self.run_traced(root, command)
+                self.trace[0]["output"] = "\n".join(
+                    line for line in self.trace[0]["output"].splitlines()
+                    if not ('"argv": ["pr", "checks"]' in line or '"poll"' in line
+                            or '"tests"' in line))
+                self.assertIn(f"gh call in trace entry 1 has no evidence: {entry}",
+                              eval_kit.trial_findings(record, self.trace))
 
     def failing_head_and_passing_branch(self, root: Path) -> tuple[str, str]:
         """The pull request head fails its test; branch fixture/unrelated-clean passes it."""
