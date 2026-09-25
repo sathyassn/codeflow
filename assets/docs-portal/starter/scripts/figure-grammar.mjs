@@ -1155,9 +1155,17 @@ export function probeFigures(options) {
       }
       for (const [state, entry] of Object.entries(record.states)) record.states[state] = Object.fromEntries(Object.entries(entry).map(([key, values]) => [key, [...values].sort()]));
       record.drawn = [...new Set(record.drawn)].sort();
+      // Rule 7: every mark is a lone box with text in it. A box holds a label
+      // when a text's ink overlaps it by 1px or more, the depth rule 8 counts
+      // as overprint. A label beside its mark, bound to it or not, is not text
+      // in a box, and a cell or bar with no text in it is a mark.
+      const holdsText = (node) => {
+        const box = node.getBoundingClientRect();
+        return record.texts.some(({ box: [left, top, right, bottom] }) => Math.min(box.right, right) - Math.max(box.left, left) >= 1 && Math.min(box.bottom, bottom) - Math.max(box.top, top) >= 1);
+      };
       record.boxedText = [...svg.querySelectorAll("[data-state]")].length > 0 && [...svg.querySelectorAll("[data-state]")].every((group) => {
         const primary = group.tagName.toLowerCase() === "g" ? [...group.children].find((node) => DRAWN.includes(node.tagName.toLowerCase())) : group;
-        return primary?.tagName.toLowerCase() === "rect" && group.querySelectorAll("*").length <= 1;
+        return primary?.tagName.toLowerCase() === "rect" && group.querySelectorAll("*").length <= 1 && holdsText(primary);
       });
     }
     figures.push(record);
@@ -1246,7 +1254,7 @@ export function figureRuleFailures({ wide, narrow, wideDark = null, narrowDark =
       else if (collision.kind === "overprint") add(8, `${label}: text "${collision.a}" overprints a ${collision.b} mark by ${collision.depth}px`);
       else add(8, `${label}: text "${collision.a}" sits ${collision.distance}px from a ${collision.b} mark it does not label, under ${THRESHOLDS.labelClearancePx}px`);
     }
-    if (record.boxedText) add(7, `${label}: every mark is a box with nothing drawn between them`);
+    if (record.boxedText) add(7, `${label}: every mark is a box with text in it and nothing drawn between them`);
     for (const [a, b] of pairs(Object.keys(record.states))) {
       const differing = channelDifferences(record.states[a], record.states[b]);
       if (differing.length < THRESHOLDS.minChannels) add(3, `${label}: states ${a} and ${b} differ on ${differing.length ? differing.join(", ") : "no channel"}, need ${THRESHOLDS.minChannels}`);

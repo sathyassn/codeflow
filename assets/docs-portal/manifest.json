@@ -71,6 +71,8 @@
     { "path": "tests/fixtures/figures/08-derivation.json", "ownership": "managed" },
     { "path": "tests/fixtures/figures/09-graph.json", "ownership": "managed" },
     { "path": "tests/fixtures/figures/10-extent-derived.json", "ownership": "managed" },
+    { "path": "tests/fixtures/figures/controls/boxed-text.json", "ownership": "managed" },
+    { "path": "tests/fixtures/figures/controls/coverage-derived.json", "ownership": "managed" },
     { "path": "tests/fixtures/figures/rendered/01-flow.html", "ownership": "managed" },
     { "path": "tests/fixtures/figures/rendered/02-structure.html", "ownership": "managed" },
     { "path": "tests/fixtures/figures/rendered/03-layering.html", "ownership": "managed" },

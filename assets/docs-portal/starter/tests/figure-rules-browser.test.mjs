@@ -6,9 +6,9 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, firefox, webkit } from "@playwright/test";
-import { canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
+import { bindDerivedData, canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
-import { specimens } from "./page-shapes.mjs";
+import { specimen, specimens } from "./page-shapes.mjs";
 
 const styles = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/styles");
 
@@ -58,7 +58,18 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
       2: () => document.querySelector(".cf-legend li").remove(),
       4: () => { for (const text of document.querySelectorAll(".cf-fig text")) text.style.fontSize = "8px"; },
       5: () => { const [wide, narrow] = document.querySelectorAll(".cf-fig-svg"); narrow.innerHTML = wide.innerHTML; narrow.setAttribute("viewBox", wide.getAttribute("viewBox")); },
-      7: () => { for (const svg of document.querySelectorAll(".cf-fig-svg")) for (const group of svg.querySelectorAll("[data-state]")) group.replaceChildren(Object.assign(document.createElementNS("http://www.w3.org/2000/svg", "rect"), {})); },
+      // Every mark becomes a box drawn around one of the figure's labels.
+      7: () => {
+        for (const svg of document.querySelectorAll(".cf-fig-svg")) {
+          const texts = [...svg.querySelectorAll("text")];
+          [...svg.querySelectorAll("[data-state]")].forEach((group, index) => {
+            const box = texts[index % texts.length].getBBox();
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            for (const [name, value] of Object.entries({ x: box.x - 6, y: box.y - 4, width: box.width + 12, height: box.height + 8 })) rect.setAttribute(name, String(value));
+            group.replaceChildren(rect);
+          });
+        }
+      },
       8: () => { for (const svg of document.querySelectorAll(".cf-fig-svg")) { const [a, b] = svg.querySelectorAll("text"); b.setAttribute("x", a.getAttribute("x")); b.setAttribute("y", a.getAttribute("y")); } },
       9: () => { document.querySelector(".cf-fig-caption").textContent = "First sentence. Second sentence."; },
       10: () => document.querySelector(".cf-fig-svg [data-state] *").setAttribute("fill", "#ff0000"),
@@ -76,6 +87,24 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
     const fact = layering.figure.facts[0];
     assert.ok(rulesOf(clean, { facts: [{ claim: fact.claim, source: fact.source, drawn: fact.value, derived: false, matches: false }] }).includes(6));
     assert.ok(rulesOf(clean, { facts: [], data: null }).includes(6));
+  } finally { await browser.close(); }
+});
+
+// Rule 7 is about text in boxes: a coverage cell is a state mark with no text
+// in it, so a grid of cells with no crossed cell is not boxed text, and boxes
+// that each hold a label still are.
+const SIGNING = JSON.stringify({ channels: { release: ["binaries", "archives", "images"], nightly: ["binaries", "archives"] } });
+test("a coverage grid is not boxed text, and boxes that each hold a label are", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+  const css = await sheet();
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    const page = await browser.newPage();
+    const declaration = await specimen("controls/coverage-derived.json");
+    const bound = bindDerivedData(declaration.figure, (relative) => (relative === "config/signing.json" ? SIGNING : null));
+    const failures = figureRuleFailures(await probe(page, css, renderFigure(declaration, { idPrefix: "c", bound })));
+    assert.deepEqual(failures.filter((failure) => failure.rule === 7), [], canonicalJson(failures));
+    const boxed = figureRuleFailures(await probe(page, css, renderFigure(await specimen("controls/boxed-text.json"), { idPrefix: "b" })));
+    assert.deepEqual(boxed.filter((failure) => failure.rule === 7).map((failure) => failure.message.split(":")[0]), ["wide", "narrow", "wide dark", "narrow dark"], canonicalJson(boxed));
   } finally { await browser.close(); }
 });
 
