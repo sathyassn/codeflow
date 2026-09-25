@@ -1,0 +1,451 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "enforcement-planes",
+    "family": "layering",
+    "binding": "authored",
+    "question": "Which plane covers which moment, and which one is the boundary?",
+    "idea": "Four planes cover a change in order, and only the remote one is a boundary.",
+    "title": "Four enforcement planes along the life of one change",
+    "kicker": "Enforcement planes",
+    "description": "A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane drawn with an end cap, meaning remote and required. One change crosses all four planes in that order.",
+    "caption": "Local planes give fast feedback and can be edited, and only the remote plane at merge is a boundary.",
+    "states": [
+      {
+        "name": "layer",
+        "mark": "layer",
+        "means": "Plane covers this moment, local and editable"
+      },
+      {
+        "name": "layer-remote",
+        "mark": "layer-remote",
+        "means": "Plane covers this moment, remote and required"
+      },
+      {
+        "name": "act",
+        "mark": "act",
+        "means": "Plane acts here"
+      },
+      {
+        "name": "done",
+        "mark": "done",
+        "means": "One change"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "four planes: git hooks, session git-guard, CI, remote branch protection",
+        "source": "AGENTS.md#git-rules",
+        "derive": "the four planes named in the first sentence of Git rules",
+        "check": {
+          "kind": "contains",
+          "text": "Four planes provide defense in depth"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 248,
+      "draw": [
+        {
+          "text": "Edit",
+          "x": 240,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "Commit",
+          "x": 340,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "Push",
+          "x": 440,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "Pull request",
+          "x": 540,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "Merge",
+          "x": 640,
+          "y": 22,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 190,
+          "y1": 42,
+          "x2": 690,
+          "y2": 42
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 240,
+          "y1": 36,
+          "x2": 240,
+          "y2": 42
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 340,
+          "y1": 36,
+          "x2": 340,
+          "y2": 42
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 440,
+          "y1": 36,
+          "x2": 440,
+          "y2": 42
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 540,
+          "y1": 36,
+          "x2": 540,
+          "y2": 42
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 640,
+          "y1": 36,
+          "x2": 640,
+          "y2": 42
+        },
+        {
+          "text": "Git hooks",
+          "x": 0,
+          "y": 89
+        },
+        {
+          "text": "Session git-guard",
+          "x": 0,
+          "y": 137
+        },
+        {
+          "text": "CI",
+          "x": 0,
+          "y": 185
+        },
+        {
+          "text": "Remote branch protection",
+          "x": 0,
+          "y": 233,
+          "style": "strong"
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 290,
+          "y": 72,
+          "w": 200,
+          "h": 24,
+          "rx": 6,
+          "id": "m1"
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 190,
+          "y": 120,
+          "w": 300,
+          "h": 24,
+          "rx": 6,
+          "id": "m2"
+        },
+        {
+          "state": "layer",
+          "shape": "rect",
+          "x": 390,
+          "y": 168,
+          "w": 200,
+          "h": 24,
+          "rx": 6,
+          "id": "m3"
+        },
+        {
+          "state": "layer-remote",
+          "shape": "rect",
+          "x": 490,
+          "y": 216,
+          "w": 186,
+          "h": 24,
+          "rx": 6,
+          "cap": "end",
+          "id": "m4"
+        },
+        {
+          "state": "done",
+          "shape": "polyline",
+          "points": [
+            [
+              340,
+              84
+            ],
+            [
+              440,
+              132
+            ],
+            [
+              540,
+              180
+            ],
+            [
+              640,
+              228
+            ]
+          ],
+          "id": "m5"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 340,
+          "cy": 84,
+          "r": 8,
+          "id": "m6"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 440,
+          "cy": 132,
+          "r": 8,
+          "id": "m7"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 540,
+          "cy": 180,
+          "r": 8,
+          "id": "m8"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 640,
+          "cy": 228,
+          "r": 8,
+          "id": "m9"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 340,
+      "height": 290,
+      "draw": [
+        {
+          "text": "Hooks",
+          "x": 140,
+          "y": 24,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Guard",
+          "x": 195,
+          "y": 24,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "CI",
+          "x": 250,
+          "y": 24,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Remote",
+          "x": 305,
+          "y": 24,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Edit",
+          "x": 0,
+          "y": 65,
+          "style": "mute"
+        },
+        {
+          "text": "Commit",
+          "x": 0,
+          "y": 115,
+          "style": "mute"
+        },
+        {
+          "text": "Push",
+          "x": 0,
+          "y": 165,
+          "style": "mute"
+        },
+        {
+          "text": "Pull request",
+          "x": 0,
+          "y": 215,
+          "style": "mute"
+        },
+        {
+          "text": "Merge",
+          "x": 0,
+          "y": 265,
+          "style": "mute"
+        },
+        {
+          "state": "layer",
+          "id": "l1",
+          "shape": "rect",
+          "x": 128,
+          "y": 98,
+          "w": 24,
+          "h": 74,
+          "rx": 6
+        },
+        {
+          "state": "layer",
+          "id": "l2",
+          "shape": "rect",
+          "x": 183,
+          "y": 48,
+          "w": 24,
+          "h": 124,
+          "rx": 6
+        },
+        {
+          "state": "layer",
+          "id": "l3",
+          "shape": "rect",
+          "x": 238,
+          "y": 148,
+          "w": 24,
+          "h": 74,
+          "rx": 6
+        },
+        {
+          "state": "layer-remote",
+          "id": "l4",
+          "shape": "rect",
+          "x": 293,
+          "y": 198,
+          "w": 24,
+          "h": 74,
+          "rx": 6,
+          "cap": "end"
+        },
+        {
+          "state": "done",
+          "id": "d1",
+          "shape": "polyline",
+          "points": [
+            [
+              140,
+              110
+            ],
+            [
+              195,
+              160
+            ],
+            [
+              250,
+              210
+            ],
+            [
+              305,
+              260
+            ]
+          ]
+        },
+        {
+          "state": "act",
+          "id": "a1",
+          "shape": "circle",
+          "cx": 140,
+          "cy": 110,
+          "r": 8
+        },
+        {
+          "state": "act",
+          "id": "a2",
+          "shape": "circle",
+          "cx": 195,
+          "cy": 160,
+          "r": 8
+        },
+        {
+          "state": "act",
+          "id": "a3",
+          "shape": "circle",
+          "cx": 250,
+          "cy": 210,
+          "r": 8
+        },
+        {
+          "state": "act",
+          "id": "a4",
+          "shape": "circle",
+          "cx": 305,
+          "cy": 260,
+          "r": 8
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Plane",
+        "Moments",
+        "Shared source",
+        "Can be bypassed locally"
+      ],
+      "rows": [
+        [
+          "Git hooks",
+          "commit, push",
+          "`.codeflow/policy.json`",
+          "yes, hooks can be edited"
+        ],
+        [
+          "Session git-guard",
+          "edit to push",
+          "`.codeflow/policy.json`",
+          "yes, the session setup can be edited"
+        ],
+        [
+          "CI",
+          "push, pull request",
+          "`.codeflow/policy.json` through `codeflow ci`",
+          "yes, unless the remote requires its result"
+        ],
+        [
+          "Remote branch protection",
+          "pull request, merge",
+          "rules derived from `.codeflow/policy.json`",
+          "no, it is the boundary at merge"
+        ]
+      ]
+    }
+  }
+}

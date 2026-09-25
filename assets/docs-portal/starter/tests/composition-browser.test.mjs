@@ -9,7 +9,7 @@ import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
 import { collectBuiltArtifacts } from "../scripts/publication.mjs";
 import { applyDisplayState, assertAltitudeTablist, observePortalPage, revealAltitudePanel } from "../scripts/browser-verify.mjs";
 import { RECORD_POINTER_COLUMNS, assertNoRecordRoutes, assertPageClassCoverage, classifyPortalPages, pageClassFailures } from "../scripts/page-classes.mjs";
-import { COMPOSED_PAGE, MISSING_CONCEPT_PAGE, MISSING_TECHNICAL_PAGE, PROSE_ARCHITECTURE_PAGE, PROSE_CONCEPT_PAGE, PROSE_TECHNICAL_PAGE, SHELL_PAGE, WRONG_PANEL_CARRIER_PAGE } from "./page-shapes.mjs";
+import { COMPOSED_PAGE, MISSING_CONCEPT_PAGE, MISSING_TECHNICAL_PAGE, NO_TABLE_TECHNICAL_PAGE, PANEL_DECLARATIONS, SHELL_PAGE, panelBindings, writeFigureInputs } from "./page-shapes.mjs";
 import { buildFixture, commitFixture, configureFixture, runLocalAdapter, selfContainedPortalFixture } from "./portal-fixture.mjs";
 
 test("the gate reads a real build and names every source that is not composed", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
@@ -22,19 +22,33 @@ test("the gate reads a real build and names every source that is not composed", 
         { id: "reference", label: "Reference", description: "Reference", fallback: true },
       ],
       records: { enabled: false, layer: "system", pointers: [{ folder: "docs/decisions", id_prefix: "ADR", purpose: "Accepted decisions." }] },
+      // Each panel's figure is bound here. A panel left unbound is a panel of
+      // prose, and a figure bound to the wrong panel answers for that panel.
+      figures: [
+        ...panelBindings("orient/product"),
+        ...panelBindings("orient/adoption", ["concept", "architecture"]),
+        ...panelBindings("system/architecture/system"),
+        ...panelBindings("system/architecture/present", ["architecture", "technical"]),
+        ...panelBindings("system/architecture/planes", ["concept", "technical"]),
+        ...panelBindings("reference/checklist", ["architecture", "technical"]),
+        ...panelBindings("reference/runbook"),
+        { declaration: PANEL_DECLARATIONS.concept, route: "reference/handbook", panel: "architecture" },
+        ...panelBindings("reference/handbook", ["technical"]),
+      ],
     });
     await rm(path.join(root, "docs/seed.md"));
     for (const directory of ["docs/architecture", "docs/decisions"]) await mkdir(path.join(root, directory));
+    await writeFigureInputs(root);
     const sources = {
       "docs/product.md": COMPOSED_PAGE,
       "docs/adoption.md": MISSING_TECHNICAL_PAGE,
       "docs/architecture/system.md": COMPOSED_PAGE,
       "docs/architecture/present.md": MISSING_CONCEPT_PAGE,
-      "docs/architecture/planes.md": PROSE_ARCHITECTURE_PAGE,
+      "docs/architecture/planes.md": COMPOSED_PAGE,
       "docs/releasing.md": SHELL_PAGE,
-      "docs/checklist.md": PROSE_CONCEPT_PAGE,
-      "docs/runbook.md": PROSE_TECHNICAL_PAGE,
-      "docs/handbook.md": WRONG_PANEL_CARRIER_PAGE,
+      "docs/checklist.md": COMPOSED_PAGE,
+      "docs/runbook.md": NO_TABLE_TECHNICAL_PAGE,
+      "docs/handbook.md": COMPOSED_PAGE,
     };
     for (const [relative, contents] of Object.entries(sources)) await writeFile(path.join(root, relative), contents);
     await writeFile(path.join(root, "docs/decisions/ADR-0001-first.md"), "# ADR-0001: first\n");
@@ -71,11 +85,11 @@ test("the gate reads a real build and names every source that is not composed", 
     }
     assert.deepEqual(failures, [
       "docs/adoption.md (explanatory page at orient/adoption) lacks the altitude trio concept, architecture, technical: missing technical; present concept, architecture",
-      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, list 0, pre 0)",
-      "docs/handbook.md (explanatory page at reference/handbook) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, list 0, pre 0)",
+      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure inside the concept panel: the concept panel carries no figure (figure 0, stage 0, table 0, list 0, pre 0)",
+      "docs/handbook.md (explanatory page at reference/handbook) lacks a figure inside the concept panel: the concept panel carries no figure (figure 0, stage 0, table 0, list 0, pre 0)",
       "docs/releasing.md (explanatory page at reference/releasing) lacks the altitude trio concept, architecture, technical: missing concept, architecture, technical; present none",
-      "docs/runbook.md (explanatory page at reference/runbook) lacks a table inside the technical panel: the technical panel carries no table (figure 0, stage 0, table 0, list 0, pre 0)",
-      "docs/architecture/planes.md (explanatory page at system/architecture/planes) lacks a stage or a table inside the architecture panel: the architecture panel carries no stage or table (figure 0, stage 0, table 0, list 0, pre 0)",
+      "docs/runbook.md (explanatory page at reference/runbook) lacks a figure and a table inside the technical panel: the technical panel carries no table (figure 1, stage 0, table 0, list 0, pre 0)",
+      "docs/architecture/planes.md (explanatory page at system/architecture/planes) lacks a figure inside the architecture panel: the architecture panel carries no figure (figure 0, stage 0, table 0, list 0, pre 0)",
       "docs/architecture/present.md (explanatory page at system/architecture/present) lacks the altitude trio concept, architecture, technical: missing concept; present architecture, technical",
     ]);
     assert.throws(() => assertPageClassCoverage(assignments, observations), /7 failure\(s\) across 10 eligible source\(s\)/);
@@ -107,32 +121,34 @@ test("a hollow carrier, or one inside another carrier, does not count", { skip: 
     const declared = { route: "reference/checklist", source: "docs/checklist.md", pageClass: "explanatory", carriers: { technical: "list" } };
 
     const hollow = await observe(document(
-      "<figure><figcaption></figcaption></figure><p>prose</p>",
+      '<figure class="cf-fig"><figcaption></figcaption></figure><p>prose</p>',
       "<table><thead><tr><th>Part</th></tr></thead><tbody></tbody></table>",
       `${stage}<ul><li></li></ul>`,
     ));
     assert.deepEqual(hollow.panelCarriers, {
       concept: { figure: 0, stage: 0, table: 0, list: 0, pre: 0 },
       architecture: { figure: 0, stage: 0, table: 0, list: 0, pre: 0 },
-      technical: { figure: 1, stage: 1, table: 0, list: 0, pre: 0 },
+      technical: { figure: 0, stage: 1, table: 0, list: 0, pre: 0 },
     });
     assert.deepEqual(pageClassFailures([declared], [hollow]), [
-      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure or a stage inside the concept panel: the concept panel carries no figure or stage (figure 0, stage 0, table 0, list 0, pre 0)",
-      "docs/checklist.md (explanatory page at reference/checklist) lacks a stage or a table inside the architecture panel: the architecture panel carries no stage or table (figure 0, stage 0, table 0, list 0, pre 0)",
-      "docs/checklist.md (explanatory page at reference/checklist) lacks a table inside the technical panel: the technical panel carries no list, which the configuration declares for it (figure 1, stage 1, table 0, list 0, pre 0)",
+      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure inside the concept panel: the concept panel carries no figure (figure 0, stage 0, table 0, list 0, pre 0)",
+      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure inside the architecture panel: the architecture panel carries no figure (figure 0, stage 0, table 0, list 0, pre 0)",
+      "docs/checklist.md (explanatory page at reference/checklist) lacks a figure and a table inside the technical panel: the technical panel carries no figure and no list, which the configuration declares for it (figure 0, stage 1, table 0, list 0, pre 0)",
     ]);
 
-    // The same page, authored: a figure with something in it, a table with a
-    // row, and the checklist the declaration is for.
+    // The same page, authored: a grammar figure in every panel, and the
+    // checklist the declaration is for. The legend list and the twin table
+    // inside a figure are its own parts, not further carriers.
+    const figure = '<figure class="cf-fig"><svg class="cf-fig-svg"></svg><ul class="cf-legend"><li>key</li></ul><figcaption>a figure</figcaption><details class="cf-twin"><table><tbody><tr><td>row</td></tr></tbody></table></details></figure>';
     const authored = await observe(document(
-      '<figure><img src="diagram.svg" alt="the shape"><figcaption>a figure</figcaption></figure>',
-      "<table><thead><tr><th>Part</th></tr></thead><tbody><tr><td>First</td></tr></tbody></table>",
-      "<ul><li>Cut the release branch</li><li>Run the gate</li></ul>",
+      figure,
+      `${figure}<table><thead><tr><th>Part</th></tr></thead><tbody><tr><td>First</td></tr></tbody></table>`,
+      `${figure}<ul><li>Cut the release branch</li><li>Run the gate</li></ul>`,
     ));
     assert.deepEqual(authored.panelCarriers, {
       concept: { figure: 1, stage: 0, table: 0, list: 0, pre: 0 },
-      architecture: { figure: 0, stage: 0, table: 1, list: 0, pre: 0 },
-      technical: { figure: 0, stage: 0, table: 0, list: 1, pre: 0 },
+      architecture: { figure: 1, stage: 0, table: 1, list: 0, pre: 0 },
+      technical: { figure: 1, stage: 0, table: 0, list: 1, pre: 0 },
     });
     assert.deepEqual(pageClassFailures([declared], [authored]), []);
   } finally { await browser.close(); }

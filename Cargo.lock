@@ -281,6 +281,7 @@ dependencies = [
  "regex",
  "rusqlite",
  "same-file",
+ "scraper",
  "serde",
  "serde_json",
  "serde_yaml_ng",

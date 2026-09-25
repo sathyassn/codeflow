@@ -18,7 +18,7 @@
     },
     "astro.config.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "da3762c8ad89b0fa91968b347af32d3459492fcb6c09b9a2cff761fe87daaba6"
+      "pristine_sha256": "632cdfa71119270876ca6257b2c4fc4e0b35070b8147188ea87401b51728f093"
     },
     "package-lock.json": {
       "ownership": "managed",
@@ -26,7 +26,7 @@
     },
     "package.json": {
       "ownership": "managed",
-      "pristine_sha256": "29524148f98cd3a70ea6ed9f52654943927013c2eadf124fa30506535d7facb2"
+      "pristine_sha256": "133ee3b668eabdc15c60adb8fb99a4e3076ae0e8c20cb303706a74935becbfe4"
     },
     "portal.config.json": {
       "ownership": "user-owned",
@@ -50,11 +50,15 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "eee734ed726d4d246e2c51a13fc4bab4bf7b6fe3497efd36ca98cc007ae77147"
+      "pristine_sha256": "30821ac56e0fdc77307a49194a1ec5386eee9a12ef25ff2418a1174775a4b726"
+    },
+    "scripts/as-is-markdown.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "428e67677f34447813468d37c1e1221ffa1bccde389528be98f4eb3201ff60c2"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "e33e3e967170b6bfd372397ed5b23bc097662733b82766c16aca90e8df7d0fb2"
+      "pristine_sha256": "e75ee60b0d12db73bd4db46906574d08c3a2feba184ab012ec36a9274b1bbfd6"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -62,7 +66,11 @@
     },
     "scripts/evidence.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "da327049e08b900d1bcbcbe136258eae24b61b7c75edf471bbb43d1fdbec5a99"
+      "pristine_sha256": "37087b488dfbd010322197279510e487d3403384b33d21d6a93963ab6757e927"
+    },
+    "scripts/figure-grammar.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "dac22d6c35522141fd96bb7b346b2b899e6250a6409c9382b7a58026a6de35ef"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -78,7 +86,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "843f662d03471e61bc9659f04aa149f54db715364a22f1935ad1b6aabefa944c"
+      "pristine_sha256": "04473344e1d505c8c5518a1be6eaaf1282742678b0954548fd7efb3b2af6e2ef"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -86,7 +94,7 @@
     },
     "scripts/page-classes.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "baee7c9476096e730c041e9510d77d1c546794de8d746e94c285b1659b798c10"
+      "pristine_sha256": "c294f24e81a607f9e5d8bf94842329d3c037de39f4129b0b95de5a00458833fa"
     },
     "scripts/process-environment.mjs": {
       "ownership": "managed",
@@ -96,9 +104,17 @@
       "ownership": "managed",
       "pristine_sha256": "1aba89319a960bdc77bf6b579e965d3bbc5b43eaf38f6469598541eb9aaf7f76"
     },
+    "scripts/runtime-scripts.json": {
+      "ownership": "managed",
+      "pristine_sha256": "d2b3ba48000fba56aab70b7b64a70f3659cc5b927a772b3d8479a075861022e3"
+    },
+    "scripts/runtime-scripts.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "ca23ba9ece998b02fa687cafea5a402369df17f299665e7aa37eec05332df588"
+    },
     "scripts/workflow.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "0f25389dea0058dadad9a7f5b95b94783e41de41eb02ff8499836141a409f03c"
+      "pristine_sha256": "ebab0c4e19c32edd23bcd6085127ef20c7341af2340c685977dbafe49a272075"
     },
     "src/components/PortalDisplay.astro": {
       "ownership": "managed",
@@ -136,6 +152,14 @@
       "ownership": "managed",
       "pristine_sha256": "3100e775e8616cd2611beecfa23a4263d7037586789b43f035236a2e6fbd4c62"
     },
+    "src/styles/figure-roles.css": {
+      "ownership": "managed",
+      "pristine_sha256": "58a75d1e0a419f4fc59cdd7475ee78001339e883ee03beacdea10c9579daf748"
+    },
+    "src/styles/figure.css": {
+      "ownership": "managed",
+      "pristine_sha256": "a7189a615f07a437cc40dfa9a27e22e0a109158a9db473cea5b7f26c834d6546"
+    },
     "src/styles/portal.css": {
       "ownership": "managed",
       "pristine_sha256": "393bbeee28f13c5709243e70c2befb9cfaad909ef0bddb9dbd3332818020fb71"
@@ -146,7 +170,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "6836334d811462055dc5b85b417b5b4b71ed0845dfdeff28ca662015440ce249"
+      "pristine_sha256": "14d5bf49aa851715f10d2b2039f5faa92972db56b19e56ae1e273a2d70dbcc96"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
@@ -154,11 +178,23 @@
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "b3c0efe5e3407a2a448794599648f5ec4be671d02f9e2f53989f4eba891898d0"
+      "pristine_sha256": "6b279c848e9fa375d440de122b4c76ceb8fd9123c0e42a6d6b39ece53dd63815"
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "53e12f4538e7e693feec09f027a591f692fa0ed8316be04dd9bf9bdef79c36c8"
+      "pristine_sha256": "09a04d79555e238a97375e4216fc17423b40f8589daecfa924b190f00e961d03"
+    },
+    "tests/figure-gate.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "18560b79241863b19b832c8dcc3db60a3c8c3f6ae50aa213fa4e81930acec3c8"
+    },
+    "tests/figure-grammar.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "e07c030f4db7e174373fe6a2dd0e54af55e965d4624a314a55a4c1461e0c7aa8"
+    },
+    "tests/figure-rules-browser.test.mjs": {
+      "ownership": "managed",
+      "pristine_sha256": "2b9bb45994aa4b2b6738cc959eb2347e4c36ca32e50ea25f6e29d11f2a162a01"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
@@ -168,17 +204,97 @@
       "ownership": "managed",
       "pristine_sha256": "6cd55c25fa118a6b63eb747086652f5e24842c908fc7abd09fa6646b50a9c3b3"
     },
+    "tests/fixtures/figures/01-flow.json": {
+      "ownership": "managed",
+      "pristine_sha256": "a54e2b287f6483cdde0f6b32455b712de8aeec6180fa0993753c5693c30e7c00"
+    },
+    "tests/fixtures/figures/02-structure.json": {
+      "ownership": "managed",
+      "pristine_sha256": "798464e4e2094e0379aaac8519e737b16c7748200b5fe03cfe6765e93a0d5547"
+    },
+    "tests/fixtures/figures/03-layering.json": {
+      "ownership": "managed",
+      "pristine_sha256": "49ee7bb19a7b2916b03e3c6e622c5ed75718c39654aa6c9eb88511eb32b3c152"
+    },
+    "tests/fixtures/figures/04-sequence.json": {
+      "ownership": "managed",
+      "pristine_sha256": "5d7d2b45f2f4b6dc009a50b16468322265485380980e68bc2fab664d95b7fdc7"
+    },
+    "tests/fixtures/figures/05-state.json": {
+      "ownership": "managed",
+      "pristine_sha256": "781c346f55a626509330c94f62115429c158820a3c4c38dcdef360299c7ab64c"
+    },
+    "tests/fixtures/figures/06-coverage.json": {
+      "ownership": "managed",
+      "pristine_sha256": "da1ffd5999b62b566fc4491fc895fb69f83e8417b2f692d4d52bdc73f8b519c1"
+    },
+    "tests/fixtures/figures/07-extent.json": {
+      "ownership": "managed",
+      "pristine_sha256": "800bad3bd120c8554b011ceec884b999b9e6f57262c2ec28e8400e9f7fcc7f03"
+    },
+    "tests/fixtures/figures/08-derivation.json": {
+      "ownership": "managed",
+      "pristine_sha256": "acaa4b5ff0b12b3ade21ca6e892c6743717d5f2c55d90d436e0811c51cf801e0"
+    },
+    "tests/fixtures/figures/09-graph.json": {
+      "ownership": "managed",
+      "pristine_sha256": "e43f27bbbb6eb2ed249ae9c4ab6e3526194ddaa178c294322e1c7a9a10ba43b7"
+    },
+    "tests/fixtures/figures/10-extent-derived.json": {
+      "ownership": "managed",
+      "pristine_sha256": "e34b89195c31aed020cf7942b56c19674f204a6898e730f292c19d786ca6058b"
+    },
+    "tests/fixtures/figures/rendered/01-flow.html": {
+      "ownership": "managed",
+      "pristine_sha256": "6f6b14e0a0862049404f1b3f1f3831b09b5b97ac028fdc4854c167c0220f9c56"
+    },
+    "tests/fixtures/figures/rendered/02-structure.html": {
+      "ownership": "managed",
+      "pristine_sha256": "1481056b10650255e35673f3fba56eceadb8a989f05fd2a2493ae17fdb9b0ce9"
+    },
+    "tests/fixtures/figures/rendered/03-layering.html": {
+      "ownership": "managed",
+      "pristine_sha256": "61fed97e03dd0c87a55d7d0a9a59a77c18d52b50dd9ef5a50b8cae4c83682a42"
+    },
+    "tests/fixtures/figures/rendered/04-sequence.html": {
+      "ownership": "managed",
+      "pristine_sha256": "6ec59e24a7b9b1f71af07c7565809a9cf60b3d24dc7c924303be6fc7a0304cd3"
+    },
+    "tests/fixtures/figures/rendered/05-state.html": {
+      "ownership": "managed",
+      "pristine_sha256": "aa5481db8ae0155c9842087f94499beb64d56864991ab2746bf1ee1337be6a32"
+    },
+    "tests/fixtures/figures/rendered/06-coverage.html": {
+      "ownership": "managed",
+      "pristine_sha256": "aa8af2f16b433150d39380d046bde638f85a00117a08beadfda04ac0670eb481"
+    },
+    "tests/fixtures/figures/rendered/07-extent.html": {
+      "ownership": "managed",
+      "pristine_sha256": "1e0fec3de045142e51e2fa7e7ba6cbf1785286ee32789dc57ee275a9309930d2"
+    },
+    "tests/fixtures/figures/rendered/08-derivation.html": {
+      "ownership": "managed",
+      "pristine_sha256": "2e35a96c21170f188a7949b7ee8225bac8052c44fb0257ef6c69c278c69a52c2"
+    },
+    "tests/fixtures/figures/rendered/09-graph.html": {
+      "ownership": "managed",
+      "pristine_sha256": "bbc466b6c7b24cf5b70fe3cc65e6a6b7edb82ed4568d177c3048e47644dee3be"
+    },
+    "tests/fixtures/figures/rendered/10-extent-derived.html": {
+      "ownership": "managed",
+      "pristine_sha256": "e98c0e3dead42e20bafe5fd148009abcaa76f91027f24430fb8fc78afca51595"
+    },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",
       "pristine_sha256": "0b442af14a23ccd4a3636d0c1cb7e3c43f24aab07313bda13ea136fcf5cd290a"
     },
     "tests/page-shapes.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "09399fa1687c3c3c6186630307746c8ef4da6ead946c86ebcfa05b67af261294"
+      "pristine_sha256": "4bcb0f07b3a8cea576a0ea11e263e7a4beacf0958727c5bbd80765e3f34f8380"
     },
     "tests/portal-fixture.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "1127b1571190391ece2af3e2b28a95b25d8bd8f8303ed2bd3566602022644a48"
+      "pristine_sha256": "dd3960e341d14073974c219b1020624903edeff9dc7b4c40f4d4b14cfc4a10c5"
     },
     "tsconfig.json": {
       "ownership": "managed",

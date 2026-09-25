@@ -44,7 +44,7 @@ portal. Apply `cf-editorial-review` to substantive copy.
 Use the portal when layered browsing, cross-linking, or machine-readable twins
 materially improve understanding. Keep Markdown-only docs when the repository
 is tiny, short-lived, or lacks the durable sources to justify a build
-dependency. Record an honest refusal instead of decorative or empty pages.
+dependency. Record an honest refusal, not decorative or empty pages.
 
 Adoption is explicit:
 
@@ -111,15 +111,15 @@ gratuitous emoji, and promotional language.
 Page shape:
 [resources/portal-page-shape.example.md](resources/portal-page-shape.example.md).
 
-- **Figures** lead every altitude panel and every how-to section, one grammar
-  family each; text inside boxes is not a figure.
+- **Figures** lead every altitude panel and how-to section, one family
+  each, drawn by the figure block; text in boxes is not a figure.
 - **Explanatory sources** author the altitude trio with a figure framed by
   short plain prose in every panel; verification fails a trio page showing
   more than one panel or an explanatory page with no trio.
 - **Records** are one generated pointer page of folders, not portal pages;
   the adapter's records switch stays off.
 - **Type roles:** display / prose / label / mono-evidence; themes own faces and
-  scale. Do not ship ad-hoc font stacks in content.
+  scale. Content ships no ad-hoc font stacks.
 - **Themes:** `signal`/`folio` map to utility skins instrument/ink; readers
   switch skin, face, scale, and appearance in the Display panel. A project may
   adapt the utility once from its brand; never feed portal palette/type/

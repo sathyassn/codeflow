@@ -98,6 +98,12 @@ pub enum Block {
         acc_title: String,
         acc_description: String,
     },
+    /// A figure-grammar declaration (`figure-grammar.md`), drawn on the
+    /// client by the grammar module the docs portal also runs.
+    Figure {
+        id: String,
+        declaration: serde_json::Value,
+    },
     Media {
         id: String,
         mime_type: MediaMime,
@@ -316,6 +322,7 @@ impl Block {
             | Self::Diff { id, .. }
             | Self::Tree { id, .. }
             | Self::Diagram { id, .. }
+            | Self::Figure { id, .. }
             | Self::Media { id, .. }
             | Self::Disclosure { id, .. }
             | Self::Tabs { id, .. }
@@ -390,6 +397,10 @@ impl Block {
                 source,
                 ..
             } => format!("{source}{acc_title} — {acc_description}"),
+            Self::Figure { declaration, .. } => {
+                let (title, caption) = figure_text(declaration);
+                format!("{title}{caption}")
+            }
             Self::Media { caption, .. } => caption.clone().unwrap_or_default(),
             Self::Disclosure { summary, .. } => summary.clone(),
             Self::Tabs { tabs, .. } => tabs.iter().map(|tab| tab.label.as_str()).collect(),
@@ -428,6 +439,7 @@ impl Block {
             | Self::Decision { title, .. }
             | Self::Tree { label: title, .. } => title.clone(),
             Self::Diagram { acc_title, .. } => acc_title.clone(),
+            Self::Figure { declaration, .. } => figure_text(declaration).0.to_string(),
             Self::Media { alt, .. } => alt.clone(),
             Self::Disclosure { summary, .. } => summary.clone(),
             // Full prompt is rendered in the block body; never dump it into the nav.
@@ -502,11 +514,11 @@ fn validate_blocks(
                 limits::MAX_BLOCKS
             )));
         }
-        if matches!(block, Block::Diagram { .. }) {
+        if matches!(block, Block::Diagram { .. } | Block::Figure { .. }) {
             *diagram_count += 1;
             if *diagram_count > limits::MAX_DIAGRAM_BLOCKS {
                 return Err(invalid(format!(
-                    "diagram count exceeds {}",
+                    "diagram and figure count exceeds {}",
                     limits::MAX_DIAGRAM_BLOCKS
                 )));
             }
@@ -647,6 +659,7 @@ fn validate_block(
                 limits::MAX_PROSE_BYTES,
             )
         }
+        Block::Figure { declaration, .. } => validate_figure_declaration(declaration),
         Block::Media {
             mime_type,
             data_base64,
@@ -852,6 +865,79 @@ fn valid_three_digits(value: &str) -> bool {
     value.len() == 3 && value.bytes().all(|byte| byte.is_ascii_digit())
 }
 
+/// The figure families of `figure-grammar.md`, in the grammar module's order.
+pub const FIGURE_FAMILIES: [&str; 9] = [
+    "flow",
+    "structure",
+    "layering",
+    "sequence",
+    "state",
+    "coverage",
+    "extent",
+    "derivation",
+    "graph",
+];
+
+/// The title and caption a figure placeholder shows before the grammar module
+/// draws it; they are also the block's canonical review text.
+fn figure_text(declaration: &serde_json::Value) -> (&str, &str) {
+    let field = |name: &str| {
+        declaration
+            .pointer(&format!("/figure/{name}"))
+            .and_then(serde_json::Value::as_str)
+            .unwrap_or_default()
+    };
+    (field("title"), field("caption"))
+}
+
+/// The envelope the service can check. The client validates the rest with the
+/// grammar module before it draws, and shows the failure in place of the
+/// figure. Present has no repository source to bind, so it draws authored
+/// figures only; a derived figure binds its data in the docs portal.
+fn validate_figure_declaration(declaration: &serde_json::Value) -> Result<()> {
+    let encoded = serde_json::to_vec(declaration)
+        .map_err(|_| invalid("figure declaration is not serializable"))?;
+    if encoded.len() > limits::MAX_FIGURE_DECLARATION_BYTES {
+        return Err(invalid(format!(
+            "figure declaration exceeds {} bytes",
+            limits::MAX_FIGURE_DECLARATION_BYTES
+        )));
+    }
+    let Some(root) = declaration.as_object() else {
+        return Err(invalid("figure declaration must be an object"));
+    };
+    if root
+        .keys()
+        .any(|key| key != "schema_version" && key != "figure")
+        || root.get("schema_version") != Some(&serde_json::Value::from(1))
+    {
+        return Err(invalid(
+            "figure declaration must be { schema_version: 1, figure: { ... } }",
+        ));
+    }
+    let Some(figure) = root.get("figure").and_then(serde_json::Value::as_object) else {
+        return Err(invalid("figure declaration must carry a figure object"));
+    };
+    let family = figure
+        .get("family")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or_default();
+    if !FIGURE_FAMILIES.contains(&family) {
+        return Err(invalid(format!(
+            "figure family must be one of {}",
+            FIGURE_FAMILIES.join(", ")
+        )));
+    }
+    if figure.get("binding").and_then(serde_json::Value::as_str) != Some("authored") {
+        return Err(invalid(
+            "present draws authored figures; a derived figure binds its data in the docs portal",
+        ));
+    }
+    let (title, caption) = figure_text(declaration);
+    require_nonempty_bounded("figure title", title, limits::MAX_TITLE_BYTES)?;
+    require_nonempty_bounded("figure caption", caption, limits::MAX_TITLE_BYTES)
+}
+
 fn require_nonempty_bounded(name: &str, value: &str, max: usize) -> Result<()> {
     if value.trim().is_empty() {
         return Err(invalid(format!("{name} must not be empty")));
@@ -995,6 +1081,83 @@ mod tests {
             .map(|index| diagram(index, "flowchart LR\nA-->B".to_string()))
             .collect();
         assert!(document(diagrams).validate().is_err());
+    }
+
+    fn figure(id: &str, declaration: serde_json::Value) -> Block {
+        Block::Figure {
+            id: id.to_string(),
+            declaration,
+        }
+    }
+
+    fn authored_declaration() -> serde_json::Value {
+        serde_json::json!({
+            "schema_version": 1,
+            "figure": {
+                "id": "review-path",
+                "family": "flow",
+                "binding": "authored",
+                "title": "One change on its review path",
+                "caption": "A change passes review before it lands."
+            }
+        })
+    }
+
+    #[test]
+    fn figure_declarations_are_checked_at_the_envelope_and_share_the_drawn_budget() {
+        let valid = authored_declaration();
+        assert!(document(vec![figure("fig", valid.clone())])
+            .validate()
+            .is_ok());
+        let block = figure("fig", valid.clone());
+        assert_eq!(block.review_label(), "One change on its review path");
+        assert_eq!(
+            block.canonical_review_text(),
+            "One change on its review pathA change passes review before it lands."
+        );
+
+        let refused = |change: &dyn Fn(&mut serde_json::Value), expected: &str| {
+            let mut declaration = valid.clone();
+            change(&mut declaration);
+            let error = document(vec![figure("fig", declaration)])
+                .validate()
+                .expect_err(expected)
+                .to_string();
+            assert!(error.contains(expected), "{error}");
+        };
+        refused(
+            &|value| value["figure"]["binding"] = "derived".into(),
+            "present draws authored figures",
+        );
+        refused(
+            &|value| value["figure"]["family"] = "chart".into(),
+            "figure family must be one of",
+        );
+        refused(
+            &|value| value["figure"]["caption"] = " ".into(),
+            "figure caption must not be empty",
+        );
+        refused(
+            &|value| value["extra"] = true.into(),
+            "schema_version: 1, figure",
+        );
+        refused(
+            &|value| value["schema_version"] = 2.into(),
+            "schema_version: 1, figure",
+        );
+        refused(
+            &|value| {
+                value["figure"]["description"] =
+                    "x".repeat(limits::MAX_FIGURE_DECLARATION_BYTES).into();
+            },
+            "figure declaration exceeds",
+        );
+        refused(&|value| *value = serde_json::json!([]), "must be an object");
+
+        let drawn = (0..=limits::MAX_DIAGRAM_BLOCKS)
+            .map(|index| figure(&format!("fig-{index}"), valid.clone()))
+            .collect();
+        assert!(document(drawn).validate().is_err());
     }
 
     #[test]

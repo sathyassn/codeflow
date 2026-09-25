@@ -75,7 +75,7 @@ to the instrument skin and produce the same artifact.
 |---|---|---|
 | Shared doctrine text | `assets/base/agents/skills/{cf-present,cf-docs-portal}/resources/utility-presentation-system.md` | scaffold parity tests; `codeflow doctor --check managed-drift` |
 | Figure grammar | `assets/base/agents/skills/{cf-present,cf-docs-portal}/resources/figure-grammar.md`: nine families, twelve rules, altitude contract, mark vocabulary, declaration field reference; `figure-grammar-specimens.md` beside it: one specimen per family, loaded when authoring a figure (ADR-0068) | scaffold parity tests; the families table and the evidence-board pointer pinned in `crates/codeflow-core/tests/manifest_consistency.rs` |
-| Figure declaration | the schema in ADR-0068: id, family, binding, question, idea, caption, states, facts, narrow, twin, source | by inspection and the evaluation kit until the figure runtime and its gate land (EPC-016) |
+| Figure declaration | the schema in ADR-0068 as updated on 2026-09-24; the field reference is `figure-grammar.md` section 6 | the grammar module `docs-portal/scripts/figure-grammar.mjs` and its figure gate (`npm run browser:verify`, present `npm run check:figures`); `codeflow validate --portal` re-derives each fact and rebuilds each companion |
 | Figure thresholds | text floor 12.5 px (token sheet); mark floor 9 px on the inner mark, narrow break 646 px, elongation ceiling 1.5, clearance 8 px and collision depth 1 px (grammar module); per-figure elongation ceiling with reason (portal configuration) | declared once by the project; the figure gate reads them |
 | Portal carriers | `docs-portal/scripts/lib.mjs` (`cf-stage` parser, altitude trio tablist, full-width `text` fences, tables, media) | adapter tests; `npm run browser:verify` |
 | Present blocks | `crates/codeflow-present` document schema under `.codeflow/schemas/present/` | present contract tests |
@@ -87,7 +87,9 @@ to the instrument skin and produce the same artifact.
 Unsupported carriers (tree and arbitrary diagram syntaxes on both surfaces;
 Mermaid in the portal, where a fence renders as plain code) are not promised
 anywhere; adding one requires an adapter or runtime change and an ADR. The
-family figure is the default form (ADR-0068) but not yet a portal carrier:
-raw HTML stays escaped, so a portal source authors the declaration beside a
-`cf-stage` or `text` fence until the figure block lands; present renders the
-inline SVG through its `html` block today.
+family figure is the default form (ADR-0068) and a rendered carrier on both
+surfaces. A portal page binds a declaration in `portal.config.json` and the
+adapter draws it as a companion beside the unchanged source; raw HTML in a
+source stays escaped, so a figure enters a page only through its declaration.
+A present document carries the declaration in a `figure` block, which the
+client draws with the same grammar module.

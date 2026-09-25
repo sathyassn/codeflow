@@ -495,6 +495,152 @@ fn kit_copies_are_byte_identical_across_skills_and_mirrors() {
     );
 }
 
+/// One figure runtime (TSK-059): the portal, its managed starter and present
+/// carry the kit's figure sheet byte for byte, and present and the starter
+/// carry the portal's grammar module byte for byte, since present's esbuild
+/// entry reaches only `web/src`.
+#[test]
+fn figure_runtime_copies_match_the_kit_sheet_and_the_portal_module() {
+    let root = repo_root();
+    let sheet = read_kit("figure.css");
+    let module = std::fs::read_to_string(root.join("docs-portal/scripts/figure-grammar.mjs"))
+        .expect("the portal grammar module is readable");
+    let mut problems = Vec::new();
+    for (copy, source, label) in [
+        (
+            "docs-portal/src/styles/figure.css",
+            &sheet,
+            "the kit figure.css",
+        ),
+        (
+            "assets/docs-portal/starter/src/styles/figure.css",
+            &sheet,
+            "the kit figure.css",
+        ),
+        (
+            "crates/codeflow-present/web/src/figure.css",
+            &sheet,
+            "the kit figure.css",
+        ),
+        (
+            "crates/codeflow-present/web/src/figure-grammar.mjs",
+            &module,
+            "docs-portal/scripts/figure-grammar.mjs",
+        ),
+        (
+            "assets/docs-portal/starter/scripts/figure-grammar.mjs",
+            &module,
+            "docs-portal/scripts/figure-grammar.mjs",
+        ),
+    ] {
+        match std::fs::read_to_string(root.join(copy)) {
+            Ok(bytes) if &bytes == source => {}
+            Ok(_) => problems.push(format!("{copy} differs from {label}")),
+            Err(error) => problems.push(format!("{copy} is unreadable: {error}")),
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "figure runtime copies drifted:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// Once the figure block renders (TSK-059), the skills teach it as the default
+/// carrier and keep `cf-stage` only as the flow interim. Pinned in every skill
+/// root so a mirror cannot keep the old default.
+#[test]
+fn skills_teach_the_figure_block_as_the_default_carrier() {
+    let root = repo_root();
+    let pins: [(&str, &[&str]); 6] = [
+        (
+            "cf-docs-portal/SKILL.md",
+            &["lead every altitude panel", "drawn by the figure block"],
+        ),
+        (
+            "cf-docs-portal/references/visual-craft.md",
+            &[
+                "a figure in every panel",
+                "### The figure block (the default carrier)",
+                "### `cf-stage`: the flow interim",
+            ],
+        ),
+        (
+            "cf-docs-portal/resources/portal-page-shape.example.md",
+            &[
+                "\"panel\": \"concept\"",
+                "\"panel\": \"architecture\"",
+                "\"panel\": \"technical\"",
+                "\"family\": \"structure\"",
+                "\"family\": \"derivation\"",
+                "\"family\": \"extent\"",
+            ],
+        ),
+        (
+            "cf-present/references/document-authoring.md",
+            &[
+                "| a relationship the reader must see | `figure` |",
+                "### Figure",
+            ],
+        ),
+        (
+            "cf-present/resources/how-presentation-works.md",
+            &["**author a `figure` block**", "flow family's interim form"],
+        ),
+        (
+            "cf-present/resources/utility-presentation-system.md",
+            &[
+                "### Page classes in configuration (portal)",
+                "`figure` block carrying the declaration",
+            ],
+        ),
+    ];
+    let mut problems = Vec::new();
+    for skill_root in SKILL_ROOTS {
+        for (file, required) in &pins {
+            let path = root.join(skill_root).join(file);
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{} is readable: {error}", path.display()));
+            for marker in *required {
+                if !text.contains(marker) {
+                    problems.push(format!("{}: missing {marker}", path.display()));
+                }
+            }
+        }
+        for skill in SKILLS {
+            let dir = root.join(skill_root).join(skill);
+            for entry in walk(&dir) {
+                let text = std::fs::read_to_string(&entry).unwrap_or_default();
+                for retired in ["Prefer a `cf-stage` fence", "Not yet a rendered carrier"] {
+                    if text.contains(retired) {
+                        problems.push(format!("{}: still says {retired}", entry.display()));
+                    }
+                }
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "the figure block is not the taught default:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+fn walk(dir: &Path) -> Vec<PathBuf> {
+    let mut files = Vec::new();
+    for entry in std::fs::read_dir(dir)
+        .unwrap_or_else(|error| panic!("{} is readable: {error}", dir.display()))
+    {
+        let path = entry.expect("directory entry is readable").path();
+        if path.is_dir() {
+            files.extend(walk(&path));
+        } else if path.extension().is_some_and(|extension| extension == "md") {
+            files.push(path);
+        }
+    }
+    files
+}
+
 /// Every kit file ships to both harnesses from its own skill source, and the
 /// repository manifest records the hash of the bytes it installed.
 #[test]

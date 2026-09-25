@@ -8,7 +8,7 @@ import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import YAML from "yaml";
-import { PANEL_CARRIER_ALTERNATES } from "./page-classes.mjs";
+import { ALTITUDE_PANELS, DERIVED_LOOKUPS, PAGE_CLASS_REASONS, PANEL_CARRIER_ALTERNATES } from "./page-classes.mjs";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -650,7 +650,7 @@ export function withBase(base, route) {
 
 export function validatePortalConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("portal.config.json: expected an object");
-  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "records", "page_carriers", "base"]);
+  const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "records", "page_carriers", "page_classes", "figures", "base"]);
   for (const key of Object.keys(value)) if (!allowed.has(key)) throw new Error(`portal.config.json: unknown key ${key}`);
   if (value.schema_version !== 1) throw new Error("portal.config.json: unsupported schema_version");
   boundedString(value.title, "title", 1, 120);
@@ -685,6 +685,60 @@ export function validatePortalConfig(value) {
   if (fallback !== 1) throw new Error("portal.config.json: exactly one layer must be the fallback");
   value.records = validateRecordsSwitch(value.records, value.layers);
   value.page_carriers = validatePageCarriers(value.page_carriers);
+  value.page_classes = validatePageClasses(value.page_classes);
+  value.figures = validateFigureBindings(value.figures);
+  return value;
+}
+
+// A page leaves the explanatory class only by a declaration here, naming its
+// source or a source prefix. Pass-through takes one reason from a closed set;
+// the no-relationship reason also records the judgment in a note. Neither
+// class drops a route or changes the bytes of its source.
+function validatePageClasses(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 256) throw new Error("portal.config.json: page_classes must be an array of at most 256 entries");
+  const keys = new Set();
+  for (const entry of value) {
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) throw new Error("portal.config.json: each page_classes entry must be an object");
+    for (const key of Object.keys(entry)) if (!["source", "prefix", "class", "reason", "note", "derive"].includes(key)) throw new Error(`portal.config.json: unknown page_classes key ${key}`);
+    const named = ["source", "prefix"].filter((key) => entry[key] !== undefined);
+    if (named.length !== 1) throw new Error("portal.config.json: each page_classes entry names exactly one source or prefix");
+    const target = portablePathKey(entry[named[0]], `page_classes ${named[0]}`);
+    if (keys.has(target)) throw new Error(`portal.config.json: duplicate page_classes entry ${entry[named[0]]}`);
+    keys.add(target);
+    if (!["illustrated", "pass-through", "derived-lookup"].includes(entry.class)) throw new Error(`portal.config.json: page_classes ${entry[named[0]]} class must be illustrated, pass-through or derived-lookup`);
+    if (entry.class === "pass-through") {
+      if (!PAGE_CLASS_REASONS.includes(entry.reason)) throw new Error(`portal.config.json: pass-through ${entry[named[0]]} needs a reason from ${PAGE_CLASS_REASONS.join(", ")}`);
+      if (entry.reason === "no-relationship") boundedString(entry.note, `page_classes ${entry[named[0]]} note`, 1, 300);
+      else if (entry.note !== undefined) boundedString(entry.note, `page_classes ${entry[named[0]]} note`, 1, 300);
+    } else if (entry.reason !== undefined || entry.note !== undefined) throw new Error(`portal.config.json: only a pass-through entry carries a reason: ${entry[named[0]]}`);
+    if (entry.class === "derived-lookup") {
+      if (!DERIVED_LOOKUPS.includes(entry.derive) || entry.source === undefined) throw new Error(`portal.config.json: derived-lookup ${entry[named[0]]} names one source and derive ${DERIVED_LOOKUPS.join(" or ")}`);
+    } else if (entry.derive !== undefined) throw new Error(`portal.config.json: only a derived-lookup entry names derive: ${entry[named[0]]}`);
+  }
+  return value;
+}
+
+// Every figure is bound to its page here, by route and by an altitude panel
+// or a section anchor of an illustrated source, never by a marker inside a
+// source. The declaration file is a committed repository input.
+function validateFigureBindings(value) {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.length > 512) throw new Error("portal.config.json: figures must be an array of at most 512 bindings");
+  const seen = new Set();
+  for (const binding of value) {
+    if (!binding || typeof binding !== "object" || Array.isArray(binding)) throw new Error("portal.config.json: each figures binding must be an object");
+    for (const key of Object.keys(binding)) if (!["declaration", "route", "panel", "anchor"].includes(key)) throw new Error(`portal.config.json: unknown figures key ${key}`);
+    safeRelative(binding.declaration, "figures declaration");
+    if (!binding.declaration.endsWith(".json")) throw new Error(`portal.config.json: figure declaration ${binding.declaration} must be a JSON file`);
+    safeRelative(binding.route, "figures route");
+    if (binding.panel !== undefined && binding.anchor !== undefined) throw new Error(`portal.config.json: figure ${binding.declaration} binds a panel or an anchor, not both`);
+    if (binding.panel !== undefined && !ALTITUDE_PANELS.includes(binding.panel)) throw new Error(`portal.config.json: figure ${binding.declaration} panel must be one of ${ALTITUDE_PANELS.join(", ")}`);
+    if (binding.anchor !== undefined && (typeof binding.anchor !== "string" || !/^[\p{L}\p{N}_-]{1,200}$/u.test(binding.anchor))) throw new Error(`portal.config.json: figure ${binding.declaration} anchor must be a heading slug`);
+    const key = `${binding.route}\u0000${binding.declaration}`;
+    if (seen.has(key)) throw new Error(`portal.config.json: figure ${binding.declaration} is bound to ${binding.route} twice`);
+    seen.add(key);
+  }
   return value;
 }
 
@@ -868,4 +922,92 @@ function validatePathArray(value, label, min, max) {
   if (!Array.isArray(value) || value.length < min || value.length > max) throw new Error(`${label}: expected ${min} to ${max} paths`);
   const paths = value.map((item) => safeRelative(item, label));
   if (new Set(paths.map((item) => portablePathKey(item, label))).size !== paths.length) throw new Error(`${label}: duplicate or case-colliding path`);
+}
+
+// An illustrated or pass-through source renders as it is. Its region is the
+// body after the frontmatter, less one leading level-one heading that repeats
+// the page title (the shell already renders the title). The validator
+// re-derives the same start from the committed bytes, so this rule is kept to
+// raw lines: blank lines, one ATX heading, blank lines.
+export function asIsRegionStart(body, title) {
+  const lines = body.split("\n");
+  let index = 0;
+  let offset = 0;
+  const advanceBlank = () => {
+    while (index < lines.length - 1 && lines[index].trim() === "") { offset += lines[index].length + 1; index += 1; }
+  };
+  advanceBlank();
+  const heading = (lines[index] ?? "").match(/^ {0,3}#[ \t]+(.*?)(?:[ \t]+#+)?[ \t]*$/);
+  if (!heading || index >= lines.length - 1 || !asIsTitleMatches(heading[1], title)) return 0;
+  offset += lines[index].length + 1;
+  index += 1;
+  advanceBlank();
+  return offset;
+}
+
+export function asIsTitleMatches(raw, title) {
+  const visible = String(raw).replace(/[`*_]/g, "").trim();
+  const wanted = String(title).replace(/[`*_]/g, "").trim();
+  const unprefixed = visible.replace(/^(?:ADR|EPC|SPC|TSK|CAP)-\d+(?:-\d+)?\s*[\u2014\u2013:-]\s*/, "");
+  return visible === wanted || unprefixed === wanted
+    || (unprefixed.slice(1) === wanted.slice(1) && unprefixed.slice(0, 1).toLowerCase() === wanted.slice(0, 1).toLowerCase());
+}
+
+// The destinations an as-is region's links resolve to in the portal. The
+// bytes stay as the source wrote them; the site's Markdown step reads this
+// map and points each link at its route, its pinned file or its fragment,
+// exactly as a composed page's links resolve.
+export function resolveAsIsLinks(markdown, options) {
+  if (/<!--\s*codeflow-/i.test(markdown)) throw new Error(`${options.sourcePath}: an as-is source may not carry a codeflow marker comment`);
+  const tree = markdownTree(markdown);
+  const referenceKinds = new Map();
+  visitMarkdown(tree, (node) => {
+    if (!["linkReference", "imageReference"].includes(node.type)) return;
+    const kind = node.type === "imageReference" ? "image" : "link";
+    const prior = referenceKinds.get(node.identifier);
+    if (prior && prior !== kind) throw new Error(`${options.sourcePath}: reference ${node.identifier} is used as both a link and an image`);
+    referenceKinds.set(node.identifier, kind);
+  });
+  const links = {};
+  visitMarkdown(tree, (node) => {
+    if (!["link", "image", "definition"].includes(node.type)) return;
+    const kind = node.type === "definition" ? referenceKinds.get(node.identifier) : node.type;
+    if (kind === undefined) {
+      if (unsafeUrl(node.url)) throw new Error(`${options.sourcePath}: unsafe Markdown URL scheme`);
+      return;
+    }
+    const key = `${kind}:${node.url}`;
+    const resolved = Object.hasOwn(links, key) ? links[key] : resolveRepositoryUrl(node.url, { ...options, kind });
+    links[key] = resolved.sourceReference ? { code: resolved.sourceReference } : resolved.url !== undefined ? { url: resolved.url } : resolved;
+    if (node.type === "definition") links[`reference:${node.identifier}`] = links[key];
+  });
+  return links;
+}
+
+// A figure bound to an altitude panel sits directly under that panel's
+// heading. The heading must exist: a binding to a panel the source does not
+// author is a configuration error, never a silent drop.
+export function insertPanelFigures(markdown, blocksByPanel, sourcePath) {
+  if (!blocksByPanel.size) return markdown;
+  const tree = markdownTree(markdown);
+  const found = new Map();
+  tree.children.forEach((node, index) => {
+    if (node.type !== "heading" || node.depth !== 2) return;
+    const label = visibleNodeText(node).trim().toLowerCase();
+    if (blocksByPanel.has(label) && !found.has(label)) found.set(label, index);
+  });
+  for (const panel of blocksByPanel.keys()) {
+    if (!found.has(panel)) throw new Error(`${sourcePath}: a figure is bound to the ${panel} panel, but the source has no "## ${panel[0].toUpperCase()}${panel.slice(1)}" section`);
+  }
+  for (const [panel, index] of [...found].sort((left, right) => right[1] - left[1])) {
+    tree.children.splice(index + 1, 0, ...blocksByPanel.get(panel).map((value) => ({ type: "html", value })));
+  }
+  return stringifyMarkdown(tree);
+}
+
+// The top-level raw HTML blocks of a generated page, in order. An as-is page
+// uses this to prove its source and companion markers each parse as their own
+// block, so no open fence or raw HTML block in the source can swallow them.
+export function topLevelHtmlBlocks(markdown) {
+  return markdownTree(markdown).children.filter((node) => node.type === "html").map((node) => node.value.trim());
 }

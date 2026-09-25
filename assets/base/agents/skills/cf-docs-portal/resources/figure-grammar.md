@@ -160,40 +160,96 @@ Named anti-patterns, each observed on that board and each now a rule:
 
 ## 6. Figure declaration
 
-Every figure carries a declaration. It is the contract the runtime draws from
-in the derived binding, and the contract the verifier checks in both bindings.
-ADR-0068 records the schema; this is the field reference.
+Every figure carries a declaration: one JSON file the grammar module draws
+from and the gate checks. The docs portal binds the file to a page in
+`portal.config.json`; a present `figure` block carries the same object in its
+`declaration` field. ADR-0068 records the schema; this is the field reference.
+The complete declarations the module draws, one per family plus a derived
+extent, are the portal starter's test fixtures: `tests/fixtures/figures/*.json`
+in an adopted portal, `docs-portal/tests/fixtures/figures/` in the CodeFlow
+repository. The YAML beside each specimen in `figure-grammar-specimens.md`
+sketches its intent and is not a file the module loads.
 
-```yaml
-figure:
-  id: landing-paths            # stable kebab-case id, unique on the page
-  family: flow                 # one of the nine family names
-  binding: authored            # authored: SVG supplied; derived: drawn from source
-  question: "How does a change reach main, and what stops it?"
-  idea: "Both landing paths end at a human merge behind green checks."
-  caption: "One task lands as a pull request; a body of work lands task by task on an integration branch."
-  states:                      # every drawn state, in legend order
-    - name: done               # the data-state value and legend key
-      means: "travel completed"
-      channels: [width, dash]  # two non-hue channels from rule 3
-  facts:                       # every fact the figure asserts (rule 6)
-    - claim: "two landing paths"
-      source: "AGENTS.md#git-rules"
-      derive: "count the paths named under 'Work lands by exactly two paths'"
-  narrow:                      # rule 5
-    recompose: rotate          # rotate | stack | strip | list
-    drops: []                  # states not drawn at narrow, keyed out of the legend
-    marks: same                # same, or the narrow mark names
-    elongation_max: 1.5        # optional; above the default only with `reason`
-  twin: inline                 # inline table below the figure, or derived from facts
-  source:                      # derived binding only
-    path: ".codeflow/policy.json"
-    select: "git.protected_branches"
+```json
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "change-states",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state is a change in, and what is the only way out of a red check?",
+    "idea": "The only route out of a red check returns to editing.",
+    "title": "States of a change and the one route out of a red check",
+    "kicker": "Change states",
+    "caption": "A red check sends the change back to editing, and no route leads from red to merged.",
+    "states": [{ "name": "return", "mark": "return", "means": "The only route out of red" }],
+    "facts": [{
+      "claim": "a red check returns to editing",
+      "source": "AGENTS.md#git-rules",
+      "derive": "the sentence beginning 'When a gate blocks you, fix the cause'",
+      "check": { "kind": "contains", "text": "When a gate blocks you, fix the cause" },
+      "value": true
+    }],
+    "wide": { "width": 640, "height": 220, "draw": [{ "state": "return", "shape": "path", "d": "M 40 120 C 200 200 440 200 600 120", "head": "end" }] },
+    "narrow": { "recompose": "stack", "drops": [], "marks": "same", "width": 360, "height": 300, "draw": [{ "state": "return", "shape": "path", "d": "M 40 60 C 120 260 240 260 320 60", "head": "end" }] },
+    "twin": { "columns": ["From", "To", "On"], "rows": [["checks red", "editing", "fix the cause"]] }
+  }
+}
 ```
 
-`facts` and `states` are required in both bindings. `source` is required in the
-derived binding and forbidden in the authored one. The description is generated
-from `idea`, `states` and `facts` unless the figure supplies its own.
+| Field | Rule |
+|---|---|
+| envelope | `{ "schema_version": 1, "figure": { ... } }`; the module refuses a bare figure object and an unknown key at any level |
+| `id`, `family`, `binding` | kebab-case id of at most 64 characters, unique on the page; one of the nine families; `authored` or `derived` |
+| `question`, `idea`, `title`, `caption` | required plain text, no em or en dash; the caption is one sentence ending in a full stop and never repeats the title (rule 9) |
+| `kicker` | optional; the line above the figure, the title when absent |
+| `description` | optional; generated from the `idea`, the states and the facts when absent (rule 11) |
+| `states` | 1 to 24 drawn states in legend order: `name` (kebab-case, the `data-state` value), `mark` from the vocabulary in section 4, `means` (the legend text), and optional `channels` naming the non-hue channels the state relies on (interior, edge, width, dash, shape, overlay); the gate measures the channels on the render (rule 3) |
+| `facts` | 1 to 32 facts the figure asserts (rule 6), each with `claim`, `derive`, `source`, `check` and `value`. `source` is a repository path with an optional `#anchor` naming a heading; the anchored section is the scope, and without an anchor the whole file is. `check.kind` is `contains` (the scope holds `check.text`; `value` is `true`), `count-items` (`value` is the number of list items in the scope) or `json` (a `.json` source with no anchor; `check.select` is a dotted path; `value` is what it holds) |
+| `wide`, `narrow` | each composition's `width` (120 to 720 units wide, 120 to 368 narrow), `height` (40 to 2400) and `draw` list of 1 to 600 items; every coordinate stays within 4000 units |
+| `narrow` recomposition | `recompose` (rotate, stack, strip or list), `drops` (the declared states the narrow composition leaves out), `marks` (`"same"` or the states it draws), and optional `elongation_max` (1 to 4, default 1.5), which above 1.5 needs a `reason` (rule 5) |
+| draw: state mark | `state`, `shape` and its geometry, an optional `id` (kebab-case, unique in the composition, and needed for a text's `for`) and optional parts. Line marks (done, todo, blocked, warn, stop, limit, trans, return) take `path`, `line` or `polyline`; human, node, agent and act take `circle`; merge takes `diamond` or `path`; cross takes `cross`; optional takes `rect`, `path`, `line` or `polyline`; every other mark takes `rect` |
+| geometry | `path`: `d`, absolute M, L, H, V, C, Q and Z commands only; `line`: `x1`, `y1`, `x2`, `y2`; `polyline`: `points`, two or more `[x, y]` pairs; `rect`: `x`, `y`, `w`, `h` and optional `rx` (0 to 40); `circle` and `diamond`: `cx`, `cy`, `r`; `cross`: `cx`, `cy`, `size` |
+| parts | `head`, `open` (an open head) and `square` (a square end) take `start`, `end` or `both` on a line shape; `cap: "end"` closes a `rect` bar; `cross` is `true` or `{ cx, cy, size }`; `tick: true` sits inside a `circle` |
+| draw: decoration | `deco` (rule, axis or tick) with a `path`, `line`, `polyline` or `rect` shape and its geometry |
+| draw: text | `text`, `x`, `y`, optional `anchor` (start, middle or end), `style` (strong, mute, head or mono, or a list of them) and `for`, the mark ids it labels |
+| `twin` | `"facts"` for a table of the facts, or `{ columns, rows }` with 1 to 8 columns and 1 to 64 rows (rule 12); backticks mark code in a cell |
+| `source`, `layout` | `source` is `{ path, select }` into a committed JSON file, derived binding only, and a derived figure draws from a `layout`. A layout replaces `wide` and the narrow `width`, `height` and `draw`; the module composes both. `extent` takes `max`, optional `unit`, 1 to 16 `rows` of `{ label, value, state }` and optional `limits` of the same shape, where `value` is a number or, derived only, a selector into the source; `coverage` takes 1 to 8 `columns` and 1 to 16 `rows` of `{ label, cells }`, one state name per column |
+
+Coordinates are user units; the frame scales them. The module refuses an
+unknown key, an undeclared state, a declared state it never draws and a
+narrow composition that drops a state it does not declare. The portal
+re-derives every fact from its source at build time and fails a figure whose
+drawn value differs; present draws facts as declared.
+
+The portal gate checks what a page renders against what its pinned
+declaration draws. Generated content carries no CSS and no executable
+content. `codeflow validate --portal` parses each generated page and each
+built page as a browser would. In content it fails a style element, a link, a
+style attribute, a script, an event handler, a script URL, a frame, an
+embedded object or a declarative shadow root; anywhere in a built page it
+fails a style element, an event handler, a script URL, a frame or a shadow
+root. It also fails any figure or companion markup that is not a companion
+equal to its rebuild. The browser gate requires the served page to be the
+recorded built page, every stylesheet to be a recorded built sheet served
+with its hash and holding exactly the rules its bytes parse to, and every
+external script to be a recorded built script served with its hash. Every
+inline script outside the content, in both the validator and the browser
+gate, must be on the runtime's allowlist: the fixed scripts whose hashes the
+starter commits in `scripts/runtime-scripts.json`, regenerated from a fresh
+build whenever the lockfile changes, and the pre-paint display script for the
+configured theme. The clean copy runs only those and the recorded built
+scripts. It compares each figure's DOM with a clean render of the pinned declaration, and
+every computed property of the companion, the figure and its descendants with
+a clean copy of the page. The figure, its caption and its legend must be
+visible at full opacity, and no ancestor may move, clip, filter or hide the
+figure unless the clean copy's does too. The gate detects drift, hand edits to
+generated output, page CSS, page scripts and changed derived values. It
+compares computed styles, not pixels. It trusts the runtime's recorded sheets
+and scripts and its allowlisted inline scripts, which come from committed
+sources. It does not defend
+against a committer who can also change the validator, the grammar module,
+the portal runtime or its sheets; review and CI own that boundary.
 
 ## 7. Chat form
 

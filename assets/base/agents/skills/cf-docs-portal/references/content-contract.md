@@ -29,6 +29,11 @@
 - A `cf-stage` fence is generated-figure input: bounded node/stage/caption
   grammar, every text field escaped, roles whitelisted. An invalid figure
   produces the bounded error page, never partial or unescaped output.
+- A figure declaration bound in `portal.config.json` is generated-figure input
+  under the same pins as a source: the build refuses a declaration that fails
+  the grammar, a fact its source does not give, or a binding to a missing
+  route or anchor. An illustrated or pass-through source keeps its bytes; the
+  page and its Markdown twin attribute companion figures to the declaration.
 - Treat an explicit ID or relationship field as authority: a wrong type,
   malformed ID, invalid target, or duplicate key produces the bounded error
   page. Infer a supported ID from the filename only when `id` is absent.

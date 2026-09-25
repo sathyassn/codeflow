@@ -21,6 +21,8 @@ use crate::scaffold::portal::state::{self, Generator};
 use crate::scaffold::sha256_hex;
 use crate::strict_json::parse_strict_json;
 
+mod figures;
+
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 const PAGEFIND_ENTRY_PATH: &str = "dist/pagefind/pagefind-entry.json";
 const MAX_PAGEFIND_ENTRY_BYTES: u64 = 1024 * 1024;
@@ -69,7 +71,11 @@ const PORTAL_CONFIG_KEYS: [&str; 12] = [
 // holds it to the carrier it declared. The panels and the alternates each one
 // accepts are closed here too, so a configuration can never widen what the
 // gate accepts.
-const PORTAL_OPTIONAL_CONFIG_KEYS: [&str; 2] = ["records", "page_carriers"];
+// Page classes and figure bindings are the last two: a source leaves the
+// explanatory class only by an entry here, and every figure is bound to its
+// page here, never by a marker inside a source.
+const PORTAL_OPTIONAL_CONFIG_KEYS: [&str; 4] =
+    ["records", "page_carriers", "page_classes", "figures"];
 const PORTAL_PAGE_CARRIER_KEYS: [&str; 2] = ["source", "technical"];
 const PORTAL_TECHNICAL_CARRIERS: [&str; 1] = ["list"];
 const MAX_PORTAL_PAGE_CARRIERS: usize = 64;
@@ -112,6 +118,8 @@ struct Evidence {
     primitive_tokens: Option<PrimitiveTokens>,
     #[serde(deserialize_with = "deserialize_media")]
     media: Vec<Media>,
+    #[serde(default, deserialize_with = "figures::deserialize_figures")]
+    figures: Option<Vec<figures::FigureEvidence>>,
     #[serde(deserialize_with = "deserialize_pages")]
     pages: Vec<Page>,
     llms: Artifact,
@@ -200,6 +208,18 @@ struct Page {
     snippets: Vec<Snippet>,
     #[serde(default)]
     stale_reason: Option<String>,
+    #[serde(default, rename = "page_class")]
+    class: Option<String>,
+    #[serde(default)]
+    class_reason: Option<String>,
+    #[serde(default)]
+    class_note: Option<String>,
+    #[serde(default, deserialize_with = "figures::deserialize_page_figures")]
+    figures: Vec<figures::PageFigure>,
+    #[serde(default)]
+    source_region: Option<figures::SourceRegion>,
+    #[serde(default)]
+    lookup: Option<figures::Lookup>,
 }
 
 #[derive(Clone)]
@@ -210,6 +230,8 @@ struct PortalSourceContract {
     excludes: Vec<String>,
     layers: Vec<PortalLayerContract>,
     records: PortalRecordsContract,
+    page_classes: Vec<figures::PageClassEntry>,
+    figure_bindings: Vec<figures::FigureBinding>,
 }
 
 #[derive(Clone, Default)]
@@ -557,6 +579,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
     let mut claimed_paths = BTreeSet::new();
     let mut id_owner = BTreeMap::new();
     let mut rendered_bytes_remaining = MAX_TOTAL_RENDERED_BYTES;
+    let mut rendered_by_route = BTreeMap::new();
     for page in &evidence.pages {
         report.checked_pages += 1;
         if !safe_path_text(&page.route) || !routes.insert(portable_key(&page.route)) {
@@ -765,6 +788,9 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
             &mut report,
         );
         verify_rendered_claims(&evidence, page, rendered.as_deref(), &mut report);
+        if let Some(output) = rendered {
+            rendered_by_route.insert(page.route.clone(), output);
+        }
         let mut relationship_claims = BTreeSet::new();
         for relationship in &page.relationships {
             if !relationship_kind(&relationship.kind)
@@ -796,6 +822,19 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         }
     }
     verify_portal_fragments(&portal, &evidence.pages, &source_blobs, &mut report);
+    if let Some(contract) = &source_contract {
+        figures::verify_figures(
+            &evidence,
+            &figures::FigureContext {
+                repository: &repository,
+                page_classes: &contract.page_classes,
+                bindings: &contract.figure_bindings,
+                source_blobs: &source_blobs,
+                rendered: &rendered_by_route,
+            },
+            &mut report,
+        );
+    }
     let mut expected = BTreeMap::<String, Vec<Backlink>>::new();
     let active_routes: BTreeSet<&str> = evidence
         .pages
@@ -972,6 +1011,41 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                 .push(format!("page is missing its built output: {}", page.route));
         }
     }
+    // The inline scripts the runtime emits, as committed at the evidenced
+    // commit, with the pre-paint script for the configured theme.
+    let runtime_scripts_path = normalized_portal_root
+        .join(figures::RUNTIME_SCRIPTS_FILE)
+        .to_string_lossy()
+        .replace('\\', "/");
+    let runtime_scripts = git_batch_blobs(
+        &repository,
+        &evidence.repository.commit,
+        &[runtime_scripts_path.as_str()],
+        64 * 1024,
+        64 * 1024,
+    )
+    .map_err(|error| error.to_string())
+    .and_then(|blobs| {
+        blobs
+            .get(&runtime_scripts_path)
+            .cloned()
+            .ok_or_else(|| "it is not committed".to_string())
+    })
+    .and_then(|list| {
+        authoritative_config
+            .as_deref()
+            .ok_or_else(|| "the configuration is unreadable".to_string())
+            .and_then(|config| figures::runtime_inline_scripts(&list, config))
+    });
+    let runtime_scripts = match runtime_scripts {
+        Ok(allowed) => Some(allowed),
+        Err(error) => {
+            report.issues.push(format!(
+                "the runtime's inline script list {runtime_scripts_path} cannot be read: {error}"
+            ));
+            None
+        }
+    };
     let mut artifact_bytes_remaining = actual_artifacts.total_bytes;
     for artifact in &evidence.artifacts {
         let Some(bytes) = verify_file_budgeted(
@@ -984,6 +1058,23 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
         ) else {
             continue;
         };
+        if std::path::Path::new(&artifact.path)
+            .extension()
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("html"))
+        {
+            match std::str::from_utf8(&bytes) {
+                Ok(html) => figures::verify_built_page(
+                    &artifact.path,
+                    html,
+                    runtime_scripts.as_ref(),
+                    &mut report,
+                ),
+                Err(error) => report.issues.push(format!(
+                    "built HTML is not UTF-8 {}: {error}",
+                    artifact.path
+                )),
+            }
+        }
         if let Some(page) = page_by_artifact.get(&artifact.path) {
             let html = match std::str::from_utf8(&bytes) {
                 Ok(html) => html,
@@ -1124,6 +1215,8 @@ fn verify_config_contract(
     let layers = configured_layers(object.get("layers"), report)?;
     let records = configured_records(object.get("records"), report)?;
     configured_page_carriers(object.get("page_carriers"), report)?;
+    let page_classes = figures::configured_page_classes(object.get("page_classes"), report)?;
+    let figure_bindings = figures::configured_figure_bindings(object.get("figures"), report)?;
     Some(PortalSourceContract {
         title: object.get("title")?.as_str()?.to_string(),
         description: object.get("description")?.as_str()?.to_string(),
@@ -1131,6 +1224,8 @@ fn verify_config_contract(
         excludes,
         layers,
         records,
+        page_classes,
+        figure_bindings,
     })
 }
 
@@ -4066,6 +4161,12 @@ mod tests {
             backlinks: Vec::new(),
             snippets: Vec::new(),
             stale_reason: None,
+            class: None,
+            class_reason: None,
+            class_note: None,
+            figures: Vec::new(),
+            source_region: None,
+            lookup: None,
         }
     }
 
@@ -4238,6 +4339,8 @@ mod tests {
                     id_prefix: "ADR".into(),
                 }],
             },
+            page_classes: Vec::new(),
+            figure_bindings: Vec::new(),
         };
         let blob = |path: &str| GitTreeRecord {
             path: path.into(),
@@ -4333,6 +4436,8 @@ mod tests {
                 },
             ],
             records: PortalRecordsContract::default(),
+            page_classes: Vec::new(),
+            figure_bindings: Vec::new(),
         };
         let mut report = PortalValidationReport::default();
         let expected = expected_portal_pages(temp.path(), &commit, &contract, &mut report).unwrap();
@@ -4390,6 +4495,14 @@ mod tests {
         }"#;
         let source = b"\xef\xbb\xbf# Guide\r\n\r\nCommit-anchored source.\r\n\r\n## Outcome\r\n\r\n[Jump](./Mixed%20Case%20%2B%20caf%C3%A9.md?view=1#outcome)\r\n";
         std::fs::write(temp.path().join("portal/portal.config.json"), config).unwrap();
+        std::fs::create_dir_all(temp.path().join("portal/scripts")).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs-portal/scripts/runtime-scripts.json"),
+            temp.path().join("portal/scripts/runtime-scripts.json"),
+        )
+        .unwrap();
+
         std::fs::write(temp.path().join("docs/Mixed Case + café.md"), source).unwrap();
         for args in [
             &["init", "-q"][..],
@@ -4398,7 +4511,12 @@ mod tests {
             // Preserve the fixture's intentional CRLF bytes in the committed
             // blob regardless of the Windows runner's global Git defaults.
             &["config", "core.autocrlf", "false"][..],
-            &["add", "docs", "portal/portal.config.json"][..],
+            &[
+                "add",
+                "docs",
+                "portal/portal.config.json",
+                "portal/scripts/runtime-scripts.json",
+            ][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
             assert!(Command::new("git")
@@ -4868,12 +4986,25 @@ mod tests {
           "base": "/"
         }"#;
         std::fs::write(temp.path().join("portal/portal.config.json"), config).unwrap();
+        std::fs::create_dir_all(temp.path().join("portal/scripts")).unwrap();
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../docs-portal/scripts/runtime-scripts.json"),
+            temp.path().join("portal/scripts/runtime-scripts.json"),
+        )
+        .unwrap();
+
         std::fs::write(temp.path().join("docs/guide.md"), "# Guide\n").unwrap();
         for args in [
             &["init", "-q"][..],
             &["config", "user.email", "portal-tests@codeflow.invalid"][..],
             &["config", "user.name", "Portal tests"][..],
-            &["add", "docs", "portal/portal.config.json"][..],
+            &[
+                "add",
+                "docs",
+                "portal/portal.config.json",
+                "portal/scripts/runtime-scripts.json",
+            ][..],
             &["commit", "-q", "-m", "fixture"][..],
         ] {
             assert!(Command::new("git")
@@ -5037,6 +5168,7 @@ mod tests {
             config_sha256: "0".repeat(64),
             primitive_tokens: None,
             media: Vec::new(),
+            figures: None,
             pages: Vec::new(),
             llms: Artifact {
                 path: "public/llms.txt".into(),

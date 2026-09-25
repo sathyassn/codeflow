@@ -5,6 +5,7 @@ export function enhanceDocument(root: HTMLElement, eager = false): () => void {
   const targets = [
     ...root.querySelectorAll<HTMLElement>("code[data-cf-language]"),
     ...root.querySelectorAll<HTMLElement>("[data-cf-diagram='pending']"),
+    ...root.querySelectorAll<HTMLElement>("[data-cf-figure-block='pending']"),
   ];
   if (eager || !("IntersectionObserver" in globalThis)) {
     void enhanceSequentially(targets, MAX_EAGER_ENHANCEMENT_MILLISECONDS);
@@ -42,6 +43,10 @@ async function enhanceSequentially(targets: HTMLElement[], budgetMilliseconds: n
 }
 
 function markDeferredFailure(target: HTMLElement): void {
+  if (target.matches("[data-cf-figure-block='pending']")) {
+    void import("./figure").then(({ markFigureFailure }) => markFigureFailure(target, "Figure drawing stopped at the local time budget."));
+    return;
+  }
   if (!target.matches("[data-cf-diagram='pending']")) return;
   target.dataset.cfDiagram = "failed";
   const status = target.querySelector<HTMLElement>("[data-cf-diagram-status]");
@@ -57,5 +62,10 @@ async function enhance(target: HTMLElement): Promise<void> {
   if (target.matches("[data-cf-diagram='pending']")) {
     const { renderDiagram } = await import("./diagram");
     await renderDiagram(target);
+    return;
+  }
+  if (target.matches("[data-cf-figure-block='pending']")) {
+    const { renderFigureBlock } = await import("./figure");
+    renderFigureBlock(target);
   }
 }

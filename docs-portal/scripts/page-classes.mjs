@@ -10,27 +10,34 @@
 export const ALTITUDE_PANELS = Object.freeze(["concept", "architecture", "technical"]);
 
 // The elements a panel can carry, counted inside the panel that owns them so
-// that a carrier in a neighbouring panel never answers for a missing one.
+// that a carrier in a neighbouring panel never answers for a missing one. A
+// figure is a grammar figure (`figure.cf-fig`); a `cf-stage` is counted as a
+// stage and is the flow interim, never the figure an altitude demands.
 export const CARRIER_ELEMENTS = Object.freeze(["figure", "stage", "table", "list", "pre"]);
 
-// What each panel of the trio must carry. The doctrine asks for a figure in
-// Concept and a stage on architecture pages; a panel of prose alone is the
-// source re-rendered, and a fence or an unrelated table is not the carrier the
-// altitude calls for.
+// What each panel of the trio must carry. Every altitude demands a figure;
+// Technical also demands a table, which is an additional carrier and never a
+// substitute for the figure (figure-grammar.md section 3).
 export const PANEL_CARRIERS = Object.freeze({
-  concept: Object.freeze({ demand: "a figure or a stage", accepts: Object.freeze(["figure", "stage"]) }),
-  architecture: Object.freeze({ demand: "a stage or a table", accepts: Object.freeze(["stage", "table"]) }),
-  technical: Object.freeze({ demand: "a table", accepts: Object.freeze(["table"]) }),
+  concept: Object.freeze({ demand: "a figure", requires: Object.freeze(["figure"]) }),
+  architecture: Object.freeze({ demand: "a figure", requires: Object.freeze(["figure"]) }),
+  technical: Object.freeze({ demand: "a figure and a table", requires: Object.freeze(["figure", "table"]) }),
 });
 
 // A page whose subject is itself a carrier declares that in the portal
 // configuration, per source, and is then held to the carrier it declared: a
-// checklist's Technical panel is a disposition list, and a table would only
-// restate it. No route is written into this file, and no page is let off a
-// carrier; the alternates a panel accepts are enumerated here.
+// checklist's Technical panel is a disposition list beside its figure, and a
+// table would only restate it. The figure is never let off.
 export const PANEL_CARRIER_ALTERNATES = Object.freeze({
-  technical: Object.freeze({ list: Object.freeze(["list"]) }),
+  technical: Object.freeze({ list: Object.freeze(["figure", "list"]) }),
 });
+
+// Pass-through takes one reason from this closed set; no-relationship also
+// records the design primary's judgment in a note.
+export const PAGE_CLASS_REASONS = Object.freeze(["accepted-record", "governance", "no-relationship"]);
+
+// The derived lookups the adapter can generate with a fidelity check.
+export const DERIVED_LOOKUPS = Object.freeze(["capability-registry"]);
 
 // The generated record pointer page (ADR-0064) is one table of folders. The
 // records themselves are repository files, never portal pages.
@@ -70,15 +77,39 @@ function panelCarrierRequirement(panel) {
       const counts = observation.panelCarriers?.[panel];
       if (!counts) return null;
       const declared = assignment?.carriers?.[panel];
-      const accepts = declared === undefined ? PANEL_CARRIERS[panel].accepts : PANEL_CARRIER_ALTERNATES[panel][declared];
-      if (accepts.some((element) => counts[element] > 0)) return null;
-      const wanted = accepts.join(" or ");
+      const requires = declared === undefined ? PANEL_CARRIERS[panel].requires : PANEL_CARRIER_ALTERNATES[panel][declared];
+      const missing = requires.filter((element) => !(counts[element] > 0));
+      if (missing.length === 0) return null;
       const inventory = CARRIER_ELEMENTS.map((element) => `${element} ${counts[element] ?? 0}`).join(", ");
       const source = declared === undefined ? "" : ", which the configuration declares for it";
-      return `the ${panel} panel carries no ${wanted}${source} (${inventory})`;
+      return `the ${panel} panel carries no ${missing.join(" and no ")}${source} (${inventory})`;
     },
   });
 }
+
+const PROVENANCE = Object.freeze({
+  id: "provenance-line",
+  demand: "the visible source provenance line",
+  unmet: (observation) => observation.provenance ? null : "no visible provenance line",
+});
+
+// An illustrated or pass-through page renders its source unchanged inside one
+// source region; the validator proves those bytes against the committed source.
+const SOURCE_REGION = Object.freeze({
+  id: "source-region",
+  demand: "the unchanged source region",
+  unmet: (observation) => observation.sourceRegions === 1 ? null : `${observation.sourceRegions ?? 0} source region(s)`,
+});
+
+const BOUND_FIGURES = Object.freeze({
+  id: "bound-figures",
+  demand: "every figure bound to the route in the configuration",
+  unmet: (observation, assignment) => {
+    const expected = assignment?.figures?.length ?? 0;
+    const drawn = observation.companions ?? 0;
+    return drawn === expected ? null : `the configuration binds ${expected} figure(s) and the page draws ${drawn}`;
+  },
+});
 
 export const PAGE_CLASSES = Object.freeze({
   explanatory: Object.freeze({
@@ -86,11 +117,7 @@ export const PAGE_CLASSES = Object.freeze({
     label: "explanatory page",
     requirements: Object.freeze([
       ...UTILITY_CHROME,
-      Object.freeze({
-        id: "provenance-line",
-        demand: "the visible source provenance line",
-        unmet: (observation) => observation.provenance ? null : "no visible provenance line",
-      }),
+      PROVENANCE,
       Object.freeze({
         id: "altitude-trio",
         demand: `the altitude trio ${ALTITUDE_PANELS.join(", ")}`,
@@ -102,6 +129,42 @@ export const PAGE_CLASSES = Object.freeze({
         },
       }),
       ...ALTITUDE_PANELS.map(panelCarrierRequirement),
+      BOUND_FIGURES,
+    ]),
+  }),
+  // The source rendered as it is, with companion figures bound to it in the
+  // configuration: at least one at the page head, and no altitude trio demanded.
+  illustrated: Object.freeze({
+    id: "illustrated",
+    label: "illustrated source",
+    requirements: Object.freeze([
+      ...UTILITY_CHROME,
+      PROVENANCE,
+      SOURCE_REGION,
+      Object.freeze({
+        id: "page-head-figure",
+        demand: "a companion figure at the page head",
+        unmet: (observation) => (observation.headFigures ?? 0) > 0 ? null : "no figure drawn above the source",
+      }),
+      BOUND_FIGURES,
+    ]),
+  }),
+  passThrough: Object.freeze({
+    id: "pass-through",
+    label: "pass-through source",
+    requirements: Object.freeze([...UTILITY_CHROME, PROVENANCE, SOURCE_REGION, BOUND_FIGURES]),
+  }),
+  derivedLookup: Object.freeze({
+    id: "derived-lookup",
+    label: "derived lookup",
+    requirements: Object.freeze([
+      ...UTILITY_CHROME,
+      PROVENANCE,
+      Object.freeze({
+        id: "derived-table",
+        demand: "the generated lookup table",
+        unmet: (observation) => (observation.tables ?? 0) > 0 ? null : "no table outside a figure",
+      }),
     ]),
   }),
   recordPointer: Object.freeze({
@@ -136,6 +199,19 @@ export function recordPointerRoute(config) {
 // source is explanatory, and the pointer page it generates is the pointer
 // class. A stale stub is excluded because its source never built, which the
 // build already reports as its own failure.
+// The class a source takes: the page_classes entry naming it exactly, else
+// the longest prefix that holds it, else explanatory. The adapter and the gate
+// both read this one function.
+export function pageClassFor(config, sourcePath) {
+  const entries = config?.page_classes ?? [];
+  const exact = entries.find((entry) => entry.source === sourcePath);
+  const prefix = entries.filter((entry) => entry.prefix !== undefined && sourcePath.startsWith(`${entry.prefix.replace(/\/$/, "")}/`))
+    .sort((left, right) => right.prefix.length - left.prefix.length)[0];
+  const entry = exact ?? prefix;
+  if (entry === undefined) return { pageClass: PAGE_CLASSES.explanatory.id, reason: null, note: null, derive: null, declaredBy: null };
+  return { pageClass: entry.class, reason: entry.reason ?? null, note: entry.note ?? null, derive: entry.derive ?? null, declaredBy: entry.source ?? entry.prefix };
+}
+
 export function classifyPortalPages(config, pages) {
   const declared = new Map((config?.page_carriers ?? []).map((entry) => [entry.source, entry]));
   const assignments = [];
@@ -145,7 +221,8 @@ export function classifyPortalPages(config, pages) {
     // source can never leave the eligible set quietly.
     if (!page || page.stale !== false || typeof page.route !== "string" || typeof page.source_path !== "string") continue;
     const carriers = declared.get(page.source_path);
-    const assignment = { route: page.route, source: page.source_path, pageClass: PAGE_CLASSES.explanatory.id };
+    const resolved = pageClassFor(config, page.source_path);
+    const assignment = { route: page.route, source: page.source_path, pageClass: resolved.pageClass, reason: resolved.reason, figures: (config?.figures ?? []).filter((binding) => binding.route === page.route) };
     if (carriers !== undefined) {
       assignment.carriers = Object.fromEntries(Object.keys(PANEL_CARRIER_ALTERNATES).filter((panel) => carriers[panel] !== undefined).map((panel) => [panel, carriers[panel]]));
     }
@@ -162,11 +239,22 @@ export function classifyPortalPages(config, pages) {
 // recorded.
 // A carrier declared for a source that the build never produced is a silent
 // exemption waiting to happen, so the declaration is held to the eligible set.
+// So is a page class declaration that names no published source, and a
+// figure bound to a route this build did not publish.
 export function declaredCarrierFailures(config, assignments) {
   const sources = new Set(assignments.map((assignment) => assignment.source));
-  return (config?.page_carriers ?? [])
-    .filter((entry) => !sources.has(entry.source))
-    .map((entry) => `portal.config.json page_carriers declares a carrier for ${entry.source}, which this build did not publish`);
+  const routes = new Set(assignments.map((assignment) => assignment.route));
+  return [
+    ...(config?.page_carriers ?? [])
+      .filter((entry) => !sources.has(entry.source))
+      .map((entry) => `portal.config.json page_carriers declares a carrier for ${entry.source}, which this build did not publish`),
+    ...(config?.page_classes ?? [])
+      .filter((entry) => ![...sources].some((source) => entry.source === source || (entry.prefix !== undefined && source.startsWith(`${entry.prefix.replace(/\/$/, "")}/`))))
+      .map((entry) => `portal.config.json page_classes declares ${entry.class} for ${entry.source ?? entry.prefix}, which matches no published source`),
+    ...(config?.figures ?? [])
+      .filter((binding) => !routes.has(binding.route))
+      .map((binding) => `portal.config.json binds ${binding.declaration} to ${binding.route}, a route this build did not publish`),
+  ];
 }
 
 export function assertDeclaredCarriers(config, assignments) {

@@ -38,11 +38,19 @@ npm run build
 npm run supply-chain
 npm run check
 npm run check:browser
+npm run check:figures
 ```
 
 `check:browser` uses a fresh headless browser profile and never attaches to the
 operator's active browser. Set `CF_PRESENT_BROWSER` when the qualified browser
 is not in one of the explicit platform locations in the script.
+
+`check:figures` needs a built `target/debug/codeflow`. It opens a document of
+the figure specimens through the real binary, exports it in light and dark, and
+reads each drawn figure with the portal's figure probe at 1280 and 390 px. The
+rule outcomes must equal the portal's specimen table. `src/figure-grammar.mjs`
+and `src/figure.css` are byte copies of the portal's grammar module and the
+design kit's figure sheet; edit the originals and copy them here.
 
 Commit the exact lockfile together with all generated changes under
 `../assets/`. Never hand-edit generated payloads, the integrity manifest, audit,

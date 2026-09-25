@@ -11,6 +11,8 @@ import { GitSnapshot } from "./git-snapshot.mjs";
 import { assertGeneratorIdentity } from "./generator.mjs";
 import { stopChild, withSignalAwareChildLifecycle } from "./child-lifecycle.mjs";
 import { PORTAL_ACCENT_BACKGROUNDS, pinnedSourceUrl, safeRelative, validatePortalConfig, withBase } from "./lib.mjs";
+import { REGENERATE, RUNTIME_SCRIPTS_FILE, allowedInlineScripts, scriptSha256 } from "./runtime-scripts.mjs";
+import { canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "./figure-grammar.mjs";
 import { ALTITUDE_PANELS, CARRIER_ELEMENTS, PAGE_CLASSES, RECORD_POINTER_COLUMNS, assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages } from "./page-classes.mjs";
 import { hardenedChildEnvironment } from "./process-environment.mjs";
 import { assertNoSymlink, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, readBoundedRegularFile, withWorkflowLease } from "./publication.mjs";
@@ -33,10 +35,6 @@ if (!/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(runId)) throw new Error("PORTAL_BR
 const PORTAL_SKINS = Object.freeze(Object.keys(PORTAL_ACCENT_BACKGROUNDS));
 export const PALETTE_PILL_GROUPS = 2;
 
-if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, () => verifyPortal(lifecycle)));
-}
-
 async function verifyPortal(lifecycle) {
   const configBytes = await readBoundedRegularFile(path.join(root, "portal.config.json"), 64 * 1024, "portal configuration");
   const config = validatePortalConfig(JSON.parse(configBytes));
@@ -45,7 +43,8 @@ async function verifyPortal(lifecycle) {
   const generated = JSON.parse(evidenceBytes);
   assertGeneratorIdentity(generated?.generator);
   const repository = path.resolve(root, config.repository_root);
-  const head = new GitSnapshot(repository).resolveHead();
+  const snapshot = new GitSnapshot(repository);
+  const head = snapshot.resolveHead();
   const configSha256 = digest(configBytes);
   if (generated?.schema_version !== 1 || generated?.repository?.commit !== head || generated?.config_sha256 !== configSha256 || !Array.isArray(generated?.pages) || !Array.isArray(generated?.artifacts)) {
     throw new Error("browser verification requires current commit-bound portal evidence");
@@ -60,6 +59,9 @@ async function verifyPortal(lifecycle) {
   const assignments = classifyPortalPages(config, generated.pages);
   assertDeclaredCarriers(config, assignments);
   const surfaces = await discoverSurfaceRoutes(generated.pages, root);
+  const declarations = pinnedDeclarations(snapshot, head, generated);
+  const kitSheets = pinnedKitSheets(snapshot, head, path.relative(repository, root));
+  const inlineScripts = pinnedRuntimeScripts(snapshot, head, path.relative(repository, root), config.theme);
 
   const outputRelative = safeRelative(`.portal/browser-evidence/${runId}`, "browser evidence path");
   const output = path.join(root, outputRelative);
@@ -88,7 +90,7 @@ async function verifyPortal(lifecycle) {
     await waitForServer(siteRoot, server, () => serverOutput.toString("utf8"));
     for (const [name, engine] of Object.entries({ chromium, firefox, webkit })) {
       lifecycle.throwIfInterrupted();
-      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, lifecycle }));
+      results.push(await verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, declarations, kitSheets, inlineScripts, lifecycle }));
     }
   } catch (error) {
     lifecycle.throwIfInterrupted();
@@ -134,7 +136,7 @@ async function verifyPortal(lifecycle) {
   console.log(`portal browser verification passed: ${outputRelative}/results.json`);
 }
 
-async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, lifecycle }) {
+async function verifyEngine(name, engine, { origin, siteRoot, output, config, generated, surfaces, assignments, declarations, kitSheets, inlineScripts, lifecycle }) {
   const profile = await mkdtemp(path.join(os.tmpdir(), `codeflow-portal-${runId}-${name}-`));
   const trace = path.join(output, `${name}-trace.zip`);
   const runtime = { console: [], page: [], request: [], remote: [] };
@@ -202,6 +204,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
 
     await assertDeepLink(page, name, origin, config.base, surfaces.deepLink);
     const compositionResult = await assertPortalComposition(page, name, origin, config, assignments);
+    const figureResult = await assertFigureGate(page, name, origin, config, assignments, generated, declarations, kitSheets, inlineScripts);
     const previewResult = await assertStrictIdPreview(page, name, origin, config, surfaces.strictPreview);
     await assertSourceLink(page, name, origin, config, generated);
     await visit(page, siteRoot);
@@ -227,7 +230,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     return {
       engine: name,
       status: "passed",
-      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search-slash-hit-and-follow", "system-and-mode-persistence-before-paint", "display-settings-persist", "palette-pill-swatches-from-live-tokens", "layer-journey", "deep-link", compositionResult, previewResult, "source-link", "keyboard-traversal-and-focus", "skins-light-dark", "target-size", "responsive", "console", "network-isolation"],
+      checks: ["landmarks-and-names", "axe-wcag22-aa", "screen-reader-structure", "layout", "search-slash-hit-and-follow", "system-and-mode-persistence-before-paint", "display-settings-persist", "palette-pill-swatches-from-live-tokens", "layer-journey", "deep-link", compositionResult, figureResult, previewResult, "source-link", "keyboard-traversal-and-focus", "skins-light-dark", "target-size", "responsive", "console", "network-isolation"],
     };
   } catch (error) {
     lifecycle.throwIfInterrupted();
@@ -358,6 +361,469 @@ async function assertPortalComposition(page, engine, origin, config, assignments
   }
 }
 
+// The figure gate: every figure the adapter bound is drawn on its page and
+// holds all twelve rules of the grammar, read off the render at a wide and a
+// narrow width, in light and in dark. Each failure names the page, the place
+// on the page and the rule.
+async function assertFigureGate(page, engine, origin, config, assignments, generated, declarations, kitSheets, inlineScripts) {
+  const { failures, drawn } = await figureGateFailures(page, (route) => visit(page, routeUrl(origin, config.base, route)), assignments, generated, declarations, kitSheets, inlineScripts);
+  if (failures.length) throw new Error(`${engine}: figure gate: ${failures.length} failure(s)\n  ${failures.join("\n  ")}`);
+  return `${engine}:figure-gate:${drawn}`;
+}
+
+// Each recorded figure declaration as committed at the evidenced commit, held
+// to the hash the evidence records: the render is measured against it.
+const MAX_DECLARATION_BYTES = 256 * 1024;
+export function pinnedDeclarations(snapshot, commit, generated) {
+  const declarations = new Map();
+  for (const entry of generated.figures ?? []) {
+    const bytes = snapshot.bytes(["cat-file", "blob", `${commit}:${safeRelative(entry.declaration_path, "figure declaration path")}`], MAX_DECLARATION_BYTES, "figure declaration");
+    if (digest(bytes) !== entry.declaration_sha256) throw new Error(`figure declaration ${entry.declaration_path} does not match its recorded hash`);
+    declarations.set(entry.declaration_path, JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)));
+  }
+  return declarations;
+}
+
+// The kit sheets as committed at the evidenced commit: the only stylesheets a
+// clean render of a figure gets, so the gate can tell whether anything else
+// on a page moves, hides or clips a drawing.
+// The hashes an inline script outside the page content may have: the
+// runtime's fixed scripts as committed at the evidenced commit, and the
+// pre-paint script for the configured theme.
+export function pinnedRuntimeScripts(snapshot, commit, portalRelative, theme) {
+  const file = safeRelative(path.posix.join(portalRelative.split(path.sep).join("/") || ".", RUNTIME_SCRIPTS_FILE), "runtime script list path");
+  const list = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(snapshot.bytes(["cat-file", "blob", `${commit}:${file}`], 64 * 1024, "runtime script list")));
+  return allowedInlineScripts(theme, list);
+}
+
+export const KIT_SHEETS = Object.freeze(["utility-tokens.css", "portal.css", "figure-roles.css", "figure.css"]);
+export function pinnedKitSheets(snapshot, commit, portalRelative) {
+  return KIT_SHEETS.map((name) => {
+    const file = safeRelative(path.posix.join(portalRelative.split(path.sep).join("/") || ".", "src/styles", name), "kit sheet path");
+    return new TextDecoder("utf-8", { fatal: true }).decode(snapshot.bytes(["cat-file", "blob", `${commit}:${file}`], 1024 * 1024, "kit sheet"));
+  }).join("\n");
+}
+
+// `declarations` maps each declaration path to its pinned declaration; rule 6
+// reads the drawn values back against it and the committed values.
+// `kitSheets` is the committed kit CSS: each rendered figure's DOM must equal
+// a clean render of its pinned declaration, and its drawings must compute the
+// same chosen geometry and visibility styles as that render under the kit
+// alone. That comparison is secondary to three checks on every page:
+//   1. Page CSS and executable content are refused at their source. The
+//      served page must be the built page the evidence records, with no
+//      declarative shadow root before the browser consumes its templates.
+//      Every stylesheet must be a link in the head to a built CSS file the
+//      evidence records, served with its recorded hash, importing nothing,
+//      and holding exactly the rules its served bytes parse to. Every external
+//      script must be a built script the evidence records, served with its
+//      hash. Content and a figure's ancestors carry no style element, link,
+//      style attribute, script or shadow root, and no element carries an
+//      event handler, a script URL, a frame or an embedded document.
+//   2. Every computed property of each companion, figure and figure
+//      descendant, pseudo-elements included, equals a clean copy of the same
+//      page: loaded afresh, stripped of any CSS the first check refuses, with
+//      the pinned rendering in place of each figure.
+//   3. Each figure, its caption and its legend are visible at full opacity,
+//      whatever the clean copy shows, and no ancestor moves, clips, filters
+//      or hides it unless the clean copy's does too.
+export async function figureGateFailures(page, visitRoute, assignments, generated, declarations, kitSheets, inlineScripts) {
+  const failures = [];
+  let drawn = 0;
+  const pinnedSheets = pinnedBuiltSheets(generated.artifacts);
+  const pinnedScripts = pinnedBuiltAssets(generated.artifacts, ".js");
+  if (!(inlineScripts instanceof Set)) throw new Error("the figure gate needs the runtime's pinned inline scripts");
+  // The clean render gets its own context where the browser allows one (a
+  // persistent profile has only its own), so nothing from the page carries.
+  const browser = page.context().browser();
+  const cleanContext = browser === null ? null : await browser.newContext();
+  const clean = await (cleanContext ?? page.context()).newPage();
+  // The clean copy runs only the runtime's scripts: the recorded built
+  // scripts by URL and the allowlisted inline scripts by hash.
+  let cleanPolicy = null;
+  await clean.route("**/*", async (route) => {
+    if (route.request().resourceType() !== "document" || cleanPolicy === null) return route.fallback();
+    const response = await route.fetch();
+    await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": cleanPolicy } });
+  });
+  try {
+    const recorded = new Map((generated.figures ?? []).map((entry) => [entry.declaration_path, entry]));
+    for (const assignment of assignments) {
+      await page.setViewportSize({ width: 1440, height: 900 });
+      await visitRoute(assignment.route);
+      for (const failure of await servedPageFailures(page, assignment.route, generated.artifacts)) failures.push(`${assignment.source} (at ${assignment.route}): served page: ${failure}`);
+      for (const failure of await pageCssFailures(page, pinnedSheets, clean)) failures.push(`${assignment.source} (at ${assignment.route}): page CSS: ${failure}`);
+      for (const failure of await pageScriptFailures(page, pinnedScripts, inlineScripts)) failures.push(`${assignment.source} (at ${assignment.route}): executable content: ${failure}`);
+      if (!assignment.figures?.length) continue;
+      const observed = {};
+      for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
+        await page.setViewportSize({ width, height: 900 });
+        await visitRoute(assignment.route);
+        await page.evaluate(showForReading, { theme: mode, root: null, strip: null, expected: null });
+        await settle(page);
+        observed[label] = await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx });
+        observed[`${label}Dom`] = await page.evaluate(readFigureDom);
+        observed[`${label}Context`] = await page.evaluate(readFigureContext);
+        for (const failure of figureChromeFailures(await page.evaluate(readFigureChrome))) failures.push(`${assignment.source} (at ${assignment.route}, ${width}px ${mode}): ${failure}`);
+        observed[`${label}Url`] = page.url();
+        observed[`${label}Root`] = await page.evaluate(() => [...document.documentElement.attributes].filter((attribute) => attribute.name.startsWith("data-")).map((attribute) => [attribute.name, attribute.value]));
+        observed[`${label}Places`] = await page.evaluate(() => [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
+          const companion = figure.closest(".cf-companion");
+          return {
+            declaration: companion?.dataset.cfCompanion ?? null,
+            placement: companion?.dataset.cfPlacement ?? null,
+            altitude: figure.closest(".portal-altitude")?.dataset.altitude ?? null,
+          };
+        }));
+      }
+      await page.setViewportSize({ width: 1440, height: 900 });
+      const places = observed.widePlaces;
+      const expected = assignment.figures.map((binding) => binding.declaration).sort();
+      const found = places.map((place) => place.declaration).sort();
+      if (canonicalJson(found) !== canonicalJson(expected)) {
+        failures.push(`${assignment.source} (at ${assignment.route}): the configuration binds ${expected.join(", ") || "no figure"} and the page draws ${found.join(", ") || "none"}`);
+      }
+      const rendered = [];
+      const wheres = [];
+      for (const [index, place] of places.entries()) {
+        drawn += 1;
+        const binding = assignment.figures.find((candidate) => candidate.declaration === place.declaration);
+        const where = `${assignment.source} (at ${assignment.route}, ${place.altitude ? `${place.altitude} panel` : place.placement === "anchor" ? `#${binding?.anchor}` : "page head"}, ${place.declaration ?? "an unbound figure"})`;
+        wheres.push(where);
+        const entry = recorded.get(place.declaration);
+        if (entry === undefined) failures.push(`${where}: the evidence manifest records no such figure`);
+        const evidence = entry === undefined ? null : {
+          facts: entry.facts.map((fact) => ({ ...fact, matches: canonicalJson(fact.derived) === canonicalJson(fact.drawn) })),
+          data: entry.derived === null ? null : { drawn: entry.derived.drawn, derived: entry.derived.values },
+        };
+        let composed = null;
+        let expectedHtml = null;
+        try {
+          const declaration = declarations.get(place.declaration);
+          if (declaration === undefined) throw new Error("its pinned declaration is not available");
+          const bound = entry?.derived ? { source: declaration.figure.source, derived: entry.derived.values } : null;
+          composed = composeFigure(declaration, bound);
+          expectedHtml = renderFigure(declaration, { idPrefix: `cf-fig-${assignment.figures.indexOf(binding)}`, bound, facts: entry?.facts ?? null });
+        } catch (error) { failures.push(`${where}: rule 6 (${FIGURE_RULES[6]}): the committed composition cannot be rebuilt: ${error.message}`); }
+        rendered.push(expectedHtml);
+        const ruleFailures = figureRuleFailures({
+          wide: observed.wide[index], narrow: observed.narrow[index], wideDark: observed.wideDark[index], narrowDark: observed.narrowDark[index], evidence, composed,
+        });
+        for (const failure of ruleFailures) failures.push(`${where}: rule ${failure.rule} (${failure.name}): ${failure.message}`);
+        if (expectedHtml === null) continue;
+        for (const [label, width] of [["wide", 1440], ["narrow", 390], ["wideDark", 1440], ["narrowDark", 390]]) {
+          await clean.setViewportSize({ width, height: 900 });
+          const root = observed[`${label}Root`].map(([name, value]) => ` ${name}="${value.replaceAll("&", "&amp;").replaceAll("\"", "&quot;")}"`).join("");
+          await clean.setContent(`<!doctype html><html${root}><head><style>${kitSheets}</style></head><body><main>${expectedHtml}</main></body></html>`);
+          const [reading] = await clean.evaluate(readFigureDom);
+          for (const message of figureDomFailures(observed[`${label}Dom`][index], reading)) failures.push(`${where}: rule 6 (${FIGURE_RULES[6]}): ${label}: ${message}`);
+        }
+      }
+      // The clean copy of the whole page: the same document, the same site
+      // sheets and the same display state, without page CSS or page scripts
+      // and with each figure as its pinned declaration renders it.
+      const site = new URL(observed.wideUrl);
+      const suffix = assignment.route === "index" ? "" : `${assignment.route}/`;
+      const base = site.pathname.endsWith(suffix) ? site.pathname.slice(0, site.pathname.length - suffix.length) : "/";
+      cleanPolicy = `script-src ${[...pinnedScripts.map((script) => `${site.origin}${base}${script.path.slice("dist/".length)}`), ...[...inlineScripts].map((hex) => `'sha256-${Buffer.from(hex, "hex").toString("base64")}'`)].join(" ")}; object-src 'none'`;
+      for (const [label, width, mode] of [["wide", 1440, "light"], ["narrow", 390, "light"], ["wideDark", 1440, "dark"], ["narrowDark", 390, "dark"]]) {
+        await clean.setViewportSize({ width, height: 900 });
+        await clean.goto(observed[`${label}Url`], { waitUntil: "networkidle" });
+        await clean.evaluate(showForReading, { theme: mode, root: observed[`${label}Root`], strip: pinnedSheets.map((sheet) => sheet.path.slice("dist/".length)), expected: rendered });
+        await settle(clean);
+        const baseline = await clean.evaluate(readFigureContext);
+        observed[`${label}Context`].forEach((reading, index) => {
+          for (const message of figureContextFailures(reading, baseline[index])) failures.push(`${wheres[index] ?? assignment.source}: rule 6 (${FIGURE_RULES[6]}): ${label}: ${message}`);
+        });
+      }
+    }
+  } finally {
+    await clean.close();
+    await cleanContext?.close();
+  }
+  return { failures, drawn };
+}
+
+// The stylesheets or scripts a build may serve: the files of that kind among
+// its recorded artifacts, each with the hash the evidence records for it.
+export function pinnedBuiltAssets(artifacts, extension) {
+  return (Array.isArray(artifacts) ? artifacts : []).filter((artifact) => typeof artifact?.path === "string" && artifact.path.startsWith("dist/") && artifact.path.endsWith(extension)).map((artifact) => ({ path: artifact.path, sha256: artifact.sha256 }));
+}
+export function pinnedBuiltSheets(artifacts) {
+  return pinnedBuiltAssets(artifacts, ".css");
+}
+
+async function servedSha256(page, url) {
+  const response = await page.request.get(url);
+  return { ok: response.ok(), sha256: createHash("sha256").update(await response.body()).digest("hex"), text: await response.text() };
+}
+
+// Check 1, the page itself: it is served as the built page the evidence
+// records, and its bytes, read before any template becomes a shadow root,
+// declare none.
+export async function servedPageFailures(page, route, artifacts) {
+  const built = route === "index" ? "dist/index.html" : `dist/${route}/index.html`;
+  const recorded = (Array.isArray(artifacts) ? artifacts : []).find((artifact) => artifact?.path === built);
+  const served = await servedSha256(page, page.url());
+  const failures = [];
+  if (recorded === undefined) failures.push(`the evidence records no built page ${built}`);
+  else if (!served.ok || served.sha256 !== recorded.sha256) failures.push(`${built} is served with sha256 ${served.sha256}, not the recorded ${recorded.sha256}`);
+  if (/<template\b[^>]*\sshadowroot(?:mode)?\s*=/i.test(served.text)) failures.push("the served page declares a shadow root");
+  return failures;
+}
+
+// Check 1, scripts: executable content reaches the page only from the site's
+// runtime. External scripts are built scripts the evidence records, served
+// with their hash; inline scripts outside the content are the runtime's own,
+// by the hashes committed in scripts/runtime-scripts.json. The content and a figure's ancestors carry no script,
+// event handler, script URL, frame or embedded document. What the runtime's
+// own scripts create in the page chrome is theirs (the search dialog's form,
+// for one, has a script URL as its action); the built page is read for these
+// before any script runs (servedPageFailures and validate --portal).
+export async function pageScriptFailures(page, pinnedScripts, inlineScripts) {
+  const found = await page.evaluate(() => {
+    const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");
+    const runs = (value) => value.split(";").some((part) => part.replace(/^[\u0000-\u0020]+|[\u0000-\u0020]+$/g, "").replace(/[\t\n\r]/g, "").toLowerCase().startsWith("javascript:"));
+    const urls = ["href", "src", "action", "formaction", "xlink:href", "data", "poster", "background"];
+    const carriers = new Set();
+    const scope = new Set(content ? [content, ...content.querySelectorAll("*")] : []);
+    for (const figure of document.querySelectorAll("figure.cf-fig")) for (let node = figure; node; node = node.parentElement) scope.add(node);
+    for (const element of scope) {
+      const tag = element.localName;
+      if (tag === "script") carriers.add("a <script> element in the page content");
+      if (["iframe", "frame", "frameset", "object", "embed"].includes(tag)) carriers.add(`an <${tag}> element`);
+      if (tag === "template" && (element.hasAttribute("shadowrootmode") || element.hasAttribute("shadowroot"))) carriers.add("a declarative shadow root");
+      for (const attribute of element.attributes) {
+        if (/^on./i.test(attribute.name)) carriers.add(`an event-handler attribute on <${tag}>`);
+        else if (attribute.name === "srcdoc") carriers.add(`an embedded document on <${tag}>`);
+        else if ((urls.includes(attribute.name) || (["animate", "set"].includes(tag) && ["to", "from", "by", "values"].includes(attribute.name))) && runs(attribute.value)) carriers.add(`a script URL on <${tag}>`);
+      }
+    }
+    return {
+      carriers: [...carriers],
+      scripts: [...document.scripts].filter((script) => script.src).map((script) => script.src),
+      inline: [...document.scripts].filter((script) => !script.src && !content?.contains(script)).map((script) => script.text),
+    };
+  });
+  const failures = [...found.carriers];
+  const unknown = [...new Set(found.inline.map(scriptSha256).filter((sha) => !inlineScripts.has(sha)))];
+  if (unknown.length) failures.push(`inline scripts outside the content are not ones the site's runtime emits (sha256 ${unknown.map((sha) => sha.slice(0, 12)).join(", ")}); if the runtime changed, regenerate ${RUNTIME_SCRIPTS_FILE}: ${REGENERATE}`);
+  const origin = new URL(page.url()).origin;
+  for (const source of found.scripts) {
+    const url = new URL(source);
+    const pin = url.origin === origin ? pinnedScripts.find((candidate) => url.pathname.endsWith(`/${candidate.path.slice("dist/".length)}`)) : undefined;
+    if (pin === undefined) { failures.push(`the script ${url.origin === origin ? url.pathname : url.href} is not a built script the evidence records`); continue; }
+    const served = await servedSha256(page, source);
+    if (!served.ok || served.sha256 !== pin.sha256) failures.push(`the script ${url.pathname} is served with sha256 ${served.sha256}, not the recorded ${pin.sha256}`);
+  }
+  return failures;
+}
+
+// Check 1: CSS may reach the page only from the site's own built sheets, and
+// each sheet holds exactly the rules its served bytes parse to, read in
+// `parser`, a page no page script reaches.
+export async function pageCssFailures(page, pinnedSheets, parser = null) {
+  const found = await page.evaluate(() => {
+    const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");
+    const scope = new Set(content ? content.querySelectorAll("*") : []);
+    for (const figure of document.querySelectorAll("figure.cf-fig")) for (let node = figure; node; node = node.parentElement) scope.add(node);
+    const carriers = new Set();
+    for (const element of scope) {
+      if (element.localName === "style") carriers.add(`a <style> element in ${content?.contains(element) ? "the page content" : "the page"}`);
+      if (element.localName === "link" && content?.contains(element)) carriers.add("a <link> element in the page content");
+      if (element.hasAttribute("style")) carriers.add(`a style attribute on <${element.localName}${element.classList.length ? ` class="${element.getAttribute("class")}"` : ""}>`);
+      if (element.shadowRoot) carriers.add(`a shadow root on <${element.localName}>`);
+      if (element.localName === "template" && (element.hasAttribute("shadowrootmode") || element.hasAttribute("shadowroot"))) carriers.add("a declarative shadow root");
+    }
+    const sheets = [...document.styleSheets].map((sheet) => {
+      let imports = [];
+      let rules = null;
+      try {
+        imports = [...sheet.cssRules].filter((rule) => rule instanceof CSSImportRule).map((rule) => rule.href);
+        rules = [...sheet.cssRules].map((rule) => rule.cssText);
+      } catch { imports = ["an unreadable rule list"]; }
+      const owner = sheet.ownerNode;
+      return { href: sheet.href, owner: owner?.localName ?? null, inHead: owner?.parentElement === document.head, imports, rules };
+    });
+    return { carriers: [...carriers], sheets, adopted: document.adoptedStyleSheets.length };
+  });
+  const failures = found.carriers.map((carrier) => `${carrier} carries CSS the site's sheets do not`);
+  if (found.adopted) failures.push(`the document adopts ${found.adopted} constructed stylesheet(s)`);
+  const origin = new URL(page.url()).origin;
+  for (const sheet of found.sheets) {
+    if (sheet.owner !== "link" || !sheet.inHead || sheet.href === null) { failures.push(`a stylesheet from ${sheet.owner ? `a <${sheet.owner}> element` : "no element"}${sheet.inHead ? " in the head" : ""} is not a built sheet`); continue; }
+    const url = new URL(sheet.href);
+    const pin = url.origin === origin ? pinnedSheets.find((candidate) => url.pathname.endsWith(`/${candidate.path.slice("dist/".length)}`)) : undefined;
+    if (pin === undefined) { failures.push(`the stylesheet ${url.origin === origin ? url.pathname : url.href} is not a built sheet the evidence records`); continue; }
+    const served = await servedSha256(page, sheet.href);
+    if (!served.ok || served.sha256 !== pin.sha256) failures.push(`the stylesheet ${url.pathname} is served with sha256 ${served.sha256}, not the recorded ${pin.sha256}`);
+    for (const imported of sheet.imports) failures.push(`the stylesheet ${url.pathname} imports ${imported}`);
+    if (parser !== null) {
+      await parser.goto("about:blank");
+      const parsed = await parser.evaluate(({ text, baseURL }) => {
+        const sheet = new CSSStyleSheet({ baseURL });
+        sheet.replaceSync(text);
+        return [...sheet.cssRules].map((rule) => rule.cssText);
+      }, { text: served.text, baseURL: sheet.href });
+      if (canonicalJson(parsed) !== canonicalJson(sheet.rules)) failures.push(`the stylesheet ${url.pathname} holds ${sheet.rules?.length ?? "unreadable"} rules that are not the ${parsed.length} its served bytes parse to`);
+    }
+  }
+  return failures;
+}
+
+// Runs in the page. Sets the display state to read, and on the clean copy
+// removes every stylesheet that is not a built sheet in the head, every style
+// element, and style attributes in the content and on a figure's ancestors,
+// then puts each figure's pinned rendering in its place.
+function showForReading({ theme, root, strip, expected }) {
+  const html = document.documentElement;
+  if (root !== null) {
+    for (const attribute of [...html.attributes]) if (attribute.name.startsWith("data-")) html.removeAttribute(attribute.name);
+    for (const [name, value] of root) html.setAttribute(name, value);
+  }
+  html.dataset.theme = theme;
+  for (const panel of document.querySelectorAll(".portal-altitude")) panel.hidden = false;
+  if (strip === null) return;
+  const built = (node) => node.localName === "link" && node.parentElement === document.head && strip.some((file) => new URL(node.href, location.href).pathname.endsWith(`/${file}`));
+  for (const node of [...document.querySelectorAll("style, link[rel~='stylesheet']")]) if (!built(node)) node.remove();
+  document.adoptedStyleSheets = [];
+  const content = document.querySelector(".sl-markdown-content") ?? document.querySelector("main");
+  const scope = new Set(content ? content.querySelectorAll("[style]") : []);
+  for (const figure of document.querySelectorAll("figure.cf-fig")) for (let node = figure.parentElement; node; node = node.parentElement) scope.add(node);
+  for (const node of scope) node.removeAttribute("style");
+  const figures = [...document.querySelectorAll("figure.cf-fig")];
+  expected.forEach((markup, index) => {
+    if (markup === null || !figures[index]) return;
+    const template = document.createElement("template");
+    template.innerHTML = markup;
+    const pristine = template.content.querySelector("figure.cf-fig");
+    if (pristine) figures[index].replaceWith(pristine);
+  });
+}
+
+// Fonts loaded and every finite transition or animation at its end, so two
+// readings of the same page compare settled values.
+async function settle(page) {
+  await page.evaluate(async () => {
+    await document.fonts.ready;
+    for (const animation of document.getAnimations()) {
+      const timing = animation.effect?.getComputedTiming?.();
+      if (timing && Number.isFinite(timing.endTime)) animation.finish();
+    }
+  });
+}
+
+// Runs in the page, self-contained. For each figure in document order: every
+// computed property of its companion, the figure and each descendant, with
+// the ::before and ::after boxes that draw; the geometry and visibility
+// effects of each ancestor to the root; and whether the figure, its caption
+// and its legend are visible.
+// The legend and the twin as the page lays them out. The clean copy carries
+// the same site styles, so a site rule that reaches into the figure shows in
+// both and only an absolute reading can see it: each legend key centred on
+// its label, and the twin marker the figure sheet's chevron with no fill or
+// mask from the site.
+export function readFigureChrome() {
+  return [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
+    const keys = [...figure.querySelectorAll(".cf-legend li")].filter((item) => item.getClientRects().length > 0).map((item) => {
+      const key = item.querySelector("svg.cf-key").getBoundingClientRect();
+      const range = document.createRange();
+      range.selectNodeContents(item);
+      range.setStartAfter(item.querySelector("svg.cf-key"));
+      const label = range.getBoundingClientRect();
+      return { state: item.dataset.state, offset: (key.top + key.height / 2) - (label.top + label.height / 2) };
+    });
+    const summary = figure.querySelector(".cf-twin > summary");
+    const marker = summary === null ? null : getComputedStyle(summary, "::before");
+    return {
+      id: figure.dataset.cfFigureId,
+      keys,
+      marker: marker === null ? null : { background: marker.backgroundColor, image: marker.backgroundImage, mask: marker.maskImage || marker.webkitMaskImage || "none", width: marker.width, border: marker.borderRightStyle },
+    };
+  });
+}
+
+export function figureChromeFailures(figures) {
+  const failures = [];
+  for (const figure of figures) {
+    for (const key of figure.keys) {
+      if (Math.abs(key.offset) > 1) failures.push(`figure ${figure.id}: the ${key.state} legend key sits ${Math.abs(key.offset).toFixed(1)}px ${key.offset < 0 ? "above" : "below"} its label`);
+    }
+    const marker = figure.marker;
+    if (marker !== null && (!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(marker.background) || marker.image !== "none" || marker.mask !== "none" || marker.width !== "6px" || marker.border !== "solid")) {
+      failures.push(`figure ${figure.id}: the twin marker is not the figure sheet's chevron (${JSON.stringify(marker)})`);
+    }
+  }
+  return failures;
+}
+
+export function readFigureContext() {
+  const EFFECTS = ["opacity", "visibility", "display", "content-visibility", "clip-path", "mask-image", "filter", "backdrop-filter", "transform", "translate", "rotate", "scale", "perspective", "offset-path", "zoom"];
+  const name = (element) => `<${element.localName}${element.getAttribute("class") ? ` class="${element.getAttribute("class")}"` : ""}>`;
+  const computed = (element, pseudo = null) => {
+    const style = getComputedStyle(element, pseudo);
+    const values = {};
+    for (let index = 0; index < style.length; index += 1) values[style[index]] = style.getPropertyValue(style[index]);
+    return values;
+  };
+  const visible = (element) => !!element && (typeof element.checkVisibility === "function" ? element.checkVisibility({ opacityProperty: true, visibilityProperty: true, contentVisibilityAuto: true }) : element.getClientRects().length > 0);
+  return [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
+    const companion = figure.closest(".cf-companion");
+    const elements = [...(companion ? [companion] : []), figure, ...figure.querySelectorAll("*")];
+    const styles = elements.flatMap((element) => {
+      const entries = [{ element: name(element), values: computed(element) }];
+      for (const pseudo of ["::before", "::after"]) {
+        const values = computed(element, pseudo);
+        if (values.content && values.content !== "none" && values.content !== "normal") entries.push({ element: `${name(element)}${pseudo}`, values });
+      }
+      return entries;
+    });
+    const chain = [];
+    let opacity = 1;
+    for (let node = figure; node; node = node.parentElement) {
+      const style = getComputedStyle(node);
+      opacity *= Number(style.opacity);
+      if (node !== figure) chain.push({ element: name(node), values: Object.fromEntries(EFFECTS.map((property) => [property, style.getPropertyValue(property)])) });
+    }
+    const box = figure.getBoundingClientRect();
+    return {
+      styles,
+      chain,
+      opacity,
+      visible: { figure: visible(figure) && box.width > 0 && box.height > 0, caption: visible(figure.querySelector(".cf-fig-caption")), legend: visible(figure.querySelector(".cf-legend")) },
+    };
+  });
+}
+
+// Checks 2 and 3 for one figure, against the clean copy of its page.
+export function figureContextFailures(observed, baseline) {
+  if (!observed || !baseline) return ["the figure or its clean copy could not be read"];
+  const failures = [];
+  for (const [part, shown] of Object.entries(observed.visible)) if (!shown) failures.push(`the ${part} is not visible to a reader`);
+  if (!(observed.opacity >= 1)) failures.push(`the figure draws at an effective opacity of ${observed.opacity}`);
+  if (observed.chain.length !== baseline.chain.length) failures.push("the figure sits in a different place in the page from its clean copy");
+  else observed.chain.forEach((ancestor, position) => {
+    const clean = baseline.chain[position];
+    for (const [property, value] of Object.entries(ancestor.values)) {
+      if (value !== clean.values[property]) failures.push(`an ancestor ${ancestor.element} has ${property} ${value} where the clean copy has ${clean.values[property]}`);
+    }
+  });
+  if (observed.styles.length !== baseline.styles.length) {
+    failures.push(`the companion draws ${observed.styles.length} styled boxes where its clean copy draws ${baseline.styles.length}`);
+    return failures;
+  }
+  observed.styles.forEach((entry, position) => {
+    const clean = baseline.styles[position];
+    if (entry.element !== clean.element) { failures.push(`${entry.element} stands where the clean copy has ${clean.element}`); return; }
+    const properties = new Set([...Object.keys(entry.values), ...Object.keys(clean.values)]);
+    const differing = [...properties].filter((property) => entry.values[property] !== clean.values[property]).sort();
+    if (!differing.length) return;
+    const shown = differing.slice(0, 4).map((property) => `${property} ${entry.values[property] ?? "unset"} where the clean copy computes ${clean.values[property] ?? "unset"}`);
+    failures.push(`${entry.element} computes ${shown.join(", ")}${differing.length > 4 ? `, and ${differing.length - 4} more` : ""}`);
+  });
+  return failures;
+}
+
 // One structural read per page: the same observation the declared class rules
 // are written against, taken from the rendered document rather than from the
 // Markdown the adapter wrote.
@@ -365,7 +831,7 @@ export function observePortalPage(page) {
   return page.evaluate(({ panels, carriers, columns }) => {
     const shown = (element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden";
     const panel = (name) => document.querySelector(`.portal-altitude[data-altitude="${name}"]`);
-    const selector = { figure: "figure", stage: ".portal-stage", table: "table", list: "ul, ol", pre: "pre" };
+    const selector = { figure: "figure.cf-fig", stage: ".portal-stage", table: "table", list: "ul, ol", pre: "pre" };
     // A carrier is what the reader sees as one thing. The rows and lists a
     // stage renders inside itself are its own internals, not further carriers,
     // so only a carrier with no carrier above it counts, and the stage counts
@@ -375,7 +841,8 @@ export function observePortalPage(page) {
       const text = (node) => node.textContent.trim().length > 0;
       if (carrier === "table") return [...element.querySelectorAll("tbody tr")].some(text);
       if (carrier === "list") return [...element.querySelectorAll("li")].some(text);
-      if (carrier === "figure" || carrier === "stage") return element.querySelector("img, svg, pre, table, .portal-stage") !== null || text(element);
+      if (carrier === "figure") return element.querySelector("svg.cf-fig-svg") !== null;
+      if (carrier === "stage") return element.querySelector("img, svg, pre, table, .portal-stage") !== null || text(element);
       return text(element);
     };
     const own = (element) => (element.parentElement?.closest("figure, .portal-stage") ?? null) === null;
@@ -398,6 +865,10 @@ export function observePortalPage(page) {
       panelCarriers: Object.fromEntries(panels.map((name) => [name, panel(name) === null ? null : carried(panel(name))])),
       pointerColumns: folderTable === null ? [] : headersOf(folderTable),
       pointerRows: folderTable?.querySelectorAll("tbody tr").length ?? 0,
+      sourceRegions: document.querySelectorAll("[data-cf-source-region]").length,
+      companions: [...document.querySelectorAll(".cf-companion")].filter((companion) => companion.querySelector("figure.cf-fig svg.cf-fig-svg") !== null).length,
+      headFigures: document.querySelectorAll('.cf-companion[data-cf-placement="head"] figure.cf-fig').length,
+      tables: tables.filter((table) => table.closest("figure") === null && table.querySelector("tbody tr") !== null).length,
     };
   }, { panels: ALTITUDE_PANELS, carriers: CARRIER_ELEMENTS, columns: RECORD_POINTER_COLUMNS });
 }
@@ -905,4 +1376,10 @@ async function waitForServer(base, processHandle, output) {
     await new Promise((resolve) => setTimeout(resolve, 100));
   }
   throw new Error(`portal preview did not become ready: ${output()}`);
+}
+
+// The entry point runs last, once every module-level binding is initialized:
+// a top-level await above a later `const` reads it before initialization.
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, () => verifyPortal(lifecycle)));
 }

@@ -1,0 +1,642 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "epic-016-graph",
+    "family": "graph",
+    "binding": "authored",
+    "question": "What depends on what in this epic, and what is on the critical path?",
+    "idea": "Six tasks form the critical path from the doctrine to the closeout; three run beside it.",
+    "title": "The nine tasks of EPC-016 and their sixteen dependencies",
+    "kicker": "Task graph of one epic",
+    "description": "Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy accent arcs mark the critical path 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.",
+    "caption": "The doctrine, the kit, the runtime, the chrome, the pages and the closeout are the critical path, and the evaluation cases, Agent OS and the annotation fixes run beside it.",
+    "states": [
+      {
+        "name": "node",
+        "mark": "node",
+        "means": "Task, labelled inside"
+      },
+      {
+        "name": "done",
+        "mark": "done",
+        "means": "Critical path"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Depends on"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the critical path runs 058, 070, 059, 060, 061, 064",
+        "source": "project-management/epics/EPC-016.md#plan-graph-plan-v43",
+        "derive": "the TASK_GRAPH edges on the critical path",
+        "check": {
+          "kind": "contains",
+          "text": "TSK-070 -> TSK-059"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 320,
+      "draw": [
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M75 171L155 229",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 157L502 83",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 162L502 208",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M307 154L503 86",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M308 164L502 206",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M306 169L504 281",
+          "head": "end",
+          "id": "m6"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M417 167L503 203",
+          "head": "end",
+          "id": "m7"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M412 173L508 277",
+          "head": "end",
+          "id": "m8"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M188 237L642 163",
+          "head": "end",
+          "id": "m9"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M537 204L643 166",
+          "head": "end",
+          "id": "m10"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M533 278L647 172",
+          "head": "end",
+          "id": "m11"
+        },
+        {
+          "state": "done",
+          "shape": "path",
+          "d": "M76 151L154 109",
+          "head": "end",
+          "id": "m12"
+        },
+        {
+          "state": "done",
+          "shape": "path",
+          "d": "M186 108L274 152",
+          "head": "end",
+          "id": "m13"
+        },
+        {
+          "state": "done",
+          "shape": "path",
+          "d": "M308 160H382",
+          "head": "end",
+          "id": "m14"
+        },
+        {
+          "state": "done",
+          "shape": "path",
+          "d": "M415 150L505 90",
+          "head": "end",
+          "id": "m15"
+        },
+        {
+          "state": "done",
+          "shape": "path",
+          "d": "M536 89L644 151",
+          "head": "end",
+          "id": "m16"
+        },
+        {
+          "state": "node",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 160,
+          "r": 17,
+          "id": "m17"
+        },
+        {
+          "state": "node",
+          "shape": "circle",
+          "cx": 170,
+          "cy": 100,
+          "r": 17,
+          "id": "m18"
+        },
+        {
+          "state": "node",
+          "shape": "circle",
+          "cx": 170,
+          "cy": 240,
+          "r": 17,
+          "id": "m19"
+        },
+        {
+          "state": "node",
+          "shape": "circle",
+          "cx": 290,
+          "cy": 160,
+          "r": 17,
+          "id": "m20"
+        },
+        {
+          "state": "node",
+          "shape": "circle",
+          "cx": 400,
+          "cy": 160,
+          "r": 17,
+          "id": "m21"
+        },
+        {
+          "state": "node",
+          "shape": "circle",
+          "cx": 520,
+          "cy": 80,
+          "r": 17,
+          "id": "m22"
+        },
+        {
+          "state": "node",
+          "shape": "circle",
+          "cx": 520,
+          "cy": 210,
+          "r": 17,
+          "id": "m23"
+        },
+        {
+          "state": "node",
+          "shape": "circle",
+          "cx": 520,
+          "cy": 290,
+          "r": 17,
+          "id": "m24"
+        },
+        {
+          "state": "node",
+          "shape": "circle",
+          "cx": 660,
+          "cy": 160,
+          "r": 17,
+          "id": "m25"
+        },
+        {
+          "text": "058",
+          "x": 60,
+          "y": 165,
+          "anchor": "middle",
+          "for": [
+            "m17"
+          ]
+        },
+        {
+          "text": "070",
+          "x": 170,
+          "y": 105,
+          "anchor": "middle",
+          "for": [
+            "m18"
+          ]
+        },
+        {
+          "text": "062",
+          "x": 170,
+          "y": 245,
+          "anchor": "middle",
+          "for": [
+            "m19"
+          ]
+        },
+        {
+          "text": "059",
+          "x": 290,
+          "y": 165,
+          "anchor": "middle",
+          "for": [
+            "m20"
+          ]
+        },
+        {
+          "text": "060",
+          "x": 400,
+          "y": 165,
+          "anchor": "middle",
+          "for": [
+            "m21"
+          ]
+        },
+        {
+          "text": "061",
+          "x": 520,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "m22"
+          ]
+        },
+        {
+          "text": "063",
+          "x": 520,
+          "y": 215,
+          "anchor": "middle",
+          "for": [
+            "m23"
+          ]
+        },
+        {
+          "text": "071",
+          "x": 520,
+          "y": 295,
+          "anchor": "middle",
+          "for": [
+            "m24"
+          ]
+        },
+        {
+          "text": "064",
+          "x": 660,
+          "y": 165,
+          "anchor": "middle",
+          "for": [
+            "m25"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 424,
+      "draw": [
+        {
+          "state": "trans",
+          "id": "e058-062",
+          "shape": "path",
+          "d": "M203.2 49.1L246.8 84.9",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e059-061",
+          "shape": "path",
+          "d": "M161.1 201.3L78.9 302.7",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e059-071",
+          "shape": "path",
+          "d": "M196.3 203.2L259.7 300.8",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e060-063",
+          "shape": "path",
+          "d": "M180 282L180 296",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e060-071",
+          "shape": "path",
+          "d": "M203.8 270.3L252.2 307.7",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e063-064",
+          "shape": "path",
+          "d": "M180 356L180 370",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e071-064",
+          "shape": "path",
+          "d": "M252.2 344.3L203.8 381.7",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e058-061",
+          "shape": "path",
+          "d": "M150 34C8 40 8 260 40 302",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e058-063",
+          "shape": "path",
+          "d": "M165 56C135 110 135 280 158 306",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e059-063",
+          "shape": "path",
+          "d": "M198 202C228 230 228 280 202 306",
+          "head": "end"
+        },
+        {
+          "state": "trans",
+          "id": "e062-064",
+          "shape": "path",
+          "d": "M292 124C360 200 360 380 208 396",
+          "head": "end"
+        },
+        {
+          "state": "done",
+          "id": "c058-070",
+          "shape": "path",
+          "d": "M156.8 49.1L113.2 84.9",
+          "head": "end"
+        },
+        {
+          "state": "done",
+          "id": "c070-059",
+          "shape": "path",
+          "d": "M113.2 123.1L156.8 158.9",
+          "head": "end"
+        },
+        {
+          "state": "done",
+          "id": "c059-060",
+          "shape": "path",
+          "d": "M180 208L180 222",
+          "head": "end"
+        },
+        {
+          "state": "done",
+          "id": "c060-061",
+          "shape": "path",
+          "d": "M154.5 267.7L85.5 310.3",
+          "head": "end"
+        },
+        {
+          "state": "done",
+          "id": "c061-064",
+          "shape": "path",
+          "d": "M85.5 341.7L154.5 384.3",
+          "head": "end"
+        },
+        {
+          "state": "node",
+          "id": "n058",
+          "shape": "circle",
+          "cx": 180,
+          "cy": 30,
+          "r": 17
+        },
+        {
+          "text": "058",
+          "x": 180,
+          "y": 35,
+          "anchor": "middle",
+          "for": [
+            "n058"
+          ]
+        },
+        {
+          "state": "node",
+          "id": "n070",
+          "shape": "circle",
+          "cx": 90,
+          "cy": 104,
+          "r": 17
+        },
+        {
+          "text": "070",
+          "x": 90,
+          "y": 109,
+          "anchor": "middle",
+          "for": [
+            "n070"
+          ]
+        },
+        {
+          "state": "node",
+          "id": "n062",
+          "shape": "circle",
+          "cx": 270,
+          "cy": 104,
+          "r": 17
+        },
+        {
+          "text": "062",
+          "x": 270,
+          "y": 109,
+          "anchor": "middle",
+          "for": [
+            "n062"
+          ]
+        },
+        {
+          "state": "node",
+          "id": "n059",
+          "shape": "circle",
+          "cx": 180,
+          "cy": 178,
+          "r": 17
+        },
+        {
+          "text": "059",
+          "x": 180,
+          "y": 183,
+          "anchor": "middle",
+          "for": [
+            "n059"
+          ]
+        },
+        {
+          "state": "node",
+          "id": "n060",
+          "shape": "circle",
+          "cx": 180,
+          "cy": 252,
+          "r": 17
+        },
+        {
+          "text": "060",
+          "x": 180,
+          "y": 257,
+          "anchor": "middle",
+          "for": [
+            "n060"
+          ]
+        },
+        {
+          "state": "node",
+          "id": "n061",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 326,
+          "r": 17
+        },
+        {
+          "text": "061",
+          "x": 60,
+          "y": 331,
+          "anchor": "middle",
+          "for": [
+            "n061"
+          ]
+        },
+        {
+          "state": "node",
+          "id": "n063",
+          "shape": "circle",
+          "cx": 180,
+          "cy": 326,
+          "r": 17
+        },
+        {
+          "text": "063",
+          "x": 180,
+          "y": 331,
+          "anchor": "middle",
+          "for": [
+            "n063"
+          ]
+        },
+        {
+          "state": "node",
+          "id": "n071",
+          "shape": "circle",
+          "cx": 276,
+          "cy": 326,
+          "r": 17
+        },
+        {
+          "text": "071",
+          "x": 276,
+          "y": 331,
+          "anchor": "middle",
+          "for": [
+            "n071"
+          ]
+        },
+        {
+          "state": "node",
+          "id": "n064",
+          "shape": "circle",
+          "cx": 180,
+          "cy": 400,
+          "r": 17
+        },
+        {
+          "text": "064",
+          "x": 180,
+          "y": 405,
+          "anchor": "middle",
+          "for": [
+            "n064"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Task",
+        "Depends on",
+        "On the critical path"
+      ],
+      "rows": [
+        [
+          "TSK-058",
+          "none",
+          "yes"
+        ],
+        [
+          "TSK-070",
+          "058",
+          "yes"
+        ],
+        [
+          "TSK-062",
+          "058",
+          "no"
+        ],
+        [
+          "TSK-059",
+          "070",
+          "yes"
+        ],
+        [
+          "TSK-060",
+          "059",
+          "yes"
+        ],
+        [
+          "TSK-061",
+          "058, 059, 060",
+          "yes"
+        ],
+        [
+          "TSK-063",
+          "058, 059, 060",
+          "no"
+        ],
+        [
+          "TSK-071",
+          "059, 060",
+          "no"
+        ],
+        [
+          "TSK-064",
+          "061, 062, 063, 071",
+          "yes"
+        ]
+      ]
+    }
+  }
+}

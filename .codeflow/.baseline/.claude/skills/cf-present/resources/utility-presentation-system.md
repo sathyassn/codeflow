@@ -83,6 +83,30 @@ not portal pages: one pointer page names their folders.
 Accepted decisions stay append-only in the repository and are cited by id
 from the pages that rely on them.
 
+### Page classes in configuration (portal)
+
+Every source is an explanatory page unless `portal.config.json` declares
+otherwise in `page_classes`, one entry per `source` path or `prefix`. A
+declaration never drops a route or changes source bytes; the evidence manifest
+lists every route with its class, reason and bound figures, and the build
+prints the counts.
+
+| Class | Declared by | What the gate demands |
+|-------|-------------|-----------------------|
+| **Explanatory** (default) | nothing | The trio, a figure in every panel, and a table beside the Technical figure; a table never stands in for a figure. A `page_carriers` entry `{ "source": ..., "technical": "list" }` lets a checklist carry a list there instead of the table |
+| **Illustrated source** | `{ "source" or "prefix", "class": "illustrated" }` | The source rendered as it is, at least one companion figure at the page head, every bound figure held to all twelve rules; no trio |
+| **Pass-through** | `{ ..., "class": "pass-through", "reason": ... }` | The source rendered as it is, no figure; `reason` is `accepted-record`, `governance` or `no-relationship`, and `no-relationship` also records the design primary's judgment in `note` |
+| **Derived lookup** | `{ ..., "class": "derived-lookup", "derive": "capability-registry" }` | A generated table with a fidelity check against its source |
+
+Figures bind in `figures`, never by a marker inside a source: each binding
+names a `declaration` file and a published `route`, plus `panel` (an
+explanatory page's altitude) or `anchor` (a heading in an illustrated source;
+omit it for the page head). A binding to a missing route or anchor fails the
+build. Declarations are committed inputs under the adapter's pins, and a
+fact a companion asserts is re-derived from the source anchor it names, so a
+wrong fact under a valid anchor fails rule 6. Pages and Markdown twins
+attribute companion content to its declaration, never to the source.
+
 A present document walks the same altitudes as a path: the Concept carrier
 first, an Architecture view only when a second structural view is needed,
 Technical panes, then one Ask (`feedback_prompt`).
@@ -94,12 +118,12 @@ not be promised in a source or a document.
 
 | Carrier | Portal (adapter) | Present (runtime blocks) |
 |---------|------------------|--------------------------|
-| Family figure (the default form, `figure-grammar.md`) | Not yet a rendered carrier: raw HTML is escaped, so author the declaration beside a `cf-stage` (flow family) or a `text` fence until the figure block lands | `html` block carrying the inline SVG drawn to the grammar, its legend, caption and table twin |
-| Subject-led labeled flow | `cf-stage` fence (nodes `NAME \| sublabel @role`, `->` between stages, one `caption:`; roles accent / positive / warn / danger / neutral; limits 6 stages, 5 nodes per stage); the flow family's interim portal form | `html` block: the authored primary stage (utility tokens, labeled nodes, named edges) |
+| Family figure (the default form, `figure-grammar.md`) | Figure block: a declaration file bound in `portal.config.json` `figures` to a route and a panel or section anchor; the adapter draws it with the grammar module, and the figure gate holds it to the twelve rules | `figure` block carrying the declaration; the runtime draws it with the same grammar module (authored binding only) |
+| Subject-led labeled flow | `cf-stage` fence (nodes `NAME \| sublabel @role`, `->` between stages, one `caption:`; roles accent / positive / warn / danger / neutral; limits 6 stages, 5 nodes per stage); the flow family's interim form while the flow specimen fails rule 3 | `html` block: the authored primary stage (utility tokens, labeled nodes, named edges) |
 | Altitude trio | depth-2 `## Concept`, `## Architecture`, `## Technical` rendered as a tablist; at least two of the three | block order as attention order; `tabs` only for true peer views |
-| Full-width figure | fenced `text` block inside a trio panel | `html` block as a static layout standard blocks cannot express |
+| Full-width figure | the figure block; a fenced `text` block only for a chat-grade sketch | `figure` block; `html` only for a static layout the families cannot express |
 | Table | Markdown table | `table` |
-| Hierarchy | **unsupported** in the portal (use a stage or a `text` figure) | `tree` |
+| Hierarchy | **unsupported** in the portal (use a structure figure) | `tree` |
 | Code, diff, evidence | fenced code | `code` / `diff` / `status` |
 | Media | image with committed source | `media` |
 | Callout | not a carrier | `callout`, sparingly |
@@ -108,7 +132,7 @@ not be promised in a source or a document.
 
 Unsupported on both surfaces: arbitrary diagram syntaxes beyond the forms
 above. In the portal, hierarchy trees and Mermaid are also unsupported; use a
-stage or a `text` figure there.
+family figure there.
 
 ---
 
@@ -188,7 +212,7 @@ specimen per family, when authoring a figure. In brief:
   text or over a mark; one-sentence caption; `--cf-fig-*` tokens only; a
   description and a table twin.
 - A labelled stage is one flow-family form, not the default; ASCII `text`
-  figures draw the same families in chat and as the portal's interim form.
+  figures draw the same families in chat.
 
 ### Anti-patterns (fail closed)
 

@@ -3,6 +3,7 @@ import { Chrome } from "./chrome";
 import { CHROME_ROOT_ID, DOCUMENT_ROOT_ID, readChromeConfig } from "./contracts";
 import { enhanceDocument } from "./enhance";
 import "./styles.css";
+import "./figure.css";
 
 void import("./fonts").then(({ installFonts }) => installFonts());
 
