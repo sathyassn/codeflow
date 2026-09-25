@@ -44,7 +44,7 @@ async function probe(page, css, html, breakage = null, argument = undefined) {
 test("each of the twelve rules fails a figure built to break it", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
   const all = await specimens();
   const layering = all.find(({ name }) => name === "03-layering.json").declaration;
-  const flow = all.find(({ name }) => name === "01-flow.json").declaration;
+  const oneChannel = await specimen("controls/one-channel.json");
   const css = await sheet();
   const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
   try {
@@ -80,9 +80,11 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
       const observed = await probe(page, css, html, breakage);
       assert.ok(rulesOf(observed).includes(Number(rule)), `rule ${rule} (${FIGURE_RULES[rule]}) did not fail: ${JSON.stringify(figureRuleFailures(observed))}`);
     }
-    // Rule 3: the flow specimen tells done from stop by shape alone.
-    const flowObserved = await probe(page, css, renderFigure(flow, { idPrefix: "f" }));
-    assert.ok(figureRuleFailures(flowObserved).some((failure) => failure.rule === 3 && /states done and stop differ on shape, need 2/.test(failure.message)));
+    // Rule 3: the layering specimen with its remote plane declared on the
+    // local layer mark, so only the cap tells the two planes apart.
+    const oneChannelFailures = figureRuleFailures(await probe(page, css, renderFigure(oneChannel, { idPrefix: "f" })));
+    assert.deepEqual([...new Set(oneChannelFailures.map((failure) => failure.rule))], [3], canonicalJson(oneChannelFailures));
+    assert.ok(oneChannelFailures.some((failure) => /^wide: states layer and layer-remote differ on overlay, need 2$/.test(failure.message)), canonicalJson(oneChannelFailures));
     // Rule 6: the evidence re-derives a value the figure does not draw.
     const fact = layering.figure.facts[0];
     assert.ok(rulesOf(clean, { facts: [{ claim: fact.claim, source: fact.source, drawn: fact.value, derived: false, matches: false }] }).includes(6));

@@ -194,7 +194,7 @@
     },
     "src/styles/figure.css": {
       "ownership": "managed",
-      "pristine_sha256": "a7189a615f07a437cc40dfa9a27e22e0a109158a9db473cea5b7f26c834d6546"
+      "pristine_sha256": "9cda65105b1eb45f3f588f0beabd5dc9d9f030fe7f1ba5b1c0bdb11556ea8f25"
     },
     "src/styles/portal.css": {
       "ownership": "managed",
@@ -226,7 +226,7 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "663b006403d800d574cf0788449412feab1d54f3f320d466df91dff605a05b62"
+      "pristine_sha256": "f2f48e09e89d882fece443eca746a2db0fa713b97ca91be5b1a975e985f06ba3"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
@@ -234,7 +234,7 @@
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "c8fe7e6ef35e42eac60d557aae3c1be699ff2f15987b5cbd6e8987fa5d15bfd3"
+      "pristine_sha256": "97c420760b2dc4c27cbe30411793c6a0884889b44f0a30fb7a2c7ecfad85f6f8"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
@@ -295,6 +295,10 @@
     "tests/fixtures/figures/controls/coverage-wrapped.json": {
       "ownership": "managed",
       "pristine_sha256": "a632c7d9eeefd9b4cb39b07a60be4b174c3dea056f5a744177d3068a87518a2c"
+    },
+    "tests/fixtures/figures/controls/one-channel.json": {
+      "ownership": "managed",
+      "pristine_sha256": "3585376015b90a25afa728f4faaa4a4697dc042d23402bee1be609256e3ca465"
     },
     "tests/fixtures/figures/rendered/01-flow.html": {
       "ownership": "managed",
