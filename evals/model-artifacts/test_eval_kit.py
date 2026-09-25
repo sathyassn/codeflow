@@ -577,29 +577,41 @@ class SuiteContractTests(unittest.TestCase):
         self.assertTrue(any(s.startswith("first_paint_") for s in display["must_not"]))
 
     def test_method_controls_grade_committed_answers(self) -> None:
-        # Committed answers for the chat, README and smallest-carrier cases:
-        # the kit computes each recorded decision from the grader's signals,
-        # and every form signal agrees with the answer text itself.
+        # A committed passing and faulty answer for every new case of the
+        # method pack: the kit computes each recorded decision from the
+        # grader's signals, and every form signal agrees with the answer.
         directory = ROOT / "evals/model-artifacts/method-controls"
         controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
         cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
         method = set(eval_kit.resolve_pack("explanation-method"))
-        self.assertEqual(method, set(controls["cases"]) | set(controls["not_practical"])
-                         | {"complex-review-uses-declarative-presentation"})
-        fence = re.compile(r"^```([^\n]*)\n(.*?)^```", re.M | re.S)
+        # The existing present case keeps its own controls; nothing else is
+        # exempt, and an exemption never counts as a control.
+        self.assertEqual(method - {"complex-review-uses-declarative-presentation"}, set(controls["cases"]))
+        self.assertNotIn("not_practical", controls)
         for case_id, entries in controls["cases"].items():
             case = cases[case_id]
             self.assertEqual({"passing", "faulty"}, {entry["role"] for entry in entries}, case_id)
             for entry in entries:
+                with self.subTest(case=case_id, answer=entry["answer"]):
+                    trial = control_trial(case, entry["signals"])
+                    self.assertEqual(entry["decision"], eval_kit.computed_trial_status(trial, case))
+                    self.assertEqual(entry["role"] == "passing", entry["decision"] == "pass")
+                    self.assertTrue((directory / entry["answer"]).exists())
+
+    def test_method_text_answers_carry_the_form_their_signals_claim(self) -> None:
+        directory = ROOT / "evals/model-artifacts/method-controls"
+        controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
+        fence = re.compile(r"^```([^\n]*)\n(.*?)^```", re.M | re.S)
+        text_cases = ("enforcement-planes-answered-in-chat", "readme-figure-uses-the-text-form",
+                      "three-unrelated-rules-take-the-smallest-carrier")
+        for case_id in text_cases:
+            for entry in controls["cases"][case_id]:
                 text = (directory / entry["answer"]).read_text(encoding="utf-8")
                 signals = set(entry["signals"])
                 fences = fence.findall(text)
                 prose = fence.sub("", text)
                 text_figure = any(language.strip() in ("", "text") for language, _ in fences)
                 with self.subTest(case=case_id, answer=entry["answer"]):
-                    trial = control_trial(case, entry["signals"])
-                    self.assertEqual(entry["decision"], eval_kit.computed_trial_status(trial, case))
-                    self.assertEqual(entry["role"] == "passing", entry["decision"] == "pass")
                     if case_id == "readme-figure-uses-the-text-form":
                         self.assertEqual(text_figure, "fenced_text_figure_in_readme" in signals)
                         self.assertEqual(any(language.strip() == "mermaid" for language, _ in fences),
@@ -626,6 +638,96 @@ class SuiteContractTests(unittest.TestCase):
                         self.assertEqual("CI" in rows, "ci_plane_omitted_with_caption_note" not in signals)
                         if "ci_plane_omitted_with_caption_note" in signals:
                             self.assertIn("CI", prose)
+
+    def test_method_structured_answers_carry_the_form_their_signals_claim(self) -> None:
+        # The guide page, display and migration answers: files laid over the
+        # fixture, or a present document. The adapter and class rules run in
+        # visual_controls.test.mjs; these are the form signals a file shows.
+        directory = ROOT / "evals/model-artifacts/method-controls"
+        controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
+        grammar = (ROOT / ".agents/skills/cf-docs-portal/resources/figure-grammar.md").read_text(encoding="utf-8")
+        contract = {"concept": {"structure", "flow", "extent"},
+                    "architecture": {"structure", "layering", "derivation", "graph"},
+                    "technical": {"sequence", "state", "coverage", "extent"}}
+        # The contract above is the altitude table of figure-grammar.md.
+        self.assertIn("| Architecture | how do the parts relate and where are the boundaries | structure, layering, "
+                      "derivation, graph |", grammar)
+        self.assertIn("| Technical | what exactly holds, in what order, and how far | sequence, state, coverage, "
+                      "extent |", grammar)
+
+        def sections(markdown: str) -> dict[str, str]:
+            parts = re.split(r"^## (.+)$", markdown, flags=re.M)
+            return {parts[i].strip(): parts[i + 1] for i in range(1, len(parts), 2)}
+
+        def declarations(root: Path, config: dict) -> dict[str, dict]:
+            return {binding["declaration"]: json.loads((root / binding["declaration"]).read_text(encoding="utf-8"))
+                    for binding in config["figures"]}
+
+        for entry in controls["cases"]["guide-page-from-a-policy-source"]:
+            root = directory / entry["answer"]
+            signals = set(entry["signals"])
+            page = (root / "docs/merge-policy.md").read_text(encoding="utf-8")
+            config = json.loads((root / "config.json").read_text(encoding="utf-8"))
+            bound = declarations(root, config)
+            with self.subTest(answer=entry["answer"]):
+                self.assertEqual({"Concept", "Architecture", "Technical"}, set(sections(page)))
+                families = {binding["panel"]: bound[binding["declaration"]]["figure"]["family"] for binding in config["figures"]}
+                self.assertEqual(
+                    bool(families) and all(family in contract[panel] for panel, family in families.items())
+                    and set(families) == set(contract),
+                    "panel_family_matches_its_relationship" in signals)
+                self.assertEqual(bool(bound) and all("twin" in item["figure"] for item in bound.values()),
+                                 "twin_present_for_each_figure" in signals)
+                technical = sections(page)["Technical"]
+                self.assertEqual(all(command in technical for command in ("`mp show`", "`mp check <pr>`", "`mp explain <rule>`"))
+                                 and "|---|---|" in technical, "command_table_kept_as_lookup" in signals)
+                self.assertEqual("```cf-stage" in page and not bound,
+                                 "source_reprinted_under_altitudes_with_box_stage" in signals)
+
+        image = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+        for entry in controls["cases"]["display-panel-and-first-paint-take-different-carriers"]:
+            root = directory / entry["answer"]
+            signals = set(entry["signals"])
+            parts = sections((root / "docs/display.md").read_text(encoding="utf-8"))
+            config = json.loads((root / "config.json").read_text(encoding="utf-8"))
+            capture = json.loads((root / "capture.json").read_text(encoding="utf-8"))
+            png = (root / capture["image"]).read_bytes()
+            with self.subTest(answer=entry["answer"]):
+                # The committed image is the one the capture record describes.
+                self.assertEqual(b"\x89PNG\r\n\x1a\n", png[:8])
+                self.assertEqual(capture["sha256"], "sha256:" + hashlib.sha256(png).hexdigest())
+                panel_images = image.findall(parts["Display panel"])
+                paint_images = image.findall(parts["First paint"])
+                named = all(key in capture.get("observed", {}) for key in ("theme", "skin", "scale")) and all(
+                    word in parts["Display panel"] for word in ("skin", "mode", "scale"))
+                self.assertEqual(bool(panel_images) and named,
+                                 "display_panel_image_committed_with_skin_mode_and_scale_named" in signals)
+                self.assertEqual(any("Display panel" in alt and "light mode" in alt for alt, _ in panel_images),
+                                 "display_panel_alt_text_names_surface_and_state" in signals)
+                keyed = re.findall(r"^\d+\. ", parts["Display panel"], flags=re.M)
+                self.assertEqual(bool(panel_images) and len(keyed) == len(capture.get("markers", [])) > 0,
+                                 "display_panel_image_annotated_by_numbered_markers_only" in signals)
+                self.assertEqual("```" in parts["Display panel"], "display_panel_drawn_as_ascii_art" in signals)
+                self.assertEqual(bool(paint_images), "first_paint_shown_as_screenshot" in signals)
+                self.assertEqual(not paint_images, "first_paint_has_no_image" in signals)
+                paint = [json.loads((root / b["declaration"]).read_text(encoding="utf-8"))["figure"]["family"]
+                         for b in config["figures"] if b.get("anchor") == "first-paint"]
+                self.assertEqual(paint == ["sequence"], "first_paint_drawn_in_sequence_family" in signals)
+
+        for entry in controls["cases"]["migration-review-leads-with-the-picture"]:
+            document = json.loads((directory / entry["answer"]).read_text(encoding="utf-8"))
+            blocks = document["blocks"]
+            signals = set(entry["signals"])
+            asks = [block for block in blocks if block["type"] == "feedback_prompt"]
+            first = blocks[0]
+            with self.subTest(answer=entry["answer"]):
+                self.assertEqual(
+                    (first["type"] == "figure" and first["declaration"]["figure"]["family"] in ("extent", "coverage"))
+                    or first["type"] == "table", "governing_comparison_is_first_block" in signals)
+                self.assertEqual(len(asks) == 1 and blocks[-1] is asks[0], "one_ask" in signals)
+                self.assertEqual(len(asks) > 1, "more_than_one_ask" in signals)
+                self.assertEqual(first["type"] == "narrative", "narrative_first_text_cards_ask_last" in signals)
+                self.assertEqual("peak load" in json.dumps(blocks), "unverified_peak_load_stated" in signals)
 
     def test_visual_doctrine_fixtures_ship_the_defect_their_case_grades(self) -> None:
         # Each visual case is graded on the declaration the subject leaves and

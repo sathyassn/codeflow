@@ -2,7 +2,9 @@
 // figure rules recorded for it and each passing answer holds every rule (or
 // only a recorded, dated module false positive), read off Chromium at 1280
 // and 390 px in light and dark with facts re-derived from the case's shipped
-// fixture, the way figure-rules-browser.test.mjs reads the specimens.
+// fixture, the way figure-rules-browser.test.mjs reads the specimens. Every
+// figure a committed method answer carries is rendered too and must hold
+// every rule.
 //
 // Run: npm run deps:install --prefix docs-portal
 //      npx --prefix docs-portal playwright install chromium   (once)
@@ -10,7 +12,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import test from "node:test";
-import { controls, declarationOf, fixtureOf, grammar, prepare } from "./visual_controls.mjs";
+import { controls, declarationOf, fixtureOf, grammar, methodAnswer, methodControls, prepare } from "./visual_controls.mjs";
 
 const { chromium } = await import(new URL("../../docs-portal/node_modules/@playwright/test/index.mjs", import.meta.url));
 const { hardenedChildEnvironment } = await import(new URL("../../docs-portal/scripts/process-environment.mjs", import.meta.url));
@@ -45,8 +47,22 @@ test("every control fails exactly the figure rules recorded for it", { skip: pro
         expected[key] = entry.rules;
       }
     }
+    // Every figure a committed method answer carries holds every rule.
+    for (const [caseId, entries] of Object.entries(methodControls.cases)) {
+      for (const entry of entries) {
+        if (!/\.json$|\/(passing|faulty)$/.test(entry.answer)) continue;
+        const { figures, readSource } = await methodAnswer(caseId, entry);
+        for (const declaration of figures) {
+          const { html, evidence, composed } = prepare(declaration, readSource);
+          const failures = grammar.figureRuleFailures({ ...(await probe(page, html)), evidence, composed });
+          const key = `${caseId} method ${entry.answer} ${declaration.figure.id}`;
+          outcome[key] = [...new Set(failures.map((failure) => failure.rule))].sort((a, b) => a - b);
+          expected[key] = [];
+        }
+      }
+    }
   } finally { await browser.close(); }
-  assert.equal(Object.keys(outcome).length, Object.values(controls.cases).flat().length);
+  assert.equal(Object.keys(outcome).length, Object.values(controls.cases).flat().length + 5);
   assert.ok(Object.values(outcome).some((rules) => rules.length > 0), "no control failed any rule");
   assert.deepEqual(outcome, expected);
 });

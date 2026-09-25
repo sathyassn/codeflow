@@ -1,0 +1,359 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "first-paint",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "How is the reader's display choice applied before the first paint?",
+    "idea": "The boot script reads the stored choice and sets it on the document root before the stylesheet paints.",
+    "title": "How the theme reaches the first paint",
+    "caption": "The boot script sets the stored choice on the root before the stylesheet paints anything.",
+    "states": [
+      {
+        "name": "call",
+        "mark": "trans",
+        "means": "Asks or sets"
+      },
+      {
+        "name": "answer",
+        "mark": "return",
+        "means": "Hands back"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the boot script loads before the stylesheet",
+        "source": "app/index.html",
+        "derive": "the head of the page",
+        "check": {
+          "kind": "contains",
+          "text": "<script src=\"boot.js\"></script>\n<link rel=\"stylesheet\" href=\"app.css\">"
+        },
+        "value": true
+      },
+      {
+        "claim": "the boot script sets the theme on the document root",
+        "source": "app/boot.js",
+        "derive": "the boot script",
+        "check": {
+          "kind": "contains",
+          "text": "root.dataset.theme = mode"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 274,
+      "draw": [
+        {
+          "text": "boot.js",
+          "x": 80,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "localStorage",
+          "x": 280,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "document root",
+          "x": 480,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "stylesheet",
+          "x": 660,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 80,
+          "y1": 34,
+          "x2": 80,
+          "y2": 250
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 280,
+          "y1": 34,
+          "x2": 280,
+          "y2": 250
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 480,
+          "y1": 34,
+          "x2": 480,
+          "y2": 250
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 660,
+          "y1": 34,
+          "x2": 660,
+          "y2": 250
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M88 70H272",
+          "id": "m0",
+          "head": "end"
+        },
+        {
+          "text": "read display",
+          "x": 180.0,
+          "y": 60,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m0"
+          ]
+        },
+        {
+          "state": "answer",
+          "shape": "path",
+          "d": "M272 126H88",
+          "id": "m1",
+          "open": "end"
+        },
+        {
+          "text": "stored choice",
+          "x": 180.0,
+          "y": 116,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M88 182H472",
+          "id": "m2",
+          "head": "end"
+        },
+        {
+          "text": "set theme, skin, scale",
+          "x": 280.0,
+          "y": 172,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M652 238H488",
+          "id": "m3",
+          "head": "end"
+        },
+        {
+          "text": "paint in that theme",
+          "x": 570.0,
+          "y": 228,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m3"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 250,
+      "draw": [
+        {
+          "text": "boot.js",
+          "x": 20,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "n0"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M150 29H226",
+          "id": "n0",
+          "head": "end"
+        },
+        {
+          "text": "localStorage",
+          "x": 236,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "n0"
+          ]
+        },
+        {
+          "text": "read display",
+          "x": 20,
+          "y": 56,
+          "style": "mono",
+          "for": [
+            "n0"
+          ]
+        },
+        {
+          "text": "localStorage",
+          "x": 20,
+          "y": 88,
+          "style": "strong",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "state": "answer",
+          "shape": "path",
+          "d": "M226 83H150",
+          "id": "n1",
+          "open": "end"
+        },
+        {
+          "text": "boot.js",
+          "x": 236,
+          "y": 88,
+          "style": "strong",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "text": "stored choice",
+          "x": 20,
+          "y": 110,
+          "style": "mute",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "text": "boot.js",
+          "x": 20,
+          "y": 142,
+          "style": "strong",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M150 137H226",
+          "id": "n2",
+          "head": "end"
+        },
+        {
+          "text": "root",
+          "x": 236,
+          "y": 142,
+          "style": "strong",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "text": "set theme, skin, scale",
+          "x": 20,
+          "y": 164,
+          "style": "mono",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "text": "stylesheet",
+          "x": 20,
+          "y": 196,
+          "style": "strong",
+          "for": [
+            "n3"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M150 191H226",
+          "id": "n3",
+          "head": "end"
+        },
+        {
+          "text": "root",
+          "x": 236,
+          "y": 196,
+          "style": "strong",
+          "for": [
+            "n3"
+          ]
+        },
+        {
+          "text": "paint in that theme",
+          "x": 20,
+          "y": 218,
+          "style": "mono",
+          "for": [
+            "n3"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To",
+        "What passes"
+      ],
+      "rows": [
+        [
+          "1",
+          "boot.js",
+          "localStorage",
+          "read display"
+        ],
+        [
+          "2",
+          "localStorage",
+          "boot.js",
+          "the stored choice"
+        ],
+        [
+          "3",
+          "boot.js",
+          "document root",
+          "theme, skin and scale"
+        ],
+        [
+          "4",
+          "stylesheet",
+          "document root",
+          "paint in that theme"
+        ]
+      ]
+    }
+  }
+}

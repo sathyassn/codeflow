@@ -1,0 +1,376 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "merge-technical",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Which part of the policy holds for which branch?",
+    "idea": "Both protected branches take the rules and checks; each lands by its own method; labs are exempt.",
+    "title": "What holds on each branch",
+    "caption": "Main squashes and release branches take a merge commit, and a prototype is exempt until it deploys.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Applies"
+      },
+      {
+        "name": "na",
+        "mark": "na",
+        "means": "Not this branch's method"
+      },
+      {
+        "name": "nc",
+        "mark": "nc",
+        "means": "Exempt until the first deploy"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "squash on main, a merge commit on release/*",
+        "source": "docs/merge-policy.md#architecture",
+        "derive": "the Architecture section",
+        "check": {
+          "kind": "contains",
+          "text": "squash on `main`, a merge commit on `release/*`"
+        },
+        "value": true
+      },
+      {
+        "claim": "prototypes under labs/ are exempt until they deploy",
+        "source": "docs/merge-policy.md#technical",
+        "derive": "the Technical section",
+        "check": {
+          "kind": "contains",
+          "text": "Prototypes under `labs/` are exempt until they deploy"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 180,
+      "draw": [
+        {
+          "text": "rules",
+          "x": 312.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "checks",
+          "x": 402.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "squash",
+          "x": 492.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "merge",
+          "x": 582.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "main",
+          "x": 0,
+          "y": 67.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 300,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 390,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 480,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 570,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "release/*",
+          "x": 0,
+          "y": 107.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 300,
+          "y": 90,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 390,
+          "y": 90,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 480,
+          "y": 90,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 570,
+          "y": 90,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "labs/ prototype",
+          "x": 0,
+          "y": 147.0
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 300,
+          "y": 130,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 390,
+          "y": 130,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 480,
+          "y": 130,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 570,
+          "y": 130,
+          "w": 24,
+          "h": 24
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 150,
+      "draw": [
+        {
+          "text": "rules",
+          "x": 175.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "checks",
+          "x": 225.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "squash",
+          "x": 275.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "merge",
+          "x": 325.0,
+          "y": 34,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "main",
+          "x": 0,
+          "y": 60.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 170,
+          "y": 50,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 220,
+          "y": 50,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 270,
+          "y": 50,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 320,
+          "y": 50,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "text": "release/*",
+          "x": 0,
+          "y": 90.0
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 170,
+          "y": 80,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 220,
+          "y": 80,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 270,
+          "y": 80,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 320,
+          "y": 80,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "text": "labs/ prototype",
+          "x": 0,
+          "y": 120.0
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 170,
+          "y": 110,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 220,
+          "y": 110,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 270,
+          "y": 110,
+          "w": 12,
+          "h": 12
+        },
+        {
+          "state": "nc",
+          "shape": "rect",
+          "x": 320,
+          "y": 110,
+          "w": 12,
+          "h": 12
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Branch",
+        "rules",
+        "checks",
+        "squash",
+        "merge commit"
+      ],
+      "rows": [
+        [
+          "main",
+          "applies",
+          "applies",
+          "applies",
+          "not its method"
+        ],
+        [
+          "release/*",
+          "applies",
+          "applies",
+          "not its method",
+          "applies"
+        ],
+        [
+          "labs/ prototype",
+          "exempt",
+          "exempt",
+          "exempt",
+          "exempt"
+        ]
+      ]
+    }
+  }
+}

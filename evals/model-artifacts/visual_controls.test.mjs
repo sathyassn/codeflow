@@ -8,7 +8,9 @@
 //      node --test evals/model-artifacts/visual_controls.test.mjs
 import assert from "node:assert/strict";
 import test from "node:test";
-import { cases, controls, declarationOf, fixtureOf, fixtures, layerFor, packs, prepare } from "./visual_controls.mjs";
+import { adapt, cases, controls, declarationOf, fixtureOf, fixtures, layerFor, methodAnswer, methodControls, observeAdaptedPage, packs, place, prepare } from "./visual_controls.mjs";
+
+const pageClasses = await import(new URL("../../docs-portal/scripts/page-classes.mjs", import.meta.url));
 
 const lib = await import(new URL("../../docs-portal/scripts/lib.mjs", import.meta.url));
 
@@ -59,4 +61,74 @@ test("each fixture's shipped declarations are all under control", () => {
     assert.deepEqual(controlled.map((reference) => reference.slice("fixture:".length)).sort(), shipped.sort(), caseId);
   }
   assert.ok(cases.size > 0);
+});
+
+test("every portal case tells the subject the guide does not build in its checkout", () => {
+  for (const fixture of portalFixtures) {
+    const scope = fixture.files["docs-portal/README.md"];
+    assert.ok(scope?.includes("not in this checkout") && scope.includes("cannot run"), `${fixture.id}: no subject-visible scope`);
+  }
+  const portalIds = new Set(portalFixtures.map((fixture) => fixture.id));
+  const portalCases = [...cases.values()].filter((entry) => portalIds.has(entry.fixture));
+  assert.ok(portalCases.length >= 14);
+  for (const entry of portalCases) assert.match(entry.prompt, /docs-portal\/README\.md/, entry.id);
+});
+
+// Two drafts carry a fact that does not re-derive; the adapter refuses them
+// on rule 6, which is the defect those cases grade. Every other fixture
+// adapts as shipped, so the subject's graded work is the only thing wrong.
+const REFUSED_AS_SHIPPED = { "figure-limits-stale-value": "rule 6", "figure-planes-remote-claim": "rule 6" };
+
+test("every shipped portal fixture adapts, except the drafts whose defect is a fact", { timeout: 300_000 }, async () => {
+  for (const fixture of portalFixtures) {
+    const { status, error } = await adapt(fixture.files);
+    if (REFUSED_AS_SHIPPED[fixture.id]) assert.match(error ?? "", new RegExp(REFUSED_AS_SHIPPED[fixture.id]), fixture.id);
+    else assert.equal(status, 0, `${fixture.id}: ${error}`);
+  }
+});
+
+test("every passing control adapts where a subject would leave it", { timeout: 300_000 }, async () => {
+  for (const [caseId, entries] of Object.entries(controls.cases)) {
+    for (const entry of entries.filter((candidate) => candidate.role === "passing")) {
+      const declaration = await declarationOf(caseId, entry.declaration);
+      const { files, target } = place(fixtureOf(caseId).fixture.files, declaration, entry.placement, entry.declaration.replace(/^fixture:docs\/figures\//, ""));
+      const { status, error, evidence } = await adapt(files);
+      assert.equal(status, 0, `${caseId}: ${error}`);
+      const bound = evidence.pages.flatMap((page) => page.figures.map((figure) => figure.declaration_path));
+      assert.ok(bound.includes(target), `${caseId}: ${target} is not bound on any page`);
+    }
+  }
+});
+
+test("every figure in a committed method answer validates and re-derives its facts", async () => {
+  let count = 0;
+  for (const [caseId, entries] of Object.entries(methodControls.cases)) {
+    for (const entry of entries) {
+      if (!/\.json$|\/(passing|faulty)$/.test(entry.answer)) continue;
+      const { figures, readSource } = await methodAnswer(caseId, entry);
+      for (const declaration of figures) {
+        const { facts } = prepare(declaration, readSource);
+        assert.ok(facts.every((fact) => fact.matches), `${entry.answer}: ${JSON.stringify(facts)}`);
+        count += 1;
+      }
+    }
+  }
+  assert.equal(count, 5);
+});
+
+test("the guide page and display answers adapt, and the class rules grade the guide page", { timeout: 300_000 }, async () => {
+  for (const caseId of ["guide-page-from-a-policy-source", "display-panel-and-first-paint-take-different-carriers"]) {
+    for (const entry of methodControls.cases[caseId]) {
+      const { files, config } = await methodAnswer(caseId, entry);
+      const { status, error, evidence, pages } = await adapt(files);
+      assert.equal(status, 0, `${entry.answer}: ${error}`);
+      if (caseId !== "guide-page-from-a-policy-source") continue;
+      const route = "system/merge-policy";
+      const assignments = pageClasses.classifyPortalPages(config, evidence.pages).filter((assignment) => assignment.route === route);
+      assert.equal(assignments[0].pageClass, "explanatory");
+      const failures = pageClasses.pageClassFailures(assignments, [observeAdaptedPage(pages[route], route)]);
+      if (entry.decision === "pass") assert.deepEqual(failures, [], entry.answer);
+      else assert.ok(failures.some((failure) => /carries no figure/.test(failure)), `${entry.answer}: ${failures}`);
+    }
+  }
 });
