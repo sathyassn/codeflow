@@ -3,8 +3,8 @@ export const CHROME_ROOT_ID = "cf-present-chrome";
 export const CONFIG_ID = "cf-present-config";
 export const REQUEST_HEADER = "X-CF-Present";
 
-export type UtilityTheme = "instrument" | "editorial" | "ink" | "technical";
-export type Typeface = "instrument" | "editorial" | "plex";
+export type UtilityTheme = "graphite" | "slate" | "sage";
+export type Typeface = "archivo" | "inter" | "plex";
 export type TypeScale = "compact" | "default" | "large";
 export type AppearanceMode = "system" | "light" | "dark";
 export type ResolvedMode = Exclude<AppearanceMode, "system">;

@@ -72,6 +72,26 @@ fn portal_distribution_is_opt_in_and_hash_only_across_fresh_tiers() {
         assert_eq!(state["runtime_ownership"], "managed");
         assert_eq!(state["starter_version"], "2.0.0");
         assert!(state["files"]["scripts/generator.mjs"].is_object());
+        for path in [
+            "public/portal-chrome.js",
+            "scripts/chrome-verify.mjs",
+            "src/components/PortalFrame.astro",
+            "src/components/PortalSkipLink.astro",
+            "src/components/PortalHeader.astro",
+            "src/components/PortalColumns.astro",
+            "src/components/PortalNav.astro",
+            "src/components/PortalTitle.astro",
+            "src/components/PortalFooter.astro",
+        ] {
+            assert_eq!(
+                state["files"][path]["ownership"], "managed",
+                "{tier}: {path}"
+            );
+            assert!(
+                fixture.root.join("guide").join(path).is_file(),
+                "{tier}: {path}"
+            );
+        }
         assert!(!fixture
             .root
             .join(".codeflow/.docs-portal-baseline")

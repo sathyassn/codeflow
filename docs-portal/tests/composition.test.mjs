@@ -296,27 +296,27 @@ test("a build with the records switch off carries no per-record route", () => {
 
 test("palette pills must show the live tokens of the palette they select", () => {
   const tokens = {
-    instrument: { canvas: "rgb(242, 243, 244)", accent: "rgb(0, 95, 86)" },
-    editorial: { canvas: "rgb(238, 242, 246)", accent: "rgb(23, 92, 168)" },
-    ink: { canvas: "rgb(246, 243, 238)", accent: "rgb(140, 70, 20)" },
+    graphite: { canvas: "rgb(242, 243, 244)", accent: "rgb(0, 95, 86)" },
+    slate: { canvas: "rgb(238, 242, 246)", accent: "rgb(23, 92, 168)" },
+    sage: { canvas: "rgb(246, 243, 238)", accent: "rgb(140, 70, 20)" },
   };
   const group = Object.entries(tokens).map(([skin, token]) => ({ skin, ...token }));
-  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [group, group] }, PALETTE_PILL_GROUPS), []);
-  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [group] }, PALETTE_PILL_GROUPS), [
-    "expected 2 palette pill group(s), the page renders 1",
+  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [group] }, PALETTE_PILL_GROUPS), []);
+  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [] }, PALETTE_PILL_GROUPS), [
+    "expected 1 palette pill group(s), the page renders 0",
   ]);
   const hardCoded = group.map((pill) => ({ ...pill, accent: "rgb(0, 95, 86)" }));
-  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [group, hardCoded] }, PALETTE_PILL_GROUPS), [
-    "display panel 2: the editorial accent swatch is rgb(0, 95, 86), the live token is rgb(23, 92, 168)",
-    "display panel 2: the ink accent swatch is rgb(0, 95, 86), the live token is rgb(140, 70, 20)",
-    "display panel 2: every accent swatch is rgb(0, 95, 86), so the pills do not preview the palette they select",
+  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [hardCoded] }, PALETTE_PILL_GROUPS), [
+    "display panel 1: the slate accent swatch is rgb(0, 95, 86), the live token is rgb(23, 92, 168)",
+    "display panel 1: the sage accent swatch is rgb(0, 95, 86), the live token is rgb(140, 70, 20)",
+    "display panel 1: every accent swatch is rgb(0, 95, 86), so the pills do not preview the palette they select",
   ]);
   const missing = group.map((pill) => ({ ...pill, canvas: "" }));
-  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [missing, group] }, PALETTE_PILL_GROUPS),
+  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [missing] }, PALETTE_PILL_GROUPS),
     Object.keys(tokens).map((skin) => `display panel 1: the ${skin} pill carries no canvas swatch`)
       .concat(["display panel 1: every canvas swatch is , so the pills do not preview the palette they select"]));
-  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [group.slice(0, 2), group] }, PALETTE_PILL_GROUPS), [
-    "display panel 1 offers instrument, editorial, the tokens define instrument, editorial, ink",
+  assert.deepEqual(paletteSwatchFailures({ tokens, groups: [group.slice(0, 2)] }, PALETTE_PILL_GROUPS), [
+    "display panel 1 offers graphite, slate, the tokens define graphite, slate, sage",
   ]);
 });
 

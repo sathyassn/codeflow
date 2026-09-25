@@ -14,26 +14,26 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-F5WCZOUN.js",
-      "present.style": "/app/assets/app-S534DFAJ.css"
+      "present.app": "/app/assets/app-5HJDNURE.js",
+      "present.style": "/app/assets/app-BINP3X4Q.css"
     },
     "inline": {
       "present.prepaint": {
-        "source": "\"use strict\";(()=>{(()=>{let n=new Set([\"instrument\",\"editorial\",\"ink\",\"technical\"]),o=new Set([\"system\",\"light\",\"dark\"]),r=new Set([\"instrument\",\"editorial\",\"plex\"]),d=new Set([\"compact\",\"default\",\"large\"]),t=null,s=null,a=null,l=null;try{t=localStorage.getItem(\"cf-present-theme\"),s=localStorage.getItem(\"cf-present-mode\"),a=localStorage.getItem(\"cf-present-typeface\"),l=localStorage.getItem(\"cf-present-scale\")}catch{}let m=t&&n.has(t)?t:\"instrument\",c=s&&o.has(s)?s:\"system\",f=a&&r.has(a)?a:\"instrument\",i=l&&d.has(l)?l:\"default\",h=c===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":c,e=document.documentElement;e.dataset.cfTheme=m,e.dataset.cfMode=c,e.dataset.cfModeResolved=h,e.dataset.cfTypeface=f,e.dataset.cfScale=i})();})();",
-        "sha256": "0677d5a199a7393b80c1edf97bb456db932787455079d21381b9a1c0dccee527",
-        "csp_sha256": "sha256-BnfVoZmnOTuAwe35e7RW25Mnh0VQedITgbmhwNzO5Sc="
+        "source": "\"use strict\";(()=>{function c(e){switch(e){case\"instrument\":case\"technical\":return\"graphite\";case\"editorial\":return\"slate\";case\"ink\":return\"sage\";default:return e}}function o(e){switch(e){case\"instrument\":return\"archivo\";case\"editorial\":return\"inter\";default:return e}}(()=>{let e=new Set([\"graphite\",\"slate\",\"sage\"]),i=new Set([\"system\",\"light\",\"dark\"]),m=new Set([\"archivo\",\"inter\",\"plex\"]),d=new Set([\"compact\",\"default\",\"large\"]),a=null,n=null,s=null,r=null;try{a=c(localStorage.getItem(\"cf-present-theme\")),n=localStorage.getItem(\"cf-present-mode\"),s=o(localStorage.getItem(\"cf-present-typeface\")),r=localStorage.getItem(\"cf-present-scale\")}catch{}let u=a&&e.has(a)?a:\"graphite\",l=n&&i.has(n)?n:\"system\",f=s&&m.has(s)?s:\"inter\",g=r&&d.has(r)?r:\"default\",h=l===\"system\"?matchMedia(\"(prefers-color-scheme: dark)\").matches?\"dark\":\"light\":l,t=document.documentElement;t.dataset.cfTheme=u,t.dataset.cfMode=l,t.dataset.cfModeResolved=h,t.dataset.cfTypeface=f,t.dataset.cfScale=g})();})();",
+        "sha256": "f50958fb63ba9c4dae14106c89be5fb5cf6e6b6e4635ab0e68f2df1052ec0425",
+        "csp_sha256": "sha256-9QlY+2O6nE2uFBBsib5ftc9ua25GNasOaPLfEFLsBCU="
       }
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-F5WCZOUN.js",
-        "stored_path": "service/app-F5WCZOUN.js.br",
+        "request_path": "/app/assets/app-5HJDNURE.js",
+        "stored_path": "service/app-5HJDNURE.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 70336,
-        "encoded_bytes": 21686,
-        "sha256": "95861e04901b93a27a3435124a82981b63abc1f578fdb2a4b8fb1853b86f40eb",
-        "etag": "\"sha256-lYYeBJAbk6J6NDUSSoKYG2OrwfV4/bKkuPsYU7hvQOs=\"",
+        "raw_bytes": 71483,
+        "encoded_bytes": 22070,
+        "sha256": "e11884722fa1c9838fb9c360f4ec19bea6a91025153dca5f705e172b392453f2",
+        "etag": "\"sha256-4RiEci+hyYOPucNg9OwZvqapECUVPcpfcF4XKzkkU/I=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -58,14 +58,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-S534DFAJ.css",
-        "stored_path": "service/app-S534DFAJ.css.br",
+        "request_path": "/app/assets/app-BINP3X4Q.css",
+        "stored_path": "service/app-BINP3X4Q.css.br",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 41417,
-        "encoded_bytes": 7738,
-        "sha256": "3d8a2b0b752305db1a0bef0c6583e0e4b24d21318baaca974ab3680c7c5936f5",
-        "etag": "\"sha256-PYorC3UjBdsaC+8MZYPg5LJNITGLqsqXSrNoDHxZNvU=\"",
+        "raw_bytes": 50756,
+        "encoded_bytes": 9097,
+        "sha256": "ffa14f94591a77ac388fb1e137a78e09f0b9cf4751f56980b9825efa4a972def",
+        "etag": "\"sha256-/6FPlFkad6w4j7HhN6eOCfC5z0dR9WmAuYJe+kqXLe8=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -315,20 +315,20 @@
     ],
     "metrics": {
       "asset_count": 15,
-      "raw_corpus_bytes": 1001817,
-      "brotli_corpus_bytes": 263687,
+      "raw_corpus_bytes": 1012303,
+      "brotli_corpus_bytes": 265430,
       "largest_raw_chunk_bytes": 186275,
       "largest_brotli_chunk_bytes": 131206
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-01836c265c7a96d9.js.gz",
+      "stored_path": "export/renderer-f27e4a00e4872d1d.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 945351,
-      "encoded_bytes": 265653,
-      "sha256": "01836c265c7a96d929f7b1f5a8f07beb4ac7503862d6ccb7537cea36b0f9f731"
+      "raw_bytes": 955600,
+      "encoded_bytes": 267453,
+      "sha256": "f27e4a00e4872d1d043b468fc0574e004edf92088916dc02e47e96bf68e8cc43"
     }
   },
   "budgets": {
@@ -338,5 +338,5 @@
     "largest_brotli_chunk_bytes": 145000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "53fd14001ec5c303cc76ec54c23349ac26777783bfee2a02022123de371870e1"
+  "corpus_sha256": "f1f23306a912572d5a9e86116e4da91c6bbf5e653f29f5a7bdbdf781db24a365"
 }
