@@ -22,8 +22,10 @@ use crate::scaffold::sha256_hex;
 use crate::strict_json::parse_strict_json;
 
 mod figures;
+pub mod lookups;
 
 pub use figures::{altitude_words, AltitudeWords};
+pub use lookups::LookupInputs;
 
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
 /// The themes a portal configuration may name, exactly the starter's
@@ -372,10 +374,24 @@ where
     })
 }
 
-/// Verify evidence without executing project code or writing output.
+/// Verify evidence without executing project code or writing output. A page
+/// classed as a lookup the binary generates (the skill catalog, the policy
+/// reference) cannot be re-derived here and is reported; the CLI supplies
+/// what they need through [`validate_portal_with`].
+#[must_use]
+pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidationReport {
+    validate_portal_with(repo_root, portal_root, None)
+}
+
+/// [`validate_portal`], with the binary's shipped assets and hook stage names
+/// so generated lookup pages are regenerated and compared.
 #[must_use]
 #[allow(clippy::too_many_lines)] // Sequential independent claims intentionally remain visible in one audit pipeline.
-pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidationReport {
+pub fn validate_portal_with(
+    repo_root: &Path,
+    portal_root: &Path,
+    lookup_inputs: Option<&LookupInputs<'_>>,
+) -> PortalValidationReport {
     let mut report = PortalValidationReport::default();
     let Some(normalized_portal_root) = normalized_relative(portal_root) else {
         report.issues.push(format!(
@@ -840,6 +856,7 @@ pub fn validate_portal(repo_root: &Path, portal_root: &Path) -> PortalValidation
                 bindings: &contract.figure_bindings,
                 source_blobs: &source_blobs,
                 rendered: &rendered_by_route,
+                lookup_inputs,
             },
             &mut report,
         );

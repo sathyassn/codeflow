@@ -98,7 +98,7 @@ prints the counts.
 | **Explanatory** (default) | nothing | The trio, a figure in every panel, and a table beside the Technical figure; a table never stands in for a figure. A `page_carriers` entry `{ "source": ..., "technical": "list" }` lets a checklist carry a list there instead of the table |
 | **Illustrated source** | `{ "source" or "prefix", "class": "illustrated" }` | The source rendered as it is, at least one companion figure at the page head, every bound figure held to all twelve rules; no trio |
 | **Pass-through** | `{ ..., "class": "pass-through", "reason": ... }` | The source rendered as it is, no figure; `reason` is `accepted-record`, `governance` or `no-relationship`, and `no-relationship` also records the design primary's judgment in `note` |
-| **Derived lookup** | `{ ..., "class": "derived-lookup", "derive": "capability-registry" }` | A generated table with a fidelity check against its source |
+| **Derived lookup** | `{ ..., "class": "derived-lookup", "derive": ... }` with `capability-registry`, `skill-catalog` or `policy-reference` | A generated table with a fidelity check against its source; `codeflow validate --portal` regenerates the skill catalog and policy reference from the binary |
 
 Figures bind in `figures`, never by a marker inside a source: each binding
 names a `declaration` file and a published `route`, plus `panel` (an

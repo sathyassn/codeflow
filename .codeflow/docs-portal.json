@@ -54,7 +54,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "5fa2f968c34b46861ddf3df6abd8f5a9ad68fb9d41d891417ad0f958b7af55e5"
+      "pristine_sha256": "f3a4ce61ad1ee834b47de25da73621b552281ab2f5ee22558d16925d83c0b420"
     },
     "scripts/as-is-markdown.mjs": {
       "ownership": "managed",
@@ -94,7 +94,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "fb1dd567c4346dc6abea6a253d7230946c035289be8c663a86ea0abffb34e5fb"
+      "pristine_sha256": "33586dc7fbc266950657441201073ea692f7b3d377ca14f084cda72d66958c3f"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -102,7 +102,7 @@
     },
     "scripts/page-classes.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "c294f24e81a607f9e5d8bf94842329d3c037de39f4129b0b95de5a00458833fa"
+      "pristine_sha256": "63a4acb1b065bc4c57cef62da68b903204227fd9a40f7f6f007b96c57d1ffd5b"
     },
     "scripts/process-environment.mjs": {
       "ownership": "managed",
@@ -222,7 +222,7 @@
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ed7f1b1ae904b3df033c98c93f9e2ee77b419de237101744f6d9079adc6f237c"
+      "pristine_sha256": "7dbb89cbd3d448498a75bef24c9c1888c6846ae2a6c5969b935c17d8b392cffa"
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",

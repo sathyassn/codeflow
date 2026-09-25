@@ -988,6 +988,12 @@ export function altitudeWords(text) {
   return words;
 }
 
+// The body rows of every table on a page: the row count a generated lookup
+// records, which the validator compares with the rows it regenerates.
+export function tableRowCount(markdown) {
+  return markdownNodes(markdownTree(markdown), "table").reduce((total, table) => total + Math.max(table.children.length - 1, 0), 0);
+}
+
 // Whether an as-is region still carries a level-one heading once the title
 // the adapter drops is gone: a second title, a title under a leading comment,
 // or deliberate h1 sections. The site's Markdown step then renders every

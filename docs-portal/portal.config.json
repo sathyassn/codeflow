@@ -27,5 +27,9 @@
   "page_carriers": [
     { "source": "docs/release-checklist.md", "technical": "list" }
   ],
+  "page_classes": [
+    { "source": "docs/skills.md", "class": "derived-lookup", "derive": "skill-catalog" },
+    { "source": "docs/policy-reference.md", "class": "derived-lookup", "derive": "policy-reference" }
+  ],
   "base": "/"
 }

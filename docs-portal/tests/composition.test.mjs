@@ -98,7 +98,7 @@ test("the page-class rules are declared once and enumerate what each class must 
   assert.deepEqual(ALTITUDE_PANELS.map((panel) => PANEL_CARRIERS[panel].requires), [["figure"], ["figure"], ["figure", "table"]]);
   assert.deepEqual(PANEL_CARRIER_ALTERNATES.technical.list, ["figure", "list"]);
   assert.deepEqual(PAGE_CLASS_REASONS, ["accepted-record", "governance", "no-relationship"]);
-  assert.deepEqual(DERIVED_LOOKUPS, ["capability-registry"]);
+  assert.deepEqual(DERIVED_LOOKUPS, ["capability-registry", "skill-catalog", "policy-reference"]);
   assert.deepEqual(Object.keys(PANEL_CARRIER_ALTERNATES), ["technical"]);
   assert.deepEqual(Object.keys(PANEL_CARRIER_ALTERNATES.technical), ["list"]);
   assert.deepEqual(RECORD_POINTER_COLUMNS, ["Folder", "Purpose", "Count", "Repository"]);

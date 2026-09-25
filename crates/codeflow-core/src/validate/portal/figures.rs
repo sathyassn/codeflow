@@ -31,7 +31,11 @@ pub(super) use dom::CodeBlockAssets;
 pub(super) const PAGE_CLASSES: [&str; 3] = ["illustrated", "pass-through", "derived-lookup"];
 pub(super) const PAGE_CLASS_REASONS: [&str; 3] =
     ["accepted-record", "governance", "no-relationship"];
-pub(super) const DERIVED_LOOKUPS: [&str; 1] = ["capability-registry"];
+pub(super) const DERIVED_LOOKUPS: [&str; 3] = [
+    "capability-registry",
+    super::lookups::SKILL_CATALOG,
+    super::lookups::POLICY_REFERENCE,
+];
 const ALTITUDE_PANELS: [&str; 3] = ["concept", "architecture", "technical"];
 const EXPLANATORY: &str = "explanatory";
 const CAPABILITY_REGISTRY: &str = "docs/capabilities.md";
@@ -500,6 +504,7 @@ pub(super) struct FigureContext<'a> {
     pub bindings: &'a [FigureBinding],
     pub source_blobs: &'a BTreeMap<String, Vec<u8>>,
     pub rendered: &'a BTreeMap<String, String>,
+    pub lookup_inputs: Option<&'a super::LookupInputs<'a>>,
 }
 
 pub(super) fn verify_figures(
@@ -1289,12 +1294,37 @@ fn verify_lookup(
 ) {
     let route = &page.route;
     let derive = entry.and_then(|entry| entry.derive.as_deref());
-    let rows = context
+    let text = context
         .source_blobs
         .get(&page.source_path)
-        .and_then(|bytes| std::str::from_utf8(bytes).ok())
-        .map(|text| parse_capabilities(text).0.len());
-    let valid = page.source_path == CAPABILITY_REGISTRY
+        .and_then(|bytes| std::str::from_utf8(bytes).ok());
+    let rows = match derive {
+        Some("capability-registry") if page.source_path == CAPABILITY_REGISTRY => {
+            text.map(|text| parse_capabilities(text).0.len())
+        }
+        Some(generated @ (super::lookups::SKILL_CATALOG | super::lookups::POLICY_REFERENCE)) => {
+            let Some(inputs) = context.lookup_inputs else {
+                report.issues.push(format!(
+                    "{route} is a {generated} page, which only the codeflow binary can re-derive"
+                ));
+                return;
+            };
+            let normalized = text.map(normalize_markdown_source);
+            match normalized
+                .as_deref()
+                .map(|text| super::lookups::verify_lookup_page(generated, text, inputs))
+            {
+                Some(Ok(rows)) => Some(rows),
+                Some(Err(why)) => {
+                    report.issues.push(format!("{route} {why}"));
+                    return;
+                }
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    let valid = rows.is_some()
         && page.source_region.is_none()
         && page.lookup.as_ref().is_some_and(|lookup| {
             Some(lookup.derive.as_str()) == derive && Some(lookup.rows) == rows
@@ -1923,6 +1953,32 @@ mod tests {
     }
 
     const ALTITUDES: &str = "# Adoption\n\n## Concept\n\nWhat it is.\n\n### Scope\n\nWhat it covers.\n\n## Technical\n\nHow it runs.\n\n### Install\n\n1. Run it.\n2. Check it.\n\n### Check\n\nConfirm it.\n\n## Technical notes\n\n### Later\n\nNot a panel.\n";
+
+    /// The starter's `DERIVED_LOOKUPS` equals the derivations this validator
+    /// can check, in both the live and the shipped copy.
+    #[test]
+    fn the_derived_lookups_match_the_starter() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for copy in [
+            "docs-portal/scripts/page-classes.mjs",
+            "assets/docs-portal/starter/scripts/page-classes.mjs",
+        ] {
+            let source = std::fs::read_to_string(root.join(copy)).unwrap();
+            let line = source
+                .lines()
+                .find(|line| line.starts_with("export const DERIVED_LOOKUPS = Object.freeze(["))
+                .unwrap_or_else(|| panic!("{copy} declares no DERIVED_LOOKUPS"));
+            let list: Vec<&str> = line
+                .split_once('[')
+                .and_then(|(_, rest)| rest.split_once(']'))
+                .map(|(inside, _)| inside)
+                .unwrap()
+                .split(',')
+                .map(|item| item.trim().trim_matches('"'))
+                .collect();
+            assert_eq!(list, DERIVED_LOOKUPS, "{copy}");
+        }
+    }
 
     /// The shared cases the starter's `altitudeWords` is tested against too.
     #[test]
