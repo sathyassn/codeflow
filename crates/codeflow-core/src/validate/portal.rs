@@ -24,6 +24,11 @@ use crate::strict_json::parse_strict_json;
 mod figures;
 
 const MAX_MANIFEST_BYTES: u64 = 8 * 1024 * 1024;
+/// The themes a portal configuration may name, exactly the starter's
+/// `PORTAL_THEMES` in `scripts/lib.mjs`: the three skins, then `signal` and
+/// `folio`, kept as aliases of graphite and sage. A parity test reads the
+/// starter's list so the two cannot drift.
+const PORTAL_THEMES: [&str; 5] = ["graphite", "slate", "sage", "signal", "folio"];
 const PAGEFIND_ENTRY_PATH: &str = "dist/pagefind/pagefind-entry.json";
 const MAX_PAGEFIND_ENTRY_BYTES: u64 = 1024 * 1024;
 const MAX_PAGES: usize = 10_000;
@@ -1410,7 +1415,7 @@ fn verify_config_metadata(
         || !object
             .get("theme")
             .and_then(serde_json::Value::as_str)
-            .is_some_and(|theme| matches!(theme, "signal" | "folio"))
+            .is_some_and(|theme| PORTAL_THEMES.contains(&theme))
     {
         report
             .issues
@@ -5236,6 +5241,72 @@ mod tests {
             )
             .is_none());
             assert!(!report.is_clean(), "mutation {mutation} was accepted");
+        }
+    }
+
+    #[test]
+    fn every_starter_theme_is_accepted_and_no_other() {
+        let (valid, evidence) = closed_contract_fixture();
+        for theme in ["graphite", "slate", "sage", "signal", "folio"] {
+            let mut config = valid.clone();
+            config["theme"] = theme.into();
+            let mut report = PortalValidationReport::default();
+            assert!(
+                verify_config_contract(
+                    &serde_json::to_vec(&config).unwrap(),
+                    &evidence,
+                    &mut report
+                )
+                .is_some(),
+                "{theme}: {:?}",
+                report.issues
+            );
+            assert!(report.is_clean(), "{theme}: {:?}", report.issues);
+        }
+        for theme in ["", "Graphite", "technical", "instrument"] {
+            let mut config = valid.clone();
+            config["theme"] = theme.into();
+            let mut report = PortalValidationReport::default();
+            assert!(
+                verify_config_contract(
+                    &serde_json::to_vec(&config).unwrap(),
+                    &evidence,
+                    &mut report
+                )
+                .is_none(),
+                "{theme} was accepted"
+            );
+            assert!(report
+                .issues
+                .iter()
+                .any(|issue| issue == "portal configuration metadata is invalid"));
+        }
+    }
+
+    /// The starter's `PORTAL_THEMES` literal, in the live and shipped copies,
+    /// equals the list this validator accepts.
+    #[test]
+    fn the_theme_list_matches_the_starter() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for copy in [
+            "docs-portal/scripts/lib.mjs",
+            "assets/docs-portal/starter/scripts/lib.mjs",
+        ] {
+            let source = std::fs::read_to_string(root.join(copy)).unwrap();
+            let line = source
+                .lines()
+                .find(|line| line.starts_with("export const PORTAL_THEMES = Object.freeze(["))
+                .unwrap_or_else(|| panic!("{copy} declares no PORTAL_THEMES"));
+            let list = line
+                .split_once('[')
+                .and_then(|(_, rest)| rest.split_once(']'))
+                .map(|(inside, _)| inside)
+                .unwrap();
+            let themes: Vec<&str> = list
+                .split(',')
+                .map(|item| item.trim().trim_matches('"'))
+                .collect();
+            assert_eq!(themes, PORTAL_THEMES, "{copy}");
         }
     }
 

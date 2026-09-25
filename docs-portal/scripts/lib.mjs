@@ -649,6 +649,11 @@ export function withBase(base, route) {
   return `${validateBase(base)}${encodedRoute}/`.replace(/^\/\//, "/");
 }
 
+// The themes a configuration may name: the three skins, then the two earlier
+// names kept as aliases (signal is graphite, folio is sage). The Rust
+// validator holds the same list and a parity test compares them.
+export const PORTAL_THEMES = Object.freeze(["graphite", "slate", "sage", "signal", "folio"]);
+
 export function validatePortalConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("portal.config.json: expected an object");
   const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "records", "page_carriers", "page_classes", "figures", "base"]);
@@ -656,7 +661,7 @@ export function validatePortalConfig(value) {
   if (value.schema_version !== 1) throw new Error("portal.config.json: unsupported schema_version");
   boundedString(value.title, "title", 1, 120);
   boundedString(value.description, "description", 1, 400);
-  if (!["graphite", "slate", "sage", "signal", "folio"].includes(value.theme)) throw new Error("portal.config.json: theme must be graphite, slate or sage (signal and folio remain aliases)");
+  if (!PORTAL_THEMES.includes(value.theme)) throw new Error("portal.config.json: theme must be graphite, slate or sage (signal and folio remain aliases)");
   if (value.repository_url !== null) {
     boundedString(value.repository_url, "repository_url", 1, 2048);
     if (!validRepositoryUrl(value.repository_url)) throw new Error("repository_url: expected an HTTPS repository URL with an ASCII or punycode host and without credentials, query, or fragment");
