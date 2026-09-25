@@ -1,7 +1,10 @@
 use std::collections::BTreeSet;
 
 use super::{Catalog, Effort, Lifecycle, Participant, Target, Version};
-use crate::model_qualification::{harness_catalog, trusted_version_probe, validate_binding};
+use crate::model_qualification::{
+    harness_catalog, trusted_version_probe, validate_binding,
+    validate_repository_relative_reference,
+};
 
 pub(super) fn nonempty(value: &str, label: &str) -> Result<(), String> {
     if value.trim().is_empty() {
@@ -244,7 +247,7 @@ impl Catalog {
                 return Err("scoped evidence needs evidence paths".into());
             }
             for path in &evidence.evidence {
-                nonempty(path, "evidence path")?;
+                validate_repository_relative_reference(path, "scoped evidence path")?;
             }
             if version.selectors.get(&evidence.harness) != Some(&evidence.selector)
                 || !version.efforts.contains(&evidence.effort)

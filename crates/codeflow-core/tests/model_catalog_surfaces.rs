@@ -19,6 +19,7 @@ fn write(root: &Path, path: &str, value: &str) {
 fn opts(root: &Path) -> Options {
     Options {
         project_dir: root.to_string_lossy().into_owned(),
+        codeflow_home: Some(root.join("personal")),
         qualification_dir: Some(root.join("personal/qualified-bindings")),
         look_path: Some(|_| panic!("schema 5 diagnostics must not probe")),
         exec_command: Some(|_, _| panic!("schema 5 diagnostics must not launch")),
@@ -296,4 +297,81 @@ fn instruction_scan_limits_workflows_to_managed_agent_examples() {
     assert!(findings
         .iter()
         .all(|finding| paths.iter().any(|path| finding.path == Path::new(path))));
+}
+
+fn repo_root() -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../..")
+}
+
+#[test]
+fn real_catalog_scans_fail_on_a_skill_selector_and_a_stray_retired_selector() {
+    let catalog = codeflow_core::model_catalog::load_catalog(&repo_root()).unwrap();
+    let versions = || catalog.lines.iter().flat_map(|line| &line.versions);
+    let active = versions()
+        .find(|v| v.lifecycle != codeflow_core::model_catalog::Lifecycle::Retired)
+        .unwrap();
+    let retired = versions()
+        .find(|v| v.lifecycle == codeflow_core::model_catalog::Lifecycle::Retired)
+        .unwrap();
+    let selector = active.selectors.values().next().unwrap();
+    let dir = tempfile::tempdir().unwrap();
+    write(
+        dir.path(),
+        ".agents/skills/example/SKILL.md",
+        &format!("Launch `{selector}`.\n"),
+    );
+    let found = scan::instruction_selectors(dir.path(), &catalog).unwrap();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(&found[0].token, selector);
+    // Allowed homes: the catalog mirrors and the history paths.
+    write(dir.path(), CATALOG, &retired.pinned_id);
+    write(dir.path(), "docs/decisions/ADR-900.md", &retired.pinned_id);
+    assert!(scan::retired_selectors(dir.path(), &catalog)
+        .unwrap()
+        .is_empty());
+    write(
+        dir.path(),
+        "docs/guide.md",
+        &format!("use {}\n", retired.pinned_id),
+    );
+    let found = scan::retired_selectors(dir.path(), &catalog).unwrap();
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].path, Path::new("docs/guide.md"));
+}
+
+#[test]
+fn doctor_reads_home_files_from_its_explicit_home_not_the_bindings_parent() {
+    let dir = tempfile::tempdir().unwrap();
+    write(dir.path(), CATALOG, &fixture_data::fixture().to_string());
+    let home = dir.path().join("user-home");
+    let bindings = dir.path().join("elsewhere/records/qualified-bindings");
+    std::fs::create_dir_all(&bindings).unwrap();
+    let canary = |drift: &str| {
+        format!(r#"{{"schema_version":1,"observed_ids":{{"orchid-one-pin":"{drift}"}}}}"#)
+    };
+    write(&home, "model-canary.json", &canary("home-drift"));
+    // A decoy where the old code derived home: the bindings directory's parent.
+    write(
+        bindings.parent().unwrap(),
+        "model-canary.json",
+        &canary("decoy-drift"),
+    );
+    let mut options = opts(dir.path());
+    options.codeflow_home = Some(home);
+    options.qualification_dir = Some(bindings.clone());
+    let result = doctor::run_check("model-bindings", &options).unwrap();
+    assert_eq!(result.status, Status::Warn, "{}", result.message);
+    assert!(result
+        .message
+        .contains("canary identity drift: orchid-one-pin observed home-drift"));
+    assert!(
+        !result.message.contains("decoy-drift"),
+        "{}",
+        result.message
+    );
+    // Binding records still come from the independently located directory.
+    write(&bindings, "broken.json", "{}");
+    let result = doctor::run_check("model-bindings", &options).unwrap();
+    assert_eq!(result.status, Status::Fail, "{}", result.message);
+    assert!(result.message.contains("broken.json"), "{}", result.message);
 }

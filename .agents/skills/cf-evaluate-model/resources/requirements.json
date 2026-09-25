@@ -1026,11 +1026,11 @@
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
             "\"role\": \"claude-judgment-primary\"",
-            "\"model_class\": \"latest-fable\"",
-            "\"model_class\": \"latest-opus\"",
-            "\"default_effort\": \"medium\"",
-            "\"default_effort\": \"high\"",
-            "without transferring judgment"
+            "\"design_owner\": \"claude-primary\"",
+            "\"relation\": \"opposite-author\"",
+            "\"effort\": \"medium\"",
+            "Primary seats retain independent planning and approval duties",
+            "Internal workers never replace a primary or named cross-lineage reviewer"
           ]
         }
       ]
@@ -1084,9 +1084,9 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
           "markers": [
-            "\"default_effort\": \"high\"",
-            "\"escalation_effort\": \"xhigh\"",
-            "\"model_class\": \"latest-terra\"",
+            "\"effort\": \"high\"",
+            "\"xhigh_triggers\"",
+            "An xhigh trigger adds a same-family xhigh-reasoning worker; the seat stays at high and keeps approval",
             "Claude-side internal routing belongs to the Claude primary",
             "A high primary retains orchestration",
             "Unobserved model, effort, worker routing, availability, and usage remain unknown"

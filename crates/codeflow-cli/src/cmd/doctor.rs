@@ -18,10 +18,11 @@ pub struct DoctorArgs {
 
 /// Run doctor checks; exit 0 when healthy (warnings allowed), 1 on failures.
 pub fn run(args: &DoctorArgs) -> i32 {
+    let home = registry::codeflow_home();
     let opts = Options {
         project_dir: super::repo_root().to_string_lossy().into_owned(),
-        qualification_dir: registry::codeflow_home()
-            .map(|home| registry::qualified_bindings_path(&home)),
+        qualification_dir: home.as_deref().map(registry::qualified_bindings_path),
+        codeflow_home: home,
         ..Options::default()
     };
     run_with(args, &opts, &mut std::io::stdout())
@@ -107,6 +108,7 @@ mod tests {
             look_path: Some(|name| Ok(format!("/stub/bin/{name}"))),
             exec_command: Some(|_, _| Ok(String::new())),
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
+            codeflow_home: None,
             qualification_dir: None,
         };
         (dir, opts)
