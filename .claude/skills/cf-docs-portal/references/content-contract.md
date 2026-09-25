@@ -73,7 +73,8 @@ are verified and recorded in evidence. Remote images, active
 SVG/PDF copies, traversal, unsupported schemes, and broken targets fail closed;
 ordinary HTTPS and mail links remain links and are never fetched.
 For authors: on the portal and in present a figure is inline SVG through the
-figure block, and in chat and a README it is the ASCII chat form.
+figure block, in a README it is the ASCII chat form, and in a chat reply the
+surface rule in `cf-method/references/workflow-lifecycle.md` picks the form.
 Pin source links to the evidenced commit on known GitHub, GitLab, and Bitbucket
 HTTPS repository URLs. A committed document excluded from the portal remains a
 pinned provider file link. A relative link to a committed directory uses the

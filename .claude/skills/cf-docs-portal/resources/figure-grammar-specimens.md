@@ -18,8 +18,8 @@ CodeFlow's own repository has remote protection unavailable (its
 verified enforcement state before drawing either.
 
 Each specimen ends with its chat form: the same facts drawn as a fenced
-ASCII figure for chat and a README, with one legend line and one caption
-line, every line printable ASCII and under 78 columns.
+ASCII figure for plain-text chat and a README, with one legend line and one
+caption line, every line printable ASCII and under 78 columns.
 
 The YAML beside each specimen sketches its intent; the module loads only the
 JSON declarations of `figure-grammar.md` section 6, and the complete ones for

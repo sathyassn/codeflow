@@ -74,7 +74,7 @@ and no figure. The family must also be one that `figure-grammar.md` section 3
 lists for the altitude; when it is not, the relationship belongs at another
 altitude, so go back to stage 2.
 
-| Subject | Carrier | Chat and README form | Portal and present form |
+| Subject | Carrier | Plain-text chat and README form | Portal and present form |
 |---|---|---|---|
 | travel between places: order, fork, join, stop | flow | lanes left to right, travelled and not-yet edges, a stop bar | figure block, flow family |
 | parts, containment and boundaries | structure | named regions with the edges between them | figure block, structure family |
@@ -97,10 +97,12 @@ relationship names.
 
 - On the portal and in present, a figure is inline SVG drawn through the
   figure block from its declaration.
-- In chat and in a README, a figure is the fenced ASCII chat form. An SVG
-  file and a Mermaid fence are not README figures: the portal rejects SVG
-  media and shows a Mermaid fence as code, and GitHub shows a `cf-stage`
-  fence as code.
+- In a chat reply, the surface rule in
+  `cf-method/references/workflow-lifecycle.md` picks the form; the fenced
+  ASCII chat form is its plain-text form.
+- In a README, a figure is the fenced ASCII chat form. An SVG file and a
+  Mermaid fence are not README figures: the portal rejects SVG media and
+  shows a Mermaid fence as code, and GitHub shows a `cf-stage` fence as code.
 - A screenshot shows a surface as it is and never a relationship. Its
   capture rules are the doctrine's "Screenshots and raster images".
 
