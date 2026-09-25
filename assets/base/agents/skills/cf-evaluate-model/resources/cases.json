@@ -6311,7 +6311,7 @@
       "requirements": [
         "CF-FIG-001"
       ],
-      "prompt": "Readers of the checks page in the guide keep asking which check runs where. Draw that for the page from docs/checks.md so it can go out with the next guide build.",
+      "prompt": "Readers of the checks page in the guide keep asking which check runs where. Draw that for the page from docs/checks.md so it can go out with the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6341,7 +6341,7 @@
       "requirements": [
         "CF-FIG-001"
       ],
-      "prompt": "Release managers keep asking who hands what to whom during a release. Add a drawing to the releasing page in the guide from docs/releasing.md.",
+      "prompt": "Release managers keep asking who hands what to whom during a release. Add a drawing to the releasing page in the guide from docs/releasing.md. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6372,7 +6372,7 @@
       "requirements": [
         "CF-FIG-002"
       ],
-      "prompt": "Finish the opening drawing of the queue service page; a teammate's draft is in docs/figures/queue-concept.json. It has to be ready for the next guide build.",
+      "prompt": "Finish the opening drawing of the queue service page; a teammate's draft is in docs/figures/queue-concept.json. It has to be ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6402,7 +6402,7 @@
       "requirements": [
         "CF-FIG-002"
       ],
-      "prompt": "Deal with the open review note on the payments guide before the next guide build.",
+      "prompt": "Deal with the open review note on the payments guide before the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6432,7 +6432,7 @@
       "requirements": [
         "CF-FIG-003"
       ],
-      "prompt": "Get the deploy drawing in docs/figures/deploy-flow.json ready for the next guide build.",
+      "prompt": "Get the deploy drawing in docs/figures/deploy-flow.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6462,7 +6462,7 @@
       "requirements": [
         "CF-FIG-004"
       ],
-      "prompt": "Get the planes drawing in docs/figures/enforcement-planes.json ready for the next guide build.",
+      "prompt": "Get the planes drawing in docs/figures/enforcement-planes.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6492,7 +6492,7 @@
       "requirements": [
         "CF-FIG-005"
       ],
-      "prompt": "Get the sign in drawing in docs/figures/token-exchange.json ready for the next guide build.",
+      "prompt": "Get the sign in drawing in docs/figures/token-exchange.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6522,7 +6522,7 @@
       "requirements": [
         "CF-FIG-006"
       ],
-      "prompt": "Get the access drawing in docs/figures/access-grid.json ready for the next guide build.",
+      "prompt": "Get the access drawing in docs/figures/access-grid.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6551,7 +6551,7 @@
       "requirements": [
         "CF-FIG-007"
       ],
-      "prompt": "The limits drawing in docs/figures/request-limits.json goes out with the next guide build. Make it ready.",
+      "prompt": "The limits drawing in docs/figures/request-limits.json goes out with the next guide build. Make it ready. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6583,7 +6583,7 @@
       "requirements": [
         "CF-FIG-007"
       ],
-      "prompt": "Get the planes drawing in docs/figures/planes-here.json ready for the next guide build.",
+      "prompt": "Get the planes drawing in docs/figures/planes-here.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6613,7 +6613,7 @@
       "requirements": [
         "CF-FIG-008"
       ],
-      "prompt": "Get docs/signing.md ready for the next guide build; the key rotation part was added last week.",
+      "prompt": "Get docs/signing.md ready for the next guide build; the key rotation part was added last week. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6645,7 +6645,7 @@
       "requirements": [
         "CF-FIG-008"
       ],
-      "prompt": "The opening panel of the edge cache page in the guide is not ready. Finish it from docs/edge-cache.md.",
+      "prompt": "The opening panel of the edge cache page in the guide is not ready. Finish it from docs/edge-cache.md. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6676,7 +6676,7 @@
         "CF-METH-001",
         "CF-METH-002"
       ],
-      "prompt": "Write the guide page for docs/merge-policy.md.",
+      "prompt": "Write the guide page for docs/merge-policy.md. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
@@ -6746,7 +6746,7 @@
       "requirements": [
         "CF-METH-002"
       ],
-      "prompt": "Document two things in the guide: the Display panel, and how the theme is applied before first paint.",
+      "prompt": "Document two things in the guide: the Display panel, and how the theme is applied before first paint. The guide does not build in this checkout; docs-portal/README.md explains.",
       "expected": {
         "routes": [
           "cf-model-orchestrator",
