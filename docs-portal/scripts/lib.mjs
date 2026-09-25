@@ -951,6 +951,15 @@ export function asIsRegionStart(body, title) {
   return offset;
 }
 
+// Whether an as-is region still carries a level-one heading once the title
+// the adapter drops is gone: a second title, a title under a leading comment,
+// or deliberate h1 sections. The site's Markdown step then renders every
+// heading in the region one level lower (h6 stays h6), so the page title is
+// the only h1 and the source keeps its structure; the bytes never change.
+export function asIsHeadingsDemoted(source) {
+  return markdownNodes(markdownTree(source), "heading").some((node) => node.depth === 1);
+}
+
 export function asIsTitleMatches(raw, title) {
   const visible = String(raw).replace(/[`*_]/g, "").trim();
   const wanted = String(title).replace(/[`*_]/g, "").trim();

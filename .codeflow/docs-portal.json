@@ -54,11 +54,11 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "cef3249dcc28f05afea5f024f6684663f578341f9c225010fe4221a0ebf5776c"
+      "pristine_sha256": "180fd8c1c57d2f1d883c9087f18840ba5a3dc376a570d77b6a97ade950656f6f"
     },
     "scripts/as-is-markdown.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "428e67677f34447813468d37c1e1221ffa1bccde389528be98f4eb3201ff60c2"
+      "pristine_sha256": "f98359fac8d44de85d5f631ec21ed5858582ba66a5f2c2a4e35f8f220c847ae0"
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
@@ -94,7 +94,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "a635a7643c8550eb1b9da8fb0a2359053b351d9de504ccdb1824358684880923"
+      "pristine_sha256": "61c484b34a20e1ee7e9a254f92ac1781d933495f4a3e3fbb7548ebde92f1aadb"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -222,7 +222,7 @@
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "1420f8ce1b1715c5fbbe853f0097cd8ca2fa221c8b844087dd47686b47417b4b"
+      "pristine_sha256": "300c8b4a20b31421eb2b04ac408f27ef947ae5689429cc514248c2ab83913d27"
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",

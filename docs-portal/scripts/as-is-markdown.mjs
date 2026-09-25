@@ -3,7 +3,9 @@
 // marker comments, so `validate --portal` can prove them against the committed
 // source. This step renders those bytes the way a composed page renders them:
 // raw HTML becomes text, comments drop, and each link points at the
-// destination the adapter resolved. Companion figures sit between their own
+// destination the adapter resolved. When the adapter found a level-one
+// heading left in the region, every heading renders one level lower, so the
+// page title stays the only h1. Companion figures sit between their own
 // markers; they are generated markup and pass through untouched.
 //
 // Astro renders Markdown with Sätteri, whose plugins visit nodes in document
@@ -12,6 +14,9 @@ import { readFileSync } from "node:fs";
 
 const BEGIN = /^<!-- codeflow-source-begin route=(\S+) /;
 const BLOCK_PARENTS = new Set(["root", "listItem", "blockquote", "footnoteDefinition", "containerDirective"]);
+// The link-table key that marks a region whose headings render one level
+// lower. Link keys all start with link:, image: or reference:.
+export const DEMOTE_HEADINGS = "headings:demote";
 
 export function asIsMarkdownIntegration({ linksPath }) {
   return {
@@ -58,6 +63,10 @@ export function asIsMarkdownPlugin(linksPath) {
         if (/^<!--[\s\S]*-->$/.test(value)) { ctx.removeNode(node); return; }
         const text = { type: "text", value: node.value };
         ctx.replaceNode(node, BLOCK_PARENTS.has(ctx.parent(node)?.type) ? { type: "paragraph", children: [text] } : text);
+      },
+      heading(node, ctx) {
+        if (!active() || links?.[DEMOTE_HEADINGS] !== true) return;
+        ctx.setProperty(node, "depth", Math.min(node.depth + 1, 6));
       },
       link(node, ctx) {
         if (!active()) return;

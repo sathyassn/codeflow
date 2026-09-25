@@ -9,7 +9,9 @@ import {
   assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages, declaredCarrierFailures,
   pageClassFailures, recordPointerRoute, recordRouteFailures, staleSourceFailures,
 } from "../scripts/page-classes.mjs";
-import { insertPanelFigures } from "../scripts/lib.mjs";
+import { markdownToHtml } from "satteri";
+import { asIsMarkdownPlugin, DEMOTE_HEADINGS } from "../scripts/as-is-markdown.mjs";
+import { asIsHeadingsDemoted, asIsRegionStart, insertPanelFigures } from "../scripts/lib.mjs";
 import { COMPOSED_PAGE, SHELL_PAGE, panelBindings } from "./page-shapes.mjs";
 import { commitFixture, configureFixture, portalFixture, runAdapter, starterRoot } from "./portal-fixture.mjs";
 
@@ -30,6 +32,38 @@ const POINTER_OBSERVATION = Object.freeze({
   pointerColumns: [...RECORD_POINTER_COLUMNS], pointerRows: 4,
 });
 const PROSE_PANEL = Object.freeze({ figure: 0, stage: 0, table: 0, list: 0, pre: 0 });
+
+// An as-is page keeps the page title as its only h1: a level-one heading left
+// in the region after the dropped title renders one level lower, with every
+// other heading, through the site's own Markdown step.
+test("an as-is region with a level-one heading left renders every heading one level lower", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "as-is-headings-"));
+  try {
+    const cases = [
+      // A decision record whose heading differs from its frontmatter title.
+      { name: "adr", title: "Keep the ledger append-only", body: "# ADR-0002: Append-only ledger\n\nWhy.\n\n## Context\n\nMore.\n", demoted: true, headings: ["h2", "h3"] },
+      // A title the adapter cannot drop because a comment comes first.
+      { name: "comment", title: "Guide", body: "<!-- Maintained by hand. -->\n\n# Guide\n\n## Step\n\n###### Detail\n", demoted: true, headings: ["h2", "h3", "h6"] },
+      // Three deliberate level-one sections.
+      { name: "sections", title: "Soul", body: "# Identity\n\nWho.\n\n# Voice\n\nHow.\n\n# Limits\n\n## Hard limits\n", demoted: true, headings: ["h2", "h2", "h2", "h3"] },
+      // A title the adapter drops leaves the rest as written.
+      { name: "titled", title: "Guide", body: "# Guide\n\n## Step\n", demoted: false, headings: ["h2"] },
+    ];
+    for (const item of cases) {
+      const region = item.body.slice(asIsRegionStart(item.body, item.title));
+      assert.equal(asIsHeadingsDemoted(region), item.demoted, item.name);
+      const linksPath = path.join(directory, `${item.name}.json`);
+      await writeFile(linksPath, JSON.stringify({ [item.name]: item.demoted ? { [DEMOTE_HEADINGS]: true } : {} }));
+      const markdown = `<!-- codeflow-source-begin route=${item.name} source_sha256=0 class=pass-through -->\n\n${region}\n<!-- codeflow-source-end -->\n\n## After the region\n`;
+      const { html } = markdownToHtml(markdown, { mdastPlugins: [asIsMarkdownPlugin(linksPath)] });
+      const inRegion = html.slice(0, html.indexOf("codeflow-source-end"));
+      assert.deepEqual([...inRegion.matchAll(/<(h[1-6])>/g)].map((match) => match[1]), item.headings, item.name);
+      assert.match(html, /<h2>After the region<\/h2>/, `${item.name}: headings outside the region keep their level`);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("a figure bound to a section of a panel sits directly under that section's heading", () => {
   const source = [

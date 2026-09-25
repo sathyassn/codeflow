@@ -7,11 +7,12 @@ import {
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown, placeCapabilityTable,
   pinnedSourceUrl as providerSourceUrl, recordFilesFor, referencedIds, renderCapabilityFences, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
-  asIsRegionStart, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks,
+  asIsHeadingsDemoted, asIsRegionStart, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks,
 } from "./lib.mjs";
 import { bindDerivedData, checkFacts, composeFigure, GRAMMAR_VERSION, markdownSections, parseFactSource, renderFigure, validateDeclaration } from "./figure-grammar.mjs";
 import { ALTITUDE_PANELS, PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
+import { DEMOTE_HEADINGS } from "./as-is-markdown.mjs";
 import { GENERATOR } from "./generator.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "./limits.mjs";
 import { isReservedPublicPath, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus } from "./publication.mjs";
@@ -498,9 +499,12 @@ function renderAsIsPage(page, bindings, routesById, referencedMedia, anchorsBySo
   const bodyBytes = Buffer.from(page.body, "utf8");
   const start = Buffer.byteLength(page.body.slice(0, asIsRegionStart(page.body, page.title)), "utf8");
   const source = bodyBytes.subarray(start).toString("utf8");
-  asIsLinks[markerRoute(page.route)] = resolveAsIsLinks(source, {
-    sourcePath: page.source_path, sourceRoutes, repositoryFiles, repositoryDirectories, pinnedSourceUrl, base, mediaReferences: referencedMedia, sourceAnchors: anchorsBySource,
-  });
+  asIsLinks[markerRoute(page.route)] = {
+    ...resolveAsIsLinks(source, {
+      sourcePath: page.source_path, sourceRoutes, repositoryFiles, repositoryDirectories, pinnedSourceUrl, base, mediaReferences: referencedMedia, sourceAnchors: anchorsBySource,
+    }),
+    ...(asIsHeadingsDemoted(source) ? { [DEMOTE_HEADINGS]: true } : {}),
+  };
   const sections = markdownSections(page.body);
   const lineOffsets = [];
   let cursor = 0;
