@@ -191,7 +191,7 @@ The operator decided on 2026-09-24 that figures are HTML and never Mermaid
 (ADR-0068, update of that date). TSK-087 carries the removal in 3.0.0, the
 first release of present, so no released consumer holds a diagram document.
 
-- The `diagram` block, its Mermaid 11.16.0 renderer, the sanitizer and the
+- The `diagram` block, its Mermaid 11.16.1 renderer, the sanitizer and the
   packages they bundled leave the build. The renderer paragraph above, which
   lazy-loads Mermaid for diagram blocks, describes the runtime before this
   update. The lazy chunks are now figure, fonts and syntax, and the SBOM,
