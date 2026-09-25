@@ -11,8 +11,7 @@ page application per response.
 
 Each invocation **reuses the utility design system**. Author **this session's**
 subject into catalog blocks; the runtime owns chrome, themes, and Comment. Do
-not clone the design-exploration board at `docs/verification/tsk-014-w5/`,
-rebuild Comment UI, or invent a second visual language.
+not rebuild Comment UI or invent a second visual language.
 
 A supporting flow inside `cf-model-orchestrator` for non-trivial repository
 work: it changes how a result is reviewed, never the accepted plan, model
@@ -54,14 +53,13 @@ perceived.
 **Before writing blocks or calling `present open`, load in order:**
 
 1. [how-presentation-works](resources/how-presentation-works.md): what
-   the human sees, instrument choice
+   the human sees
 2. [utility-presentation-system](resources/utility-presentation-system.md):
-   system craft, Comment lifecycle, fail-closed anti-patterns
+   craft, Comment lifecycle, anti-patterns
 3. [figure-grammar](resources/figure-grammar.md): families, rules
 4. [design-system kit](resources/design-system/README.md)
 5. [visual-craft](references/visual-craft.md): checklist
-6. [document-authoring](references/document-authoring.md): fields **after**
-   the page walk settles
+6. [document-authoring](references/document-authoring.md): fields last
 
 **Choose blocks by information shape.** A visual must communicate one
 relationship in one grammar family under its twelve rules, never decorate

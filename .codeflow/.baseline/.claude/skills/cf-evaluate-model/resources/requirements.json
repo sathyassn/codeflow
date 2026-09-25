@@ -1707,7 +1707,7 @@
           "markers": [
             "derived utility, never a second source of truth",
             "same utility design system as `cf-present`",
-            "Do not clone the",
+            "Do not copy present Comment chrome",
             "Apply `cf-design`",
             "Apply `cf-editorial-review`"
           ]
@@ -1874,7 +1874,7 @@
           "markers": [
             "restyling the same chat answer is a failed use",
             "Author **this session's** subject",
-            "Do not clone the design-exploration board",
+            "Do not rebuild Comment UI or invent a second visual language",
             "one primary visual form at rest",
             "exact selected text, one semantic element",
             "whole document",
@@ -1895,9 +1895,16 @@
           "markers": [
             "JSON is only the handoff format",
             "order of `blocks[]` = order of attention",
-            "5‑second picture",
-            "Choose one primary carrier",
-            "Mentally walk the page"
+            "the stage 3 carrier is the first block",
+            "the page walked top to bottom in plain words"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-present/resources/explanation-method.md",
+          "markers": [
+            "what relationship the reader must see first",
+            "The smallest carrier that keeps the depth wins",
+            "with every sentence removed, the carrier still states the relationship"
           ]
         }
       ]

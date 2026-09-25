@@ -1,26 +1,13 @@
 # `cf-present` visual craft
 
-**Required load order (do not skip):**
+**Load order:** the one list in [SKILL.md](../SKILL.md).
 
-1. [resources/how-presentation-works.md](../resources/how-presentation-works.md)
-   is **how to think**: what the human sees, why structure is the presentation,
-   how to choose instruments before JSON
-2. [resources/utility-presentation-system.md](../resources/utility-presentation-system.md)
-   is the shared craft: composition rule, page classes, carriers, tokens
-3. This file is the present profile: composition gate, Comment surface,
-   feedback pipeline, runtime mapping, checklist
-4. [document-authoring.md](document-authoring.md) covers envelope and block fields
-   only after the thinking is settled
-5. Prefer [resources/present-document.example.json](../resources/present-document.example.json)
-   as a **shape** (figure → frame → evidence → ask), not a template to pad
-
-If you cannot pass the self-check in *how presentation works*, **do not open**
-the session.
+If the draft fails the method's check or the composition gate below, **do
+not open** the session.
 
 `cf-design` stays product-generic. This skill is **utility present** only.
-Author **this session's** subject. Do not clone the evidence board
-(`docs/verification/tsk-014-w5/`, whose baselines are the negative controls);
-draw figures to `resources/figure-grammar.md`.
+Author **this session's** subject and draw figures to
+`resources/figure-grammar.md`.
 
 Display chrome (runtime-owned, as the shared doctrine states): Font (Archivo
 for instrument, Inter for editorial, IBM Plex Sans for ink), Size (Compact /
@@ -93,26 +80,13 @@ Delivery is at-least-once by `event_id`. No harness-specific transport.
 | Stable block IDs across present revisions | Guessed re-anchors for moved regions |
 | Bootstrap link + session id on present open | Port-only "open localhost" instructions |
 
-## Thinking (non-negotiable)
+## Thinking
 
-- Present JSON is a **handoff**, not the product. The product is the open page.
-- **Block order is attention order.** First block owns the fold.
-- Choosing a block type chooses a **perceptual instrument** (see how-presentation-works).
-  Prose and bullets are reading instruments. They do not become a stage by
-  wishing.
-- One **primary carrier** for the governing idea; everything else supports,
-  proves, or asks.
-- Utility themes stay quiet so subject structure can be loud. Do not paper over
-  a weak figure with more words.
-
-## Altitude as a path
-
-1. **Concept**: the carrier that creates the 5 second picture  
-2. **Architecture**: only if another structural view is required  
-3. **Technical**: verifiable panes (status, diff, code, table)  
-4. **Ask**: one clear feedback prompt  
-
-Short narrative **frames**; it does not replace the carrier.
+`resources/explanation-method.md` owns the thinking: reader and question,
+altitude, carrier, draft, check. `resources/how-presentation-works.md` owns
+what the human sees and block order as attention order. The present altitude
+path is the shared doctrine's "Page classes (portal) and document shapes
+(present)".
 
 ## Motion
 
@@ -120,7 +94,7 @@ Meaning at rest. No dependence on animation to teach structure.
 
 ## Before open
 
-- [ ] Walked the page top-to-bottom in plain language (how-presentation-works §3E)
+- [ ] Passed the method's stage 5 check; walked the page top to bottom
 - [ ] 5‑second picture named; primary carrier first
 - [ ] Structure survives sentence removal
 - [ ] No chat-restyle wall; no secrets/paths

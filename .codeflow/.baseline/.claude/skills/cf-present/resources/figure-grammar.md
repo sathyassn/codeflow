@@ -142,9 +142,8 @@ value and the legend key.
 `docs/verification/tsk-014-w5/` is the evidence board behind this grammar. Its
 `shared/svg.js` carries the mark vocabulary the table above distils, and its
 `baselines/` (p1, p2, p3, d1, d2, d3: plain chat, plain Markdown and plain HTML
-for every scorable surface) are the negative controls a figure must beat. The
-board is evidence, never a subject to re-render: do not clone its cases, its
-portal families or its comments into a present session or a portal page.
+for every scorable surface) are the negative controls a figure must beat. How
+the board may be used is the shared doctrine's section 0.
 
 Named anti-patterns, each observed on that board and each now a rule:
 

@@ -1252,9 +1252,10 @@ fn normalized_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// Read one figure grammar file, assert its cf-present and cf-docs-portal
-/// copies are byte-identical, and return its whitespace-normalized text.
-fn shared_figure_grammar_file(file: &str) -> String {
+/// Read one shared presentation resource (the explanation method, the figure
+/// grammar or its specimens), assert its cf-present and cf-docs-portal copies
+/// are byte-identical, and return its whitespace-normalized text.
+fn shared_presentation_resource(file: &str) -> String {
     let skills = repo_root().join("assets/base/agents/skills");
     let present = std::fs::read(skills.join("cf-present/resources").join(file))
         .unwrap_or_else(|_| panic!("present {file} is readable"));
@@ -1264,7 +1265,7 @@ fn shared_figure_grammar_file(file: &str) -> String {
         present, portal,
         "{file} drifted between cf-present and cf-docs-portal"
     );
-    normalized_whitespace(&String::from_utf8(present).expect("figure grammar is UTF-8"))
+    normalized_whitespace(&String::from_utf8(present).expect("shared resource is UTF-8"))
 }
 
 const FIGURE_FAMILIES: [&str; 9] = [
@@ -1284,8 +1285,8 @@ const FIGURE_FAMILIES: [&str; 9] = [
 /// doctrine names the companion, and neither file draws with a literal colour.
 #[test]
 fn figure_grammar_is_shared_names_its_specimens_and_draws_with_tokens_only() {
-    let grammar = shared_figure_grammar_file("figure-grammar.md");
-    let specimens = shared_figure_grammar_file("figure-grammar-specimens.md");
+    let grammar = shared_presentation_resource("figure-grammar.md");
+    let specimens = shared_presentation_resource("figure-grammar-specimens.md");
     assert!(
         grammar.contains(&normalized_whitespace(
             "`figure-grammar-specimens.md` beside this file, also byte-identical in both skills. Load it when authoring a figure"
@@ -1326,7 +1327,7 @@ fn figure_grammar_is_shared_names_its_specimens_and_draws_with_tokens_only() {
 /// fail here.
 #[test]
 fn figure_grammar_keeps_its_families_rules_altitude_and_evidence() {
-    let grammar = shared_figure_grammar_file("figure-grammar.md");
+    let grammar = shared_presentation_resource("figure-grammar.md");
     let families_header =
         "| Family | Relationship it encodes | Geometry | Non-colour channels that carry state | Reader question it answers |";
     assert!(
@@ -1376,7 +1377,7 @@ fn figure_grammar_keeps_its_families_rules_altitude_and_evidence() {
 /// its declared figure.
 #[test]
 fn figure_grammar_specimens_keep_one_specimen_per_family() {
-    let specimens = shared_figure_grammar_file("figure-grammar-specimens.md");
+    let specimens = shared_presentation_resource("figure-grammar-specimens.md");
     for (index, family) in FIGURE_FAMILIES.iter().enumerate() {
         assert!(
             specimens.contains(&format!("## {}. {family}", index + 1)),
@@ -1389,12 +1390,19 @@ fn figure_grammar_specimens_keep_one_specimen_per_family() {
     }
 }
 
-/// Both presentation skills, their shared doctrine and their profile references
-/// point at the figure grammar and at the evidence board with its baselines,
-/// never at a bare design-exploration board.
+/// Both presentation skills name the figure grammar in their load list; the
+/// shared doctrine names the evidence board and states once, in section 0,
+/// that it is never cloned; the grammar names the board and points at that
+/// rule; no reference names a bare design-exploration board (TSK-072).
 #[test]
 fn presentation_skills_point_at_the_figure_grammar_and_evidence_board() {
     let skills = repo_root().join("assets/base/agents/skills");
+    let grammar = shared_presentation_resource("figure-grammar.md");
+    assert!(
+        grammar.contains("`docs/verification/tsk-014-w5/` is the evidence board")
+            && grammar.contains("How the board may be used is the shared doctrine's section 0"),
+        "figure grammar must name the evidence board and point at the doctrine's rule"
+    );
     for skill in ["cf-present", "cf-docs-portal"] {
         let skill_text = std::fs::read_to_string(skills.join(skill).join("SKILL.md"))
             .expect("skill is readable");
@@ -1402,38 +1410,284 @@ fn presentation_skills_point_at_the_figure_grammar_and_evidence_board() {
             skill_text.contains("resources/figure-grammar.md"),
             "{skill}/SKILL.md must name the figure grammar in its load order"
         );
-        assert!(
-            skill_text.contains("docs/verification/tsk-014-w5/"),
-            "{skill}/SKILL.md must point at the evidence board, not a bare design-exploration board"
+        let doctrine = normalized_whitespace(
+            &std::fs::read_to_string(
+                skills
+                    .join(skill)
+                    .join("resources/utility-presentation-system.md"),
+            )
+            .expect("shared doctrine is readable"),
         );
-        let doctrine = std::fs::read_to_string(
-            skills
-                .join(skill)
-                .join("resources/utility-presentation-system.md"),
-        )
-        .expect("shared doctrine is readable");
         assert!(
             doctrine.contains("`figure-grammar.md`")
                 && doctrine.contains("### Figure grammar")
                 && !doctrine.contains("### Stage and diagram grammar"),
             "{skill} shared doctrine must point at the figure grammar as the default form"
         );
+        let section_zero = doctrine
+            .split("## 1. Separation of planes")
+            .next()
+            .expect("doctrine has a section 0");
         assert!(
-            doctrine.contains("docs/verification/tsk-014-w5/"),
-            "{skill} shared doctrine must name the evidence board"
+            section_zero.contains("docs/verification/tsk-014-w5/")
+                && section_zero.contains("It is **evidence only**. Do not clone it"),
+            "{skill} shared doctrine section 0 must name the evidence board and its rule"
         );
     }
-    for reference in [
+    for (path, text) in presentation_skill_markdown("cf-present")
+        .into_iter()
+        .map(|(path, text)| (format!("cf-present/{path}"), text))
+        .chain(
+            presentation_skill_markdown("cf-docs-portal")
+                .into_iter()
+                .map(|(path, text)| (format!("cf-docs-portal/{path}"), text)),
+        )
+    {
+        assert!(
+            !text.contains("design-exploration board"),
+            "{path} must not name a bare design-exploration board"
+        );
+    }
+}
+
+/// Every Markdown file of one presentation skill in the canonical source,
+/// keyed by its path relative to the skill.
+fn presentation_skill_markdown(skill: &str) -> BTreeMap<String, String> {
+    let dir = repo_root().join("assets/base/agents/skills").join(skill);
+    walk_files(&dir)
+        .into_iter()
+        .filter(|path| path.extension().is_some_and(|extension| extension == "md"))
+        .map(|path| {
+            let text = std::fs::read_to_string(&path)
+                .unwrap_or_else(|error| panic!("{} is readable: {error}", path.display()));
+            (rel(&dir, &path), text)
+        })
+        .collect()
+}
+
+/// TSK-072 dedupe: in each presentation skill the altitude contract table
+/// header is stated once, in the figure grammar; the evidence board path
+/// appears only in the doctrine and the grammar; and the rule not to clone
+/// the board is stated once, in the doctrine's section 0.
+#[test]
+fn presentation_skills_state_the_altitude_table_and_board_rule_once() {
+    let mut problems = Vec::new();
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let files = presentation_skill_markdown(skill);
+        let count_where = |predicate: &dyn Fn(&str) -> usize| -> BTreeMap<String, usize> {
+            files
+                .iter()
+                .map(|(path, text)| (path.clone(), predicate(text)))
+                .filter(|(_, count)| *count > 0)
+                .collect()
+        };
+        let altitude_headers = count_where(&|text| {
+            text.lines()
+                .filter(|line| line.trim_start().starts_with("| Altitude |"))
+                .count()
+        });
+        let expected_altitude = BTreeMap::from([("resources/figure-grammar.md".to_string(), 1)]);
+        if altitude_headers != expected_altitude {
+            problems.push(format!(
+                "{skill}: altitude table headers {altitude_headers:?}, want {expected_altitude:?}"
+            ));
+        }
+        let board: BTreeSet<String> =
+            count_where(&|text| text.matches("docs/verification/tsk-014-w5/").count())
+                .into_keys()
+                .collect();
+        let expected_board = BTreeSet::from([
+            "resources/figure-grammar.md".to_string(),
+            "resources/utility-presentation-system.md".to_string(),
+        ]);
+        if board != expected_board {
+            problems.push(format!(
+                "{skill}: evidence board path in {board:?}, want {expected_board:?}"
+            ));
+        }
+        let board_rule = count_where(&|text| text.to_lowercase().matches("clone").count());
+        let expected_rule =
+            BTreeMap::from([("resources/utility-presentation-system.md".to_string(), 1)]);
+        if board_rule != expected_rule {
+            problems.push(format!(
+                "{skill}: the evidence board rule is stated in {board_rule:?}, want {expected_rule:?}"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "presentation doctrine is restated:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// The explanation method (TSK-072) is one shared resource in both
+/// presentation skills. It keeps its five stages, a reader and question per
+/// altitude, a carrier row per family plus screenshot, table and the
+/// no-family boundary, the README and smallest-carrier rules, three worked
+/// decisions and the sentence on sources it leaves alone.
+#[test]
+fn explanation_method_is_shared_and_carries_its_stages_readers_and_carriers() {
+    let method = shared_presentation_resource("explanation-method.md");
+    let mut missing = Vec::new();
+    for stage in [
+        "## 1. Reader and question",
+        "## 2. Altitude",
+        "## 3. Carrier",
+        "## 4. Draft",
+        "## 5. Check",
+    ] {
+        if !method.contains(stage) {
+            missing.push(stage.to_string());
+        }
+    }
+    for reader in [
+        "| Concept | someone deciding whether the subject is for them |",
+        "| Architecture | an engineer who will change or integrate it |",
+        "| Technical | an operator or a reviewer |",
+        "| How-to section | someone doing the task now |",
+        "| Reply | the operator who asked |",
+        "A pull request body takes the reply row's reader, and an ADR takes the Architecture row's",
+    ] {
+        if !method.contains(reader) {
+            missing.push(reader.to_string());
+        }
+    }
+    for family in FIGURE_FAMILIES {
+        let row = format!("| {family} | ");
+        if !method.contains(&row) {
+            missing.push(row);
+        }
+    }
+    for marker in [
+        "| a surface as it is | screenshot |",
+        "| facts to look up, with no relationship | table |",
+        "| a distribution, or a series over time | no family draws it today |",
+        "In chat and in a README, a figure is the fenced ASCII chat form",
+        "An SVG file and a Mermaid fence are not README figures",
+        "GitHub shows a `cf-stage` fence as code",
+        "The smallest carrier that keeps the depth wins",
+        "Facts with no relationship between them take bullets or a table and no figure",
+        "nothing asks a page or a document to record the stages",
+        "The method never rewrites a source it must leave alone",
+        "declared `illustrated` with a companion figure bound in configuration or `pass-through`",
+    ] {
+        if !method.contains(&normalized_whitespace(marker)) {
+            missing.push(marker.to_string());
+        }
+    }
+    let decisions: Vec<&str> = method.split("### ").skip(1).collect();
+    if decisions.len() != 3 {
+        missing.push(format!("three worked decisions, found {}", decisions.len()));
+    }
+    for (decision, (altitude, family)) in decisions.iter().zip([
+        ("Concept", "structure"),
+        ("Architecture", "layering"),
+        ("Technical", "coverage"),
+    ]) {
+        for field in [
+            format!("**Altitude:** {altitude}."),
+            "**Reader:**".to_string(),
+            "**Question:**".to_string(),
+            format!("**Family:** {family}"),
+        ] {
+            if !decision.contains(&field) {
+                missing.push(format!("worked decision {altitude}: {field}"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "explanation method lost:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
+/// Each presentation skill carries its only load list in `SKILL.md`; the
+/// references that used to restate it carry one pointer line instead.
+#[test]
+fn presentation_references_point_at_the_one_load_list() {
+    const POINTER: &str = "**Load order:** the one list in [SKILL.md](../SKILL.md).";
+    let mut problems = Vec::new();
+    for skill in ["cf-present", "cf-docs-portal"] {
+        let files = presentation_skill_markdown(skill);
+        let lists: Vec<&String> = files
+            .iter()
+            .filter(|(_, text)| text.contains("load in order"))
+            .map(|(path, _)| path)
+            .collect();
+        if lists != ["SKILL.md"] {
+            problems.push(format!(
+                "{skill}: load lists in {lists:?}, want SKILL.md only"
+            ));
+        }
+        for (path, text) in &files {
+            for retired in ["Required load order", "Required first", "Thinking first"] {
+                if text.contains(retired) {
+                    problems.push(format!("{skill}/{path}: still says {retired}"));
+                }
+            }
+        }
+    }
+    for path in [
         "cf-present/references/visual-craft.md",
         "cf-present/references/document-authoring.md",
         "cf-present/resources/how-presentation-works.md",
         "cf-docs-portal/references/visual-craft.md",
     ] {
-        let text = std::fs::read_to_string(skills.join(reference)).expect("reference is readable");
+        let text =
+            std::fs::read_to_string(repo_root().join("assets/base/agents/skills").join(path))
+                .expect("reference is readable");
+        let pointers = text.lines().filter(|line| *line == POINTER).count();
+        let head: Vec<&str> = text
+            .lines()
+            .filter(|line| !line.is_empty())
+            .take(2)
+            .collect();
+        if pointers != 1 || head.get(1) != Some(&POINTER) {
+            problems.push(format!(
+                "{path}: the load-order preamble must be the one pointer line under the title"
+            ));
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "load order is restated:\n  {}",
+        problems.join("\n  ")
+    );
+}
+
+/// `how-presentation-works.md` keeps only present content: what the human
+/// sees, block order as attention order, the mental models and the worked
+/// contrast. The general steps and the self-check belong to the method.
+#[test]
+fn how_presentation_works_keeps_only_present_content() {
+    let text = std::fs::read_to_string(
+        repo_root()
+            .join("assets/base/agents/skills/cf-present/resources/how-presentation-works.md"),
+    )
+    .expect("how-presentation-works is readable");
+    for step in ["A", "B", "C", "D", "E", "F"] {
         assert!(
-            !text.contains("design-exploration board")
-                && text.contains("docs/verification/tsk-014-w5/"),
-            "{reference} must resolve the board reference to docs/verification/tsk-014-w5/"
+            !text.contains(&format!("### Step {step}")),
+            "how-presentation-works still carries Step {step}"
+        );
+    }
+    assert!(
+        !text.contains("Self-check"),
+        "how-presentation-works still carries the self-check the method owns"
+    );
+    for kept in [
+        "## 1. What the human actually encounters",
+        "**order of `blocks[]` = order of attention.**",
+        "## 2. Why structure is the presentation",
+        "## 4. Mental models for present blocks",
+        "## 5. Worked contrast (same facts, different thinking)",
+        "Work through `explanation-method.md` first",
+    ] {
+        assert!(
+            text.contains(kept),
+            "how-presentation-works lost present content: {kept}"
         );
     }
 }

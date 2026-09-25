@@ -1,25 +1,17 @@
 # `cf-docs-portal` visual craft
 
-**Required load order (do not skip):**
-
-1. [resources/utility-presentation-system.md](../resources/utility-presentation-system.md)
-   is the shared doctrine: composition rule, page classes, supported carriers, tokens
-2. This file is the portal profile: page composition gate, layers, verification
-3. [information-architecture.md](information-architecture.md) before source roots / layers
-4. [content-contract.md](content-contract.md) before source interpretation changes
-5. [operations.md](operations.md) before install / publish / acceptance evidence
-6. Prefer [resources/portal-page-shape.example.md](../resources/portal-page-shape.example.md)
-   as the shape of an explanatory page
+**Load order:** the one list in [SKILL.md](../SKILL.md).
 
 If a page violates the canonical resource’s anti-patterns or fails the portal
 composition gate, **do not** treat it as craft-complete. Fix sources or refuse
 decorative portal chrome.
 
 `cf-design` stays product-generic. This skill is **utility portal** only.
-Author repository sources for this project or any consuming project. Do not
-clone the evidence board (`docs/verification/tsk-014-w5/`, whose baselines are
-the negative controls) or copy present Comment chrome; draw figures to
-`resources/figure-grammar.md`.
+Author repository sources for this project or any consuming project, do not
+copy present Comment chrome, and draw figures to
+`resources/figure-grammar.md`. Prefer
+[resources/portal-page-shape.example.md](../resources/portal-page-shape.example.md)
+as the shape of an explanatory page.
 
 ---
 

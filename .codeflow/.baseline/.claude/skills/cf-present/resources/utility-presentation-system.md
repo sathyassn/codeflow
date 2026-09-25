@@ -1,11 +1,12 @@
 # Utility presentation system (shared skill resource)
 
 **Status:** normative for every `cf-present` and `cf-docs-portal` invocation.
-This file is byte-identical in both skills; the figure doctrine it points to is
-`figure-grammar.md` beside it, also byte-identical; the profile-specific rules
-live in each skill's `references/visual-craft.md`. The durable architecture
-record is `docs/architecture/utility-presentation.md` (ADR-0053, ADR-0063,
-ADR-0068).
+This file is byte-identical in both skills; the explanation method that comes
+before it is `explanation-method.md` beside it, and the figure doctrine it
+points to is `figure-grammar.md`, both also byte-identical; the
+profile-specific rules live in each skill's `references/visual-craft.md`. The
+durable architecture record is `docs/architecture/utility-presentation.md`
+(ADR-0053, ADR-0063, ADR-0068).
 **Product name:** CodeFlow **utility presentation system**.
 **Not:** product brand, consuming-app design system, free-form agent HTML, or
 internal exploration codenames.
@@ -29,10 +30,11 @@ The evidence board that settled this system is `docs/verification/tsk-014-w5/`:
 its `shared/svg.js` is the mark vocabulary the figure grammar distils, and its
 `baselines/` (plain chat, plain Markdown and plain HTML for every scorable
 surface) are the negative controls every figure must beat. It is **evidence
-only**: never re-render its cases, portal families or comments as a present
-session, a portal page, or product HTML. Each invocation applies the same craft
-to **new** subject matter. Comment is present-only chrome the runtime already
-owns; the portal has **no** Comment lifecycle.
+only**. Do not clone it: never re-render its cases, portal families or
+comments as a present session, a portal page, or product HTML. Each
+invocation applies the same craft to **new** subject matter. Comment is
+present-only chrome the runtime already owns; the portal has **no** Comment
+lifecycle.
 
 `cf-design` stays product-generic. It does not own this utility.
 
@@ -146,16 +148,10 @@ a teaser dump.
 
 ### Altitude grammar
 
-Figures lead at every altitude and in every how-to section; the full contract
-(reader question, families, prose role per altitude) is `figure-grammar.md`
-section 3.
-
-| Altitude | Job | Figure families |
-|----------|-----|-----------------|
-| **Concept** | What it is, who it is for, what it is not, in ~5s | structure, flow, extent |
-| **Architecture** | How the parts relate and where the boundaries are, in ~20s | structure, layering, derivation, graph |
-| **Technical** | What exactly holds, in what order, how far; evidence and gates | sequence, state, coverage, extent, with status, tables, code and diff for lookup |
-| **How-to section** | What to do, in what order, what proves it worked | sequence, state or extent |
+Figures lead at every altitude and in every how-to section. The altitude
+contract (reader question, families, prose role per altitude) is stated once,
+in `figure-grammar.md` section 3; the reader of each altitude is named in
+`explanation-method.md` stage 1.
 
 ### Type roles (author roles, not font names)
 
