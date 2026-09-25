@@ -52,6 +52,7 @@ TRANSCRIPT="$STUB_DIR/transcript"
 #   pane-delay  seconds `pane read` sleeps first, to model a stuck read
 #   start-out / start-rc   the reply and status of `agent start`
 #   get-out / get-rc       the reply and status of `agent get`
+#   enters / accept-at     Enters sent so far, and the one that is accepted
 {
   printf '#!/bin/sh\n'
   printf 'D=%s\n' "$STUB_DIR"
@@ -63,6 +64,10 @@ TRANSCRIPT="$STUB_DIR/transcript"
   printf '    exit "$(cat "$D/pane-rc")" ;;\n'
   printf '  "agent start") cat "$D/start-out"; exit "$(cat "$D/start-rc")" ;;\n'
   printf '  "agent get") cat "$D/get-out"; exit "$(cat "$D/get-rc")" ;;\n'
+  printf '  "pane send-keys")\n'
+  printf '    n=$(($(cat "$D/enters") + 1)); printf "%%s" "$n" >"$D/enters"\n'
+  printf '    [ "$n" -lt "$(cat "$D/accept-at")" ] || : >"$D/accepted"\n'
+  printf '    exit 0 ;;\n'
   printf 'esac\n'
   printf 'exit 0\n'
 } >"$STUB_DIR/herdr"
@@ -79,6 +84,9 @@ stub_herdr() {
   printf 'pane is busy\n' >"$STUB_DIR/start-out"
   printf '1' >"$STUB_DIR/get-rc"
   printf 'agent target not found\n' >"$STUB_DIR/get-out"
+  printf '0' >"$STUB_DIR/enters"
+  printf '99' >"$STUB_DIR/accept-at"
+  rm -f "$STUB_DIR/accepted"
 }
 
 # agent_get_json <pane> <tab> - the reply shape `herdr agent get` prints.
@@ -293,6 +301,143 @@ ok mutation.probe "without the guard an unreadable pane reads as answered" \
   "$([ "$_mutant_rc" = "$TRUST_GONE" ] && echo 0 || echo 1)"
 
 # ---------------------------------------------------------------------------
+# deliver_turn: the settle pause and the evidence-gated re-Enter
+# ---------------------------------------------------------------------------
+#
+# The stub herdr counts Enters and writes `accepted` on the one named in
+# accept-at; the stub candidate answers `delegate wait` with 0 once that file
+# exists and with the timeout exit 124 until then. `pane read` prints
+# pane-text, the screen deliver_turn judges before any re-Enter.
+
+{
+  printf '#!/bin/sh\n'
+  printf 'D=%s\n' "$STUB_DIR"
+  printf 'printf "codeflow %%s\\n" "$*" >>"$D/calls"\n'
+  printf '[ -f "$D/accepted" ] && exit 0\n'
+  printf 'echo "timed out"; exit 124\n'
+} >"$STUB_DIR/cf-stub"
+chmod 0755 "$STUB_DIR/cf-stub"
+# shellcheck disable=SC2034 # read by cf() in lib.sh
+BINARY="$STUB_DIR/cf-stub"
+printf 'Reply with exactly: ok. Do not edit any file.' >"$STUB_DIR/prompt.txt"
+
+# The prompt still sitting in the input box, below an earlier turn.
+UNSENT_PANE='> earlier question
+● earlier answer
+────────────────
+❯ Reply with exactly: ok. Do not edit any file.
+────────────────'
+
+# The same prompt submitted: it is history now, and the input line is empty.
+SENT_PANE='❯ Reply with exactly: ok. Do not edit any file.
+● Working
+────────────────
+❯ 
+────────────────'
+
+# A long paste Claude collapsed into an attachment on the input line.
+PASTED_PANE='────────────────
+❯ [Pasted text #1 +12 lines]
+────────────────'
+
+# run_deliver <accept-at> <pane text> - deliver one turn against the stubs.
+run_deliver() {
+  stub_herdr "$2"
+  printf '%s' "$1" >"$STUB_DIR/accept-at"
+  deliver_turn p1 "$STUB_DIR/prompt.txt" run1 /tmp/state t1 && DELIVER_RC=0 || DELIVER_RC=$?
+  DELIVER_ENTERS=$(cat "$STUB_DIR/enters")
+  DELIVER_WAITS=$(grep -c '^codeflow delegate wait' "$STUB_DIR/calls" || true)
+  DELIVER_READS=$(grep -c '^pane read' "$STUB_DIR/calls" || true)
+}
+
+# Accepted on the first Enter, after the default settle pause.
+_began=$(date +%s)
+run_deliver 1 "$UNSENT_PANE"
+_took=$(($(date +%s) - _began))
+ok deliver_turn.first "accepted on the first Enter: one Enter, no pane read" \
+  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] && [ "$DELIVER_READS" = 0 ] && echo 0 || echo 1)"
+ok deliver_turn.settle "waits the 2 s settle between the text and Enter, took $_took s" \
+  "$([ "$_took" -ge 2 ] && echo 0 || echo 1)"
+ok deliver_turn.order "sends the text before the first Enter" \
+  "$(sed -n '1p' "$STUB_DIR/calls" | grep -qF 'pane send-text p1 Reply with exactly: ok.' &&
+     sed -n '2p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
+ok deliver_turn.probe "probes acceptance of this turn for 5 s" \
+  "$(grep -qF 'delegate wait --run-id run1 --state-dir /tmp/state --until accepted --turn-id t1 --timeout-seconds 5' \
+     "$STUB_DIR/calls" && echo 0 || echo 1)"
+
+# shellcheck disable=SC2034 # read by deliver_turn in lib.sh
+DELIVER_SETTLE_SECONDS=0
+
+# The unsent prompt is visible on the input line: one re-Enter lands it.
+run_deliver 2 "$UNSENT_PANE"
+ok deliver_turn.reenter "unsent text on the input line gets one re-Enter, then acceptance" \
+  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 2 ] && [ "$DELIVER_WAITS" = 2 ] && echo 0 || echo 1)"
+ok deliver_turn.reenter "the re-Enter follows a visible-screen read and never resends the text" \
+  "$(grep -qF 'pane read p1 --source visible --lines 120' "$STUB_DIR/calls" &&
+     [ "$(grep -c 'pane send-text' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
+
+run_deliver 2 "$PASTED_PANE"
+ok deliver_turn.pasted "a paste attachment on the input line gets a re-Enter" \
+  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 2 ] && echo 0 || echo 1)"
+
+# Negative controls: not accepted, but no evidence of unsent text.
+run_deliver 99 "$SENT_PANE"
+ok deliver_turn.no_evidence "a submitted prompt in history with an empty input line gets no Enter" \
+  "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_ENTERS" = 1 ] && echo 0 || echo 1)"
+
+run_deliver 99 "$TRUSTED_PANE"
+ok deliver_turn.no_evidence "a screen without the prompt gets no Enter" \
+  "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_ENTERS" = 1 ] && echo 0 || echo 1)"
+
+stub_herdr "$UNSENT_PANE"
+printf '1' >"$STUB_DIR/pane-rc"
+printf '99' >"$STUB_DIR/accept-at"
+deliver_turn p1 "$STUB_DIR/prompt.txt" run1 /tmp/state t1 && _r=0 || _r=$?
+ok deliver_turn.unreadable "an unreadable pane is no evidence, so no Enter" \
+  "$([ "$_r" != 0 ] && [ "$(cat "$STUB_DIR/enters")" = 1 ] && echo 0 || echo 1)"
+
+# Still unsent after the one re-Enter: stop and fail.
+run_deliver 99 "$UNSENT_PANE"
+ok deliver_turn.bounded "still unsent after one re-Enter ends non-zero with two Enters" \
+  "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_ENTERS" = 2 ] && [ "$DELIVER_WAITS" = 2 ] && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
+# The live session's binding to the candidate
+# ---------------------------------------------------------------------------
+#
+# A pane whose startup put an installed codeflow first on PATH. The line the
+# harness runs in the pane must still resolve the candidate, and the binding
+# check must refuse anything else.
+
+mkdir -p "$STUB_DIR/candidate" "$STUB_DIR/installed"
+printf '#!/bin/sh\necho candidate\n' >"$STUB_DIR/candidate/codeflow"
+printf '#!/bin/sh\necho installed\n' >"$STUB_DIR/installed/codeflow"
+chmod 0755 "$STUB_DIR/candidate/codeflow" "$STUB_DIR/installed/codeflow"
+CANDIDATE="$STUB_DIR/candidate/codeflow"
+PANE_RECORD="$STUB_DIR/pane-codeflow"
+
+rm -f "$PANE_RECORD"
+_pane_out=$(PATH="$STUB_DIR/installed:$PATH" \
+  sh -c "$(pane_env_command "$STUB_DIR/candidate:$STUB_DIR/decoy" "$PANE_RECORD")")
+pane_codeflow_binding "$PANE_RECORD" "$CANDIDATE" && _r=0 || _r=1
+ok binding.pane "the pane line puts the candidate ahead of an installed codeflow" "$_r"
+ok binding.pane "the pane line still reports the tracked environment" \
+  "$([ "$_pane_out" = TRACKED=1 ] && echo 0 || echo 1)"
+
+# Negative control: the pane as it was before, with no export.
+rm -f "$PANE_RECORD"
+PATH="$STUB_DIR/installed:$PATH" sh -c 'command -v codeflow >"$1"' sh "$PANE_RECORD"
+pane_codeflow_binding "$PANE_RECORD" "$CANDIDATE" && _r=1 || _r=0
+ok binding.installed "an installed codeflow in the pane fails the binding" "$_r"
+ok binding.installed "the observed path names the installed binary" \
+  "$([ "$PANE_CF_PATH" = "$STUB_DIR/installed/codeflow" ] && echo 0 || echo 1)"
+
+rm -f "$PANE_RECORD"
+pane_codeflow_binding "$PANE_RECORD" "$CANDIDATE" && _r=1 || _r=0
+ok binding.missing "no recorded resolution fails the binding" \
+  "$([ "$_r" = 0 ] && [ "$PANE_CF_PATH" = "nothing recorded" ] && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
 # The option the operator drives all of this with
 # ---------------------------------------------------------------------------
 
@@ -306,6 +451,17 @@ ok qualify.sh "rejects a --trust-wait-seconds that is not a number" \
 ok qualify.sh "runs the trust branch through resolve_trust_prompt" \
   "$(grep -qF 'resolve_trust_prompt "$HERDR_PANE" "$HERDR_TAB"' \
      "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
+
+ok qualify.sh "both armed turns go through deliver_turn with their turn id" \
+  "$(grep -qF 'deliver_turn "$HERDR_PANE" "$WORK/delegate-prompt.txt" "$_run" "$_state" "$_turn"' \
+     "$SCRIPT_DIR/qualify.sh" &&
+     grep -qF 'deliver_turn "$HERDR_PANE" "$WORK/pipeline-prompt.txt" "$_run" "$_state" "$_turn2"' \
+     "$SCRIPT_DIR/qualify.sh" && ! grep -q '^deliver_turn()' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
+
+ok qualify.sh "exports the candidate into the live pane and records its binding" \
+  "$(grep -qF 'pane_env_command "$BIN_DIR:$DECOY_DIR" "$_pane_codeflow"' "$SCRIPT_DIR/qualify.sh" &&
+     grep -qF 'pane_codeflow_binding "$_pane_codeflow" "$BINARY"' "$SCRIPT_DIR/qualify.sh" &&
+     echo 0 || echo 1)"
 
 printf '\n%s check(s), %s failed\n' "$CHECKS" "$FAILED"
 [ "$FAILED" = 0 ]

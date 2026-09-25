@@ -947,48 +947,169 @@ fn portal_bundle_is_single_complete_and_bounded() {
 /// The repository guide is the first consumer of the shipped starter. Keep
 /// project-owned configuration independent, but require every reusable starter
 /// file to exist and remain byte-identical so a dogfood-only fix cannot pass
-/// while consumers receive stale runtime or tests.
+/// while consumers receive stale runtime or tests. The check runs here and not
+/// in the starter's own tests, because a consumer has no second copy to
+/// compare against.
 #[test]
 fn portal_dogfood_runtime_matches_the_shipped_starter() {
     let root = repo_root();
-    let starter = root.join("assets/docs-portal/starter");
-    let dogfood = root.join("docs-portal");
-    let mut problems = Vec::new();
-    // Match the exact dependency-tree exclusion in EmbeddedAssets without
-    // excluding any authored starter file or weakening the parity inventory.
-    let sources: Vec<PathBuf> = std::fs::read_dir(&starter)
-        .expect("starter directory is readable")
-        .map(|entry| entry.expect("starter entry is readable").path())
-        .filter(|path| path.file_name().is_none_or(|name| name != "node_modules"))
-        .flat_map(|path| {
-            if path.is_dir() {
-                walk_files(&path)
-            } else {
-                vec![path]
-            }
-        })
-        .collect();
-    for source in sources {
-        let relative = rel(&starter, &source);
-        if relative == "portal.config.json" {
-            continue;
-        }
-        let deployed = dogfood.join(&relative);
-        if !deployed.is_file() {
-            problems.push(format!("missing dogfood file {relative}"));
-            continue;
-        }
-        if std::fs::read(&source).expect("read starter portal file")
-            != std::fs::read(&deployed).expect("read dogfood portal file")
-        {
-            problems.push(format!("byte drift at {relative}"));
-        }
-    }
+    let starter_files = git_inventory(&root, "assets/docs-portal/starter");
+    let dogfood_files = git_inventory(&root, "docs-portal");
+    assert!(!starter_files.is_empty(), "the starter lists no files");
+    assert!(!dogfood_files.is_empty(), "docs-portal lists no files");
+    let problems = portal_mirror_drift(
+        &root.join("assets/docs-portal/starter"),
+        &starter_files,
+        &root.join("docs-portal"),
+        &dogfood_files,
+    );
     assert!(
         problems.is_empty(),
         "docs-portal diverged from the shipped reusable starter:\n  {}",
         problems.join("\n  ")
     );
+}
+
+#[test]
+fn portal_mirror_drift_names_each_perturbed_copy() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    let repo = root.path();
+    // No template, so the fixture never copies sample hooks.
+    let init = std::process::Command::new("git")
+        .args(["init", "-q", "--template="])
+        .arg(repo)
+        .output()
+        .expect("git is available for the parity fixture");
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let starter = repo.join("starter");
+    let dogfood = repo.join("dogfood");
+    for side in [&starter, &dogfood] {
+        std::fs::create_dir_all(side.join("scripts")).expect("create scripts");
+        std::fs::write(side.join(".gitignore"), "node_modules/\ndist/\n").expect("write");
+        std::fs::write(side.join("scripts/gate.mjs"), "export const gate = 1;\n").expect("write");
+        std::fs::write(side.join("portal.config.json"), "{}\n").expect("write");
+    }
+    std::fs::write(dogfood.join("portal.config.json"), "{\"title\":\"own\"}\n").expect("write");
+    // Ignored dependency and build output on the starter side only.
+    std::fs::create_dir_all(starter.join("node_modules/pkg")).expect("create node_modules");
+    std::fs::write(starter.join("node_modules/pkg/index.js"), "1\n").expect("write");
+    std::fs::create_dir_all(starter.join("dist")).expect("create dist");
+    std::fs::write(starter.join("dist/index.html"), "<html></html>\n").expect("write");
+    let drift = || {
+        portal_mirror_drift(
+            &starter,
+            &git_inventory(repo, "starter"),
+            &dogfood,
+            &git_inventory(repo, "dogfood"),
+        )
+    };
+    // Project-owned configuration and ignored output are out of scope.
+    assert_eq!(drift(), Vec::<String>::new());
+    std::fs::write(dogfood.join("scripts/gate.mjs"), "export const gate = 2;\n").expect("write");
+    assert_eq!(drift(), vec!["byte drift at scripts/gate.mjs".to_owned()]);
+    std::fs::remove_file(dogfood.join("scripts/gate.mjs")).expect("remove");
+    assert_eq!(
+        drift(),
+        vec!["missing dogfood file scripts/gate.mjs".to_owned()]
+    );
+    // A case-only rename resolves through either spelling on a
+    // case-insensitive filesystem, so only the exact names reveal it.
+    std::fs::write(dogfood.join("scripts/GATE.mjs"), "export const gate = 1;\n").expect("write");
+    assert_eq!(
+        drift(),
+        vec![
+            "missing dogfood file scripts/gate.mjs".to_owned(),
+            "scripts/GATE.mjs is in docs-portal but not in the shipped starter".to_owned(),
+        ]
+    );
+    std::fs::remove_file(dogfood.join("scripts/GATE.mjs")).expect("remove");
+    std::fs::write(dogfood.join("scripts/gate.mjs"), "export const gate = 1;\n").expect("write");
+    assert_eq!(drift(), Vec::<String>::new());
+    std::fs::write(
+        dogfood.join("scripts/extra.mjs"),
+        "export const extra = 1;\n",
+    )
+    .expect("write");
+    assert_eq!(
+        drift(),
+        vec!["scripts/extra.mjs is in docs-portal but not in the shipped starter".to_owned()]
+    );
+}
+
+/// Files under `dir` (relative to the repository at `root`) that Git tracks or
+/// would track: untracked files count before they are staged, and ignored
+/// dependency or build output never does. Paths are relative to `dir`.
+fn git_inventory(root: &Path, dir: &str) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            dir,
+        ])
+        .output()
+        .expect("git is available for portal parity verification");
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let prefix = format!("{dir}/");
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).replace('\\', "/"))
+        .map(|path| {
+            path.strip_prefix(&prefix)
+                .unwrap_or_else(|| panic!("{path} is not under {dir}"))
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Differences between the shipped starter and the dogfood portal. The exact
+/// relative names are compared as strings in both directions, so a case-only
+/// rename is reported even where the filesystem resolves either spelling;
+/// bytes are compared only for names present on both sides.
+/// `portal.config.json` is project-owned, so only its presence is compared.
+fn portal_mirror_drift(
+    starter: &Path,
+    starter_files: &[String],
+    dogfood: &Path,
+    dogfood_files: &[String],
+) -> Vec<String> {
+    let starter_names: BTreeSet<&str> = starter_files.iter().map(String::as_str).collect();
+    let dogfood_names: BTreeSet<&str> = dogfood_files.iter().map(String::as_str).collect();
+    let mut problems: Vec<String> =
+        starter_names
+            .difference(&dogfood_names)
+            .map(|relative| format!("missing dogfood file {relative}"))
+            .chain(dogfood_names.difference(&starter_names).map(|relative| {
+                format!("{relative} is in docs-portal but not in the shipped starter")
+            }))
+            .collect();
+    for relative in starter_names.intersection(&dogfood_names) {
+        if *relative == "portal.config.json" {
+            continue;
+        }
+        if std::fs::read(starter.join(relative)).expect("read starter portal file")
+            != std::fs::read(dogfood.join(relative)).expect("read dogfood portal file")
+        {
+            problems.push(format!("byte drift at {relative}"));
+        }
+    }
+    problems.sort();
+    problems
 }
 
 #[test]
