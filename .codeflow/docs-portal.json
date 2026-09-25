@@ -234,7 +234,7 @@
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "8f06985931dc5be5281742c1b031cf8ee171d2e2510338b3242c802ddb95d035"
+      "pristine_sha256": "ec0be1450634815a15657a2e637e0322a49b1ad85f50fd700a664c22004711d5"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",

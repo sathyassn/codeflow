@@ -123,7 +123,7 @@ test("a coverage grid is not boxed text and its narrow labels clear the cells th
 // does not clear the form, and a container box whose bound label sits beside
 // it is still a text box. Bars and cells with their labels beside them, bound
 // or not, are marks, so an extent of bars and a coverage grid pass.
-test("rule 7 finds labels in boxes however the rest of the figure is drawn", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+test("rule 7 finds labels in boxes however the rest of the figure is drawn", { skip: process.platform === "win32", timeout: 300_000 }, async () => {
   const boxed = await specimen("controls/boxed-text.json");
   const variant = (change) => { const copy = structuredClone(boxed); for (const name of ["wide", "narrow"]) change(copy.figure[name].draw, name); return copy; };
   const padded = variant((draw, name) => draw.push({ state: "part", shape: "rect", x: 20, y: name === "wide" ? 110 : 150, w: 16, h: 16, id: "empty" }));
@@ -142,16 +142,18 @@ test("rule 7 finds labels in boxes however the rest of the figure is drawn", { s
   const coverage = await specimen("controls/coverage-derived.json");
   const coverageBound = bindDerivedData(coverage.figure, (relative) => (relative === "config/signing.json" ? SIGNING : null));
   const css = await sheet();
-  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
-  try {
-    const page = await browser.newPage();
-    const sevens = async (declaration, bound = null) => figureRuleFailures(await probe(page, css, renderFigure(declaration, { idPrefix: "r", bound }))).filter((failure) => failure.rule === 7).map((failure) => failure.message);
-    for (const [name, declaration] of Object.entries({ boxed, padded, unlabelled, beside })) {
-      assert.deepEqual(await sevens(declaration), ["wide", "narrow", "wide dark", "narrow dark"].map((label) => `${label}: labels sit in boxes with nothing drawn between them`), name);
-    }
-    assert.deepEqual(await sevens(bars, barsBound), [], "extent bars with bound value labels");
-    assert.deepEqual(await sevens(coverage, coverageBound), [], "coverage cells with bound column names");
-  } finally { await browser.close(); }
+  for (const [engineName, engine] of Object.entries({ chromium, webkit, firefox })) {
+    const browser = await engine.launch({ headless: true, env: hardenedChildEnvironment() });
+    try {
+      const page = await browser.newPage();
+      const sevens = async (declaration, bound = null) => figureRuleFailures(await probe(page, css, renderFigure(declaration, { idPrefix: "r", bound }))).filter((failure) => failure.rule === 7).map((failure) => failure.message);
+      for (const [name, declaration] of Object.entries({ boxed, padded, unlabelled, beside })) {
+        assert.deepEqual(await sevens(declaration), ["wide", "narrow", "wide dark", "narrow dark"].map((label) => `${label}: labels sit in boxes with nothing drawn between them`), `${engineName}, ${name}`);
+      }
+      assert.deepEqual(await sevens(bars, barsBound), [], `${engineName}, extent bars with bound value labels`);
+      assert.deepEqual(await sevens(coverage, coverageBound), [], `${engineName}, coverage cells with bound column names`);
+    } finally { await browser.close(); }
+  }
 });
 
 // Rule 6 reads the bars and limits themselves: a render whose marks or value
