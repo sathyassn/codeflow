@@ -1,0 +1,365 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "architecture-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What are the three areas of this repository, and what does each own?",
+    "idea": "The engine and the scaffold ship inside one binary, and the docs stay in the repository.",
+    "title": "The three areas and what ships in the binary",
+    "kicker": "Repository areas",
+    "caption": "Code and scaffold become the one binary a consumer installs, while this repository's docs describe it and are never shipped.",
+    "states": [
+      {
+        "name": "area",
+        "mark": "layer",
+        "means": "Ships inside the binary"
+      },
+      {
+        "name": "record",
+        "mark": "optional",
+        "means": "Stays in the repository"
+      },
+      {
+        "name": "seeds",
+        "mark": "trans",
+        "means": "Seeds from templates"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the three areas are engine, scaffold and docs",
+        "source": "AGENTS.md#project-specific-instructions",
+        "derive": "the Areas bullet",
+        "check": {
+          "kind": "contains",
+          "text": "`engine` = `crates/codeflow-core` + `crates/codeflow-cli` +"
+        },
+        "value": true
+      },
+      {
+        "claim": "assets are embedded into the binary",
+        "source": "crates/codeflow-cli/src/embedded.rs",
+        "derive": "the rust-embed folder attribute",
+        "check": {
+          "kind": "contains",
+          "text": "#[folder = \"../../assets/\"]"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 240,
+      "draw": [
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 16,
+          "y": 30,
+          "w": 474,
+          "h": 150
+        },
+        {
+          "text": "ships in the codeflow binary",
+          "x": 32,
+          "y": 52,
+          "style": "head"
+        },
+        {
+          "state": "area",
+          "shape": "rect",
+          "x": 32,
+          "y": 66,
+          "w": 224,
+          "h": 98,
+          "rx": 8,
+          "id": "e"
+        },
+        {
+          "text": "engine",
+          "x": 48,
+          "y": 90,
+          "style": "strong",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "text": "crates/codeflow-core",
+          "x": 48,
+          "y": 114,
+          "style": "mono",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "text": "crates/codeflow-cli",
+          "x": 48,
+          "y": 134,
+          "style": "mono",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "text": "crates/codeflow-present",
+          "x": 48,
+          "y": 154,
+          "style": "mono",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "state": "area",
+          "shape": "rect",
+          "x": 272,
+          "y": 66,
+          "w": 202,
+          "h": 98,
+          "rx": 8,
+          "id": "s"
+        },
+        {
+          "text": "scaffold",
+          "x": 288,
+          "y": 90,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "assets/base",
+          "x": 288,
+          "y": 114,
+          "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "assets/docs-portal",
+          "x": 288,
+          "y": 134,
+          "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "record",
+          "shape": "rect",
+          "x": 520,
+          "y": 66,
+          "w": 184,
+          "h": 98,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "docs",
+          "x": 536,
+          "y": 90,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "docs/",
+          "x": 536,
+          "y": 114,
+          "style": "mono",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "stays in the repo",
+          "x": 536,
+          "y": 146,
+          "style": "mute",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "seeds",
+          "shape": "path",
+          "d": "M372 166V204H612V168",
+          "head": "end",
+          "id": "k"
+        },
+        {
+          "text": "init seeds a consumer's own docs from templates",
+          "x": 372,
+          "y": 226,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 352,
+      "draw": [
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 8,
+          "y": 26,
+          "w": 344,
+          "h": 222
+        },
+        {
+          "text": "ships in the codeflow binary",
+          "x": 20,
+          "y": 48,
+          "style": "head"
+        },
+        {
+          "state": "area",
+          "shape": "rect",
+          "x": 20,
+          "y": 62,
+          "w": 320,
+          "h": 84,
+          "rx": 8,
+          "id": "e"
+        },
+        {
+          "text": "engine",
+          "x": 34,
+          "y": 86,
+          "style": "strong",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "text": "crates/codeflow-core, -cli,",
+          "x": 34,
+          "y": 110,
+          "style": "mono",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "text": "-present",
+          "x": 34,
+          "y": 130,
+          "style": "mono",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "state": "area",
+          "shape": "rect",
+          "x": 20,
+          "y": 158,
+          "w": 320,
+          "h": 76,
+          "rx": 8,
+          "id": "s"
+        },
+        {
+          "text": "scaffold",
+          "x": 34,
+          "y": 182,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "assets/base, assets/docs-portal",
+          "x": 34,
+          "y": 206,
+          "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "seeds",
+          "shape": "path",
+          "d": "M60 236V278",
+          "head": "end",
+          "id": "k"
+        },
+        {
+          "text": "init seeds a consumer's docs",
+          "x": 78,
+          "y": 262,
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "state": "record",
+          "shape": "rect",
+          "x": 8,
+          "y": 282,
+          "w": 344,
+          "h": 60,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "docs",
+          "x": 24,
+          "y": 306,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "docs/  stays in the repo",
+          "x": 24,
+          "y": 330,
+          "style": "mono",
+          "for": [
+            "d"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Area",
+        "Paths",
+        "Ships in the binary"
+      ],
+      "rows": [
+        [
+          "engine",
+          "`crates/codeflow-core`, `crates/codeflow-cli`, `crates/codeflow-present`",
+          "yes"
+        ],
+        [
+          "scaffold",
+          "`assets/base`, `assets/docs-portal`",
+          "yes, embedded"
+        ],
+        [
+          "docs",
+          "`docs/`",
+          "no; `init` seeds a consumer's own docs from templates"
+        ]
+      ]
+    }
+  }
+}

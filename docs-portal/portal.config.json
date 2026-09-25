@@ -74,7 +74,25 @@
     { "declaration": "docs-portal/figures/troubleshooting/concept.json", "route": "guides/troubleshooting", "panel": "concept" },
     { "declaration": "docs-portal/figures/troubleshooting/architecture.json", "route": "guides/troubleshooting", "panel": "architecture" },
     { "declaration": "docs-portal/figures/troubleshooting/technical.json", "route": "guides/troubleshooting", "panel": "technical" },
-    { "declaration": "docs-portal/figures/troubleshooting/howto-fix.json", "route": "guides/troubleshooting", "panel": "technical", "anchor": "fix-a-failing-check" }
+    { "declaration": "docs-portal/figures/troubleshooting/howto-fix.json", "route": "guides/troubleshooting", "panel": "technical", "anchor": "fix-a-failing-check" },
+    { "declaration": "docs-portal/figures/architecture/concept.json", "route": "system/architecture", "panel": "concept" },
+    { "declaration": "docs-portal/figures/architecture/architecture.json", "route": "system/architecture", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/architecture/technical.json", "route": "system/architecture", "panel": "technical" },
+    { "declaration": "docs-portal/figures/enforcement-planes/concept.json", "route": "system/architecture/enforcement-planes", "panel": "concept" },
+    { "declaration": "docs-portal/figures/enforcement-planes/architecture.json", "route": "system/architecture/enforcement-planes", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/enforcement-planes/technical.json", "route": "system/architecture/enforcement-planes", "panel": "technical" },
+    { "declaration": "docs-portal/figures/present/concept.json", "route": "system/architecture/present", "panel": "concept" },
+    { "declaration": "docs-portal/figures/present/architecture.json", "route": "system/architecture/present", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/present/technical.json", "route": "system/architecture/present", "panel": "technical" },
+    { "declaration": "docs-portal/figures/utility-presentation/concept.json", "route": "system/architecture/utility-presentation", "panel": "concept" },
+    { "declaration": "docs-portal/figures/utility-presentation/architecture.json", "route": "system/architecture/utility-presentation", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/utility-presentation/technical.json", "route": "system/architecture/utility-presentation", "panel": "technical" },
+    { "declaration": "docs-portal/figures/harness-posture/concept.json", "route": "system/harness-posture", "panel": "concept" },
+    { "declaration": "docs-portal/figures/harness-posture/architecture.json", "route": "system/harness-posture", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/harness-posture/technical.json", "route": "system/harness-posture", "panel": "technical" },
+    { "declaration": "docs-portal/figures/decision-map/concept.json", "route": "system/decision-map", "panel": "concept" },
+    { "declaration": "docs-portal/figures/decision-map/architecture.json", "route": "system/decision-map", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/decision-map/technical.json", "route": "system/decision-map", "panel": "technical" }
   ],
   "base": "/"
 }

@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "architecture-build",
+    "family": "derivation",
+    "binding": "authored",
+    "question": "How do the crates and the assets become one binary, and what checks the scaffold?",
+    "idea": "Cargo builds the crates and rust-embed folds the assets into one binary, and a test fails the build when an asset or mirror drifts.",
+    "title": "How the binary is made and what checks it",
+    "kicker": "The build",
+    "caption": "The scaffold a consumer receives is the assets tree embedded at build time, held honest by the manifest test.",
+    "states": [
+      {
+        "name": "source",
+        "mark": "layer-remote",
+        "means": "Source tree"
+      },
+      {
+        "name": "transform",
+        "mark": "merge",
+        "means": "Build step"
+      },
+      {
+        "name": "product",
+        "mark": "state",
+        "means": "Product"
+      },
+      {
+        "name": "derives",
+        "mark": "trans",
+        "means": "Derives"
+      },
+      {
+        "name": "compares",
+        "mark": "blocked",
+        "means": "Compared"
+      },
+      {
+        "name": "check",
+        "mark": "human",
+        "means": "Test that fails the build"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "assets are embedded with rust-embed",
+        "source": "crates/codeflow-cli/src/embedded.rs",
+        "derive": "the folder attribute",
+        "check": {
+          "kind": "contains",
+          "text": "#[folder = \"../../assets/\"]"
+        },
+        "value": true
+      },
+      {
+        "claim": "the manifest_consistency test enforces manifest entries and mirrors",
+        "source": "AGENTS.md#project-specific-instructions",
+        "derive": "the managed artifact bullet",
+        "check": {
+          "kind": "contains",
+          "text": "The `manifest_consistency` test"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 256,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 188,
+          "h": 44,
+          "rx": 4,
+          "cap": "end",
+          "id": "c"
+        },
+        {
+          "text": "crates/",
+          "x": 110,
+          "y": 67,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 120,
+          "w": 188,
+          "h": 44,
+          "rx": 4,
+          "cap": "end",
+          "id": "a"
+        },
+        {
+          "text": "assets/",
+          "x": 110,
+          "y": 147,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M204 62C240 62 250 100 286 100",
+          "head": "end",
+          "id": "d1"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M204 142C240 142 250 104 286 104",
+          "head": "end",
+          "id": "d2"
+        },
+        {
+          "state": "transform",
+          "shape": "diamond",
+          "cx": 320,
+          "cy": 102,
+          "r": 32,
+          "id": "tf"
+        },
+        {
+          "text": "cargo build",
+          "x": 320,
+          "y": 58,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "tf"
+          ]
+        },
+        {
+          "text": "rust-embed",
+          "x": 320,
+          "y": 158,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "tf"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M354 102H452",
+          "head": "end",
+          "id": "d3"
+        },
+        {
+          "state": "product",
+          "shape": "rect",
+          "x": 454,
+          "y": 78,
+          "w": 170,
+          "h": 48,
+          "rx": 4,
+          "id": "b"
+        },
+        {
+          "text": "one codeflow binary",
+          "x": 539,
+          "y": 107,
+          "anchor": "middle",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 110,
+          "cy": 214,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M110 166V200",
+          "square": "end",
+          "id": "k1"
+        },
+        {
+          "text": "manifest_consistency test",
+          "x": 132,
+          "y": 219,
+          "style": "mono",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "each asset listed, each skill mirror identical",
+          "x": 132,
+          "y": 243,
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 306,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 12,
+          "w": 160,
+          "h": 40,
+          "rx": 4,
+          "cap": "end",
+          "id": "c"
+        },
+        {
+          "text": "crates/",
+          "x": 88,
+          "y": 37,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 192,
+          "y": 12,
+          "w": 160,
+          "h": 40,
+          "rx": 4,
+          "cap": "end",
+          "id": "a"
+        },
+        {
+          "text": "assets/",
+          "x": 272,
+          "y": 37,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M88 54C88 80 160 84 170 96",
+          "head": "end",
+          "id": "d1"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M272 54C272 80 200 84 190 96",
+          "head": "end",
+          "id": "d2"
+        },
+        {
+          "state": "transform",
+          "shape": "diamond",
+          "cx": 180,
+          "cy": 124,
+          "r": 26,
+          "id": "tf"
+        },
+        {
+          "text": "cargo build",
+          "x": 150,
+          "y": 120,
+          "anchor": "end",
+          "style": "mono",
+          "for": [
+            "tf"
+          ]
+        },
+        {
+          "text": "rust-embed",
+          "x": 210,
+          "y": 138,
+          "style": "mono",
+          "for": [
+            "tf"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M180 152V186",
+          "head": "end",
+          "id": "d3"
+        },
+        {
+          "state": "product",
+          "shape": "rect",
+          "x": 90,
+          "y": 188,
+          "w": 180,
+          "h": 40,
+          "rx": 4,
+          "id": "b"
+        },
+        {
+          "text": "one codeflow binary",
+          "x": 180,
+          "y": 213,
+          "anchor": "middle",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M330 54V262H224",
+          "square": "end",
+          "id": "k1"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 210,
+          "cy": 262,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "text": "manifest_consistency",
+          "x": 196,
+          "y": 267,
+          "anchor": "end",
+          "style": "mono",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "assets listed, mirrors identical",
+          "x": 8,
+          "y": 296,
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "Step",
+        "To",
+        "Checked by"
+      ],
+      "rows": [
+        [
+          "`crates/`",
+          "`cargo build`",
+          "one `codeflow` binary",
+          "the Rust test suite"
+        ],
+        [
+          "`assets/`",
+          "rust-embed",
+          "the embedded scaffold",
+          "`manifest_consistency`: every asset listed, every skill mirror identical"
+        ]
+      ]
+    }
+  }
+}

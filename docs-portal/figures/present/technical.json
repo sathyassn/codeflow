@@ -1,0 +1,430 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "present-feedback-states",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state is a feedback note in, and which moves does the ledger refuse?",
+    "idea": "A note is received, then delivered, then addressed or dismissed, and the ledger refuses any skipped step or any move after the end.",
+    "title": "The states of a feedback note",
+    "kicker": "Feedback ledger",
+    "caption": "Replay accepts only the forward path, so a note is resolved only after the agent has received it and never changes once resolved.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "State of a note"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Allowed move"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Refused move"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "replay rejects resolution before delivery and every post-terminal transition",
+        "source": "docs/architecture/present.md#technical",
+        "derive": "the ledger replay row",
+        "check": {
+          "kind": "contains",
+          "text": "resolution before delivery, and every post-terminal transition"
+        },
+        "value": true
+      },
+      {
+        "claim": "resolve appends addressed or dismissed state",
+        "source": "docs/architecture/present.md#technical",
+        "derive": "the agent-side resolve row",
+        "check": {
+          "kind": "contains",
+          "text": "appends addressed or dismissed state"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 210,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 20,
+          "y": 60,
+          "w": 110,
+          "h": 36,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "received",
+          "x": 75,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 60,
+          "w": 110,
+          "h": 36,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "delivered",
+          "x": 255,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 400,
+          "y": 20,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "a"
+        },
+        {
+          "text": "addressed",
+          "x": 460,
+          "y": 43,
+          "anchor": "middle",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 400,
+          "y": 104,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "x"
+        },
+        {
+          "text": "dismissed",
+          "x": 460,
+          "y": 127,
+          "anchor": "middle",
+          "for": [
+            "x"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M132 78H198",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M312 70C350 70 360 38 398 38",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M312 86C350 86 360 122 398 122",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "text": "agent reads it",
+          "x": 165,
+          "y": 42,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "text": "resolve",
+          "x": 356,
+          "y": 30,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M75 98C75 190 460 190 460 142",
+          "cross": {
+            "cx": 268,
+            "cy": 170,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "resolve before delivery",
+          "x": 268,
+          "y": 196,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M522 38H600V122H522",
+          "cross": {
+            "cx": 600,
+            "cy": 80,
+            "size": 12
+          },
+          "id": "f2"
+        },
+        {
+          "text": "no move after",
+          "x": 614,
+          "y": 76,
+          "style": "mute",
+          "for": [
+            "f2"
+          ]
+        },
+        {
+          "text": "a terminal state",
+          "x": 614,
+          "y": 96,
+          "style": "mute",
+          "for": [
+            "f2"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 300,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 12,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "received",
+          "x": 68,
+          "y": 35,
+          "anchor": "middle",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M68 50V90",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "agent reads it",
+          "x": 84,
+          "y": 76,
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 92,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "delivered",
+          "x": 68,
+          "y": 115,
+          "anchor": "middle",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M40 130V180",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M110 130L222 180",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "text": "resolve",
+          "x": 50,
+          "y": 160,
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 182,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "a"
+        },
+        {
+          "text": "addressed",
+          "x": 68,
+          "y": 205,
+          "anchor": "middle",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 172,
+          "y": 182,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "x"
+        },
+        {
+          "text": "dismissed",
+          "x": 232,
+          "y": 205,
+          "anchor": "middle",
+          "for": [
+            "x"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M130 30H330V178",
+          "cross": {
+            "cx": 330,
+            "cy": 104,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "resolve before",
+          "x": 318,
+          "y": 98,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "text": "delivery",
+          "x": 318,
+          "y": 118,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M68 222V260H232V222",
+          "cross": {
+            "cx": 150,
+            "cy": 260,
+            "size": 12
+          },
+          "id": "f2"
+        },
+        {
+          "text": "no move after a terminal state",
+          "x": 180,
+          "y": 288,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f2"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "Allowed"
+      ],
+      "rows": [
+        [
+          "received",
+          "delivered",
+          "yes, when the agent reads feedback"
+        ],
+        [
+          "delivered",
+          "addressed or dismissed",
+          "yes, through `resolve` at the current version"
+        ],
+        [
+          "received",
+          "addressed or dismissed",
+          "no, resolution before delivery is refused"
+        ],
+        [
+          "addressed or dismissed",
+          "any state",
+          "no, terminal"
+        ]
+      ]
+    }
+  }
+}

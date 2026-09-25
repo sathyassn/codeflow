@@ -1,0 +1,415 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "present-architecture",
+    "family": "structure",
+    "binding": "authored",
+    "question": "How do revisions, feedback and the quota relate across a session's state?",
+    "idea": "Only the durable authority's revisions and feedback are quota-governed history; the runtime root and the browser profile are derived and bounded separately.",
+    "title": "Where a review session keeps its state",
+    "kicker": "Session state",
+    "caption": "Revisions and feedback are the only history the quota governs, and nothing the browser keeps ever becomes authority.",
+    "states": [
+      {
+        "name": "owner",
+        "mark": "layer-remote",
+        "means": "Durable authority"
+      },
+      {
+        "name": "quota",
+        "mark": "optional",
+        "means": "Quota-governed history"
+      },
+      {
+        "name": "runtime",
+        "mark": "layer",
+        "means": "Derived, owner-private"
+      },
+      {
+        "name": "cache",
+        "mark": "denied",
+        "means": "Browser cache, never authority"
+      },
+      {
+        "name": "derives",
+        "mark": "trans",
+        "means": "Derives"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "immutable revisions and feedback are the only quota-governed history",
+        "source": "docs/architecture/present.md#architecture",
+        "derive": "the quota sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Immutable revisions and feedback are the only quota-governed history."
+        },
+        "value": true
+      },
+      {
+        "claim": "the lock order is project mutation, session, runtime control",
+        "source": "docs/architecture/present.md#architecture",
+        "derive": "the lock order sentence",
+        "check": {
+          "kind": "contains",
+          "text": "project mutation, then session, then runtime"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 250,
+      "draw": [
+        {
+          "state": "owner",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 240,
+          "h": 170,
+          "rx": 8,
+          "cap": "end",
+          "id": "d"
+        },
+        {
+          "text": "durable authority",
+          "x": 32,
+          "y": 64,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "versioned document",
+          "x": 32,
+          "y": 90,
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "quota",
+          "shape": "rect",
+          "x": 26,
+          "y": 104,
+          "w": 220,
+          "h": 72,
+          "rx": 6,
+          "id": "q"
+        },
+        {
+          "text": "immutable revisions",
+          "x": 40,
+          "y": 128,
+          "for": [
+            "q",
+            "d"
+          ]
+        },
+        {
+          "text": "feedback ledger",
+          "x": 40,
+          "y": 152,
+          "for": [
+            "q",
+            "d"
+          ]
+        },
+        {
+          "text": "quota-governed history",
+          "x": 32,
+          "y": 198,
+          "style": "mute",
+          "for": [
+            "q",
+            "d"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M258 100H300",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "runtime",
+          "shape": "rect",
+          "x": 302,
+          "y": 40,
+          "w": 204,
+          "h": 170,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "derived runtime root",
+          "x": 318,
+          "y": 64,
+          "style": "strong",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "bootstrap",
+          "x": 318,
+          "y": 90,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "ready",
+          "x": 318,
+          "y": 114,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "launch recovery",
+          "x": 318,
+          "y": 138,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "its own exact budget",
+          "x": 318,
+          "y": 198,
+          "style": "mute",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M508 100H550",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "cache",
+          "shape": "rect",
+          "x": 552,
+          "y": 40,
+          "w": 152,
+          "h": 170,
+          "rx": 8,
+          "cross": {
+            "cx": 684,
+            "cy": 130,
+            "size": 12
+          },
+          "id": "b"
+        },
+        {
+          "text": "browser profile",
+          "x": 568,
+          "y": 64,
+          "style": "strong",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "cache only",
+          "x": 568,
+          "y": 90,
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "never authority",
+          "x": 568,
+          "y": 198,
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "lock order: project mutation, then session, then runtime control",
+          "x": 16,
+          "y": 238,
+          "style": "mute"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 360,
+      "draw": [
+        {
+          "state": "owner",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 118,
+          "rx": 8,
+          "cap": "end",
+          "id": "d"
+        },
+        {
+          "text": "durable authority",
+          "x": 22,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "text": "versioned document",
+          "x": 22,
+          "y": 56,
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "quota",
+          "shape": "rect",
+          "x": 16,
+          "y": 70,
+          "w": 320,
+          "h": 48,
+          "rx": 6,
+          "id": "q"
+        },
+        {
+          "text": "revisions, feedback: quota-governed",
+          "x": 28,
+          "y": 99,
+          "for": [
+            "q",
+            "d"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M60 130V156",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "runtime",
+          "shape": "rect",
+          "x": 8,
+          "y": 158,
+          "w": 344,
+          "h": 80,
+          "rx": 8,
+          "id": "r"
+        },
+        {
+          "text": "derived runtime root",
+          "x": 22,
+          "y": 182,
+          "style": "strong",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "bootstrap, ready, launch recovery",
+          "x": 22,
+          "y": 204,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "its own exact budget",
+          "x": 22,
+          "y": 226,
+          "style": "mute",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M60 244V270",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "cache",
+          "shape": "rect",
+          "x": 8,
+          "y": 272,
+          "w": 344,
+          "h": 52,
+          "rx": 8,
+          "cross": {
+            "cx": 330,
+            "cy": 298,
+            "size": 12
+          },
+          "id": "b"
+        },
+        {
+          "text": "browser profile",
+          "x": 22,
+          "y": 294,
+          "style": "strong",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "cache only, never authority",
+          "x": 22,
+          "y": 314,
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "lock order: project, session, runtime",
+          "x": 8,
+          "y": 348,
+          "style": "mute"
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "State",
+        "Holds",
+        "Governed by"
+      ],
+      "rows": [
+        [
+          "durable authority",
+          "versioned document, immutable revisions, feedback ledger",
+          "the quota, for revisions and feedback"
+        ],
+        [
+          "derived runtime root",
+          "bootstrap, ready, launch-recovery controls",
+          "its own exact budget"
+        ],
+        [
+          "browser profile",
+          "cache only",
+          "cache flags, idle lifetime and cleanup; never authority"
+        ]
+      ]
+    }
+  }
+}

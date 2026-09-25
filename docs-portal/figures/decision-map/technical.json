@@ -1,0 +1,312 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "decision-status",
+    "family": "state",
+    "binding": "authored",
+    "question": "What status can a decision hold, and how does it move?",
+    "idea": "A decision is proposed, then accepted, and may be superseded by a later one; an accepted record is never rewritten.",
+    "title": "The status of a decision",
+    "kicker": "Status",
+    "caption": "Changing your mind means writing a new decision that supersedes the old one, never editing the old record.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "Status"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Move"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Forbidden move"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "67 decisions, 3 superseded",
+        "source": "docs/decision-map.md#technical",
+        "derive": "the count sentence",
+        "check": {
+          "kind": "contains",
+          "text": "67 decisions, 3 with `status: superseded`."
+        },
+        "value": true
+      },
+      {
+        "claim": "a decision's content is never rewritten",
+        "source": "docs/decision-map.md#technical",
+        "derive": "the status sentence",
+        "check": {
+          "kind": "contains",
+          "text": "content is never rewritten, and only `superseded_by` or a dated note is added."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 176,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 60,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "pr"
+        },
+        {
+          "text": "proposed",
+          "x": 81,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "pr"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M148 78H258",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 260,
+          "y": 60,
+          "w": 130,
+          "h": 36,
+          "rx": 8,
+          "id": "ac"
+        },
+        {
+          "text": "accepted",
+          "x": 325,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "ac"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M392 78H518",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "a later decision",
+          "x": 455,
+          "y": 50,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 520,
+          "y": 60,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "su"
+        },
+        {
+          "text": "superseded",
+          "x": 595,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "su"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M325 98V150H200",
+          "cross": {
+            "cx": 325,
+            "cy": 124,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "rewrite its content",
+          "x": 190,
+          "y": 155,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "text": "only superseded_by or a dated note is added",
+          "x": 400,
+          "y": 130,
+          "style": "mute",
+          "for": [
+            "su"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 236,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "pr"
+        },
+        {
+          "text": "proposed",
+          "x": 83,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "pr"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 48V74",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 76,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "ac"
+        },
+        {
+          "text": "accepted",
+          "x": 83,
+          "y": 99,
+          "anchor": "middle",
+          "for": [
+            "ac"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 114V160",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "a later decision",
+          "x": 96,
+          "y": 142,
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 162,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "su"
+        },
+        {
+          "text": "superseded",
+          "x": 83,
+          "y": 185,
+          "anchor": "middle",
+          "for": [
+            "su"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M160 94H300V40",
+          "cross": {
+            "cx": 300,
+            "cy": 66,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "rewrite its content",
+          "x": 352,
+          "y": 28,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "text": "only superseded_by or a note",
+          "x": 8,
+          "y": 226,
+          "style": "mute",
+          "for": [
+            "su"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "Allowed"
+      ],
+      "rows": [
+        [
+          "proposed",
+          "accepted",
+          "yes"
+        ],
+        [
+          "accepted",
+          "superseded",
+          "yes, when a later decision replaces it"
+        ],
+        [
+          "accepted",
+          "a rewritten record",
+          "no; only `superseded_by` or a dated note is added"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,325 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "decision-map-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What is a decision record, and what is the map not?",
+    "idea": "The records are the authority and are never rewritten; the map is built from their frontmatter to help you find one, and summarises none.",
+    "title": "Records and the map built from them",
+    "kicker": "Decision map",
+    "caption": "Use the map to find a decision, then read the record, because only the record says what was decided.",
+    "states": [
+      {
+        "name": "record",
+        "mark": "layer-remote",
+        "means": "The authority"
+      },
+      {
+        "name": "map",
+        "mark": "layer",
+        "means": "Derived finding aid"
+      },
+      {
+        "name": "derives",
+        "mark": "trans",
+        "means": "Built from"
+      },
+      {
+        "name": "denied",
+        "mark": "denied",
+        "means": "Not what the map is"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the map summarises no decision",
+        "source": "docs/decision-map.md#concept",
+        "derive": "the summary sentence",
+        "check": {
+          "kind": "contains",
+          "text": "It summarises no decision, so read the record itself"
+        },
+        "value": true
+      },
+      {
+        "claim": "each record is never rewritten afterwards",
+        "source": "docs/decision-map.md#concept",
+        "derive": "the append-only sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Each record is written once, when the decision is made, and never rewritten"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 228,
+      "draw": [
+        {
+          "state": "record",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 260,
+          "h": 110,
+          "rx": 8,
+          "cap": "end",
+          "id": "r"
+        },
+        {
+          "text": "decision records",
+          "x": 32,
+          "y": 66,
+          "style": "strong",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "docs/decisions/ADR-NNNN",
+          "x": 32,
+          "y": 92,
+          "style": "mono",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "written once, never rewritten",
+          "x": 32,
+          "y": 116,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "the authority",
+          "x": 32,
+          "y": 138,
+          "style": "mute",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M278 95H396",
+          "head": "end",
+          "id": "e"
+        },
+        {
+          "text": "frontmatter",
+          "x": 337,
+          "y": 85,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "state": "map",
+          "shape": "rect",
+          "x": 398,
+          "y": 40,
+          "w": 306,
+          "h": 110,
+          "rx": 8,
+          "id": "m"
+        },
+        {
+          "text": "the decision map",
+          "x": 414,
+          "y": 66,
+          "style": "strong",
+          "for": [
+            "m"
+          ]
+        },
+        {
+          "text": "grouped by area",
+          "x": 414,
+          "y": 92,
+          "for": [
+            "m"
+          ]
+        },
+        {
+          "text": "with supersession chains",
+          "x": 414,
+          "y": 116,
+          "for": [
+            "m"
+          ]
+        },
+        {
+          "text": "a finding aid",
+          "x": 414,
+          "y": 138,
+          "style": "mute",
+          "for": [
+            "m"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 398,
+          "y": 176,
+          "w": 306,
+          "h": 40,
+          "rx": 6,
+          "cross": {
+            "cx": 684,
+            "cy": 196,
+            "size": 12
+          },
+          "id": "n"
+        },
+        {
+          "text": "a summary of any decision",
+          "x": 414,
+          "y": 201,
+          "for": [
+            "n"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 282,
+      "draw": [
+        {
+          "state": "record",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 96,
+          "rx": 8,
+          "cap": "end",
+          "id": "r"
+        },
+        {
+          "text": "decision records",
+          "x": 22,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "docs/decisions/ADR-NNNN",
+          "x": 22,
+          "y": 58,
+          "style": "mono",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "written once, never rewritten",
+          "x": 22,
+          "y": 82,
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M60 110V140",
+          "head": "end",
+          "id": "e"
+        },
+        {
+          "text": "frontmatter",
+          "x": 76,
+          "y": 131,
+          "style": "mute",
+          "for": [
+            "e"
+          ]
+        },
+        {
+          "state": "map",
+          "shape": "rect",
+          "x": 8,
+          "y": 144,
+          "w": 344,
+          "h": 72,
+          "rx": 8,
+          "id": "m"
+        },
+        {
+          "text": "the decision map",
+          "x": 22,
+          "y": 168,
+          "style": "strong",
+          "for": [
+            "m"
+          ]
+        },
+        {
+          "text": "areas and supersession chains",
+          "x": 22,
+          "y": 192,
+          "for": [
+            "m"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 8,
+          "y": 232,
+          "w": 344,
+          "h": 40,
+          "rx": 6,
+          "cross": {
+            "cx": 330,
+            "cy": 252,
+            "size": 12
+          },
+          "id": "n"
+        },
+        {
+          "text": "a summary of any decision",
+          "x": 22,
+          "y": 257,
+          "for": [
+            "n"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Role"
+      ],
+      "rows": [
+        [
+          "decision records under `docs/decisions/`",
+          "the authority, written once and never rewritten"
+        ],
+        [
+          "the decision map",
+          "built from the records' frontmatter, grouped by area, with supersession chains"
+        ],
+        [
+          "a summary of any decision",
+          "not something the map provides"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,399 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "planes-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What enforces the rules, and why is no single harness the trust anchor?",
+    "idea": "One policy file is read by four planes, two local and editable and two that form the perimeter.",
+    "title": "One policy file read by four enforcement planes",
+    "kicker": "Enforcement planes",
+    "caption": "A rule is written once in the policy file, and each plane reads it where it can see the work.",
+    "states": [
+      {
+        "name": "source",
+        "mark": "layer-remote",
+        "means": "The one place a rule is written"
+      },
+      {
+        "name": "reads",
+        "mark": "trans",
+        "means": "Reads the policy"
+      },
+      {
+        "name": "plane",
+        "mark": "optional",
+        "means": "Local plane: fast feedback, editable"
+      },
+      {
+        "name": "perimeter",
+        "mark": "layer",
+        "means": "Perimeter plane: authoritative where armed"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the policy file is the only place a rule is written",
+        "source": "docs/architecture/enforcement-planes.md#concept",
+        "derive": "the lead sentence",
+        "check": {
+          "kind": "contains",
+          "text": "`.codeflow/policy.json` is the only place a rule is written"
+        },
+        "value": true
+      },
+      {
+        "claim": "four planes read one policy source",
+        "source": "AGENTS.md#git-rules",
+        "derive": "the first sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Four planes provide defense in depth"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 248,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 100,
+          "w": 204,
+          "h": 44,
+          "rx": 6,
+          "cap": "end",
+          "id": "src"
+        },
+        {
+          "text": ".codeflow/policy.json",
+          "x": 116,
+          "y": 127,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "src"
+          ]
+        },
+        {
+          "text": "one source",
+          "x": 60,
+          "y": 166,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "src"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 268,
+          "y": 22,
+          "w": 200,
+          "h": 200
+        },
+        {
+          "text": "local, editable",
+          "x": 368,
+          "y": 44,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "state": "plane",
+          "shape": "rect",
+          "x": 284,
+          "y": 62,
+          "w": 168,
+          "h": 40,
+          "rx": 6,
+          "id": "g"
+        },
+        {
+          "text": "git client hooks",
+          "x": 368,
+          "y": 87,
+          "anchor": "middle",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "plane",
+          "shape": "rect",
+          "x": 284,
+          "y": 150,
+          "w": 168,
+          "h": 40,
+          "rx": 6,
+          "id": "s"
+        },
+        {
+          "text": "in-session guards",
+          "x": 368,
+          "y": 175,
+          "anchor": "middle",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 504,
+          "y": 22,
+          "w": 200,
+          "h": 200
+        },
+        {
+          "text": "the perimeter",
+          "x": 604,
+          "y": 44,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "state": "perimeter",
+          "shape": "rect",
+          "x": 520,
+          "y": 62,
+          "w": 168,
+          "h": 40,
+          "rx": 6,
+          "id": "c"
+        },
+        {
+          "text": "CI",
+          "x": 604,
+          "y": 87,
+          "anchor": "middle",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "perimeter",
+          "shape": "rect",
+          "x": 520,
+          "y": 150,
+          "w": 168,
+          "h": 40,
+          "rx": 6,
+          "id": "r"
+        },
+        {
+          "text": "remote protection",
+          "x": 604,
+          "y": 175,
+          "anchor": "middle",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M220 112C250 112 254 82 282 82",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M220 132C250 132 254 170 282 170",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M150 98V10H672V60",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M150 146V238H672V192",
+          "head": "end",
+          "id": "e4"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 304,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 12,
+          "w": 220,
+          "h": 40,
+          "rx": 6,
+          "cap": "end",
+          "id": "src"
+        },
+        {
+          "text": ".codeflow/policy.json",
+          "x": 118,
+          "y": 37,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "src"
+          ]
+        },
+        {
+          "text": "local, editable",
+          "x": 44,
+          "y": 75,
+          "style": "head"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M22 54V108H42",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "plane",
+          "shape": "rect",
+          "x": 44,
+          "y": 90,
+          "w": 308,
+          "h": 36,
+          "rx": 6,
+          "id": "g"
+        },
+        {
+          "text": "git client hooks",
+          "x": 60,
+          "y": 113,
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M22 54V154H42",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "plane",
+          "shape": "rect",
+          "x": 44,
+          "y": 136,
+          "w": 308,
+          "h": 36,
+          "rx": 6,
+          "id": "s"
+        },
+        {
+          "text": "in-session guards",
+          "x": 60,
+          "y": 159,
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "the perimeter",
+          "x": 44,
+          "y": 197,
+          "style": "head"
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M22 54V230H42",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "perimeter",
+          "shape": "rect",
+          "x": 44,
+          "y": 212,
+          "w": 308,
+          "h": 36,
+          "rx": 6,
+          "id": "c"
+        },
+        {
+          "text": "CI",
+          "x": 60,
+          "y": 235,
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "reads",
+          "shape": "path",
+          "d": "M22 54V276H42",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "state": "perimeter",
+          "shape": "rect",
+          "x": 44,
+          "y": 258,
+          "w": 308,
+          "h": 36,
+          "rx": 6,
+          "id": "r"
+        },
+        {
+          "text": "remote protection",
+          "x": 60,
+          "y": 281,
+          "for": [
+            "r"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Plane",
+        "Kind",
+        "Reads"
+      ],
+      "rows": [
+        [
+          "git client hooks",
+          "local, editable",
+          "`.codeflow/policy.json`"
+        ],
+        [
+          "in-session guards",
+          "local, editable",
+          "`.codeflow/policy.json`"
+        ],
+        [
+          "CI",
+          "perimeter",
+          "`.codeflow/policy.json`"
+        ],
+        [
+          "remote protection",
+          "perimeter, where the host arms it",
+          "`.codeflow/policy.json`"
+        ]
+      ]
+    }
+  }
+}
