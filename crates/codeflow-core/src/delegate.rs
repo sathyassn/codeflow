@@ -510,9 +510,10 @@ fn accept_prompt(
 /// `paste_envelope` when removing exactly one outer envelope leaves the armed
 /// bytes. The accepted grammar is an optional prefix of exactly two LF, then
 /// `<pasted_content id="N">` LF, the inner bytes, LF, `</pasted_content
-/// id="N">`, then at most one LF, where both N are the same non-empty ASCII
-/// digit string. Claude Code submits a paste into an empty input box with that
-/// two-LF prefix and the trailing LF. Anything else does not match.
+/// id="N">`, then at most one LF, where both N are the same id of exactly four
+/// lowercase hex digits, the id Claude Code derives per session. Claude Code
+/// submits a paste into an empty input box with that two-LF prefix and the
+/// trailing LF. Anything else does not match.
 fn submitted_delivery(prompt: &str, armed_sha256: &str) -> Option<&'static str> {
     if hex_sha256(prompt.as_bytes()) == armed_sha256 {
         return Some("exact");
@@ -524,11 +525,14 @@ fn submitted_delivery(prompt: &str, armed_sha256: &str) -> Option<&'static str> 
 fn strip_paste_envelope(prompt: &str) -> Option<&str> {
     let prompt = prompt.strip_prefix("\n\n").unwrap_or(prompt);
     let rest = prompt.strip_prefix("<pasted_content id=\"")?;
-    let id_len = rest.find(|character: char| !character.is_ascii_digit())?;
-    if id_len == 0 {
+    let id = rest.get(..4)?;
+    if !id
+        .bytes()
+        .all(|byte| matches!(byte, b'0'..=b'9' | b'a'..=b'f'))
+    {
         return None;
     }
-    let (id, rest) = rest.split_at(id_len);
+    let rest = &rest[4..];
     let body = rest.strip_prefix("\">\n")?;
     let body = body.strip_suffix('\n').unwrap_or(body);
     body.strip_suffix(&format!("\n</pasted_content id=\"{id}\">"))
@@ -1680,6 +1684,12 @@ mod tests {
                 format!("\n\n<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">"),
                 "paste_envelope",
             ),
+            (
+                format!(
+                    "\n\n<pasted_content id=\"ce16\">\n{ARMED}\n</pasted_content id=\"ce16\">\n"
+                ),
+                "paste_envelope",
+            ),
         ] {
             let (_temp, path) = state();
             ready(&path);
@@ -1728,6 +1738,13 @@ mod tests {
             format!("\n\n{open}\n{ARMED}\n{close}\n\n\n{open}\n{ARMED}\n{close}\n"),
             format!("\n\n{ARMED}"),
             format!("\n\n{open}\n{differs}\n{close}\n"),
+            // The id is exactly four lowercase hex digits and nothing else.
+            format!("<pasted_content id=\"CE16\">\n{ARMED}\n</pasted_content id=\"CE16\">"),
+            format!("<pasted_content id=\"ce1\">\n{ARMED}\n</pasted_content id=\"ce1\">"),
+            format!("<pasted_content id=\"ce160\">\n{ARMED}\n</pasted_content id=\"ce160\">"),
+            format!("<pasted_content id=\"79140\">\n{ARMED}\n</pasted_content id=\"79140\">"),
+            format!("<pasted_content id=\"ce1g\">\n{ARMED}\n</pasted_content id=\"ce1g\">"),
+            format!("<pasted_content id=\"ce16\">\n{ARMED}\n</pasted_content id=\"CE16\">"),
         ] {
             let (_temp, path) = state();
             ready(&path);
@@ -1743,21 +1760,34 @@ mod tests {
     }
 
     /// The pipeline prompt the release-qualification harness arms, and the
-    /// `UserPromptSubmit` stdin a live Claude Code session sent after
-    /// `herdr pane send-text` pasted it and `send-keys Enter` submitted it.
+    /// `UserPromptSubmit` stdin two live Claude Code 2.1.283 sessions sent
+    /// after `herdr pane send-text` pasted it and `send-keys Enter` submitted
+    /// it. The envelope id is per session: one drew only digits, one did not.
     const CAPTURED_ARMED: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/delegate/pipeline-prompt-armed.txt"
     ));
-    const CAPTURED_SUBMIT: &str = include_str!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/tests/fixtures/delegate/pipeline-prompt-submitted.json"
-    ));
+    const CAPTURED_SUBMITS: [(&str, &str); 2] = [
+        (
+            "2888",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/delegate/pipeline-prompt-submitted-digit-id.json"
+            )),
+        ),
+        (
+            "19fe",
+            include_str!(concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/tests/fixtures/delegate/pipeline-prompt-submitted-hex-id.json"
+            )),
+        ),
+    ];
 
     /// Arm the captured prompt behind a session that matches the captured
     /// stdin, so the hook sees the payload exactly as Claude Code sent it.
-    fn arm_captured() -> (TempDir, PathBuf, serde_json::Value) {
-        let captured: serde_json::Value = serde_json::from_str(CAPTURED_SUBMIT).unwrap();
+    fn arm_captured(submit: &str) -> (TempDir, PathBuf, serde_json::Value) {
+        let captured: serde_json::Value = serde_json::from_str(submit).unwrap();
         let (temp, path) = state();
         handle_hook(
             "run-1",
@@ -1776,40 +1806,53 @@ mod tests {
     }
 
     #[test]
-    fn accepts_the_captured_claude_code_paste() {
-        let (_temp, path, _captured) = arm_captured();
-        handle_hook("run-1", &path, CAPTURED_SUBMIT).unwrap();
-        let text = std::fs::read_to_string(path.join("turns/turn-1/accepted.json")).unwrap();
-        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-        assert_eq!(
-            value["prompt_sha256"],
-            "a70978989a1e5d4eed4509ec269ff193419a6698b9acc35cdf9ff4acb654ebdb"
-        );
-        assert_eq!(value["delivery"], "paste_envelope");
+    fn accepts_the_captured_claude_code_pastes() {
+        for (id, submit) in CAPTURED_SUBMITS {
+            let (_temp, path, _captured) = arm_captured(submit);
+            handle_hook("run-1", &path, submit).unwrap();
+            let text = std::fs::read_to_string(path.join("turns/turn-1/accepted.json")).unwrap();
+            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+            assert_eq!(
+                value["prompt_sha256"],
+                "a70978989a1e5d4eed4509ec269ff193419a6698b9acc35cdf9ff4acb654ebdb",
+                "{id}"
+            );
+            assert_eq!(value["delivery"], "paste_envelope", "{id}");
+        }
     }
 
     #[test]
-    fn rejects_near_misses_of_the_captured_paste() {
-        let prompt = serde_json::from_str::<serde_json::Value>(CAPTURED_SUBMIT).unwrap()["prompt"]
-            .as_str()
-            .unwrap()
-            .to_string();
-        assert!(prompt.starts_with("\n\n<pasted_content id=\"2888\">\n"));
-        for near_miss in [
-            prompt.replacen("\n\n", "\n\n\n", 1),
-            prompt.replacen("\n\n", "\n", 1),
-            prompt.replacen("<the exact reason>", "&lt;the exact reason&gt;", 1),
-            prompt.replacen("verbatim, as a single", "verbatim, as a\nsingle", 1),
-            prompt.replacen("Then stop.", "Then stop. ", 1),
-            prompt.replace('\n', "\r\n"),
-            prompt.replacen("id=\"2888\">\n", "id=\"2889\">\n", 1),
-        ] {
-            assert_ne!(near_miss, prompt);
-            let (_temp, path, mut captured) = arm_captured();
-            captured["prompt"] = serde_json::Value::String(near_miss.clone());
-            let error = handle_hook("run-1", &path, &captured.to_string()).unwrap_err();
-            assert_eq!(error.kind, ErrorKind::Invalid, "{near_miss:?}");
-            assert!(!path.join("turns/turn-1/accepted.json").exists());
+    fn rejects_near_misses_of_the_captured_pastes() {
+        for (id, submit) in CAPTURED_SUBMITS {
+            let prompt = serde_json::from_str::<serde_json::Value>(submit).unwrap()["prompt"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            let open = format!("id=\"{id}\">\n");
+            assert!(prompt.starts_with(&format!("\n\n<pasted_content {open}")));
+            let mut near_misses = vec![
+                prompt.replacen("\n\n", "\n\n\n", 1),
+                prompt.replacen("\n\n", "\n", 1),
+                prompt.replacen("<the exact reason>", "&lt;the exact reason&gt;", 1),
+                prompt.replacen("verbatim, as a single", "verbatim, as a\nsingle", 1),
+                prompt.replacen("Then stop.", "Then stop. ", 1),
+                prompt.replace('\n', "\r\n"),
+                prompt.replacen(&open, "id=\"2889\">\n", 1),
+                prompt.replace(id, &id.to_uppercase()),
+                prompt.replace(id, &id[..3]),
+                prompt.replace(id, &format!("{id}0")),
+                prompt.replace(id, &format!("{}g", &id[..3])),
+            ];
+            near_misses.retain(|near_miss| *near_miss != prompt);
+            // Upper-casing an all-digit id changes nothing, so it drops out.
+            assert!(near_misses.len() >= 10, "{id}");
+            for near_miss in near_misses {
+                let (_temp, path, mut captured) = arm_captured(submit);
+                captured["prompt"] = serde_json::Value::String(near_miss.clone());
+                let error = handle_hook("run-1", &path, &captured.to_string()).unwrap_err();
+                assert_eq!(error.kind, ErrorKind::Invalid, "{near_miss:?}");
+                assert!(!path.join("turns/turn-1/accepted.json").exists());
+            }
         }
     }
 
