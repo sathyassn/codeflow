@@ -123,10 +123,12 @@ surface has not earned its visual claim.
 defines it, the same file the docs portal binds; the elided fields are filled
 as the specimens in `figure-grammar-specimens.md` show. The complete block to
 copy is the first block of `assets/review-document.example.json`: a flow
-figure with its states, facts, wide and narrow compositions and table twin. The service checks the
-envelope (schema version, a family from the nine, the authored binding, a
-title and a caption, at most 64 KiB); the runtime validates the rest with the
-grammar module before it draws and shows the refusal in place of the figure.
+figure with its states, facts, wide and narrow compositions and table twin.
+Its facts cite CodeFlow's own `AGENTS.md`; substitute your repository's
+sources before you copy it. The service checks the envelope (schema version,
+a family from the nine, the authored binding, a title and a caption, at most
+64 KiB); the runtime validates the rest with the grammar module before it
+draws and shows the refusal in place of the figure.
 Present draws authored figures only, and it draws each fact as declared: only
 the portal re-derives facts from their sources, so cite sources a reviewer
 can check. A document draws at most 24 figure blocks.
@@ -160,6 +162,11 @@ refuse a document that still carries one, naming the block and its
 replacement. A revision stored before the removal still opens read only, with
 a notice and each diagram's source to convert from.
 
+The table names the usual family for each kind. Choose by the relationship the
+reader must see (`resources/explanation-method.md` stage 3), so a flowchart
+that drew parts and boundaries becomes a structure figure, and one that drew
+peers with no single order a graph figure.
+
 | Former `kind` | Replacement |
 |---|---|
 | `flowchart` | a flow figure |
@@ -175,7 +182,8 @@ one. The first block of `assets/review-document.example.json` is a flow figure
 converted from a flowchart, and `resources/figure-grammar-specimens.md` draws
 one specimen per family, whose complete declarations are the portal starter's
 `tests/fixtures/figures/*.json`. Carry the old `acc_title` into the figure's
-`title` and the `acc_description` into its `caption` or `description`. Keep the
+`title`, and the `acc_description` into its `description`, or into its
+`caption` when it is one sentence that does not repeat the title. Keep the
 block id only when the figure is the same conceptual item; a note anchored on
 the removed diagram stays in the history as orphaned. The `cf-stage` interim is
 a portal form; in present an `html` block keeps only the two uses above.

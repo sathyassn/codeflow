@@ -233,7 +233,7 @@
             "drops": [],
             "marks": "same",
             "width": 344,
-            "height": 300,
+            "height": 262,
             "draw": [
               {
                 "state": "blocked",
@@ -248,31 +248,31 @@
                 "state": "done",
                 "id": "claude-lane",
                 "shape": "path",
-                "d": "M92 58V80C92 102 140 120 161 120"
+                "d": "M92 58V80C92 94 172 86 172 101"
               },
               {
                 "state": "done",
                 "id": "codex-lane",
                 "shape": "path",
-                "d": "M252 58V80C252 102 204 120 183 120"
+                "d": "M252 58V80C252 94 172 86 172 101"
               },
               {
                 "state": "done",
                 "id": "to-review",
                 "shape": "path",
-                "d": "M172 131V172"
+                "d": "M172 123V154"
               },
               {
                 "state": "done",
                 "id": "to-gates",
                 "shape": "path",
-                "d": "M172 188V224"
+                "d": "M172 170V202"
               },
               {
                 "state": "done",
                 "id": "to-pr",
                 "shape": "path",
-                "d": "M172 240V274"
+                "d": "M172 218V242"
               },
               {
                 "state": "agent",
@@ -295,7 +295,7 @@
                 "id": "settle",
                 "shape": "diamond",
                 "cx": 172,
-                "cy": 120,
+                "cy": 112,
                 "r": 11
               },
               {
@@ -303,7 +303,7 @@
                 "id": "review",
                 "shape": "circle",
                 "cx": 172,
-                "cy": 180,
+                "cy": 162,
                 "r": 8
               },
               {
@@ -311,7 +311,7 @@
                 "id": "gates",
                 "shape": "circle",
                 "cx": 172,
-                "cy": 232,
+                "cy": 210,
                 "r": 8
               },
               {
@@ -319,7 +319,7 @@
                 "id": "pr",
                 "shape": "circle",
                 "cx": 172,
-                "cy": 282,
+                "cy": 250,
                 "r": 8
               },
               {
@@ -343,7 +343,7 @@
               {
                 "text": "no shared context",
                 "x": 172,
-                "y": 76,
+                "y": 72,
                 "anchor": "middle",
                 "style": "mute",
                 "for": [
@@ -352,8 +352,8 @@
               },
               {
                 "text": "Settle",
-                "x": 188,
-                "y": 152,
+                "x": 191,
+                "y": 117,
                 "anchor": "start",
                 "for": [
                   "settle"
@@ -362,7 +362,7 @@
               {
                 "text": "Cross review",
                 "x": 188,
-                "y": 185,
+                "y": 167,
                 "anchor": "start",
                 "for": [
                   "review"
@@ -371,7 +371,7 @@
               {
                 "text": "Gates",
                 "x": 188,
-                "y": 237,
+                "y": 215,
                 "anchor": "start",
                 "for": [
                   "gates"
@@ -380,7 +380,7 @@
               {
                 "text": "Pull request",
                 "x": 188,
-                "y": 287,
+                "y": 255,
                 "anchor": "start",
                 "for": [
                   "pr"
