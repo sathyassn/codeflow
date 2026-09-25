@@ -1,0 +1,397 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "doctor-results",
+    "family": "state",
+    "binding": "authored",
+    "question": "What does each result mean, and how does it change after a fix?",
+    "idea": "Each check ends ok, warn or FAIL; only FAIL makes doctor exit 1, and a fixed check reads ok when you rerun it.",
+    "title": "What a check's result means",
+    "kicker": "Results",
+    "caption": "Warnings never change the exit code, so a script that checks doctor's exit sees only the FAIL lines.",
+    "states": [
+      {
+        "name": "run",
+        "mark": "optional",
+        "means": "A running check"
+      },
+      {
+        "name": "result",
+        "mark": "state",
+        "means": "Result"
+      },
+      {
+        "name": "ends",
+        "mark": "trans",
+        "means": "Ends in"
+      },
+      {
+        "name": "fixed",
+        "mark": "return",
+        "means": "After your fix"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "doctor exits 0 with no failed check and 1 when any failed",
+        "source": "docs/troubleshooting.md#technical",
+        "derive": "the exit sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Doctor exits 0 when no check failed, with or without warnings, and 1 when any"
+        },
+        "value": true
+      },
+      {
+        "claim": "warn never changes the exit code",
+        "source": "docs/troubleshooting.md#technical",
+        "derive": "the warn bullet",
+        "check": {
+          "kind": "contains",
+          "text": "It never changes the exit code."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 240,
+      "draw": [
+        {
+          "state": "run",
+          "shape": "rect",
+          "x": 16,
+          "y": 104,
+          "w": 140,
+          "h": 40,
+          "rx": 8,
+          "id": "c"
+        },
+        {
+          "text": "a check runs",
+          "x": 86,
+          "y": 129,
+          "anchor": "middle",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M158 116C220 116 230 46 300 46",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M158 124H300",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M158 132C220 132 230 202 300 202",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "result",
+          "shape": "rect",
+          "x": 302,
+          "y": 20,
+          "w": 300,
+          "h": 52,
+          "rx": 8,
+          "id": "ok"
+        },
+        {
+          "text": "ok",
+          "x": 316,
+          "y": 42,
+          "style": "mono",
+          "for": [
+            "ok"
+          ]
+        },
+        {
+          "text": "passed, or nothing to inspect",
+          "x": 316,
+          "y": 62,
+          "style": "mute",
+          "for": [
+            "ok"
+          ]
+        },
+        {
+          "state": "result",
+          "shape": "rect",
+          "x": 302,
+          "y": 98,
+          "w": 300,
+          "h": 52,
+          "rx": 8,
+          "id": "wn"
+        },
+        {
+          "text": "warn",
+          "x": 316,
+          "y": 120,
+          "style": "mono",
+          "for": [
+            "wn"
+          ]
+        },
+        {
+          "text": "needs attention; exit code unchanged",
+          "x": 316,
+          "y": 140,
+          "style": "mute",
+          "for": [
+            "wn"
+          ]
+        },
+        {
+          "state": "result",
+          "shape": "rect",
+          "x": 302,
+          "y": 176,
+          "w": 300,
+          "h": 52,
+          "rx": 8,
+          "id": "fl"
+        },
+        {
+          "text": "FAIL",
+          "x": 316,
+          "y": 198,
+          "style": "mono",
+          "for": [
+            "fl"
+          ]
+        },
+        {
+          "text": "broken state; doctor exits 1",
+          "x": 316,
+          "y": 218,
+          "style": "mute",
+          "for": [
+            "fl"
+          ]
+        },
+        {
+          "state": "fixed",
+          "shape": "path",
+          "d": "M604 202H660V46H604",
+          "open": "end",
+          "id": "fx"
+        },
+        {
+          "text": "fix,",
+          "x": 672,
+          "y": 118,
+          "style": "mute",
+          "for": [
+            "fx"
+          ]
+        },
+        {
+          "text": "rerun",
+          "x": 672,
+          "y": 138,
+          "style": "mute",
+          "for": [
+            "fx"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 290,
+      "draw": [
+        {
+          "state": "run",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "c"
+        },
+        {
+          "text": "a check runs",
+          "x": 83,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M24 48V234",
+          "id": "e3"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M24 86H38",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M24 158H38",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "ends",
+          "shape": "path",
+          "d": "M24 230H38",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "result",
+          "shape": "rect",
+          "x": 40,
+          "y": 60,
+          "w": 270,
+          "h": 52,
+          "rx": 8,
+          "id": "ok"
+        },
+        {
+          "text": "ok",
+          "x": 54,
+          "y": 82,
+          "style": "mono",
+          "for": [
+            "ok"
+          ]
+        },
+        {
+          "text": "passed",
+          "x": 54,
+          "y": 102,
+          "style": "mute",
+          "for": [
+            "ok"
+          ]
+        },
+        {
+          "state": "result",
+          "shape": "rect",
+          "x": 40,
+          "y": 132,
+          "w": 270,
+          "h": 52,
+          "rx": 8,
+          "id": "wn"
+        },
+        {
+          "text": "warn",
+          "x": 54,
+          "y": 154,
+          "style": "mono",
+          "for": [
+            "wn"
+          ]
+        },
+        {
+          "text": "exit code unchanged",
+          "x": 54,
+          "y": 174,
+          "style": "mute",
+          "for": [
+            "wn"
+          ]
+        },
+        {
+          "state": "result",
+          "shape": "rect",
+          "x": 40,
+          "y": 204,
+          "w": 270,
+          "h": 52,
+          "rx": 8,
+          "id": "fl"
+        },
+        {
+          "text": "FAIL",
+          "x": 54,
+          "y": 226,
+          "style": "mono",
+          "for": [
+            "fl"
+          ]
+        },
+        {
+          "text": "doctor exits 1",
+          "x": 54,
+          "y": 246,
+          "style": "mute",
+          "for": [
+            "fl"
+          ]
+        },
+        {
+          "state": "fixed",
+          "shape": "path",
+          "d": "M312 230H340V86H312",
+          "open": "end",
+          "id": "fx"
+        },
+        {
+          "text": "fix, rerun",
+          "x": 352,
+          "y": 280,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "fx"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Result",
+        "Means",
+        "Exit"
+      ],
+      "rows": [
+        [
+          "`ok`",
+          "passed, or nothing to inspect",
+          "0"
+        ],
+        [
+          "`warn`",
+          "needs attention",
+          "unchanged"
+        ],
+        [
+          "`FAIL`",
+          "a broken state",
+          "1"
+        ],
+        [
+          "after a fix",
+          "rerun the check; it reads `ok`",
+          "0 when no `FAIL` remains"
+        ]
+      ]
+    }
+  }
+}

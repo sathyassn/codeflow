@@ -1,0 +1,590 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "present-guide-sequence",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "What exchange happens for each action in a review?",
+    "idea": "The agent opens the session, you submit through the browser, the agent pulls your review with feedback, and resolve updates what you see.",
+    "title": "What happens behind each action",
+    "kicker": "Commands",
+    "caption": "The agent never watches you type: it receives your review only when it runs feedback after you submit.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Sends"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Returns"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "feedback delivers pending reviews as JSON lines",
+        "source": "docs/present-guide.md#technical",
+        "derive": "the feedback row",
+        "check": {
+          "kind": "contains",
+          "text": "| `codeflow present feedback <SESSION_ID>` | Delivers pending reviews as JSON lines"
+        },
+        "value": true
+      },
+      {
+        "claim": "resolve marks one delivered review as handled",
+        "source": "docs/present-guide.md#technical",
+        "derive": "the resolve row",
+        "check": {
+          "kind": "contains",
+          "text": "| Marks one delivered review as handled."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 420,
+      "draw": [
+        {
+          "text": "you",
+          "x": 70,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "browser",
+          "x": 263.3,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "service",
+          "x": 456.7,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "agent",
+          "x": 650,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 70,
+          "y1": 34,
+          "x2": 70,
+          "y2": 412
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 263.3,
+          "y1": 34,
+          "x2": 263.3,
+          "y2": 412
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 456.7,
+          "y1": 34,
+          "x2": 456.7,
+          "y2": 412
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 650,
+          "y1": 34,
+          "x2": 650,
+          "y2": 412
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M642 62H464.7",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "present open",
+          "x": 553.4,
+          "y": 52,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M448.7 108H271.3",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "text": "isolated window",
+          "x": 360,
+          "y": 98,
+          "anchor": "middle",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 154H255.3",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "text": "notes, verdict",
+          "x": 166.7,
+          "y": 144,
+          "anchor": "middle",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M271.3 200H448.7",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "text": "submitted review",
+          "x": 360,
+          "y": 190,
+          "anchor": "middle",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M642 246H464.7",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "text": "present feedback",
+          "x": 553.4,
+          "y": 236,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M464.7 292H642",
+          "open": "end",
+          "id": "m6"
+        },
+        {
+          "text": "review as JSON",
+          "x": 553.4,
+          "y": 282,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m6"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M642 338H464.7",
+          "head": "end",
+          "id": "m7"
+        },
+        {
+          "text": "present resolve",
+          "x": 553.4,
+          "y": 328,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m7"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M448.7 384H271.3",
+          "open": "end",
+          "id": "m8"
+        },
+        {
+          "text": "review state changed",
+          "x": 360,
+          "y": 374,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m8"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 492,
+      "draw": [
+        {
+          "text": "agent",
+          "x": 8,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M59 24H284",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "text": "service",
+          "x": 352,
+          "y": 29,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "present open",
+          "x": 8,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "service",
+          "x": 8,
+          "y": 89,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M76 84H284",
+          "head": "end",
+          "id": "c2"
+        },
+        {
+          "text": "browser",
+          "x": 352,
+          "y": 89,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "isolated window",
+          "x": 8,
+          "y": 112,
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 149,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 144H284",
+          "head": "end",
+          "id": "c3"
+        },
+        {
+          "text": "browser",
+          "x": 352,
+          "y": 149,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "notes, verdict",
+          "x": 8,
+          "y": 172,
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "browser",
+          "x": 8,
+          "y": 209,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M76 204H284",
+          "head": "end",
+          "id": "c4"
+        },
+        {
+          "text": "service",
+          "x": 352,
+          "y": 209,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "submitted review",
+          "x": 8,
+          "y": 232,
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "agent",
+          "x": 8,
+          "y": 269,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M59 264H284",
+          "head": "end",
+          "id": "c5"
+        },
+        {
+          "text": "service",
+          "x": 352,
+          "y": 269,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "present feedback",
+          "x": 8,
+          "y": 292,
+          "style": "mono",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "service",
+          "x": 8,
+          "y": 329,
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M76 324H301",
+          "open": "end",
+          "id": "c6"
+        },
+        {
+          "text": "agent",
+          "x": 352,
+          "y": 329,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "review as JSON",
+          "x": 8,
+          "y": 352,
+          "style": "mute",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "agent",
+          "x": 8,
+          "y": 389,
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M59 384H284",
+          "head": "end",
+          "id": "c7"
+        },
+        {
+          "text": "service",
+          "x": 352,
+          "y": 389,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "present resolve",
+          "x": 8,
+          "y": 412,
+          "style": "mono",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "service",
+          "x": 8,
+          "y": 449,
+          "style": "strong",
+          "for": [
+            "c8"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M76 444H284",
+          "open": "end",
+          "id": "c8"
+        },
+        {
+          "text": "browser",
+          "x": 352,
+          "y": 449,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c8"
+          ]
+        },
+        {
+          "text": "review state changed",
+          "x": 8,
+          "y": 472,
+          "style": "mute",
+          "for": [
+            "c8"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "agent",
+          "service",
+          "`codeflow present open`"
+        ],
+        [
+          "2",
+          "service",
+          "browser",
+          "the isolated review window"
+        ],
+        [
+          "3",
+          "you",
+          "browser",
+          "notes and a verdict"
+        ],
+        [
+          "4",
+          "browser",
+          "service",
+          "the submitted review"
+        ],
+        [
+          "5",
+          "agent",
+          "service",
+          "`codeflow present feedback`"
+        ],
+        [
+          "6",
+          "service",
+          "agent",
+          "the review as JSON"
+        ],
+        [
+          "7",
+          "agent",
+          "service",
+          "`codeflow present resolve`"
+        ],
+        [
+          "8",
+          "service",
+          "browser",
+          "the review state change you see"
+        ]
+      ]
+    }
+  }
+}

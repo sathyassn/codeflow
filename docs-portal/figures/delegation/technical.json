@@ -1,0 +1,602 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "delegate-turn-states",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state is a delegate turn in, and what does each wait exit mean?",
+    "idea": "A turn moves from initialized through ready, armed and accepted to completed or failed, and any restart or stray event poisons the run for good.",
+    "title": "The states of a delegate turn",
+    "kicker": "Delegate lifecycle",
+    "caption": "A poisoned run is never reused: start again with a new run id in a fresh directory.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "State of the turn"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Normal move"
+      },
+      {
+        "name": "poison",
+        "mark": "return",
+        "means": "Poisons the run"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Forbidden"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a completed terminal wait exits 0",
+        "source": "docs/delegation.md#technical",
+        "derive": "the completed row",
+        "check": {
+          "kind": "contains",
+          "text": "`codeflow delegate wait ... --until terminal --turn-id <TURN> --timeout-seconds <N>` exits 0"
+        },
+        "value": true
+      },
+      {
+        "claim": "a failed terminal wait exits 10",
+        "source": "docs/delegation.md#technical",
+        "derive": "the failed row",
+        "check": {
+          "kind": "contains",
+          "text": "| The terminal wait exits 10 and prints the record |"
+        },
+        "value": true
+      },
+      {
+        "claim": "a poisoned run makes any wait exit 11 and needs a new run id",
+        "source": "docs/delegation.md#technical",
+        "derive": "the poisoned row",
+        "check": {
+          "kind": "contains",
+          "text": "| Any wait exits 11. Start again with a new run id in a fresh directory |"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 224,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 40,
+          "w": 110,
+          "h": 36,
+          "rx": 8,
+          "id": "in"
+        },
+        {
+          "text": "initialized",
+          "x": 71,
+          "y": 63,
+          "anchor": "middle",
+          "for": [
+            "in"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M128 58H148",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 150,
+          "y": 40,
+          "w": 90,
+          "h": 36,
+          "rx": 8,
+          "id": "rd"
+        },
+        {
+          "text": "ready",
+          "x": 195,
+          "y": 63,
+          "anchor": "middle",
+          "for": [
+            "rd"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M242 58H262",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 264,
+          "y": 40,
+          "w": 90,
+          "h": 36,
+          "rx": 8,
+          "id": "ar"
+        },
+        {
+          "text": "armed",
+          "x": 309,
+          "y": 63,
+          "anchor": "middle",
+          "for": [
+            "ar"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M356 58H376",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 378,
+          "y": 40,
+          "w": 110,
+          "h": 36,
+          "rx": 8,
+          "id": "ac"
+        },
+        {
+          "text": "accepted",
+          "x": 433,
+          "y": 63,
+          "anchor": "middle",
+          "for": [
+            "ac"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M490 52C520 52 528 30 552 30",
+          "head": "end",
+          "id": "t4"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M490 64C520 64 528 96 552 96",
+          "head": "end",
+          "id": "t5"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 554,
+          "y": 8,
+          "w": 150,
+          "h": 50,
+          "rx": 8,
+          "id": "co"
+        },
+        {
+          "text": "completed",
+          "x": 629,
+          "y": 31,
+          "anchor": "middle",
+          "for": [
+            "co"
+          ]
+        },
+        {
+          "text": "exit 0",
+          "x": 629,
+          "y": 50,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "co"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 554,
+          "y": 76,
+          "w": 150,
+          "h": 50,
+          "rx": 8,
+          "id": "fa"
+        },
+        {
+          "text": "failed",
+          "x": 629,
+          "y": 99,
+          "anchor": "middle",
+          "for": [
+            "fa"
+          ]
+        },
+        {
+          "text": "exit 10",
+          "x": 629,
+          "y": 118,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "fa"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 150,
+          "w": 150,
+          "h": 50,
+          "rx": 8,
+          "id": "po"
+        },
+        {
+          "text": "poisoned",
+          "x": 275,
+          "y": 173,
+          "anchor": "middle",
+          "for": [
+            "po"
+          ]
+        },
+        {
+          "text": "exit 11",
+          "x": 275,
+          "y": 192,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "po"
+          ]
+        },
+        {
+          "state": "poison",
+          "shape": "path",
+          "d": "M320 78V148",
+          "head": "end",
+          "id": "p1"
+        },
+        {
+          "text": "restart, resume, compaction",
+          "x": 332,
+          "y": 118,
+          "style": "mute",
+          "for": [
+            "p1"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M200 175H70V78",
+          "cross": {
+            "cx": 136,
+            "cy": 175,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "reuse the run",
+          "x": 16,
+          "y": 212,
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 284,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "in"
+        },
+        {
+          "text": "initialized",
+          "x": 83,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "in"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 48V60",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 62,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "rd"
+        },
+        {
+          "text": "ready",
+          "x": 83,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "rd"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 100V112",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 114,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "ar"
+        },
+        {
+          "text": "armed",
+          "x": 83,
+          "y": 137,
+          "anchor": "middle",
+          "for": [
+            "ar"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 152V164",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 166,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "ac"
+        },
+        {
+          "text": "accepted",
+          "x": 83,
+          "y": 189,
+          "anchor": "middle",
+          "for": [
+            "ac"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M60 204V222",
+          "head": "end",
+          "id": "t4"
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M130 204C130 214 250 212 262 222",
+          "head": "end",
+          "id": "t5"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 224,
+          "w": 150,
+          "h": 50,
+          "rx": 8,
+          "id": "co"
+        },
+        {
+          "text": "completed",
+          "x": 83,
+          "y": 247,
+          "anchor": "middle",
+          "for": [
+            "co"
+          ]
+        },
+        {
+          "text": "exit 0",
+          "x": 83,
+          "y": 266,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "co"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 190,
+          "y": 224,
+          "w": 150,
+          "h": 50,
+          "rx": 8,
+          "id": "fa"
+        },
+        {
+          "text": "failed",
+          "x": 265,
+          "y": 247,
+          "anchor": "middle",
+          "for": [
+            "fa"
+          ]
+        },
+        {
+          "text": "exit 10",
+          "x": 265,
+          "y": 266,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "fa"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 202,
+          "y": 62,
+          "w": 150,
+          "h": 50,
+          "rx": 8,
+          "id": "po"
+        },
+        {
+          "text": "poisoned",
+          "x": 277,
+          "y": 85,
+          "anchor": "middle",
+          "for": [
+            "po"
+          ]
+        },
+        {
+          "text": "exit 11",
+          "x": 277,
+          "y": 104,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "po"
+          ]
+        },
+        {
+          "state": "poison",
+          "shape": "path",
+          "d": "M160 184H270V118",
+          "head": "end",
+          "id": "p1"
+        },
+        {
+          "text": "restart",
+          "x": 280,
+          "y": 152,
+          "style": "mute",
+          "for": [
+            "p1"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M277 60V28H160",
+          "cross": {
+            "cx": 220,
+            "cy": 28,
+            "size": 11
+          },
+          "id": "f1"
+        },
+        {
+          "text": "reuse",
+          "x": 244,
+          "y": 18,
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "By",
+        "Wait exit"
+      ],
+      "rows": [
+        [
+          "initialized",
+          "ready",
+          "a `SessionStart` hook with source `startup`",
+          "0"
+        ],
+        [
+          "ready",
+          "armed",
+          "`codeflow delegate arm`",
+          ""
+        ],
+        [
+          "armed",
+          "accepted",
+          "a matching `UserPromptSubmit` hook",
+          "0"
+        ],
+        [
+          "accepted",
+          "completed",
+          "a `Stop` hook",
+          "0"
+        ],
+        [
+          "accepted",
+          "failed",
+          "a `StopFailure` hook",
+          "10"
+        ],
+        [
+          "any",
+          "poisoned",
+          "a restarted, resumed or compacted session, or an unmatched event",
+          "11"
+        ],
+        [
+          "poisoned",
+          "any",
+          "forbidden: start a new run",
+          ""
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,455 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "present-guide-parts",
+    "family": "structure",
+    "binding": "authored",
+    "question": "Where do my notes go?",
+    "idea": "Your notes go from the isolated browser to a loopback service on your machine, which keeps them in an append-only ledger the agent reads from.",
+    "title": "Where your notes go",
+    "kicker": "The parts of a review",
+    "caption": "Everything a review writes stays on your machine under your user, and nothing from it is committed to the repository.",
+    "states": [
+      {
+        "name": "agentpart",
+        "mark": "optional",
+        "means": "The agent's session"
+      },
+      {
+        "name": "service",
+        "mark": "layer-remote",
+        "means": "Keeps the record"
+      },
+      {
+        "name": "browser",
+        "mark": "layer",
+        "means": "Where you read and comment"
+      },
+      {
+        "name": "talks",
+        "mark": "trans",
+        "means": "Sends to"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the service listens only on 127.0.0.1",
+        "source": "docs/present-guide.md#architecture",
+        "derive": "the service bullet",
+        "check": {
+          "kind": "contains",
+          "text": "only on `127.0.0.1`."
+        },
+        "value": true
+      },
+      {
+        "claim": "the feedback ledger is append-only and outside the repository",
+        "source": "docs/present-guide.md#architecture",
+        "derive": "the ledger bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- **The feedback ledger** is an append-only history kept outside the"
+        },
+        "value": true
+      },
+      {
+        "claim": "nothing from a session is committed",
+        "source": "docs/present-guide.md#architecture",
+        "derive": "the commit bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- Nothing from a session is committed."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 240,
+      "draw": [
+        {
+          "state": "agentpart",
+          "shape": "rect",
+          "x": 16,
+          "y": 70,
+          "w": 150,
+          "h": 60,
+          "rx": 8,
+          "id": "a"
+        },
+        {
+          "text": "agent session",
+          "x": 30,
+          "y": 96,
+          "style": "strong",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "text": "writes, then reads",
+          "x": 30,
+          "y": 118,
+          "style": "mute",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 190,
+          "y": 26,
+          "w": 514,
+          "h": 196
+        },
+        {
+          "text": "your machine, your user only",
+          "x": 206,
+          "y": 48,
+          "style": "head"
+        },
+        {
+          "state": "service",
+          "shape": "rect",
+          "x": 206,
+          "y": 62,
+          "w": 220,
+          "h": 76,
+          "rx": 8,
+          "cap": "end",
+          "id": "s"
+        },
+        {
+          "text": "loopback service",
+          "x": 222,
+          "y": 88,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "127.0.0.1 only",
+          "x": 222,
+          "y": 110,
+          "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "one per session",
+          "x": 222,
+          "y": 128,
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "browser",
+          "shape": "rect",
+          "x": 482,
+          "y": 62,
+          "w": 206,
+          "h": 76,
+          "rx": 8,
+          "id": "b"
+        },
+        {
+          "text": "isolated browser",
+          "x": 498,
+          "y": 88,
+          "style": "strong",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "its own profile",
+          "x": 498,
+          "y": 110,
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "never your everyday one",
+          "x": 498,
+          "y": 128,
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "service",
+          "shape": "rect",
+          "x": 206,
+          "y": 158,
+          "w": 220,
+          "h": 52,
+          "rx": 8,
+          "cap": "end",
+          "id": "l"
+        },
+        {
+          "text": "feedback ledger",
+          "x": 222,
+          "y": 181,
+          "style": "strong",
+          "for": [
+            "l"
+          ]
+        },
+        {
+          "text": "append-only",
+          "x": 222,
+          "y": 200,
+          "style": "mute",
+          "for": [
+            "l"
+          ]
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M168 92H204",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M204 112H168",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M428 100H480",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M480 120H428",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M316 142V156",
+          "head": "end",
+          "id": "e5"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 358,
+      "draw": [
+        {
+          "state": "agentpart",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 44,
+          "rx": 8,
+          "id": "a"
+        },
+        {
+          "text": "agent session",
+          "x": 22,
+          "y": 37,
+          "style": "strong",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "text": "writes, then reads",
+          "x": 160,
+          "y": 37,
+          "style": "mute",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M60 56V96",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M100 96V56",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 8,
+          "y": 98,
+          "w": 344,
+          "h": 250
+        },
+        {
+          "text": "your machine, your user only",
+          "x": 20,
+          "y": 120,
+          "style": "head"
+        },
+        {
+          "state": "service",
+          "shape": "rect",
+          "x": 20,
+          "y": 134,
+          "w": 320,
+          "h": 56,
+          "rx": 8,
+          "cap": "end",
+          "id": "s"
+        },
+        {
+          "text": "loopback service",
+          "x": 34,
+          "y": 158,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "127.0.0.1 only",
+          "x": 34,
+          "y": 180,
+          "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M60 194V218",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M100 218V194",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "state": "browser",
+          "shape": "rect",
+          "x": 20,
+          "y": 220,
+          "w": 150,
+          "h": 56,
+          "rx": 8,
+          "id": "b"
+        },
+        {
+          "text": "isolated",
+          "x": 34,
+          "y": 244,
+          "style": "strong",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "browser",
+          "x": 34,
+          "y": 266,
+          "style": "strong",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M280 194V218",
+          "head": "end",
+          "id": "e5"
+        },
+        {
+          "state": "service",
+          "shape": "rect",
+          "x": 190,
+          "y": 220,
+          "w": 150,
+          "h": 56,
+          "rx": 8,
+          "cap": "end",
+          "id": "l"
+        },
+        {
+          "text": "feedback",
+          "x": 204,
+          "y": 244,
+          "style": "strong",
+          "for": [
+            "l"
+          ]
+        },
+        {
+          "text": "ledger",
+          "x": 204,
+          "y": 266,
+          "style": "strong",
+          "for": [
+            "l"
+          ]
+        },
+        {
+          "text": "nothing is committed",
+          "x": 20,
+          "y": 318,
+          "style": "mute"
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Role"
+      ],
+      "rows": [
+        [
+          "agent session",
+          "writes the document, later reads your review and resolves it"
+        ],
+        [
+          "loopback service",
+          "one per session, listening only on 127.0.0.1; validates and stores revisions"
+        ],
+        [
+          "isolated browser",
+          "its own profile, never your everyday browser"
+        ],
+        [
+          "feedback ledger",
+          "append-only, owner-only, outside the repository"
+        ]
+      ]
+    }
+  }
+}

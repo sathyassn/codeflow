@@ -60,7 +60,21 @@
     { "declaration": "docs-portal/figures/cap-015/concept.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "concept" },
     { "declaration": "docs-portal/figures/cap-015/architecture.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "architecture" },
     { "declaration": "docs-portal/figures/cap-015/technical.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "technical" },
-    { "declaration": "docs-portal/figures/cap-015/howto-adopt.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "technical", "anchor": "adopt-and-build-the-portal" }
+    { "declaration": "docs-portal/figures/cap-015/howto-adopt.json", "route": "orient/capabilities/CAP-015-opt-in-documentation-portal", "panel": "technical", "anchor": "adopt-and-build-the-portal" },
+    { "declaration": "docs-portal/figures/present-guide/concept.json", "route": "guides/present-guide", "panel": "concept" },
+    { "declaration": "docs-portal/figures/present-guide/architecture.json", "route": "guides/present-guide", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/present-guide/technical.json", "route": "guides/present-guide", "panel": "technical" },
+    { "declaration": "docs-portal/figures/present-guide/howto-export.json", "route": "guides/present-guide", "panel": "technical", "anchor": "export-or-close-a-session" },
+    { "declaration": "docs-portal/figures/present-guide/howto-review.json", "route": "guides/present-guide", "panel": "technical", "anchor": "review-a-document" },
+    { "declaration": "docs-portal/figures/delegation/concept.json", "route": "guides/delegation", "panel": "concept" },
+    { "declaration": "docs-portal/figures/delegation/architecture.json", "route": "guides/delegation", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/delegation/technical.json", "route": "guides/delegation", "panel": "technical" },
+    { "declaration": "docs-portal/figures/delegation/howto-herdr.json", "route": "guides/delegation", "panel": "technical", "anchor": "host-a-peer-in-herdr" },
+    { "declaration": "docs-portal/figures/delegation/howto-once.json", "route": "guides/delegation", "panel": "technical", "anchor": "consult-or-delegate-once" },
+    { "declaration": "docs-portal/figures/troubleshooting/concept.json", "route": "guides/troubleshooting", "panel": "concept" },
+    { "declaration": "docs-portal/figures/troubleshooting/architecture.json", "route": "guides/troubleshooting", "panel": "architecture" },
+    { "declaration": "docs-portal/figures/troubleshooting/technical.json", "route": "guides/troubleshooting", "panel": "technical" },
+    { "declaration": "docs-portal/figures/troubleshooting/howto-fix.json", "route": "guides/troubleshooting", "panel": "technical", "anchor": "fix-a-failing-check" }
   ],
   "base": "/"
 }

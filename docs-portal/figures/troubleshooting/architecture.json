@@ -1,0 +1,883 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "doctor-check-groups",
+    "family": "structure",
+    "binding": "authored",
+    "question": "Which check inspects which surface, and which checks can fail?",
+    "idea": "The fifteen checks fall into six groups by the surface they read, and only six of them can fail; the other nine warn at most.",
+    "title": "The fifteen checks, by what they read",
+    "kicker": "Doctor checks",
+    "caption": "A FAIL comes only from hooks, config, permissions, model bindings, the delegate round trip or repository integrity.",
+    "states": [
+      {
+        "name": "group",
+        "mark": "layer",
+        "means": "What the checks read"
+      },
+      {
+        "name": "canfail",
+        "mark": "agent",
+        "means": "Can fail"
+      },
+      {
+        "name": "warnonly",
+        "mark": "node",
+        "means": "Warns at most"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "six checks can fail",
+        "source": "docs/troubleshooting.md#technical",
+        "derive": "the fail sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Six checks can fail: `hooks`, `config`, `permissions`,"
+        },
+        "value": true
+      },
+      {
+        "claim": "the other nine warn at most",
+        "source": "docs/troubleshooting.md#technical",
+        "derive": "the warn sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The other nine warn"
+        },
+        "value": true
+      },
+      {
+        "claim": "the checks fall into six groups",
+        "source": "docs/troubleshooting.md#architecture",
+        "derive": "the group count",
+        "check": {
+          "kind": "count-items"
+        },
+        "value": 6
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 332,
+      "draw": [
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 16,
+          "y": 16,
+          "w": 224,
+          "h": 150,
+          "rx": 8,
+          "id": "g0"
+        },
+        {
+          "text": "Git hooks and CI",
+          "x": 30,
+          "y": 40,
+          "style": "strong",
+          "for": [
+            "g0"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 64,
+          "r": 6,
+          "id": "g0c0"
+        },
+        {
+          "text": "hooks",
+          "x": 56,
+          "y": 69,
+          "style": "mono",
+          "for": [
+            "g0c0",
+            "g0"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 88,
+          "r": 6,
+          "id": "g0c1"
+        },
+        {
+          "text": "ci-perimeter",
+          "x": 56,
+          "y": 93,
+          "style": "mono",
+          "for": [
+            "g0c1",
+            "g0"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 248,
+          "y": 16,
+          "w": 224,
+          "h": 150,
+          "rx": 8,
+          "id": "g1"
+        },
+        {
+          "text": "Harness wiring",
+          "x": 262,
+          "y": 40,
+          "style": "strong",
+          "for": [
+            "g1"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 64,
+          "r": 6,
+          "id": "g1c0"
+        },
+        {
+          "text": "claude",
+          "x": 288,
+          "y": 69,
+          "style": "mono",
+          "for": [
+            "g1c0",
+            "g1"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 88,
+          "r": 6,
+          "id": "g1c1"
+        },
+        {
+          "text": "codex",
+          "x": 288,
+          "y": 93,
+          "style": "mono",
+          "for": [
+            "g1c1",
+            "g1"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 112,
+          "r": 6,
+          "id": "g1c2"
+        },
+        {
+          "text": "grok",
+          "x": 288,
+          "y": 117,
+          "style": "mono",
+          "for": [
+            "g1c2",
+            "g1"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 480,
+          "y": 16,
+          "w": 224,
+          "h": 150,
+          "rx": 8,
+          "id": "g2"
+        },
+        {
+          "text": "Policy and config",
+          "x": 494,
+          "y": 40,
+          "style": "strong",
+          "for": [
+            "g2"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 504,
+          "cy": 64,
+          "r": 6,
+          "id": "g2c0"
+        },
+        {
+          "text": "config",
+          "x": 520,
+          "y": 69,
+          "style": "mono",
+          "for": [
+            "g2c0",
+            "g2"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 504,
+          "cy": 88,
+          "r": 6,
+          "id": "g2c1"
+        },
+        {
+          "text": "permissions",
+          "x": 520,
+          "y": 93,
+          "style": "mono",
+          "for": [
+            "g2c1",
+            "g2"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 16,
+          "y": 176,
+          "w": 224,
+          "h": 150,
+          "rx": 8,
+          "id": "g3"
+        },
+        {
+          "text": "Delegates, models, network",
+          "x": 30,
+          "y": 200,
+          "style": "strong",
+          "for": [
+            "g3"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 224,
+          "r": 6,
+          "id": "g3c0"
+        },
+        {
+          "text": "delegates",
+          "x": 56,
+          "y": 229,
+          "style": "mono",
+          "for": [
+            "g3c0",
+            "g3"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 248,
+          "r": 6,
+          "id": "g3c1"
+        },
+        {
+          "text": "model-bindings",
+          "x": 56,
+          "y": 253,
+          "style": "mono",
+          "for": [
+            "g3c1",
+            "g3"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 272,
+          "r": 6,
+          "id": "g3c2"
+        },
+        {
+          "text": "delegate-roundtrip",
+          "x": 56,
+          "y": 277,
+          "style": "mono",
+          "for": [
+            "g3c2",
+            "g3"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 40,
+          "cy": 296,
+          "r": 6,
+          "id": "g3c3"
+        },
+        {
+          "text": "network",
+          "x": 56,
+          "y": 301,
+          "style": "mono",
+          "for": [
+            "g3c3",
+            "g3"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 248,
+          "y": 176,
+          "w": 224,
+          "h": 150,
+          "rx": 8,
+          "id": "g4"
+        },
+        {
+          "text": "Repository, managed files",
+          "x": 262,
+          "y": 200,
+          "style": "strong",
+          "for": [
+            "g4"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 224,
+          "r": 6,
+          "id": "g4c0"
+        },
+        {
+          "text": "repo-integrity",
+          "x": 288,
+          "y": 229,
+          "style": "mono",
+          "for": [
+            "g4c0",
+            "g4"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 272,
+          "cy": 248,
+          "r": 6,
+          "id": "g4c1"
+        },
+        {
+          "text": "managed-drift",
+          "x": 288,
+          "y": 253,
+          "style": "mono",
+          "for": [
+            "g4c1",
+            "g4"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 480,
+          "y": 176,
+          "w": 224,
+          "h": 150,
+          "rx": 8,
+          "id": "g5"
+        },
+        {
+          "text": "Customization, tests",
+          "x": 494,
+          "y": 200,
+          "style": "strong",
+          "for": [
+            "g5"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 504,
+          "cy": 224,
+          "r": 6,
+          "id": "g5c0"
+        },
+        {
+          "text": "customization",
+          "x": 520,
+          "y": 229,
+          "style": "mono",
+          "for": [
+            "g5c0",
+            "g5"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 504,
+          "cy": 248,
+          "r": 6,
+          "id": "g5c1"
+        },
+        {
+          "text": "test-config",
+          "x": 520,
+          "y": 253,
+          "style": "mono",
+          "for": [
+            "g5c1",
+            "g5"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 402,
+      "draw": [
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 168,
+          "h": 90,
+          "rx": 8,
+          "id": "g0"
+        },
+        {
+          "text": "Git hooks and CI",
+          "x": 20,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "g0"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 56,
+          "r": 6,
+          "id": "g0c0"
+        },
+        {
+          "text": "hooks",
+          "x": 42,
+          "y": 61,
+          "style": "mono",
+          "for": [
+            "g0c0",
+            "g0"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 80,
+          "r": 6,
+          "id": "g0c1"
+        },
+        {
+          "text": "ci-perimeter",
+          "x": 42,
+          "y": 85,
+          "style": "mono",
+          "for": [
+            "g0c1",
+            "g0"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 184,
+          "y": 10,
+          "w": 168,
+          "h": 114,
+          "rx": 8,
+          "id": "g1"
+        },
+        {
+          "text": "Harness wiring",
+          "x": 196,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "g1"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 56,
+          "r": 6,
+          "id": "g1c0"
+        },
+        {
+          "text": "claude",
+          "x": 218,
+          "y": 61,
+          "style": "mono",
+          "for": [
+            "g1c0",
+            "g1"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 80,
+          "r": 6,
+          "id": "g1c1"
+        },
+        {
+          "text": "codex",
+          "x": 218,
+          "y": 85,
+          "style": "mono",
+          "for": [
+            "g1c1",
+            "g1"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 104,
+          "r": 6,
+          "id": "g1c2"
+        },
+        {
+          "text": "grok",
+          "x": 218,
+          "y": 109,
+          "style": "mono",
+          "for": [
+            "g1c2",
+            "g1"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 8,
+          "y": 110,
+          "w": 168,
+          "h": 90,
+          "rx": 8,
+          "id": "g2"
+        },
+        {
+          "text": "Policy and config",
+          "x": 20,
+          "y": 134,
+          "style": "strong",
+          "for": [
+            "g2"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 156,
+          "r": 6,
+          "id": "g2c0"
+        },
+        {
+          "text": "config",
+          "x": 42,
+          "y": 161,
+          "style": "mono",
+          "for": [
+            "g2c0",
+            "g2"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 180,
+          "r": 6,
+          "id": "g2c1"
+        },
+        {
+          "text": "permissions",
+          "x": 42,
+          "y": 185,
+          "style": "mono",
+          "for": [
+            "g2c1",
+            "g2"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 8,
+          "y": 210,
+          "w": 168,
+          "h": 90,
+          "rx": 8,
+          "id": "g4"
+        },
+        {
+          "text": "Repository",
+          "x": 20,
+          "y": 234,
+          "style": "strong",
+          "for": [
+            "g4"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 256,
+          "r": 6,
+          "id": "g4c0"
+        },
+        {
+          "text": "repo-integrity",
+          "x": 42,
+          "y": 261,
+          "style": "mono",
+          "for": [
+            "g4c0",
+            "g4"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 28,
+          "cy": 280,
+          "r": 6,
+          "id": "g4c1"
+        },
+        {
+          "text": "managed-drift",
+          "x": 42,
+          "y": 285,
+          "style": "mono",
+          "for": [
+            "g4c1",
+            "g4"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 184,
+          "y": 134,
+          "w": 168,
+          "h": 90,
+          "rx": 8,
+          "id": "g5"
+        },
+        {
+          "text": "Customization",
+          "x": 196,
+          "y": 158,
+          "style": "strong",
+          "for": [
+            "g5"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 180,
+          "r": 6,
+          "id": "g5c0"
+        },
+        {
+          "text": "customization",
+          "x": 218,
+          "y": 185,
+          "style": "mono",
+          "for": [
+            "g5c0",
+            "g5"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 204,
+          "cy": 204,
+          "r": 6,
+          "id": "g5c1"
+        },
+        {
+          "text": "test-config",
+          "x": 218,
+          "y": 209,
+          "style": "mono",
+          "for": [
+            "g5c1",
+            "g5"
+          ]
+        },
+        {
+          "state": "group",
+          "shape": "rect",
+          "x": 8,
+          "y": 310,
+          "w": 344,
+          "h": 90,
+          "rx": 8,
+          "id": "g3"
+        },
+        {
+          "text": "Delegates, models, network",
+          "x": 20,
+          "y": 334,
+          "style": "strong",
+          "for": [
+            "g3"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 20,
+          "cy": 356,
+          "r": 6,
+          "id": "g3c0"
+        },
+        {
+          "text": "delegates",
+          "x": 34,
+          "y": 361,
+          "style": "mono",
+          "for": [
+            "g3c0",
+            "g3"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 212,
+          "cy": 356,
+          "r": 6,
+          "id": "g3c1"
+        },
+        {
+          "text": "model-bindings",
+          "x": 226,
+          "y": 361,
+          "style": "mono",
+          "for": [
+            "g3c1",
+            "g3"
+          ]
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 20,
+          "cy": 380,
+          "r": 6,
+          "id": "g3c2"
+        },
+        {
+          "text": "delegate-roundtrip",
+          "x": 34,
+          "y": 385,
+          "style": "mono",
+          "for": [
+            "g3c2",
+            "g3"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 212,
+          "cy": 380,
+          "r": 6,
+          "id": "g3c3"
+        },
+        {
+          "text": "network",
+          "x": 226,
+          "y": 385,
+          "style": "mono",
+          "for": [
+            "g3c3",
+            "g3"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Group",
+        "Can fail",
+        "Warns at most"
+      ],
+      "rows": [
+        [
+          "Git hooks and CI",
+          "`hooks`",
+          "`ci-perimeter`"
+        ],
+        [
+          "Harness wiring",
+          "none",
+          "`claude`, `codex`, `grok`"
+        ],
+        [
+          "Policy and config",
+          "`config`, `permissions`",
+          "none"
+        ],
+        [
+          "Delegates, models, network",
+          "`model-bindings`, `delegate-roundtrip`",
+          "`delegates`, `network`"
+        ],
+        [
+          "Repository, managed files",
+          "`repo-integrity`",
+          "`managed-drift`"
+        ],
+        [
+          "Customization, tests",
+          "none",
+          "`customization`, `test-config`"
+        ]
+      ]
+    }
+  }
+}

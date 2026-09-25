@@ -1,0 +1,389 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "present-guide-export",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state does a session end in when I export or close it?",
+    "idea": "Export makes a read-only copy and leaves the session active, close ends it, and clear removes closed sessions older than the window.",
+    "title": "Ending a review session",
+    "kicker": "How-to",
+    "caption": "Export while the session is active, because clear only ever removes sessions that are already closed.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "Session state"
+      },
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Command"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Not possible"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "clear removes closed sessions older than --older-than, default 30d",
+        "source": "docs/present-guide.md#technical",
+        "derive": "the clear row",
+        "check": {
+          "kind": "contains",
+          "text": "| Removes closed sessions older than `--older-than` (default `30d`)."
+        },
+        "value": true
+      },
+      {
+        "claim": "the export holds the document only",
+        "source": "docs/present-guide.md#technical",
+        "derive": "step 2",
+        "check": {
+          "kind": "contains",
+          "text": "holds the document only, without notes or review controls."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 176,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 16,
+          "y": 60,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "ac"
+        },
+        {
+          "text": "active",
+          "x": 76,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "ac"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M76 58V34H200",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "export",
+          "x": 90,
+          "y": 26,
+          "style": "mono",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 202,
+          "y": 16,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "ex"
+        },
+        {
+          "text": "HTML copy made",
+          "x": 277,
+          "y": 39,
+          "anchor": "middle",
+          "for": [
+            "ex"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M138 78H258",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "close",
+          "x": 198,
+          "y": 100,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 260,
+          "y": 60,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "cl"
+        },
+        {
+          "text": "closed",
+          "x": 320,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "cl"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M382 78H502",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "text": "clear, 30 days",
+          "x": 442,
+          "y": 118,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "t3"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 504,
+          "y": 60,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "gone"
+        },
+        {
+          "text": "removed",
+          "x": 564,
+          "y": 83,
+          "anchor": "middle",
+          "for": [
+            "gone"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M76 98V140H564V98",
+          "cross": {
+            "cx": 320,
+            "cy": 140,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "clear an active session",
+          "x": 320,
+          "y": 166,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 258,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "ac"
+        },
+        {
+          "text": "active",
+          "x": 83,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "ac"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M160 28H198",
+          "head": "end",
+          "id": "t1"
+        },
+        {
+          "text": "export",
+          "x": 180,
+          "y": 68,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 200,
+          "y": 10,
+          "w": 152,
+          "h": 36,
+          "rx": 8,
+          "id": "ex"
+        },
+        {
+          "text": "HTML copy",
+          "x": 276,
+          "y": 33,
+          "anchor": "middle",
+          "for": [
+            "ex"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 48V98",
+          "head": "end",
+          "id": "t2"
+        },
+        {
+          "text": "close",
+          "x": 96,
+          "y": 78,
+          "style": "mono",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 100,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "cl"
+        },
+        {
+          "text": "closed",
+          "x": 83,
+          "y": 123,
+          "anchor": "middle",
+          "for": [
+            "cl"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M83 138V188",
+          "head": "end",
+          "id": "t3"
+        },
+        {
+          "text": "clear, 30 days",
+          "x": 96,
+          "y": 168,
+          "style": "mono",
+          "for": [
+            "t3"
+          ]
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 8,
+          "y": 190,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "gone"
+        },
+        {
+          "text": "removed",
+          "x": 83,
+          "y": 213,
+          "anchor": "middle",
+          "for": [
+            "gone"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M160 208H290V64",
+          "cross": {
+            "cx": 290,
+            "cy": 140,
+            "size": 12
+          },
+          "id": "f1"
+        },
+        {
+          "text": "not while active",
+          "x": 352,
+          "y": 250,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "By"
+      ],
+      "rows": [
+        [
+          "active",
+          "active, with an HTML copy",
+          "`codeflow present export --out <file>`"
+        ],
+        [
+          "active",
+          "closed",
+          "`codeflow present close`"
+        ],
+        [
+          "closed",
+          "removed",
+          "`codeflow present clear`, after `--older-than` (default 30 days)"
+        ],
+        [
+          "active",
+          "removed",
+          "not possible: clear selects closed sessions only"
+        ]
+      ]
+    }
+  }
+}

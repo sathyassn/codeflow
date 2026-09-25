@@ -1,0 +1,477 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "delegation-concept",
+    "family": "flow",
+    "binding": "authored",
+    "question": "What does delegation do, and what is it not?",
+    "idea": "A consult returns a verdict to your agent, a delegate returns commits that pass the same gates before a human lands them, and no peer ever runs headless.",
+    "title": "Consult and delegate",
+    "kicker": "Delegation",
+    "caption": "A peer's reply counts only with a native thread id or lifecycle records behind it, and a peer's commits face the same gates as yours.",
+    "states": [
+      {
+        "name": "host",
+        "mark": "agent",
+        "means": "Your agent"
+      },
+      {
+        "name": "peer",
+        "mark": "state",
+        "means": "The peer model's session"
+      },
+      {
+        "name": "gates",
+        "mark": "layer-remote",
+        "means": "CodeFlow's gates"
+      },
+      {
+        "name": "flows",
+        "mark": "trans",
+        "means": "Sends"
+      },
+      {
+        "name": "back",
+        "mark": "return",
+        "means": "Returns"
+      },
+      {
+        "name": "human",
+        "mark": "human",
+        "means": "A human's act"
+      },
+      {
+        "name": "blocked",
+        "mark": "blocked",
+        "means": "Never done"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a consult is read-only and ends with a verdict line",
+        "source": "docs/delegation.md#concept",
+        "derive": "the consult sentence",
+        "check": {
+          "kind": "contains",
+          "text": "A consult is read-only, so the peer reads, tests and reasons, then ends its"
+        },
+        "value": true
+      },
+      {
+        "claim": "it never runs a peer headless",
+        "source": "docs/delegation.md#concept",
+        "derive": "the headless sentence",
+        "check": {
+          "kind": "contains",
+          "text": "It never runs a peer headless"
+        },
+        "value": true
+      },
+      {
+        "claim": "a human lands a delegate's work",
+        "source": "docs/delegation.md#architecture",
+        "derive": "the worktree bullet",
+        "check": {
+          "kind": "contains",
+          "text": "a human lands its work."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 256,
+      "draw": [
+        {
+          "state": "host",
+          "shape": "circle",
+          "cx": 64,
+          "cy": 110,
+          "r": 11,
+          "id": "h"
+        },
+        {
+          "text": "your agent",
+          "x": 64,
+          "y": 84,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M76 104C130 104 140 58 198 58",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "text": "consult",
+          "x": 138,
+          "y": 54,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "state": "peer",
+          "shape": "rect",
+          "x": 200,
+          "y": 40,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "c"
+        },
+        {
+          "text": "peer, read-only",
+          "x": 214,
+          "y": 63,
+          "style": "strong",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "back",
+          "shape": "path",
+          "d": "M372 66H420V20H8V110H51",
+          "open": "end",
+          "id": "b"
+        },
+        {
+          "text": "verdict line, with a native thread id",
+          "x": 240,
+          "y": 14,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M76 116C130 116 140 164 198 164",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "text": "delegate",
+          "x": 138,
+          "y": 184,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f2"
+          ]
+        },
+        {
+          "state": "peer",
+          "shape": "rect",
+          "x": 200,
+          "y": 146,
+          "w": 170,
+          "h": 36,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "peer, in a worktree",
+          "x": 214,
+          "y": 169,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M372 164H418",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "text": "commits",
+          "x": 395,
+          "y": 132,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "f3"
+          ]
+        },
+        {
+          "state": "gates",
+          "shape": "rect",
+          "x": 420,
+          "y": 146,
+          "w": 150,
+          "h": 36,
+          "rx": 8,
+          "id": "g"
+        },
+        {
+          "text": "the same gates",
+          "x": 434,
+          "y": 169,
+          "style": "strong",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M572 164H622",
+          "head": "end",
+          "id": "f4"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 636,
+          "cy": 164,
+          "r": 10,
+          "id": "hu"
+        },
+        {
+          "text": "a human lands it",
+          "x": 704,
+          "y": 198,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "hu"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M64 124V240H200",
+          "cross": {
+            "cx": 130,
+            "cy": 240,
+            "size": 12
+          },
+          "id": "x"
+        },
+        {
+          "text": "a headless peer run",
+          "x": 212,
+          "y": 245,
+          "for": [
+            "x"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 314,
+      "draw": [
+        {
+          "state": "host",
+          "shape": "circle",
+          "cx": 180,
+          "cy": 20,
+          "r": 10,
+          "id": "h"
+        },
+        {
+          "text": "your agent",
+          "x": 198,
+          "y": 18,
+          "style": "strong",
+          "for": [
+            "h"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M170 30C150 50 100 50 100 70",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "state": "peer",
+          "shape": "rect",
+          "x": 8,
+          "y": 72,
+          "w": 164,
+          "h": 36,
+          "rx": 8,
+          "id": "c"
+        },
+        {
+          "text": "consult, read-only",
+          "x": 22,
+          "y": 95,
+          "style": "strong",
+          "for": [
+            "c"
+          ]
+        },
+        {
+          "state": "back",
+          "shape": "path",
+          "d": "M40 70V20H168",
+          "open": "end",
+          "id": "b"
+        },
+        {
+          "text": "verdict",
+          "x": 46,
+          "y": 46,
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M190 30C210 50 262 50 262 70",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "state": "peer",
+          "shape": "rect",
+          "x": 188,
+          "y": 72,
+          "w": 164,
+          "h": 36,
+          "rx": 8,
+          "id": "d"
+        },
+        {
+          "text": "delegate, worktree",
+          "x": 202,
+          "y": 95,
+          "style": "strong",
+          "for": [
+            "d"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M270 110V144",
+          "head": "end",
+          "id": "f3"
+        },
+        {
+          "text": "commits",
+          "x": 258,
+          "y": 131,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f3"
+          ]
+        },
+        {
+          "state": "gates",
+          "shape": "rect",
+          "x": 188,
+          "y": 146,
+          "w": 164,
+          "h": 36,
+          "rx": 8,
+          "id": "g"
+        },
+        {
+          "text": "the same gates",
+          "x": 202,
+          "y": 169,
+          "style": "strong",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M270 184V210",
+          "head": "end",
+          "id": "f4"
+        },
+        {
+          "state": "human",
+          "shape": "circle",
+          "cx": 270,
+          "cy": 222,
+          "r": 10,
+          "id": "hu"
+        },
+        {
+          "text": "a human lands it",
+          "x": 270,
+          "y": 256,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "hu"
+          ]
+        },
+        {
+          "state": "blocked",
+          "shape": "path",
+          "d": "M180 30V278H60",
+          "cross": {
+            "cx": 120,
+            "cy": 278,
+            "size": 11
+          },
+          "id": "x"
+        },
+        {
+          "text": "a headless peer run",
+          "x": 8,
+          "y": 304,
+          "for": [
+            "x"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Mode",
+        "The peer",
+        "What returns",
+        "Then"
+      ],
+      "rows": [
+        [
+          "consult",
+          "reads, tests and reasons, read-only",
+          "a verdict line with a native thread id or lifecycle records",
+          "your agent checks it against its own analysis"
+        ],
+        [
+          "delegate",
+          "works in its own worktree on a feature branch",
+          "commits",
+          "the same gates, then a human lands them"
+        ],
+        [
+          "headless run",
+          "never",
+          "nothing",
+          "prohibited"
+        ]
+      ]
+    }
+  }
+}
