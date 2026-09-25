@@ -8,6 +8,7 @@ import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import YAML from "yaml";
+import { slugHeading } from "./figure-grammar.mjs";
 import { ALTITUDE_PANELS, DERIVED_LOOKUPS, PAGE_CLASS_REASONS, PANEL_CARRIER_ALTERNATES } from "./page-classes.mjs";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
@@ -720,8 +721,9 @@ function validatePageClasses(value) {
 }
 
 // Every figure is bound to its page here, by route and by an altitude panel
-// or a section anchor of an illustrated source, never by a marker inside a
-// source. The declaration file is a committed repository input.
+// (optionally narrowed to a section anchor inside that panel) or a section
+// anchor of an illustrated source, never by a marker inside a source. The
+// declaration file is a committed repository input.
 function validateFigureBindings(value) {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 512) throw new Error("portal.config.json: figures must be an array of at most 512 bindings");
@@ -732,7 +734,6 @@ function validateFigureBindings(value) {
     safeRelative(binding.declaration, "figures declaration");
     if (!binding.declaration.endsWith(".json")) throw new Error(`portal.config.json: figure declaration ${binding.declaration} must be a JSON file`);
     safeRelative(binding.route, "figures route");
-    if (binding.panel !== undefined && binding.anchor !== undefined) throw new Error(`portal.config.json: figure ${binding.declaration} binds a panel or an anchor, not both`);
     if (binding.panel !== undefined && !ALTITUDE_PANELS.includes(binding.panel)) throw new Error(`portal.config.json: figure ${binding.declaration} panel must be one of ${ALTITUDE_PANELS.join(", ")}`);
     if (binding.anchor !== undefined && (typeof binding.anchor !== "string" || !/^[\p{L}\p{N}_-]{1,200}$/u.test(binding.anchor))) throw new Error(`portal.config.json: figure ${binding.declaration} anchor must be a heading slug`);
     const key = `${binding.route}\u0000${binding.declaration}`;
@@ -992,6 +993,10 @@ export function resolveAsIsLinks(markdown, options) {
 // A figure bound to an altitude panel sits directly under that panel's
 // heading. The heading must exist: a binding to a panel the source does not
 // author is a configuration error, never a silent drop.
+// Each block is a companion string placed directly under its panel heading,
+// or { value, heading } placed directly under the one heading inside that
+// panel whose slug equals the slug of `heading`, the source text of the
+// anchored heading the adapter already proved lies inside the panel.
 export function insertPanelFigures(markdown, blocksByPanel, sourcePath) {
   if (!blocksByPanel.size) return markdown;
   const tree = markdownTree(markdown);
@@ -1004,8 +1009,28 @@ export function insertPanelFigures(markdown, blocksByPanel, sourcePath) {
   for (const panel of blocksByPanel.keys()) {
     if (!found.has(panel)) throw new Error(`${sourcePath}: a figure is bound to the ${panel} panel, but the source has no "## ${panel[0].toUpperCase()}${panel.slice(1)}" section`);
   }
-  for (const [panel, index] of [...found].sort((left, right) => right[1] - left[1])) {
-    tree.children.splice(index + 1, 0, ...blocksByPanel.get(panel).map((value) => ({ type: "html", value })));
+  const inserts = [];
+  for (const [panel, index] of found) {
+    const next = tree.children.findIndex((node, position) => position > index && node.type === "heading" && node.depth <= 2);
+    const end = next === -1 ? tree.children.length : next;
+    const atPanel = [];
+    for (const block of blocksByPanel.get(panel)) {
+      if (typeof block === "string") { atPanel.push(block); continue; }
+      const want = slugHeading(block.heading);
+      const matches = [];
+      for (let position = index + 1; position < end; position += 1) {
+        const node = tree.children[position];
+        if (node.type === "heading" && node.depth > 2 && slugHeading(visibleNodeText(node)) === want) matches.push(position);
+      }
+      if (matches.length !== 1) throw new Error(`${sourcePath}: a figure is bound to the section "${block.heading}" of the ${panel} panel, which names ${matches.length} headings there, not one`);
+      inserts.push({ at: matches[0], values: [block.value] });
+    }
+    if (atPanel.length) inserts.push({ at: index, values: atPanel });
+  }
+  const merged = new Map();
+  for (const insert of inserts) merged.set(insert.at, [...(merged.get(insert.at) ?? []), ...insert.values]);
+  for (const [at, values] of [...merged].sort((left, right) => right[0] - left[0])) {
+    tree.children.splice(at + 1, 0, ...values.map((value) => ({ type: "html", value })));
   }
   return stringifyMarkdown(tree);
 }

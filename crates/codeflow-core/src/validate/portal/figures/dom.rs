@@ -27,6 +27,9 @@ pub(super) struct RenderedFigures {
     /// Each element carrying the `cf-companion` class, in document order,
     /// with the level-two heading above it and its canonical form.
     pub companions: Vec<(Option<String>, String)>,
+    /// For each companion, the text of the nearest heading of any level
+    /// above it.
+    pub sections: Vec<Option<String>>,
     /// Elements outside every companion that carry figure or companion
     /// markup: a kit class or a figure data attribute.
     pub stray: usize,
@@ -98,11 +101,12 @@ pub(super) fn rendered_figures(markdown: &str) -> RenderedFigures {
     let document = Html::parse_document(&render_markdown(markdown));
     let mut found = RenderedFigures {
         companions: Vec::new(),
+        sections: Vec::new(),
         stray: 0,
         css: std::collections::BTreeSet::new(),
         active: std::collections::BTreeSet::new(),
     };
-    let mut heading = None;
+    let mut heading = Headings::default();
     walk(document.root_element(), &mut heading, &mut found);
     for element in document
         .root_element()
@@ -216,13 +220,27 @@ pub(super) fn canonical_fragment(fragment: &str) -> Option<String> {
     elements.next().is_none().then(|| canonical(first))
 }
 
-fn walk(element: ElementRef<'_>, heading: &mut Option<String>, found: &mut RenderedFigures) {
+/// The level-two heading and the nearest heading of any level seen so far.
+#[derive(Default)]
+struct Headings {
+    panel: Option<String>,
+    nearest: Option<String>,
+}
+
+fn walk(element: ElementRef<'_>, heading: &mut Headings, found: &mut RenderedFigures) {
     let name = element.value().name();
-    if name == "h2" {
-        *heading = Some(element.text().collect::<String>().trim().to_lowercase());
+    if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+        let text = element.text().collect::<String>();
+        if name == "h2" {
+            heading.panel = Some(text.trim().to_lowercase());
+        }
+        heading.nearest = Some(text.trim().to_string());
     }
     if has_class(element, |class| class == "cf-companion") {
-        found.companions.push((heading.clone(), canonical(element)));
+        found
+            .companions
+            .push((heading.panel.clone(), canonical(element)));
+        found.sections.push(heading.nearest.clone());
         return;
     }
     if figure_markup(element) {

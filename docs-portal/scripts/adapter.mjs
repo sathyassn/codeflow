@@ -10,7 +10,7 @@ import {
   asIsRegionStart, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks,
 } from "./lib.mjs";
 import { bindDerivedData, checkFacts, composeFigure, GRAMMAR_VERSION, markdownSections, parseFactSource, renderFigure, validateDeclaration } from "./figure-grammar.mjs";
-import { PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
+import { ALTITUDE_PANELS, PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { GENERATOR } from "./generator.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "./limits.mjs";
@@ -244,8 +244,9 @@ for (const layer of layers) {
 }
 
 // A binding names a published route and a place on it that the page's class
-// allows: a panel of an explanatory page, or the head or a section anchor of
-// an illustrated source. Pass-through and derived pages carry no figure.
+// allows: a panel of an explanatory page, optionally narrowed to a section
+// heading inside that panel, or the head or a section anchor of an
+// illustrated source. Pass-through and derived pages carry no figure.
 const pageByRoute = new Map(pages.map((page) => [page.route, page]));
 for (const binding of config.figures) {
   const page = pageByRoute.get(binding.route);
@@ -256,8 +257,10 @@ for (const binding of config.figures) {
   if (page.page_class === PAGE_CLASSES.illustrated.id && binding.panel !== undefined) throw new Error(`${where}: an illustrated source binds a figure to its head or a section anchor, not a panel`);
   if (page.page_class === PAGE_CLASSES.passThrough.id || page.page_class === PAGE_CLASSES.derivedLookup.id) throw new Error(`${where}: a ${page.page_class} page carries no figure`);
   if (binding.anchor !== undefined) {
-    const section = markdownSections(page.body).find((candidate) => candidate.anchor === binding.anchor);
+    const sections = markdownSections(page.body);
+    const section = sections.find((candidate) => candidate.anchor === binding.anchor);
     if (section === undefined || !sourceAnchors.get(page.source_path)?.has(binding.anchor)) throw new Error(`${where}: anchor #${binding.anchor} names no heading in ${page.source_path}`);
+    if (binding.panel !== undefined && panelOfSection(sections, section) !== binding.panel) throw new Error(`${where}: anchor #${binding.anchor} is not a section inside the ${binding.panel} panel`);
   }
 }
 for (const page of pages) {
@@ -276,7 +279,7 @@ for (const page of pages) {
     declaration_path: binding.declaration,
     declaration_sha256: figures.get(binding.declaration).sha256,
     figure_id: figures.get(binding.declaration).declaration.figure.id,
-    placement: binding.panel !== undefined ? "panel" : binding.anchor !== undefined ? "anchor" : "head",
+    placement: figurePlacement(binding),
     panel: binding.panel ?? null,
     anchor: binding.anchor ?? null,
   }));
@@ -429,6 +432,22 @@ function pinnedSourceUrl(sourcePath, target = "file") {
 
 // One bound figure as it lands on a page: the figure, then one line saying it
 // comes from its declaration in the configuration, never from the source.
+// A binding with an anchor is placed at that section, whether or not it also
+// names the panel the section sits in; a panel alone is placed at the panel.
+function figurePlacement(binding) {
+  return binding.anchor !== undefined ? "anchor" : binding.panel !== undefined ? "panel" : "head";
+}
+
+// The altitude panel a heading sits in: the nearest level-two heading above
+// it, when that heading names a panel, and only for a heading below level two.
+function panelOfSection(sections, section) {
+  if (section.level <= 2) return null;
+  const owner = sections.filter((candidate) => candidate.line < section.line && candidate.level <= 2).at(-1);
+  if (owner === undefined || owner.level !== 2) return null;
+  const label = owner.text.trim().toLowerCase();
+  return ALTITUDE_PANELS.includes(label) ? label : null;
+}
+
 function companionBlock(binding, placement, index) {
   const entry = figures.get(binding.declaration);
   const figureHtml = renderFigure(entry.declaration, { idPrefix: `cf-fig-${index}`, bound: entry.bound, facts: entry.facts });
@@ -553,9 +572,11 @@ function renderPage(page, bindings, routesById, previews, referencedMedia, ancho
     selfRoute: withBase(base, page.route),
   }), page.source_path);
   const panelBlocks = new Map();
+  const sections = markdownSections(page.body);
   bindings.forEach((binding, index) => {
     if (!panelBlocks.has(binding.panel)) panelBlocks.set(binding.panel, []);
-    panelBlocks.get(binding.panel).push(companionBlock(binding, "panel", index));
+    const value = companionBlock(binding, figurePlacement(binding), index);
+    panelBlocks.get(binding.panel).push(binding.anchor === undefined ? value : { value, heading: sections.find((section) => section.anchor === binding.anchor).text });
   });
   const withFigures = insertPanelFigures(sourceMarkdown, panelBlocks, page.source_path);
   const safeBody = decorateAltitude(page.source_path === CAPABILITY_REGISTRY ? renderCapabilityRegistry(withFigures, page.source_path) : withFigures);

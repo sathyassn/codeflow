@@ -9,6 +9,7 @@ import {
   assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages, declaredCarrierFailures,
   pageClassFailures, recordPointerRoute, recordRouteFailures, staleSourceFailures,
 } from "../scripts/page-classes.mjs";
+import { insertPanelFigures } from "../scripts/lib.mjs";
 import { COMPOSED_PAGE, SHELL_PAGE, panelBindings } from "./page-shapes.mjs";
 import { commitFixture, configureFixture, portalFixture, runAdapter, starterRoot } from "./portal-fixture.mjs";
 
@@ -29,6 +30,22 @@ const POINTER_OBSERVATION = Object.freeze({
   pointerColumns: [...RECORD_POINTER_COLUMNS], pointerRows: 4,
 });
 const PROSE_PANEL = Object.freeze({ figure: 0, stage: 0, table: 0, list: 0, pre: 0 });
+
+test("a figure bound to a section of a panel sits directly under that section's heading", () => {
+  const source = [
+    "## Concept", "", "What it is.", "", "### Install", "", "Not the one.", "",
+    "## Technical", "", "How it runs.", "", "### Install", "", "1. Run it.", "", "### Check", "", "Confirm it.", "",
+  ].join("\n");
+  const placed = insertPanelFigures(source, new Map([["technical", ["<div>panel</div>", { value: "<div>section</div>", heading: "Install" }]]]), "docs/a.md");
+  const lines = placed.split("\n").filter((line) => line.trim() !== "");
+  assert.equal(lines[lines.indexOf("## Technical") + 1], "<div>panel</div>");
+  assert.equal(lines.indexOf("<div>section</div>"), lines.lastIndexOf("### Install") + 1);
+  assert.equal(lines.filter((line) => line === "<div>section</div>").length, 1);
+  // A section outside the panel, or one the panel does not hold once, is refused.
+  assert.throws(() => insertPanelFigures(source, new Map([["technical", [{ value: "<div>x</div>", heading: "Scope" }]]]), "docs/a.md"), /names 0 headings there, not one/);
+  const twice = source.replace("### Check", "### Install");
+  assert.throws(() => insertPanelFigures(twice, new Map([["technical", [{ value: "<div>x</div>", heading: "Install" }]]]), "docs/a.md"), /names 2 headings there, not one/);
+});
 
 test("the page-class rules are declared once and enumerate what each class must show", () => {
   assert.deepEqual(ALTITUDE_PANELS, ["concept", "architecture", "technical"]);

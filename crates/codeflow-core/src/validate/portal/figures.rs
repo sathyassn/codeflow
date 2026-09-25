@@ -204,7 +204,8 @@ impl PageClassEntry {
     }
 }
 
-/// One `figures` binding: a declaration, a route, and a panel or an anchor.
+/// One `figures` binding: a declaration, a route, and a panel, an anchor, or
+/// both (an explanatory section inside its panel).
 #[derive(Clone, Debug)]
 pub(super) struct FigureBinding {
     declaration: String,
@@ -215,10 +216,10 @@ pub(super) struct FigureBinding {
 
 impl FigureBinding {
     fn placement(&self) -> &'static str {
-        if self.panel.is_some() {
-            "panel"
-        } else if self.anchor.is_some() {
+        if self.anchor.is_some() {
             "anchor"
+        } else if self.panel.is_some() {
+            "panel"
         } else {
             "head"
         }
@@ -365,7 +366,6 @@ pub(super) fn configured_figure_bindings(
             .keys()
             .all(|key| ["declaration", "route", "panel", "anchor"].contains(&key.as_str()))
             && object.values().all(serde_json::Value::is_string)
-            && !(panel.is_some() && anchor.is_some())
             && panel
                 .as_deref()
                 .is_none_or(|panel| ALTITUDE_PANELS.contains(&panel))
@@ -912,8 +912,17 @@ fn verify_page_class(
         .iter()
         .filter(|binding| &binding.route == route)
         .collect();
+    let source = context
+        .source_blobs
+        .get(&page.source_path)
+        .and_then(|bytes| std::str::from_utf8(bytes).ok());
     let allowed = match class {
-        EXPLANATORY => bindings.iter().all(|binding| binding.panel.is_some()),
+        EXPLANATORY => bindings.iter().all(|binding| {
+            binding.panel.is_some()
+                && binding.anchor.as_deref().is_none_or(|anchor| {
+                    source.and_then(|text| panel_of_anchor(text, anchor)) == binding.panel
+                })
+        }),
         "illustrated" => bindings.iter().all(|binding| binding.panel.is_none()),
         _ => bindings.is_empty(),
     };
@@ -942,7 +951,7 @@ fn verify_page_class(
     match class {
         EXPLANATORY => {
             if let Some(output) = rendered {
-                verify_rendered_figures(page, output, true, declarations, report);
+                verify_rendered_figures(page, output, source, declarations, report);
             }
             if page.source_region.is_some() || page.lookup.is_some() {
                 report.issues.push(format!(
@@ -953,13 +962,13 @@ fn verify_page_class(
         "derived-lookup" => {
             verify_lookup(page, entry, context, report);
             if let Some(output) = rendered {
-                verify_rendered_figures(page, output, false, declarations, report);
+                verify_rendered_figures(page, output, None, declarations, report);
             }
         }
         _ => match (&page.source_region, rendered) {
             (Some(region), Some(output)) => {
                 verify_source_region(page, region, output, context, declarations, report);
-                verify_rendered_figures(page, output, false, declarations, report);
+                verify_rendered_figures(page, output, None, declarations, report);
             }
             (None, _) => report.issues.push(format!(
                 "{route} {class} source records no unchanged source region"
@@ -971,8 +980,9 @@ fn verify_page_class(
 
 /// Every figure a page puts in front of a reader must be a companion that
 /// equals the reconstruction of a declaration bound to that page, each
-/// binding exactly once, compared as parsed HTML. On an explanatory page each
-/// sits under its declared panel heading. Figure or companion markup anywhere
+/// binding exactly once, compared as parsed HTML. On an explanatory page, whose
+/// committed source is passed, each sits under its declared panel heading and
+/// an anchored one directly under its section heading. Figure or companion markup anywhere
 /// else fails, however it is spelled; a comment renders nothing and text that
 /// names a kit class is not markup. The page content carries no CSS and no
 /// executable content: only the site's own built sheets and runtime may style
@@ -980,11 +990,29 @@ fn verify_page_class(
 fn verify_rendered_figures(
     page: &Page,
     output: &str,
-    panels: bool,
+    explanatory_source: Option<&str>,
     declarations: &BTreeMap<String, Pinned>,
     report: &mut PortalValidationReport,
 ) {
     let route = &page.route;
+    let panels = explanatory_source.is_some();
+    let sections = explanatory_source
+        .map(markdown_sections)
+        .unwrap_or_default();
+    // The heading an anchored companion must sit under, slugged from its
+    // rendered text; `None` for a figure placed at its panel heading.
+    let section_slugs: Vec<Option<String>> = page
+        .figures
+        .iter()
+        .map(|figure| {
+            figure.anchor.as_ref().map(|anchor| {
+                sections
+                    .iter()
+                    .find(|section| &section.anchor == anchor)
+                    .map_or_else(String::new, |section| slug_heading(&section.text))
+            })
+        })
+        .collect();
     let rendered = dom::rendered_figures(markdown_body(output));
     let mut expected = Vec::new();
     for (index, figure) in page.figures.iter().enumerate() {
@@ -1006,13 +1034,18 @@ fn verify_rendered_figures(
         }
     }
     let mut matched = vec![false; expected.len()];
-    for (panel, companion) in &rendered.companions {
+    for ((panel, companion), under) in rendered.companions.iter().zip(&rendered.sections) {
         let found = expected
             .iter()
             .enumerate()
             .position(|(index, (want, _, text))| {
                 !matched[index]
-                    && (!panels || want == panel)
+                    && (!panels
+                        || (want == panel
+                            && section_slugs[index].as_ref().is_none_or(|slug| {
+                                !slug.is_empty()
+                                    && under.as_deref().map(slug_heading).as_ref() == Some(slug)
+                            })))
                     && text.as_deref() == Some(companion.as_str())
             });
         match found {
@@ -1400,11 +1433,13 @@ fn title_matches(raw: &str, title: &str) -> bool {
         || (rest(&unprefixed) == rest(&wanted) && first(&unprefixed) == first(&wanted))
 }
 
-/// One ATX heading outside fenced code: its line, level, anchor and the lines
-/// of its section.
+/// One ATX heading outside fenced code: its line, level, anchor, source text
+/// and the lines of its section.
 struct Section {
     line: usize,
+    level: usize,
     anchor: String,
+    text: String,
     body: String,
 }
 
@@ -1419,7 +1454,7 @@ fn markdown_sections(text: &str) -> Vec<Section> {
     let normalized = normalize_markdown_source(text);
     let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
     let lines: Vec<&str> = normalized.split('\n').collect();
-    let mut headings: Vec<(usize, usize, String)> = Vec::new();
+    let mut headings: Vec<(usize, usize, String, String)> = Vec::new();
     let mut seen = BTreeMap::<String, usize>::new();
     let mut fence: Option<(char, usize)> = None;
     for (index, line) in lines.iter().enumerate() {
@@ -1460,23 +1495,42 @@ fn markdown_sections(text: &str) -> Vec<Section> {
             format!("{base}-{count}")
         };
         *count += 1;
-        headings.push((index, level, anchor));
+        headings.push((index, level, anchor, raw.to_string()));
     }
     headings
         .iter()
         .enumerate()
-        .map(|(position, (line, level, anchor))| {
+        .map(|(position, (line, level, anchor, text))| {
             let next = headings[position + 1..]
                 .iter()
-                .find(|(_, candidate, _)| candidate <= level)
-                .map_or(lines.len(), |(next, _, _)| *next);
+                .find(|(_, candidate, _, _)| candidate <= level)
+                .map_or(lines.len(), |(next, _, _, _)| *next);
             Section {
                 line: *line,
+                level: *level,
                 anchor: anchor.clone(),
+                text: text.clone(),
                 body: lines[line + 1..next].join("\n"),
             }
         })
         .collect()
+}
+
+/// The altitude panel an anchored heading sits in: the nearest level-two
+/// heading above it names the panel, and the heading itself is below level
+/// two. `None` when the anchor names no such heading.
+fn panel_of_anchor(source: &str, anchor: &str) -> Option<String> {
+    let sections = markdown_sections(source);
+    let target = sections.iter().find(|section| section.anchor == anchor)?;
+    if target.level <= 2 {
+        return None;
+    }
+    let owner = sections
+        .iter()
+        .rev()
+        .find(|section| section.line < target.line && section.level <= 2)?;
+    let label = owner.text.trim().to_lowercase();
+    (owner.level == 2 && ALTITUDE_PANELS.contains(&label.as_str())).then_some(label)
 }
 
 fn slug_heading(raw: &str) -> String {
@@ -1736,7 +1790,8 @@ mod tests {
         let bindings = serde_json::json!([
             { "declaration": "figures/a.json", "route": "orient/product", "panel": "concept" },
             { "declaration": "figures/b.json", "route": "reference/guide", "anchor": "install" },
-            { "declaration": "figures/c.json", "route": "reference/guide" }
+            { "declaration": "figures/c.json", "route": "reference/guide" },
+            { "declaration": "figures/d.json", "route": "orient/adoption", "panel": "technical", "anchor": "install" }
         ]);
         let parsed =
             configured_figure_bindings(Some(&bindings), &mut report).expect("closed bindings");
@@ -1745,12 +1800,11 @@ mod tests {
                 .iter()
                 .map(FigureBinding::placement)
                 .collect::<Vec<_>>(),
-            ["panel", "anchor", "head"]
+            ["panel", "anchor", "head", "anchor"]
         );
         for rejected in [
             serde_json::json!([{ "declaration": "figures/a.md", "route": "x" }]),
             serde_json::json!([{ "declaration": "figures/a.json", "route": "x", "panel": "summary" }]),
-            serde_json::json!([{ "declaration": "figures/a.json", "route": "x", "panel": "concept", "anchor": "a" }]),
             serde_json::json!([{ "declaration": "../a.json", "route": "x" }]),
             serde_json::json!([{ "declaration": "figures/a.json", "route": "x", "anchor": "not an anchor" }]),
             serde_json::json!([{ "declaration": "figures/a.json", "route": "x" }, { "declaration": "figures/a.json", "route": "x" }]),
@@ -1759,6 +1813,91 @@ mod tests {
             assert!(
                 configured_figure_bindings(Some(&rejected), &mut report).is_none(),
                 "{rejected} was accepted"
+            );
+        }
+    }
+
+    const ALTITUDES: &str = "# Adoption\n\n## Concept\n\nWhat it is.\n\n### Scope\n\nWhat it covers.\n\n## Technical\n\nHow it runs.\n\n### Install\n\n1. Run it.\n2. Check it.\n\n### Check\n\nConfirm it.\n\n## Technical notes\n\n### Later\n\nNot a panel.\n";
+
+    #[test]
+    fn an_anchor_belongs_to_the_panel_above_it() {
+        assert_eq!(
+            panel_of_anchor(ALTITUDES, "install").as_deref(),
+            Some("technical")
+        );
+        assert_eq!(
+            panel_of_anchor(ALTITUDES, "scope").as_deref(),
+            Some("concept")
+        );
+        // A panel heading itself, a heading under a level-two heading that is
+        // not a panel, the title, and an unknown anchor name no panel section.
+        for anchor in ["technical", "later", "adoption", "missing"] {
+            assert_eq!(panel_of_anchor(ALTITUDES, anchor), None, "{anchor}");
+        }
+    }
+
+    /// An explanatory page whose one figure is bound to the Install section
+    /// of its Technical panel, rendered with the companion after `heading`.
+    fn anchored_page_issues(heading: &str) -> Vec<String> {
+        let placement = "anchor";
+        let sha256 = sha256_hex(DECLARATION.as_bytes());
+        let pinned = Pinned {
+            sha256: sha256.clone(),
+            declaration: serde_json::from_str(DECLARATION).unwrap(),
+            derived: None,
+        };
+        let companion = pinned
+            .companion("figures/steps.json", placement, 0)
+            .unwrap();
+        let page: super::super::Page = serde_json::from_value(serde_json::json!({
+            "source_path": "docs/adoption.md",
+            "source_sha256": "0".repeat(64),
+            "built_from_commit": "0".repeat(40),
+            "route": "orient/adoption",
+            "title": "Adoption",
+            "status": null,
+            "output_markdown": "src/content/docs/orient/adoption.md",
+            "output_markdown_sha256": "0".repeat(64),
+            "markdown_twin": "public/markdown/orient/adoption.md",
+            "markdown_twin_sha256": "0".repeat(64),
+            "stale": false,
+            "searchable": true,
+            "ids": [],
+            "relationships": [],
+            "snippets": [],
+            "figures": [{
+                "declaration_path": "figures/steps.json",
+                "declaration_sha256": sha256,
+                "figure_id": "steps",
+                "placement": placement,
+                "panel": "technical",
+                "anchor": "install"
+            }]
+        }))
+        .unwrap();
+        let body = ALTITUDES.strip_prefix("# Adoption\n\n").unwrap();
+        let output = format!(
+            "---\ntitle: \"Adoption\"\n---\n\n{}",
+            body.replacen(heading, &format!("{heading}\n\n{companion}\n"), 1)
+        );
+        let declarations = BTreeMap::from([("figures/steps.json".to_string(), pinned)]);
+        let mut report = PortalValidationReport::default();
+        verify_rendered_figures(&page, &output, Some(ALTITUDES), &declarations, &mut report);
+        report.issues
+    }
+
+    #[test]
+    fn an_anchored_figure_sits_directly_under_its_section_heading() {
+        assert_eq!(anchored_page_issues("### Install"), Vec::<String>::new());
+        let not_rendered =
+            "orient/adoption does not render the figure its declaration figures/steps.json draws";
+        // At the panel heading, under a sibling section, or in another panel,
+        // the companion is not where its binding places it.
+        for heading in ["## Technical", "### Check", "### Scope"] {
+            let issues = anchored_page_issues(heading);
+            assert!(
+                issues.iter().any(|issue| issue == not_rendered),
+                "{heading}: {issues:?}"
             );
         }
     }
