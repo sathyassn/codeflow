@@ -32,13 +32,17 @@ publication date._
 
 <!-- codeflow:release-impact minor -->
 - **Written content policy check (ADR-0067).** The commit-msg hook and
-  `codeflow ci` block em and en dashes in new commit messages, pull request
+  `codeflow ci` report em and en dashes in new commit messages, pull request
   bodies and lines a change adds under `docs/`, `project-management/` and the
-  skill trees. Existing lines are left alone. The new `git.policy_characters`
-  key defaults to `block`, including when a policy file omits it.
-  `codeflow update` adds the key to an existing `policy.json`. Upgrade the
-  `codeflow` on `PATH` before running `codeflow update`: the hooks call that
-  binary, and an older one rejects the new key and blocks every commit.
+  skill trees. Existing lines are left alone, and so is a file whose bytes
+  equal the managed asset the running `codeflow` ships for that path, so the
+  scaffold and `codeflow update` ranges never trip on the managed skills. The
+  new `git.policy_characters` key defaults to `warn`, including when a policy
+  file omits it; set it to `block` to enforce the guideline, as CodeFlow's own
+  repository does. `codeflow update` adds the key to an existing
+  `policy.json`. Upgrade the `codeflow` on `PATH` before running
+  `codeflow update`: the hooks call that binary, and an older one rejects the
+  new key and blocks every commit.
 
 <!-- codeflow:release-impact minor -->
 - **Responsible-autonomy diagnostics.** The standard/full model-evaluation kit
@@ -167,6 +171,43 @@ publication date._
   or substitution that a shell or any other program can run is still checked.
   A `cd` or `-C` chain that switches to a new branch before committing is
   judged on that branch.
+
+<!-- codeflow:release-impact patch -->
+- **Delegate turns accept a pasted prompt.** Claude Code submits a long or
+  multi-line pasted prompt inside a `<pasted_content id="N">` envelope with a
+  per-session id of four lowercase hex digits, and tells the model to act on
+  pasted text only where the user's own words say so. The delegate-turn hook
+  used to reject that envelope as a digest mismatch, and a bare paste could be
+  refused by the model. The delivering host now types one fixed sentence,
+  `Carry out the pasted instructions.`, after the paste. The hook accepts the
+  prompt when its bytes match exactly, or when it is exactly the envelope
+  Claude Code submits around the armed bytes followed by that sentence, and
+  `accepted.json` records which delivery matched. A bare envelope, another
+  sentence, extra text, or any other prefix, id or shape still fails.
+
+<!-- codeflow:release-impact patch -->
+- **Portal writes work on Windows.** Every `codeflow portal` write on Windows
+  failed with "The parameter is incorrect" (or a length error for
+  one-character names) when it moved a staged file into place. The rename
+  now goes straight to the kernel with the name resolved under the held
+  destination directory and a correctly sized request, so it no longer
+  depends on the process working directory. Reparse points are still
+  refused and no path outside the portal root is opened.
+
+<!-- codeflow:release-impact patch -->
+- **Delegate turns survive backgrounded work.** When a delegated session
+  backgrounds a Workflow or a Bash command, Claude Code reports its end with a
+  task notice after the turn stops, and the delegate-turn hook used to block
+  that notice as an unarmed prompt. The hook now admits exactly one notice
+  envelope as a continuation of the current turn when the session transcript
+  shows that turn launched the task, records it under the turn's
+  `continuations/`, and closes it with the Stop that follows instead of
+  poisoning the run. Unknown or earlier tasks, extra text and second
+  envelopes are still blocked. That Stop first checks the session transcript:
+  the notice must be recorded as a Claude Code task notice with the admitted
+  bytes, and a typed copy or changed body poisons the run with no result.
+  The model may still act on a forged notice within that turn; the check only
+  keeps it from being recorded as a clean result.
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 

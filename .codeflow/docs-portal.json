@@ -142,7 +142,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "453e2eb6d425f48de40b7434494db99bd9fc61c3e3d9af378e67e1845c38ef21"
+      "pristine_sha256": "10caea9b2f9297b790fa5ff9f311e4410568a5b9c50ccf535a106fe94f6927b9"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",

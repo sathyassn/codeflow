@@ -149,6 +149,10 @@ rendered rows warn under `pr_sections`. The independent `pr_release_impact`
 check defaults to warn: it validates generic fields, compatibility consistency,
 migration guidance and breaking commit floors against `pr_breaking_level`
 (default major). It requires no release automation or project-specific fields.
+The ADR-0067 dash check (`policy_characters`) also defaults to warn; CodeFlow's
+own policy sets block. Its added-lines scan skips a file only when its bytes
+equal the whole-file managed asset the running binary ships for that path, so
+unmodified scaffold content never trips it and a project record proves nothing.
 The generic PR template ships at every tier. The structural
 anti-bypass layer is not flippable, by design: the strict policy validator (an
 invalid file fails loud rather than silently reverting to defaults), the schema
@@ -731,7 +735,7 @@ name: transport-neutral-delegate-lifecycle
 area: engine
 status: building
 verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "codeflow-cli tests/delegate_pty_stress.rs", "cargo test doctor::tests::test_delegate_roundtrip", "docs/verification/delegate-lifecycle-canary-2026-07-23.md", "docs/verification/delegate-lifecycle-canary-2026-07-24.md"]
-epics: [EPC-002]
+epics: [EPC-002, EPC-019]
 adrs: [ADR-0036, ADR-0037]
 ```
 
@@ -776,6 +780,24 @@ validated and must agree across acceptance and terminal records; a session
 without one takes the recorded pre-2.1.196 compatibility path, limited to a
 single turn. Native Windows fails closed (use WSL2). Poison is durable and
 write-once; recovery is a new run in a fresh directory.
+
+A task the turn backgrounds (a Workflow, a background Bash command) can finish
+after the turn's Stop, and Claude Code then submits a task notice as a new
+prompt. The hook admits it without an armed turn only as a continuation of the
+current turn: the prompt must be exactly one `<task-notification>` envelope,
+the turn must have stopped with no other continuation open, and the session
+transcript must show the tool call that launched that task within the turn or
+one of its continuations. The record under `turns/<turn>/continuations/<task>/`
+keeps the notice's `prompt_id` and the SHA-256 of its bytes. Claude Code
+2.1.283 gives the prompt hook nothing that tells a real notice from the same
+text typed into the session, so the proof waits for the Stop carrying that
+`prompt_id`: before it writes the continuation result, the transcript must
+record the prompt with origin `task-notification`, `promptSource` `system` and
+`turnOrigin` `task_notification`, bytes matching the digest, and an earlier
+queue enqueue of the same bytes. A typed copy, a changed body or a missing
+entry poisons the run and writes no result. The residual risk stands: the
+model may act on a forged notice within that continuation turn; the check
+keeps it from being recorded as a clean result.
 
 Status is building: the engine surface and its unit/CLI/doctor tests landed,
 and the `delegate-roundtrip` doctor check requires the rebuilt CLI to be

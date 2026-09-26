@@ -141,6 +141,7 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
                 "no other control characters",
                 "empty",
                 "300 ms",
+                "Carry out the pasted instructions.",
                 "send Enter once more",
                 "Never",
                 "repeated Enter",

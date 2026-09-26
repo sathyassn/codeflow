@@ -14,7 +14,7 @@
 //! scaffolded wrappers avoid the skip state entirely (full-depth checkout
 //! plus explicit `--base`/`--head`).
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
@@ -26,12 +26,15 @@ use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
     any_blocking, git_hook, policy_schema, repo, standards, GitPolicy, PolicyLevel, Violation,
 };
+use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::{
     check_work_start_for_branch, declared_work_target, durable_work_tracking_enabled,
     resolve_work_target, task_id_from_branch,
 };
 use pr_body::find_section;
+
+use crate::embedded::EmbeddedAssets;
 
 #[derive(Debug, Args)]
 pub struct CiArgs {
@@ -1023,6 +1026,14 @@ fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRe
 /// `-diff` or `binary` attribute from hiding a text addition behind a
 /// binary-files summary; a patch is skipped as binary only by the content of
 /// its new-side blob, named by the full object id in its `index` line.
+///
+/// A file whose head bytes are exactly the whole-file managed asset this
+/// binary ships for that path is scaffold content, not the project's, so its
+/// lines are skipped: a scaffold or `codeflow update` range never fails on
+/// the managed skills it installs. The proof is the embedded asset, never the
+/// project's `.codeflow/manifest.json`, which the change itself can write. An
+/// edited file, or one from another scaffold version, does not match and is
+/// scanned.
 fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, String> {
     let merge_base = git_stdout(root, &["merge-base", base, head])?;
     let merge_base = merge_base.trim();
@@ -1048,23 +1059,51 @@ fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, St
     args.extend(standards::POLICY_CHARACTER_TREES);
     let lines = parse_added_lines(&git_stdout(root, &args)?);
     let blobs: BTreeSet<&str> = lines.iter().filter_map(|l| l.blob.as_deref()).collect();
-    let binary = binary_blobs(root, &blobs.into_iter().collect::<Vec<_>>())?;
+    let contents = read_blobs(root, &blobs.into_iter().collect::<Vec<_>>())?;
+    let shipped = shipped_scaffold();
     // A line without a blob id cannot be classified, so it is scanned.
     Ok(lines
         .into_iter()
-        .filter(|added| added.blob.as_ref().is_none_or(|b| !binary.contains(b)))
+        .filter(|added| {
+            let Some(content) = added.blob.as_ref().and_then(|b| contents.get(b)) else {
+                return true;
+            };
+            !is_binary(content)
+                && !shipped
+                    .as_ref()
+                    .is_some_and(|m| m.installs_verbatim(&EmbeddedAssets, &added.path, content))
+        })
         .collect())
+}
+
+/// This binary's own scaffold map. A map that will not load is reported and
+/// skips nothing, so every file is scanned.
+fn shipped_scaffold() -> Option<ScaffoldManifest> {
+    ScaffoldManifest::load(&EmbeddedAssets)
+        .map_err(|error| {
+            eprintln!(
+                "codeflow ci: warning: cannot load the shipped scaffold manifest ({error}); managed files are scanned like any other"
+            );
+        })
+        .ok()
 }
 
 /// Git's own binary heuristic, applied to content instead of attributes: a
 /// NUL byte in the first 8000 bytes of the blob.
 const BINARY_SNIFF_BYTES: usize = 8000;
 
-/// The `blobs` (full object ids) whose content is binary, read in one
+fn is_binary(content: &[u8]) -> bool {
+    content
+        .iter()
+        .take(BINARY_SNIFF_BYTES)
+        .any(|byte| *byte == 0)
+}
+
+/// The content of `blobs` (full object ids), read in one
 /// `git cat-file --batch`. An id Git cannot read is an error, never a pass.
-fn binary_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeSet<String>, String> {
+fn read_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeMap<String, Vec<u8>>, String> {
     if blobs.is_empty() {
-        return Ok(BTreeSet::new());
+        return Ok(BTreeMap::new());
     }
     let mut child = Command::new("git")
         .arg("-C")
@@ -1090,13 +1129,12 @@ fn binary_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeSet<String>, String>
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    parse_batch_binary(&out.stdout, blobs)
+    parse_batch(&out.stdout, blobs)
 }
 
-/// Read `git cat-file --batch` output for `queried` blob ids, in order,
-/// keeping the ids whose content sniffs as binary.
-fn parse_batch_binary(stdout: &[u8], queried: &[&str]) -> Result<BTreeSet<String>, String> {
-    let mut binary = BTreeSet::new();
+/// Read `git cat-file --batch` output for `queried` blob ids, in order.
+fn parse_batch(stdout: &[u8], queried: &[&str]) -> Result<BTreeMap<String, Vec<u8>>, String> {
+    let mut contents = BTreeMap::new();
     let mut rest = stdout;
     for blob in queried {
         let end = rest
@@ -1114,16 +1152,10 @@ fn parse_batch_binary(stdout: &[u8], queried: &[&str]) -> Result<BTreeSet<String
             .and_then(|field| field.parse().ok())
             .ok_or_else(|| format!("git cat-file: bad header {header:?}"))?;
         let content = rest.get(..size).ok_or("git cat-file: truncated content")?;
-        if content
-            .iter()
-            .take(BINARY_SNIFF_BYTES)
-            .any(|byte| *byte == 0)
-        {
-            binary.insert((*blob).to_string());
-        }
+        contents.insert((*blob).to_string(), content.to_vec());
         rest = rest.get(size + 1..).unwrap_or_default();
     }
-    Ok(binary)
+    Ok(contents)
 }
 
 /// Run `git -C root <args>` and return its stdout, or its stderr as the error.
@@ -1591,10 +1623,30 @@ mod tests {
         );
     }
 
+    /// The level this repository uses; the shipped default is warn.
+    fn blocking() -> GitPolicy {
+        GitPolicy {
+            policy_characters: PolicyLevel::Block,
+            ..git()
+        }
+    }
+
+    #[test]
+    fn policy_character_warns_by_default_in_ci() {
+        let v = evaluate_commits(&git(), &[commit("aaaa6666", "feat: a \u{2014} b\n")]);
+        let found = v
+            .iter()
+            .find(|t| t.violation.rule == "git.policy_characters")
+            .expect("a policy_characters finding");
+        assert_eq!(found.violation.level, PolicyLevel::Warn);
+        let flat: Vec<Violation> = v.into_iter().map(|t| t.violation).collect();
+        assert!(!any_blocking(&flat), "the default level must not block");
+    }
+
     #[test]
     fn policy_character_in_commit_body_blocks_in_ci() {
         let v = evaluate_commits(
-            &git(),
+            &blocking(),
             &[commit(
                 "aaaa7777",
                 "feat: add ranges\n\n- pages 1\u{2013}3\n",
@@ -1606,7 +1658,10 @@ mod tests {
 
     #[test]
     fn pr_body_policy_character_blocks_naming_the_line() {
-        let v = evaluate_pr_body(&git(), "## Summary\n\nAdds a check \u{2014} and tests.\n");
+        let v = evaluate_pr_body(
+            &blocking(),
+            "## Summary\n\nAdds a check \u{2014} and tests.\n",
+        );
         let found = v
             .iter()
             .find(|x| x.rule == "git.policy_characters")

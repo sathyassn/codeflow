@@ -286,6 +286,30 @@ fn init_standard_adds_the_method_and_not_pm() {
     );
 }
 
+/// The starter docs a fresh scaffold writes must pass the doc-graph check
+/// they ship with, at every tier that writes them. Codex review round 2 of
+/// the dash-free starter templates: an unquoted `: ` in the ADR-0001 title
+/// made its frontmatter unparseable, and only the dash scan was tested.
+#[test]
+fn fresh_standard_and_full_starter_docs_validate() {
+    for tier in ["--standard", "--full"] {
+        let (_tmp, root) = project();
+        init(&root, tier);
+        let adr = read(&root, "docs/decisions/ADR-0001-stack-choice.md");
+        assert!(
+            !adr.contains('\u{2014}') && !adr.contains('\u{2013}'),
+            "{tier}: starter ADR carries a policy character:\n{adr}"
+        );
+        let out = codeflow(&root, &["validate", "--docs"]);
+        assert!(
+            out.status.success(),
+            "{tier}: validate --docs failed on a fresh scaffold:\n{}\n{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 #[test]
 fn init_full_adds_project_management() {
     let (_tmp, root) = project();

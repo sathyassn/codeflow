@@ -46,6 +46,7 @@
     ],
     "ai_attribution": "block",
     "commit_emoji": "block",
+    "policy_characters": "block",
     "branch_naming": "block",
     "branch_prefixes": [
       "feat/",

@@ -23,6 +23,10 @@ sys.modules[SPEC.name] = release
 SPEC.loader.exec_module(release)
 
 
+# The published source archive whose digest the fixture config records.
+BOOTSTRAP_ARCHIVE = {"name": "source.tar.gz", "digest": "sha256:" + "a" * 64, "size": 1}
+
+
 def command(root: Path, *args: str) -> str:
     result = subprocess.run(
         list(args), cwd=root, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=True
@@ -78,7 +82,11 @@ class Repository:
             "release_unit": "codeflow",
             "main_branch": "main",
             "bootstrap": {
-                "comparison": {"tag": "v2.0.0", "commit": self.baseline},
+                "comparison": {
+                    "tag": "v2.0.0",
+                    "commit": self.baseline,
+                    "tree": command(self.root, "git", "rev-parse", "HEAD^{tree}"),
+                },
                 "published": {
                     "changelog_sha256": release.hashlib.sha256(
                         release.published_snapshot(
@@ -120,7 +128,7 @@ class Repository:
             "prerelease": False,
             "target": self.baseline,
             "body": "historical bootstrap",
-            "assets": [],
+            "assets": [BOOTSTRAP_ARCHIVE],
         }
         self.write(
             "host.json",
@@ -419,7 +427,7 @@ class BaselineTests(unittest.TestCase):
             "prerelease": False,
             "target": self.repo.baseline,
             "body": "bootstrap",
-            "assets": [],
+            "assets": [BOOTSTRAP_ARCHIVE],
         }
         return {
             "schema_version": 1,
@@ -490,6 +498,49 @@ class BaselineTests(unittest.TestCase):
         config["bootstrap"]["published"]["source_commit"] = "f" * 40
         baseline = release.resolve_baseline(config, json.loads(self.repo.host.read_text()), cwd=self.repo.root)
         self.assertNotEqual(baseline.source, baseline.comparison_commit)
+
+    def test_bootstrap_survives_a_history_rewrite_that_keeps_the_tagged_tree(self) -> None:
+        # A path filter rewrites every commit id but keeps the tagged content,
+        # and a release recreated for the existing tag reports a branch target.
+        root = self.repo.root
+        rewritten = command(
+            root, "git", "commit-tree", "HEAD~1^{tree}", "-m", "chore: baseline (filtered)"
+        )
+        command(root, "git", "tag", "-f", "v2.0.0", rewritten)
+        state = self.state({"v2.0.0": rewritten}, [])
+        state["releases"][0]["target"] = "main"
+        baseline = release.resolve_baseline(self.config, state, cwd=root)
+        self.assertEqual((baseline.version, baseline.comparison_commit), ("2.0.0", rewritten))
+
+    def test_bootstrap_tag_moved_to_other_content_fails_closed(self) -> None:
+        root = self.repo.root
+        moved = command(root, "git", "rev-parse", "HEAD")
+        command(root, "git", "tag", "-f", "v2.0.0", moved)
+        state = self.state({"v2.0.0": moved}, [])
+        with self.assertRaisesRegex(release.ReleaseError, "never move it"):
+            release.resolve_baseline(self.config, state, cwd=root)
+
+    def test_bootstrap_requires_host_tag_and_published_archive_identity(self) -> None:
+        wrong_tag = self.state({}, [])
+        wrong_tag["tags"]["v2.0.0"] = "f" * 40
+        wrong_digest = self.state({}, [])
+        wrong_digest["releases"][0]["assets"] = [
+            {**BOOTSTRAP_ARCHIVE, "digest": "sha256:" + "f" * 64}
+        ]
+        no_archive = self.state({}, [])
+        no_archive["releases"][0]["assets"] = [{**BOOTSTRAP_ARCHIVE, "name": "other.tar.gz"}]
+        for state in [wrong_tag, wrong_digest, no_archive]:
+            with self.subTest(state=state), self.assertRaisesRegex(
+                release.ReleaseError, "live host state"
+            ):
+                release.resolve_baseline(self.config, state, cwd=self.repo.root)
+
+    def test_bootstrap_without_a_tree_pin_is_malformed(self) -> None:
+        config = json.loads(self.repo.config.read_text())
+        for tree in [None, "d" * 39, "D" * 40]:
+            config["bootstrap"]["comparison"]["tree"] = tree
+            with self.subTest(tree=tree), self.assertRaisesRegex(release.ReleaseError, "malformed"):
+                release.validate_bootstrap(config, cwd=self.repo.root)
 
     def test_missing_live_bootstrap_is_not_silently_trusted(self) -> None:
         with self.assertRaisesRegex(release.ReleaseError, "live host state"):

@@ -124,12 +124,7 @@ fn open_relative_with_hook(
             0,
         )
     };
-    if status < 0 {
-        // SAFETY: pure NTSTATUS-to-Win32 conversion, preserving NotFound etc.
-        return Err(io::Error::from_raw_os_error(
-            unsafe { RtlNtStatusToDosError(status) }.cast_signed(),
-        ));
-    }
+    nt_result(status)?;
     if handle.is_null() {
         return Err(invalid());
     }
@@ -140,6 +135,18 @@ fn open_relative_with_hook(
         return Err(error);
     }
     Ok(file)
+}
+
+/// Maps a failed native call's NTSTATUS to its Win32 error, preserving kinds
+/// such as `NotFound` and `AlreadyExists` for callers.
+pub(crate) fn nt_result(status: i32) -> io::Result<()> {
+    if status < 0 {
+        // SAFETY: pure NTSTATUS-to-Win32 conversion with no pointer inputs.
+        return Err(io::Error::from_raw_os_error(
+            unsafe { RtlNtStatusToDosError(status) }.cast_signed(),
+        ));
+    }
+    Ok(())
 }
 
 /// Only this call's proven exclusive creation may be disposed. Cleanup is
@@ -186,7 +193,10 @@ pub(crate) mod tests {
         ] {
             let root = tempfile::tempdir().unwrap();
             let path = root.path().join("owned");
+            // std refuses create_new without write intent even when an
+            // explicit access_mode already grants FILE_GENERIC_WRITE.
             let file = std::fs::OpenOptions::new()
+                .write(true)
                 .access_mode(FILE_GENERIC_READ | FILE_GENERIC_WRITE | DELETE)
                 .share_mode(FILE_SHARE_READ | FILE_SHARE_WRITE)
                 .create_new(true)

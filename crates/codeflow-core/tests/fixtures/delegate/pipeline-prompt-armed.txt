@@ -1,0 +1,12 @@
+Run the pipeline workflow that this repository already has at
+.claude/workflows/pipeline.workflow.js, end to end, with the Workflow tool.
+Arguments: task "add a subtract function beside add, with a unit test", criteria
+["subtract(4, 1) returns 3", "the existing add test still passes"], stages
+["build", "verify"]. Work on the branch feat/pipeline-canary; never commit to
+main and never push. When the workflow returns, write the object it returned,
+verbatim, as a single line of JSON to qualification-pipeline-result.txt in the repository root.
+That object is the workflow's own result and carries status, attempts and trail.
+If the workflow cannot run at all, write instead, on one line:
+{"status": "unavailable", "reason": "<the exact reason>"}
+Do not write anything else to that file, and do not hand-write a trail.
+Then stop.

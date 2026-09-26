@@ -168,3 +168,30 @@ the record of what was first decided.
   `unrendered_figure_on_plain_text_surface` and `mermaid_figure_in_reply` on
   the flow case, which passes with an inline HTML figure or `cf-present`
   where HTML renders and with ASCII on a plain-text surface.
+
+## Note (2026-09-25): a warning by default, and managed files skipped
+
+On 2026-09-25 the operator changed how the mechanical check enforces the
+two characters. The text above stays unchanged as the record of what was
+first decided.
+
+- Em and en dashes are preferably avoided in content and copy unless they
+  are really needed. This is a writing guideline that review and
+  evaluation judge, so the code check reports and does not fail by default.
+- `git.policy_characters` now defaults to `warn` in the built-in policy and
+  in the shipped `policy.json`. A project that wants the gate sets `block`.
+  CodeFlow's own `.codeflow/policy.json` sets `block`, so this repository
+  still fails on a new dash.
+- The release candidate's scaffold range failed `codeflow ci` on the dashes
+  inside the managed skill files that the scaffold itself installs. Those
+  bytes are CodeFlow's, not the adopter's.
+- `codeflow ci` now skips an added line only when its file's bytes at the
+  head equal the asset the running binary ships for that path as a
+  whole-file managed entry, with no template substitution. The project's
+  `.codeflow/manifest.json` is not proof: the change under check can write
+  it. A file the adopter edited, or one from a different scaffold version,
+  does not match and is scanned.
+- In this repository the `.claude/skills/` and `.agents/skills/` mirrors
+  equal their `assets/base/` sources and are skipped, while the sources
+  themselves are not scaffold destinations, so a new dash in a skill is
+  still caught at its source.

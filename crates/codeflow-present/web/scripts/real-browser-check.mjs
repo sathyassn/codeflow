@@ -38,7 +38,11 @@ class BoundedTimeoutError extends Error {
 }
 const runId = `${runPrefix}-${process.pid}-${randomUUID()}`;
 const windowsProfileConfinement = qualifyWindowsEnvironment();
-const runRoot = await mkdtemp(join(tmpdir(), `${runId}-`));
+// Keep the root name short: Chromium puts its singleton socket under TMPDIR
+// (this root's tmp/) and aborts at launch when that Unix socket path exceeds
+// 107 bytes on Linux. mkdtemp's suffix keeps the root unique; the marker keeps
+// the full runId.
+const runRoot = await mkdtemp(join(tmpdir(), `${runPrefix}-${process.pid}-`));
 const marker = join(runRoot, ".cf-present-qualification-root");
 const project = join(runRoot, "project");
 const home = join(runRoot, "home");
@@ -580,12 +584,14 @@ async function launchBrowser(profile) {
     headless: true,
     viewport: { width: 1280, height: 900 },
     env: browserEnvironment,
+    // Never pass --disable-crashpad-for-testing: on Linux Chromium it makes
+    // the network service abort with an FD ownership violation and restart in
+    // a tight loop, so no navigation commits and the runner is starved.
     args: [
       "--disable-background-networking",
       "--disable-component-update",
       "--disable-breakpad",
       "--disable-crash-reporter",
-      "--disable-crashpad-for-testing",
       "--disable-default-apps",
       "--disable-sync",
       "--no-default-browser-check",

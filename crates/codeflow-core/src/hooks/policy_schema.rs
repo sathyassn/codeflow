@@ -311,9 +311,12 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "En and em dashes (U+2013, U+2014) in commit messages, PR bodies, and lines a ci range adds under the written-content trees (ADR-0067).",
-        notes: "Judges new text only: `codeflow ci` checks lines the range \
-                adds under docs/, project-management/ and the skill trees, so \
-                existing bytes are grandfathered and nothing asks for a sweep.",
+        notes: "Defaults to warn: a writing guideline review and evaluation \
+                judge; set block to enforce it. Judges new text only: \
+                `codeflow ci` checks lines the range adds under docs/, \
+                project-management/ and the skill trees, so existing bytes are \
+                grandfathered, and skips a file whose bytes are exactly the \
+                whole-file managed asset this binary ships for that path.",
     },
     // ---- git: PR-body structure --------------------------------------------
     KeySpec {
