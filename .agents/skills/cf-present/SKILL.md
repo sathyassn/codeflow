@@ -81,12 +81,12 @@ as a **shape** (carrier first), not a form to pad.
    let `codeflow present open <document.json>` perform authoritative semantic
    and byte-bound validation (schema alone cannot enforce unique IDs, byte
    limits, or cross-field invariants).
-3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is an
-   explicit recovery or automation path, not permission to attach to the
-   operator's browser or active view.
-4. **Handoff:** lead with the owner-private **bootstrap file path / openable
-   link** CodeFlow printed, then session ID, revision, and the decision
-   sought — never ports and cookie recipes as the primary path.
+3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is for
+   recovery, automation, or an agent sandbox (run in the project tree); it
+   never attaches to the operator's browser or active view.
+4. **Handoff:** lead with the single-use **handoff link** CodeFlow printed
+   (unopened in 120 s, the session closes), then session ID, revision and
+   the decision sought; not ports or cookies.
 5. Do not claim the document was seen or approved until feedback or other
    direct evidence proves it.
 
