@@ -23,7 +23,7 @@
     ".agents/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "1d52759ae98d34ccd144d4450fec57fc26684f903079e74876526433dd720697",
+      "sha256": "78d913a483f6aedcb9b2f5c78499fef78b2e3e4d53bf3d67e24417b0caf1cba3",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/claude-turn-completion.md": {
@@ -293,7 +293,7 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "a4e89b9e911058f3ae3c8dd5d3bfe17cdbe473815599f8383d803a14b8818d61",
+      "sha256": "2ef2ec39c48283247e0c35fb436141be32fc94f33cdd337bd397c96724bcad63",
       "exec": false
     },
     ".agents/skills/cf-method/SKILL.md": {
@@ -497,7 +497,7 @@
     ".claude/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "1d52759ae98d34ccd144d4450fec57fc26684f903079e74876526433dd720697",
+      "sha256": "78d913a483f6aedcb9b2f5c78499fef78b2e3e4d53bf3d67e24417b0caf1cba3",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/claude-turn-completion.md": {
@@ -767,7 +767,7 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "a4e89b9e911058f3ae3c8dd5d3bfe17cdbe473815599f8383d803a14b8818d61",
+      "sha256": "2ef2ec39c48283247e0c35fb436141be32fc94f33cdd337bd397c96724bcad63",
       "exec": false
     },
     ".claude/skills/cf-method/SKILL.md": {

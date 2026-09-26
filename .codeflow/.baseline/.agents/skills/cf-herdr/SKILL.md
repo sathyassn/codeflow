@@ -72,9 +72,6 @@ Repo slug truncation collides across worktrees of the same project. The
 **intended worktree `cwd`** is the disambiguator, not the label. Put full cwd,
 repo basename, and work identity in the optional cache.
 
-Examples: `cf-codeflow-skills-rev-cl01`, parallel Claude `…-cl02`, Codex on
-the same work `…-cx01`.
-
 List live agents first; increment `nn` until free. Never reuse a live name.
 Never steal a name that does not start with `cf-`.
 
@@ -133,8 +130,9 @@ After `codeflow delegate arm`, send the same canonical UTF-8/LF file bytes:
 
 ```bash
 herdr pane send-text "$pane_id" "$(cat "$P")"
-sleep 2  # settle before reading the input line; not completion detection
-# Only when the owned pane's input line shows a "[Pasted text" attachment:
+sleep 2  # input settle; not completion detection
+# Only if the input line shows a folded "[Pasted text" attachment; the hook
+# then requires this exact sentence (see cf-delegate):
 herdr pane send-text "$pane_id" "Carry out the pasted instructions."
 sleep 0.3
 herdr pane send-keys "$pane_id" Enter
@@ -143,10 +141,6 @@ codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
 codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
   --until terminal --turn-id "$TURN" --timeout-seconds 3600
 ```
-
-Claude Code folds a long or multi-line paste into that attachment, and the
-delegate-turn hook accepts it only with that exact sentence typed after it
-(`cf-delegate` carries the accepted bytes).
 
 Do not `tmux load-buffer` / `paste-buffer` into a Herdr pane. `herdr agent
 prompt` is for a consult that is not lifecycle-armed; it does not replace the

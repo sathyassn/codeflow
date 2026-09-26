@@ -167,19 +167,18 @@ tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree \
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until ready --timeout-seconds 120
 codeflow delegate arm --run-id run-42 --state-dir "$STATE" --turn-id turn-1 --prompt-file "$P"
 tmux load-buffer -b cf-run-42-turn-1 "$P"; tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
-sleep 0.3  # bounded TUI input-settle; this is not completion detection
-# Only when the input line shows a "[Pasted text" attachment:
+sleep 0.3  # bounded input-settle; not completion detection
+# Only if the input shows a "[Pasted text" attachment:
 tmux send-keys -l -t cf-run-42 'Carry out the pasted instructions.'; sleep 0.3
 tmux send-keys -t cf-run-42 Enter
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until accepted --turn-id turn-1 --timeout-seconds 120
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --turn-id turn-1 --timeout-seconds 3600
 ```
 
-When `HERDR_ENV=1`, use the named Herdr tab per `cf-herdr`, including the
-launch-local task environment and `--settings`; use the selected model/effort,
-production `bypassPermissions`, consult auto.
-Deliver the armed file with `herdr pane send-text` then Enter as that skill
-names; do not `tmux load-buffer` into a Herdr pane. Lifecycle waits stay the
+When `HERDR_ENV=1`, use the named Herdr tab per `cf-herdr` (launch-local task
+environment, `--settings`, selected model/effort, production
+`bypassPermissions`, consult auto) and deliver the armed file as that skill
+names; never `tmux load-buffer` into a Herdr pane. Lifecycle waits stay the
 completion signal.
 
 - **Turn detection is the lifecycle, not the pane.** `init` creates owner-only
@@ -191,13 +190,11 @@ completion signal.
   empty or other noncanonical input before durable turn state is created.
   Normalize once before arming, then
   deliver that same file exactly
-  (buffer paste, a bounded 300 ms input-settle, the fixed sentence `Carry
-  out the pasted instructions.` typed only when the input shows a paste
-  attachment, then one separate Enter);
+  (buffer paste, a bounded 300 ms input-settle, the adapter's fixed
+  sentence only when the input shows a paste attachment, then one Enter);
   acceptance and terminal records bind
-  session and `prompt_id`. Waits are bounded with stable exit states —
-  `0` observed (a completed terminal prints the result JSON), `10` failed
-  terminal, `11` poison/unsafe, `124` timeout, `130` interrupt. Restarts,
+  session and `prompt_id`. Waits are bounded with stable exit states
+  (listed in the adapter). Restarts,
   mis-correlated events, and interrupted waits after acceptance poison the
   run; recovery is a new run id in a fresh state directory. Turns are
   sequential — one outstanding armed turn per run; arm a new id in the same
@@ -219,9 +216,8 @@ completion signal.
   malformed, to answer an explicit in-turn dialog, or once after a paste to
   see whether the input shows a paste attachment. Never enumerate or
   capture unrelated tmux sessions; they may contain secrets or other users'
-  work. If acceptance times out and the dedicated pane explicitly shows the
-  paste attachment still waiting in the input editor, send Enter once more and
-  re-wait once. Never issue blind or repeated Enter retries.
+  work. If acceptance times out and the pane shows the prompt still waiting,
+  send Enter once more and re-wait once; never blind or repeated Enter.
 - **Effective autonomy is layered:** invoke the Claude primary with the selector
   and default effort from
   `../cf-model-orchestrator/resources/current-ensemble.json`. The primary owns
