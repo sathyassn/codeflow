@@ -37,7 +37,11 @@ pub enum HookName {
     SessionOrient,
     /// `SessionEnd`: append the session record to the ledger.
     SessionSummary,
-    /// `Stop` / `StopFailure`: persist and signal one interactive delegate turn.
+    /// `SessionStart`, `UserPromptSubmit`, `Stop` and `StopFailure`: with
+    /// `--state-dir`, advance the schema-v2 delegate lifecycle (ready, armed
+    /// prompt or task-notice continuation, terminal result); with `--result`,
+    /// the legacy one-shot mode that records and signals a `Stop` or
+    /// `StopFailure`.
     DelegateTurn,
 }
 
@@ -54,7 +58,7 @@ pub struct HookArgs {
     /// Unique task id for `delegate-turn` (1-64 safe ASCII characters).
     #[arg(long, value_name = "ID")]
     pub run_id: Option<String>,
-    /// Absolute owner-only result path for `delegate-turn`.
+    /// Absolute owner-only result path for legacy one-shot `delegate-turn`.
     #[arg(long, value_name = "FILE")]
     pub result: Option<PathBuf>,
     /// Absolute owner-only lifecycle directory for schema-v2 `delegate-turn`.
