@@ -5,12 +5,15 @@ export async function checkSelectionLifecycle(browser, origin) {
   const context = await browser.newContext();
   const errors = [];
   const posts = [];
+  let reviews = 0;
   try {
     const page = await context.newPage();
     page.on("pageerror", (error) => errors.push(error.message));
     await page.route("**/app/api/reviews", async (route) => {
       posts.push(route.request().postDataJSON());
-      await route.fulfill({ status: 200, contentType: "application/json", body: '{"event_id":"selection-proof","state":"received"}' });
+      reviews += 1;
+      const body = JSON.stringify({ event_id: `selection-proof-${reviews}`, state: "received" });
+      await route.fulfill({ status: 200, contentType: "application/json", body });
     });
     await page.goto(`${origin}/app?case=selection`, { waitUntil: "networkidle" });
     const chip = page.getByTestId("float-chip");
@@ -46,8 +49,11 @@ export async function checkSelectionLifecycle(browser, origin) {
       await page.getByTestId("composer-save").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });
       posts.length = 0;
+      // The previous review's toast can still be showing, so wait for the
+      // toast that names this response before the next step reads the state.
+      const received = `Review received (selection-proof-${reviews + 1}).`;
       await page.getByTestId("submit-all").click();
-      await page.getByTestId("toast").getByText(/Review received/).waitFor();
+      await page.getByTestId("toast").getByText(received, { exact: true }).waitFor();
       assert.equal(posts.length, 1);
       assert.equal(posts[0].notes.length, 1);
       return posts[0].notes[0];

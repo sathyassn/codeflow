@@ -21,6 +21,8 @@ const exportFallback = await readFile(join(webRoot, "src/export-fallback.css"), 
 const projectUtilityCss = ":root[data-cf-theme]{--cf-reading-measure:68ch;}";
 const applicationCsp = `default-src 'none'; script-src 'self' '${manifest.service.inline["present.prepaint"].csp_sha256}'; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; font-src data:; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`;
 const reviewPosts = [];
+// Each fixture review gets its own event id, so a wait can name its response.
+let reviewEvents = 0;
 const server = createServer(async (request, response) => {
   try {
     const url = new URL(request.url ?? "/", "http://127.0.0.1");
@@ -80,8 +82,9 @@ const server = createServer(async (request, response) => {
       const chunks = [];
       for await (const chunk of request) chunks.push(chunk);
       reviewPosts.push(JSON.parse(Buffer.concat(chunks).toString("utf8")));
+      reviewEvents += 1;
       response.writeHead(200, { "Content-Type": "application/json" });
-      response.end('{"event_id":"evt-browser-check","state":"received"}');
+      response.end(JSON.stringify({ event_id: `evt-browser-check-${reviewEvents}`, state: "received" }));
       return;
     }
     response.writeHead(404, { "Content-Type": "text/plain" });
@@ -538,8 +541,11 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Harness excerpts: intercept the actual review POST, not the rail labels.
   async function submitCapturedReview() {
     capturedReviews.length = 0;
+    // The previous review's toast can still be showing, so wait for the
+    // toast that names this response before reading the captured POST.
+    const received = `Review received (evt-browser-check-${reviewEvents + 1}).`;
     await page.getByTestId("submit-all").click();
-    await page.getByTestId("toast").getByText(/Review received/).waitFor({ timeout: 10000 });
+    await page.getByTestId("toast").getByText(received, { exact: true }).waitFor({ timeout: 10000 });
     if (capturedReviews.length !== 1) {
       throw new Error(`Expected one review POST, got ${capturedReviews.length}`);
     }
