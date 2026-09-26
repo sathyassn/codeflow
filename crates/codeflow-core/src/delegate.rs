@@ -134,7 +134,7 @@ struct AcceptedRecord {
     prompt_sha256: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     compatibility: Option<String>,
-    /// How the submitted prompt matched: `exact` or `paste_envelope`.
+    /// How the submitted prompt matched: `exact` or `paste_directive`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     delivery: Option<String>,
 }
@@ -505,26 +505,26 @@ fn accept_prompt(
 
 /// Classify how a submitted prompt matches the armed digest.
 ///
-/// The prompt matches `exact` when its bytes are the armed bytes. Claude Code
-/// wraps a long or multi-line paste as one envelope, so it also matches
-/// `paste_envelope` when removing exactly one outer envelope leaves the armed
-/// bytes. The accepted grammar is an optional prefix of exactly two LF, then
-/// `<pasted_content id="N">` LF, the inner bytes, LF, `</pasted_content
-/// id="N">`, then at most one LF, where both N are the same id of exactly four
-/// lowercase hex digits, the id Claude Code derives per session. Claude Code
-/// submits a paste into an empty input box with that two-LF prefix and the
-/// trailing LF. Anything else does not match.
+/// The prompt matches `exact` when its bytes are the armed bytes, which is how
+/// a short prompt typed or pasted without an envelope arrives. Claude Code
+/// wraps a long or multi-line paste in an envelope, and the host then types
+/// [`PASTE_DIRECTIVE`], so the prompt also matches `paste_directive` in the
+/// exact byte order Claude Code submits that: two LF, `<pasted_content
+/// id="N">` LF, the armed bytes, LF, `</pasted_content id="N">`, two LF, then
+/// the directive and nothing after it, where both N are the same id of exactly
+/// four lowercase hex digits. A bare envelope, another sentence, extra text or
+/// any other shape does not match.
 fn submitted_delivery(prompt: &str, armed_sha256: &str) -> Option<&'static str> {
     if hex_sha256(prompt.as_bytes()) == armed_sha256 {
         return Some("exact");
     }
-    let inner = strip_paste_envelope(prompt)?;
-    (hex_sha256(inner.as_bytes()) == armed_sha256).then_some("paste_envelope")
+    let pasted = prompt.strip_suffix(PASTE_DIRECTIVE)?.strip_suffix("\n\n")?;
+    let inner = strip_paste_envelope(pasted)?;
+    (hex_sha256(inner.as_bytes()) == armed_sha256).then_some("paste_directive")
 }
 
-fn strip_paste_envelope(prompt: &str) -> Option<&str> {
-    let prompt = prompt.strip_prefix("\n\n").unwrap_or(prompt);
-    let rest = prompt.strip_prefix("<pasted_content id=\"")?;
+fn strip_paste_envelope(pasted: &str) -> Option<&str> {
+    let rest = pasted.strip_prefix("\n\n<pasted_content id=\"")?;
     let id = rest.get(..4)?;
     if !id
         .bytes()
@@ -534,9 +534,15 @@ fn strip_paste_envelope(prompt: &str) -> Option<&str> {
     }
     let rest = &rest[4..];
     let body = rest.strip_prefix("\">\n")?;
-    let body = body.strip_suffix('\n').unwrap_or(body);
     body.strip_suffix(&format!("\n</pasted_content id=\"{id}\">"))
 }
+
+/// The one sentence the delivering host types after pasting an armed prompt.
+///
+/// Claude Code tells the model that pasted text states the user's intent only
+/// where the user's own words direct it, so a bare paste may be refused. This
+/// typed sentence is those words.
+const PASTE_DIRECTIVE: &str = "Carry out the pasted instructions.";
 
 fn record_terminal(
     run_id: &str,
@@ -771,7 +777,7 @@ fn inspect_turns(run_id: &str, state_dir: &Path) -> Result<Vec<TurnState>, Deleg
                 || (record.prompt_id.is_some() && record.compatibility.is_some())
                 || !matches!(
                     record.delivery.as_deref(),
-                    None | Some("exact" | "paste_envelope")
+                    None | Some("exact" | "paste_directive")
                 )
             {
                 return Err(DelegateError::unsafe_state(
@@ -1663,32 +1669,20 @@ mod tests {
     }
 
     #[test]
-    fn accepts_exact_prompt_or_one_matching_paste_envelope() {
+    fn accepts_the_exact_prompt_or_its_paste_with_the_directive() {
         for (submitted, delivery) in [
             (ARMED.to_string(), "exact"),
             (
-                format!("<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">"),
-                "paste_envelope",
-            ),
-            (
-                format!("<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">\n"),
-                "paste_envelope",
+                format!(
+                    "\n\n<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">\n\n{PASTE_DIRECTIVE}"
+                ),
+                "paste_directive",
             ),
             (
                 format!(
-                    "\n\n<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">\n"
+                    "\n\n<pasted_content id=\"ce16\">\n{ARMED}\n</pasted_content id=\"ce16\">\n\n{PASTE_DIRECTIVE}"
                 ),
-                "paste_envelope",
-            ),
-            (
-                format!("\n\n<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7914\">"),
-                "paste_envelope",
-            ),
-            (
-                format!(
-                    "\n\n<pasted_content id=\"ce16\">\n{ARMED}\n</pasted_content id=\"ce16\">\n"
-                ),
-                "paste_envelope",
+                "paste_directive",
             ),
         ] {
             let (_temp, path) = state();
@@ -1702,49 +1696,56 @@ mod tests {
     }
 
     #[test]
-    fn rejects_every_other_paste_envelope_shape() {
+    fn rejects_every_other_paste_shape() {
         let open = "<pasted_content id=\"7914\">";
         let close = "</pasted_content id=\"7914\">";
+        let directive = PASTE_DIRECTIVE;
         let mut differs = ARMED.to_string();
         differs.replace_range(0..1, "r");
         for submitted in [
+            // A bare envelope in any shape, with no directive after it.
+            format!("{open}\n{ARMED}\n{close}"),
+            format!("{open}\n{ARMED}\n{close}\n"),
+            format!("\n\n{open}\n{ARMED}\n{close}"),
+            format!("\n\n{open}\n{ARMED}\n{close}\n"),
             format!("<pasted_content id=\"7914\">\n{ARMED}\n</pasted_content id=\"7915\">"),
-            format!("<pasted_content id=\"\">\n{ARMED}\n</pasted_content id=\"\">"),
-            format!("<pasted_content id=\"a1\">\n{ARMED}\n</pasted_content id=\"a1\">"),
             format!("x{open}\n{ARMED}\n{close}"),
-            format!("\n{open}\n{ARMED}\n{close}"),
-            format!("{open}\n{ARMED}\n{close}x"),
-            format!("{open}\n{ARMED}\n{close}\n\n"),
-            format!("{open}{ARMED}{close}"),
-            format!("{open}\n{ARMED}\n\n{close}"),
-            format!("{open}\r\n{ARMED}\r\n{close}"),
             format!("{open}\n{ARMED}\n{close}\n{open}\n{ARMED}\n{close}"),
-            format!(
-                "{open}\n{ARMED}\n{close}\n<pasted_content id=\"2\">\n{ARMED}\n</pasted_content id=\"2\">"
-            ),
-            format!(
-                "{open}\n<pasted_content id=\"2\">\n{ARMED}\n</pasted_content id=\"2\">\n{close}"
-            ),
-            format!("{open}\n{differs}\n{close}"),
-            format!("{open}\n{ARMED} \n{close}"),
-            format!("{open}\nsomething else entirely\n{close}"),
-            // Near misses of the two-LF prefix Claude Code really sends.
-            format!("\n\n\n{open}\n{ARMED}\n{close}\n"),
-            format!("\n\n\n\n{open}\n{ARMED}\n{close}\n"),
-            format!("\r\n\r\n{open}\n{ARMED}\n{close}\n"),
-            format!(" \n\n{open}\n{ARMED}\n{close}\n"),
-            format!("\n \n{open}\n{ARMED}\n{close}\n"),
-            format!("\n\n{open}\n{ARMED}\n{close}\n\n"),
-            format!("\n\n{open}\n{ARMED}\n{close}\n\n\n{open}\n{ARMED}\n{close}\n"),
-            format!("\n\n{ARMED}"),
-            format!("\n\n{open}\n{differs}\n{close}\n"),
-            // The id is exactly four lowercase hex digits and nothing else.
-            format!("<pasted_content id=\"CE16\">\n{ARMED}\n</pasted_content id=\"CE16\">"),
-            format!("<pasted_content id=\"ce1\">\n{ARMED}\n</pasted_content id=\"ce1\">"),
-            format!("<pasted_content id=\"ce160\">\n{ARMED}\n</pasted_content id=\"ce160\">"),
-            format!("<pasted_content id=\"79140\">\n{ARMED}\n</pasted_content id=\"79140\">"),
-            format!("<pasted_content id=\"ce1g\">\n{ARMED}\n</pasted_content id=\"ce1g\">"),
-            format!("<pasted_content id=\"ce16\">\n{ARMED}\n</pasted_content id=\"CE16\">"),
+            // The directive in any other place, form or number.
+            format!("\n\n{open}\n{ARMED}\n{close}\n\nCarry out the pasted instruction."),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\nDo what the paste says."),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\ncarry out the pasted instructions."),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\nPlease. {directive}"),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\n{directive} Now."),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\n{directive}\n"),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\n{directive}{directive}"),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\n{directive}\n\n{directive}"),
+            format!("\n\n{open}\n{ARMED}\n\n{directive}\n{close}\n"),
+            format!("\n\n{open}\n{ARMED}\n{close}\n{directive}"),
+            format!("\n\n{open}\n{ARMED}\n{close}{directive}"),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\n\n{directive}"),
+            format!("{open}\n{ARMED}\n{close}\n\n{directive}"),
+            format!("\n{open}\n{ARMED}\n{close}\n\n{directive}"),
+            format!("\n\n\n{open}\n{ARMED}\n{close}\n\n{directive}"),
+            format!("\r\n\r\n{open}\n{ARMED}\n{close}\n\n{directive}"),
+            format!("{ARMED}{directive}"),
+            format!("{ARMED}\n\n{directive}"),
+            format!("\n\n{directive}"),
+            // The envelope around the directive must still hold the armed bytes.
+            format!("\n\n{open}\n{differs}\n{close}\n\n{directive}"),
+            format!("\n\n{open}\n{ARMED} \n{close}\n\n{directive}"),
+            format!("\n\n{open}{ARMED}{close}\n\n{directive}"),
+            format!("\n\n{open}\n{ARMED}\n\n{close}\n\n{directive}"),
+            format!("\n\n{open}\r\n{ARMED}\r\n{close}\n\n{directive}"),
+            format!("\n\n{open}\n{ARMED}\n{close}\n\n{open}\n{ARMED}\n{close}\n\n{directive}"),
+            format!("\n\n{open}\nsomething else entirely\n{close}\n\n{directive}"),
+            // The id is exactly four lowercase hex digits, the same at both ends.
+            format!("\n\n<pasted_content id=\"CE16\">\n{ARMED}\n</pasted_content id=\"CE16\">\n\n{directive}"),
+            format!("\n\n<pasted_content id=\"ce1\">\n{ARMED}\n</pasted_content id=\"ce1\">\n\n{directive}"),
+            format!("\n\n<pasted_content id=\"79140\">\n{ARMED}\n</pasted_content id=\"79140\">\n\n{directive}"),
+            format!("\n\n<pasted_content id=\"ce1g\">\n{ARMED}\n</pasted_content id=\"ce1g\">\n\n{directive}"),
+            format!("\n\n<pasted_content id=\"ce16\">\n{ARMED}\n</pasted_content id=\"CE16\">\n\n{directive}"),
+            format!("\n\n<pasted_content id=\"\">\n{ARMED}\n</pasted_content id=\"\">\n\n{directive}"),
         ] {
             let (_temp, path) = state();
             ready(&path);
@@ -1760,29 +1761,28 @@ mod tests {
     }
 
     /// The pipeline prompt the release-qualification harness arms, and the
-    /// `UserPromptSubmit` stdin two live Claude Code 2.1.283 sessions sent
-    /// after `herdr pane send-text` pasted it and `send-keys Enter` submitted
-    /// it. The envelope id is per session: one drew only digits, one did not.
+    /// `UserPromptSubmit` stdin live Claude Code 2.1.283 sessions sent after
+    /// `herdr pane send-text` pasted it. Two were submitted with Enter alone,
+    /// one envelope id all digits and one not; the third had the directive
+    /// typed with `send-text` after the paste, then Enter.
     const CAPTURED_ARMED: &[u8] = include_bytes!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/tests/fixtures/delegate/pipeline-prompt-armed.txt"
     ));
-    const CAPTURED_SUBMITS: [(&str, &str); 2] = [
-        (
-            "2888",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/delegate/pipeline-prompt-submitted-digit-id.json"
-            )),
-        ),
-        (
-            "19fe",
-            include_str!(concat!(
-                env!("CARGO_MANIFEST_DIR"),
-                "/tests/fixtures/delegate/pipeline-prompt-submitted-hex-id.json"
-            )),
-        ),
+    const CAPTURED_BARE_PASTES: [&str; 2] = [
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/delegate/pipeline-prompt-submitted-digit-id.json"
+        )),
+        include_str!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/fixtures/delegate/pipeline-prompt-submitted-hex-id.json"
+        )),
     ];
+    const CAPTURED_DIRECTIVE: &str = include_str!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/delegate/pipeline-prompt-submitted-directive.json"
+    ));
 
     /// Arm the captured prompt behind a session that matches the captured
     /// stdin, so the hook sees the payload exactly as Claude Code sent it.
@@ -1806,53 +1806,65 @@ mod tests {
     }
 
     #[test]
-    fn accepts_the_captured_claude_code_pastes() {
-        for (id, submit) in CAPTURED_SUBMITS {
-            let (_temp, path, _captured) = arm_captured(submit);
-            handle_hook("run-1", &path, submit).unwrap();
-            let text = std::fs::read_to_string(path.join("turns/turn-1/accepted.json")).unwrap();
-            let value: serde_json::Value = serde_json::from_str(&text).unwrap();
-            assert_eq!(
-                value["prompt_sha256"],
-                "a70978989a1e5d4eed4509ec269ff193419a6698b9acc35cdf9ff4acb654ebdb",
-                "{id}"
-            );
-            assert_eq!(value["delivery"], "paste_envelope", "{id}");
+    fn accepts_the_captured_paste_with_the_directive_only() {
+        let (_temp, path, _captured) = arm_captured(CAPTURED_DIRECTIVE);
+        handle_hook("run-1", &path, CAPTURED_DIRECTIVE).unwrap();
+        let text = std::fs::read_to_string(path.join("turns/turn-1/accepted.json")).unwrap();
+        let value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        assert_eq!(
+            value["prompt_sha256"],
+            "a70978989a1e5d4eed4509ec269ff193419a6698b9acc35cdf9ff4acb654ebdb"
+        );
+        assert_eq!(value["delivery"], "paste_directive");
+        // The same paste submitted without the directive is not admitted.
+        for bare in CAPTURED_BARE_PASTES {
+            let (_temp, path, _captured) = arm_captured(bare);
+            let error = handle_hook("run-1", &path, bare).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Invalid);
+            assert!(!path.join("turns/turn-1/accepted.json").exists());
         }
     }
 
     #[test]
-    fn rejects_near_misses_of_the_captured_pastes() {
-        for (id, submit) in CAPTURED_SUBMITS {
-            let prompt = serde_json::from_str::<serde_json::Value>(submit).unwrap()["prompt"]
-                .as_str()
-                .unwrap()
-                .to_string();
-            let open = format!("id=\"{id}\">\n");
-            assert!(prompt.starts_with(&format!("\n\n<pasted_content {open}")));
-            let mut near_misses = vec![
-                prompt.replacen("\n\n", "\n\n\n", 1),
-                prompt.replacen("\n\n", "\n", 1),
-                prompt.replacen("<the exact reason>", "&lt;the exact reason&gt;", 1),
-                prompt.replacen("verbatim, as a single", "verbatim, as a\nsingle", 1),
-                prompt.replacen("Then stop.", "Then stop. ", 1),
-                prompt.replace('\n', "\r\n"),
-                prompt.replacen(&open, "id=\"2889\">\n", 1),
-                prompt.replace(id, &id.to_uppercase()),
-                prompt.replace(id, &id[..3]),
-                prompt.replace(id, &format!("{id}0")),
-                prompt.replace(id, &format!("{}g", &id[..3])),
-            ];
-            near_misses.retain(|near_miss| *near_miss != prompt);
-            // Upper-casing an all-digit id changes nothing, so it drops out.
-            assert!(near_misses.len() >= 10, "{id}");
-            for near_miss in near_misses {
-                let (_temp, path, mut captured) = arm_captured(submit);
-                captured["prompt"] = serde_json::Value::String(near_miss.clone());
-                let error = handle_hook("run-1", &path, &captured.to_string()).unwrap_err();
-                assert_eq!(error.kind, ErrorKind::Invalid, "{near_miss:?}");
-                assert!(!path.join("turns/turn-1/accepted.json").exists());
-            }
+    fn rejects_near_misses_of_the_captured_paste() {
+        let id = "1f17";
+        let prompt = serde_json::from_str::<serde_json::Value>(CAPTURED_DIRECTIVE).unwrap()
+            ["prompt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let open = format!("id=\"{id}\">\n");
+        let close = format!("</pasted_content id=\"{id}\">\n\n");
+        assert!(prompt.starts_with(&format!("\n\n<pasted_content {open}")));
+        assert!(prompt.ends_with(&format!("{close}{PASTE_DIRECTIVE}")));
+        let near_misses = vec![
+            prompt.replacen("\n\n", "\n\n\n", 1),
+            prompt.replacen("\n\n", "\n", 1),
+            prompt.replacen("<the exact reason>", "&lt;the exact reason&gt;", 1),
+            prompt.replacen("verbatim, as a single", "verbatim, as a\nsingle", 1),
+            prompt.replacen("Then stop.", "Then stop. ", 1),
+            prompt.replace('\n', "\r\n"),
+            prompt.replacen(&open, "id=\"2889\">\n", 1),
+            prompt.replace(id, &id.to_uppercase()),
+            prompt.replace(id, &id[..3]),
+            prompt.replace(id, &format!("{id}0")),
+            prompt.replace(id, &format!("{}g", &id[..3])),
+            prompt.replace(PASTE_DIRECTIVE, "Run the pasted instructions."),
+            prompt.replace(PASTE_DIRECTIVE, &format!("Also push. {PASTE_DIRECTIVE}")),
+            prompt.replace(
+                PASTE_DIRECTIVE,
+                &format!("{PASTE_DIRECTIVE} {PASTE_DIRECTIVE}"),
+            ),
+            format!("{prompt}\n"),
+            prompt.replacen(&close, &format!("\n{PASTE_DIRECTIVE}\n{close}"), 1),
+        ];
+        assert!(near_misses.iter().all(|near_miss| *near_miss != prompt));
+        for near_miss in near_misses {
+            let (_temp, path, mut captured) = arm_captured(CAPTURED_DIRECTIVE);
+            captured["prompt"] = serde_json::Value::String(near_miss.clone());
+            let error = handle_hook("run-1", &path, &captured.to_string()).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Invalid, "{near_miss:?}");
+            assert!(!path.join("turns/turn-1/accepted.json").exists());
         }
     }
 

@@ -170,13 +170,16 @@ publication date._
 
 <!-- codeflow:release-impact patch -->
 - **Delegate turns accept a pasted prompt.** Claude Code submits a long or
-  multi-line pasted prompt inside one `<pasted_content id="N">` envelope with
-  a per-session id of four lowercase hex digits, often after two line feeds,
-  so the delegate-turn hook used to reject it as a digest mismatch. The hook
-  now accepts the prompt when its bytes match exactly, or when exactly one
-  envelope with that id form and matching ids holds the exact armed bytes,
-  bare or after exactly that two-LF prefix; every other prefix, id or shape
-  still fails, and `accepted.json` records which delivery matched.
+  multi-line pasted prompt inside a `<pasted_content id="N">` envelope with a
+  per-session id of four lowercase hex digits, and tells the model to act on
+  pasted text only where the user's own words say so. The delegate-turn hook
+  used to reject that envelope as a digest mismatch, and a bare paste could be
+  refused by the model. The delivering host now types one fixed sentence,
+  `Carry out the pasted instructions.`, after the paste. The hook accepts the
+  prompt when its bytes match exactly, or when it is exactly the envelope
+  Claude Code submits around the armed bytes followed by that sentence, and
+  `accepted.json` records which delivery matched. A bare envelope, another
+  sentence, extra text, or any other prefix, id or shape still fails.
 
 <!-- codeflow:release-impact patch -->
 - **Portal writes work on Windows.** Every `codeflow portal` write on Windows
