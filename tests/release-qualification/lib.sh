@@ -412,18 +412,21 @@ resolve_trust_session() {
 #
 # Claude's input box is not settled for a moment after SessionStart records
 # ready: text sent then Enter pressed at once leaves the text unsent, so the
-# UserPromptSubmit hook never fires. deliver_turn pauses between the text and
-# Enter. When a short accepted wait then fails, it presses Enter once more,
-# never resending the text, and only when the pane's input line visibly still
-# holds the armed prompt, once, as cf-delegate allows. A blind Enter
-# could answer whatever dialog is on screen, so no evidence means no Enter.
+# UserPromptSubmit hook never fires. deliver_turn pauses after the text, then
+# reads the screen and presses Enter only when the current editor visibly
+# holds the armed prompt. A blind Enter could answer whatever dialog is on
+# screen, so an unreadable pane, a dialog, history alone or any screen whose
+# editor cannot be told apart sends nothing more: no text and no keys.
 #
 # Claude Code folds a long or multi-line paste into a `[Pasted text` attachment
-# and acts on pasted text only where the user's own words say so. After the
-# settle, deliver_turn reads the input line once, and when it shows that
-# attachment it types the fixed directive cf-delegate names, pauses again, and
-# only then presses Enter. The delegate-turn hook accepts an attachment only
-# with that sentence after it.
+# and acts on pasted text only where the user's own words say so. When the
+# current editor holds exactly that attachment, deliver_turn types the fixed
+# directive cf-delegate names, pauses, reads again, and presses Enter only when
+# the editor holds the attachment followed by exactly that sentence. The
+# delegate-turn hook accepts an attachment only with that sentence after it.
+#
+# When a short accepted wait then fails, it presses Enter once more, never
+# resending anything, and only when the editor still holds the prompt.
 
 DELIVER_SETTLE_SECONDS=${DELIVER_SETTLE_SECONDS:-2}
 PASTE_DIRECTIVE='Carry out the pasted instructions.'
@@ -433,42 +436,84 @@ DELIVER_MAX_REENTERS=1
 # The prompt marker Claude Code paints at the start of its input line.
 INPUT_LINE_MARKER='^([[:space:]]|│)*(❯|>)'
 
-# input_line <pane-id> - prints a readable pane's input line, the last
-# visible line that starts with the prompt marker, and nothing for an
-# unreadable pane. Earlier marker lines are submitted history.
-input_line() {
-  _il_file=${TMPDIR:-/tmp}/cf-input-line.$$
-  if pane_read_visible "$1" "$_il_file" "$TRUST_READ_TIMEOUT"; then
-    LC_ALL=C grep -E "$INPUT_LINE_MARKER" "$_il_file" | tail -1
-  fi
-  rm -f "$_il_file"
-  unset _il_file
-}
+# What a read of the current editor found, returned as an exit status.
+EDITOR_FOUND=0
+EDITOR_NONE=1
+EDITOR_UNREADABLE=2
 
-# unsent_prompt_showing <pane-id> <prompt-file> - returns 0 only when the
-# pane's input line holds the armed prompt: its first 24 characters, or the
-# paste attachment Claude shows for a long paste. A prompt that was sent is
-# history and never matches. An unreadable pane returns non-zero: it is no
-# evidence of unsent text.
-unsent_prompt_showing() {
-  _ups_match=$(head -1 "$2" | cut -c1-24)
-  _ups_line=$(input_line "$1")
-  set -- 1
-  if [ -n "$_ups_line" ] && [ -n "$_ups_match" ]; then
-    case $_ups_line in
-      *"$_ups_match"* | *"[Pasted text"*) set -- 0 ;;
-    esac
+# current_editor <pane-id> - one bounded read of the screen. Claude Code draws
+# its editor between two full-width rules, with only its footer below, and the
+# editor's first line starts with the prompt marker. Returns EDITOR_FOUND and
+# prints that first line, marker removed, when the last two rules on screen
+# enclose such an editor and no marker line follows them. Submitted history is
+# never enclosed like that, and a dialog draws at most one rule, so both return
+# EDITOR_NONE, as does any other screen. A read that fails, times out or
+# prints nothing returns EDITOR_UNREADABLE.
+current_editor() {
+  _ce_file=${TMPDIR:-/tmp}/cf-current-editor.$$
+  pane_read_visible "$1" "$_ce_file" "$TRUST_READ_TIMEOUT" && _ce_read=0 || _ce_read=$?
+  if [ "$_ce_read" != 0 ] || [ ! -s "$_ce_file" ]; then
+    rm -f "$_ce_file"
+    unset _ce_file _ce_read
+    return "$EDITOR_UNREADABLE"
   fi
-  unset _ups_match _ups_line
+  _ce_line=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" '
+    { line[NR] = $0 }
+    /^[[:space:]]*(─)+[[:space:]]*$/ { top = bottom; bottom = NR; next }
+    $0 ~ marker { last_marker = NR }
+    END {
+      if (top == 0 || bottom - top < 2 || last_marker > bottom) exit 1
+      first = line[top + 1]
+      if (first !~ marker) exit 1
+      sub(marker, "", first)
+      sub(/^ /, "", first)
+      sub(/[[:space:]]+$/, "", first)
+      print first
+    }
+  ' "$_ce_file") && _ce_status=$EDITOR_FOUND || _ce_status=$EDITOR_NONE
+  rm -f "$_ce_file"
+  [ "$_ce_status" = "$EDITOR_FOUND" ] && printf '%s\n' "$_ce_line"
+  set -- "$_ce_status"
+  unset _ce_file _ce_read _ce_line _ce_status
   return "$1"
 }
 
-# paste_attachment_showing <pane-id> - returns 0 only when the pane's input
-# line shows the attachment Claude Code folds a long paste into.
-paste_attachment_showing() {
-  case $(input_line "$1") in
-    *"[Pasted text"*) return 0 ;;
+# editor_holds <text> <prompt-file> - classify the editor's first line:
+# prints `attachment` for exactly the folded paste, `directive` for that
+# attachment followed by exactly the directive, `prompt` for the armed prompt's
+# first 24 characters, and `other` for anything else, an empty editor included.
+editor_holds() {
+  _eh_match=$(head -1 "$2" | cut -c1-24)
+  _eh_rest=$(printf '%s\n' "$1" |
+    LC_ALL=C sed -E 's/^\[Pasted text #[0-9]+ \+[0-9]+ lines\]//')
+  if [ "$_eh_rest" != "$1" ] && [ -z "$_eh_rest" ]; then
+    echo attachment
+  elif [ "$_eh_rest" != "$1" ] && [ "$_eh_rest" = "$PASTE_DIRECTIVE" ]; then
+    echo directive
+  elif [ -n "$_eh_match" ] && [ "${1#"$_eh_match"}" != "$1" ]; then
+    echo prompt
+  else
+    echo other
+  fi
+  unset _eh_match _eh_rest
+}
+
+# unsent_prompt_showing <pane-id> <prompt-file> - returns 0 only when the
+# current editor still holds the armed prompt, its attachment, or the
+# attachment with the directive. History, dialogs and unreadable panes are no
+# evidence of unsent text.
+unsent_prompt_showing() {
+  _ups_text=$(current_editor "$1") || { unset _ups_text; return 1; }
+  case $(editor_holds "$_ups_text" "$2") in
+    prompt | attachment | directive) unset _ups_text; return 0 ;;
   esac
+  unset _ups_text
+  return 1
+}
+
+# deliver_stop <reason> - record why nothing more was sent, and fail.
+deliver_stop() {
+  printf '\n%s; no further text or keys sent\n' "$1" >>"$TRANSCRIPT"
   return 1
 }
 
@@ -477,11 +522,25 @@ paste_attachment_showing() {
 deliver_turn() {
   herdr pane send-text "$1" "$(cat "$2")" >>"$TRANSCRIPT" 2>&1 || true
   sleep "$DELIVER_SETTLE_SECONDS"
-  if paste_attachment_showing "$1"; then
-    printf '\nthe input line shows a paste attachment; typing the directive\n' >>"$TRANSCRIPT"
-    herdr pane send-text "$1" "$PASTE_DIRECTIVE" >>"$TRANSCRIPT" 2>&1 || true
-    sleep "$DELIVER_SETTLE_SECONDS"
-  fi
+  _dt_text=$(current_editor "$1") && _dt_read=0 || _dt_read=$?
+  case $_dt_read in
+    "$EDITOR_UNREADABLE") deliver_stop 'the pane could not be read after the paste'; return 1 ;;
+    "$EDITOR_NONE") deliver_stop 'no current editor is visible after the paste'; return 1 ;;
+  esac
+  case $(editor_holds "$_dt_text" "$2") in
+    prompt) ;;
+    attachment)
+      printf '\nthe editor holds a paste attachment; typing the directive\n' >>"$TRANSCRIPT"
+      herdr pane send-text "$1" "$PASTE_DIRECTIVE" >>"$TRANSCRIPT" 2>&1 || true
+      sleep "$DELIVER_SETTLE_SECONDS"
+      _dt_text=$(current_editor "$1") && _dt_read=0 || _dt_read=$?
+      if [ "$_dt_read" != 0 ] || [ "$(editor_holds "$_dt_text" "$2")" != directive ]; then
+        deliver_stop 'the editor does not show the attachment followed by the directive'
+        return 1
+      fi
+      ;;
+    *) deliver_stop 'the current editor does not hold the armed prompt'; return 1 ;;
+  esac
   herdr pane send-keys "$1" Enter >>"$TRANSCRIPT" 2>&1 || true
   _dt_reenters=0
   while :; do
@@ -490,12 +549,12 @@ deliver_turn() {
     [ "$CF_STATUS" = 0 ] && return 0
     [ "$_dt_reenters" -ge "$DELIVER_MAX_REENTERS" ] && return 1
     if ! unsent_prompt_showing "$1" "$2"; then
-      printf '\nnot accepted yet, and the input line shows no unsent prompt; no Enter sent\n' \
+      printf '\nnot accepted yet, and the current editor shows no unsent prompt; no Enter sent\n' \
         >>"$TRANSCRIPT"
       return 1
     fi
     _dt_reenters=$((_dt_reenters + 1))
-    printf '\nnot accepted yet, and the input line still holds the prompt; Enter again (%s of %s)\n' \
+    printf '\nnot accepted yet, and the current editor still holds the prompt; Enter again (%s of %s)\n' \
       "$_dt_reenters" "$DELIVER_MAX_REENTERS" >>"$TRANSCRIPT"
     herdr pane send-keys "$1" Enter >>"$TRANSCRIPT" 2>&1 || true
   done

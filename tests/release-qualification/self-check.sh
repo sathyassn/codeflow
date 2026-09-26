@@ -55,6 +55,8 @@ TRANSCRIPT="$STUB_DIR/transcript"
 #   enters / accept-at     Enters sent so far, and the one that is accepted
 #   proc-out               what `pane process-info` prints; with exit-on-keys
 #                          present, any send-keys swaps in proc-shell
+#   pane-text-directive    swapped into pane-text when the directive is typed
+#   pane-text-after-enter  swapped into pane-text on any send-keys
 {
   printf '#!/bin/sh\n'
   printf 'D=%s\n' "$STUB_DIR"
@@ -67,8 +69,14 @@ TRANSCRIPT="$STUB_DIR/transcript"
   printf '  "agent start") cat "$D/start-out"; exit "$(cat "$D/start-rc")" ;;\n'
   printf '  "agent get") cat "$D/get-out"; exit "$(cat "$D/get-rc")" ;;\n'
   printf '  "pane process-info") cat "$D/proc-out"; exit 0 ;;\n'
+  printf '  "pane send-text")\n'
+  printf '    case "$*" in *"Carry out the pasted instructions."*)\n'
+  printf '      [ -f "$D/pane-text-directive" ] && cp "$D/pane-text-directive" "$D/pane-text" ;;\n'
+  printf '    esac\n'
+  printf '    exit 0 ;;\n'
   printf '  "pane send-keys")\n'
   printf '    [ -f "$D/exit-on-keys" ] && cp "$D/proc-shell" "$D/proc-out"\n'
+  printf '    [ -f "$D/pane-text-after-enter" ] && cp "$D/pane-text-after-enter" "$D/pane-text"\n'
   printf '    n=$(($(cat "$D/enters") + 1)); printf "%%s" "$n" >"$D/enters"\n'
   printf '    [ "$n" -lt "$(cat "$D/accept-at")" ] || : >"$D/accepted"\n'
   printf '    exit 0 ;;\n'
@@ -90,7 +98,8 @@ stub_herdr() {
   printf 'agent target not found\n' >"$STUB_DIR/get-out"
   printf '0' >"$STUB_DIR/enters"
   printf '99' >"$STUB_DIR/accept-at"
-  rm -f "$STUB_DIR/accepted" "$STUB_DIR/exit-on-keys"
+  rm -f "$STUB_DIR/accepted" "$STUB_DIR/exit-on-keys" \
+    "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter"
   printf '%s\n' "$PROC_AGENT" >"$STUB_DIR/proc-out"
   printf '%s\n' "$PROC_SHELL" >"$STUB_DIR/proc-shell"
 }
@@ -312,14 +321,16 @@ ok mutation.probe "without the guard an unreadable pane reads as answered" \
   "$([ "$_mutant_rc" = "$TRUST_GONE" ] && echo 0 || echo 1)"
 
 # ---------------------------------------------------------------------------
-# deliver_turn: the settle pause and the evidence-gated re-Enter
+# deliver_turn: an Enter only for a positively identified editor
 # ---------------------------------------------------------------------------
 #
 # The stub herdr counts Enters and writes `accepted` on the one named in
 # accept-at; the stub candidate answers `delegate wait` with 0 once that file
 # exists and with the timeout exit 124 until then. `pane read` prints
-# pane-text, the screen deliver_turn judges for a paste attachment before the
-# first Enter and for unsent text before any re-Enter.
+# pane-text. Typing the directive swaps in pane-text-directive and an Enter
+# swaps in pane-text-after-enter, when those files exist, so a case can model
+# the screen changing. The screens follow a live Claude Code 2.1.283 pane: the
+# editor sits between two rules with its footer below.
 
 {
   printf '#!/bin/sh\n'
@@ -333,49 +344,113 @@ chmod 0755 "$STUB_DIR/cf-stub"
 BINARY="$STUB_DIR/cf-stub"
 printf 'Reply with exactly: ok. Do not edit any file.' >"$STUB_DIR/prompt.txt"
 
-# The prompt still sitting in the input box, below an earlier turn.
-UNSENT_PANE='> earlier question
+RULE='──────────────────────────────'
+
+# The prompt in the current editor, below an earlier turn.
+UNSENT_PANE="> earlier question
 ● earlier answer
-────────────────
+$RULE
 ❯ Reply with exactly: ok. Do not edit any file.
-────────────────'
+$RULE
+  ⏸ manual mode on"
 
-# The same prompt submitted: it is history now, and the input line is empty.
-SENT_PANE='❯ Reply with exactly: ok. Do not edit any file.
+# The same prompt submitted: history now, and the editor shows its placeholder.
+SENT_PANE="❯ Reply with exactly: ok. Do not edit any file.
 ● Working
-────────────────
-❯ 
-────────────────'
+$RULE
+❯ Try \"fix lint errors\"
+$RULE
+  ⏸ manual mode on · ? for shortcuts"
 
-# A long paste Claude collapsed into an attachment on the input line.
-PASTED_PANE='────────────────
+# A long paste Claude folded into an attachment in the current editor, and the
+# same editor once the directive is typed after it.
+PASTED_PANE="$RULE
 ❯ [Pasted text #1 +12 lines]
-────────────────'
+$RULE
+  paste again to expand"
+DIRECTIVE_PANE="$RULE
+❯ [Pasted text #1 +12 lines]Carry out the pasted instructions.
+$RULE
+  ⏸ manual mode on"
 
-# run_deliver <accept-at> <pane text> - deliver one turn against the stubs.
+# An attachment that is only history: no editor is drawn below it.
+HISTORY_PASTE_PANE='❯ [Pasted text #1 +12 lines]
+● Working on earlier request'
+
+# A dialog: one rule above it, and its own marker on an option.
+DIALOG_PANE="$RULE
+ Accessing workspace:
+
+ Quick safety check: Is this a project you created or one you trust?
+
+ ❯ No, exit
+   Yes, I trust this folder
+
+ Enter to confirm · Esc to cancel"
+
+# Something that looks like an editor, with a marker line after it: ambiguous.
+AMBIGUOUS_PANE="$RULE
+❯ Reply with exactly: ok. Do not edit any file.
+$RULE
+ ❯ 1. Yes"
+
+# run_deliver <accept-at> <pane text> [directive pane] [pane after Enter]
 run_deliver() {
   stub_herdr "$2"
   printf '%s' "$1" >"$STUB_DIR/accept-at"
+  rm -f "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter"
+  [ -z "${3:-}" ] || printf '%s\n' "$3" >"$STUB_DIR/pane-text-directive"
+  [ -z "${4:-}" ] || printf '%s\n' "$4" >"$STUB_DIR/pane-text-after-enter"
   deliver_turn p1 "$STUB_DIR/prompt.txt" run1 /tmp/state t1 && DELIVER_RC=0 || DELIVER_RC=$?
   DELIVER_ENTERS=$(cat "$STUB_DIR/enters")
   DELIVER_WAITS=$(grep -c '^codeflow delegate wait' "$STUB_DIR/calls" || true)
   DELIVER_READS=$(grep -c '^pane read' "$STUB_DIR/calls" || true)
+  DELIVER_TEXTS=$(grep -c '^pane send-text' "$STUB_DIR/calls" || true)
+  DELIVER_DIRECTIVES=$(grep -c '^pane send-text p1 Carry out the pasted instructions\.$' \
+    "$STUB_DIR/calls" || true)
 }
+
+# current_editor: the three results, each against its opposite.
+stub_herdr "$UNSENT_PANE"
+_text=$(current_editor p1) && _r=0 || _r=$?
+ok current_editor.found "the editor between the last two rules is found, marker removed" \
+  "$([ "$_r" = "$EDITOR_FOUND" ] && [ "$_text" = 'Reply with exactly: ok. Do not edit any file.' ] && echo 0 || echo 1)"
+# no_editor_case <description> <pane text>
+no_editor_case() {
+  stub_herdr "$2"
+  current_editor p1 >/dev/null && _r=0 || _r=$?
+  ok current_editor.none "$1 has no current editor" \
+    "$([ "$_r" = "$EDITOR_NONE" ] && echo 0 || echo 1)"
+}
+no_editor_case 'an attachment only in history' "$HISTORY_PASTE_PANE"
+no_editor_case 'a dialog' "$DIALOG_PANE"
+no_editor_case 'a marker line after the editor' "$AMBIGUOUS_PANE"
+no_editor_case 'a screen with no rules' "$TRUSTED_PANE"
+stub_herdr "$UNSENT_PANE"
+printf '1' >"$STUB_DIR/pane-rc"
+current_editor p1 >/dev/null && _r=0 || _r=$?
+ok current_editor.unreadable "a failed read is unreadable, never an editor or its absence" \
+  "$([ "$_r" = "$EDITOR_UNREADABLE" ] && echo 0 || echo 1)"
+stub_herdr ''
+: >"$STUB_DIR/pane-text"
+current_editor p1 >/dev/null && _r=0 || _r=$?
+ok current_editor.unreadable "an empty read is unreadable" \
+  "$([ "$_r" = "$EDITOR_UNREADABLE" ] && echo 0 || echo 1)"
 
 # Accepted on the first Enter, after the default settle pause.
 _began=$(date +%s)
 run_deliver 1 "$UNSENT_PANE"
 _took=$(($(date +%s) - _began))
-ok deliver_turn.first "accepted on the first Enter: one Enter, one pane read" \
+ok deliver_turn.first "the prompt in the editor: accepted on one Enter after one read" \
   "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] && [ "$DELIVER_READS" = 1 ] && echo 0 || echo 1)"
-ok deliver_turn.settle "waits the 2 s settle between the text and Enter, took $_took s" \
+ok deliver_turn.settle "waits the 2 s settle between the text and the read, took $_took s" \
   "$([ "$_took" -ge 2 ] && echo 0 || echo 1)"
-ok deliver_turn.order "sends the text, reads the input line, then the first Enter" \
+ok deliver_turn.order "sends the text, reads the editor, then the first Enter" \
   "$(sed -n '1p' "$STUB_DIR/calls" | grep -qF 'pane send-text p1 Reply with exactly: ok.' &&
      sed -n '2p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
      sed -n '3p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
 ok deliver_turn.no_directive "a prompt shown as text gets no directive" \
-  "$([ "$(grep -c 'pane send-text' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
+  "$([ "$DELIVER_TEXTS" = 1 ] && echo 0 || echo 1)"
 ok deliver_turn.probe "probes acceptance of this turn for 5 s" \
   "$(grep -qF 'delegate wait --run-id run1 --state-dir /tmp/state --until accepted --turn-id t1 --timeout-seconds 5' \
      "$STUB_DIR/calls" && echo 0 || echo 1)"
@@ -383,46 +458,59 @@ ok deliver_turn.probe "probes acceptance of this turn for 5 s" \
 # shellcheck disable=SC2034 # read by deliver_turn in lib.sh
 DELIVER_SETTLE_SECONDS=0
 
-# The unsent prompt is visible on the input line: one re-Enter lands it.
+# The prompt still in the editor after the first Enter: one re-Enter lands it.
 run_deliver 2 "$UNSENT_PANE"
-ok deliver_turn.reenter "unsent text on the input line gets one re-Enter, then acceptance" \
+ok deliver_turn.reenter "the prompt still in the editor gets one re-Enter, then acceptance" \
   "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 2 ] && [ "$DELIVER_WAITS" = 2 ] && echo 0 || echo 1)"
-ok deliver_turn.reenter "the re-Enter follows a visible-screen read and never resends the text" \
-  "$(grep -qF 'pane read p1 --source visible --lines 120' "$STUB_DIR/calls" &&
-     [ "$(grep -c 'pane send-text' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
+ok deliver_turn.reenter "the re-Enter follows a second read and never resends the text" \
+  "$([ "$DELIVER_READS" = 2 ] && [ "$DELIVER_TEXTS" = 1 ] && echo 0 || echo 1)"
 
-run_deliver 1 "$PASTED_PANE"
-ok deliver_turn.directive "a paste attachment gets the directive typed, then one Enter" \
+# The prompt went to history after the first Enter: no re-Enter.
+run_deliver 99 "$UNSENT_PANE" '' "$SENT_PANE"
+ok deliver_turn.no_evidence "a prompt that went to history gets no re-Enter" \
+  "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_ENTERS" = 1 ] && echo 0 || echo 1)"
+
+# A folded paste: the directive is typed, seen, and then submitted.
+run_deliver 1 "$PASTED_PANE" "$DIRECTIVE_PANE"
+ok deliver_turn.directive "an attachment gets the directive, a second read, then one Enter" \
   "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] &&
      sed -n '2p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
      [ "$(sed -n '3p' "$STUB_DIR/calls")" = 'pane send-text p1 Carry out the pasted instructions.' ] &&
-     sed -n '4p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
+     sed -n '4p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
+     sed -n '5p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
 
-run_deliver 2 "$PASTED_PANE"
-ok deliver_turn.pasted "a paste attachment on the input line gets a re-Enter" \
-  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 2 ] && echo 0 || echo 1)"
-ok deliver_turn.directive "the re-Enter never types the directive again" \
-  "$([ "$(grep -c 'pane send-text p1 Carry out' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
+run_deliver 2 "$PASTED_PANE" "$DIRECTIVE_PANE"
+ok deliver_turn.pasted "the attachment and directive still in the editor get one re-Enter" \
+  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 2 ] && [ "$DELIVER_DIRECTIVES" = 1 ] && echo 0 || echo 1)"
 
-# Negative controls: not accepted, but no evidence of unsent text.
-run_deliver 99 "$SENT_PANE"
-ok deliver_turn.no_evidence "a submitted prompt in history with an empty input line gets no Enter" \
-  "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_ENTERS" = 1 ] && echo 0 || echo 1)"
+# The directive typed but not seen after the attachment: nothing is submitted.
+run_deliver 1 "$PASTED_PANE"
+ok deliver_turn.directive "a directive the editor does not show gets no Enter" \
+  "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_ENTERS" = 0 ] && [ "$DELIVER_DIRECTIVES" = 1 ] && echo 0 || echo 1)"
 
-run_deliver 99 "$TRUSTED_PANE"
-ok deliver_turn.no_evidence "a screen without the prompt gets no Enter" \
-  "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_ENTERS" = 1 ] && echo 0 || echo 1)"
+# Negative controls: after the paste, no current editor holding the prompt
+# means no further text and no keys at all.
+# unavailable_case <description> <pane text>
+unavailable_case() {
+  run_deliver 1 "$2"
+  ok deliver_turn.unavailable "$1 after the paste: no directive and no Enter" \
+    "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_ENTERS" = 0 ] && [ "$DELIVER_TEXTS" = 1 ] && echo 0 || echo 1)"
+}
+unavailable_case 'an attachment only in history' "$HISTORY_PASTE_PANE"
+unavailable_case 'a dialog' "$DIALOG_PANE"
+unavailable_case 'a marker line after the editor' "$AMBIGUOUS_PANE"
+unavailable_case 'an editor showing only its placeholder' "$SENT_PANE"
+unavailable_case 'a screen with no rules' "$TRUSTED_PANE"
 
-stub_herdr "$UNSENT_PANE"
+stub_herdr "$PASTED_PANE"
 printf '1' >"$STUB_DIR/pane-rc"
-printf '99' >"$STUB_DIR/accept-at"
+printf '1' >"$STUB_DIR/accept-at"
 deliver_turn p1 "$STUB_DIR/prompt.txt" run1 /tmp/state t1 && _r=0 || _r=$?
-ok deliver_turn.unreadable "an unreadable pane is no evidence, so no Enter" \
-  "$([ "$_r" != 0 ] && [ "$(cat "$STUB_DIR/enters")" = 1 ] && echo 0 || echo 1)"
-ok deliver_turn.unreadable "an unreadable pane gets no directive" \
-  "$([ "$(grep -c 'pane send-text' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
+ok deliver_turn.unreadable "an unreadable pane after the paste: no directive and zero Enters" \
+  "$([ "$_r" != 0 ] && [ "$(cat "$STUB_DIR/enters")" = 0 ] &&
+     [ "$(grep -c '^pane send-text' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
 
-# Still unsent after the one re-Enter: stop and fail.
+# Still in the editor after the one re-Enter: stop and fail.
 run_deliver 99 "$UNSENT_PANE"
 ok deliver_turn.bounded "still unsent after one re-Enter ends non-zero with two Enters" \
   "$([ "$DELIVER_RC" != 0 ] && [ "$DELIVER_ENTERS" = 2 ] && [ "$DELIVER_WAITS" = 2 ] && echo 0 || echo 1)"
