@@ -664,6 +664,12 @@ _bad=$(sh "$SCRIPT_DIR/qualify.sh" --trust-wait-seconds soon 2>&1 || true)
 ok qualify.sh "rejects a --trust-wait-seconds that is not a number" \
   "$(printf '%s' "$_bad" | grep -q 'whole number of seconds' && echo 0 || echo 1)"
 
+_bad=$(sh "$SCRIPT_DIR/qualify.sh" --target-dir "$STUB_DIR/elsewhere" 2>&1) && _bad_rc=0 || _bad_rc=$?
+ok qualify.sh "refuses --target-dir and builds only into its own work directory" \
+  "$([ "$_bad_rc" = 64 ] && printf '%s' "$_bad" | grep -q 'its own target' &&
+     [ ! -e "$STUB_DIR/elsewhere" ] &&
+     grep -qF 'TARGET_DIR="$WORK/cargo-target"' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
+
 ok qualify.sh "runs the trust branch through resolve_trust_prompt" \
   "$(grep -qF 'resolve_trust_prompt "$HERDR_PANE" "$HERDR_TAB"' \
      "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"

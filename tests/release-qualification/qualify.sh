@@ -10,6 +10,11 @@
 # The candidate commit and the binary digest are parameters, never constants:
 # the same script re-runs against a later integration head unchanged.
 #
+# The build always uses its own Cargo target directory inside the work
+# directory. A debug binary reads its embedded assets from the checkout it was
+# built in, and that checkout is removed at teardown, so building into a
+# caller's target would leave the caller a binary that no longer runs.
+#
 #   sh tests/release-qualification/qualify.sh --commit <SHA> [options]
 #
 # Options:
@@ -19,7 +24,6 @@
 #   --out <FILE>        Matrix destination (default: the v3.0.0 sibling record).
 #   --evidence <FILE>   Release record whose qualification block is refreshed.
 #   --work-dir <DIR>    Disposable root (default: a mktemp under $TMPDIR).
-#   --target-dir <DIR>  Cargo target directory for the build.
 #   --node <DIR>        bin/ directory of the portal's pinned Node (24.18.0).
 #   --herdr-workspace   Herdr workspace id for the delegate canary (default: w2).
 #   --blocked-on        What a blocked verdict is blocked on, recorded verbatim.
@@ -45,7 +49,6 @@ BINARY=""
 OUT=""
 EVIDENCE=""
 WORK_PARENT_OPT=""
-TARGET_DIR=""
 NODE_BIN=""
 HERDR_WORKSPACE="w2"
 BLOCKED_ON=""
@@ -63,7 +66,10 @@ while [ $# -gt 0 ]; do
     --out) OUT=$2; shift 2 ;;
     --evidence) EVIDENCE=$2; shift 2 ;;
     --work-dir) WORK_PARENT_OPT=$2; shift 2 ;;
-    --target-dir) TARGET_DIR=$2; shift 2 ;;
+    --target-dir)
+      printf -- '--target-dir is not accepted: the build uses its own target under the work directory\n' >&2
+      exit 64
+      ;;
     --node) NODE_BIN=$2; shift 2 ;;
     --herdr-workspace) HERDR_WORKSPACE=$2; shift 2 ;;
     --blocked-on) BLOCKED_ON=$2; shift 2 ;;
@@ -72,7 +78,7 @@ while [ $# -gt 0 ]; do
     --skip-canary) SKIP_CANARY=1; shift ;;
     --trust-wait-seconds) TRUST_WAIT_SECONDS=$2; shift 2 ;;
     --keep) KEEP=1; shift ;;
-    -h | --help) sed -n '2,34p' "$0"; exit 0 ;;
+    -h | --help) sed -n '2,37p' "$0"; exit 0 ;;
     *) printf 'unknown option: %s\n' "$1" >&2; exit 64 ;;
   esac
 done
@@ -333,7 +339,7 @@ BUILD_TREE="$WORK/candidate"
 if [ -n "$BINARY" ]; then
   printf 'using the supplied binary; no build will run\n' >&2
 elif [ -z "$BINARY" ]; then
-  [ -n "$TARGET_DIR" ] || TARGET_DIR="$WORK/cargo-target"
+  TARGET_DIR="$WORK/cargo-target"
   mkdir -p "$TARGET_DIR"
   printf 'building %s (this takes a few minutes)\n' "$COMMIT" >&2
   git -C "$REPO" worktree add --detach --quiet "$BUILD_TREE" "$COMMIT"
