@@ -4,9 +4,9 @@
 // then read in a browser, where the class rules and the twelve figure rules
 // are applied to what actually renders.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "@playwright/test";
@@ -737,4 +737,63 @@ test("the figure gate matches page motion without accepting changed figure style
     await site?.close();
     await rm(root, { recursive: true, force: true });
   }
+});
+
+// A fetch the clean copy cannot complete (a socket hang-up under load) fails
+// the check and the verifier still releases what it holds. Each run holds
+// the workflow lease and a tracked preview child, then loads a page from a
+// server that hangs up on every request: through the clean copy's route, the
+// failed fetch is recorded and the navigation fails; through a route with no
+// catch, the lifecycle takes the unhandled rejection as fatal. Either way the
+// process exits 1, with no lock, no lock candidate and no preview left.
+test("a failed clean-copy fetch fails the verifier and releases its lease and preview", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const runner = path.join(root, "fetch-failure-fixture.mjs");
+    await writeFile(runner, `
+      import { spawn } from "node:child_process";
+      import { createServer } from "node:http";
+      import { writeFile } from "node:fs/promises";
+      import path from "node:path";
+      import { chromium } from "@playwright/test";
+      import { cleanDocumentRoute } from "./scripts/browser-verify.mjs";
+      import { withSignalAwareChildLifecycle } from "./scripts/child-lifecycle.mjs";
+      import { hardenedChildEnvironment } from "./scripts/process-environment.mjs";
+      import { withWorkflowLease } from "./scripts/publication.mjs";
+      const root = process.cwd();
+      const guarded = process.argv[2] === "guarded";
+      await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, async () => {
+        const preview = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000)"], { stdio: "ignore" });
+        lifecycle.trackChild(preview);
+        await writeFile(path.join(root, ".preview-pid"), String(preview.pid));
+        const server = createServer((request) => request.socket.destroy());
+        await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+        lifecycle.addCleanup(() => new Promise((resolve) => server.close(resolve)));
+        const browser = await lifecycle.acquire(chromium.launch({ headless: true, env: hardenedChildEnvironment() }), (late) => late.close());
+        lifecycle.addCleanup(() => browser.close());
+        const page = await browser.newPage();
+        const failures = [];
+        if (guarded) await page.route("**/*", (route) => cleanDocumentRoute(route, "script-src 'none'", failures));
+        else await page.route("**/*", async (route) => { const response = await route.fetch(); await route.fulfill({ response }); });
+        try { await page.goto("http://127.0.0.1:" + server.address().port + "/"); }
+        catch (error) { throw new Error(failures.join("; ") + "; then " + error.message); }
+      }));
+    `);
+    for (const mode of ["guarded", "unguarded"]) {
+      const child = spawn(process.execPath, [runner, mode], { cwd: root, stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      const outcome = await new Promise((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      assert.deepEqual(outcome, { code: 1, signal: null }, `${mode}: ${stderr}`);
+      assert.match(stderr, /socket hang up/, mode);
+      if (mode === "guarded") assert.match(stderr, /the clean copy could not load http:\/\/127\.0\.0\.1:\d+\/: .*socket hang up/, stderr);
+      await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/, mode);
+      assert.deepEqual((await readdir(path.join(root, ".portal"))).filter((name) => name.startsWith(".workflow-lock")), [], mode);
+      const pid = Number(await readFile(path.join(root, ".preview-pid"), "utf8"));
+      assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, `${mode}: the preview ${pid} is still running`);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });

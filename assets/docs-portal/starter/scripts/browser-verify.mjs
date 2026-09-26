@@ -159,11 +159,17 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     // envelope instead of duplicating an unbounded screenshot timeline.
     await context.tracing.start({ screenshots: false, snapshots: false, sources: false });
     traceStarted = true;
+    // A route that cannot be continued or aborted is a request failure,
+    // recorded for the isolation check, never a rejection that ends the run.
     await context.route("**/*", async (route) => {
-      const url = new URL(route.request().url());
-      if (["http:", "https:"].includes(url.protocol) && url.origin === origin) return route.continue();
-      pushBoundedDiagnostic(runtime.remote, route.request().url());
-      return route.abort("blockedbyclient");
+      try {
+        const url = new URL(route.request().url());
+        if (["http:", "https:"].includes(url.protocol) && url.origin === origin) return await route.continue();
+        pushBoundedDiagnostic(runtime.remote, route.request().url());
+        return await route.abort("blockedbyclient");
+      } catch (error) {
+        pushBoundedDiagnostic(runtime.request, `${route.request().url()}: ${boundedError(error)}`);
+      }
     });
     const page = context.pages()[0] ?? await context.newPage();
     page.on("console", (message) => { if (message.type() === "error") pushBoundedDiagnostic(runtime.console, message.text()); });
@@ -453,11 +459,8 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
   // The clean copy runs only the runtime's scripts: the recorded built
   // scripts by URL and the allowlisted inline scripts by hash.
   let cleanPolicy = null;
-  await clean.route("**/*", async (route) => {
-    if (route.request().resourceType() !== "document" || cleanPolicy === null) return route.fallback();
-    const response = await route.fetch();
-    await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": cleanPolicy } });
-  });
+  const routeFailures = [];
+  await clean.route("**/*", (route) => cleanDocumentRoute(route, cleanPolicy, routeFailures));
   try {
     const recorded = new Map((generated.figures ?? []).map((entry) => [entry.declaration_path, entry]));
     for (const assignment of assignments) {
@@ -549,11 +552,32 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
         });
       }
     }
+  } catch (error) {
+    // An aborted clean copy fails its navigation; name the fetch that failed.
+    if (routeFailures.length) throw new Error(`${routeFailures.join("; ")}; then ${error.message}`, { cause: error });
+    throw error;
   } finally {
     await clean.close();
     await cleanContext?.close();
   }
+  failures.push(...routeFailures);
   return { failures, drawn };
+}
+
+// The clean copy's document route: the document as served, under the pinned
+// script policy once one is set. A fetch that fails (a socket hang-up under
+// load) aborts the route and is recorded as a failure of the check, never
+// left as a rejection, which would end the verifier with its workflow lease
+// and preview server still held.
+export async function cleanDocumentRoute(route, policy, failures) {
+  try {
+    if (route.request().resourceType() !== "document" || policy === null) return await route.fallback();
+    const response = await route.fetch();
+    await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": policy } });
+  } catch (error) {
+    failures.push(`the clean copy could not load ${route.request().url()}: ${error?.message ?? error}`);
+    await route.abort("failed").catch(() => {});
+  }
 }
 
 // The stylesheets or scripts a build may serve: the files of that kind among
