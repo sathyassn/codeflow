@@ -1483,9 +1483,19 @@ PROMPT
     return
   fi
 
+  _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, this harness's own subtract(4, 1) test green, and the sample gate green"
   deliver_turn "$HERDR_PANE" "$WORK/pipeline-prompt.txt" "$_run" "$_state" "$_turn2" || true
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until accepted \
-    --turn-id "$_turn2" --timeout-seconds 180
+    --turn-id "$_turn2" --timeout-seconds "$PIPELINE_ACCEPT_SECONDS"
+  # A turn the session never accepted cannot run the pipeline, and nothing
+  # later can change that, so the row fails now instead of waiting out the
+  # pipeline budget on a turn that does not exist.
+  if [ "$CF_STATUS" != 0 ]; then
+    record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \
+      "$RESULT_FAILED" "$_pipeline_expected" \
+      "the pipeline turn was not accepted within $PIPELINE_ACCEPT_SECONDS s: $(observed_exit)"
+    return
+  fi
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until terminal \
     --turn-id "$_turn2" --timeout-seconds 3600
   _pipeline_terminal=$CF_STATUS
@@ -1564,7 +1574,6 @@ PROBE
     rm -f "$DIR/tests/qualification_subtract.rs"
   fi
 
-  _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, this harness's own subtract(4, 1) test green, and the sample gate green"
   cf test --mode full --strict
   _gate=$CF_STATUS
   _invoked=$(workflow_invocation_evidence "$_state")
@@ -1616,6 +1625,9 @@ PROBE
 # ---------------------------------------------------------------------------
 
 PIPELINE_RESULT="qualification-pipeline-result.txt"
+
+# How long the pipeline turn has to be accepted before the row fails.
+PIPELINE_ACCEPT_SECONDS=180
 
 # Did the session actually invoke the native Workflow tool on the scaffolded
 # pipeline? The turn's own result.json names the Claude Code session, and that

@@ -478,6 +478,11 @@ ok qualify.sh "teardown stops the agent through stop_pane_agent, never a missing
   "$(grep -qF 'stop_pane_agent "$HERDR_PANE"' "$SCRIPT_DIR/qualify.sh" &&
      ! grep -q 'herdr agent stop' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
 
+ok qualify.sh "a pipeline turn that is not accepted fails the row before the terminal wait" \
+  "$(awk '/--timeout-seconds "\$PIPELINE_ACCEPT_SECONDS"/ {a=NR} /the pipeline turn was not accepted/ {r=NR}
+          /--until terminal/ && a && !t {t=NR} END {exit !(a && r && t && a < r && r < t)}' \
+     "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
+
 # ---------------------------------------------------------------------------
 # The option the operator drives all of this with
 # ---------------------------------------------------------------------------
