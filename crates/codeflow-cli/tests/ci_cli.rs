@@ -690,3 +690,214 @@ fn ci_committed_hash_line_and_merge_message_are_scanned() {
     assert!(all.contains("commit subject contains an em dash"), "{all}");
     assert!(all.contains("1 merge(s)"), "{all}");
 }
+
+// -- managed content is CodeFlow's (ADR-0067 note, 2026-09-25) ----------------
+
+/// Run a git command with the binary under test first on `PATH`, so the
+/// hooks `codeflow init` wires run this build.
+fn git_with_binary(dir: &Path, args: &[&str]) {
+    let exe = Path::new(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// A `trunk` commit, then `codeflow init --standard` committed on
+/// `feat/x`, with the scaffolded policy raised to `block` so any finding
+/// would fail the run. The range `trunk..HEAD` is the scaffold pull request.
+fn scaffolded_standard(dir: &Path) {
+    git(dir, &["init", "-b", "trunk"]);
+    git(dir, &["config", "user.email", "t@example.com"]);
+    git(dir, &["config", "user.name", "t"]);
+    std::fs::write(dir.join("README.md"), "# sample\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "chore: init"]);
+    git(dir, &["checkout", "-b", "feat/x"]);
+    let out = run_in(dir, &["init", "--standard", "--yes"]);
+    assert!(
+        out.status.success(),
+        "init: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git_with_binary(dir, &["add", "-A"]);
+    git_with_binary(dir, &["commit", "-q", "-m", "chore: scaffold codeflow"]);
+    let path = dir.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    policy["git"]["policy_characters"] = "block".into();
+    std::fs::write(&path, serde_json::to_vec_pretty(&policy).unwrap()).unwrap();
+}
+
+fn ci_scaffold_range(dir: &Path) -> (Option<i32>, String) {
+    let out = run_in(
+        dir,
+        &[
+            "ci", "--base", "trunk", "--head", "HEAD", "--branch", "feat/x",
+        ],
+    );
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code(), all)
+}
+
+#[test]
+fn ci_scaffold_range_skips_unmodified_managed_files() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffolded_standard(dir.path());
+    // The fixture must really carry a dash, or the skip proves nothing.
+    let skill =
+        std::fs::read_to_string(dir.path().join(".agents/skills/cf-consult/SKILL.md")).unwrap();
+    assert!(skill.contains('\u{2014}'), "fixture lost its em dash");
+    let (_, all) = ci_scaffold_range(dir.path());
+    // No managed skill or project-management file is judged: their bytes
+    // are exactly what this binary ships for those paths.
+    for tree in [".agents/skills/", ".claude/skills/", "project-management/"] {
+        assert!(!all.contains(tree), "{tree}: {all}");
+    }
+    // The user-owned starter docs belong to the project once written, so
+    // their dashes are reported (a warning at the shipped default). This
+    // also proves the added-lines scan ran over the range.
+    assert!(all.contains("docs/product.md:"), "{all}");
+}
+
+#[test]
+fn ci_adopter_edited_managed_file_is_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffolded_standard(dir.path());
+    let path = dir.path().join(".agents/skills/cf-consult/SKILL.md");
+    let mut skill = std::fs::read_to_string(&path).unwrap();
+    skill.push_str("\nA local note, added by the adopter.\n");
+    std::fs::write(&path, skill).unwrap();
+    git_with_binary(dir.path(), &["add", "."]);
+    git_with_binary(
+        dir.path(),
+        &["commit", "-m", "docs: note the consult skill"],
+    );
+    let (code, all) = ci_scaffold_range(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains(".agents/skills/cf-consult/SKILL.md:6 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    // The untouched mirror is still CodeFlow's bytes.
+    assert!(!all.contains(".claude/skills/cf-consult/SKILL.md"), "{all}");
+}
+
+#[test]
+fn ci_non_managed_docs_file_in_a_scaffolded_repo_is_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    scaffolded_standard(dir.path());
+    std::fs::write(
+        dir.path().join("docs/notes.md"),
+        "# Notes\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git_with_binary(dir.path(), &["add", "."]);
+    git_with_binary(dir.path(), &["commit", "-m", "docs: add notes"]);
+    let (code, all) = ci_scaffold_range(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("docs/notes.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    assert!(!all.contains("skills/"), "{all}");
+}
+
+/// Codex R1 and Grok D1 on the first cut: the change writes
+/// `.codeflow/manifest.json` itself, so a record in it proves nothing. An
+/// authored page with a dash and a matching forged record, for every
+/// ownership value, is still reported under `block`.
+#[test]
+fn ci_forged_manifest_record_does_not_hide_an_authored_dash() {
+    for ownership in ["managed", "managed-region", "user-owned"] {
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_grandfathered_dash(dir.path());
+        let page = "# Notes\n\nA line \u{2014} added.\n";
+        std::fs::write(dir.path().join("docs/notes.md"), page).unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        let digest = codeflow_core::scaffold::sha256_hex(page.as_bytes());
+        let manifest = serde_json::json!({
+            "schema_version": 1,
+            "scaffold_version": "3.0.0",
+            "files": {
+                "docs/notes.md": {
+                    "src": "agents/skills/cf-consult/SKILL.md",
+                    "ownership": ownership,
+                    "sha256": digest,
+                    "exec": false
+                }
+            }
+        });
+        std::fs::write(
+            dir.path().join(".codeflow/manifest.json"),
+            serde_json::to_vec_pretty(&manifest).unwrap(),
+        )
+        .unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "docs: add notes"]);
+        let (code, all) = ci_range_output(dir.path());
+        assert_eq!(code, Some(1), "{ownership}: {all}");
+        assert!(
+            all.contains("docs/notes.md:3 adds an em dash (U+2014)"),
+            "{ownership}: {all}"
+        );
+    }
+}
+
+/// The exemption is the shipped asset itself: a real managed skill at its
+/// shipped path passes with no installed-file record at all, while the same
+/// bytes at a path the scaffold does not install are scanned.
+#[test]
+fn ci_shipped_skill_bytes_are_exempt_only_at_their_shipped_path() {
+    let shipped = std::fs::read(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../assets/base/agents/skills/cf-consult/SKILL.md"),
+    )
+    .unwrap();
+    assert!(
+        String::from_utf8_lossy(&shipped).contains('\u{2014}'),
+        "fixture lost its em dash"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    let skill = dir.path().join(".agents/skills/cf-consult");
+    std::fs::create_dir_all(&skill).unwrap();
+    std::fs::write(skill.join("SKILL.md"), &shipped).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add the consult skill"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+
+    std::fs::write(dir.path().join("docs/consult.md"), &shipped).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(
+        dir.path(),
+        &["commit", "-m", "docs: copy the consult skill"],
+    );
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("docs/consult.md:6 adds an em dash"), "{all}");
+    assert!(!all.contains(".agents/skills/cf-consult"), "{all}");
+}

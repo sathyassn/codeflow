@@ -148,6 +148,24 @@ impl ScaffoldManifest {
         Ok(manifest)
     }
 
+    /// Whether `bytes` are exactly what the scaffold installs verbatim at
+    /// `dest`: a whole-file `managed` entry for `dest`, with no template
+    /// substitution, whose asset in `source` has these bytes. The proof is the
+    /// shipped asset itself, never a project's installed-file record, which
+    /// the project can write. Managed regions, templated and user-owned files,
+    /// and assets missing from `source` never match.
+    #[must_use]
+    pub fn installs_verbatim(&self, source: &dyn AssetSource, dest: &str, bytes: &[u8]) -> bool {
+        self.entries.iter().any(|entry| {
+            entry.dest == dest
+                && entry.ownership == Ownership::Managed
+                && !entry.template
+                && source
+                    .read(&format!("base/{}", entry.src))
+                    .is_some_and(|asset| asset == bytes)
+        })
+    }
+
     fn validate(&self) -> Result<(), ScaffoldError> {
         for entry in &self.entries {
             if entry.ownership == Ownership::ManagedRegion && entry.region.is_none() {
@@ -244,6 +262,60 @@ mod tests {
         "#;
         let manifest: ScaffoldManifest = toml::from_str(toml).unwrap();
         assert!(manifest.validate().is_err());
+    }
+
+    #[test]
+    fn installs_verbatim_needs_a_whole_file_managed_asset_with_these_bytes() {
+        let dir = tempfile::tempdir().unwrap();
+        let base = dir.path().join("base");
+        std::fs::create_dir_all(&base).unwrap();
+        for name in ["skill.md", "region.md", "template.md", "owned.md"] {
+            std::fs::write(base.join(name), "shipped\n").unwrap();
+        }
+        let toml = r#"
+            schema_version = 1
+            [[entry]]
+            src = "skill.md"
+            dest = ".agents/skills/cf-x/SKILL.md"
+            ownership = "managed"
+            tiers = ["standard"]
+            [[entry]]
+            src = "region.md"
+            dest = "AGENTS.md"
+            ownership = "managed-region"
+            region = "markdown"
+            tiers = ["standard"]
+            [[entry]]
+            src = "template.md"
+            dest = "docs/product.md"
+            ownership = "managed"
+            template = true
+            tiers = ["standard"]
+            [[entry]]
+            src = "owned.md"
+            dest = "docs/owned.md"
+            ownership = "user-owned"
+            tiers = ["standard"]
+            [[entry]]
+            src = "absent.md"
+            dest = "docs/absent.md"
+            ownership = "managed"
+            tiers = ["standard"]
+        "#;
+        let manifest: ScaffoldManifest = toml::from_str(toml).unwrap();
+        let source = DirSourceForTest(dir.path().to_path_buf());
+        let verbatim = |dest: &str, bytes: &[u8]| manifest.installs_verbatim(&source, dest, bytes);
+        assert!(verbatim(".agents/skills/cf-x/SKILL.md", b"shipped\n"));
+        assert!(!verbatim(".agents/skills/cf-x/SKILL.md", b"edited\n"));
+        for dest in [
+            "AGENTS.md",
+            "docs/product.md",
+            "docs/owned.md",
+            "docs/absent.md",
+        ] {
+            assert!(!verbatim(dest, b"shipped\n"), "{dest}");
+        }
+        assert!(!verbatim("docs/notes.md", b"shipped\n"));
     }
 
     struct DirSourceForTest(std::path::PathBuf);
