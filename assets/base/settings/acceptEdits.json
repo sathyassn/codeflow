@@ -271,6 +271,10 @@
       "allowRead": [
         "~/.claude/plugins/cache"
       ],
+      "allowWrite": [
+        "~/Library/Application Support/codeflow/present",
+        "~/.local/state/codeflow/present"
+      ],
       "denyRead": [
         "~/.ssh",
         "~/.aws",

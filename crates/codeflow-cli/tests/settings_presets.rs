@@ -541,6 +541,36 @@ fn sandbox_reallows_only_immutable_plugin_code_under_claude_state() {
     }
 }
 
+/// The only extra sandbox write root is the per-user state directory
+/// `codeflow present` needs (macOS, then Linux without `XDG_STATE_HOME`), so
+/// an agent can run it without a sandbox bypass. `present_cli` proves the
+/// the runtime keeps its state under the matching root.
+const PRESENT_STATE_WRITE_ROOTS: [&str; 2] = [
+    "~/Library/Application Support/codeflow/present",
+    "~/.local/state/codeflow/present",
+];
+
+#[test]
+fn sandbox_allows_writes_only_to_the_present_state_directory() {
+    for name in preset_files() {
+        let value = load(&name);
+        let allow_write: Vec<&str> = value["sandbox"]["filesystem"]["allowWrite"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name}: sandbox.filesystem.allowWrite missing"))
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .collect();
+        assert_eq!(
+            allow_write, PRESENT_STATE_WRITE_ROOTS,
+            "{name}: the sandbox may add only the cf-present state directory as a write root"
+        );
+        assert!(
+            value["sandbox"]["filesystem"]["denyWrite"].is_null(),
+            "{name}: no preset denyWrite is expected"
+        );
+    }
+}
+
 #[test]
 fn deny_extends_to_pure_secret_home_stores() {
     // Read protection reaches beyond the project cwd to the home-dir secret
