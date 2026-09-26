@@ -32,13 +32,17 @@ publication date._
 
 <!-- codeflow:release-impact minor -->
 - **Written content policy check (ADR-0067).** The commit-msg hook and
-  `codeflow ci` block em and en dashes in new commit messages, pull request
+  `codeflow ci` report em and en dashes in new commit messages, pull request
   bodies and lines a change adds under `docs/`, `project-management/` and the
-  skill trees. Existing lines are left alone. The new `git.policy_characters`
-  key defaults to `block`, including when a policy file omits it.
-  `codeflow update` adds the key to an existing `policy.json`. Upgrade the
-  `codeflow` on `PATH` before running `codeflow update`: the hooks call that
-  binary, and an older one rejects the new key and blocks every commit.
+  skill trees. Existing lines are left alone, and so is a file whose bytes
+  equal the managed asset the running `codeflow` ships for that path, so the
+  scaffold and `codeflow update` ranges never trip on the managed skills. The
+  new `git.policy_characters` key defaults to `warn`, including when a policy
+  file omits it; set it to `block` to enforce the guideline, as CodeFlow's own
+  repository does. `codeflow update` adds the key to an existing
+  `policy.json`. Upgrade the `codeflow` on `PATH` before running
+  `codeflow update`: the hooks call that binary, and an older one rejects the
+  new key and blocks every commit.
 
 <!-- codeflow:release-impact minor -->
 - **Responsible-autonomy diagnostics.** The standard/full model-evaluation kit

@@ -1208,14 +1208,15 @@ mod tests {
     }
 
     #[test]
-    fn test_commit_msg_policy_character_in_subject_blocked() {
+    fn test_commit_msg_policy_character_in_subject_warns_by_default() {
         let report = commit_msg(&GitPolicy::default(), "feat: a \u{2014} b\n", false);
         let v = report
             .violations
             .iter()
             .find(|v| v.rule == "git.policy_characters")
             .expect("a policy_characters violation");
-        assert_eq!(v.level, PolicyLevel::Block);
+        // A writing guideline by default: reported, never a refusal.
+        assert_eq!(v.level, PolicyLevel::Warn);
         assert!(v.message.contains("commit subject"), "{}", v.message);
         assert!(v.message.contains("em dash (U+2014)"), "{}", v.message);
         assert!(v.remedy.contains("a comma, colon"), "{}", v.remedy);

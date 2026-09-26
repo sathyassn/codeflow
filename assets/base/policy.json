@@ -27,7 +27,7 @@
     "breaking_watch_paths": [],
     "ai_attribution": "block",
     "commit_emoji": "block",
-    "policy_characters": "block",
+    "policy_characters": "warn",
     "pr_sections": "block",
     "pr_release_impact": "warn",
     "pr_breaking_level": "major",

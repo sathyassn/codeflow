@@ -1153,9 +1153,16 @@ fn real_wired_hook_blocks_commit_via_git() {
 // cleanup, so the installed hook must scan what that cleanup keeps. These
 // drive real `git commit` through the wired hook in each cleanup situation.
 
+/// Wire the commit-msg hook under a policy that blocks the policy
+/// characters (the level this repository uses; the shipped default only
+/// warns), so a scanned dash refuses the commit.
 #[cfg(unix)]
 fn wire_commit_msg_hook(dir: &Path) {
     use std::os::unix::fs::PermissionsExt;
+    write_policy(
+        dir,
+        r#"{"schema_version":1,"git":{"policy_characters":"block"}}"#,
+    );
     let hook = dir.join(".git/hooks/commit-msg");
     std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
     std::fs::write(
@@ -1280,6 +1287,26 @@ fn wired_commit_msg_scans_hash_lines_git_keeps_without_editor() {
     );
     let stored = assert_committed(dir.path(), &out, "commit.cleanup=strip");
     assert_eq!("feat: add ranges\n\n", stored);
+}
+
+// Operator direction 2026-09-25 (ADR-0067 note): without a policy file the
+// built-in level warns, so the dash is reported and the commit lands.
+#[cfg(unix)]
+#[test]
+fn wired_commit_msg_default_level_warns_and_commits() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    wire_commit_msg_hook(dir.path());
+    std::fs::remove_file(dir.path().join(".codeflow/policy.json")).unwrap();
+    let out = wired_commit(
+        dir.path(),
+        &["commit", "-m", "feat: add ranges\n\n- pages 1\u{2013}3\n"],
+        None,
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr).into_owned();
+    let stored = assert_committed(dir.path(), &out, "default warn");
+    assert!(stored.contains("pages 1\u{2013}3"), "{stored}");
+    assert!(stderr.contains("git.policy_characters"), "{stderr}");
 }
 
 #[cfg(unix)]

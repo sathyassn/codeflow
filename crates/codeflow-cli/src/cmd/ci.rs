@@ -1623,10 +1623,30 @@ mod tests {
         );
     }
 
+    /// The level this repository uses; the shipped default is warn.
+    fn blocking() -> GitPolicy {
+        GitPolicy {
+            policy_characters: PolicyLevel::Block,
+            ..git()
+        }
+    }
+
+    #[test]
+    fn policy_character_warns_by_default_in_ci() {
+        let v = evaluate_commits(&git(), &[commit("aaaa6666", "feat: a \u{2014} b\n")]);
+        let found = v
+            .iter()
+            .find(|t| t.violation.rule == "git.policy_characters")
+            .expect("a policy_characters finding");
+        assert_eq!(found.violation.level, PolicyLevel::Warn);
+        let flat: Vec<Violation> = v.into_iter().map(|t| t.violation).collect();
+        assert!(!any_blocking(&flat), "the default level must not block");
+    }
+
     #[test]
     fn policy_character_in_commit_body_blocks_in_ci() {
         let v = evaluate_commits(
-            &git(),
+            &blocking(),
             &[commit(
                 "aaaa7777",
                 "feat: add ranges\n\n- pages 1\u{2013}3\n",
@@ -1638,7 +1658,10 @@ mod tests {
 
     #[test]
     fn pr_body_policy_character_blocks_naming_the_line() {
-        let v = evaluate_pr_body(&git(), "## Summary\n\nAdds a check \u{2014} and tests.\n");
+        let v = evaluate_pr_body(
+            &blocking(),
+            "## Summary\n\nAdds a check \u{2014} and tests.\n",
+        );
         let found = v
             .iter()
             .find(|x| x.rule == "git.policy_characters")

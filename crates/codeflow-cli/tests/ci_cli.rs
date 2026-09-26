@@ -437,13 +437,25 @@ fn ci_full_body_on_code_range_is_clean() {
 
 // -- policy characters (ADR-0067) --------------------------------------------
 
+/// Set `git.policy_characters` to `block`, the level this repository uses;
+/// the shipped default is `warn`, which never fails a run.
+fn block_policy_characters(dir: &Path) {
+    std::fs::create_dir_all(dir.join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.join(".codeflow/policy.json"),
+        r#"{"schema_version":1,"git":{"policy_characters":"block"}}"#,
+    )
+    .unwrap();
+}
+
 /// A repo whose `main` already carries `docs/old.md` with an em dash on its
-/// second line (grandfathered bytes), then a `feat/x` branch; the caller adds
-/// the branch commit.
+/// second line (grandfathered bytes) and a policy that blocks the character,
+/// then a `feat/x` branch; the caller adds the branch commit.
 fn repo_with_grandfathered_dash(dir: &Path) {
     git(dir, &["init", "-b", "main"]);
     git(dir, &["config", "user.email", "t@example.com"]);
     git(dir, &["config", "user.name", "t"]);
+    block_policy_characters(dir);
     std::fs::create_dir_all(dir.join("docs")).unwrap();
     std::fs::write(
         dir.join("docs/old.md"),
@@ -545,6 +557,7 @@ fn ci_changed_line_keeping_a_policy_character_blocks() {
 fn ci_pr_body_policy_character_blocks() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
+    block_policy_characters(dir.path());
     let body = FULL_BODY.replace("adds a thing", "adds a thing \u{2014} and more");
     let out = ci_with_body(dir.path(), &body);
     assert_eq!(out.status.code(), Some(1));
@@ -689,6 +702,33 @@ fn ci_committed_hash_line_and_merge_message_are_scanned() {
     assert_eq!(code, Some(1), "{all}");
     assert!(all.contains("commit subject contains an em dash"), "{all}");
     assert!(all.contains("1 merge(s)"), "{all}");
+}
+
+// Operator direction 2026-09-25 (ADR-0067 note): the dash rule is a writing
+// guideline. Without a policy file the built-in default warns and passes.
+#[test]
+fn ci_default_level_warns_on_an_added_dash_and_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "docs");
+    std::fs::create_dir_all(dir.path().join("docs")).unwrap();
+    std::fs::write(
+        dir.path().join("docs/notes.md"),
+        "# Notes\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add notes"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(
+        all.contains("policy rule git.policy_characters (warn)"),
+        "{all}"
+    );
+    assert!(all.contains("warning(s) only"), "{all}");
+    assert!(
+        all.contains("docs/notes.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
 }
 
 // -- managed content is CodeFlow's (ADR-0067 note, 2026-09-25) ----------------

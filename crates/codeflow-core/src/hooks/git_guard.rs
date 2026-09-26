@@ -3255,12 +3255,14 @@ mod tests {
     }
 
     #[test]
-    fn test_pr_body_policy_character_blocked() {
+    fn test_pr_body_policy_character_reported() {
         let p = default_policy();
         let cmd = "gh pr create --title 'feat: x' --body 'Adds a hook \u{2014} and a test.'";
         let v = evaluate(cmd, &ctx(&p, "feat/x"));
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].rule, "git.policy_characters");
+        // The shipped default warns; a project that sets block is refused.
+        assert_eq!(v[0].level, PolicyLevel::Warn);
         assert!(
             v[0].message.contains("em dash (U+2014)"),
             "{}",
@@ -3270,7 +3272,7 @@ mod tests {
 
     // Codex EPC-017 review, finding 5: an edited body is scanned too.
     #[test]
-    fn test_pr_edit_body_policy_character_blocked() {
+    fn test_pr_edit_body_policy_character_reported() {
         let p = default_policy();
         let inline = "gh pr edit 12 --body 'Adds a hook \u{2014} and a test.'";
         let v = evaluate(inline, &ctx(&p, "feat/x"));

@@ -149,6 +149,10 @@ rendered rows warn under `pr_sections`. The independent `pr_release_impact`
 check defaults to warn: it validates generic fields, compatibility consistency,
 migration guidance and breaking commit floors against `pr_breaking_level`
 (default major). It requires no release automation or project-specific fields.
+The ADR-0067 dash check (`policy_characters`) also defaults to warn; CodeFlow's
+own policy sets block. Its added-lines scan skips a file only when its bytes
+equal the whole-file managed asset the running binary ships for that path, so
+unmodified scaffold content never trips it and a project record proves nothing.
 The generic PR template ships at every tier. The structural
 anti-bypass layer is not flippable, by design: the strict policy validator (an
 invalid file fails loud rather than silently reverting to defaults), the schema

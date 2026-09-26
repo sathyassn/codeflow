@@ -174,8 +174,11 @@ pub struct GitPolicy {
     /// The policy characters of ADR-0067, U+2013 (en dash) and U+2014 (em
     /// dash), in new text: commit subjects and bodies (commit-msg hook), PR
     /// bodies, and lines a `codeflow ci` range adds under the written-content
-    /// trees. Level (off/warn/allow/block); default `block`. Existing bytes
-    /// are grandfathered: `codeflow ci` judges added lines, never the tree.
+    /// trees. Level (off/warn/allow/block); default `warn`, a writing
+    /// guideline that review and evaluation judge (this repository sets
+    /// `block`). Existing bytes are grandfathered: `codeflow ci` judges added
+    /// lines, never the tree, and skips a file whose bytes are exactly the
+    /// whole-file managed asset the running binary ships for that path.
     pub policy_characters: PolicyLevel,
     /// Structure of the PR/MR body — the section check `codeflow ci` runs when
     /// a PR body is provided (`--pr-body`, `--pr-body-file`, or
@@ -251,7 +254,7 @@ impl Default for GitPolicy {
             breaking_watch_paths: Vec::new(),
             ai_attribution: PolicyLevel::Block,
             commit_emoji: PolicyLevel::Block,
-            policy_characters: PolicyLevel::Block,
+            policy_characters: PolicyLevel::Warn,
             pr_sections: PolicyLevel::Block,
             pr_release_impact: PolicyLevel::Warn,
             pr_breaking_level: "major".into(),
@@ -618,7 +621,9 @@ mod tests {
         assert!(g.breaking_watch_paths.is_empty());
         assert_eq!(g.ai_attribution, PolicyLevel::Block);
         assert_eq!(g.commit_emoji, PolicyLevel::Block);
-        assert_eq!(g.policy_characters, PolicyLevel::Block);
+        // A writing guideline: it reports, and only a project that opts in
+        // (CodeFlow itself) blocks on it.
+        assert_eq!(g.policy_characters, PolicyLevel::Warn);
         // PR-body structure gate: the doctrine sections ship block-enforced.
         assert_eq!(g.pr_sections, PolicyLevel::Block);
         // The built-in default must not grow: a repository without an explicit

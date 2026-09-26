@@ -187,6 +187,18 @@ fn repository_policy_requires_the_always_present_pr_sections() {
     );
 }
 
+/// The dash rule (ADR-0067, note of 2026-09-25) is a writing guideline that
+/// ships at warn, while this repository keeps blocking its own new text.
+#[test]
+fn repository_policy_blocks_policy_characters_while_the_shipped_default_warns() {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(".codeflow/policy.json")).expect("policy JSON");
+    assert_eq!(policy["git"]["policy_characters"], "block");
+    let shipped: serde_json::Value =
+        serde_json::from_str(&read("assets/base/policy.json")).expect("shipped policy JSON");
+    assert_eq!(shipped["git"]["policy_characters"], "warn");
+}
+
 #[test]
 fn ship_returns_failures_to_their_owner_without_waiving_configured_gates() {
     assert_contains(
