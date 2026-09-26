@@ -704,34 +704,65 @@ print(found)' "$1" 2>/dev/null)
   find "$HOME/.claude/projects" -maxdepth 2 -name "$_sid.jsonl" 2>/dev/null | head -1
 }
 
+# pipeline_workflow_calls <transcript> - print the tool-use id of every
+# Workflow call in the transcript that runs the scaffolded pipeline, one per
+# line. This is the one rule every reading below shares: a Workflow tool_use
+# whose input names the pipeline exactly ("name": "pipeline", never a
+# substring) or refers to its script (pipeline.workflow). Text elsewhere in
+# the transcript never counts. Returns non-zero when the transcript cannot be
+# read.
+pipeline_workflow_calls() {
+  python3 - "$1" <<'PY'
+import json, sys
+
+for line in open(sys.argv[1], encoding="utf-8"):
+    try:
+        entry = json.loads(line)
+    except Exception:
+        continue
+    content = (entry.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        continue
+    for block in content:
+        if not isinstance(block, dict) or block.get("type") != "tool_use" or \
+                block.get("name") != "Workflow":
+            continue
+        tool_input = block.get("input")
+        by_name = isinstance(tool_input, dict) and tool_input.get("name") == "pipeline"
+        if by_name or "pipeline.workflow" in json.dumps(tool_input):
+            print(block.get("id"))
+PY
+}
+
 # Did the session actually invoke the native Workflow tool on the scaffolded
 # pipeline? Prints yes, no, or unknown, where unknown means no transcript could
-# be located and is never read as no.
+# be located or read and is never read as no.
 workflow_invocation_evidence() {
   _tx=$(session_transcript "$1")
-  if [ -z "$_tx" ]; then
+  if [ -z "$_tx" ] || ! _calls=$(pipeline_workflow_calls "$_tx" 2>/dev/null); then
     printf 'unknown'
-    return 0
-  fi
-  if grep -q '"name"[[:space:]]*:[[:space:]]*"Workflow"' "$_tx" 2>/dev/null &&
-    grep -q 'pipeline.workflow' "$_tx" 2>/dev/null; then
+  elif [ -n "$_calls" ]; then
     printf 'yes'
   else
     printf 'no'
   fi
 }
 
-# workflow_launch_evidence <state-dir> - how the Workflow call was run: its run
-# id and whether Claude Code launched it in the background, read from the tool
-# result the session's transcript recorded for that call.
+# workflow_launch_evidence <state-dir> - how the pipeline's Workflow call was
+# run: its run id and whether Claude Code launched it in the background, read
+# from the tool result the session's transcript recorded for that call.
 workflow_launch_evidence() {
   _tx=$(session_transcript "$1")
   if [ -z "$_tx" ]; then
     printf 'workflow launch unknown: no session transcript'
     return 0
   fi
+  if ! _calls=$(pipeline_workflow_calls "$_tx" 2>/dev/null); then
+    printf 'workflow launch unknown: the transcript could not be read'
+    return 0
+  fi
   python3 -c 'import json,sys
-calls, launches = set(), []
+calls, launches = set(sys.argv[2].split()), []
 for line in open(sys.argv[1], encoding="utf-8"):
     try:
         entry = json.loads(line)
@@ -743,9 +774,7 @@ for line in open(sys.argv[1], encoding="utf-8"):
     for block in content:
         if not isinstance(block, dict):
             continue
-        if block.get("type") == "tool_use" and block.get("name") == "Workflow":
-            calls.add(block.get("id"))
-        elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+        if block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
             result = entry.get("toolUseResult")
             result = result if isinstance(result, dict) else {}
             mode = "in the background" if result.get("status") == "async_launched" else "in the foreground"
@@ -753,9 +782,9 @@ for line in open(sys.argv[1], encoding="utf-8"):
 if launches:
     print("; ".join(launches))
 elif calls:
-    print("workflow launch unknown: the Workflow call has no recorded result")
+    print("workflow launch unknown: the pipeline Workflow call has no recorded result")
 else:
-    print("workflow launch: no Workflow call recorded")' "$_tx" 2>/dev/null ||
+    print("workflow launch: no pipeline Workflow call recorded")' "$_tx" "$_calls" 2>/dev/null ||
     printf 'workflow launch unknown: the transcript could not be read'
 }
 
@@ -807,11 +836,15 @@ workflow_task_evidence() {
     printf 'task output unknown: no session transcript'
     return 1
   fi
-  python3 - "$_tx" "$2" <<'PY'
+  if ! _calls=$(pipeline_workflow_calls "$_tx" 2>/dev/null); then
+    printf 'task output unknown: the transcript could not be read'
+    return 1
+  fi
+  python3 - "$_tx" "$2" "$_calls" <<'PY'
 import json, re, sys
 
 transcript, result_file = sys.argv[1], sys.argv[2]
-calls, task_id, notices = set(), None, []
+calls, task_id, notices = set(sys.argv[3].split()), None, []
 for line in open(transcript, encoding="utf-8"):
     try:
         entry = json.loads(line)
@@ -827,14 +860,7 @@ for line in open(transcript, encoding="utf-8"):
     for block in content:
         if not isinstance(block, dict):
             continue
-        # The pipeline is launched by script path or by its registered name;
-        # the name must be exactly "pipeline", never a substring match.
-        tool_input = block.get("input")
-        by_name = isinstance(tool_input, dict) and tool_input.get("name") == "pipeline"
-        if block.get("type") == "tool_use" and block.get("name") == "Workflow" and \
-                (by_name or "pipeline.workflow" in json.dumps(tool_input)):
-            calls.add(block.get("id"))
-        elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+        if block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
             result = entry.get("toolUseResult")
             if isinstance(result, dict) and result.get("taskId"):
                 task_id = result["taskId"]

@@ -910,7 +910,7 @@ ok pipeline.launch "any other recorded result reports the foreground" \
 printf '{"message":{"content":[{"type":"text","text":"no tools"}]}}\n' >"$LAUNCH_TX"
 _launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
 ok pipeline.launch "a transcript without a Workflow call says so" \
-  "$([ "$_launch" = "workflow launch: no Workflow call recorded" ] && echo 0 || echo 1)"
+  "$([ "$_launch" = "workflow launch: no pipeline Workflow call recorded" ] && echo 0 || echo 1)"
 
 rm -f "$LAUNCH_TX"
 _launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
@@ -965,24 +965,64 @@ _task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESUL
 ok pipeline.task "a missing task output is no proof" \
   "$([ "$_r" != 0 ] && printf '%s' "$_task" | grep -q 'output unreadable' && echo 0 || echo 1)"
 
-# The pipeline launched by its registered name, as live Claude Code sessions
-# also do, counts the same as the script path form above.
+# ---------------------------------------------------------------------------
+# One rule recognises the pipeline's Workflow call in every reading
+# ---------------------------------------------------------------------------
+
 printf '{"summary":"s","result":%s}\n' "$GOOD_RESULT" >"$TASK_OUT"
 printf '%s\n' "$GOOD_RESULT" >"$MODEL_RESULT"
+TASK_PROOF="Claude Code task wtask0001 output: status complete, stages build/verify, verify verdict approved; agrees with the result file"
+
+# check_pipeline_match <label> <yes|no> - read the current transcript with the
+# invocation, launch and task readings and check that each one does, or does
+# not, find the pipeline's Workflow call in it.
+check_pipeline_match() {
+  _cpm_inv=$(HOME="$FAKE_HOME" workflow_invocation_evidence "$STUB_DIR/state")
+  _cpm_launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
+  _cpm_task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") &&
+    _cpm_r=0 || _cpm_r=$?
+  if [ "$2" = yes ]; then
+    ok pipeline.match "$1: the invocation reads yes" \
+      "$([ "$_cpm_inv" = yes ] && echo 0 || echo 1)"
+    ok pipeline.match "$1: the launch reads its run in the background" \
+      "$([ "$_cpm_launch" = "workflow run wf_x launched in the background" ] && echo 0 || echo 1)"
+    ok pipeline.match "$1: the task output is the proof" \
+      "$([ "$_cpm_r" = 0 ] && [ "$_cpm_task" = "$TASK_PROOF" ] && echo 0 || echo 1)"
+  else
+    ok pipeline.match "$1: the invocation reads no" \
+      "$([ "$_cpm_inv" = no ] && echo 0 || echo 1)"
+    ok pipeline.match "$1: no pipeline launch is claimed" \
+      "$([ "$_cpm_launch" = "workflow launch: no pipeline Workflow call recorded" ] && echo 0 || echo 1)"
+    ok pipeline.match "$1: no pipeline task is matched" \
+      "$([ "$_cpm_r" != 0 ] && printf '%s' "$_cpm_task" | grep -q 'no backgrounded pipeline Workflow task' &&
+         echo 0 || echo 1)"
+  fi
+}
+
+# The script path form, and the registered name that live Claude Code
+# sessions also use, are both the pipeline.
+write_task_tx
+check_pipeline_match "a Workflow call on the script path" yes
 write_task_tx '{"name":"pipeline","args":{"stages":["build","verify"]}}'
-_task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
-ok pipeline.task "a Workflow call naming the pipeline is matched" \
-  "$([ "$_r" = 0 ] && [ "$_task" = "Claude Code task wtask0001 output: status complete, stages build/verify, verify verdict approved; agrees with the result file" ] &&
-     echo 0 || echo 1)"
+check_pipeline_match "a Workflow call naming the pipeline" yes
 
 # Negative controls: another workflow's name, or a name that only contains
 # the word, is not the pipeline.
 for _other in deploy pipeline-canary; do
   write_task_tx "{\"name\":\"$_other\",\"args\":{}}"
-  _task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
-  ok pipeline.task "a Workflow call naming $_other is not the pipeline" \
-    "$([ "$_r" != 0 ] && printf '%s' "$_task" | grep -q 'no backgrounded pipeline Workflow task' && echo 0 || echo 1)"
+  check_pipeline_match "a Workflow call naming $_other" no
 done
+
+# The script path mentioned only in prose, or read by another tool, next to a
+# Workflow call on another workflow, is not the pipeline. The launched task is
+# recorded against the Read call, so only the match can reject it.
+{
+  printf '{"type":"assistant","message":{"content":[{"type":"text","text":"I will run .claude/workflows/pipeline.workflow.js next."}]}}\n'
+  printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"/s/.claude/workflows/pipeline.workflow.js"}},{"type":"tool_use","id":"t2","name":"Workflow","input":{"name":"deploy"}}]}}\n'
+  printf '{"type":"user","promptId":"p1","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"status":"async_launched","taskId":"wtask0001","runId":"wf_x"}}\n'
+  printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\\n<task-id>wtask0001</task-id>\\n<tool-use-id>toolu_1</tool-use-id>\\n<output-file>%s</output-file>\\n</task-notification>"}\n' "$TASK_OUT"
+} >"$LAUNCH_TX"
+check_pipeline_match "pipeline.workflow outside a Workflow call" no
 write_task_tx
 
 # ---------------------------------------------------------------------------
