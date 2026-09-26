@@ -84,6 +84,9 @@ codeflow delegate arm --run-id run-42 --state-dir "$STATE" \
 tmux load-buffer -b cf-run-42-turn-1 "$RUN_TMP/turn-1.prompt"
 tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
 sleep 0.3  # bounded TUI input-settle; not a completion heuristic
+# Only when the input line shows a "[Pasted text" attachment:
+tmux send-keys -l -t cf-run-42 'Carry out the pasted instructions.'
+sleep 0.3
 tmux send-keys -t cf-run-42 Enter
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" \
   --until accepted --turn-id turn-1 --timeout-seconds 120
@@ -113,13 +116,19 @@ state, then records the
 SHA-256 of the accepted file bytes. Deliver that same file through a uniquely
 named tmux buffer with a literal paste into the exact pane, wait a bounded
 300 ms for the TUI to attach it, and send one separate Enter. Acceptance
-requires a `UserPromptSubmit` whose prompt matches the digest; one outer
-`<pasted_content id="N">` envelope with a same-id close around the exact bytes,
-where N is four lowercase hex digits, bare or after the two LF Claude Code puts
-before a paste, is tolerated and recorded as `delivery: paste_envelope`. If
-acceptance times out, inspect only the dedicated pane; when it explicitly
-shows the paste attachment still waiting in the editor, send Enter once more
-and re-wait once.
+requires a `UserPromptSubmit` whose prompt matches the digest, recorded as
+`delivery: exact`. Claude Code folds a long or multi-line paste into a
+`[Pasted text` attachment and tells the model to act on pasted text only where
+the user's own words say so, so a bare attachment may be refused. When the
+input line shows that attachment, type exactly `Carry out the pasted
+instructions.` as literal keys before the Enter. Claude Code then submits two
+LF, `<pasted_content id="N">` LF, the exact bytes, LF, `</pasted_content
+id="N">`, two LF and that sentence, where N is four lowercase hex digits; the
+hook accepts only that shape and records `delivery: paste_directive`. A bare
+attachment, another sentence, extra text or the sentence typed twice is
+blocked. If acceptance times out, inspect only the dedicated pane; when it
+explicitly shows the paste attachment still waiting in the editor, send Enter
+once more and re-wait once.
 Never send blind or repeated Enter retries. A mismatched, unarmed, or duplicate
 submission is blocked at the harness (hook exit 2) with run state preserved.
 Prompts are capped at 1 MiB.

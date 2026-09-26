@@ -168,6 +168,8 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until ready --time
 codeflow delegate arm --run-id run-42 --state-dir "$STATE" --turn-id turn-1 --prompt-file "$P"
 tmux load-buffer -b cf-run-42-turn-1 "$P"; tmux paste-buffer -p -b cf-run-42-turn-1 -t cf-run-42
 sleep 0.3  # bounded TUI input-settle; this is not completion detection
+# Only when the input line shows a "[Pasted text" attachment:
+tmux send-keys -l -t cf-run-42 'Carry out the pasted instructions.'; sleep 0.3
 tmux send-keys -t cf-run-42 Enter
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until accepted --turn-id turn-1 --timeout-seconds 120
 codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --turn-id turn-1 --timeout-seconds 3600
@@ -189,7 +191,9 @@ completion signal.
   empty or other noncanonical input before durable turn state is created.
   Normalize once before arming, then
   deliver that same file exactly
-  (buffer paste, a bounded 300 ms input-settle, then one separate Enter);
+  (buffer paste, a bounded 300 ms input-settle, the fixed sentence `Carry
+  out the pasted instructions.` typed only when the input shows a paste
+  attachment, then one separate Enter);
   acceptance and terminal records bind
   session and `prompt_id`. Waits are bounded with stable exit states —
   `0` observed (a completed terminal prints the result JSON), `10` failed
@@ -212,7 +216,8 @@ completion signal.
   unverified sibling fails the preflight.
 - **Pane access is diagnosis-only.** Capture only the dedicated task pane,
   and only for bounded diagnosis when a wait times out or a result is
-  malformed, or to answer an explicit in-turn dialog. Never enumerate or
+  malformed, to answer an explicit in-turn dialog, or once after a paste to
+  see whether the input shows a paste attachment. Never enumerate or
   capture unrelated tmux sessions; they may contain secrets or other users'
   work. If acceptance times out and the dedicated pane explicitly shows the
   paste attachment still waiting in the input editor, send Enter once more and
