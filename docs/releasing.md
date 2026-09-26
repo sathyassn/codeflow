@@ -276,7 +276,13 @@ commit `3c3efdb91009361e18b0fabad699b5e875d4e4dd` and has SHA-256
 `1501e0d81716dadd3aa4dc1c56348dd7321abd9cdca90b8f5deb89ea20d54beb`.
 The release target and published source agree with each other, not with the
 current tag. The bootstrap records all three facts, does not move the tag, and
-accepts the already-staged `3.0.0` pending section. After that version is
+accepts the already-staged `3.0.0` pending section. Those commit ids belong to
+the original repository. The public repository's history is a path-filtered
+copy, so its `v2.1.0` tag has a different commit id with the same tree
+`c00d62202df12d8aab2caf4ff90a81491f294a8f`. The check therefore requires the
+tag to resolve to that tree, the host tag to match the local tag, and the
+public release to carry `source.tar.gz` with the recorded SHA-256. A tag moved
+to other content still fails. After that version is
 published, the verified public release—not this bootstrap record—becomes the
 automatic baseline.
 

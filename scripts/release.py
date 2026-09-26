@@ -341,17 +341,26 @@ def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
     if not isinstance(published, dict) or not isinstance(comparison, dict):
         fail("bootstrap must record published and distinct comparison provenance")
     version, tag = str(published.get("version", "")), comparison.get("tag")
-    commit, source = comparison.get("commit"), published.get("source_commit")
-    if tag != f"v{version}" or not isinstance(commit, str) or not isinstance(source, str):
-        fail("bootstrap version, comparison tag, and source are malformed")
+    tree, source = comparison.get("tree"), published.get("source_commit")
+    if (
+        tag != f"v{version}"
+        or not isinstance(tree, str)
+        or not re.fullmatch(r"[0-9a-f]{40}", tree)
+        or not isinstance(source, str)
+    ):
+        fail("bootstrap version, comparison tag, tree, and source are malformed")
     semver(version)
+    # The tag is identified by its content. A history rewrite that keeps the
+    # tagged tree (the public repository's path filter) changes the commit
+    # id, never the content every later check compares against.
     actual = git("rev-parse", f"{tag}^{{commit}}", cwd=cwd)
-    if actual != commit:
-        fail(f"bootstrap tag {tag} resolves to {actual}, expected {commit}; never move it")
+    actual_tree = git("rev-parse", f"{actual}^{{tree}}", cwd=cwd)
+    if actual_tree != tree:
+        fail(f"bootstrap tag {tag} resolves to tree {actual_tree}, expected {tree}; never move it")
     checksum = str(published.get("source_archive_sha256", ""))
     if not re.fullmatch(r"[0-9a-f]{64}", checksum):
         fail("bootstrap archive checksum must be 64 lowercase hex characters")
-    return Baseline(version, tag, source, commit)
+    return Baseline(version, tag, source, actual)
 
 
 def resolve_baseline(
@@ -374,11 +383,18 @@ def resolve_baseline(
         ),
         None,
     )
-    expected_target = config["bootstrap"]["published"].get("release_target_commit")
+    # The published source archive digest, not the mutable release target
+    # string, identifies the bootstrap release on every host that carries it.
+    archive_digest = f"sha256:{config['bootstrap']['published']['source_archive_sha256']}"
     if (
         bootstrap_release is None
         or tags.get(bootstrap.tag) != bootstrap.comparison_commit
-        or bootstrap_release.get("target") != expected_target
+        or not any(
+            isinstance(asset, dict)
+            and asset.get("name") == "source.tar.gz"
+            and asset.get("digest") == archive_digest
+            for asset in bootstrap_release.get("assets") or []
+        )
     ):
         fail("live host state does not prove the recorded public bootstrap release")
     public = [bootstrap]
