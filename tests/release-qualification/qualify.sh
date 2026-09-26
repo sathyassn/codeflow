@@ -703,7 +703,13 @@ qualify_read_only() {
   record "$SAMPLE" "$TIER" "ci" "range and branch check over the seeded history" \
     "$(status_for_match 0 'clean')" "exit 0, the resolved range clean" "$(observed_exit)"
 
-  printf '## Summary\n\nA qualification sample.\n\n## Changes\n\n- one change\n\n## Testing\n\n- the sample gate\n' \
+  # Every section the scaffolded policy requires, so a clean body is judged.
+  printf '%s\n' '## Summary' '' 'A qualification sample.' '' '## Changes' '' '- one change' '' \
+    '## Testing' '' '- the sample gate' '- Not tested: nothing beyond the sample gate' '' \
+    '## Reviews' '' '| Reviewer | Scope | Verdict |' '|---|---|---|' \
+    '| None: a qualification sample | this range | not reviewed |' '' \
+    '## Release impact' '' '- Impact: patch' '- Breaking: no' \
+    '- Rationale: one small change in a qualification sample' '- Migration: none' \
     >"$WORK/pr-body-ok.md"
   cf ci --base "$_base" --head HEAD --pr-body-file "$WORK/pr-body-ok.md"
   record "$SAMPLE" "$TIER" "ci --pr-body-file" "positive: a conforming PR body" \
