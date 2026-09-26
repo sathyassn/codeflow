@@ -54,6 +54,10 @@ test("an as-is region with a level-one heading left renders every heading one le
       { name: "comment", title: "Guide", body: "<!-- Maintained by hand. -->\n\n# Guide\n\n## Step\n\n###### Detail\n", demoted: true, headings: ["h2", "h3", "h6"] },
       // Three deliberate level-one sections.
       { name: "sections", title: "Soul", body: "# Identity\n\nWho.\n\n# Voice\n\nHow.\n\n# Limits\n\n## Hard limits\n", demoted: true, headings: ["h2", "h2", "h2", "h3"] },
+      // Levels keep their nesting: the contents list (h2 and h3) then holds
+      // the source's top two levels, and a third level leaves it, as an h4
+      // leaves it on any page.
+      { name: "nested", title: "Soul", body: "# Identity\n\n## Voice\n\n### Tone\n\n# Limits\n", demoted: true, headings: ["h2", "h3", "h4", "h2"] },
       // A title the adapter drops leaves the rest as written.
       { name: "titled", title: "Guide", body: "# Guide\n\n## Step\n", demoted: false, headings: ["h2"] },
     ];
