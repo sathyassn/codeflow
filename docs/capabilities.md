@@ -781,6 +781,24 @@ without one takes the recorded pre-2.1.196 compatibility path, limited to a
 single turn. Native Windows fails closed (use WSL2). Poison is durable and
 write-once; recovery is a new run in a fresh directory.
 
+A task the turn backgrounds (a Workflow, a background Bash command) can finish
+after the turn's Stop, and Claude Code then submits a task notice as a new
+prompt. The hook admits it without an armed turn only as a continuation of the
+current turn: the prompt must be exactly one `<task-notification>` envelope,
+the turn must have stopped with no other continuation open, and the session
+transcript must show the tool call that launched that task within the turn or
+one of its continuations. The record under `turns/<turn>/continuations/<task>/`
+keeps the notice's `prompt_id` and the SHA-256 of its bytes. Claude Code
+2.1.283 gives the prompt hook nothing that tells a real notice from the same
+text typed into the session, so the proof waits for the Stop carrying that
+`prompt_id`: before it writes the continuation result, the transcript must
+record the prompt with origin `task-notification`, `promptSource` `system` and
+`turnOrigin` `task_notification`, bytes matching the digest, and an earlier
+queue enqueue of the same bytes. A typed copy, a changed body or a missing
+entry poisons the run and writes no result. The residual risk stands: the
+model may act on a forged notice within that continuation turn; the check
+keeps it from being recorded as a clean result.
+
 Status is building: the engine surface and its unit/CLI/doctor tests landed,
 and the `delegate-roundtrip` doctor check requires the rebuilt CLI to be
 installed before it can pass. The dated PR1 canary record covers the active

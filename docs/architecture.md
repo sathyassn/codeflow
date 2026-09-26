@@ -191,7 +191,14 @@ acceptance — serializes on a single bounded run lock; a duplicate or
 digest-mismatched prompt submission is blocked (hook exit 2, run state
 preserved); and every true ambiguity (non-startup session source,
 mis-correlated terminal event, ambiguous retry, interrupt after acceptance)
-fails closed via a durable poison record. The `delegate-roundtrip` doctor
+fails closed via a durable poison record. A Claude Code task notice for work
+the turn backgrounded is admitted as a continuation of that turn when the
+session transcript shows the turn launched the task; its record keeps the
+notice's `prompt_id` and byte digest, and the Stop that closes it writes a
+result only after the transcript proves the prompt was a native task notice
+with those bytes (a typed copy poisons the run). The model may still act on a
+forged notice within that turn; the check keeps it from being recorded as a
+clean result. The `delegate-roundtrip` doctor
 check drives the installed binary through the full synthetic lifecycle at
 Fail severity.
 Rationale, the full invariant set, and the canonical prompt-boundary amendment:
