@@ -187,6 +187,16 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     hotSelRef.current?.classList.remove("cf-hot-sel");
     hotSelRef.current = null;
   };
+  // Discarding a text capture also releases its native highlight. A press on a
+  // live highlight (even at its edge) starts a native text drag instead of a
+  // new selection, at once on Linux and Windows, so no new capture follows.
+  const releaseCapturedSelection = (pin: PendingPin | null): void => {
+    if (!pin?.captured.selector) return;
+    const selection = window.getSelection();
+    if (selection?.rangeCount && documentRoot.contains(selection.getRangeAt(0).commonAncestorContainer)) {
+      selection.removeAllRanges();
+    }
+  };
   const setHot = (element: HTMLElement | null): void => {
     if (hotRef.current === element) return;
     hotRef.current?.classList.remove("cf-hot");
@@ -453,6 +463,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (event.target.closest(".cf-marker, .cf-marker-layer")) return;
       if (event.target.closest("button, a, input, textarea, select")) return;
       if (pendingPinRef.current) {
+        releaseCapturedSelection(pendingPinRef.current);
         setPendingPin(null);
         lastPinnedSelectionRef.current = "";
         setHotSel(null);
@@ -702,6 +713,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   };
 
   function cancelComposer(): void {
+    releaseCapturedSelection(pendingPinRef.current);
     setComposerOpen(false);
     setComposerBody("");
     setEditingId(null);
@@ -812,6 +824,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         }
         if (pendingPinRef.current) {
           event.preventDefault();
+          releaseCapturedSelection(pendingPinRef.current);
           pendingPinRef.current = null;
           setPendingPin(null);
           lastPinnedSelectionRef.current = "";
@@ -1074,6 +1087,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             class="esc"
             data-testid="float-esc"
             onClick={() => {
+              releaseCapturedSelection(pendingPin);
               setPendingPin(null);
               lastPinnedSelectionRef.current = "";
               clearHot();

@@ -296,7 +296,18 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
 
   // Drag starting on the prose wrapper (padding around the paragraph) must stay
   // Text. Missing that hit-test is how region marquees steal text selection.
-  for (const steps of [1, 10]) {
+  // A press held past macOS's 150 ms text-drag delay behaves as every press
+  // does on Linux and Windows: on a live highlight it drags the text instead
+  // of selecting. Held drags after Escape and over a showing chip prove a
+  // discarded capture releases its highlight on every platform.
+  const proseDrags = [
+    { steps: 1, hold: 0, dismiss: true },
+    { steps: 10, hold: 0, dismiss: true },
+    { steps: 10, hold: 200, dismiss: false },
+    { steps: 10, hold: 200, dismiss: true },
+  ];
+  for (const { steps, hold, dismiss } of proseDrags) {
+    const label = `Prose drag (${steps} steps${hold ? `, ${hold} ms hold` : ""})`;
     await revealDocumentForGestures();
     const prose = page.locator("#gesture-root");
     await prose.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
@@ -321,18 +332,22 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     }
     await page.mouse.move(start.x, start.y);
     await page.mouse.down();
+    if (hold) await page.waitForTimeout(hold);
     await page.mouse.move(endpoint.x, endpoint.y, { steps });
     const marquee = await page.locator(".cf-region-draft").count();
     await page.mouse.up();
     const quote = await page.evaluate(() => String(getSelection()));
-    if (quote !== "Review") throw new Error(`Prose drag (${steps} steps) selected ${JSON.stringify(quote)}, expected Review`);
-    await waitForTextChip(page, `Prose drag (${steps} steps)`);
+    if (quote !== "Review") throw new Error(`${label} selected ${JSON.stringify(quote)}, expected Review`);
+    await waitForTextChip(page, label);
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
-    if (marquee !== 0) throw new Error("Prose drag drew a region marquee");
-    if (kind !== "Text") throw new Error(`Prose drag opened ${kind}, expected Text`);
-    if ((await page.getByTestId("float-chip").locator(".q").innerText()) !== "Review") throw new Error("Prose drag pinned a stale quote");
+    if (marquee !== 0) throw new Error(`${label} drew a region marquee`);
+    if (kind !== "Text") throw new Error(`${label} opened ${kind}, expected Text`);
+    if ((await page.getByTestId("float-chip").locator(".q").innerText()) !== "Review") throw new Error(`${label} pinned a stale quote`);
+    if (!dismiss) continue;
     await page.keyboard.press("Escape");
     await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
+    const kept = await page.evaluate(() => String(getSelection()));
+    if (kept) throw new Error(`Escape kept the discarded capture highlighted: ${JSON.stringify(kept)}`);
   }
 
   // Words on an authored SVG stage must pin as Text (same as HTML prose).

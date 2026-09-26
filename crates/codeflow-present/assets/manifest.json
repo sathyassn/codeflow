@@ -15,7 +15,7 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-NHWO5GPS.js",
+      "present.app": "/app/assets/app-4JWELJKW.js",
       "present.style": "/app/assets/app-ZMBSQOWF.css"
     },
     "inline": {
@@ -27,14 +27,14 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-NHWO5GPS.js",
-        "stored_path": "service/app-NHWO5GPS.js.br",
+        "request_path": "/app/assets/app-4JWELJKW.js",
+        "stored_path": "service/app-4JWELJKW.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 69876,
-        "encoded_bytes": 21568,
-        "sha256": "c2ecaedaf340811a0a3a357f57186d7650222e4a533f00f404afbbb7b38403d7",
-        "etag": "\"sha256-wuyu2vNAgRoKOjV/VxhtdlAiLkpTPwD0BK+7t7OEA9c=\"",
+        "raw_bytes": 70083,
+        "encoded_bytes": 21645,
+        "sha256": "7626c3b2bd2492eac2d377e2aec2d3eb53a19769f54f946df553daa126dd7505",
+        "etag": "\"sha256-dibDsr0kkurC03firsLT61Ohl2n1T5Rt9VPaoSbddQU=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-PUSCJW6P.js",
@@ -5243,8 +5243,8 @@
     ],
     "metrics": {
       "asset_count": 119,
-      "raw_corpus_bytes": 4386787,
-      "brotli_corpus_bytes": 1087833,
+      "raw_corpus_bytes": 4386994,
+      "brotli_corpus_bytes": 1087910,
       "largest_raw_chunk_bytes": 667680,
       "largest_brotli_chunk_bytes": 131167
     }
@@ -5266,5 +5266,5 @@
     "largest_brotli_chunk_bytes": 150000,
     "export_gzip_bytes": 1300000
   },
-  "corpus_sha256": "90e98d2eceaf149a360ac7ee30177891b5a47fa88a7d277f86b0edb48dc35750"
+  "corpus_sha256": "1478105120bd122cb38831ea986cdc464e3f8214d9b48143feb4389dfdcfa9c7"
 }
