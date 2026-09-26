@@ -735,7 +735,7 @@ name: transport-neutral-delegate-lifecycle
 area: engine
 status: building
 verified_by: ["cargo test delegate::", "codeflow-cli tests/delegate_cli.rs", "codeflow-cli tests/delegate_pty_stress.rs", "cargo test doctor::tests::test_delegate_roundtrip", "docs/verification/delegate-lifecycle-canary-2026-07-23.md", "docs/verification/delegate-lifecycle-canary-2026-07-24.md"]
-epics: [EPC-002]
+epics: [EPC-002, EPC-019]
 adrs: [ADR-0036, ADR-0037]
 ```
 
