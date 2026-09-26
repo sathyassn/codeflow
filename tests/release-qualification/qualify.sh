@@ -1483,7 +1483,7 @@ PROMPT
     return
   fi
 
-  _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, and on the pipeline branch this harness's own subtract(4, 1) test green and the sample gate green"
+  _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, equal to Claude Code's own task output for the run, and on the pipeline branch this harness's own subtract(4, 1) test green and the sample gate green"
   _pipeline_began=$(date +%s)
   deliver_turn "$HERDR_PANE" "$WORK/pipeline-prompt.txt" "$_run" "$_state" "$_turn2" || true
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until accepted \
@@ -1533,34 +1533,7 @@ PROMPT
   # stage record the driver builds; only a real run produces both. What the
   # workflow did is then checked against behaviour this harness verifies for
   # itself, never against a test the peer wrote.
-  _shape=$(printf '%s' "${_state_line:-}" | python3 -c 'import json,sys
-raw = sys.stdin.read().strip()
-if not raw:
-    print("absent"); raise SystemExit
-try:
-    doc = json.loads(raw)
-except Exception:
-    print("unparsable"); raise SystemExit
-if not isinstance(doc, dict):
-    print("not-an-object"); raise SystemExit
-status = doc.get("status")
-if status == "unavailable":
-    print("unavailable"); raise SystemExit
-trail = doc.get("trail")
-if status != "complete":
-    print("status-" + str(status)); raise SystemExit
-if not isinstance(trail, list) or not trail:
-    print("no-trail"); raise SystemExit
-if not isinstance(doc.get("attempts"), int) or doc["attempts"] < 1:
-    print("no-attempts"); raise SystemExit
-entries = [e for e in trail if isinstance(e, dict)]
-stages = [e.get("stage") for e in entries]
-if "build" not in stages or "verify" not in stages:
-    print("trail-missing-stages"); raise SystemExit
-verify = [e for e in entries if e.get("stage") == "verify"]
-if not verify or verify[-1].get("verdict") != "approved":
-    print("verify-not-approved"); raise SystemExit
-print("complete")' 2>/dev/null || printf 'unparsable')
+  _shape=$(printf '%s' "${_state_line:-}" | pipeline_result_shape)
 
   # Behaviour, verified here, where the pipeline built it: its branch, in the
   # worktree it used or a spare checkout of that branch, never the sample root
@@ -1603,9 +1576,13 @@ PROBE
   else
     _where="no branch $PIPELINE_BRANCH to check"
   fi
+
+  workflow_task_evidence "$_state" "$DIR/$PIPELINE_RESULT" >"$WORK/task-evidence.txt" &&
+    _task_ok=0 || _task_ok=1
+  _task=$(cat "$WORK/task-evidence.txt")
   _invoked=$(workflow_invocation_evidence "$_state")
   _launch=$(workflow_launch_evidence "$_state")
-  _observed="turn exit $_pipeline_terminal; native Workflow invocation $_invoked; $_launch; $_result_wait; workflow result $_shape; subtract(4, 1) test $_behaviour; sample gate exit $_gate; $_where"
+  _observed="turn exit $_pipeline_terminal; native Workflow invocation $_invoked; $_launch; $_result_wait; workflow result $_shape; $_task; subtract(4, 1) test $_behaviour; sample gate exit $_gate; $_where"
   printf '\npipeline row observed: %s\n' "$_observed" >>"$TRANSCRIPT"
 
   # Whether the capability was exercised is decided by the transcript, not by
@@ -1616,7 +1593,7 @@ PROBE
   # claiming success with no invocation behind it is a fabrication, so it
   # fails rather than passing.
   if [ "$_invoked" = yes ]; then
-    if [ "$_pipeline_terminal" = 0 ] && [ "$_shape" = complete ] &&
+    if [ "$_pipeline_terminal" = 0 ] && [ "$_shape" = complete ] && [ "$_task_ok" = 0 ] &&
       [ "$_behaviour" = passed ] && [ "$_gate" = 0 ]; then
       _pipeline_verdict=$RESULT_PASSED
     else

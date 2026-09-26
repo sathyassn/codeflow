@@ -527,6 +527,52 @@ ok pipeline.launch "a missing transcript is unknown, never a background claim" \
   "$([ "$_launch" = "workflow launch unknown: no session transcript" ] && echo 0 || echo 1)"
 
 # ---------------------------------------------------------------------------
+# Claude Code's own task output is the independent proof of the pipeline
+# ---------------------------------------------------------------------------
+
+GOOD_RESULT='{"status":"complete","attempts":1,"trail":[{"stage":"build","verdict":null},{"stage":"verify","verdict":"approved"}]}'
+ok pipeline.shape "a complete run with an approved verify reads as complete" \
+  "$([ "$(printf '%s' "$GOOD_RESULT" | pipeline_result_shape)" = complete ] && echo 0 || echo 1)"
+ok pipeline.shape "a rejected verify does not" \
+  "$([ "$(printf '%s' "$GOOD_RESULT" | sed 's/approved/rejected/' | pipeline_result_shape)" = verify-not-approved ] &&
+     echo 0 || echo 1)"
+
+TASK_OUT="$STUB_DIR/task.output"
+MODEL_RESULT="$STUB_DIR/model-result.txt"
+# write_task_tx - a transcript with the pipeline Workflow launched as task
+# wtask0001 and Claude Code's notice naming its output file.
+write_task_tx() {
+  {
+    printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Workflow","input":{"scriptPath":"/s/.claude/workflows/pipeline.workflow.js"}}]}}\n'
+    printf '{"type":"user","promptId":"p1","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"status":"async_launched","taskId":"wtask0001","runId":"wf_x"}}\n'
+    printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\\n<task-id>wtask0001</task-id>\\n<tool-use-id>toolu_1</tool-use-id>\\n<output-file>%s</output-file>\\n</task-notification>"}\n' "$TASK_OUT"
+  } >"$LAUNCH_TX"
+}
+write_task_tx
+printf '{"summary":"s","result":%s}\n' "$GOOD_RESULT" >"$TASK_OUT"
+printf '%s\n' "$GOOD_RESULT" >"$MODEL_RESULT"
+_task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
+ok pipeline.task "a successful task output equal to the result file is the proof" \
+  "$([ "$_r" = 0 ] && [ "$_task" = "Claude Code task wtask0001 output: status complete, stages build/verify, verify verdict approved; agrees with the result file" ] &&
+     echo 0 || echo 1)"
+
+printf '%s\n' "$GOOD_RESULT" | sed 's/"attempts":1/"attempts":2/' >"$MODEL_RESULT"
+_task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
+ok pipeline.task "a result file that differs from the task output fails" \
+  "$([ "$_r" != 0 ] && printf '%s' "$_task" | grep -q 'does not agree' && echo 0 || echo 1)"
+
+printf '{"summary":"s","result":%s}\n' "$(printf '%s' "$GOOD_RESULT" | sed 's/approved/rejected/')" >"$TASK_OUT"
+printf '%s\n' "$GOOD_RESULT" | sed 's/approved/rejected/' >"$MODEL_RESULT"
+_task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
+ok pipeline.task "agreeing on an unsuccessful run still fails" \
+  "$([ "$_r" != 0 ] && printf '%s' "$_task" | grep -q 'verify verdict rejected; agrees' && echo 0 || echo 1)"
+
+rm -f "$TASK_OUT"
+_task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
+ok pipeline.task "a missing task output is no proof" \
+  "$([ "$_r" != 0 ] && printf '%s' "$_task" | grep -q 'output unreadable' && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
 # The pipeline's work is checked on its own branch
 # ---------------------------------------------------------------------------
 
@@ -547,9 +593,10 @@ pipeline_checkout "$SAMPLE_REPO" feat/missing "$STUB_DIR/spare" >/dev/null && _r
 ok pipeline.checkout "a branch that does not exist is reported, never the sample root" \
   "$([ "$_r" != 0 ] && [ ! -e "$STUB_DIR/spare" ] && echo 0 || echo 1)"
 
-ok qualify.sh "the pipeline row checks the branch the pipeline built on" \
+ok qualify.sh "the pipeline row checks its branch and needs the task output to agree" \
   "$(grep -qF '_checkout=$(pipeline_checkout "$DIR" "$PIPELINE_BRANCH" "$_spare")' "$SCRIPT_DIR/qualify.sh" &&
-     echo 0 || echo 1)"
+     grep -qF 'workflow_task_evidence "$_state" "$DIR/$PIPELINE_RESULT"' "$SCRIPT_DIR/qualify.sh" &&
+     grep -qF '[ "$_task_ok" = 0 ]' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
 
 # ---------------------------------------------------------------------------
 # Teardown ends the agent through its own exit keys, then closes the tab

@@ -592,6 +592,119 @@ else:
     printf 'workflow launch unknown: the transcript could not be read'
 }
 
+# pipeline_result_shape - read one pipeline result object on stdin and print
+# `complete` only when it is the object the driver returns for a successful
+# run: status exactly `complete`, a positive attempts count, a trail with build
+# and verify stages, and an approved final verify verdict. Anything else prints
+# the first reason it is not.
+pipeline_result_shape() {
+  python3 -c 'import json,sys
+raw = sys.stdin.read().strip()
+if not raw:
+    print("absent"); raise SystemExit
+try:
+    doc = json.loads(raw)
+except Exception:
+    print("unparsable"); raise SystemExit
+if not isinstance(doc, dict):
+    print("not-an-object"); raise SystemExit
+status = doc.get("status")
+if status == "unavailable":
+    print("unavailable"); raise SystemExit
+trail = doc.get("trail")
+if status != "complete":
+    print("status-" + str(status)); raise SystemExit
+if not isinstance(trail, list) or not trail:
+    print("no-trail"); raise SystemExit
+if not isinstance(doc.get("attempts"), int) or doc["attempts"] < 1:
+    print("no-attempts"); raise SystemExit
+entries = [e for e in trail if isinstance(e, dict)]
+stages = [e.get("stage") for e in entries]
+if "build" not in stages or "verify" not in stages:
+    print("trail-missing-stages"); raise SystemExit
+verify = [e for e in entries if e.get("stage") == "verify"]
+if not verify or verify[-1].get("verdict") != "approved":
+    print("verify-not-approved"); raise SystemExit
+print("complete")' 2>/dev/null || printf 'unparsable'
+}
+
+# workflow_task_evidence <state-dir> <result-file> - the independent proof.
+# Claude Code writes each backgrounded task's own output file, named in the
+# task notice it submits, and the model never authors it. This prints what that
+# file says the pipeline workflow returned (status, stages, verify verdict) and
+# whether the model's result file holds the same object, and returns 0 only
+# when the task output is a successful run and both objects are equal.
+workflow_task_evidence() {
+  _tx=$(session_transcript "$1")
+  if [ -z "$_tx" ]; then
+    printf 'task output unknown: no session transcript'
+    return 1
+  fi
+  python3 - "$_tx" "$2" <<'PY'
+import json, re, sys
+
+transcript, result_file = sys.argv[1], sys.argv[2]
+calls, task_id, notices = set(), None, []
+for line in open(transcript, encoding="utf-8"):
+    try:
+        entry = json.loads(line)
+    except Exception:
+        continue
+    if entry.get("type") == "queue-operation" and isinstance(entry.get("content"), str):
+        notices.append(entry["content"])
+    content = (entry.get("message") or {}).get("content")
+    if isinstance(content, str):
+        notices.append(content)
+    if not isinstance(content, list):
+        continue
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_use" and block.get("name") == "Workflow" and \
+                "pipeline.workflow" in json.dumps(block.get("input")):
+            calls.add(block.get("id"))
+        elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+            result = entry.get("toolUseResult")
+            if isinstance(result, dict) and result.get("taskId"):
+                task_id = result["taskId"]
+if not task_id:
+    print("task output unknown: no backgrounded pipeline Workflow task in the transcript")
+    raise SystemExit(1)
+output_file = None
+for notice in notices:
+    if "<task-id>%s</task-id>" % task_id in notice:
+        match = re.search(r"<output-file>([^<\n]+)</output-file>", notice)
+        if match:
+            output_file = match.group(1)
+if not output_file:
+    print("task %s output unknown: no task notice named its output file" % task_id)
+    raise SystemExit(1)
+try:
+    task = json.load(open(output_file, encoding="utf-8"))["result"]
+except Exception as error:
+    print("task %s output unreadable at %s: %s" % (task_id, output_file, error))
+    raise SystemExit(1)
+trail = task.get("trail") if isinstance(task, dict) else None
+entries = [e for e in trail if isinstance(e, dict)] if isinstance(trail, list) else []
+stages = [e.get("stage") for e in entries]
+verify = [e.get("verdict") for e in entries if e.get("stage") == "verify"]
+verdict = verify[-1] if verify else None
+successful = isinstance(task, dict) and task.get("status") == "complete" and \
+    isinstance(task.get("attempts"), int) and task["attempts"] >= 1 and \
+    "build" in stages and "verify" in stages and verdict == "approved"
+try:
+    claimed = json.loads(open(result_file, encoding="utf-8").read().strip())
+except Exception:
+    claimed = None
+agrees = claimed == task
+print("Claude Code task %s output: status %s, stages %s, verify verdict %s; %s the result file" % (
+    task_id, task.get("status") if isinstance(task, dict) else None,
+    "/".join(str(s) for s in stages) or "none", verdict,
+    "agrees with" if agrees else "does not agree with"))
+raise SystemExit(0 if successful and agrees else 1)
+PY
+}
+
 # pipeline_checkout <sample-dir> <branch> <spare-dir> - print the directory
 # holding the branch the pipeline built on: its existing worktree, or a
 # detached checkout of the branch made at <spare-dir>. Returns 1 when the
