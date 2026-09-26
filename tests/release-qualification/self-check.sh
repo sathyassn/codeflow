@@ -408,6 +408,41 @@ BYPASS_MULTILINE_PANE="$RULE
 $RULE
   ⏵⏵ bypass permissions on (shift+tab to cycle)"
 
+# The canary's layouts with the harness's fixed status line, captured live on
+# 2026-09-26 in bypassPermissions mode from a folder whose shared project
+# settings print the git branch as the status line, as the scaffolded sample
+# does, and whose local settings came from write_status_line_settings: the
+# marker replaced the branch.
+STATUS_IDLE_PANE="⚠ 3 MCP servers need authentication · run /mcp
+$RULE
+❯ Try \"refactor <filepath>\"
+$RULE
+  codeflow-qualify
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
+STATUS_UNSENT_PANE="⚠ 3 MCP servers need authentication · run /mcp
+$RULE
+❯ Reply with exactly: ok. Do not edit any file.
+$RULE
+  codeflow-qualify
+  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+STATUS_PASTED_PANE="$RULE
+❯ [Pasted text #1 +13 lines]
+$RULE
+  codeflow-qualify
+  paste again to expand"
+STATUS_DIRECTIVE_PANE="$RULE
+❯ [Pasted text #1 +13 lines]Carry out the pasted instructions.
+$RULE
+  codeflow-qualify
+  paste again to expand"
+
+# frame_under <lines below the frame> - the prompt in a well-formed frame over
+# the given lines, for the status line near misses below.
+frame_under() {
+  printf '%s\n%s\n%s\n%s' "$RULE" '❯ Reply with exactly: ok. Do not edit any file.' "$RULE" "$1"
+}
+BYPASS_FOOTER='  ⏵⏵ bypass permissions on (shift+tab to cycle)'
+
 # frame_with_footer <footer line> - the prompt in a well-formed frame over the
 # given footer, for the footer near misses below.
 frame_with_footer() {
@@ -526,6 +561,14 @@ found_case 'the live bypassPermissions idle layout is an editor' \
   "$BYPASS_IDLE_PANE" 'Try "create a util logging.py that..."'
 found_case 'the live bypassPermissions multi-line layout is an editor' \
   "$BYPASS_MULTILINE_PANE" "$(printf 'probe line 1 with some more words\nprobe line 2 with some more words')"
+found_case 'the live idle layout with the fixed status line is an editor' \
+  "$STATUS_IDLE_PANE" 'Try "refactor <filepath>"'
+found_case 'the live prompt layout with the fixed status line is an editor' \
+  "$STATUS_UNSENT_PANE" 'Reply with exactly: ok. Do not edit any file.'
+found_case 'the live folded layout with the fixed status line is an editor' \
+  "$STATUS_PASTED_PANE" '[Pasted text #1 +13 lines]'
+found_case 'the live directive layout with the fixed status line is an editor' \
+  "$STATUS_DIRECTIVE_PANE" '[Pasted text #1 +13 lines]Carry out the pasted instructions.'
 found_case 'the manual mode footer alone is recognised' \
   "$(frame_with_footer '  ⏸ manual mode on')" 'Reply with exactly: ok. Do not edit any file.'
 
@@ -557,6 +600,59 @@ no_editor_case 'a frame over the paste hint indented three spaces' \
   "$(frame_with_footer '   paste again to expand')"
 no_editor_case 'a frame over two known footer lines' \
   "$(frame_with_footer "$(printf '  ⏸ manual mode on\n  paste again to expand')")"
+# Status line near misses: only the harness's own marker, above the footer.
+no_editor_case 'a frame over the branch status line of rerun C' \
+  "$(frame_under "$(printf '  main\n%s' "$BYPASS_FOOTER")")"
+no_editor_case 'a frame over the marker with extra text' \
+  "$(frame_under "$(printf '  codeflow-qualify main\n%s' "$BYPASS_FOOTER")")"
+no_editor_case 'a frame over the marker not indented' \
+  "$(frame_under "$(printf 'codeflow-qualify\n%s' "$BYPASS_FOOTER")")"
+no_editor_case 'a frame over the marker below the footer' \
+  "$(frame_under "$(printf '%s\n  codeflow-qualify' "$BYPASS_FOOTER")")"
+no_editor_case 'a frame over the marker and no footer' "$(frame_under '  codeflow-qualify')"
+no_editor_case 'a frame over the marker twice' \
+  "$(frame_under "$(printf '  codeflow-qualify\n  codeflow-qualify\n%s' "$BYPASS_FOOTER")")"
+no_editor_case 'a frame over the marker and an unknown footer' \
+  "$(frame_under "$(printf '  codeflow-qualify\n  Continue? (y/n)')")"
+
+# log_refused_screen: a refusal leaves the frame region in the transcript, and
+# only that; an accepted screen leaves nothing.
+: >"$TRANSCRIPT"
+stub_herdr "$(printf 'secret history line\n%s' "$(frame_under "$(printf '  main\n%s' "$BYPASS_FOOTER")")")"
+current_editor p1 >/dev/null || true
+ok log_refused_screen "a refused screen is logged from its frame down" \
+  "$(grep -qF 'current_editor refused this screen (frame region only):' "$TRANSCRIPT" &&
+     grep -qF '  | ❯ Reply with exactly: ok. Do not edit any file.' "$TRANSCRIPT" &&
+     grep -qF '  |   main' "$TRANSCRIPT" && echo 0 || echo 1)"
+ok log_refused_screen "the history above the frame is not logged" \
+  "$(grep -qF 'secret history line' "$TRANSCRIPT" && echo 1 || echo 0)"
+: >"$TRANSCRIPT"
+stub_herdr "$(printf 'secret history line\nno frame here')"
+current_editor p1 >/dev/null || true
+ok log_refused_screen "a screen with no rule is logged only by its line count" \
+  "$(grep -qF '(no rule on screen; 2 lines not logged)' "$TRANSCRIPT" &&
+     ! grep -qF 'secret history line' "$TRANSCRIPT" && echo 0 || echo 1)"
+: >"$TRANSCRIPT"
+stub_herdr "$STATUS_UNSENT_PANE"
+current_editor p1 >/dev/null
+ok log_refused_screen "an accepted screen is not logged" \
+  "$([ ! -s "$TRANSCRIPT" ] && echo 0 || echo 1)"
+
+# write_status_line_settings: the file the canary's status line comes from.
+mkdir -p "$STUB_DIR/sample"
+write_status_line_settings "$STUB_DIR/sample" && _r=0 || _r=$?
+ok write_status_line_settings "writes a local settings file whose status line prints the marker" \
+  "$([ "$_r" = 0 ] && python3 -c 'import json,sys
+d = json.load(open(sys.argv[1]))
+assert d == {"statusLine": {"type": "command", "command": "printf %s codeflow-qualify"}}
+' "$STUB_DIR/sample/.claude/settings.local.json" && echo 0 || echo 1)"
+ok write_status_line_settings "the marker command prints exactly the marker" \
+  "$([ "$(sh -c 'printf %s codeflow-qualify')" = "$QUALIFY_STATUS_LINE" ] && echo 0 || echo 1)"
+printf 'owner file\n' >"$STUB_DIR/sample/.claude/settings.local.json"
+write_status_line_settings "$STUB_DIR/sample" && _r=0 || _r=$?
+ok write_status_line_settings "refuses to replace an existing local settings file" \
+  "$([ "$_r" != 0 ] && [ "$(cat "$STUB_DIR/sample/.claude/settings.local.json")" = 'owner file' ] && echo 0 || echo 1)"
+
 stub_herdr "$UNSENT_PANE"
 printf '1' >"$STUB_DIR/pane-rc"
 current_editor p1 >/dev/null && _r=0 || _r=$?
@@ -639,6 +735,10 @@ ok deliver_turn.directive "an attachment gets the directive, a second read, then
      sed -n '4p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
      sed -n '5p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
 
+run_deliver 1 "$STATUS_PASTED_PANE" "$STATUS_DIRECTIVE_PANE"
+ok deliver_turn.directive "the live status line layouts: directive, a second read, then one Enter" \
+  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] && [ "$DELIVER_DIRECTIVES" = 1 ] && echo 0 || echo 1)"
+
 run_deliver 2 "$PASTED_PANE" "$DIRECTIVE_PANE"
 ok deliver_turn.pasted "the attachment and directive still in the editor get one re-Enter" \
   "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 2 ] && [ "$DELIVER_DIRECTIVES" = 1 ] && echo 0 || echo 1)"
@@ -669,6 +769,8 @@ unavailable_case 'a frame with three lines below it' "$LONG_FOOTER_PANE"
 unavailable_case 'a frame with an unindented line below it' "$FLUSH_FOOTER_PANE"
 unavailable_case 'the prompt with more text in the editor' "$EXTRA_TEXT_PANE"
 unavailable_case 'two attachments in the editor' "$TWO_ATTACHMENTS_PANE"
+unavailable_case 'a frame over the branch status line of rerun C' \
+  "$(frame_under "$(printf '  main\n%s' "$BYPASS_FOOTER")")"
 unavailable_case 'a frame over "Continue? (y/n)"' "$(frame_with_footer '  Continue? (y/n)')"
 unavailable_case 'a frame over "Press Enter to continue"' \
   "$(frame_with_footer '  Press Enter to continue')"
@@ -930,6 +1032,10 @@ ok qualify.sh "refuses --target-dir and builds only into its own work directory"
   "$([ "$_bad_rc" = 64 ] && printf '%s' "$_bad" | grep -q 'its own target' &&
      [ ! -e "$STUB_DIR/elsewhere" ] &&
      grep -qF 'TARGET_DIR="$WORK/cargo-target"' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
+
+ok qualify.sh "writes the fixed status line before it creates the canary tab" \
+  "$(awk '/write_status_line_settings "\$DIR"/ { w = NR } /herdr tab create --workspace "\$HERDR_WORKSPACE"/ { t = NR }
+     END { exit !(w && t && w < t) }' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
 
 ok qualify.sh "runs the trust branch through resolve_trust_prompt" \
   "$(grep -qF 'resolve_trust_prompt "$HERDR_PANE" "$HERDR_TAB"' \

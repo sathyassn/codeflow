@@ -1334,6 +1334,15 @@ print(json.load(open(sys.argv[1])).get("prompt_sha256", "no-prompt-digest"))' \
     return
   fi
 
+  # The canary's status line must be text deliver_turn can recognise, so the
+  # sample gets a local settings file that prints a fixed marker there.
+  if ! write_status_line_settings "$DIR"; then
+    canary_unavailable \
+      "could not write $DIR/.claude/settings.local.json with the fixed status line, or it already exists" \
+      "this harness"
+    return
+  fi
+
   _created=$(herdr tab create --workspace "$HERDR_WORKSPACE" \
     --label "cf/codeflow/tsk044/canary" --cwd "$DIR" --no-focus 2>&1) || {
     canary_unavailable \

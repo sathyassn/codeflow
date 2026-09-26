@@ -433,6 +433,24 @@ PASTE_DIRECTIVE='Carry out the pasted instructions.'
 DELIVER_ACCEPT_PROBE_SECONDS=5
 DELIVER_MAX_REENTERS=1
 
+# The status line the canary session draws. The scaffolded project settings
+# print the git branch there, and a user may set any command, so the harness
+# gives the canary a local project settings file whose status line prints
+# exactly this text. current_editor accepts no other status line.
+QUALIFY_STATUS_LINE='codeflow-qualify'
+
+# write_status_line_settings <sample-dir> - write the sample's
+# .claude/settings.local.json with that fixed status line. Local project
+# settings take precedence over the shared project and user settings, and the
+# generated --settings file must stay byte-for-byte as delegate init wrote it,
+# so the status line cannot go there. Refuses to replace an existing file.
+write_status_line_settings() {
+  [ ! -e "$1/.claude/settings.local.json" ] || return 1
+  mkdir -p "$1/.claude" &&
+    printf '{\n  "statusLine": {\n    "type": "command",\n    "command": "printf %%s %s"\n  }\n}\n' \
+      "$QUALIFY_STATUS_LINE" >"$1/.claude/settings.local.json"
+}
+
 # The prompt marker Claude Code paints at the start of its input line.
 INPUT_LINE_MARKER='^([[:space:]]|│)*(❯|>)'
 
@@ -449,6 +467,7 @@ EDITOR_UNREADABLE=2
 #   ❯ first editor line         the marker, one space, then text
 #     continued editor line     zero or more, each indented two spaces
 #   ──────────────────────────  the last rule on screen
+#     codeflow-qualify          optional: the canary's own status line
 #     ⏸ manual mode on          exactly one known footer line
 #
 # The footer is recognised, never guessed: after two spaces it is one of the
@@ -456,10 +475,12 @@ EDITOR_UNREADABLE=2
 # mode), `⏵⏵ bypass permissions on (shift+tab to cycle)` (bypassPermissions,
 # the canary's mode) or `paste again to expand` (a folded paste, with or
 # without the directive after it), optionally followed by the shortcut hints
-# ` · ? for shortcuts` and ` · ← for agents` those panes appended. Any other
-# footer, a missing one or a second footer line returns EDITOR_NONE, as do a
-# second prompt marker in the frame, a body line that is not indented,
-# submitted history and a dialog. The printed text has the marker and the
+# ` · ? for shortcuts` and ` · ← for agents` those panes appended. The only
+# line allowed above it is QUALIFY_STATUS_LINE, indented two spaces. Any other
+# footer or status line, a missing footer or a further line returns
+# EDITOR_NONE, as do a second prompt marker in the frame, a body line that is
+# not indented, submitted history and a dialog, and every such screen is
+# logged by log_refused_screen. The printed text has the marker and the
 # two-space indents removed and trailing blanks trimmed. A read that fails,
 # times out or prints nothing returns EDITOR_UNREADABLE.
 current_editor() {
@@ -470,7 +491,7 @@ current_editor() {
     unset _ce_file _ce_read
     return "$EDITOR_UNREADABLE"
   fi
-  _ce_text=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" '
+  _ce_text=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" -v status="$QUALIFY_STATUS_LINE" '
     { line[NR] = $0 }
     /^[[:space:]]*(─)+[[:space:]]*$/ { top = bottom; bottom = NR }
     END {
@@ -488,23 +509,43 @@ current_editor() {
         }
         body = body text "\n"
       }
-      footer = 0
+      below = 0
       for (i = bottom + 1; i <= NR; i++) {
         text = line[i]
         sub(/[[:space:]]+$/, "", text)
-        if (text == "") continue
-        footer++
-        if (text !~ /^  (⏸ manual mode on|⏵⏵ bypass permissions on \(shift\+tab to cycle\)|paste again to expand)( · (\? for shortcuts|← for agents))*$/) exit 1
+        if (text != "") under[++below] = text
       }
-      if (footer != 1) exit 1
+      if (below == 2 && under[1] == "  " status) under[1] = under[2]
+      else if (below != 1) exit 1
+      if (under[1] !~ /^  (⏸ manual mode on|⏵⏵ bypass permissions on \(shift\+tab to cycle\)|paste again to expand)( · (\? for shortcuts|← for agents))*$/) exit 1
       printf "%s", body
     }
   ' "$_ce_file") && _ce_status=$EDITOR_FOUND || _ce_status=$EDITOR_NONE
+  [ "$_ce_status" = "$EDITOR_FOUND" ] || log_refused_screen "$_ce_file"
   rm -f "$_ce_file"
   [ "$_ce_status" = "$EDITOR_FOUND" ] && printf '%s\n' "$_ce_text"
   set -- "$_ce_status"
   unset _ce_file _ce_read _ce_text _ce_status
   return "$1"
+}
+
+# log_refused_screen <screen-file> - append the screen current_editor refused
+# to the transcript, cut to the frame region: from the next-to-last rule (or
+# the only rule) to the bottom of the screen. History above the frame is left
+# out, and a screen with no rule is logged only by its line count.
+log_refused_screen() {
+  {
+    printf '\ncurrent_editor refused this screen (frame region only):\n'
+    LC_ALL=C awk '
+      { line[NR] = $0 }
+      /^[[:space:]]*(─)+[[:space:]]*$/ { top = bottom; bottom = NR }
+      END {
+        start = top ? top : bottom
+        if (!start) { printf "  (no rule on screen; %d lines not logged)\n", NR; exit }
+        for (i = start; i <= NR; i++) print "  | " line[i]
+      }
+    ' "$1"
+  } >>"${TRANSCRIPT:-/dev/null}"
 }
 
 # editor_holds <editor text> <prompt-file> - classify what the editor holds:
