@@ -82,6 +82,9 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             template,
             source().read("base/ci/pull_request_template.md").unwrap()
         );
+        // The scaffold ships LF on every platform (.gitattributes); a CRLF
+        // checkout would leave the fill-ins below unmatched and the body empty.
+        assert!(!template.contains(&b'\r'), "template checked out with CRLF");
         let policy = read_policy(dir.path());
         assert_eq!(policy["git"]["pr_release_impact"], "warn");
         assert_eq!(policy["git"]["pr_breaking_level"], "major");

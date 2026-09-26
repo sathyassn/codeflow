@@ -1,3 +1,9 @@
+# Check text out with LF on every platform. The scaffold under assets/ is
+# embedded into the binary, so a CRLF checkout (Git for Windows defaults to
+# core.autocrlf=true) would ship different bytes from a Windows build and
+# break the tests that compare installed files with their source.
+* text=auto eol=lf
+
 # Generated cf-present payloads are compressed binary data. Prevent text
 # normalization, text diffs, and automatic merge drivers from corrupting them.
 crates/codeflow-present/assets/service/*.br binary
