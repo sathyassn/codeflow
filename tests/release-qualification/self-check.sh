@@ -449,6 +449,84 @@ ok binding.missing "no recorded resolution fails the binding" \
   "$([ "$_r" = 0 ] && [ "$PANE_CF_PATH" = "nothing recorded" ] && echo 0 || echo 1)"
 
 # ---------------------------------------------------------------------------
+# The pipeline row waits for the backgrounded workflow's result file
+# ---------------------------------------------------------------------------
+
+# shellcheck disable=SC2034 # read by wait_for_pipeline_result in lib.sh
+PIPELINE_POLL_SECONDS=1
+RESULT_FILE="$STUB_DIR/pipeline-result.txt"
+TURN_RESULT="$STUB_DIR/turn-result.json"
+
+rm -f "$RESULT_FILE" "$TURN_RESULT"
+printf '{"status": "completed"}\n' >"$TURN_RESULT"
+(sleep 2; printf '{"status":"complete"}\n' >"$RESULT_FILE") &
+wait_for_pipeline_result "$RESULT_FILE" "$TURN_RESULT" 20 && _r=0 || _r=$?
+wait
+ok pipeline.wait "a result file written after the first Stop ends the wait with 0" \
+  "$([ "$_r" = 0 ] && echo 0 || echo 1)"
+
+rm -f "$RESULT_FILE"
+_began=$(date +%s)
+wait_for_pipeline_result "$RESULT_FILE" "$TURN_RESULT" 2 && _r=0 || _r=$?
+_took=$(($(date +%s) - _began))
+ok pipeline.wait "no result file ends at the bound with 124, took $_took s" \
+  "$([ "$_r" = 124 ] && [ "$_took" -ge 2 ] && [ "$_took" -le 5 ] && echo 0 || echo 1)"
+
+printf '{\n  "status": "failed"\n}\n' >"$TURN_RESULT"
+wait_for_pipeline_result "$RESULT_FILE" "$TURN_RESULT" 20 && _r=0 || _r=$?
+ok pipeline.wait "a turn that recorded a terminal failure ends the wait with 3" \
+  "$([ "$_r" = 3 ] && echo 0 || echo 1)"
+
+# A file still growing is not taken until it holds still.
+printf '{"status": "completed"}\n' >"$TURN_RESULT"
+: >"$RESULT_FILE"
+(for _n in 1 2 3; do sleep 1; printf 'x' >>"$RESULT_FILE"; done) &
+wait_for_pipeline_result "$RESULT_FILE" "$TURN_RESULT" 20 && _r=0 || _r=$?
+wait
+ok pipeline.wait "a result file is read only once it stops changing" \
+  "$([ "$_r" = 0 ] && [ "$(cat "$RESULT_FILE")" = xxx ] && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
+# The Workflow launch, read from the session's own transcript
+# ---------------------------------------------------------------------------
+
+FAKE_HOME="$STUB_DIR/home"
+mkdir -p "$FAKE_HOME/.claude/projects/sample" "$STUB_DIR/state/turns/turn2"
+printf '{"session_id": "s-launch"}\n' >"$STUB_DIR/state/turns/turn2/result.json"
+LAUNCH_TX="$FAKE_HOME/.claude/projects/sample/s-launch.jsonl"
+
+# write_launch_tx <tool-use-result json> - a transcript with one Workflow call
+# on the scaffolded pipeline and the given recorded result for it.
+write_launch_tx() {
+  {
+    printf '{"message":{"content":[{"type":"tool_use","id":"t1","name":"Workflow","input":{"scriptPath":"/s/.claude/workflows/pipeline.workflow.js"}}]}}\n'
+    printf '{"message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]},"toolUseResult":%s}\n' "$1"
+  } >"$LAUNCH_TX"
+}
+
+write_launch_tx '{"status":"async_launched","runId":"wf_self-check","taskType":"local_workflow"}'
+_launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
+ok pipeline.launch "an async launch reports its run id and the background" \
+  "$([ "$_launch" = "workflow run wf_self-check launched in the background" ] && echo 0 || echo 1)"
+ok pipeline.launch "the same transcript still proves the Workflow invocation" \
+  "$([ "$(HOME="$FAKE_HOME" workflow_invocation_evidence "$STUB_DIR/state")" = yes ] && echo 0 || echo 1)"
+
+write_launch_tx '{"status":"completed","runId":"wf_self-check"}'
+_launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
+ok pipeline.launch "any other recorded result reports the foreground" \
+  "$([ "$_launch" = "workflow run wf_self-check launched in the foreground" ] && echo 0 || echo 1)"
+
+printf '{"message":{"content":[{"type":"text","text":"no tools"}]}}\n' >"$LAUNCH_TX"
+_launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
+ok pipeline.launch "a transcript without a Workflow call says so" \
+  "$([ "$_launch" = "workflow launch: no Workflow call recorded" ] && echo 0 || echo 1)"
+
+rm -f "$LAUNCH_TX"
+_launch=$(HOME="$FAKE_HOME" workflow_launch_evidence "$STUB_DIR/state")
+ok pipeline.launch "a missing transcript is unknown, never a background claim" \
+  "$([ "$_launch" = "workflow launch unknown: no session transcript" ] && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
 # Teardown ends the agent through its own exit keys, then closes the tab
 # ---------------------------------------------------------------------------
 
@@ -482,6 +560,11 @@ ok qualify.sh "a pipeline turn that is not accepted fails the row before the ter
   "$(awk '/--timeout-seconds "\$PIPELINE_ACCEPT_SECONDS"/ {a=NR} /the pipeline turn was not accepted/ {r=NR}
           /--until terminal/ && a && !t {t=NR} END {exit !(a && r && t && a < r && r < t)}' \
      "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
+
+ok qualify.sh "the pipeline row waits for the result file and records the launch" \
+  "$(grep -qF 'wait_for_pipeline_result "$DIR/$PIPELINE_RESULT"' "$SCRIPT_DIR/qualify.sh" &&
+     grep -qF '_launch=$(workflow_launch_evidence "$_state")' "$SCRIPT_DIR/qualify.sh" &&
+     echo 0 || echo 1)"
 
 # ---------------------------------------------------------------------------
 # The option the operator drives all of this with

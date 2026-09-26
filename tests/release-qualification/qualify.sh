@@ -1484,6 +1484,7 @@ PROMPT
   fi
 
   _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, this harness's own subtract(4, 1) test green, and the sample gate green"
+  _pipeline_began=$(date +%s)
   deliver_turn "$HERDR_PANE" "$WORK/pipeline-prompt.txt" "$_run" "$_state" "$_turn2" || true
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until accepted \
     --turn-id "$_turn2" --timeout-seconds "$PIPELINE_ACCEPT_SECONDS"
@@ -1496,10 +1497,23 @@ PROMPT
       "the pipeline turn was not accepted within $PIPELINE_ACCEPT_SECONDS s: $(observed_exit)"
     return
   fi
+
+  # The first Stop only ends the turn that launched the workflow; the budget
+  # covers it and the wait for the result file together.
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until terminal \
-    --turn-id "$_turn2" --timeout-seconds 3600
+    --turn-id "$_turn2" --timeout-seconds "$PIPELINE_TIMEOUT_SECONDS"
   _pipeline_terminal=$CF_STATUS
   _pipeline_out=$CF_OUT
+  _left=$((PIPELINE_TIMEOUT_SECONDS - ($(date +%s) - _pipeline_began)))
+  [ "$_left" -gt 0 ] || _left=0
+  wait_for_pipeline_result "$DIR/$PIPELINE_RESULT" "$_state/turns/$_turn2/result.json" "$_left" &&
+    _result_wait=0 || _result_wait=$?
+  case $_result_wait in
+    0) _result_wait="result file written after $(($(date +%s) - _pipeline_began)) s" ;;
+    3) _result_wait="the turn recorded a terminal failure and no result file" ;;
+    *) _result_wait="no result file within the $PIPELINE_TIMEOUT_SECONDS s row timeout" ;;
+  esac
+  printf '\npipeline result wait: %s\n' "$_result_wait" >>"$TRANSCRIPT"
 
   if [ -f "$DIR/$PIPELINE_RESULT" ]; then
     _state_line=$(head -1 "$DIR/$PIPELINE_RESULT")
@@ -1577,7 +1591,8 @@ PROBE
   cf test --mode full --strict
   _gate=$CF_STATUS
   _invoked=$(workflow_invocation_evidence "$_state")
-  _observed="turn exit $_pipeline_terminal; native Workflow invocation $_invoked; workflow result $_shape; independent subtract(4, 1) test $_behaviour; sample gate exit $_gate"
+  _launch=$(workflow_launch_evidence "$_state")
+  _observed="turn exit $_pipeline_terminal; native Workflow invocation $_invoked; $_launch; $_result_wait; workflow result $_shape; independent subtract(4, 1) test $_behaviour; sample gate exit $_gate"
 
   # Whether the capability was exercised is decided by the transcript, not by
   # the result file. Once the Workflow tool has been invoked, every shortfall
@@ -1626,42 +1641,10 @@ PROBE
 
 PIPELINE_RESULT="qualification-pipeline-result.txt"
 
-# How long the pipeline turn has to be accepted before the row fails.
+# How long the pipeline turn has to be accepted, and the row timeout covering
+# the launching turn and the backgrounded workflow behind it.
 PIPELINE_ACCEPT_SECONDS=180
-
-# Did the session actually invoke the native Workflow tool on the scaffolded
-# pipeline? The turn's own result.json names the Claude Code session, and that
-# session's transcript records every tool call it made. The transcript is
-# written by the harness, not by the session under test, so it is the one piece
-# of evidence here that a peer cannot author. Prints yes, no, or unknown, where
-# unknown means no transcript could be located and is never read as no.
-workflow_invocation_evidence() {
-  _sid=$(python3 -c 'import glob,json,sys
-found = ""
-for path in sorted(glob.glob(sys.argv[1] + "/turns/*/result.json")):
-    try:
-        doc = json.load(open(path, encoding="utf-8"))
-    except Exception:
-        continue
-    if doc.get("session_id"):
-        found = doc["session_id"]
-print(found)' "$1" 2>/dev/null)
-  if [ -z "$_sid" ]; then
-    printf 'unknown'
-    return 0
-  fi
-  _tx=$(find "$HOME/.claude/projects" -maxdepth 2 -name "$_sid.jsonl" 2>/dev/null | head -1)
-  if [ -z "$_tx" ]; then
-    printf 'unknown'
-    return 0
-  fi
-  if grep -q '"name"[[:space:]]*:[[:space:]]*"Workflow"' "$_tx" 2>/dev/null &&
-    grep -q 'pipeline.workflow' "$_tx" 2>/dev/null; then
-    printf 'yes'
-  else
-    printf 'no'
-  fi
-}
+PIPELINE_TIMEOUT_SECONDS=3600
 
 pipeline_unavailable() {
   record "$SAMPLE" "$TIER" "pipeline workflow" "run the scaffolded pipeline end to end" \

@@ -475,6 +475,124 @@ deliver_turn() {
 }
 
 # ---------------------------------------------------------------------------
+# Waiting for a backgrounded workflow
+# ---------------------------------------------------------------------------
+#
+# Claude Code normally launches a Workflow in the background: the turn that
+# invoked it stops at once, and a later turn, prompted by the task
+# notification, writes the workflow's result. The first Stop is therefore not
+# the end of the pipeline. The result file the prompt asks for is the proof,
+# so the harness polls for it with the session left open, bounded by the row
+# timeout. A file is taken only once it is non-empty and unchanged across one
+# further poll, so a half-written file is never read.
+
+PIPELINE_POLL_SECONDS=${PIPELINE_POLL_SECONDS:-5}
+
+# wait_for_pipeline_result <result-file> <turn-result.json> <seconds> - returns
+# 0 once the result file is present and stable, 3 when the turn itself recorded
+# a terminal failure (StopFailure) and no result file exists, and 124 when the
+# bound passes first.
+wait_for_pipeline_result() {
+  _wpr_deadline=$(($(date +%s) + $3))
+  _wpr_last=""
+  while :; do
+    if [ -s "$1" ]; then
+      _wpr_now=$(cksum <"$1")
+      [ "$_wpr_now" = "$_wpr_last" ] && return 0
+      _wpr_last=$_wpr_now
+    elif [ -f "$2" ] &&
+      grep -q '"status"[[:space:]]*:[[:space:]]*"failed"' "$2" 2>/dev/null; then
+      return 3
+    fi
+    if [ "$(date +%s)" -ge "$_wpr_deadline" ]; then
+      [ -s "$1" ] && return 0
+      return 124
+    fi
+    sleep "$PIPELINE_POLL_SECONDS"
+  done
+}
+
+# ---------------------------------------------------------------------------
+# What the live session's own transcript shows
+# ---------------------------------------------------------------------------
+
+# session_transcript <state-dir> - print the Claude Code transcript of the
+# session the delegate turns recorded, or nothing when it cannot be located.
+# The turn's own result.json names the session, and that session's transcript
+# records every tool call it made. The transcript is written by the harness,
+# not by the session under test, so it is the one piece of evidence here that
+# a peer cannot author.
+session_transcript() {
+  _sid=$(python3 -c 'import glob,json,sys
+found = ""
+for path in sorted(glob.glob(sys.argv[1] + "/turns/*/result.json")):
+    try:
+        doc = json.load(open(path, encoding="utf-8"))
+    except Exception:
+        continue
+    if doc.get("session_id"):
+        found = doc["session_id"]
+print(found)' "$1" 2>/dev/null)
+  [ -n "$_sid" ] || return 0
+  find "$HOME/.claude/projects" -maxdepth 2 -name "$_sid.jsonl" 2>/dev/null | head -1
+}
+
+# Did the session actually invoke the native Workflow tool on the scaffolded
+# pipeline? Prints yes, no, or unknown, where unknown means no transcript could
+# be located and is never read as no.
+workflow_invocation_evidence() {
+  _tx=$(session_transcript "$1")
+  if [ -z "$_tx" ]; then
+    printf 'unknown'
+    return 0
+  fi
+  if grep -q '"name"[[:space:]]*:[[:space:]]*"Workflow"' "$_tx" 2>/dev/null &&
+    grep -q 'pipeline.workflow' "$_tx" 2>/dev/null; then
+    printf 'yes'
+  else
+    printf 'no'
+  fi
+}
+
+# workflow_launch_evidence <state-dir> - how the Workflow call was run: its run
+# id and whether Claude Code launched it in the background, read from the tool
+# result the session's transcript recorded for that call.
+workflow_launch_evidence() {
+  _tx=$(session_transcript "$1")
+  if [ -z "$_tx" ]; then
+    printf 'workflow launch unknown: no session transcript'
+    return 0
+  fi
+  python3 -c 'import json,sys
+calls, launches = set(), []
+for line in open(sys.argv[1], encoding="utf-8"):
+    try:
+        entry = json.loads(line)
+    except Exception:
+        continue
+    content = (entry.get("message") or {}).get("content")
+    if not isinstance(content, list):
+        continue
+    for block in content:
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") == "tool_use" and block.get("name") == "Workflow":
+            calls.add(block.get("id"))
+        elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
+            result = entry.get("toolUseResult")
+            result = result if isinstance(result, dict) else {}
+            mode = "in the background" if result.get("status") == "async_launched" else "in the foreground"
+            launches.append("workflow run %s launched %s" % (result.get("runId") or "without a run id", mode))
+if launches:
+    print("; ".join(launches))
+elif calls:
+    print("workflow launch unknown: the Workflow call has no recorded result")
+else:
+    print("workflow launch: no Workflow call recorded")' "$_tx" 2>/dev/null ||
+    printf 'workflow launch unknown: the transcript could not be read'
+}
+
+# ---------------------------------------------------------------------------
 # Ending the live session
 # ---------------------------------------------------------------------------
 #
