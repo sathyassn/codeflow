@@ -150,7 +150,11 @@ def main() -> int:
     ]
     blocked = bool(counts["failed"]) or bool(required_unavailable)
     verdict = "blocked" if blocked else "qualified"
-    verdict_line = verdict_sentence(counts, blocked, args.blocked_on)
+    blocking = [row for row in rows if row["status"] == "failed"] + required_unavailable
+    derived = ", ".join(
+        dict.fromkeys(f"`{row['command']}` ({row['status']})" for row in blocking)
+    )
+    verdict_line = verdict_sentence(counts, blocked, args.blocked_on or derived)
 
     out = pathlib.Path(args.out)
     lines: list[str] = []

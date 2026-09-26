@@ -150,6 +150,30 @@ TRUST_SHOWING=0
 TRUST_GONE=1
 TRUST_UNREADABLE=2
 
+# pane_read_visible <pane-id> <file> <seconds> - one bounded read of the
+# visible screen into <file>. Returns the read's status: 124 when the bound
+# fired, 2 when perl is not on PATH, and herdr's own status otherwise.
+#
+# perl forks herdr as its child and kills that child when the alarm fires,
+# exiting 124 itself. The shell therefore never sees a child die by signal,
+# which is what makes it print "Alarm clock" on the operator's screen. A
+# child that exits normally passes its status through; one that dies by a
+# signal is reported as 128 plus the signal number.
+pane_read_visible() {
+  command -v perl >/dev/null 2>&1 || return 2
+  perl -e '
+    my $bound = shift;
+    my $pid = fork;
+    die "fork: $!" unless defined $pid;
+    if ($pid == 0) { exec @ARGV or exit 127 }
+    $SIG{ALRM} = sub { kill "KILL", $pid; waitpid($pid, 0); exit 124 };
+    alarm $bound;
+    waitpid($pid, 0);
+    alarm 0;
+    exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
+  ' "$3" herdr pane read "$1" --source visible --lines 120 >"$2" 2>/dev/null
+}
+
 # trust_prompt_showing <pane-id> [seconds] - inspect the pane once.
 #
 # Returns TRUST_SHOWING while the pane still asks the question, TRUST_GONE when
@@ -169,10 +193,6 @@ trust_prompt_showing() {
   _tps_bound=${2:-$TRUST_READ_TIMEOUT}
   _tps_file=${TMPDIR:-/tmp}/cf-trust-pane.$$
 
-  if ! command -v perl >/dev/null 2>&1; then
-    unset _tps_pane _tps_bound _tps_file
-    return 2
-  fi
   if ! : >"$_tps_file" 2>/dev/null; then
     unset _tps_pane _tps_bound _tps_file
     return 2
@@ -182,23 +202,7 @@ trust_prompt_showing() {
   # where an answered question is still written, so polling that source would
   # keep waiting until the budget ran out on every prompt the operator did
   # answer. The prompt has to be judged gone from the current screen.
-  # perl forks herdr as its child and kills that child when the alarm fires,
-  # exiting 124 itself. The shell therefore never sees a child die by signal,
-  # which is what makes it print "Alarm clock" on the operator's screen. A
-  # child that exits normally passes its status through; one that dies by a
-  # signal is reported as 128 plus the signal number.
-  perl -e '
-    my $bound = shift;
-    my $pid = fork;
-    die "fork: $!" unless defined $pid;
-    if ($pid == 0) { exec @ARGV or exit 127 }
-    $SIG{ALRM} = sub { kill "KILL", $pid; waitpid($pid, 0); exit 124 };
-    alarm $bound;
-    waitpid($pid, 0);
-    alarm 0;
-    exit(($? & 127) ? 128 + ($? & 127) : $? >> 8);
-  ' "$_tps_bound" herdr pane read "$_tps_pane" --source visible --lines 120 \
-    >"$_tps_file" 2>/dev/null && _tps_read=0 || _tps_read=$?
+  pane_read_visible "$_tps_pane" "$_tps_file" "$_tps_bound" && _tps_read=0 || _tps_read=$?
 
   if [ "$_tps_read" != 0 ] || [ ! -s "$_tps_file" ]; then
     _tps_seen=$TRUST_UNREADABLE
@@ -400,6 +404,106 @@ resolve_trust_session() {
 
   unset _rts_pane _rts_tab _rts_agent _rts_settings _rts_cmd _rts_start \
     _rts_status _rts_get _rts_getst _rts_where
+}
+
+# ---------------------------------------------------------------------------
+# Delivering an armed prompt to the live pane
+# ---------------------------------------------------------------------------
+#
+# Claude's input box is not settled for a moment after SessionStart records
+# ready: text sent then Enter pressed at once leaves the text unsent, so the
+# UserPromptSubmit hook never fires. deliver_turn pauses between the text and
+# Enter. When a short accepted wait then fails, it presses Enter once more,
+# never resending the text, and only when the pane's input line visibly still
+# holds the armed prompt, once, as cf-delegate allows. A blind Enter
+# could answer whatever dialog is on screen, so no evidence means no Enter.
+
+DELIVER_SETTLE_SECONDS=${DELIVER_SETTLE_SECONDS:-2}
+DELIVER_ACCEPT_PROBE_SECONDS=5
+DELIVER_MAX_REENTERS=1
+
+# The prompt marker Claude Code paints at the start of its input line.
+INPUT_LINE_MARKER='^([[:space:]]|│)*(❯|>)'
+
+# unsent_prompt_showing <pane-id> <prompt-file> - returns 0 only when a
+# readable pane's input line, the last visible line that starts with the
+# prompt marker, holds the armed prompt: its first 24 characters, or the
+# paste attachment Claude shows for a long paste. Earlier marker lines are
+# submitted history, so a prompt that was sent never matches. An unreadable
+# pane returns non-zero: it is no evidence of unsent text.
+unsent_prompt_showing() {
+  _ups_file=${TMPDIR:-/tmp}/cf-unsent-pane.$$
+  _ups_match=$(head -1 "$2" | cut -c1-24)
+  pane_read_visible "$1" "$_ups_file" "$TRUST_READ_TIMEOUT" && _ups_read=0 || _ups_read=$?
+  _ups_line=""
+  if [ "$_ups_read" = 0 ]; then
+    _ups_line=$(LC_ALL=C grep -E "$INPUT_LINE_MARKER" "$_ups_file" | tail -1)
+  fi
+  rm -f "$_ups_file"
+  set -- 1
+  if [ -n "$_ups_line" ] && [ -n "$_ups_match" ]; then
+    case $_ups_line in
+      *"$_ups_match"* | *"[Pasted text"*) set -- 0 ;;
+    esac
+  fi
+  unset _ups_file _ups_match _ups_read _ups_line
+  return "$1"
+}
+
+# deliver_turn <pane> <prompt-file> <run-id> <state-dir> <turn-id> - returns 0
+# once the turn is accepted, non-zero when it was not.
+deliver_turn() {
+  herdr pane send-text "$1" "$(cat "$2")" >>"$TRANSCRIPT" 2>&1 || true
+  sleep "$DELIVER_SETTLE_SECONDS"
+  herdr pane send-keys "$1" Enter >>"$TRANSCRIPT" 2>&1 || true
+  _dt_reenters=0
+  while :; do
+    cf delegate wait --run-id "$3" --state-dir "$4" --until accepted \
+      --turn-id "$5" --timeout-seconds "$DELIVER_ACCEPT_PROBE_SECONDS"
+    [ "$CF_STATUS" = 0 ] && return 0
+    [ "$_dt_reenters" -ge "$DELIVER_MAX_REENTERS" ] && return 1
+    if ! unsent_prompt_showing "$1" "$2"; then
+      printf '\nnot accepted yet, and the input line shows no unsent prompt; no Enter sent\n' \
+        >>"$TRANSCRIPT"
+      return 1
+    fi
+    _dt_reenters=$((_dt_reenters + 1))
+    printf '\nnot accepted yet, and the input line still holds the prompt; Enter again (%s of %s)\n' \
+      "$_dt_reenters" "$DELIVER_MAX_REENTERS" >>"$TRANSCRIPT"
+    herdr pane send-keys "$1" Enter >>"$TRANSCRIPT" 2>&1 || true
+  done
+}
+
+# ---------------------------------------------------------------------------
+# Binding the live session to the candidate
+# ---------------------------------------------------------------------------
+#
+# The session's hooks run bare `codeflow`, resolved through the PATH the
+# Claude process inherits from its pane shell. The harness PATH never reaches
+# a Herdr pane, and that shell's own startup puts any installed codeflow
+# first, so the candidate directories are exported in the pane itself after
+# its startup. The same command records what `command -v codeflow` resolves
+# to there, which is the environment the session and its hooks inherit.
+
+# pane_env_command <path-prefix> <record-file> - the shell line the pane runs.
+pane_env_command() {
+  printf "export PATH='%s':\"\$PATH\" CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; command -v codeflow >'%s'; echo TRACKED=\$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS" \
+    "$1" "$2"
+}
+
+# pane_codeflow_binding <record-file> <candidate> - sets PANE_CF_PATH and
+# PANE_CF_SHA, and returns 0 only when the pane resolved codeflow to the
+# candidate's own path and bytes.
+pane_codeflow_binding() {
+  PANE_CF_PATH=$(head -1 "$1" 2>/dev/null || true)
+  [ -n "$PANE_CF_PATH" ] || PANE_CF_PATH="nothing recorded"
+  if [ -f "$PANE_CF_PATH" ]; then
+    PANE_CF_SHA=$(shasum -a 256 "$PANE_CF_PATH" | awk '{print $1}')
+  else
+    PANE_CF_SHA=none
+  fi
+  [ "$PANE_CF_PATH" = "$2" ] &&
+    [ "$PANE_CF_SHA" = "$(shasum -a 256 "$2" | awk '{print $1}')" ]
 }
 
 # tree_digest <dir> - one digest over the content of every file in the sample,

@@ -133,7 +133,7 @@ After `codeflow delegate arm`, send the same canonical UTF-8/LF file bytes:
 
 ```bash
 herdr pane send-text "$pane_id" "$(cat "$P")"
-sleep 0.3  # bounded TUI input-settle; this is not completion detection
+sleep 2  # input-settle, not completion detection
 herdr pane send-keys "$pane_id" Enter
 codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
   --until accepted --turn-id "$TURN" --timeout-seconds 120
@@ -141,9 +141,12 @@ codeflow delegate wait --run-id "$RUN" --state-dir "$STATE" \
   --until terminal --turn-id "$TURN" --timeout-seconds 3600
 ```
 
+If acceptance times out and the visible input box still holds the prompt,
+send Enter once more and re-wait once; never blind Enter.
+
 Do not `tmux load-buffer` / `paste-buffer` into a Herdr pane. `herdr agent
-prompt` is for a consult that is not lifecycle-armed; it does not replace the
-armed-file digest. If `"$P"` exceeds 256 KiB, use degraded tmux paste-buffer
+prompt` (unarmed consults) does not replace the armed-file digest.
+If `"$P"` exceeds 256 KiB, use degraded tmux paste-buffer
 (`send-text` is argv and can `E2BIG`). Prove the Herdr path with the same
 lifecycle canary as tmux.
 
