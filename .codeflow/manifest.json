@@ -293,7 +293,7 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "8683b5f66ca82a691ab0fbc36fa08e35220194b4fe9cd418af36443be1a04f15",
+      "sha256": "a4e89b9e911058f3ae3c8dd5d3bfe17cdbe473815599f8383d803a14b8818d61",
       "exec": false
     },
     ".agents/skills/cf-method/SKILL.md": {
@@ -767,7 +767,7 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "8683b5f66ca82a691ab0fbc36fa08e35220194b4fe9cd418af36443be1a04f15",
+      "sha256": "a4e89b9e911058f3ae3c8dd5d3bfe17cdbe473815599f8383d803a14b8818d61",
       "exec": false
     },
     ".claude/skills/cf-method/SKILL.md": {

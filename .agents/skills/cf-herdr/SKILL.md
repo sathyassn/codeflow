@@ -133,7 +133,7 @@ After `codeflow delegate arm`, send the same canonical UTF-8/LF file bytes:
 
 ```bash
 herdr pane send-text "$pane_id" "$(cat "$P")"
-sleep 0.3  # bounded TUI input-settle; this is not completion detection
+sleep 2  # settle before reading the input line; not completion detection
 # Only when the owned pane's input line shows a "[Pasted text" attachment:
 herdr pane send-text "$pane_id" "Carry out the pasted instructions."
 sleep 0.3
