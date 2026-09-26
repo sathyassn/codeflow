@@ -23,7 +23,13 @@ pub const POLICY_REFERENCE: &str = "policy-reference";
 pub const HOOK_STAGES_HEADING: &str = "## Git hook stages";
 
 /// What the binary supplies so a derived lookup can be regenerated: its
-/// shipped assets and the stage names its git hook dispatcher accepts.
+/// scaffold assets and the stage names its git hook dispatcher accepts.
+///
+/// The assets are the binary's own scaffold, never the validated project's
+/// files. A release binary carries them embedded; a debug build of the binary
+/// reads them from its own checkout's `assets/` tree, the same bytes a
+/// release built from that checkout embeds, so the lookup pages of this
+/// repository are checked against the scaffold they will ship with.
 pub struct LookupInputs<'a> {
     pub assets: &'a dyn AssetSource,
     pub hook_stages: &'a [String],
