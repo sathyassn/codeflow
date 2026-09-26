@@ -619,7 +619,7 @@ PY
 
 step_evidence() {
   say "run at $(now) against $REPO"
-  local M root paths ev id
+  local M root paths ev id block
   M=$(clone maint maintainer@proof.invalid)
   fetch_registry "$M"
   say "registry branch tree"
@@ -646,17 +646,20 @@ step_evidence() {
     --json databaseId,event,headBranch,conclusion,createdAt,url > "$OUT/runs.json"
   jq -r '.[] | [.databaseId, .event, .headBranch, .conclusion, .createdAt] | @tsv' "$OUT/runs.json"
   for ev in push pull_request schedule; do
-    id=$(jq -r "[.[] | select(.event == \"$ev\" and .conclusion != \"\")] | first | .databaseId // empty" "$OUT/runs.json")
+    # The earliest run of each kind comes from the unedited workflow.
+    id=$(jq -r "[.[] | select(.event == \"$ev\" and .conclusion != \"\")] | last | .databaseId // empty" "$OUT/runs.json")
     if [ -z "$id" ]; then
       echo "no completed $ev run yet"
       assert "one completed $ev run" false
       continue
     fi
     gh run view -R "$REPO" "$id" --log > "$OUT/run-$id-$ev-latest.log" 2>&1
-    echo "$ev run $id permission block:"
-    grep -A4 "GITHUB_TOKEN Permissions" "$OUT/run-$id-$ev-latest.log" | sed $'s/^[^\t]*\t[^\t]*\t//'
-    assert "$ev run $id has only read permissions" \
-      bash -c "grep -A6 'GITHUB_TOKEN Permissions' '$OUT/run-$id-$ev-latest.log' | grep -qE 'Contents: read' && ! grep -A6 'GITHUB_TOKEN Permissions' '$OUT/run-$id-$ev-latest.log' | grep -q ': write'"
+    block=$(awk -F'\t' '/GITHUB_TOKEN Permissions/ {on = 1; next} on && /##\[endgroup\]/ {exit} on {sub(/^[^ ]* /, "", $3); print $3}' \
+      "$OUT/run-$id-$ev-latest.log")
+    echo "$ev run $id token permissions:"
+    echo "$block"
+    assert "$ev run $id has read-only token permissions" \
+      test -n "$block" -a -z "$(grep -v ': read$' <<<"$block")"
   done
 }
 
