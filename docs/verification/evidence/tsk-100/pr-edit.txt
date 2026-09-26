@@ -1,0 +1,23 @@
+
+## run at 2026-09-26T22:39:21Z against sathyassn/codeflow-registry-proof
+$ git -C $WORK/contrib fetch -q origin main
+[exit 0]
+$ git -C $WORK/contrib fetch -q origin task/TSK-010-workflow-edit
+[exit 0]
+$ git -C $WORK/contrib switch -q -C task/TSK-010-workflow-edit origin/task/TSK-010-workflow-edit
+[exit 0]
+$ git -C $WORK/contrib commit -q --allow-empty -m chore: rerun the edited workflow
+[exit 0]
+$ git -C $WORK/contrib push -q origin task/TSK-010-workflow-edit
+[exit 0]
+{"number":2,"url":"https://github.com/sathyassn/codeflow-registry-proof/pull/2"}
+{"attempt":1,"conclusion":"success","createdAt":"2026-09-26T22:39:28Z","databaseId":36276985397,"event":"pull_request","headBranch":"task/TSK-010-workflow-edit","headSha":"203e90df7d4dcfd52928bdb2d80519ceac4ae514","url":"https://github.com/sathyassn/codeflow-registry-proof/actions/runs/36276985397"}
+log: run-36276985397-pull_request-attempt1.log
+2026-09-26T22:39:31.4022694Z [36;1mecho "event: ${EVENT}; check code from $(git rev-parse --short origin/target):ci/ids.py"[0m
+2026-09-26T22:39:31.4025330Z [36;1mecho "registry check: skipped by the pull request"[0m
+2026-09-26T22:39:32.7678825Z event: pull_request; check code from af843e0:ci/ids.py
+2026-09-26T22:39:32.7680318Z registry check: skipped by the pull request
+the registry is damaged (see the delete step), so an honest check is red
+PASS: a PR that edits the workflow is green: the PR selects its own check (finding)
+
+## result: 0 failed assertions

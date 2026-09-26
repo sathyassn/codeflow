@@ -1,0 +1,66 @@
+
+## run at 2026-09-26T22:37:24Z against sathyassn/codeflow-registry-proof
+$ git -C $WORK/maint fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+
+## a plain commit deletes the top reservation ids/TSK/008.toml
+$ git push --porcelain origin 1d116a57e436:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	1d116a57e4369154bfb0f824f6902a01af2f36b3:refs/heads/codeflow/registry	1e69821..1d116a5
+Done
+[exit 0]
+classified: accepted
+PASS: the host accepts the deleting commit (rules do not cover contents; AC-6)
+
+## allocation after the deletion (R-7)
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+next TSK: registry tip only (unsafe) max 007, refs max 0
+next TSK: registry history max 008, refs max 001
+tip-only allocation would issue TSK-008; history allocation gives TSK-009
+PASS: tip-only allocation would reissue the deleted number (the fault)
+PASS: history allocation does not reissue TSK-008
+
+## issue is refused while the registry is damaged (R-9)
+issue attempt 1 for uid 04a67894-1e99-45d2-8966-47ce4d1af81a
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+registry: refs/remotes/origin/codeflow/registry tip 1d116a57e436, 9 commits, 8 ids ever added
+mode: registry history only
+FINDING 1d116a57e436: deletes ids/TSK/008.toml (R-8)
+FINDING damaged: ids/TSK/008.toml (added in 1e69821a47a0) is absent from the tip (R-9)
+registry check: FAIL (2 findings)
+issue refused: the registry check fails (R-9)
+PASS: issue is refused
+
+## the registry check from the code branch's CI reports the deletion
+$ git -C $WORK/contrib switch -q task/TSK-008-fork-record
+[exit 0]
+$ git -C $WORK/contrib commit -q --allow-empty -m chore: rerun the registry check
+[exit 0]
+$ git -C $WORK/contrib push -q origin task/TSK-008-fork-record
+[exit 0]
+{"attempt":1,"conclusion":"failure","createdAt":"2026-09-26T22:37:33Z","databaseId":36276880984,"event":"pull_request","headBranch":"task/TSK-008-fork-record","headSha":"84d55bc896125653c0b85b37214367458741074d","url":"https://github.com/sathyassn/codeflow-registry-proof/actions/runs/36276880984"}
+log: run-36276880984-pull_request-attempt1.log
+2026-09-26T22:37:36.3465518Z [36;1mecho "event: ${EVENT}; check code from $(git rev-parse --short origin/target):ci/ids.py"[0m
+2026-09-26T22:37:38.7964291Z event: pull_request; check code from af843e0:ci/ids.py
+2026-09-26T22:37:38.8630802Z FINDING 1d116a57e436: deletes ids/TSK/008.toml (R-8)
+2026-09-26T22:37:38.8631695Z FINDING damaged: ids/TSK/008.toml (added in 1e69821a47a0) is absent from the tip (R-9)
+2026-09-26T22:37:38.8632335Z FINDING TSK-008: not reserved in the registry; a maintainer must admit uid e5412fbd-d3b3-43eb-a442-1ee9b2c8fb45 (R-14, R-17)
+2026-09-26T22:37:38.8632878Z registry check: FAIL (3 findings)
+PASS: the PR job is red
+PASS: the PR job reports the deleting commit
+PASS: the PR job reports the damaged tip
+$ gh workflow run -R sathyassn/codeflow-registry-proof registry-check.yml --ref main
+[exit 0]
+{"attempt":1,"conclusion":"failure","createdAt":"2026-09-26T22:37:47Z","databaseId":36276894678,"event":"workflow_dispatch","headBranch":"main","headSha":"af843e04c96abd63fbaeb76c012e51d72fed30ce","url":"https://github.com/sathyassn/codeflow-registry-proof/actions/runs/36276894678"}
+log: run-36276894678-workflow_dispatch-attempt1.log
+2026-09-26T22:37:51.5410730Z [36;1mecho "event: ${EVENT}; check code from $(git rev-parse --short origin/target):ci/ids.py"[0m
+2026-09-26T22:37:52.3751301Z event: workflow_dispatch; check code from af843e0:ci/ids.py
+2026-09-26T22:37:52.4697911Z bound: TSK-001 -> b9463d36-6d9b-48d8-9e7c-0dc8dbada6fc
+2026-09-26T22:37:52.4699156Z FINDING 1d116a57e436: deletes ids/TSK/008.toml (R-8)
+2026-09-26T22:37:52.4700733Z FINDING damaged: ids/TSK/008.toml (added in 1e69821a47a0) is absent from the tip (R-9)
+2026-09-26T22:37:52.4702576Z registry check: FAIL (2 findings)
+PASS: a run on main is red and reports the deletion
+
+## result: 0 failed assertions

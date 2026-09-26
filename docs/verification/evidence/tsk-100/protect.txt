@@ -1,0 +1,93 @@
+
+## run at 2026-09-26T22:35:48Z against sathyassn/codeflow-registry-proof
+
+## host rule listing: before
+rulesets:
+{"id":24054247,"name":"proof-main-code-profile","target":"branch","enforcement":"active","include":["refs/heads/main"],"rules":["deletion","non_fast_forward","pull_request"],"bypass_actors":[]}
+effective rules:
+{"branch":"main","rules":["deletion","non_fast_forward","pull_request"]}
+{"branch":"codeflow/registry","rules":[]}
+$ gh api repos/sathyassn/codeflow-registry-proof/branches/main/protection
+{"message":"Branch not protected","documentation_url":"https://docs.github.com/rest/branches/branch-protection#get-branch-protection","status":"404"}gh: Branch not protected (HTTP 404)
+
+## apply the data profile to codeflow/registry through the host API (R-6, R-22)
+$ gh api -X POST repos/sathyassn/codeflow-registry-proof/rulesets --input - --jq {id, name}
+{"id":24054251,"name":"codeflow-registry-data-profile"}
+[exit 0]
+
+## host rule listing: after
+rulesets:
+{"id":24054251,"name":"codeflow-registry-data-profile","target":"branch","enforcement":"active","include":["refs/heads/codeflow/registry"],"rules":["deletion","non_fast_forward"],"bypass_actors":[]}
+{"id":24054247,"name":"proof-main-code-profile","target":"branch","enforcement":"active","include":["refs/heads/main"],"rules":["deletion","non_fast_forward","pull_request"],"bypass_actors":[]}
+effective rules:
+{"branch":"main","rules":["deletion","non_fast_forward","pull_request"]}
+{"branch":"codeflow/registry","rules":["deletion","non_fast_forward"]}
+$ gh api repos/sathyassn/codeflow-registry-proof/branches/main/protection
+{"message":"Branch not protected","documentation_url":"https://docs.github.com/rest/branches/branch-protection#get-branch-protection","status":"404"}gh: Branch not protected (HTTP 404)
+
+## compare
+PASS: codeflow/registry refuses deletion and force push
+PASS: codeflow/registry has no pull-request requirement
+$ diff /dev/fd/63 /dev/fd/62
+[exit 0]
+PASS: main's ruleset is byte-identical before and after
+$ diff /dev/fd/63 /dev/fd/62
+[exit 0]
+PASS: main's effective rules are unchanged
+
+## refusals through git
+$ git -C $WORK/maint fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+$ git -C $WORK/maint push origin --delete codeflow/registry
+remote: error: GH013: Repository rule violations found for refs/heads/codeflow/registry.        
+remote: Review all repository rules at https://github.com/sathyassn/codeflow-registry-proof/rules?ref=refs%2Fheads%2Fcodeflow%2Fregistry        
+remote: 
+remote: - Cannot delete this branch        
+remote: 
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ ! [remote rejected] codeflow/registry (push declined due to repository rule violations)
+error: failed to push some refs to 'https://github.com/sathyassn/codeflow-registry-proof.git'
+[exit 1]
+PASS: git push --delete codeflow/registry is refused
+rewritten history: bb335d91508f (same tree, not a descendant of 9ea9910bf349)
+$ git -C $WORK/maint push --force origin bb335d91508f72d6875cc8bf81f94a3eda88816d:refs/heads/codeflow/registry
+remote: error: GH013: Repository rule violations found for refs/heads/codeflow/registry.        
+remote: Review all repository rules at https://github.com/sathyassn/codeflow-registry-proof/rules?ref=refs%2Fheads%2Fcodeflow%2Fregistry        
+remote: 
+remote: - Cannot force-push to this branch        
+remote: 
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ ! [remote rejected] bb335d91508f72d6875cc8bf81f94a3eda88816d -> codeflow/registry (push declined due to repository rule violations)
+error: failed to push some refs to 'https://github.com/sathyassn/codeflow-registry-proof.git'
+[exit 1]
+PASS: git push --force onto codeflow/registry is refused
+
+## refusals through the REST API
+$ git -C $WORK/maint push -q origin bb335d91508f72d6875cc8bf81f94a3eda88816d:refs/heads/proof/rewrite-candidate
+remote: 
+remote: Create a pull request for 'proof/rewrite-candidate' on GitHub by visiting:        
+remote:      https://github.com/sathyassn/codeflow-registry-proof/pull/new/proof/rewrite-candidate        
+remote: 
+[exit 0]
+$ gh api -X PATCH repos/sathyassn/codeflow-registry-proof/git/refs/heads/codeflow/registry -f sha=bb335d91508f72d6875cc8bf81f94a3eda88816d -F force=true
+{"message":"Repository rule violations found\n\nCannot force-push to this branch\n\n","documentation_url":"https://docs.github.com/rest/git/refs#update-a-reference","status":"422"}gh: Repository rule violations found
+
+Cannot force-push to this branch
+
+ (HTTP 422)
+[exit 1]
+PASS: forced ref update through the API is refused
+$ gh api -X DELETE repos/sathyassn/codeflow-registry-proof/git/refs/heads/codeflow/registry
+{"message":"Repository rule violations found\n\nCannot delete this branch\n\n","documentation_url":"https://docs.github.com/rest/git/refs#delete-a-reference","status":"422"}gh: Repository rule violations found
+
+Cannot delete this branch
+
+ (HTTP 422)
+[exit 1]
+PASS: ref deletion through the API is refused
+$ git -C $WORK/maint fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+tip before 9ea9910bf349, after 9ea9910bf349
+PASS: the registry tip is unchanged
+
+## result: 0 failed assertions

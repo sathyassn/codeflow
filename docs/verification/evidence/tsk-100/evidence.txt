@@ -1,0 +1,79 @@
+
+## run at 2026-09-26T23:13:29Z against sathyassn/codeflow-registry-proof
+$ git -C $WORK/maint fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+
+## registry branch tree
+$ git -C $WORK/maint ls-tree -r --name-only refs/remotes/origin/codeflow/registry
+ids/TSK/001.toml
+ids/TSK/002.toml
+ids/TSK/003.toml
+ids/TSK/004.toml
+ids/TSK/005.toml
+ids/TSK/006.toml
+ids/TSK/007.toml
+ids/TSK/009.toml
+ids/TSK/010.toml
+ids/TSK/011.toml
+ids/TSK/012.toml
+ids/TSK/013.toml
+ids/TSK/014.toml
+[exit 0]
+PASS: every path on the registry tip is an ids/ file
+
+## registry history
+$ git -C $WORK/maint log --format=%h %s refs/remotes/origin/codeflow/registry
+b42d925 issue: TSK-014
+8334d16 issue: TSK-013
+e344a4e issue: TSK-012
+4e8188f issue: TSK-011
+ee862af issue: TSK-010
+e022136 issue: TSK-009
+1d116a5 remove TSK-008
+1e69821 admit: TSK-008
+0b915de issue: TSK-007
+6d3b5c0 issue: TSK-006
+7347b46 issue: TSK-005
+6c56f61 issue: TSK-004
+073af20 issue: TSK-003
+690e8e2 issue: TSK-002
+9ea9910 seed: TSK-001
+[exit 0]
+
+## root commit
+$ git -C $WORK/maint diff-tree -r --root --name-status --no-commit-id 9ea9910bf3497f942e666c6338edae4d1536307e
+A	ids/TSK/001.toml
+[exit 0]
+PASS: the registry has one root commit
+PASS: the root commit adds only ids/ files
+
+## workflow on the code branch (main)
+$ grep -nE ^(on|permissions|  pull_request|  push|  schedule|    - cron|      contents) docs/verification/evidence/tsk-100/workflow-main.yml
+6:on:
+7:  pull_request:
+8:  push:
+10:  schedule:
+13:    - cron: "*/15 * * * *"
+16:permissions:
+23:      contents: read
+[exit 0]
+
+## runs of each job kind
+36276985397	pull_request	task/TSK-010-workflow-edit	success	2026-09-26T22:39:28Z
+36276942616	pull_request	task/TSK-010-workflow-edit	success	2026-09-26T22:38:40Z
+36276894678	workflow_dispatch	main	failure	2026-09-26T22:37:47Z
+36276880984	pull_request	task/TSK-008-fork-record	failure	2026-09-26T22:37:33Z
+36276831759	pull_request	task/TSK-008-fork-record	success	2026-09-26T22:36:38Z
+36276768160	push	main	success	2026-09-26T22:35:28Z
+push run 36276768160 token permissions:
+Contents: read
+Metadata: read
+PASS: push run 36276768160 has read-only token permissions
+pull_request run 36276831759 token permissions:
+Contents: read
+Metadata: read
+PASS: pull_request run 36276831759 has read-only token permissions
+no completed schedule run yet
+FAIL: one completed schedule run
+
+## result: 1 failed assertions
