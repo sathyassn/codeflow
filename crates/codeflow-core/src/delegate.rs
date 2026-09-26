@@ -1040,10 +1040,6 @@ fn inspect_continuations(
             run_id,
             "continuation",
         )?;
-        let launchers_ok = record.launched_by_prompt_id == turn_prompt
-            || continuations
-                .iter()
-                .any(|earlier| earlier.accepted.prompt_id == record.launched_by_prompt_id);
         if record.turn_id != turn_id
             || record.task_id != task_id
             || record.event != "UserPromptSubmit"
@@ -1051,7 +1047,6 @@ fn inspect_continuations(
             || record.session_id != accepted.session_id
             || record.prompt_id == turn_prompt
             || !valid_digest(&record.notice_sha256)
-            || !launchers_ok
         {
             return Err(DelegateError::unsafe_state(
                 "continuation record is mis-correlated with its turn",
@@ -1076,7 +1071,45 @@ fn inspect_continuations(
             result: terminal,
         });
     }
+    validate_launch_chains(turn_prompt, &continuations)?;
     Ok(continuations)
+}
+
+/// Check how the continuations of one turn launched each other, after all of
+/// them are loaded, so directory order plays no part.
+///
+/// Every continuation has its own `prompt_id` and traces back, through the
+/// continuations that launched it, to the turn's own prompt without a cycle.
+/// A continuation that launched another had stopped before that one was
+/// admitted, so it must hold a result.
+fn validate_launch_chains(
+    turn_prompt: &str,
+    continuations: &[ContinuationState],
+) -> Result<(), DelegateError> {
+    let mis_correlated =
+        || DelegateError::unsafe_state("continuation record is mis-correlated with its turn");
+    let mut by_prompt = std::collections::HashMap::with_capacity(continuations.len());
+    for continuation in continuations {
+        if by_prompt
+            .insert(continuation.accepted.prompt_id.as_str(), continuation)
+            .is_some()
+        {
+            return Err(mis_correlated());
+        }
+    }
+    for continuation in continuations {
+        let mut launcher = continuation.accepted.launched_by_prompt_id.as_str();
+        let mut steps = 0;
+        while launcher != turn_prompt {
+            let parent = by_prompt.get(launcher).ok_or_else(mis_correlated)?;
+            steps += 1;
+            if parent.result.is_none() || steps > continuations.len() {
+                return Err(mis_correlated());
+            }
+            launcher = parent.accepted.launched_by_prompt_id.as_str();
+        }
+    }
+    Ok(())
 }
 
 fn validate_result_record(
@@ -2513,6 +2546,188 @@ mod tests {
             inspect_turns("run-1", &path).unwrap_err().kind,
             ErrorKind::Unsafe
         );
+    }
+
+    #[test]
+    fn a_replayed_notice_is_refused_once_its_task_was_admitted() {
+        let (_temp, path) = notice_run();
+        captured_turn(&path, "turn-1", "turn1-submit", "turn1-stop");
+        let notice = captured("workflow-notice-submit");
+        let mut replay = notice.clone();
+        replay["prompt_id"] =
+            serde_json::Value::String("5d9f1c3e-8a2b-4c6d-9e0f-1a2b3c4d5e6f".into());
+        send(&path, &notice).unwrap();
+        // While the continuation is open, and again after its Stop.
+        assert_blocked(&path, &replay, "still open");
+        send(&path, &captured("workflow-notice-stop")).unwrap();
+        assert_blocked(&path, &replay, "conflicting record");
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(continuation_file(
+                &path,
+                "turn-1",
+                "wkj4tsqcd",
+                "accepted.json",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["prompt_id"], notice["prompt_id"]);
+    }
+
+    const WORKFLOW_TASK: &str = "wkj4tsqcd";
+    const BASH_TASK: &str = "b64do3c7c";
+
+    /// The captured submit and Stop payloads for one task's notice.
+    fn notice_payloads(task: &str) -> (&'static str, &'static str) {
+        if task == WORKFLOW_TASK {
+            ("workflow-notice-submit", "workflow-notice-stop")
+        } else {
+            ("bash-notice-submit", "bash-notice-stop")
+        }
+    }
+
+    /// Rearrange the captured transcript so that turn 1 launches `outer` and
+    /// the prompt that delivered `outer`'s notice launches the other task.
+    /// Returns the rewritten transcript path.
+    fn nested_transcript(dir: &Path, outer: &str) -> String {
+        let lines: Vec<serde_json::Value> =
+            std::fs::read_to_string(format!("{NOTICE_DIR}/{NOTICE_SESSION}.jsonl"))
+                .unwrap()
+                .lines()
+                .map(|line| serde_json::from_str(line).unwrap())
+                .collect();
+        // Captured order: turn-1 prompt, Workflow launch, Workflow notice,
+        // turn-2 prompt, Bash launch, Bash notice.
+        let (outer_at, inner_at) = if outer == WORKFLOW_TASK {
+            (1, 4)
+        } else {
+            (4, 1)
+        };
+        let mut outer_launch = lines[outer_at].clone();
+        outer_launch["promptId"] = lines[0]["promptId"].clone();
+        let outer_notice = lines[outer_at + 1].clone();
+        let mut inner_launch = lines[inner_at].clone();
+        inner_launch["promptId"] = outer_notice["promptId"].clone();
+        let text: Vec<String> = [
+            lines[0].clone(),
+            outer_launch,
+            outer_notice,
+            inner_launch,
+            lines[inner_at + 1].clone(),
+        ]
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+        let path = dir.join(format!("{NOTICE_SESSION}.jsonl"));
+        std::fs::write(&path, text.join("\n") + "\n").unwrap();
+        path.to_string_lossy().into_owned()
+    }
+
+    /// Run turn 1 and admit and stop `outer`'s notice, then the notice of the
+    /// task its continuation launched.
+    fn nested_run(outer: &str) -> (TempDir, TempDir, PathBuf) {
+        let (temp, path) = notice_run();
+        let transcripts = tempfile::tempdir().unwrap();
+        let transcript = nested_transcript(transcripts.path(), outer);
+        captured_turn(&path, "turn-1", "turn1-submit", "turn1-stop");
+        let inner = if outer == WORKFLOW_TASK {
+            BASH_TASK
+        } else {
+            WORKFLOW_TASK
+        };
+        for task in [outer, inner] {
+            let (submit, stop) = notice_payloads(task);
+            let mut notice = captured(submit);
+            notice["transcript_path"] = serde_json::Value::String(transcript.clone());
+            send(&path, &notice).unwrap();
+            send(&path, &captured(stop)).unwrap();
+            assert!(continuation_file(&path, "turn-1", task, "result.json").exists());
+        }
+        (temp, transcripts, path)
+    }
+
+    #[test]
+    fn nested_continuations_hold_in_either_directory_order() {
+        // The Bash task id sorts before the Workflow task id, so the two
+        // cases put the launching continuation first and last on disk.
+        for (outer, inner) in [(WORKFLOW_TASK, BASH_TASK), (BASH_TASK, WORKFLOW_TASK)] {
+            let (_temp, _transcripts, path) = nested_run(outer);
+            let record: serde_json::Value = serde_json::from_str(
+                &std::fs::read_to_string(continuation_file(
+                    &path,
+                    "turn-1",
+                    inner,
+                    "accepted.json",
+                ))
+                .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(
+                record["launched_by_prompt_id"],
+                captured(notice_payloads(outer).0)["prompt_id"]
+            );
+            // Exact retries of the inner Stop and the turn's Stop still hold.
+            send(&path, &captured(notice_payloads(inner).1)).unwrap();
+            send(&path, &captured("turn1-stop")).unwrap();
+            let terminal = wait(
+                "run-1",
+                &path,
+                Some("turn-1"),
+                WaitUntil::Terminal,
+                Duration::from_secs(1),
+                || false,
+            )
+            .unwrap();
+            assert!(!terminal.failed);
+            let terminal: serde_json::Value = serde_json::from_str(&terminal.json).unwrap();
+            assert_eq!(terminal["prompt_id"], captured("turn1-stop")["prompt_id"]);
+            // The run goes on to its next armed turn.
+            captured_turn(&path, "turn-2", "turn2-submit", "turn2-stop");
+            let states = inspect_turns("run-1", &path).unwrap();
+            assert_eq!(states.len(), 2);
+            assert_eq!(states[0].continuations.len(), 2);
+            assert!(!path.join("poison.json").exists());
+        }
+    }
+
+    #[test]
+    fn continuation_chains_must_be_rooted_acyclic_and_closed() {
+        let outer_prompt = captured("workflow-notice-submit")["prompt_id"].clone();
+        let inner_prompt = captured("bash-notice-submit")["prompt_id"].clone();
+        for case in [
+            "launcher still open",
+            "unknown launcher",
+            "cycle",
+            "shared prompt_id",
+        ] {
+            let (_temp, _transcripts, path) = nested_run(WORKFLOW_TASK);
+            inspect_turns("run-1", &path).unwrap();
+            let file = |task, name| continuation_file(&path, "turn-1", task, name);
+            match case {
+                "launcher still open" => {
+                    std::fs::remove_file(file(WORKFLOW_TASK, "result.json")).unwrap();
+                }
+                "unknown launcher" => rewrite_json(&file(BASH_TASK, "accepted.json"), |value| {
+                    value["launched_by_prompt_id"] = serde_json::Value::String(PROMPT_ID.into());
+                }),
+                "cycle" => rewrite_json(&file(WORKFLOW_TASK, "accepted.json"), |value| {
+                    value["launched_by_prompt_id"] = inner_prompt.clone();
+                }),
+                _ => {
+                    std::fs::remove_file(file(BASH_TASK, "result.json")).unwrap();
+                    rewrite_json(&file(BASH_TASK, "accepted.json"), |value| {
+                        value["prompt_id"] = outer_prompt.clone();
+                        value["launched_by_prompt_id"] = outer_prompt.clone();
+                    });
+                }
+            }
+            let error = inspect_turns("run-1", &path).unwrap_err();
+            assert_eq!(error.kind, ErrorKind::Unsafe, "{case}");
+            assert!(
+                error.message.contains("mis-correlated"),
+                "{case}: {error:?}"
+            );
+        }
     }
 
     #[test]
