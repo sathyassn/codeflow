@@ -3270,6 +3270,25 @@ mod tests {
         );
     }
 
+    // Grok review of the warn default, D2: a project that sets block (as
+    // this repository does) still refuses a dashed PR body.
+    #[test]
+    fn test_pr_body_policy_character_blocked_when_policy_blocks() {
+        let p = GitPolicy {
+            policy_characters: PolicyLevel::Block,
+            ..default_policy()
+        };
+        for cmd in [
+            "gh pr create --title 'feat: x' --body 'Adds a hook \u{2014} and a test.'",
+            "gh pr edit 12 --body 'Pages 1\u{2013}3.'",
+        ] {
+            let v = evaluate(cmd, &ctx(&p, "feat/x"));
+            assert_eq!(v.len(), 1, "{cmd}");
+            assert_eq!(v[0].rule, "git.policy_characters");
+            assert_eq!(v[0].level, PolicyLevel::Block, "{cmd}");
+        }
+    }
+
     // Codex EPC-017 review, finding 5: an edited body is scanned too.
     #[test]
     fn test_pr_edit_body_policy_character_reported() {
