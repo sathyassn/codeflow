@@ -592,6 +592,23 @@ else:
     printf 'workflow launch unknown: the transcript could not be read'
 }
 
+# pipeline_checkout <sample-dir> <branch> <spare-dir> - print the directory
+# holding the branch the pipeline built on: its existing worktree, or a
+# detached checkout of the branch made at <spare-dir>. Returns 1 when the
+# branch does not exist.
+pipeline_checkout() {
+  _pc_tree=$(git -C "$1" worktree list --porcelain 2>/dev/null | awk -v ref="branch refs/heads/$2" '
+    /^worktree / { path = substr($0, 10) }
+    $0 == ref { print path; exit }')
+  if [ -n "$_pc_tree" ]; then
+    printf '%s' "$_pc_tree"
+    return 0
+  fi
+  git -C "$1" rev-parse --verify --quiet "refs/heads/$2" >/dev/null || return 1
+  git -C "$1" worktree add --detach "$3" "$2" >/dev/null 2>&1 || return 1
+  printf '%s' "$3"
+}
+
 # ---------------------------------------------------------------------------
 # Ending the live session
 # ---------------------------------------------------------------------------

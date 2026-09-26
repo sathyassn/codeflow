@@ -1465,7 +1465,7 @@ Run the pipeline workflow that this repository already has at
 .claude/workflows/pipeline.workflow.js, end to end, with the Workflow tool.
 Arguments: task "add a subtract function beside add, with a unit test", criteria
 ["subtract(4, 1) returns 3", "the existing add test still passes"], stages
-["build", "verify"]. Work on the branch feat/pipeline-canary; never commit to
+["build", "verify"]. Work on the branch $PIPELINE_BRANCH; never commit to
 main and never push. When the workflow returns, write the object it returned,
 verbatim, as a single line of JSON to $PIPELINE_RESULT in the repository root.
 That object is the workflow's own result and carries status, attempts and trail.
@@ -1483,7 +1483,7 @@ PROMPT
     return
   fi
 
-  _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, this harness's own subtract(4, 1) test green, and the sample gate green"
+  _pipeline_expected="a transcript showing the native Workflow tool invoked on the scaffolded pipeline, a terminal turn, that workflow's own returned object at status complete with build and verify stages and an approved verify verdict, and on the pipeline branch this harness's own subtract(4, 1) test green and the sample gate green"
   _pipeline_began=$(date +%s)
   deliver_turn "$HERDR_PANE" "$WORK/pipeline-prompt.txt" "$_run" "$_state" "$_turn2" || true
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until accepted \
@@ -1562,37 +1562,51 @@ if not verify or verify[-1].get("verdict") != "approved":
     print("verify-not-approved"); raise SystemExit
 print("complete")' 2>/dev/null || printf 'unparsable')
 
-  # Behaviour, verified here: a test this harness writes, compiled and run by
-  # the sample's own toolchain. A subtract that returns the wrong value fails
-  # this even if the peer shipped a test that agrees with it.
+  # Behaviour, verified here, where the pipeline built it: its branch, in the
+  # worktree it used or a spare checkout of that branch, never the sample root
+  # on main. A test this harness writes is compiled and run by the sample's own
+  # toolchain there, so a subtract that returns the wrong value fails even if
+  # the peer shipped a test that agrees with it, and the sample gate runs there.
   _behaviour=not-checked
-  if [ -f "$DIR/Cargo.toml" ]; then
-    mkdir -p "$DIR/tests"
-    cat >"$DIR/tests/qualification_subtract.rs" <<'PROBE'
+  _gate=not-run
+  _spare="$WORK/pipeline-checkout"
+  if _checkout=$(pipeline_checkout "$DIR" "$PIPELINE_BRANCH" "$_spare"); then
+    _in=${_checkout#"$DIR"/}
+    [ "$_checkout" != "$_spare" ] || _in="a spare checkout"
+    _where="checked on $PIPELINE_BRANCH at $(git -C "$_checkout" rev-parse --short HEAD 2>/dev/null) in $_in"
+    if [ -f "$_checkout/Cargo.toml" ]; then
+      mkdir -p "$_checkout/tests"
+      cat >"$_checkout/tests/qualification_subtract.rs" <<'PROBE'
 //! Written by the release qualification, not by the session under test.
 #[test]
 fn subtract_four_minus_one_is_three() {
     assert_eq!(qualification_sample::subtract(4, 1), 3);
 }
 PROBE
-    # cargo's own status, captured before anything truncates its output. A
-    # pipe here would report the exit status of the last stage instead, and a
-    # test binary that exits 101 would read as success.
-    sh_run "cd '$DIR' && cargo test --test qualification_subtract >'$WORK/subtract-probe.log' 2>&1"
-    _sub_status=$CF_STATUS
-    if [ "$_sub_status" = 0 ]; then
-      _behaviour=passed
-    else
-      _behaviour="failed at exit $_sub_status: $(oneline "$(tail -5 "$WORK/subtract-probe.log" 2>/dev/null)")"
+      # cargo's own status, captured before anything truncates its output. A
+      # pipe here would report the exit status of the last stage instead, and
+      # a test binary that exits 101 would read as success.
+      sh_run "cd '$_checkout' && cargo test --test qualification_subtract >'$WORK/subtract-probe.log' 2>&1"
+      _sub_status=$CF_STATUS
+      if [ "$_sub_status" = 0 ]; then
+        _behaviour=passed
+      else
+        _behaviour="failed at exit $_sub_status: $(oneline "$(tail -5 "$WORK/subtract-probe.log" 2>/dev/null)")"
+      fi
+      rm -f "$_checkout/tests/qualification_subtract.rs"
     fi
-    rm -f "$DIR/tests/qualification_subtract.rs"
+    cd "$_checkout"
+    cf test --mode full --strict
+    _gate=$CF_STATUS
+    cd "$DIR"
+    [ "$_checkout" != "$_spare" ] || git -C "$DIR" worktree remove --force "$_spare" >/dev/null 2>&1 || true
+  else
+    _where="no branch $PIPELINE_BRANCH to check"
   fi
-
-  cf test --mode full --strict
-  _gate=$CF_STATUS
   _invoked=$(workflow_invocation_evidence "$_state")
   _launch=$(workflow_launch_evidence "$_state")
-  _observed="turn exit $_pipeline_terminal; native Workflow invocation $_invoked; $_launch; $_result_wait; workflow result $_shape; independent subtract(4, 1) test $_behaviour; sample gate exit $_gate"
+  _observed="turn exit $_pipeline_terminal; native Workflow invocation $_invoked; $_launch; $_result_wait; workflow result $_shape; subtract(4, 1) test $_behaviour; sample gate exit $_gate; $_where"
+  printf '\npipeline row observed: %s\n' "$_observed" >>"$TRANSCRIPT"
 
   # Whether the capability was exercised is decided by the transcript, not by
   # the result file. Once the Workflow tool has been invoked, every shortfall
@@ -1640,6 +1654,7 @@ PROBE
 # ---------------------------------------------------------------------------
 
 PIPELINE_RESULT="qualification-pipeline-result.txt"
+PIPELINE_BRANCH="feat/pipeline-canary"
 
 # How long the pipeline turn has to be accepted, and the row timeout covering
 # the launching turn and the backgrounded workflow behind it.

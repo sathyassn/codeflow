@@ -527,6 +527,31 @@ ok pipeline.launch "a missing transcript is unknown, never a background claim" \
   "$([ "$_launch" = "workflow launch unknown: no session transcript" ] && echo 0 || echo 1)"
 
 # ---------------------------------------------------------------------------
+# The pipeline's work is checked on its own branch
+# ---------------------------------------------------------------------------
+
+SAMPLE_REPO="$STUB_DIR/sample-repo"
+git init -q -b main "$SAMPLE_REPO"
+git -C "$SAMPLE_REPO" -c user.name=q -c user.email=q@example.invalid commit -q --allow-empty -m init
+git -C "$SAMPLE_REPO" branch feat/built
+_where=$(pipeline_checkout "$SAMPLE_REPO" feat/built "$STUB_DIR/spare") && _r=0 || _r=$?
+ok pipeline.checkout "a branch with no worktree gets a spare checkout" \
+  "$([ "$_r" = 0 ] && [ "$_where" = "$STUB_DIR/spare" ] && [ -e "$STUB_DIR/spare/.git" ] && echo 0 || echo 1)"
+git -C "$SAMPLE_REPO" worktree remove --force "$STUB_DIR/spare"
+git -C "$SAMPLE_REPO" worktree add -q "$STUB_DIR/built-tree" feat/built
+_where=$(pipeline_checkout "$SAMPLE_REPO" feat/built "$STUB_DIR/spare") && _r=0 || _r=$?
+ok pipeline.checkout "the worktree the pipeline used is checked in place" \
+  "$([ "$_r" = 0 ] && [ "$(cd "$_where" && pwd -P)" = "$(cd "$STUB_DIR/built-tree" && pwd -P)" ] &&
+     [ ! -e "$STUB_DIR/spare" ] && echo 0 || echo 1)"
+pipeline_checkout "$SAMPLE_REPO" feat/missing "$STUB_DIR/spare" >/dev/null && _r=0 || _r=$?
+ok pipeline.checkout "a branch that does not exist is reported, never the sample root" \
+  "$([ "$_r" != 0 ] && [ ! -e "$STUB_DIR/spare" ] && echo 0 || echo 1)"
+
+ok qualify.sh "the pipeline row checks the branch the pipeline built on" \
+  "$(grep -qF '_checkout=$(pipeline_checkout "$DIR" "$PIPELINE_BRANCH" "$_spare")' "$SCRIPT_DIR/qualify.sh" &&
+     echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
 # Teardown ends the agent through its own exit keys, then closes the tab
 # ---------------------------------------------------------------------------
 
