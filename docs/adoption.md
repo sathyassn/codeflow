@@ -257,6 +257,14 @@ hooks run that binary, and one older than a new key rejects the policy file,
 which blocks every commit until the binary is upgraded (for example
 `git.policy_characters`, ADR-0067).
 
+Work records follow the same order. `codeflow update` adds
+`git.work_records` (`block` or `warn`; an `off` from an unreleased build is
+rewritten to `warn` with a notice) and, in a project that already has epic,
+spec or task records, records `work_records_baseline` in
+`.codeflow/project.toml` once, as the current commit. Records whose bytes are
+unchanged since that commit keep the rules they were written under; a status
+change, a criteria change or a new record follows the status verbs' rules.
+
 ## Optional repository guide portal
 
 Standard and full tiers include the concise `cf-docs-portal` workflow, but no
