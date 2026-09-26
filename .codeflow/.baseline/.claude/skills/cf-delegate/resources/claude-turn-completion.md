@@ -113,7 +113,9 @@ state, then records the
 SHA-256 of the accepted file bytes. Deliver that same file through a uniquely
 named tmux buffer with a literal paste into the exact pane, wait a bounded
 300 ms for the TUI to attach it, and send one separate Enter. Acceptance
-requires a `UserPromptSubmit` whose prompt matches the digest. If acceptance
+requires a `UserPromptSubmit` whose prompt matches the digest; one outer
+`<pasted_content id="N">` envelope with a same-id close around the exact bytes
+is tolerated and recorded as `delivery: paste_envelope`. If acceptance
 times out, inspect only the dedicated pane; when it explicitly shows the paste
 attachment still waiting in the editor, send Enter once more and re-wait once.
 Never send blind or repeated Enter retries. A mismatched, unarmed, or duplicate

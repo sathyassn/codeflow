@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "signed-artifacts",
+    "family": "coverage",
+    "binding": "derived",
+    "question": "Which artifacts are signed on which channel?",
+    "idea": "Every release artifact is signed; nightly builds sign only the binaries.",
+    "title": "Which artifacts are signed on which channel",
+    "caption": "Release signs every artifact, and nightly leaves the container image unsigned.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Signed"
+      },
+      {
+        "name": "na",
+        "mark": "na",
+        "means": "Not signed"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "release signs binaries, archives and images",
+        "source": "config/signing.json",
+        "derive": "channels.release",
+        "check": {
+          "kind": "json",
+          "select": "channels.release"
+        },
+        "value": [
+          "binaries",
+          "archives",
+          "images"
+        ]
+      }
+    ],
+    "source": {
+      "path": "config/signing.json",
+      "select": "channels"
+    },
+    "layout": {
+      "kind": "coverage",
+      "columns": [
+        "Binaries",
+        "Archives",
+        "Images"
+      ],
+      "rows": [
+        {
+          "label": "Release",
+          "cells": [
+            "cov",
+            "cov",
+            "cov"
+          ]
+        },
+        {
+          "label": "Nightly",
+          "cells": [
+            "cov",
+            "cov",
+            "na"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same"
+    },
+    "twin": "facts"
+  }
+}

@@ -655,7 +655,7 @@ export function validatePortalConfig(value) {
   if (value.schema_version !== 1) throw new Error("portal.config.json: unsupported schema_version");
   boundedString(value.title, "title", 1, 120);
   boundedString(value.description, "description", 1, 400);
-  if (!["signal", "folio"].includes(value.theme)) throw new Error("portal.config.json: theme must be signal or folio");
+  if (!["graphite", "slate", "sage", "signal", "folio"].includes(value.theme)) throw new Error("portal.config.json: theme must be graphite, slate or sage (signal and folio remain aliases)");
   if (value.repository_url !== null) {
     boundedString(value.repository_url, "repository_url", 1, 2048);
     if (!validRepositoryUrl(value.repository_url)) throw new Error("repository_url: expected an HTTPS repository URL with an ASCII or punycode host and without credentials, query, or fragment");
@@ -834,16 +834,21 @@ function validPortSuffix(value) {
 // Reader-selectable skins, not only the initial config theme. Browser tests
 // bind these validation backgrounds to the actual utility CSS.
 export const PORTAL_ACCENT_BACKGROUNDS = Object.freeze({
-  instrument: { light: ["#ffffff", "#f7f8f9", "#e8eaec", "#e8f1f9"], dark: ["#161a1e", "#1d2227", "#252b31", "#15283a"] },
-  editorial: { light: ["#fafcfe", "#f2f5f9", "#e2e8ef", "#e3edf6"], dark: ["#161c24", "#1d252f", "#26303b", "#182a3b"] },
-  ink: { light: ["#fcfaf6", "#f4f0e9", "#eae4da", "#f3ece3"], dark: ["#261d16", "#30261e", "#3b2f25", "#3e2c1c"] },
+  graphite: { light: ["#ffffff", "#ffffff", "#ececec", "#dcefec"], dark: ["#232323", "#2b2b2b", "#303030", "#1e3c39"] },
+  slate: { light: ["#f8fafc", "#ffffff", "#e2e7ed", "#f5e3d9"], dark: ["#1a2028", "#222a34", "#262e39", "#3e2b20"] },
+  sage: { light: ["#fafbf8", "#ffffff", "#e8ece6", "#dcece5"], dark: ["#1d2320", "#252c28", "#29312c", "#213b32"] },
 });
+
+export function portalSkinOrder(theme) {
+  const initial = ({ signal: "graphite", folio: "sage" })[theme] ?? theme;
+  return [initial, ...Object.keys(PORTAL_ACCENT_BACKGROUNDS).filter((skin) => skin !== initial)];
+}
 
 export function validatePrimitiveTokens(value, theme) {
   if (!value || typeof value !== "object" || Array.isArray(value) || Object.keys(value).sort().join(",") !== "dark,light,schema_version" || value.schema_version !== 1) {
     throw new Error("primitive token import must contain exactly schema_version, light, and dark");
   }
-  const skins = theme === "folio" ? ["ink", "instrument", "editorial"] : ["instrument", "editorial", "ink"];
+  const skins = portalSkinOrder(theme);
   for (const mode of ["light", "dark"]) {
     const record = value[mode];
     if (!record || typeof record !== "object" || Array.isArray(record) || Object.keys(record).sort().join(",") !== "accent" || !/^#[a-fA-F0-9]{6}$/.test(record.accent ?? "")) {

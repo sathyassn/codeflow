@@ -304,7 +304,7 @@ test("the rendered sidebar keeps the landing order when pages nest", { skip: pro
     const landing = await readFile(path.join(root, "src/content/docs/orient/index.md"), "utf8");
     assert.deepEqual([...landing.matchAll(/<span class="t">([^<]+)<\/span>/g)].map((match) => match[1]), ["Product", "Topics", "One", "Adoption"]);
     const html = await readFile(path.join(root, "dist/orient/index.html"), "utf8");
-    const start = html.indexOf('<nav class="sidebar');
+    const start = html.indexOf('<nav aria-label="Guide pages"');
     assert.notEqual(start, -1);
     const sidebar = html.slice(start, html.indexOf("</nav>", start));
     const routes = [...new Set([...sidebar.matchAll(/href="(\/orient\/[^"]*)"/g)].map((match) => match[1]))];
@@ -726,8 +726,7 @@ test("primitive-token influence is narrow, closed, and contrast checked", () => 
   assert.doesNotThrow(() => validatePrimitiveTokens({ schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" } }, "folio"));
   // These passed the old approximate theme surfaces, but not the actual
   // reader-selectable surface/selected-background combinations. The values
-  // track the retuned ink light surfaces (TSK-038): a grey that clears the
-  // parchment-era surfaces must still fail against the near-white ones.
+  // hold the approved near-white surfaces in every selectable skin.
   for (const [mode, accent] of [["light", "#737373"], ["dark", "#858585"], ["light", "#7a7a7a"]]) {
     const tokens = { schema_version: 1, light: { accent: "#005f56" }, dark: { accent: "#72e2cf" }, [mode]: { accent } };
     assert.throws(() => validatePrimitiveTokens(tokens, "signal"), /contrast/);

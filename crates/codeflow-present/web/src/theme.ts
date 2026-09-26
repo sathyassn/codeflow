@@ -1,11 +1,12 @@
+import { normalizeSkin, normalizeTypeface } from "./appearance-values";
 import type { AppearanceMode, ResolvedMode, TypeScale, Typeface, UtilityTheme } from "./contracts";
 
 const MODE_KEY = "cf-present-mode";
 const THEME_KEY = "cf-present-theme";
 const TYPEFACE_KEY = "cf-present-typeface";
 const SCALE_KEY = "cf-present-scale";
-const THEMES: readonly UtilityTheme[] = ["instrument", "editorial", "ink", "technical"];
-const TYPEFACES: readonly Typeface[] = ["instrument", "editorial", "plex"];
+const THEMES: readonly UtilityTheme[] = ["graphite", "slate", "sage"];
+const TYPEFACES: readonly Typeface[] = ["archivo", "inter", "plex"];
 const SCALES: readonly TypeScale[] = ["compact", "default", "large"];
 const MODES: readonly AppearanceMode[] = ["system", "light", "dark"];
 
@@ -17,9 +18,9 @@ export interface AppearanceState {
 }
 
 export function initialAppearance(): AppearanceState {
-  const theme = readChoice(readStorage(THEME_KEY), THEMES) ?? "instrument";
+  const theme = readChoice(normalizeSkin(readStorage(THEME_KEY)), THEMES) ?? "graphite";
   const mode = readChoice(readStorage(MODE_KEY), MODES) ?? "system";
-  const typeface = readChoice(readStorage(TYPEFACE_KEY), TYPEFACES) ?? "instrument";
+  const typeface = readChoice(normalizeTypeface(readStorage(TYPEFACE_KEY)), TYPEFACES) ?? "inter";
   const scale = readChoice(readStorage(SCALE_KEY), SCALES) ?? "default";
   return { theme, mode, typeface, scale };
 }

@@ -463,7 +463,7 @@ function recordContextFor(page, routesById) {
 }
 
 function pageFrontmatter(page) {
-  return `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(typeof page.frontmatter.description === "string" ? page.frontmatter.description : `Repository source: ${page.source_path}`)}\nslug: ${JSON.stringify(page.route)}\n${sidebarFrontmatter(page.route)}---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Source ${sourceLink(page.source_path)}${builtFromSegment(page.source_path)}${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>${renderedGeneratorVersion}</code></div>${snippetMarker(page)}`;
+  return `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(typeof page.frontmatter.description === "string" ? page.frontmatter.description : `Repository source: ${page.source_path}`)}\nslug: ${JSON.stringify(page.route)}\n${sidebarFrontmatter(page.route)}---\n\n${provenanceMarker(page)}\n<div class="portal-provenance"><span>Current</span> · Source ${sourceLink(page.source_path)}${builtFromSegment(page.source_path)}${config.release_version === null ? "" : ` · release <code>${escapeHtml(config.release_version)}</code>`} · portal <code>${renderedGeneratorVersion}</code></div>${snippetMarker(page)}`;
 }
 
 function snippetMarker(page) {
@@ -563,7 +563,7 @@ function renderPage(page, bindings, routesById, previews, referencedMedia, ancho
 }
 
 function renderStaleStub(page) {
-  const rendered = `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(`Source failed to build: ${page.source_path}`)}\nslug: ${JSON.stringify(page.route)}\n${sidebarFrontmatter(page.route)}pagefind: false\n---\n\n${provenanceMarker(page)}\n<div class="portal-provenance">Source ${sourceLink(page.source_path)}${builtFromSegment(page.source_path)} · portal <code>${renderedGeneratorVersion}</code></div>\n\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> **Source unavailable:** This page's source failed to build at commit <code>${commit.slice(0, 12)}</code>. Fix <code>${escapeHtml(page.source_path)}</code> and rebuild; the previous version of this page is not shown.\n\n<details><summary>Build diagnostic</summary>\n\n${escapeMarkdownInline(page.stale_reason)}\n\n</details>\n\n</div>\n`;
+  const rendered = `---\ntitle: ${JSON.stringify(page.title)}\ndescription: ${JSON.stringify(`Source failed to build: ${page.source_path}`)}\nslug: ${JSON.stringify(page.route)}\n${sidebarFrontmatter(page.route)}pagefind: false\n---\n\n${provenanceMarker(page)}\n<div class="portal-provenance" data-stale="true"><span>Unavailable</span> · Source ${sourceLink(page.source_path)}${builtFromSegment(page.source_path)} · portal <code>${renderedGeneratorVersion}</code></div>\n\n<div class="portal-stale" data-pagefind-ignore="all">\n\n> **Source unavailable:** This page's source failed to build at commit <code>${commit.slice(0, 12)}</code>. Fix <code>${escapeHtml(page.source_path)}</code> and rebuild; the previous version of this page is not shown.\n\n<details><summary>Build diagnostic</summary>\n\n${escapeMarkdownInline(page.stale_reason)}\n\n</details>\n\n</div>\n`;
   if (Buffer.byteLength(rendered) > MAX_STALE_STUB_BYTES) throw new Error(`${page.source_path}: stale stub exceeds ${MAX_STALE_STUB_BYTES} bytes`);
   return rendered;
 }

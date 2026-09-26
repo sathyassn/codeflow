@@ -227,10 +227,10 @@ test("setting the display state leaves the preference and the attribute agreeing
     // A built page carries its component behaviour in an ES module bundle,
     // which a file URL will not load, so the panel here carries the two writes
     // the component makes on a pill click and nothing else.
-    await writeFile(path.join(directory, "control.html"), `<!doctype html><html data-theme="light" data-cfp-skin="instrument"><body>
+    await writeFile(path.join(directory, "control.html"), `<!doctype html><html data-theme="light" data-cfp-skin="graphite"><body>
 <button type="button" data-testid="portal-display-btn">Display</button>
 <div data-testid="portal-display-panel" hidden>
-<div class="pills" data-group="skin"><button type="button" data-value="ink" data-testid="skin-ink">Warm</button></div>
+<div class="pills" data-group="skin"><button type="button" data-value="sage" data-testid="skin-sage">Sage</button></div>
 <div class="pills" data-group="appearance"><button type="button" data-value="dark" data-testid="appearance-dark">Dark</button></div>
 </div>
 <script>
@@ -244,20 +244,20 @@ panel.addEventListener("click", (event) => {
   else { localStorage.setItem("cf-portal-skin", pill.dataset.value); root.dataset.cfpSkin = pill.dataset.value; }
 });
 </script></body></html>`);
-    await writeFile(path.join(directory, "bare.html"), `<!doctype html><html data-theme="light" data-cfp-skin="instrument"><body><h1>A surface with no Display control</h1></body></html>`);
+    await writeFile(path.join(directory, "bare.html"), `<!doctype html><html data-theme="light" data-cfp-skin="graphite"><body><h1>A surface with no Display control</h1></body></html>`);
     const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
     try {
       const page = await browser.newPage();
       for (const [file, expected] of [["control.html", "control"], ["bare.html", "preference"]]) {
         await page.goto(pathToFileURL(path.join(directory, file)).href);
         await page.evaluate(() => localStorage.clear());
-        assert.equal(await applyDisplayState(page, "ink", "dark"), expected, `${file} took the wrong path`);
+        assert.equal(await applyDisplayState(page, "sage", "dark"), expected, `${file} took the wrong path`);
         assert.deepEqual(await page.evaluate(() => ({
           theme: document.documentElement.dataset.theme,
           skin: document.documentElement.dataset.cfpSkin,
           appearance: localStorage.getItem("starlight-theme"),
           palette: localStorage.getItem("cf-portal-skin"),
-        })), { theme: "dark", skin: "ink", appearance: "dark", palette: "ink" }, `${file} left the preference and the attribute disagreeing`);
+        })), { theme: "dark", skin: "sage", appearance: "dark", palette: "sage" }, `${file} left the preference and the attribute disagreeing`);
       }
     } finally { await browser.close(); }
   } finally { await rm(directory, { recursive: true, force: true }); }

@@ -947,48 +947,169 @@ fn portal_bundle_is_single_complete_and_bounded() {
 /// The repository guide is the first consumer of the shipped starter. Keep
 /// project-owned configuration independent, but require every reusable starter
 /// file to exist and remain byte-identical so a dogfood-only fix cannot pass
-/// while consumers receive stale runtime or tests.
+/// while consumers receive stale runtime or tests. The check runs here and not
+/// in the starter's own tests, because a consumer has no second copy to
+/// compare against.
 #[test]
 fn portal_dogfood_runtime_matches_the_shipped_starter() {
     let root = repo_root();
-    let starter = root.join("assets/docs-portal/starter");
-    let dogfood = root.join("docs-portal");
-    let mut problems = Vec::new();
-    // Match the exact dependency-tree exclusion in EmbeddedAssets without
-    // excluding any authored starter file or weakening the parity inventory.
-    let sources: Vec<PathBuf> = std::fs::read_dir(&starter)
-        .expect("starter directory is readable")
-        .map(|entry| entry.expect("starter entry is readable").path())
-        .filter(|path| path.file_name().is_none_or(|name| name != "node_modules"))
-        .flat_map(|path| {
-            if path.is_dir() {
-                walk_files(&path)
-            } else {
-                vec![path]
-            }
-        })
-        .collect();
-    for source in sources {
-        let relative = rel(&starter, &source);
-        if relative == "portal.config.json" {
-            continue;
-        }
-        let deployed = dogfood.join(&relative);
-        if !deployed.is_file() {
-            problems.push(format!("missing dogfood file {relative}"));
-            continue;
-        }
-        if std::fs::read(&source).expect("read starter portal file")
-            != std::fs::read(&deployed).expect("read dogfood portal file")
-        {
-            problems.push(format!("byte drift at {relative}"));
-        }
-    }
+    let starter_files = git_inventory(&root, "assets/docs-portal/starter");
+    let dogfood_files = git_inventory(&root, "docs-portal");
+    assert!(!starter_files.is_empty(), "the starter lists no files");
+    assert!(!dogfood_files.is_empty(), "docs-portal lists no files");
+    let problems = portal_mirror_drift(
+        &root.join("assets/docs-portal/starter"),
+        &starter_files,
+        &root.join("docs-portal"),
+        &dogfood_files,
+    );
     assert!(
         problems.is_empty(),
         "docs-portal diverged from the shipped reusable starter:\n  {}",
         problems.join("\n  ")
     );
+}
+
+#[test]
+fn portal_mirror_drift_names_each_perturbed_copy() {
+    let root = tempfile::tempdir().expect("temporary directory");
+    let repo = root.path();
+    // No template, so the fixture never copies sample hooks.
+    let init = std::process::Command::new("git")
+        .args(["init", "-q", "--template="])
+        .arg(repo)
+        .output()
+        .expect("git is available for the parity fixture");
+    assert!(
+        init.status.success(),
+        "git init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let starter = repo.join("starter");
+    let dogfood = repo.join("dogfood");
+    for side in [&starter, &dogfood] {
+        std::fs::create_dir_all(side.join("scripts")).expect("create scripts");
+        std::fs::write(side.join(".gitignore"), "node_modules/\ndist/\n").expect("write");
+        std::fs::write(side.join("scripts/gate.mjs"), "export const gate = 1;\n").expect("write");
+        std::fs::write(side.join("portal.config.json"), "{}\n").expect("write");
+    }
+    std::fs::write(dogfood.join("portal.config.json"), "{\"title\":\"own\"}\n").expect("write");
+    // Ignored dependency and build output on the starter side only.
+    std::fs::create_dir_all(starter.join("node_modules/pkg")).expect("create node_modules");
+    std::fs::write(starter.join("node_modules/pkg/index.js"), "1\n").expect("write");
+    std::fs::create_dir_all(starter.join("dist")).expect("create dist");
+    std::fs::write(starter.join("dist/index.html"), "<html></html>\n").expect("write");
+    let drift = || {
+        portal_mirror_drift(
+            &starter,
+            &git_inventory(repo, "starter"),
+            &dogfood,
+            &git_inventory(repo, "dogfood"),
+        )
+    };
+    // Project-owned configuration and ignored output are out of scope.
+    assert_eq!(drift(), Vec::<String>::new());
+    std::fs::write(dogfood.join("scripts/gate.mjs"), "export const gate = 2;\n").expect("write");
+    assert_eq!(drift(), vec!["byte drift at scripts/gate.mjs".to_owned()]);
+    std::fs::remove_file(dogfood.join("scripts/gate.mjs")).expect("remove");
+    assert_eq!(
+        drift(),
+        vec!["missing dogfood file scripts/gate.mjs".to_owned()]
+    );
+    // A case-only rename resolves through either spelling on a
+    // case-insensitive filesystem, so only the exact names reveal it.
+    std::fs::write(dogfood.join("scripts/GATE.mjs"), "export const gate = 1;\n").expect("write");
+    assert_eq!(
+        drift(),
+        vec![
+            "missing dogfood file scripts/gate.mjs".to_owned(),
+            "scripts/GATE.mjs is in docs-portal but not in the shipped starter".to_owned(),
+        ]
+    );
+    std::fs::remove_file(dogfood.join("scripts/GATE.mjs")).expect("remove");
+    std::fs::write(dogfood.join("scripts/gate.mjs"), "export const gate = 1;\n").expect("write");
+    assert_eq!(drift(), Vec::<String>::new());
+    std::fs::write(
+        dogfood.join("scripts/extra.mjs"),
+        "export const extra = 1;\n",
+    )
+    .expect("write");
+    assert_eq!(
+        drift(),
+        vec!["scripts/extra.mjs is in docs-portal but not in the shipped starter".to_owned()]
+    );
+}
+
+/// Files under `dir` (relative to the repository at `root`) that Git tracks or
+/// would track: untracked files count before they are staged, and ignored
+/// dependency or build output never does. Paths are relative to `dir`.
+fn git_inventory(root: &Path, dir: &str) -> Vec<String> {
+    let output = std::process::Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args([
+            "ls-files",
+            "-z",
+            "--cached",
+            "--others",
+            "--exclude-standard",
+            "--",
+            dir,
+        ])
+        .output()
+        .expect("git is available for portal parity verification");
+    assert!(
+        output.status.success(),
+        "git ls-files failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let prefix = format!("{dir}/");
+    output
+        .stdout
+        .split(|byte| *byte == 0)
+        .filter(|path| !path.is_empty())
+        .map(|path| String::from_utf8_lossy(path).replace('\\', "/"))
+        .map(|path| {
+            path.strip_prefix(&prefix)
+                .unwrap_or_else(|| panic!("{path} is not under {dir}"))
+                .to_owned()
+        })
+        .collect()
+}
+
+/// Differences between the shipped starter and the dogfood portal. The exact
+/// relative names are compared as strings in both directions, so a case-only
+/// rename is reported even where the filesystem resolves either spelling;
+/// bytes are compared only for names present on both sides.
+/// `portal.config.json` is project-owned, so only its presence is compared.
+fn portal_mirror_drift(
+    starter: &Path,
+    starter_files: &[String],
+    dogfood: &Path,
+    dogfood_files: &[String],
+) -> Vec<String> {
+    let starter_names: BTreeSet<&str> = starter_files.iter().map(String::as_str).collect();
+    let dogfood_names: BTreeSet<&str> = dogfood_files.iter().map(String::as_str).collect();
+    let mut problems: Vec<String> =
+        starter_names
+            .difference(&dogfood_names)
+            .map(|relative| format!("missing dogfood file {relative}"))
+            .chain(dogfood_names.difference(&starter_names).map(|relative| {
+                format!("{relative} is in docs-portal but not in the shipped starter")
+            }))
+            .collect();
+    for relative in starter_names.intersection(&dogfood_names) {
+        if *relative == "portal.config.json" {
+            continue;
+        }
+        if std::fs::read(starter.join(relative)).expect("read starter portal file")
+            != std::fs::read(dogfood.join(relative)).expect("read dogfood portal file")
+        {
+            problems.push(format!("byte drift at {relative}"));
+        }
+    }
+    problems.sort();
+    problems
 }
 
 #[test]
@@ -2219,13 +2340,9 @@ fn present_schema_source_live_and_baseline_copies_are_identical_and_closed() {
     );
 }
 
-/// The portal's utility token layer must stay value-identical to the settled
-/// present skins (ADR-0053 shared craft): portal `signal` mirrors the present
-/// `instrument` skin and portal `folio` mirrors `ink`, in both modes, plus the
-/// instrument/plex typeface stacks and the shared mono stack. Present's
-/// `styles.css` is canonical; a divergence here is design-system drift. The
-/// starter mirror read here must also equal the live `docs-portal` copy, so a
-/// retune cannot land in one of the two portal files alone.
+/// Both products use the design kit's 27 colour roles in all six skin/mode
+/// pairs, with independent font preferences. The starter and live portal
+/// remain byte-identical; the kit JSON is the shared value authority.
 #[test]
 fn portal_utility_tokens_match_present_skins() {
     fn block_after(css: &str, marker: &str) -> std::collections::BTreeMap<String, String> {
@@ -2246,221 +2363,79 @@ fn portal_utility_tokens_match_present_skins() {
             })
             .collect()
     }
-    const ROLES: [&str; 16] = [
-        "canvas",
-        "surface",
-        "surface-raised",
-        "surface-subtle",
-        "text",
-        "text-muted",
-        "border",
-        "border-strong",
-        "accent",
-        "accent-strong",
-        "accent-soft",
-        "focus",
-        "positive",
-        "warning",
-        "danger",
-        "diagram-line",
-    ];
     let root = repo_root();
     let present = std::fs::read_to_string(root.join("crates/codeflow-present/web/src/styles.css"))
-        .expect("present styles are readable");
+        .expect("present styles");
     let portal = std::fs::read_to_string(
         root.join("assets/docs-portal/starter/src/styles/utility-tokens.css"),
     )
-    .expect("portal utility tokens are readable");
-    let live_portal =
-        std::fs::read_to_string(root.join("docs-portal/src/styles/utility-tokens.css"))
-            .expect("live portal utility tokens are readable");
-    let pairs = [
-        (
-            "portal instrument light vs present instrument light",
-            ":root {",
-            "[data-cf-theme=\"instrument\"][data-cf-mode-resolved=\"light\"]",
-        ),
-        (
-            "portal instrument dark vs present instrument dark",
-            ":root[data-theme=\"dark\"] {",
-            "[data-cf-theme=\"instrument\"][data-cf-mode-resolved=\"dark\"]",
-        ),
-        (
-            "portal editorial light vs present editorial light",
-            ":root[data-cfp-skin=\"editorial\"] {",
-            "[data-cf-theme=\"editorial\"][data-cf-mode-resolved=\"light\"]",
-        ),
-        (
-            "portal editorial dark vs present editorial dark",
-            ":root[data-theme=\"dark\"][data-cfp-skin=\"editorial\"] {",
-            "[data-cf-theme=\"editorial\"][data-cf-mode-resolved=\"dark\"]",
-        ),
-        (
-            "portal ink light vs present ink light",
-            ":root[data-cfp-skin=\"ink\"] {",
-            "[data-cf-theme=\"ink\"][data-cf-mode-resolved=\"light\"]",
-        ),
-        (
-            "portal ink dark vs present ink dark",
-            ":root[data-theme=\"dark\"][data-cfp-skin=\"ink\"] {",
-            "[data-cf-theme=\"ink\"][data-cf-mode-resolved=\"dark\"]",
-        ),
-    ];
-    let mut drift = Vec::new();
-    for (label, portal_marker, present_marker) in pairs {
-        let ours = block_after(&portal, portal_marker);
-        let theirs = block_after(&present, present_marker);
-        for role in ROLES {
-            match (ours.get(role), theirs.get(role)) {
-                (Some(a), Some(b)) if a == b => {}
-                (a, b) => drift.push(format!(
-                    "{label}: --cf-{role}: portal {a:?} != present {b:?}"
-                )),
-            }
-        }
-    }
-
-    // The settled TSK-045 token table. Equality between the sheets is not
-    // enough on its own: a coordinated retune of all three would still pass it,
-    // so every role of every skin and mode pair is pinned to its settled value
-    // in each of the three sheets.
-    let settled_roles: [&str; 14] = [
-        "canvas",
-        "surface",
-        "surface-raised",
-        "surface-subtle",
-        "text",
-        "text-muted",
-        "border",
-        "border-strong",
-        "accent",
-        "accent-strong",
-        "accent-soft",
-        "positive",
-        "warning",
-        "danger",
-    ];
-    let settled_table: [[&str; 14]; 6] = [
-        [
-            "#f2f3f4", "#ffffff", "#f7f8f9", "#e8eaec", "#15181b", "#4d555d", "#d5d9dd", "#6d767f",
-            "#1f6fb2", "#185c95", "#e8f1f9", "#2e7d57", "#9a5f0f", "#9b1c1c",
-        ],
-        [
-            "#0f1113", "#161a1e", "#1d2227", "#252b31", "#e8ebee", "#a8b0b8", "#2e353c", "#7a838c",
-            "#6aaee8", "#8fc2f0", "#15283a", "#4fb183", "#d99a45", "#ff7b6e",
-        ],
-        [
-            "#eef2f6", "#fafcfe", "#f2f5f9", "#e2e8ef", "#171c22", "#4a5563", "#cfd8e2", "#6b7a8c",
-            "#2f5f8a", "#244a6d", "#e3edf6", "#246b4a", "#9a6b1a", "#a33a32",
-        ],
-        [
-            "#0f141a", "#161c24", "#1d252f", "#26303b", "#e6ecf2", "#a4b0bd", "#2d3846", "#78889a",
-            "#86b4d6", "#a5c8e4", "#182a3b", "#4fb183", "#d9a85a", "#ff8a80",
-        ],
-        [
-            "#f6f3ee", "#fcfaf6", "#f4f0e9", "#eae4da", "#2a2116", "#5b5348", "#dcd4c8", "#857a6c",
-            "#8a5636", "#6d4128", "#f3ece3", "#3d6b3a", "#8f5a12", "#9b1c1c",
-        ],
-        [
-            "#1c1510", "#261d16", "#30261e", "#3b2f25", "#f3eadc", "#c6b6a3", "#45372b", "#927e69",
-            "#dba672", "#e6bd8c", "#3e2c1c", "#7cbc74", "#d9a85a", "#ff8a80",
-        ],
-    ];
-    for index in 0..pairs.len() {
-        let (label, portal_marker, present_marker) = pairs[index];
-        for (sheet, css, marker) in [
-            ("starter portal", &portal, portal_marker),
-            ("live portal", &live_portal, portal_marker),
-            ("present", &present, present_marker),
-        ] {
-            let block = block_after(css, marker);
-            for (role, settled) in settled_roles.iter().zip(settled_table[index].iter()) {
-                match block.get(*role) {
-                    Some(actual) if actual == settled => {}
-                    actual => drift.push(format!(
-                        "{label}: {sheet} --cf-{role}: {actual:?} != settled {settled:?}"
-                    )),
+    .expect("starter tokens");
+    let live = std::fs::read_to_string(root.join("docs-portal/src/styles/utility-tokens.css"))
+        .expect("live tokens");
+    assert_eq!(
+        portal, live,
+        "live portal and starter must remain identical"
+    );
+    let kit: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(
+            root.join("assets/base/agents/skills/cf-present/resources/design-system/tokens.json"),
+        )
+        .expect("kit tokens"),
+    )
+    .expect("kit JSON");
+    for skin in ["graphite", "slate", "sage"] {
+        for mode in ["light", "dark"] {
+            let pair = format!("{skin}-{mode}");
+            let roles = kit[&pair].as_object().expect("kit pair");
+            assert_eq!(roles.len(), 27, "complete kit role set");
+            for (sheet, css, marker) in [
+                (
+                    "portal",
+                    &portal,
+                    format!("[data-cfp-skin=\"{skin}\"][data-theme=\"{mode}\"]"),
+                ),
+                (
+                    "present",
+                    &present,
+                    format!("[data-cf-theme=\"{skin}\"][data-cf-mode-resolved=\"{mode}\"]"),
+                ),
+            ] {
+                let actual = block_after(css, &marker);
+                for (role, value) in roles {
+                    assert_eq!(
+                        actual.get(role).map(String::as_str),
+                        value.as_str(),
+                        "{sheet} {pair} {role}"
+                    );
                 }
             }
         }
     }
-    // Present's bare :root default carries the instrument light skin, so a
-    // present document that has not yet had its theme attribute written paints
-    // the settled instrument values rather than a stale earlier palette.
-    let present_default = block_after(&present, ":root {");
-    for (role, settled) in settled_roles.iter().zip(settled_table[0].iter()) {
-        match present_default.get(*role) {
-            Some(actual) if actual == settled => {}
-            actual => drift.push(format!(
-                "present :root default: --cf-{role}: {actual:?} != settled {settled:?}"
-            )),
-        }
-    }
-
-    let typefaces = [
-        (
-            "portal instrument sans vs present instrument typeface",
-            ":root[data-cfp-typeface=\"instrument\"]",
-            "[data-cf-typeface=\"instrument\"]",
-            "font-sans",
-        ),
-        (
-            "portal editorial sans vs present editorial typeface",
-            ":root[data-cfp-typeface=\"editorial\"]",
-            "[data-cf-typeface=\"editorial\"]",
-            "font-sans",
-        ),
-        (
-            "portal plex sans vs present plex typeface",
-            ":root[data-cfp-typeface=\"plex\"]",
-            "[data-cf-typeface=\"plex\"]",
-            "font-sans",
-        ),
-    ];
-    for (label, portal_marker, present_marker, role) in typefaces {
-        let ours = block_after(&portal, portal_marker);
-        let theirs = block_after(&present, present_marker);
-        match (ours.get(role), theirs.get(role)) {
-            (Some(a), Some(b)) if a == b => {}
-            (a, b) => drift.push(format!(
-                "{label}: --cf-{role}: portal {a:?} != present {b:?}"
-            )),
-        }
-    }
-    // The starter mirror this test reads and the live portal copy must be the
-    // same file: a retune applied to one and not the other would otherwise pass
-    // every check above while the published portal still shipped the old skin.
-    if portal != live_portal {
-        for (label, portal_marker, _present_marker) in pairs {
-            let starter_block = block_after(&portal, portal_marker);
-            let live_block = block_after(&live_portal, portal_marker);
-            for role in ROLES {
-                match (starter_block.get(role), live_block.get(role)) {
-                    (Some(a), Some(b)) if a == b => {}
-                    (a, b) => drift.push(format!(
-                        "{label}: --cf-{role}: starter {a:?} != live portal {b:?}"
-                    )),
-                }
-            }
-        }
-        drift.push(
-            "assets/docs-portal/starter/src/styles/utility-tokens.css and \
-             docs-portal/src/styles/utility-tokens.css are not byte-identical"
-                .to_string(),
+    let default = block_after(&present, ":root {");
+    for (role, value) in kit["graphite-light"].as_object().expect("default pair") {
+        assert_eq!(
+            default.get(role).map(String::as_str),
+            value.as_str(),
+            "present prepaint default {role}"
         );
     }
-
-    let portal_mono = block_after(&portal, ":root {");
-    let present_mono = block_after(&present, ":root {");
-    match (portal_mono.get("font-mono"), present_mono.get("font-mono")) {
-        (Some(a), Some(b)) if a == b => {}
-        (a, b) => drift.push(format!("shared mono stack: portal {a:?} != present {b:?}")),
+    for face in ["archivo", "inter", "plex"] {
+        let portal = block_after(&portal, &format!("[data-cfp-typeface=\"{face}\"]"));
+        let present = block_after(&present, &format!("[data-cf-typeface=\"{face}\"]"));
+        assert_eq!(
+            portal.get("font-sans"),
+            present.get("font-sans"),
+            "font {face}"
+        );
+        assert!(portal.contains_key("font-sans"));
     }
-
-    assert!(
-        drift.is_empty(),
-        "portal utility tokens drifted from the canonical present skins \
-         (crates/codeflow-present/web/src/styles.css):\n  {}",
-        drift.join("\n  ")
-    );
+    let portal_default = block_after(&portal, ":root {");
+    for role in ["font-mono", "font-sans"] {
+        assert_eq!(
+            portal_default.get(role),
+            default.get(role),
+            "default {role}"
+        );
+        assert!(default.contains_key(role));
+    }
 }

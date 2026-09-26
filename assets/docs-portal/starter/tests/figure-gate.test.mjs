@@ -80,9 +80,10 @@ async function mixedFixture() {
   steps.figure.id = "install-steps";
   steps.figure.facts = [{ claim: "The install section lists two steps", source: "docs/guide.md#install", derive: "numbered items in the Install section", check: { kind: "count-items" }, value: 2 }];
   await writeFile(path.join(root, "figures/install-steps.json"), `${JSON.stringify(steps, null, 2)}\n`);
-  // The flow specimen draws done and stop apart by shape alone, so it breaks
-  // rule 3 on any page it lands on.
-  const broken = await specimen("01-flow.json");
+  // The layering specimen with its remote plane declared on the local layer
+  // mark: only the cap tells the two planes apart, so it breaks rule 3 on any
+  // page it lands on.
+  const broken = await specimen("controls/one-channel.json");
   broken.figure.facts = [{ claim: "The source says a rule is broken", source: "docs/broken.md", derive: "the source text", check: { kind: "contains", text: "breaks a rule" }, value: true }];
   await writeFile(path.join(root, "figures/broken.json"), `${JSON.stringify(broken, null, 2)}\n`);
   await configureFixture(root, { layers: LAYERS, page_carriers: [], page_classes: PAGE_CLASSES, figures: FIGURES });
@@ -277,7 +278,7 @@ test("the mixed fixture renders every class and the gates name only what falls s
       assert.ok(failures.length > 0);
       for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
       assert.deepEqual(failures.filter((failure) => /served page|page CSS|executable content|clean copy|not visible to a reader|effective opacity|legend key sits|twin marker/.test(failure)), []);
-      assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states done and stop differ on shape, need 2/.test(failure)), failures.join("\n"));
+      assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states layer and layer-remote differ on overlay, need 2/.test(failure)), failures.join("\n"));
 
       // Page CSS (R3-2, R4-1, R4-2). Each rule is refused at its source, as a
       // stylesheet that is not a built sheet, and is also seen by the checks
@@ -686,4 +687,54 @@ test("validate --portal accepts the inserted figures and refuses a tampered sour
     const restored = validate();
     assert.match(restored.stdout + restored.stderr, /validate --portal: 2 page\(s\) clean/, restored.stdout + restored.stderr);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// A page-level motion override must reach the isolated clean comparison too.
+// Otherwise the kit's motion variables create false rule-6 differences even
+// though the page and clean copy use exactly the same committed sheets.
+test("the figure gate matches page motion without accepting changed figure styles", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  let site;
+  let browser;
+  try {
+    await writeFigureInputs(root);
+    await configureFixture(root, {
+      page_classes: [{ source: "docs/seed.md", class: "illustrated" }],
+      figures: [{ declaration: "figures/architecture.json", route: "reference/seed" }],
+    });
+    commitFixture(root, "motion context fixture");
+    runLocalAdapter(root);
+    buildFixture(root);
+    const recorded = spawnSync(process.execPath, ["scripts/evidence.mjs"], { cwd: root, encoding: "utf8" });
+    assert.equal(recorded.status, 0, recorded.stderr);
+    const built = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
+    const config = JSON.parse(await readFile(path.join(root, "portal.config.json"), "utf8"));
+    const assignments = classifyPortalPages(config, built.pages);
+    const snapshot = new GitSnapshot(root);
+    const declarations = pinnedDeclarations(snapshot, built.repository.commit, built);
+    const kitSheets = pinnedKitSheets(snapshot, built.repository.commit, "");
+    const inlineScripts = pinnedRuntimeScripts(snapshot, built.repository.commit, "", config.theme);
+    site = await serve(path.join(root, "dist"));
+    browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+    for (const reducedMotion of ["reduce", "no-preference"]) {
+      const context = await browser.newContext({ reducedMotion: reducedMotion === "reduce" ? "no-preference" : "reduce" });
+      try {
+        const page = await context.newPage();
+        await page.emulateMedia({ reducedMotion });
+        const visitRoute = async (route) => { await page.goto(`${site.origin}/${route}/`, { waitUntil: "networkidle" }); };
+        const clean = await figureGateFailures(page, visitRoute, assignments, built, declarations, kitSheets, inlineScripts);
+        assert.equal(clean.drawn, 1);
+        assert.deepEqual(clean.failures, [], `${reducedMotion}: matching sheets must pass`);
+        const altered = await figureGateFailures(page, async (route) => {
+          await visitRoute(route);
+          await page.evaluate(() => { document.querySelector("figure.cf-fig").style.opacity = "0"; });
+        }, assignments, built, declarations, kitSheets, inlineScripts);
+        assert.ok(altered.failures.some((failure) => /rule 6.*opacity/.test(failure)), `${reducedMotion}: changed figure opacity must still fail`);
+      } finally { await context.close(); }
+    }
+  } finally {
+    await browser?.close();
+    await site?.close();
+    await rm(root, { recursive: true, force: true });
+  }
 });

@@ -1,16 +1,21 @@
+import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import { access, readFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import axe from "axe-core";
-import { chromium } from "playwright-core";
+import { chromium, firefox, webkit } from "playwright-core";
 import { checkSelectionOccurrences } from "./selection-browser-check.mjs";
 import { checkDocumentExcerpts } from "./excerpt-browser-check.mjs";
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
+import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const assetsRoot = resolve(webRoot, "../assets");
+const repoRoot = resolve(webRoot, "../../..");
+// A figure block the grammar draws with no rule failure (the portal's state specimen).
+const figureDeclaration = await readFile(join(repoRoot, "docs-portal/tests/fixtures/figures/05-state.json"), "utf8");
 const manifest = JSON.parse(await readFile(join(assetsRoot, "manifest.json"), "utf8"));
 const assets = new Map(manifest.service.assets.map((asset) => [asset.request_path, asset]));
 const appPath = manifest.service.entrypoints["present.app"];
@@ -103,6 +108,11 @@ const executablePath = await findBrowser();
 const browser = await chromium.launch({ executablePath, headless: true });
 
 try {
+  for (const [name, engine] of [['chromium', chromium], ['firefox', firefox], ['webkit', webkit]]) {
+    const chromeBrowser = name === 'chromium' ? browser : await engine.launch();
+    try { await checkSavedAppearance(chromeBrowser, origin, name); }
+    finally { if (chromeBrowser !== browser) await chromeBrowser.close(); }
+  }
   await checkSelectionOccurrences(browser);
   await checkDocumentExcerpts(browser);
   await checkProseLazyPath(browser, origin);
@@ -110,19 +120,55 @@ try {
   await checkIframeComments(browser, origin);
   await checkInteractiveSurface(browser, origin, reviewPosts);
   await checkStaticExportModes(browser, origin);
-  process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, diagrams, axe, and 320 px reflow\n");
+  process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, figure blocks, zero CSP violations, axe, and 320 px reflow\n");
 } finally {
   await browser.close();
   await new Promise((resolve) => server.close(resolve));
 }
 
+async function checkSavedAppearance(browser, origin, engine) {
+  for (const [key, saved, skin, face] of [
+    ...[['instrument', 'graphite'], ['editorial', 'slate'], ['ink', 'sage'], ['technical', 'graphite']].map(([old, skin]) => ['cf-present-theme', old, skin, 'plex']),
+    ...[['instrument', 'archivo'], ['editorial', 'inter'], ['plex', 'plex']].map(([old, face]) => ['cf-present-typeface', old, 'sage', face]),
+  ]) {
+    const context = await browser.newContext();
+    try {
+      await context.addInitScript(({ key, saved }) => {
+        localStorage.setItem('cf-present-theme', 'sage'); localStorage.setItem('cf-present-typeface', 'plex'); localStorage.setItem(key, saved);
+        window.__appearancePaints = [];
+        new MutationObserver(() => {
+          const root = document.documentElement;
+          if (root?.dataset.cfTheme && root.dataset.cfTypeface) window.__appearancePaints.push([root.dataset.cfTheme, root.dataset.cfTypeface]);
+        }).observe(document, { subtree: true, childList: true, attributes: true });
+      }, { key, saved });
+      const page = await context.newPage();
+      await page.goto(`${origin}/app?case=prose`);
+      await page.getByTestId('settings-btn').click();
+      const paints = await page.evaluate(() => window.__appearancePaints);
+      assert.ok(paints.length && paints.every(p => p[0] === skin && p[1] === face), `${engine}: ${key}=${saved} first paint`);
+      assert.equal(await page.locator(`[data-testid=skin-pills] [data-skin=${skin}]`).getAttribute('aria-pressed'), 'true');
+      assert.equal(await page.getByTestId(`typeface-${face}`).getAttribute('aria-pressed'), 'true');
+    } finally { await context.close(); }
+  }
+  process.stdout.write(`${engine}: saved appearance first-paint and selected-pill controls passed (7 values)\n`);
+}
+
+async function assertPrimary(button) {
+  assert.deepEqual(await button.evaluate(el => {
+    const s = getComputedStyle(el);
+    const probe = document.createElement('span'); probe.style.fontFamily = 'var(--cf-font-sans)'; probe.style.color = 'var(--cf-on-accent)'; probe.style.backgroundColor = 'var(--cf-accent)'; document.body.append(probe);
+    const p = getComputedStyle(probe);
+    const result = [s.fontFamily === p.fontFamily, s.fontWeight, s.backgroundColor === p.backgroundColor, s.color === p.color]; probe.remove(); return result;
+  }), [true, '600', true, true]);
+}
+
 async function checkStaticExportModes(browser, origin) {
   for (const { mode, preference, expected } of [
-    // The export page defaults to the editorial skin: cool slate, #eef2f6 light and #0f141a dark.
-    { mode: "system", preference: "dark", expected: "rgb(15, 20, 26)" },
-    { mode: "system", preference: "light", expected: "rgb(238, 242, 246)" },
-    { mode: "dark", preference: "light", expected: "rgb(15, 20, 26)" },
-    { mode: "light", preference: "dark", expected: "rgb(238, 242, 246)" },
+    // The retained export default resolves to Slate in either appearance.
+    { mode: "system", preference: "dark", expected: "rgb(18, 23, 29)" },
+    { mode: "system", preference: "light", expected: "rgb(234, 238, 243)" },
+    { mode: "dark", preference: "light", expected: "rgb(18, 23, 29)" },
+    { mode: "light", preference: "dark", expected: "rgb(234, 238, 243)" },
   ]) {
     const context = await browser.newContext({ colorScheme: preference, javaScriptEnabled: false });
     const page = await context.newPage();
@@ -149,6 +195,7 @@ async function checkStaticExportModes(browser, origin) {
 async function checkProseLazyPath(browser, origin) {
   const context = await browser.newContext({ colorScheme: "dark" });
   const page = await context.newPage();
+  await recordPolicyViolations(page);
   const requests = [];
   page.on("request", (request) => requests.push(new URL(request.url())));
   await page.goto(`${origin}/app?case=prose`, { waitUntil: "networkidle" });
@@ -159,14 +206,15 @@ async function checkProseLazyPath(browser, origin) {
     manifest.service.assets
       .find((asset) => asset.request_path === appPath)
       // The small offline font module is intentionally available on prose
-      // pages; heavyweight syntax/diagram renderers must remain lazy.
+      // pages; the syntax and figure renderers must remain lazy.
       .imports.filter((item) => item.kind === "dynamic-import" && !/\/chunk-fonts-[^/]+\.js$/u.test(item.request_path))
       .map((item) => item.request_path),
   );
   if (requests.some((request) => dynamicPaths.has(request.pathname))) {
-    throw new Error("A prose-only page requested a syntax or Mermaid entry path");
+    throw new Error("A prose-only page requested a syntax or figure entry path");
   }
   assertLoopbackOnly(requests);
+  await assertNoPolicyViolations(page, "prose page");
   await context.close();
 }
 
@@ -180,22 +228,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       consoleErrors.push(message.text());
     }
   });
-  await page.addInitScript(() => {
-    globalThis.__cfPolicyViolations = [];
-    globalThis.__cfLongTasks = [];
-    document.addEventListener("securitypolicyviolation", (event) => {
-      globalThis.__cfPolicyViolations.push({
-        directive: event.effectiveDirective,
-        blocked: event.blockedURI,
-        sample: event.sample,
-      });
-    });
-    if ("PerformanceObserver" in globalThis) {
-      new PerformanceObserver((entries) => {
-        globalThis.__cfLongTasks.push(...entries.getEntries().map((entry) => entry.duration));
-      }).observe({ type: "longtask", buffered: true });
-    }
-  });
+  await recordPolicyViolations(page);
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
   await assertBundledFonts(page);
@@ -208,49 +241,25 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   const code = page.locator("code[data-cf-language='rust']");
   await code.scrollIntoViewIfNeeded();
   await page.waitForFunction(() => document.querySelector("code[data-cf-language='rust']")?.getAttribute("data-cf-highlight") === "ready");
-  const diagram = page.locator("[data-cf-diagram-title='Request flow']");
-  await diagram.scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector("[data-cf-diagram]")?.getAttribute("data-cf-diagram") !== "pending");
-  if (await diagram.getAttribute("data-cf-diagram") !== "ready") {
-    throw new Error(`Diagram did not render: ${await diagram.locator("[data-cf-diagram-status]").textContent()}`);
+  const figure = page.locator("[data-cf-block-id='block-flow'] [data-cf-figure-block]");
+  await figure.scrollIntoViewIfNeeded();
+  await page.waitForFunction(() => document.querySelector("[data-cf-figure-block]")?.getAttribute("data-cf-figure-block") !== "pending");
+  if (await figure.getAttribute("data-cf-figure-block") !== "ready") {
+    throw new Error(`Figure block did not draw: ${await figure.locator("[data-cf-figure-status]").textContent()}`);
   }
-  const diagramSvg = diagram.locator("svg[role='img']");
-  await diagramSvg.waitFor();
-  const diagramEvidence = await diagramSvg.evaluate((svg) => ({
-    text: svg.textContent?.replace(/\s+/gu, " ").trim() ?? "",
-    foreignObjects: svg.querySelectorAll("foreignObject").length,
-    scripts: svg.querySelectorAll("script").length,
-    externalLinks: [...svg.querySelectorAll("a")].filter((link) => {
-      const href = link.getAttribute("href") ?? link.getAttribute("xlink:href") ?? "";
-      return /^(?:https?:)?\/\//iu.test(href);
-    }).length,
-    visibleLabels: [...svg.querySelectorAll("text")].filter((label) => {
-      const box = label.getBoundingClientRect();
-      const style = getComputedStyle(label);
-      return box.width > 0 && box.height > 0 && style.visibility !== "hidden" && style.display !== "none";
-    }).map((label) => label.textContent?.trim() ?? ""),
+  const figureEvidence = await figure.evaluate((block) => ({
+    // The grammar draws a wide and a narrow composition; one shows at a time.
+    figures: [...block.querySelectorAll("figure.cf-fig svg.cf-fig-svg")].filter((svg) => svg.getBoundingClientRect().width > 0).length,
+    states: [...new Set([...block.querySelectorAll("svg [data-state]")].map((node) => node.getAttribute("data-state")))].length,
+    legend: block.querySelectorAll(".cf-legend li").length,
+    styled: block.querySelectorAll("[style]").length,
+    unsafe: block.querySelectorAll("script, foreignObject").length,
   }));
-  if (!diagramEvidence.text.includes("Input") || !diagramEvidence.text.includes("Review")) {
-    throw new Error(`Diagram lost its semantic labels during rendering: ${JSON.stringify(diagramEvidence)}`);
+  if (figureEvidence.figures !== 1 || figureEvidence.states < 2 || figureEvidence.legend < 2 || figureEvidence.styled || figureEvidence.unsafe) {
+    throw new Error(`Figure block drew an unexpected figure: ${JSON.stringify(figureEvidence)}`);
   }
-  if (!diagramEvidence.visibleLabels.includes("Input") || !diagramEvidence.visibleLabels.includes("Review")) {
-    throw new Error(`Diagram labels are present but not visibly rendered: ${JSON.stringify(diagramEvidence)}`);
-  }
-  if (diagramEvidence.foreignObjects || diagramEvidence.scripts || diagramEvidence.externalLinks) {
-    throw new Error(`Diagram hardening left an unsafe node: ${JSON.stringify(diagramEvidence)}`);
-  }
-  const denseDiagram = page.locator("[data-cf-diagram-title='Dense flow']");
-  const denseStarted = Date.now();
-  await denseDiagram.scrollIntoViewIfNeeded();
-  await page.waitForFunction(() => document.querySelector("[data-cf-diagram-title='Dense flow']")?.getAttribute("data-cf-diagram") !== "pending", null, { timeout: 15_000 });
-  if (await denseDiagram.getAttribute("data-cf-diagram") !== "ready") {
-    throw new Error(`Dense diagram did not render: ${await denseDiagram.locator("[data-cf-diagram-status]").textContent()}`);
-  }
-  const denseMetrics = await page.evaluate(() => ({
-    longestTask: Math.max(0, ...globalThis.__cfLongTasks),
-  }));
-  if (Date.now() - denseStarted > 10_000 || denseMetrics.longestTask > 5_000) {
-    throw new Error(`Dense diagram exceeded the responsiveness envelope: ${JSON.stringify(denseMetrics)}`);
+  if (await page.locator("[data-cf-diagram], [data-cf-diagram-source]").count()) {
+    throw new Error("The review surface still carries a diagram hook");
   }
   await page.frameLocator("iframe[title='Sandbox fixture']").getByText("Static sandbox content").waitFor();
   const attackFrame = page.frameLocator("iframe[title='Attack sandbox']");
@@ -267,7 +276,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       .map((element) => ({ tag: element.tagName, id: element.id, className: element.className, right: element.getBoundingClientRect().right, width: element.scrollWidth }))
       .filter((item) => item.right > document.documentElement.clientWidth + 1)
       .slice(0, 8),
-    diagram: (() => {
+    localScroll: (() => {
       const element = document.querySelector(".cf-local-scroll");
       if (!element) return null;
       const style = getComputedStyle(element);
@@ -292,6 +301,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Pass10 Comment SM: arm → pin → float → composer → rail → speech markers
   await page.getByRole("button", { name: /Comment/ }).click();
   await page.locator(".cf-hint.on").waitFor();
+  assert.equal(await page.locator(".cf-hint.on").innerText(), "Comment: select words, click a figure part, or drag a box. Esc leaves.");
   await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
   await page.getByText("Nothing noted yet").waitFor();
 
@@ -362,7 +372,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
         tools.scrollIntoView({ block: "end" });
       }
     });
-    await page.getByTestId(testId).click({ force: true });
+    await page.getByTestId(testId).click();
   }
   async function saveComposerNote(body, { viaFloat = false } = {}) {
     if (viaFloat) {
@@ -375,6 +385,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       throw new Error("Composer did not expose the server-provided length limit");
     }
     await box.fill(body, { force: true });
+    await assertPrimary(page.getByTestId("composer-save"));
     await page.getByTestId("composer-save").click({ force: true });
     await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10000 });
   }
@@ -385,6 +396,13 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await saveComposerNote("Keep this exact wording.");
   if ((await page.locator(".cf-note-row").count()) !== 1) throw new Error("Text note did not land in the rail");
   if ((await page.locator(".cf-marker").count()) !== 1) throw new Error("Speech marker missing for text note");
+
+  const desktop = page.viewportSize();
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.mouse.move(0, 0);
+  await page.waitForFunction(() => [...document.querySelectorAll('.cf-marker')].every(el => el.getBoundingClientRect().right <= innerWidth - 8));
+  assert.equal(await page.locator('.cf-marker').evaluateAll(nodes => nodes.every(el => el.getBoundingClientRect().left >= 0 && el.getBoundingClientRect().right <= innerWidth - 8)), true);
+  await page.setViewportSize(desktop);
 
   // Limit
   await selectFixtureText(page);
@@ -443,6 +461,8 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Harness excerpts: intercept the actual review POST, not the rail labels.
   async function submitCapturedReview() {
     capturedReviews.length = 0;
+    await page.mouse.move(0, 0);
+    await assertPrimary(page.getByTestId("submit-all"));
     await page.getByTestId("submit-all").click();
     await page.getByTestId("toast").getByText(/Review received/).waitFor({ timeout: 10000 });
     if (capturedReviews.length !== 1) {
@@ -585,7 +605,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   );
 
   await page.getByTestId("settings-btn").click();
-  await page.locator("[data-testid=skin-pills] [data-skin=instrument]").click();
+  await page.locator("[data-testid=skin-pills] [data-skin=graphite]").click();
   const identityPreserved = await page.evaluate(() => globalThis.__cfDocumentRoot === document.getElementById("cf-present-document"));
   if (!identityPreserved) throw new Error("Review chrome replaced the Rust-owned document root");
 
@@ -596,9 +616,9 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     && document.documentElement.dataset.cfTypeface === "plex"
   );
   await page.locator("[data-testid=scale-pills] [data-scale=default]").click();
-  await page.locator("[data-testid=typeface-pills] [data-typeface=instrument]").click();
+  await page.locator("[data-testid=typeface-pills] [data-typeface=archivo]").click();
 
-  for (const theme of ["editorial", "instrument", "ink"]) {
+  for (const theme of ["slate", "graphite", "sage"]) {
     await page.locator(`[data-testid=skin-pills] [data-skin=${theme}]`).click();
     for (const mode of ["Light", "Dark"]) {
       await page.getByRole("button", { name: mode, exact: true }).click();
@@ -614,9 +634,11 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     const violations = await page.evaluate(() => globalThis.__cfPolicyViolations);
     throw new Error(`Browser console errors: ${consoleErrors.join(" | ")}; CSP: ${JSON.stringify(violations)}`);
   }
+  await assertNoPolicyViolations(page, "interactive surface");
   assertNetworkStayedLoopback(network);
   await context.close();
 }
+
 
 async function assertBundledFonts(page) {
   const notices = page.locator("body > footer[data-cf-font-licenses]");
@@ -679,7 +701,6 @@ function assertNetworkStayedLoopback({ responses, externalRoutes }) {
 }
 
 function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
-  const denseSource = denseDiagramSource(300);
   const enhancements = proseOnly
     ? ""
     : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation" data-cf-block-digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
@@ -688,18 +709,13 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
         <figure role="img" aria-label="Stage fixture"><svg viewBox="0 0 280 36" width="280" height="36"><text id="stage-label" x="8" y="24">Stage words</text></svg></figure></div>
         <pre tabindex="0" role="region" aria-label="Rust example"><code data-cf-language="rust">fn main() { println!("safe"); }</code></pre>
       </section>
-      <section class="block block--diagram" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
+      <section class="block block--figure" data-cf-block-id="block-flow" data-cf-block-label="Flow" data-cf-block-digest="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb">
         <h2 id="flow">Flow</h2>
-        <div class="cf-local-scroll" tabindex="0" role="region" aria-label="Request flow diagram" data-cf-diagram="pending" data-cf-diagram-title="Request flow" data-cf-diagram-description="A request moves from input to review.">
-          <template data-cf-diagram-source>flowchart LR
-            A[Input] --> B[Review]</template>
-          <div data-cf-diagram-output></div>
-          <p data-cf-diagram-status aria-live="polite">Rendering diagram…</p>
-        </div>
-        <div class="cf-local-scroll" tabindex="0" role="region" aria-label="Dense flow diagram" data-cf-diagram="pending" data-cf-diagram-title="Dense flow" data-cf-diagram-description="A bounded dense flow exercises the renderer responsiveness envelope.">
-          <template data-cf-diagram-source>${denseSource}</template>
-          <div data-cf-diagram-output></div>
-          <p data-cf-diagram-status aria-live="polite">Rendering diagram…</p>
+        <div data-cf-review-text-root data-cf-canonical-text="Figure">
+          <div class="figure-block" data-cf-figure-block="pending" data-cf-figure-declaration="${escapeAttribute(figureDeclaration)}">
+            <div data-cf-figure-output><p class="figure-block__title">Figure</p></div>
+            <p data-cf-figure-status class="sr-only" role="status"></p>
+          </div>
         </div>
       </section>`;
   const sandbox = iframeOnly
@@ -798,13 +814,13 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
 </html>`;
 }
 
-function denseDiagramSource(edges) {
-  return ["flowchart LR", ...Array.from({ length: edges }, (_, index) => `N${index}-->N${index + 1}`)].join("\n");
+function escapeAttribute(value) {
+  return value.replaceAll("&", "&amp;").replaceAll("\"", "&quot;").replaceAll("<", "&lt;").replaceAll(">", "&gt;");
 }
 
 function exportFixture(mode) {
   const resolved = mode === "dark" ? "dark" : "light";
-  return `<!doctype html><html data-cf-theme="editorial" data-cf-mode="${mode}" data-cf-mode-resolved="${resolved}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src data:; frame-src 'self' blob:; form-action 'none'"><style>${sourceStyles}\n${exportFallback}</style></head><body><main id="cf-present-document"><h1>Static export</h1><iframe sandbox title="Static export sandbox" srcdoc="&lt;p&gt;Static export sandbox content&lt;/p&gt;"></iframe><iframe sandbox title="Static export attack" style="width:1px;height:1px;position:fixed;left:0;top:0;opacity:0" srcdoc="&lt;meta http-equiv='refresh' content='0;url=https://example.invalid/export-escape'&gt;&lt;img src='https://example.invalid/export-pixel.png'&gt;&lt;p&gt;Static export attack stayed local&lt;/p&gt;"></iframe></main></body></html>`;
+  return `<!doctype html><html data-cf-theme="slate" data-cf-mode="${mode}" data-cf-mode-resolved="${resolved}"><head><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src data:; frame-src 'self' blob:; form-action 'none'"><style>${sourceStyles}\n${exportFallback}</style></head><body><main id="cf-present-document"><h1>Static export</h1><iframe sandbox title="Static export sandbox" srcdoc="&lt;p&gt;Static export sandbox content&lt;/p&gt;"></iframe><iframe sandbox title="Static export attack" style="width:1px;height:1px;position:fixed;left:0;top:0;opacity:0" srcdoc="&lt;meta http-equiv='refresh' content='0;url=https://example.invalid/export-escape'&gt;&lt;img src='https://example.invalid/export-pixel.png'&gt;&lt;p&gt;Static export attack stayed local&lt;/p&gt;"></iframe></main></body></html>`;
 }
 
 function assertLoopbackOnly(requests) {

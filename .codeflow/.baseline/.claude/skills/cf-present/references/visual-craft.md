@@ -9,9 +9,9 @@ not open** the session.
 Author **this session's** subject and draw figures to
 `resources/figure-grammar.md`.
 
-Display chrome (runtime-owned, as the shared doctrine states): Font (Archivo
-for instrument, Inter for editorial, IBM Plex Sans for ink), Size (Compact /
-Default / Large), Palette (Neutral / Cool / Warm), Appearance (Light / Dark /
+Display chrome (runtime-owned, as the shared doctrine states): Font (Archivo,
+Inter, IBM Plex Sans; Inter when unset), Size (Compact /
+Default / Large), Palette (Graphite / Slate / Sage), Appearance (Light / Dark /
 System). Comment is one
 mode: gesture → float → composer; rail only while armed; Esc backs out.
 

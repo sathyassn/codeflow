@@ -7,7 +7,7 @@ use uuid::Uuid;
 use crate::{
     error::{PresentError, Result},
     limits,
-    render::{render_document, render_unsupported, RenderOptions},
+    render::{render_document, render_retired, render_unsupported, RenderOptions},
     service::{load_manifest, EmbeddedAssets},
     state::{discard_new_file, open_private_create_new, RevisionContent, SessionStore},
 };
@@ -16,8 +16,12 @@ const EXPORT_BOOTSTRAP: &str = "(async()=>{const e=document.getElementById('cf-p
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ExportTheme {
+    Graphite,
+    Slate,
+    Sage,
+    /// Compatibility name for Slate.
     Editorial,
-    /// The instrument skin. `technical` is the documented CLI alias for it.
+    /// Compatibility name for Graphite.
     Instrument,
 }
 
@@ -76,6 +80,7 @@ pub fn export_session(
             schema_version,
             raw,
         } => render_unsupported(&raw, schema_version),
+        RevisionContent::Retired { document, .. } => render_retired(&document),
     };
     write_new_private(output, html.as_bytes())
 }
@@ -125,8 +130,9 @@ fn enhance_export(
     );
     let marker = "</head>";
     let theme = match theme {
-        ExportTheme::Editorial => "editorial",
-        ExportTheme::Instrument => "instrument",
+        ExportTheme::Slate | ExportTheme::Editorial => "slate",
+        ExportTheme::Graphite | ExportTheme::Instrument => "graphite",
+        ExportTheme::Sage => "sage",
     };
     let (mode, resolved) = match mode {
         ExportMode::System => ("system", "light"),
@@ -183,6 +189,30 @@ mod tests {
     use tempfile::tempdir;
 
     use super::{write_new_private, EXPORT_BOOTSTRAP};
+
+    #[test]
+    fn a_new_export_of_a_retired_revision_carries_the_notice_and_no_renderer() {
+        let temporary = tempdir().expect("temporary directory");
+        let store = crate::state::SessionStore::at_root(
+            temporary.path().join("project"),
+            "key".to_string(),
+        )
+        .expect("store");
+        let id =
+            crate::state::retired_fixture::install(&store, crate::state::retired_fixture::REVISION);
+        let output = temporary.path().join("retired.html");
+        super::export_session(
+            &store,
+            id,
+            &output,
+            super::ExportTheme::Editorial,
+            super::ExportMode::System,
+        )
+        .expect("export a retired revision");
+        let html = fs::read_to_string(&output).expect("read export");
+        crate::render::tests::assert_retired_page(&html);
+        assert!(!html.contains("cf-present-export-payload"));
+    }
 
     #[test]
     fn export_bootstrap_never_contains_network_endpoint_or_auth_name() {

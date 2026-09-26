@@ -1,0 +1,6 @@
+---
+const { pagination } = Astro.locals.starlightRoute;
+---
+<nav class="cf-footer-nav" aria-label="Previous and next pages">
+{(["prev", "next"] as const).map(direction => { const link = pagination[direction]; return link && <a class="cf-footer-card" href={link.href} rel={direction}><span class="cf-kicker">{direction === "prev" ? "Previous" : "Next"}</span><span>{link.label}</span></a>; })}
+</nav>

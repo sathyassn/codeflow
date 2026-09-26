@@ -135,10 +135,10 @@ loudly. A stage counts as a stage, never as the figure a panel demands.
 
 ## 4. Themes and type
 
-- Bundled themes via `portal.config.json` map to the utility skins: **signal**
-  → instrument (Archivo), **folio** → ink (IBM Plex Sans); light/dark from the
-  shell toggle. System-fallback faces only, no remote fonts.
-- Author for type roles; themes own faces and scale.
+- Bundled skins via `portal.config.json`: **Graphite**, **Slate**, **Sage**;
+  light/dark from Display. Font is independent: Archivo, Inter (the unset
+  default), or IBM Plex Sans, bundled locally with system fallbacks.
+- Author for type roles; Display controls face and scale separately from skin.
 - Project may adapt utility once from brand; never feed portal palette/type/
   components back into the product design system.
 
