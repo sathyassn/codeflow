@@ -441,14 +441,24 @@ EDITOR_FOUND=0
 EDITOR_NONE=1
 EDITOR_UNREADABLE=2
 
-# current_editor <pane-id> - one bounded read of the screen. Claude Code draws
-# its editor between two full-width rules, with only its footer below, and the
-# editor's first line starts with the prompt marker. Returns EDITOR_FOUND and
-# prints that first line, marker removed, when the last two rules on screen
-# enclose such an editor and no marker line follows them. Submitted history is
-# never enclosed like that, and a dialog draws at most one rule, so both return
-# EDITOR_NONE, as does any other screen. A read that fails, times out or
-# prints nothing returns EDITOR_UNREADABLE.
+# current_editor <pane-id> - one bounded read of the screen, returning
+# EDITOR_FOUND and printing the editor's text only when the screen has the
+# layout a live Claude Code 2.1.283 pane draws around its editor:
+#
+#   ──────────────────────────  the next-to-last rule on screen
+#   ❯ first editor line         the marker, one space, then text
+#     continued editor line     zero or more, each indented two spaces
+#   ──────────────────────────  the last rule on screen
+#     ⏸ manual mode on          one or two footer lines, indented two spaces
+#
+# Every part is checked. A second prompt marker anywhere in the frame or the
+# footer, a body line that is not indented, a footer that is missing, longer
+# than two lines, not indented, or that carries dialog text (a numbered
+# option, "Enter to confirm", "Esc to cancel", a question) all return
+# EDITOR_NONE, as do submitted history and a dialog, which draw no such frame.
+# The printed text has the marker and the two-space indents removed and
+# trailing blanks trimmed. A read that fails, times out or prints nothing
+# returns EDITOR_UNREADABLE.
 current_editor() {
   _ce_file=${TMPDIR:-/tmp}/cf-current-editor.$$
   pane_read_visible "$1" "$_ce_file" "$TRUST_READ_TIMEOUT" && _ce_read=0 || _ce_read=$?
@@ -457,45 +467,63 @@ current_editor() {
     unset _ce_file _ce_read
     return "$EDITOR_UNREADABLE"
   fi
-  _ce_line=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" '
+  _ce_text=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" '
     { line[NR] = $0 }
-    /^[[:space:]]*(─)+[[:space:]]*$/ { top = bottom; bottom = NR; next }
-    $0 ~ marker { last_marker = NR }
+    /^[[:space:]]*(─)+[[:space:]]*$/ { top = bottom; bottom = NR }
     END {
-      if (top == 0 || bottom - top < 2 || last_marker > bottom) exit 1
-      first = line[top + 1]
-      if (first !~ marker) exit 1
-      sub(marker, "", first)
-      sub(/^ /, "", first)
-      sub(/[[:space:]]+$/, "", first)
-      print first
+      if (top == 0 || bottom - top < 2) exit 1
+      for (i = top + 1; i < bottom; i++) {
+        text = line[i]
+        sub(/[[:space:]]+$/, "", text)
+        if (i == top + 1) {
+          if (text !~ /^❯ [^ ]/) exit 1
+          sub(/^❯ /, "", text)
+        } else {
+          if (text ~ marker) exit 1
+          if (text != "" && text !~ /^  /) exit 1
+          sub(/^  /, "", text)
+        }
+        body = body text "\n"
+      }
+      footer = 0
+      for (i = bottom + 1; i <= NR; i++) {
+        if (line[i] ~ /^[[:space:]]*$/) continue
+        footer++
+        if (line[i] !~ /^  [^ ]/ || line[i] ~ marker) exit 1
+        if (line[i] ~ /(^[[:space:]]*[0-9]+\.[[:space:]])|Enter to confirm|Esc to cancel|\?[[:space:]]*$/) exit 1
+      }
+      if (footer < 1 || footer > 2) exit 1
+      printf "%s", body
     }
   ' "$_ce_file") && _ce_status=$EDITOR_FOUND || _ce_status=$EDITOR_NONE
   rm -f "$_ce_file"
-  [ "$_ce_status" = "$EDITOR_FOUND" ] && printf '%s\n' "$_ce_line"
+  [ "$_ce_status" = "$EDITOR_FOUND" ] && printf '%s\n' "$_ce_text"
   set -- "$_ce_status"
-  unset _ce_file _ce_read _ce_line _ce_status
+  unset _ce_file _ce_read _ce_text _ce_status
   return "$1"
 }
 
-# editor_holds <text> <prompt-file> - classify the editor's first line:
-# prints `attachment` for exactly the folded paste, `directive` for that
-# attachment followed by exactly the directive, `prompt` for the armed prompt's
-# first 24 characters, and `other` for anything else, an empty editor included.
+# editor_holds <editor text> <prompt-file> - classify what the editor holds:
+# `attachment` for exactly one folded-paste attachment, `directive` for that
+# attachment followed by exactly the directive, `prompt` when the editor's
+# text is the armed prompt apart from whitespace (the editor wraps long lines
+# and indents continuations), and `other` for anything else, an empty or
+# placeholder editor included.
 editor_holds() {
-  _eh_match=$(head -1 "$2" | cut -c1-24)
   _eh_rest=$(printf '%s\n' "$1" |
     LC_ALL=C sed -E 's/^\[Pasted text #[0-9]+ \+[0-9]+ lines\]//')
-  if [ "$_eh_rest" != "$1" ] && [ -z "$_eh_rest" ]; then
+  _eh_lines=$(printf '%s\n' "$1" | wc -l | tr -d ' ')
+  if [ "$_eh_lines" = 1 ] && [ "$_eh_rest" != "$1" ] && [ -z "$_eh_rest" ]; then
     echo attachment
-  elif [ "$_eh_rest" != "$1" ] && [ "$_eh_rest" = "$PASTE_DIRECTIVE" ]; then
+  elif [ "$_eh_lines" = 1 ] && [ "$_eh_rest" != "$1" ] && [ "$_eh_rest" = "$PASTE_DIRECTIVE" ]; then
     echo directive
-  elif [ -n "$_eh_match" ] && [ "${1#"$_eh_match"}" != "$1" ]; then
+  elif [ -n "$1" ] &&
+    [ "$(printf '%s' "$1" | LC_ALL=C tr -d '[:space:]')" = "$(LC_ALL=C tr -d '[:space:]' <"$2")" ]; then
     echo prompt
   else
     echo other
   fi
-  unset _eh_match _eh_rest
+  unset _eh_rest _eh_lines
 }
 
 # unsent_prompt_showing <pane-id> <prompt-file> - returns 0 only when the

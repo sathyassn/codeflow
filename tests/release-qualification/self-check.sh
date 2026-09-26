@@ -344,7 +344,27 @@ chmod 0755 "$STUB_DIR/cf-stub"
 BINARY="$STUB_DIR/cf-stub"
 printf 'Reply with exactly: ok. Do not edit any file.' >"$STUB_DIR/prompt.txt"
 
-RULE='──────────────────────────────'
+# The positive screens are the layouts live Claude Code 2.1.283 panes showed
+# through `herdr pane read --source visible` on 2026-09-26, in manual and in
+# bypassPermissions mode: a full-width rule, the editor, a rule, then one
+# footer line, with any notice right-aligned above the frame. Only the rule
+# width is shortened here, and the prompt text is this check's own.
+RULE='────────────────────────────────────────────────────────────'
+
+# The idle editor: its placeholder, which holds no prompt.
+IDLE_PANE="
+$RULE
+❯ Try \"fix lint errors\"
+$RULE
+  ⏸ manual mode on · ? for shortcuts · ← for agents"
+
+# A short multi-line paste Claude did not fold: continuations indented.
+MULTILINE_PANE="$RULE
+❯ line one of a probe
+  line two of a probe
+  line three
+$RULE
+  ⏸ manual mode on"
 
 # The prompt in the current editor, below an earlier turn.
 UNSENT_PANE="> earlier question
@@ -362,16 +382,32 @@ $RULE
 $RULE
   ⏸ manual mode on · ? for shortcuts"
 
-# A long paste Claude folded into an attachment in the current editor, and the
-# same editor once the directive is typed after it.
-PASTED_PANE="$RULE
+# A long paste Claude folded into an attachment, under the usage notice the
+# live pane showed, and the same editor once the directive is typed after it.
+PASTED_PANE="                                                  You've used 94% of your limit
+$RULE
 ❯ [Pasted text #1 +12 lines]
 $RULE
   paste again to expand"
 DIRECTIVE_PANE="$RULE
 ❯ [Pasted text #1 +12 lines]Carry out the pasted instructions.
 $RULE
-  ⏸ manual mode on"
+  paste again to expand"
+
+# The idle editor in bypassPermissions mode, the mode the canary runs in.
+BYPASS_IDLE_PANE="                                                  ◐ medium · /effort
+$RULE
+❯ Try \"create a util logging.py that...\"
+$RULE
+  ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
+
+# Two attachments: herdr delivered one long text as two pastes.
+TWO_ATTACHMENTS_PANE="$RULE
+❯ [Pasted text #1 +15 lines][Pasted text #2 +14 lines]
+$RULE
+  paste again to expand"
+
+# Negative controls. None of these is an editor, whatever its first line says.
 
 # An attachment that is only history: no editor is drawn below it.
 HISTORY_PASTE_PANE='❯ [Pasted text #1 +12 lines]
@@ -388,11 +424,56 @@ DIALOG_PANE="$RULE
 
  Enter to confirm · Esc to cancel"
 
-# Something that looks like an editor, with a marker line after it: ambiguous.
+# A marker line below the frame.
 AMBIGUOUS_PANE="$RULE
 ❯ Reply with exactly: ok. Do not edit any file.
 $RULE
  ❯ 1. Yes"
+
+# A frame with a trust dialog below it instead of a footer.
+DIALOG_BELOW_PANE="$RULE
+❯ Reply with exactly: ok. Do not edit any file.
+$RULE
+$BLOCKED_PANE"
+
+# Answer text inside the frame, and no footer.
+HISTORY_IN_FRAME_PANE="$RULE
+❯ Reply with exactly: ok. Do not edit any file.
+● Working on earlier request
+$RULE"
+
+# A second marker inside the frame, and dialog text below it.
+MARKER_IN_FRAME_PANE="$RULE
+❯ Reply with exactly: ok. Do not edit any file.
+ ❯ 1. Yes
+$RULE
+  Enter to confirm · Esc to cancel"
+
+# A well-formed frame with nothing below it.
+NO_FOOTER_PANE="$RULE
+❯ Reply with exactly: ok. Do not edit any file.
+$RULE"
+
+# Three lines below the frame: more than a footer.
+LONG_FOOTER_PANE="$RULE
+❯ Reply with exactly: ok. Do not edit any file.
+$RULE
+  ⏸ manual mode on
+  ⎿ earlier output
+  ⎿ more output"
+
+# A footer that is not indented.
+FLUSH_FOOTER_PANE="$RULE
+❯ Reply with exactly: ok. Do not edit any file.
+$RULE
+Continue? (y/n)"
+
+# The prompt with more text after it in the editor.
+EXTRA_TEXT_PANE="$RULE
+❯ Reply with exactly: ok. Do not edit any file.
+  Then push the branch.
+$RULE
+  ⏸ manual mode on"
 
 # run_deliver <accept-at> <pane text> [directive pane] [pane after Enter]
 run_deliver() {
@@ -411,10 +492,26 @@ run_deliver() {
 }
 
 # current_editor: the three results, each against its opposite.
-stub_herdr "$UNSENT_PANE"
-_text=$(current_editor p1) && _r=0 || _r=$?
-ok current_editor.found "the editor between the last two rules is found, marker removed" \
-  "$([ "$_r" = "$EDITOR_FOUND" ] && [ "$_text" = 'Reply with exactly: ok. Do not edit any file.' ] && echo 0 || echo 1)"
+# found_case <description> <pane text> <expected editor text>
+found_case() {
+  stub_herdr "$2"
+  _text=$(current_editor p1) && _r=0 || _r=$?
+  ok current_editor.found "$1" \
+    "$([ "$_r" = "$EDITOR_FOUND" ] && [ "$_text" = "$3" ] && echo 0 || echo 1)"
+}
+found_case 'the live idle layout is an editor holding its placeholder' \
+  "$IDLE_PANE" 'Try "fix lint errors"'
+found_case 'the live unfolded multi-line layout is an editor, indents removed' \
+  "$MULTILINE_PANE" "$(printf 'line one of a probe\nline two of a probe\nline three')"
+found_case 'the prompt in the editor below history, marker removed' \
+  "$UNSENT_PANE" 'Reply with exactly: ok. Do not edit any file.'
+found_case 'the live folded layout under a notice is an editor holding the attachment' \
+  "$PASTED_PANE" '[Pasted text #1 +12 lines]'
+found_case 'the live directive layout is an editor holding the attachment and sentence' \
+  "$DIRECTIVE_PANE" '[Pasted text #1 +12 lines]Carry out the pasted instructions.'
+found_case 'the live bypassPermissions idle layout is an editor' \
+  "$BYPASS_IDLE_PANE" 'Try "create a util logging.py that..."'
+
 # no_editor_case <description> <pane text>
 no_editor_case() {
   stub_herdr "$2"
@@ -425,6 +522,12 @@ no_editor_case() {
 no_editor_case 'an attachment only in history' "$HISTORY_PASTE_PANE"
 no_editor_case 'a dialog' "$DIALOG_PANE"
 no_editor_case 'a marker line after the editor' "$AMBIGUOUS_PANE"
+no_editor_case 'a frame with a trust dialog below it' "$DIALOG_BELOW_PANE"
+no_editor_case 'a frame holding answer text and no footer' "$HISTORY_IN_FRAME_PANE"
+no_editor_case 'a frame holding a second marker' "$MARKER_IN_FRAME_PANE"
+no_editor_case 'a frame with no footer' "$NO_FOOTER_PANE"
+no_editor_case 'a frame with three lines below it' "$LONG_FOOTER_PANE"
+no_editor_case 'a frame with an unindented line below it' "$FLUSH_FOOTER_PANE"
 no_editor_case 'a screen with no rules' "$TRUSTED_PANE"
 stub_herdr "$UNSENT_PANE"
 printf '1' >"$STUB_DIR/pane-rc"
@@ -436,6 +539,35 @@ stub_herdr ''
 current_editor p1 >/dev/null && _r=0 || _r=$?
 ok current_editor.unreadable "an empty read is unreadable" \
   "$([ "$_r" = "$EDITOR_UNREADABLE" ] && echo 0 || echo 1)"
+
+# editor_holds: what an identified editor holds, each against a near miss.
+printf 'line one of a probe\nline two of a probe\nline three' >"$STUB_DIR/multi.txt"
+# holds_case <description> <editor text> <prompt file> <expected>
+holds_case() {
+  ok editor_holds "$1" "$([ "$(editor_holds "$2" "$3")" = "$4" ] && echo 0 || echo 1)"
+}
+holds_case 'the whole multi-line prompt is the prompt' \
+  "$(printf 'line one of a probe\nline two of a probe\nline three')" "$STUB_DIR/multi.txt" prompt
+holds_case 'a prompt wrapped at another place is still the prompt' \
+  "$(printf 'line one of a\nprobe line two of a probe\nline three')" "$STUB_DIR/multi.txt" prompt
+holds_case 'only its first line is not the prompt' \
+  'line one of a probe' "$STUB_DIR/multi.txt" other
+holds_case 'the prompt with more text is not the prompt' \
+  "$(printf 'Reply with exactly: ok. Do not edit any file.\nThen push the branch.')" \
+  "$STUB_DIR/prompt.txt" other
+holds_case 'the placeholder is not the prompt' 'Try "fix lint errors"' "$STUB_DIR/prompt.txt" other
+holds_case 'one attachment is the attachment' '[Pasted text #1 +12 lines]' "$STUB_DIR/prompt.txt" attachment
+holds_case 'the attachment and the directive are the directive' \
+  '[Pasted text #1 +12 lines]Carry out the pasted instructions.' "$STUB_DIR/prompt.txt" directive
+holds_case 'the directive with more text is neither' \
+  '[Pasted text #1 +12 lines]Carry out the pasted instructions. Now.' "$STUB_DIR/prompt.txt" other
+holds_case 'two attachments are neither' \
+  '[Pasted text #1 +15 lines][Pasted text #2 +14 lines]' "$STUB_DIR/prompt.txt" other
+holds_case 'two attachments and the directive are neither' \
+  '[Pasted text #1 +15 lines][Pasted text #2 +14 lines]Carry out the pasted instructions.' \
+  "$STUB_DIR/prompt.txt" other
+holds_case 'an attachment with a second line is neither' \
+  "$(printf '[Pasted text #1 +12 lines]\nmore')" "$STUB_DIR/prompt.txt" other
 
 # Accepted on the first Enter, after the default settle pause.
 _began=$(date +%s)
@@ -501,6 +633,14 @@ unavailable_case 'a dialog' "$DIALOG_PANE"
 unavailable_case 'a marker line after the editor' "$AMBIGUOUS_PANE"
 unavailable_case 'an editor showing only its placeholder' "$SENT_PANE"
 unavailable_case 'a screen with no rules' "$TRUSTED_PANE"
+unavailable_case 'a frame with a trust dialog below it' "$DIALOG_BELOW_PANE"
+unavailable_case 'a frame holding answer text and no footer' "$HISTORY_IN_FRAME_PANE"
+unavailable_case 'a frame holding a second marker' "$MARKER_IN_FRAME_PANE"
+unavailable_case 'a frame with no footer' "$NO_FOOTER_PANE"
+unavailable_case 'a frame with three lines below it' "$LONG_FOOTER_PANE"
+unavailable_case 'a frame with an unindented line below it' "$FLUSH_FOOTER_PANE"
+unavailable_case 'the prompt with more text in the editor' "$EXTRA_TEXT_PANE"
+unavailable_case 'two attachments in the editor' "$TWO_ATTACHMENTS_PANE"
 
 stub_herdr "$PASTED_PANE"
 printf '1' >"$STUB_DIR/pane-rc"
