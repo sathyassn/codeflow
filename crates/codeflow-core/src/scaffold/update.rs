@@ -155,6 +155,9 @@ pub fn update(
     installed.store(root)?;
     state.scaffold_version.clone_from(&opts.binary_version);
     state.store(root)?;
+    if let Some(note) = record_work_records_baseline(root)? {
+        report.notes.push(note);
+    }
 
     if let Some(path) = &opts.diff_out {
         let mut out = report.to_string();
@@ -169,6 +172,56 @@ pub fn update(
     }
 
     Ok(report)
+}
+
+/// The work-record migration (SPC-013 R-83): an existing project whose
+/// records predate the lifecycle rules gets its migration baseline recorded
+/// once, as the current `HEAD`, so older records keep their exact blobs
+/// exempt and the rules apply by transition from here. A project with no
+/// record, no commit, or a recorded baseline is left alone.
+fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldError> {
+    use crate::workgraph::lifecycle::{recorded_baseline, Graph, BASELINE_KEY};
+    if recorded_baseline(root).is_some() || Graph::from_worktree(root).records.is_empty() {
+        return Ok(None);
+    }
+    let Some(head) = git2::Repository::discover(root).ok().and_then(|repo| {
+        let id = repo.head().ok()?.peel_to_commit().ok()?.id();
+        Some(id.to_string())
+    }) else {
+        return Ok(None);
+    };
+    let path = ProjectState::path(root);
+    let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
+    let mut table: toml::Table =
+        toml::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+            what: path.display().to_string(),
+            detail: e.to_string(),
+        })?;
+    table.insert(BASELINE_KEY.to_string(), toml::Value::String(head.clone()));
+    let next = toml::to_string_pretty(&table).map_err(|e| ScaffoldError::InvalidState {
+        what: path.display().to_string(),
+        detail: e.to_string(),
+    })?;
+    write_file(&path, next.as_bytes())?;
+    Ok(Some(format!(
+        "recorded {BASELINE_KEY} = {head}: work-record rules apply to records changed after this commit"
+    )))
+}
+
+/// Policy values a released binary no longer accepts, rewritten to their
+/// nearest accepted value with a note. Only `git.work_records = "off"` from
+/// an unreleased build qualifies (SPC-013 R-81); every other value is kept.
+fn migrate_policy_values(dest: &str, user: &mut serde_json::Value) -> Vec<String> {
+    if dest != ".codeflow/policy.json" {
+        return Vec::new();
+    }
+    match user.pointer_mut("/git/work_records") {
+        Some(value) if value.as_str() == Some("off") => {
+            *value = serde_json::Value::from("warn");
+            vec!["git.work_records `off` no longer exists; rewritten to `warn`".to_string()]
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn record(installed: &mut InstalledManifest, entry: &ManifestEntry, sha256: String) {
@@ -475,11 +528,13 @@ fn sync_user_owned_json(
         );
     }
 
+    let migrated = migrate_policy_values(&entry.dest, &mut user);
+
     // Refresh the shipped-default baseline and record either way.
     Baseline::write(root, &entry.dest, rendered)?;
     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
 
-    if added.is_empty() {
+    if added.is_empty() && migrated.is_empty() {
         let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
         if old_default.is_none() {
             notes.push(
@@ -494,6 +549,7 @@ fn sync_user_owned_json(
     // schema_version awareness: carry the new default's schema_version when
     // keys were added and the user has not customized it past the default.
     let mut notes: Vec<String> = added.iter().map(|k| format!("added key {k}")).collect();
+    notes.extend(migrated);
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
             .and_then(serde_json::Value::as_u64),

@@ -1524,3 +1524,102 @@ fn version_skew_warns_when_behind_only() {
     let (_q, other) = project_dir();
     assert!(scaffold::version_skew_warning(&other, "2.1.0").is_none());
 }
+
+// --- work records (SPC-013 R-81, R-83) ---------------------------------------
+
+fn set_policy_key(root: &Path, key: &str, value: &str) {
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+    policy["git"][key] = value.into();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&policy).unwrap(),
+    )
+    .unwrap();
+}
+
+/// The v2 fixture assets with `git.work_records` in the shipped default.
+fn assets_shipping_work_records() -> (tempfile::TempDir, DirSource) {
+    let (dir, _) = fixture_assets(true);
+    let path = dir.path().join("base/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+    policy["git"]["work_records"] = "block".into();
+    std::fs::write(&path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
+    let source = DirSource::new(dir.path());
+    (dir, source)
+}
+
+#[test]
+fn update_preserves_every_work_records_value_including_the_default() {
+    isolate_git();
+    for (value, expected) in [("block", "block"), ("warn", "warn"), ("off", "warn")] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        set_policy_key(&root, "work_records", value);
+        set_policy_key(&root, "commit_format", "block");
+        let (_a2, assets) = assets_shipping_work_records();
+        let report = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(after["git"]["work_records"], expected, "from {value}");
+        assert_eq!(
+            after["git"]["commit_format"], "block",
+            "a default-equal value is kept"
+        );
+        let notes = &report
+            .files
+            .iter()
+            .find(|f| f.dest == ".codeflow/policy.json")
+            .unwrap()
+            .notes;
+        assert_eq!(
+            notes.iter().any(|n| n.contains("rewritten to `warn`")),
+            value == "off",
+            "{notes:?}"
+        );
+    }
+}
+
+#[test]
+fn update_records_the_work_records_baseline_once_for_existing_records() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let (_a2, assets) = fixture_assets(true);
+    scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    assert!(
+        !read(&root, ".codeflow/project.toml").contains("work_records_baseline"),
+        "a project without records gets no baseline"
+    );
+
+    std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+    std::fs::write(
+        root.join("project-management/tasks/TSK-001.md"),
+        "---\nid: TSK-001\ntitle: t\nstatus: complete\nwork_type: feat\n---\n",
+    )
+    .unwrap();
+    git(&root, &["add", "-A"]);
+    git(&root, &["commit", "-q", "-m", "chore: add a record"]);
+    let head = git(&root, &["rev-parse", "HEAD"]);
+    let report = scaffold::update(&assets, &root, &update_opts("2.2.0")).unwrap();
+    let state = read(&root, ".codeflow/project.toml");
+    assert!(
+        state.contains(&format!("work_records_baseline = \"{head}\"")),
+        "{state}"
+    );
+    assert!(report
+        .notes
+        .iter()
+        .any(|n| n.contains("work_records_baseline")));
+
+    git(
+        &root,
+        &["commit", "-q", "--allow-empty", "-m", "chore: later"],
+    );
+    scaffold::update(&assets, &root, &update_opts("2.3.0")).unwrap();
+    assert!(
+        read(&root, ".codeflow/project.toml").contains(&head),
+        "a recorded baseline is never moved"
+    );
+}

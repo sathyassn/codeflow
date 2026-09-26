@@ -33,6 +33,7 @@
     "pr_breaking_level": "major",
     "pr_required_sections": ["Summary", "Changes", "Reviews", "Release impact"],
     "pr_code_sections": ["Testing"],
+    "work_records": "block",
     "branch_naming": "block",
     "branch_prefixes": ["feat/", "fix/", "docs/", "refactor/", "test/", "chore/", "ci/", "hotfix/", "plan/", "task/", "spike/", "experiment/", "integration/"],
     "secret_scan": "block",

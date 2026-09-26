@@ -207,6 +207,14 @@ pub struct GitPolicy {
     /// range — counts as code). Default `["Testing"]`. Enforced under
     /// `pr_sections`.
     pub pr_code_sections: Vec<String>,
+    /// The level of the adjustable work-record rules of SPC-013 R-80: the
+    /// acceptance block bound to the reviewed commit and the journey
+    /// criterion for adopter-facing ranges. Accepts `block` or `warn` only;
+    /// `off` does not exist (R-81). Default `block`. The transition rules
+    /// (Blocker, cancellation, acceptance block on completion) always block
+    /// and are not governed by this key. Read it through
+    /// [`GitPolicy::work_records_level`].
+    pub work_records: PolicyLevel,
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
@@ -260,6 +268,7 @@ impl Default for GitPolicy {
             pr_breaking_level: "major".into(),
             pr_required_sections: vec!["Summary".into(), "Changes".into()],
             pr_code_sections: vec!["Testing".into()],
+            work_records: PolicyLevel::Block,
             branch_naming: PolicyLevel::Block,
             branch_prefixes: [
                 "feat/",
@@ -288,6 +297,18 @@ impl Default for GitPolicy {
 }
 
 impl GitPolicy {
+    /// The effective `work_records` level: `warn` when the policy says so,
+    /// `block` otherwise. A value outside `block | warn` (the strict
+    /// validator rejects it) never switches the rules off.
+    #[must_use]
+    pub fn work_records_level(&self) -> PolicyLevel {
+        if self.work_records == PolicyLevel::Warn {
+            PolicyLevel::Warn
+        } else {
+            PolicyLevel::Block
+        }
+    }
+
     /// `true` when `branch` matches the protected list (names and globs).
     /// Reuses the security plane's matcher so all planes agree (D7).
     #[must_use]
@@ -630,6 +651,7 @@ mod tests {
         // list would start blocking on a binary upgrade alone.
         assert_eq!(g.pr_required_sections, vec!["Summary", "Changes"]);
         assert_eq!(g.pr_release_impact, PolicyLevel::Warn);
+        assert_eq!(g.work_records, PolicyLevel::Block);
         assert_eq!(g.pr_breaking_level, "major");
         assert_eq!(g.pr_code_sections, vec!["Testing"]);
         assert_eq!(g.branch_naming, PolicyLevel::Block);
