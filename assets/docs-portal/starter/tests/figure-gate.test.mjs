@@ -7,11 +7,12 @@ import assert from "node:assert/strict";
 import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
 import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "@playwright/test";
 import { sha256 } from "../scripts/lib.mjs";
-import { figureGateFailures, observePortalPage, pageCssFailures, pinnedBuiltSheets, pinnedDeclarations, pinnedKitSheets, pinnedRuntimeScripts } from "../scripts/browser-verify.mjs";
+import { figureGateFailures, finishTrace, observePortalPage, pageCssFailures, pinnedBuiltSheets, pinnedDeclarations, pinnedKitSheets, pinnedRuntimeScripts } from "../scripts/browser-verify.mjs";
 import { REGENERATE, builtRuntimeScripts } from "../scripts/runtime-scripts.mjs";
 import { drawnValuesMatch } from "../scripts/figure-grammar.mjs";
 import { GitSnapshot } from "../scripts/git-snapshot.mjs";
@@ -796,4 +797,26 @@ test("a failed clean-copy fetch fails the verifier and releases its lease and pr
       assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, `${mode}: the preview ${pid} is still running`);
     }
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// A passing engine is proven by its results and keeps no trace; a failing
+// engine keeps its trace for diagnosis.
+test("a passing engine leaves no trace and a failing one keeps it", { skip: process.platform === "win32", timeout: 60_000 }, async () => {
+  const output = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-trace-"));
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    for (const passed of [true, false]) {
+      const context = await browser.newContext();
+      try {
+        await context.tracing.start({ screenshots: false, snapshots: false, sources: false });
+        await (await context.newPage()).setContent("<p>traced</p>");
+        await finishTrace(context, path.join(output, `${passed ? "passing" : "failing"}-trace.zip`), passed);
+      } finally { await context.close(); }
+    }
+    assert.deepEqual(await readdir(output), ["failing-trace.zip"]);
+    assert.ok((await stat(path.join(output, "failing-trace.zip"))).size > 0);
+  } finally {
+    await browser.close();
+    await rm(output, { recursive: true, force: true });
+  }
 });

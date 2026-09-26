@@ -1,7 +1,7 @@
 import { verifyChrome } from "./chrome-verify.mjs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +23,8 @@ const MAX_SERVER_OUTPUT_BYTES = 64 * 1024;
 const MAX_RESULT_ERROR_BYTES = 16 * 1024;
 const MAX_RESULTS_BYTES = 1024 * 1024;
 const MAX_BROWSER_EVIDENCE_BYTES = 64 * 1024 * 1024;
+const MAX_BROWSER_ARTIFACT_BYTES = 32 * 1024 * 1024;
+const MAX_BROWSER_ARTIFACTS = 64;
 const MAX_RUNTIME_DIAGNOSTICS = 128;
 const MAX_RUNTIME_DIAGNOSTIC_BYTES = 4 * 1024;
 const runId = process.env.PORTAL_BROWSER_RUN ?? "local";
@@ -101,7 +103,6 @@ async function verifyPortal(lifecycle) {
   const afterArtifacts = await collectBuiltArtifacts(path.join(root, "dist"));
   assertArtifactClaims(generated.artifacts, afterArtifacts, "after browser verification");
   if (JSON.stringify(beforeArtifacts) !== JSON.stringify(afterArtifacts)) throw new Error("built artifacts changed during browser verification");
-  const artifacts = await evidenceInventory(output);
   const evidence = {
     schema_version: 1,
     run_id: runId,
@@ -117,16 +118,11 @@ async function verifyPortal(lifecycle) {
     port,
     headless: true,
     results,
-    artifacts,
+    artifacts: null,
     teardown_verified: teardownVerified,
   };
-  const encoded = Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`);
-  const artifactBytes = artifacts.reduce((total, artifact) => total + artifact.bytes, 0);
-  if (encoded.length > MAX_RESULTS_BYTES || artifacts.length + 1 > 64 || artifactBytes + encoded.length > MAX_BROWSER_EVIDENCE_BYTES) {
-    throw new Error("browser evidence result envelope exceeds its file, count, or aggregate byte limit");
-  }
-  await writeFile(path.join(output, "results.json"), encoded, { flag: "wx" });
-  if (!teardownVerified || results.some((result) => result.status !== "passed")) {
+  const artifacts = await writeBrowserEvidence(output, evidence);
+  if (!teardownVerified || results.some((result) => result.status !== "passed") || artifacts.some((artifact) => artifact.status === "failed")) {
     throw new Error(`portal browser verification failed; inspect ${outputRelative}/results.json`);
   }
   console.log(`portal browser verification passed: ${outputRelative}/results.json`);
@@ -155,8 +151,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
       requestAnimationFrame(() => { window.__codeflowThemeBeforePaint = document.documentElement.dataset.theme ?? null; });
     });
     // The named review screenshots carry visual evidence. Keep the trace to
-    // action/network metadata so all engines fit the deterministic evidence
-    // envelope instead of duplicating an unbounded screenshot timeline.
+    // action/network metadata, and keep it only for an engine that fails.
     await context.tracing.start({ screenshots: false, snapshots: false, sources: false });
     traceStarted = true;
     // A route that cannot be continued or aborted is a request failure,
@@ -230,7 +225,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     const runtimeFailures = meaningfulRuntimeDiagnostics(runtime);
     if (Object.values(runtimeFailures).some((items) => items.length)) throw new Error(`${name}: runtime/network isolation failure: ${JSON.stringify(runtimeFailures)}`);
 
-    await context.tracing.stop({ path: trace });
+    await finishTrace(context, trace, true);
     traceStarted = false;
     await context.close();
     removeContextCleanup();
@@ -242,7 +237,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     };
   } catch (error) {
     lifecycle.throwIfInterrupted();
-    if (context && traceStarted) await context.tracing.stop({ path: trace }).catch(() => {});
+    if (context && traceStarted) await finishTrace(context, trace, false).catch(() => {});
     return { engine: name, status: "failed", error: boundedError(error) };
   } finally {
     if (context) await context.close().catch(() => {});
@@ -1443,21 +1438,55 @@ async function visit(page, url) {
   }
 }
 
-async function evidenceInventory(directory) {
-  const entries = (await readdir(directory)).sort();
-  if (entries.length > 64) throw new Error("browser evidence contains more than 64 artifacts");
+// An engine's trace is kept only when the engine fails: a passing engine is
+// proven by its results, and a full run's traces outgrow the evidence caps.
+export async function finishTrace(context, trace, passed) {
+  if (passed) await context.tracing.stop();
+  else await context.tracing.stop({ path: trace });
+}
+
+// The results are written before the evidence files are inventoried, so a
+// long run never loses them. The inventory then records each file, or a
+// failed artifact where a file is over its cap, would take the evidence past
+// its aggregate cap or cannot be read, and the results are rewritten with it.
+// The caller fails the run on a failed artifact.
+export async function writeBrowserEvidence(output, evidence, limits = {}) {
+  const { artifactBytes = MAX_BROWSER_ARTIFACT_BYTES, totalBytes = MAX_BROWSER_EVIDENCE_BYTES, resultsBytes = MAX_RESULTS_BYTES, count = MAX_BROWSER_ARTIFACTS } = limits;
+  const file = path.join(output, "results.json");
+  const encode = (value) => {
+    const encoded = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+    if (encoded.length > resultsBytes) throw new Error(`browser evidence results exceed ${resultsBytes} bytes`);
+    return encoded;
+  };
+  await writeFile(file, encode(evidence), { flag: "wx" });
+  // The results file is budgeted at its cap, so it and the artifacts always
+  // fit the aggregate.
+  const artifacts = await evidenceInventory(output, { exclude: "results.json", artifactBytes, totalBytes: totalBytes - resultsBytes, count: count - 1 });
+  const encoded = encode({ ...evidence, artifacts });
+  await writeFile(`${file}.partial`, encoded, { flag: "wx" });
+  await rename(`${file}.partial`, file);
+  return artifacts;
+}
+
+async function evidenceInventory(directory, { exclude, artifactBytes, totalBytes, count }) {
+  const entries = (await readdir(directory)).filter((entry) => entry !== exclude).sort();
   const artifacts = [];
   let total = 0;
-  for (const entry of entries) {
+  for (const entry of entries.slice(0, count)) {
     const file = path.join(directory, entry);
-    const remaining = MAX_BROWSER_EVIDENCE_BYTES - total;
-    if (remaining <= 0) throw new Error(`browser evidence exceeds ${MAX_BROWSER_EVIDENCE_BYTES} bytes`);
-    const result = await hashBoundedRegularFile(file, Math.min(32 * 1024 * 1024, remaining), "browser evidence artifact");
-    const artifact = { file: path.basename(file), ...result };
-    total += artifact.bytes;
-    if (total > MAX_BROWSER_EVIDENCE_BYTES) throw new Error(`browser evidence exceeds ${MAX_BROWSER_EVIDENCE_BYTES} bytes: ${total}`);
-    artifacts.push(artifact);
+    const remaining = totalBytes - total;
+    try {
+      const size = (await lstat(file)).size;
+      if (size > artifactBytes) throw new Error(`${size} bytes is over the ${artifactBytes} byte artifact cap`);
+      if (size > remaining) throw new Error(`${size} bytes would take the evidence past its ${totalBytes} byte cap`);
+      const result = await hashBoundedRegularFile(file, Math.min(artifactBytes, remaining), "browser evidence artifact");
+      total += result.bytes;
+      artifacts.push({ file: entry, ...result });
+    } catch (error) {
+      artifacts.push({ file: entry, status: "failed", error: boundedError(error?.message ?? error) });
+    }
   }
+  if (entries.length > count) artifacts.push({ file: null, status: "failed", error: `${entries.length - count} more files past the ${count} artifact limit` });
   return artifacts;
 }
 

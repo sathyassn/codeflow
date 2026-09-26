@@ -62,7 +62,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "08ffa898dae238ff1486fad8c73bab181762ea0150c868d48d7deb3f66a81bf4"
+      "pristine_sha256": "b88a23c3f45e28262e696e4329c339d49febf49a2ccd04c61712c975ea720bfc"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -206,7 +206,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "1f8b6bd2ec338a513a16ac766f1b03c47748a1cd0505dd91187e006bb918d54d"
+      "pristine_sha256": "18b1733717886eeb1d25ef6f4cda8ec5c4fb93f3864a7e5161d53dc388e62b66"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
@@ -226,7 +226,7 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "1c32227c0f85d04e914d4ceeac797be6ddaab00d650d6d4b155d1250398ba08b"
+      "pristine_sha256": "ef5d6944b0f8e336dfa6b5b675417fc16f74372840e5c905f287d4b948a24ec3"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",

@@ -9,7 +9,7 @@ import { amendmentHeadings, checkoutEquivalentBytes, collectPageIds, committedDi
 import { assertExpectedPageArtifacts, assertToolOutputRoots, collectBuiltArtifacts, hashBoundedRegularFile, publishOwnedCorpus, readBoundedRegularFile, recoverOwnedCorpus, withWorkflowLease } from "../scripts/publication.mjs";
 import { boundedPathspecBatches, GitSnapshot, hardenedGitEnvironment } from "../scripts/git-snapshot.mjs";
 import { assertEvidenceEnvelope, assertEvidencePageLimits, EVIDENCE_LIMITS } from "../scripts/limits.mjs";
-import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnostics } from "../scripts/browser-verify.mjs";
+import { assertArtifactClaims, discoverSurfaceRoutes, meaningfulRuntimeDiagnostics, writeBrowserEvidence } from "../scripts/browser-verify.mjs";
 import { assertReviewedInstallScripts, REVIEWED_IGNORED_LIFECYCLE_SCRIPTS } from "../scripts/install-dependencies.mjs";
 import { stopChild } from "../scripts/child-lifecycle.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
@@ -1505,6 +1505,34 @@ test("tool output traversal uses one global total-entry budget", async () => {
     await writeFile(path.join(root, "two/file.txt"), "x");
     await assert.rejects(assertToolOutputRoots(root, ["one", "two"], 1), /total entries/);
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// A trace over its cap is a failed artifact recorded beside intact results,
+// not a throw that loses a long run's results; a file that would take the
+// evidence past its aggregate cap, and files past the count, fail the same way.
+test("browser evidence keeps its results and records an oversized artifact as failed", async () => {
+  const output = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-browser-evidence-"));
+  try {
+    await writeFile(path.join(output, "chromium-mobile.png"), "p".repeat(100));
+    await writeFile(path.join(output, "firefox-trace.zip"), "t".repeat(2048));
+    await writeFile(path.join(output, "webkit-mobile.png"), "w".repeat(950));
+    await writeFile(path.join(output, "zz-extra.png"), "z");
+    const results = [{ engine: "chromium", status: "passed", checks: ["figure-gate"] }, { engine: "firefox", status: "failed", error: "rule 8" }];
+    const evidence = { schema_version: 1, run_id: "local", results, artifacts: null, teardown_verified: true };
+    const artifacts = await writeBrowserEvidence(output, evidence, { artifactBytes: 1024, totalBytes: 4096 + 1000, resultsBytes: 4096, count: 4 });
+    const written = JSON.parse(await readFile(path.join(output, "results.json"), "utf8"));
+    assert.deepEqual(written.results, results);
+    assert.deepEqual(written.artifacts, artifacts);
+    assert.deepEqual(artifacts.map(({ file, status }) => [file, status ?? "recorded"]), [
+      ["chromium-mobile.png", "recorded"], ["firefox-trace.zip", "failed"], ["webkit-mobile.png", "failed"], [null, "failed"],
+    ]);
+    assert.equal(artifacts[0].bytes, 100);
+    assert.match(artifacts[0].sha256, /^[0-9a-f]{64}$/);
+    assert.match(artifacts[1].error, /2048 bytes is over the 1024 byte artifact cap/);
+    assert.match(artifacts[2].error, /950 bytes would take the evidence past its 1000 byte cap/);
+    assert.match(artifacts[3].error, /1 more files past the 3 artifact limit/);
+    assert.deepEqual((await readdir(output)).sort(), ["chromium-mobile.png", "firefox-trace.zip", "results.json", "webkit-mobile.png", "zz-extra.png"]);
+  } finally { await rm(output, { recursive: true, force: true }); }
 });
 
 test("streamed browser artifact hashes reject growth and path replacement races", { skip: process.platform === "win32" }, async () => {
