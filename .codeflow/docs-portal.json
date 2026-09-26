@@ -222,7 +222,7 @@
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "dbb440db805300a6687a8c2aaebd96824ccac5b4e4e8db080979c64dec3e994a"
+      "pristine_sha256": "37b9624948577df1cff2465ab58bf894323a8e1d8c3f7eaa2d08141a60407c64"
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",

@@ -182,6 +182,14 @@ publication date._
   A `cd` or `-C` chain that switches to a new branch before committing is
   judged on that branch.
 
+<!-- codeflow:release-impact patch -->
+- **Delegate turns accept a pasted prompt.** Claude Code submits a long or
+  multi-line pasted prompt inside one `<pasted_content id="N">` envelope, so
+  the delegate-turn hook used to reject it as a digest mismatch. The hook now
+  accepts the prompt when its bytes match exactly or when exactly one
+  envelope with matching ids holds the exact armed bytes; every other shape
+  still fails, and `accepted.json` records which delivery matched.
+
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
 - **Optional agentic operating and estimation method (ADR-0057).** Standard and

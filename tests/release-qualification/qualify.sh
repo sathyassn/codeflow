@@ -48,9 +48,7 @@ WORK_PARENT_OPT=""
 TARGET_DIR=""
 NODE_BIN=""
 HERDR_WORKSPACE="w2"
-BLOCKED_ON="the delegate canary and the pipeline run, which need a live Claude \
-session, and the positive present resolve, which only the browser review \
-surface can produce"
+BLOCKED_ON=""
 NO_SESSION_REASON=""
 NO_SESSION_OWNER=""
 SKIP_CANARY=0
@@ -1301,6 +1299,8 @@ print(json.load(open(sys.argv[1])).get("prompt_sha256", "no-prompt-digest"))' \
   canary_unavailable() {
     record "$SAMPLE" "$TIER" "delegate wait --until ready" "harness startup observed in a live session" \
       "$RESULT_UNAVAILABLE" "exit 0 once the session's SessionStart hook records ready" "$1" "$2"
+    record "$SAMPLE" "$TIER" "candidate binding" "the live session's pane resolves codeflow to the candidate" \
+      "$RESULT_UNAVAILABLE" "the live pane resolves codeflow to $BINARY" "$1" "$2"
     record "$SAMPLE" "$TIER" "delegate wait --until accepted" "the armed prompt is accepted by the live session" \
       "$RESULT_UNAVAILABLE" "exit 0 once the session accepts the armed prompt" "$1" "$2"
     record "$SAMPLE" "$TIER" "delegate wait --until terminal" "the accepted turn reaches a terminal state" \
@@ -1339,8 +1339,11 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
   # The tracked-Claude environment is set in the pane itself, then the pane has
   # to be back at its prompt: `agent start` refuses a pane that is still busy,
   # and that refusal would otherwise be recorded instead of the real blocker.
+  # The same line puts the candidate first on the pane's PATH, which the
+  # session and its hooks inherit, and records what codeflow resolves to.
+  _pane_codeflow="$WORK/pane-codeflow"
   herdr pane run "$HERDR_PANE" \
-    'export CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1; echo TRACKED=$CLAUDE_CODE_DISABLE_BACKGROUND_TASKS' >>"$TRANSCRIPT" 2>&1 || true
+    "$(pane_env_command "$BIN_DIR:$DECOY_DIR" "$_pane_codeflow")" >>"$TRANSCRIPT" 2>&1 || true
   herdr pane wait-output "$HERDR_PANE" --match "TRACKED=1" --timeout 15000 >>"$TRANSCRIPT" 2>&1 || true
   sleep 2
 
@@ -1396,6 +1399,18 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
     "harness startup observed in Herdr tab $HERDR_TAB" \
     "$(status_for 0)" "exit 0 once the session's SessionStart hook records ready" "$(observed_exit)"
 
+  # The hooks that wrote ready resolved bare codeflow in the pane's
+  # environment, so that resolution must be the candidate itself.
+  if pane_codeflow_binding "$_pane_codeflow" "$BINARY"; then
+    _s=$RESULT_PASSED
+  else
+    _s=$RESULT_FAILED
+  fi
+  record "$SAMPLE" "$TIER" "candidate binding" \
+    "the live session's pane resolves codeflow to the candidate" \
+    "$_s" "command -v codeflow in pane $HERDR_PANE is $BINARY, digest $BINARY_SHA" \
+    "resolved $PANE_CF_PATH, digest $PANE_CF_SHA"
+
   if [ "$_ready_status" != 0 ]; then
     record "$SAMPLE" "$TIER" "delegate wait --until accepted" \
       "the armed prompt is accepted by the live session" \
@@ -1409,7 +1424,7 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
     return
   fi
 
-  deliver_turn "$HERDR_PANE" "$WORK/delegate-prompt.txt"
+  deliver_turn "$HERDR_PANE" "$WORK/delegate-prompt.txt" "$_run" "$_state" "$_turn" || true
 
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until accepted \
     --turn-id "$_turn" --timeout-seconds 180
@@ -1463,7 +1478,7 @@ PROMPT
     return
   fi
 
-  deliver_turn "$HERDR_PANE" "$WORK/pipeline-prompt.txt"
+  deliver_turn "$HERDR_PANE" "$WORK/pipeline-prompt.txt" "$_run" "$_state" "$_turn2" || true
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until accepted \
     --turn-id "$_turn2" --timeout-seconds 180
   cf delegate wait --run-id "$_run" --state-dir "$_state" --until terminal \
@@ -1587,12 +1602,6 @@ PROBE
       "$_pipeline_expected" \
       "$_observed"
   fi
-}
-
-# Deliver the exact armed bytes to the live pane, then Enter.
-deliver_turn() {
-  herdr pane send-text "$1" "$(cat "$2")" >>"$TRANSCRIPT" 2>&1 || true
-  herdr pane send-keys "$1" Enter >>"$TRANSCRIPT" 2>&1 || true
 }
 
 # ---------------------------------------------------------------------------
