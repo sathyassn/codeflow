@@ -326,7 +326,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     await page.mouse.up();
     const quote = await page.evaluate(() => String(getSelection()));
     if (quote !== "Review") throw new Error(`Prose drag (${steps} steps) selected ${JSON.stringify(quote)}, expected Review`);
-    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    await waitForTextChip(page, `Prose drag (${steps} steps)`);
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
     if (marquee !== 0) throw new Error("Prose drag drew a region marquee");
     if (kind !== "Text") throw new Error(`Prose drag opened ${kind}, expected Text`);
@@ -346,7 +346,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       selection?.removeAllRanges();
       selection?.addRange(range);
     });
-    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    await waitForTextChip(page, "Stage label selection");
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
     if (kind !== "Text") throw new Error(`Stage label selection opened ${kind}, expected Text`);
     await page.keyboard.press("Escape");
@@ -809,6 +809,33 @@ function exportFixture(mode) {
 function assertLoopbackOnly(requests) {
   const remote = requests.find((request) => request.hostname !== "127.0.0.1");
   if (remote) throw new Error(`Non-loopback request observed: ${remote.href}`);
+}
+
+// A text selection opens the chip only after the page maps it into one review
+// text root. Name the selection and the page's status when that never happens.
+async function waitForTextChip(page, label) {
+  try {
+    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+  } catch (error) {
+    const state = await page.evaluate(() => {
+      const selection = getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      const where = (node, offset) => {
+        const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+        const textRoot = element?.closest("[data-cf-review-text-root]");
+        return { node: node?.nodeName, id: element?.id || null, offset, textRoot: textRoot?.id ?? null };
+      };
+      return {
+        quote: String(selection),
+        ranges: selection?.rangeCount ?? 0,
+        start: range && where(range.startContainer, range.startOffset),
+        end: range && where(range.endContainer, range.endOffset),
+        status: document.querySelector(".cf-status")?.textContent?.trim() ?? null,
+        hint: document.querySelector("[data-testid=comment-hint]")?.textContent?.trim() ?? null,
+      };
+    });
+    throw new Error(`${label} opened no comment chip; page state ${JSON.stringify(state)}`, { cause: error });
+  }
 }
 
 async function findBrowser() {
