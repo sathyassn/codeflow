@@ -138,7 +138,8 @@ pub struct AltitudeWords {
 }
 
 /// The prose words in each altitude panel of an explanatory source, by the
-/// rule `altitudeWords` in the starter's `scripts/lib.mjs` states: a line
+/// rule `altitudeWords` in the starter's `scripts/lib.mjs` states: YAML
+/// frontmatter is not prose and is skipped whole; after it, a line
 /// `## Concept`, `## Architecture` or `## Technical` opens that panel and any
 /// other level-two heading closes it; lines inside a fence, inside an HTML
 /// comment (a line starting `<!--` through the line holding `-->`), headings
@@ -148,13 +149,12 @@ pub struct AltitudeWords {
 pub fn altitude_words(text: &str) -> AltitudeWords {
     static FENCE: LazyLock<Regex> =
         LazyLock::new(|| Regex::new(r"^ {0,3}(`{3,}|~{3,})(.*)$").expect("fence pattern"));
-    let normalized = normalize_markdown_source(text);
-    let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
+    let body = source_body(text);
     let mut words = AltitudeWords::default();
     let mut panel: Option<&str> = None;
     let mut fence: Option<(char, usize)> = None;
     let mut comment = false;
-    for line in normalized.split('\n') {
+    for line in body.split('\n') {
         let marker = FENCE.captures(line);
         if let Some((character, length)) = fence {
             if let Some(marker) = &marker {
@@ -1004,11 +1004,15 @@ fn verify_page_class(
         .source_blobs
         .get(&page.source_path)
         .and_then(|bytes| std::str::from_utf8(bytes).ok());
+    // Sections are the adapter's: headings of the body after frontmatter.
+    let body = source.map(source_body);
     let allowed = match class {
         EXPLANATORY => bindings.iter().all(|binding| {
             binding.panel.is_some()
                 && binding.anchor.as_deref().is_none_or(|anchor| {
-                    source.and_then(|text| panel_of_anchor(text, anchor)) == binding.panel
+                    body.as_deref()
+                        .and_then(|text| panel_of_anchor(text, anchor))
+                        == binding.panel
                 })
         }),
         "illustrated" => bindings.iter().all(|binding| binding.panel.is_none()),
@@ -1040,7 +1044,7 @@ fn verify_page_class(
     match class {
         EXPLANATORY => {
             if let Some(output) = rendered {
-                verify_rendered_figures(page, output, source, declarations, report);
+                verify_rendered_figures(page, output, body.as_deref(), declarations, report);
             }
             if page.source_region.is_some() || page.lookup.is_some() {
                 report.issues.push(format!(
@@ -1088,6 +1092,38 @@ fn verify_altitude_words(
     }
 }
 
+/// The text of an anchored figure's section names exactly one heading of
+/// its panel in the rendered page, the rule the adapter applies when it
+/// places the figure, so a companion matched by that text is under that
+/// section and no other.
+fn verify_section_headings(
+    page: &Page,
+    rendered: &dom::RenderedFigures,
+    section_slugs: &[Option<String>],
+    report: &mut PortalValidationReport,
+) {
+    let route = &page.route;
+    for (figure, slug) in page.figures.iter().zip(section_slugs) {
+        let Some(slug) = slug.as_ref().filter(|slug| !slug.is_empty()) else {
+            continue;
+        };
+        let named = rendered
+            .headings
+            .iter()
+            .filter(|(panel, level, text)| {
+                *level > 2 && *panel == figure.panel && &slug_heading(text) == slug
+            })
+            .count();
+        if named != 1 {
+            report.issues.push(format!(
+                "{route} renders {named} headings named like the section #{} of the {} panel, not one",
+                figure.anchor.as_deref().unwrap_or_default(),
+                figure.panel.as_deref().unwrap_or("page")
+            ));
+        }
+    }
+}
+
 /// Every figure a page puts in front of a reader must be a companion that
 /// equals the reconstruction of a declaration bound to that page, each
 /// binding exactly once, compared as parsed HTML. On an explanatory page, whose
@@ -1124,6 +1160,7 @@ fn verify_rendered_figures(
         })
         .collect();
     let rendered = dom::rendered_figures(markdown_body(output));
+    verify_section_headings(page, &rendered, &section_slugs, report);
     let mut expected = Vec::new();
     for (index, figure) in page.figures.iter().enumerate() {
         let path = &figure.declaration_path;
@@ -1653,9 +1690,12 @@ fn markdown_sections(text: &str) -> Vec<Section> {
 
 /// The altitude panel an anchored heading sits in: the nearest level-two
 /// heading above it names the panel, and the heading itself is below level
-/// two. `None` when the anchor names no such heading.
-fn panel_of_anchor(source: &str, anchor: &str) -> Option<String> {
-    let sections = markdown_sections(source);
+/// two. `None` when the anchor names no such heading, or when another heading
+/// in that panel has the same text, which the adapter refuses as ambiguous:
+/// the rendered page places a figure by its section's text, so the text must
+/// name one section of the panel.
+fn panel_of_anchor(body: &str, anchor: &str) -> Option<String> {
+    let sections = markdown_sections(body);
     let target = sections.iter().find(|section| section.anchor == anchor)?;
     if target.level <= 2 {
         return None;
@@ -1665,7 +1705,33 @@ fn panel_of_anchor(source: &str, anchor: &str) -> Option<String> {
         .rev()
         .find(|section| section.line < target.line && section.level <= 2)?;
     let label = owner.text.trim().to_lowercase();
-    (owner.level == 2 && ALTITUDE_PANELS.contains(&label.as_str())).then_some(label)
+    if owner.level != 2 || !ALTITUDE_PANELS.contains(&label.as_str()) {
+        return None;
+    }
+    let end = sections
+        .iter()
+        .find(|section| section.line > owner.line && section.level <= 2)
+        .map_or(usize::MAX, |section| section.line);
+    let slug = slug_heading(&target.text);
+    let named = sections
+        .iter()
+        .filter(|section| section.line > owner.line && section.line < end)
+        .filter(|section| slug_heading(&section.text) == slug)
+        .count();
+    (named == 1).then_some(label)
+}
+
+/// A committed source's body: the text after its YAML frontmatter, with a
+/// byte order mark and CR line ends normalized the way the adapter reads it.
+/// Frontmatter is metadata, so its lines are never sections or prose.
+fn source_body(text: &str) -> String {
+    let normalized = normalize_markdown_source(text);
+    let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
+    normalized
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.find("\n---\n").map(|end| &rest[end + 5..]))
+        .unwrap_or(normalized)
+        .to_string()
 }
 
 fn slug_heading(raw: &str) -> String {
@@ -2022,9 +2088,84 @@ mod tests {
         }
     }
 
+    #[test]
+    fn anchors_resolve_on_the_body_after_frontmatter() {
+        // A heading-like line in frontmatter, here inside a block scalar,
+        // neither takes a section's slug nor opens a panel.
+        let stolen = format!("---\nnote: |\n   ## Install\n---\n{ALTITUDES}");
+        assert_eq!(
+            panel_of_anchor(&source_body(&stolen), "install").as_deref(),
+            Some("technical")
+        );
+        let invented = format!("---\ntitle: Adoption\n## Technical\n### Secret\n---\n{ALTITUDES}");
+        assert_eq!(panel_of_anchor(&source_body(&invented), "secret"), None);
+        assert_eq!(
+            source_body("\u{feff}---\r\na: 1\r\n---\r\nBody\r\n"),
+            "Body\n"
+        );
+        // Without a closed frontmatter block the whole text is the body.
+        assert_eq!(source_body("---\na: 1\n"), "---\na: 1\n");
+    }
+
+    #[test]
+    fn an_anchor_names_one_section_of_its_panel() {
+        let twice =
+            "# Adoption\n\n## Technical\n\n### Install\n\nFirst.\n\n### Install\n\nSecond.\n";
+        for anchor in ["install", "install-1"] {
+            assert_eq!(panel_of_anchor(twice, anchor), None, "{anchor}");
+        }
+        let across = "# Adoption\n\n## Concept\n\n### Install\n\nWhy.\n\n## Technical\n\n### Install\n\nHow.\n";
+        assert_eq!(
+            panel_of_anchor(across, "install").as_deref(),
+            Some("concept")
+        );
+        assert_eq!(
+            panel_of_anchor(across, "install-1").as_deref(),
+            Some("technical")
+        );
+    }
+
+    #[test]
+    fn a_companion_sits_under_the_one_section_its_anchor_names() {
+        let twice =
+            "# Adoption\n\n## Technical\n\n### Install\n\nFirst.\n\n### Install\n\nSecond.\n";
+        let ambiguous = "orient/adoption renders 2 headings named like the section #install-1 of the technical panel, not one";
+        for occurrence in [0, 1] {
+            let issues = anchored_issues(twice, "install-1", "### Install", occurrence);
+            assert!(
+                issues.iter().any(|issue| issue == ambiguous),
+                "{occurrence}: {issues:?}"
+            );
+        }
+        // The same text in another panel is a different section.
+        let across = "# Adoption\n\n## Concept\n\n### Install\n\nWhy.\n\n## Technical\n\n### Install\n\nHow.\n";
+        assert_eq!(
+            anchored_issues(across, "install-1", "### Install", 1),
+            Vec::<String>::new()
+        );
+        let issues = anchored_issues(across, "install-1", "### Install", 0);
+        assert!(
+            issues.iter().any(|issue| issue
+                == "orient/adoption does not render the figure its declaration figures/steps.json draws"),
+            "{issues:?}"
+        );
+    }
+
     /// An explanatory page whose one figure is bound to the Install section
     /// of its Technical panel, rendered with the companion after `heading`.
     fn anchored_page_issues(heading: &str) -> Vec<String> {
+        anchored_issues(ALTITUDES, "install", heading, 0)
+    }
+
+    /// An explanatory page built from `source` whose one figure is bound to
+    /// `anchor` in its Technical panel, rendered with the companion after the
+    /// `occurrence`-th line equal to `heading`.
+    fn anchored_issues(
+        source: &str,
+        anchor: &str,
+        heading: &str,
+        occurrence: usize,
+    ) -> Vec<String> {
         let placement = "anchor";
         let sha256 = sha256_hex(DECLARATION.as_bytes());
         let pinned = Pinned {
@@ -2057,18 +2198,24 @@ mod tests {
                 "figure_id": "steps",
                 "placement": placement,
                 "panel": "technical",
-                "anchor": "install"
+                "anchor": anchor
             }]
         }))
         .unwrap();
-        let body = ALTITUDES.strip_prefix("# Adoption\n\n").unwrap();
+        let body = source.strip_prefix("# Adoption\n\n").unwrap();
+        let (at, _) = body
+            .match_indices(&format!("{heading}\n"))
+            .nth(occurrence)
+            .unwrap();
+        let split = at + heading.len();
         let output = format!(
-            "---\ntitle: \"Adoption\"\n---\n\n{}",
-            body.replacen(heading, &format!("{heading}\n\n{companion}\n"), 1)
+            "---\ntitle: \"Adoption\"\n---\n\n{}\n\n{companion}\n{}",
+            &body[..split],
+            &body[split..]
         );
         let declarations = BTreeMap::from([("figures/steps.json".to_string(), pinned)]);
         let mut report = PortalValidationReport::default();
-        verify_rendered_figures(&page, &output, Some(ALTITUDES), &declarations, &mut report);
+        verify_rendered_figures(&page, &output, Some(source), &declarations, &mut report);
         report.issues
     }
 

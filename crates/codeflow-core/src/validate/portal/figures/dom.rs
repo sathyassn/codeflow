@@ -30,6 +30,10 @@ pub(super) struct RenderedFigures {
     /// For each companion, the text of the nearest heading of any level
     /// above it.
     pub sections: Vec<Option<String>>,
+    /// Every heading outside the companions, in document order: the
+    /// level-two heading it sits under (itself for a level-two heading), its
+    /// level and its text.
+    pub headings: Vec<(Option<String>, usize, String)>,
     /// Elements outside every companion that carry figure or companion
     /// markup: a kit class or a figure data attribute.
     pub stray: usize,
@@ -102,6 +106,7 @@ pub(super) fn rendered_figures(markdown: &str) -> RenderedFigures {
     let mut found = RenderedFigures {
         companions: Vec::new(),
         sections: Vec::new(),
+        headings: Vec::new(),
         stray: 0,
         css: std::collections::BTreeSet::new(),
         active: std::collections::BTreeSet::new(),
@@ -229,12 +234,19 @@ struct Headings {
 
 fn walk(element: ElementRef<'_>, heading: &mut Headings, found: &mut RenderedFigures) {
     let name = element.value().name();
-    if matches!(name, "h1" | "h2" | "h3" | "h4" | "h5" | "h6") {
+    if let Some(level) = name
+        .strip_prefix('h')
+        .and_then(|digit| digit.parse::<usize>().ok())
+        .filter(|level| (1..=6).contains(level))
+    {
         let text = element.text().collect::<String>();
-        if name == "h2" {
+        if level == 2 {
             heading.panel = Some(text.trim().to_lowercase());
         }
         heading.nearest = Some(text.trim().to_string());
+        found
+            .headings
+            .push((heading.panel.clone(), level, text.trim().to_string()));
     }
     if has_class(element, |class| class == "cf-companion") {
         found

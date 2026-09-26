@@ -957,8 +957,9 @@ export function asIsRegionStart(body, title) {
 }
 
 // The prose words in each altitude panel of an explanatory source, counted by
-// a rule simple enough that the Rust validator recounts it byte for byte: on
-// the committed text, a line `## Concept`, `## Architecture` or `## Technical`
+// a rule simple enough that the Rust validator recounts it byte for byte: YAML
+// frontmatter is not prose and is skipped whole; after it, a line
+// `## Concept`, `## Architecture` or `## Technical`
 // opens that panel and any other level-two heading closes it; lines inside a
 // fence (the markdownSections fence rule), inside an HTML comment (from a line
 // starting `<!--` through the line holding `-->`), headings (`#`) and table
@@ -970,7 +971,10 @@ export function altitudeWords(text) {
   let panel = null;
   let fence = null;
   let comment = false;
-  for (const line of String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").split("\n")) {
+  const normalized = String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const end = normalized.startsWith("---\n") ? normalized.indexOf("\n---\n", 4) : -1;
+  const body = end < 0 ? normalized : normalized.slice(end + 5);
+  for (const line of body.split("\n")) {
     const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
     if (fence !== null) {
       if (marker && marker[1][0] === fence.char && marker[1].length >= fence.length && marker[2].trim() === "") fence = null;

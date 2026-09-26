@@ -27,6 +27,15 @@
         "architecture": 3,
         "technical": 0
       }
+    },
+    {
+      "name": "frontmatter is not prose",
+      "text": "---\ntitle: Words\n## Technical\n---\n\nLead words outside every panel.\n\n## Concept\n\nOne two.\n",
+      "words": {
+        "concept": 2,
+        "architecture": 0,
+        "technical": 0
+      }
     }
   ]
 }

@@ -94,7 +94,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "33586dc7fbc266950657441201073ea692f7b3d377ca14f084cda72d66958c3f"
+      "pristine_sha256": "41e080f56181c1f71ca524e928784e55ac2a80b0a26c9e25ba1ea6f0e45305da"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -238,7 +238,7 @@
     },
     "tests/fixtures/altitude-words.json": {
       "ownership": "managed",
-      "pristine_sha256": "7e4e4a003903d0378ebffa2800b9786b34244ed6d293b6b625f2cee2ce198327"
+      "pristine_sha256": "5ed0d628b0f4a64527bd461dfbf0babd49077424c753c75a092cb992f658fce4"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
