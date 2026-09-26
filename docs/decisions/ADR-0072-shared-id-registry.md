@@ -4,7 +4,7 @@ title: Shared id registry on a protected data branch
 date: 2026-09-26
 status: proposed
 superseded_by: null
-architecture_impact: "`docs/architecture.md`: durable work gains a shared id registry on the `codeflow/registry` data branch, a hidden `uid` per record bound to its number before merge, history-based allocation, and the advisory claim branch as the visible mark of work in progress. Updated in the same PR as this record. "
+architecture_impact: "`docs/architecture.md`: durable work gains a shared id registry on the `codeflow/registry` data branch, a hidden `uid` per record bound to its number before merge, history-based allocation with typed restore, and the advisory claim branch as the visible mark of work in progress. Updated in the PR that accepts this record (TSK-101)."
 ---
 
 # ADR-0072: Shared id registry on a protected data branch
@@ -53,12 +53,16 @@ The design trusts that protection only as far as it goes. The next number
 is computed from every id ever added in the registry's history and on every
 local and remote-tracking ref, so deleting a file on the tip cannot lower
 it. Append-only is enforced before the push by CodeFlow's pre-push hook and
-git-guard over the whole pushed range, checked after it by a registry CI
-job, and checked again by the CLI on the fetched history before every
-issue; damage refuses issuance until a restoring commit repairs it. On a
-host without branch rules, the CLI keeps the last verified tip and refuses
-to issue when the new tip does not descend from it, and `doctor` reports
-reduced assurance.
+git-guard over the whole pushed range, checked by the CLI on the fetched
+history before every issue, and checked by `codeflow ids check` in the
+code branch's CI on every PR and push and on a daily schedule. The data
+branch holds no workflow or code, so nothing runs from it and a PR cannot
+choose the binary that checks it. Damage refuses issuance until a typed
+restore repairs it: one maintainer commit that returns the named files to
+the bytes of their first addition and nothing else, which the same guards
+accept and any other edit fails. On a host without branch rules, the CLI
+keeps the last verified tip and refuses to issue when the new tip does not
+descend from it, and `doctor` reports reduced assurance.
 
 Offline issue commits a pending reservation on the local
 `codeflow/registry`, kept apart from the remote-tracking copy by a
@@ -93,8 +97,17 @@ is SPC-013.
 - The host is trusted for what it protects: the branch's history and refs.
   File-level integrity is CodeFlow's own work, on three planes, and is
   made harmless by history-based allocation even when a plane is bypassed.
-  Damage to a file loses at most one reservation and is reported; it never
-  reissues a number.
+  Damage never reissues a number, because the bindings stay in history;
+  its real cost is availability: one damaging commit can remove any number
+  of files, and issue stops repository-wide until a maintainer's typed
+  restore lands. The registry check is not a job on the data branch; it
+  runs at the next CI run of any tracked branch and daily, so detection
+  is bounded by that cadence, while the CLI's own check before each issue
+  is immediate for the issuer.
+- The saved last-verified tip detects a rewrite only for an observer that
+  holds that checkpoint. A fresh clone on a host without branch rules has
+  no such proof and reports unknown assurance rather than claiming
+  prevention.
 - The registry is one more branch in every tracking repository. Clones
   fetch it explicitly, CI fetches it with full history, and maintainers
   create and seed it once. Contention is on one tip, so a busy moment
@@ -208,20 +221,35 @@ workspace's `design/delivery-system/` holds the sources.
 ## What this supersedes
 
 ADR-0045 is already superseded by ADR-0046. ADR-0046 stays accepted for the
-independent id grammar, frontmatter relationships, the planning anchor and
-the read-only `work start` preflight. This record supersedes one clause of
-its consequences: "Planning therefore serializes allocation or renumbers
-collisions before merge." Allocation is now the registry protocol, and a
-renumber before merge is the exception path for an offline clash, not the
-rule. The recommended marking is a dated Note on ADR-0046 pointing here,
-since the rest of that record is unchanged and its `superseded_by` field
-would otherwise imply the whole decision fell. ADR-0062 is unchanged: the
-registry branch is outside release state and the calculator.
+independent id grammar, one persisted `id` equal to the filename,
+frontmatter relationships, one epic or a standalone rationale per task, the
+planning anchor, and the rule that a task branch cannot authorise its own
+planning record. This record changes three of its clauses and no other:
+
+| ADR-0046 clause | Change |
+|---|---|
+| "Planning therefore serializes allocation or renumbers collisions before merge." | Superseded. Allocation is the registry protocol; a renumber before merge (`ids retarget`) is the exception path for an offline clash, never the rule. |
+| `work start` requires "completed dependencies". | Amended. A code dependency must be complete and present in the task's execution base; a research or decision dependency is satisfied at a pinned commit; the same core predicate serves a new claim, the caller's own task branch and a PR transition, with the caller context stated (SPC-013 R-40, R-110, R-112). `work start` stays read-only. |
+| "No surface creates records, branches, worktrees, or status changes." | Amended. `work claim` creates and pushes the task branch as the visible advisory mark; `task status`, `epic status` and `spec status` write status under transition rules; `ids retarget` renumbers an unmerged record. No surface creates a worktree, and `work start` still writes nothing. |
+
+Two clauses that a reader might expect to change do not. "Specs have no
+duplicate parent relationship" stands: consumers own their `specs` lists
+and a spec's consumers are derived, so many-to-many consumption adds no
+reciprocal list. "New records persist one `id`, equal to their flat
+filename" stands: `former_ids` and `uid` are additions beside it.
+
+The marking is a dated Note on ADR-0046 pointing here, written in the PR
+that accepts this record, since the rest of that record is unchanged and
+its `superseded_by` field would imply the whole decision fell. ADR-0062 is
+unchanged: the registry branch is outside release state and the
+calculator.
 
 ## Architecture impact
 
 `docs/architecture.md`: durable work gains a shared id registry on the
 `codeflow/registry` data branch, a hidden `uid` per record bound to its
-number before merge, history-based allocation, and the advisory claim
-branch as the visible mark of work in progress. Updated in the same PR as
-this record.
+number before merge, history-based allocation with typed restore, and the
+advisory claim branch as the visible mark of work in progress. This record
+is proposed on a planning-only change and updates nothing yet; the PR that
+lands the registry (TSK-101) sets it accepted, writes the ADR-0046 Note and
+updates `docs/architecture.md` in that same PR.
