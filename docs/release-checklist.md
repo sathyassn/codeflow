@@ -111,7 +111,7 @@ Presentation adversarial cases for box 3.12:
 |---|---|
 | Native paths | Invalid native-path bytes are handled |
 | Collection amplification | Per-block and aggregate amplification are bounded |
-| Project quotas | Impossible and concurrent quotas across create, update, runtime and feedback mutations; zero-growth retries and cleanup in legacy over-quota state |
+| Project quotas | Impossible and concurrent quotas across create, update, runtime and feedback mutations; zero-growth retries and cleanup in a project already over its quota |
 | Feedback transitions | Malformed, duplicate, post-terminal and concurrent transitions |
 | Feedback re-anchoring | Exact, ambiguous and missing re-anchoring |
 | Resolution | Stale and cross-session resolution, and concurrent identical and conflicting terminal retries |
