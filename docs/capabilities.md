@@ -41,7 +41,7 @@ name: scaffold-init
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::init", "cargo test scaffold::detect", "codeflow-core tests/scaffold_test.rs", "codeflow-cli tests/tier_floor_e2e.rs", "codeflow-cli tests/settings_presets.rs", "codeflow-cli tests/codex_config.rs"]
-epics: [EPC-001, EPC-005, EPC-009, EPC-011, EPC-012]
+epics: [EPC-001, EPC-005, EPC-009, EPC-011, EPC-012, EPC-020]
 adrs: [ADR-0019, ADR-0025, ADR-0026, ADR-0054, ADR-0055]
 ```
 
@@ -91,7 +91,7 @@ name: scaffold-update
 area: scaffold
 status: shipped
 verified_by: ["cargo test scaffold::update", "cargo test scaffold::state::tests", "cargo test scaffold::settings_merge", "cargo test scaffold::region", "cargo test scaffold::manifest", "codeflow-cli tests/tier_floor_e2e.rs"]
-epics: [EPC-001, EPC-005, EPC-012]
+epics: [EPC-001, EPC-005, EPC-012, EPC-020]
 adrs: [ADR-0011, ADR-0019]
 ```
 
@@ -116,7 +116,7 @@ name: git-policy-gates
 area: engine
 status: shipped
 verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs"]
-epics: [EPC-001, EPC-011, EPC-017]
+epics: [EPC-001, EPC-011, EPC-017, EPC-020]
 adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0067]
 ```
 
@@ -284,7 +284,7 @@ name: remote-protect-doctor
 area: engine
 status: shipped
 verified_by: ["cargo test remote::", "cargo test doctor::", "codeflow-cli tests/recall_remote_cli.rs"]
-epics: [EPC-001, EPC-002, EPC-003]
+epics: [EPC-001, EPC-002, EPC-003, EPC-020]
 adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
 ```
 
@@ -358,7 +358,7 @@ name: duo-model-orchestration
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md"]
-epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017]
+epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-020]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060]
 ```
 
@@ -541,7 +541,7 @@ name: scaffold-customize
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/manifest_consistency.rs", "cargo test doctor::tests::test_customization", "codeflow-core tests/scaffold_test.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012]
+epics: [EPC-003, EPC-004, EPC-005, EPC-009, EPC-010, EPC-011, EPC-012, EPC-020]
 adrs: [ADR-0025, ADR-0044]
 ```
 
@@ -595,7 +595,7 @@ name: model-binding-evaluation
 area: scaffold
 status: shipped
 verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
-epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017]
+epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017, EPC-020]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060]
 ```
 
@@ -794,7 +794,7 @@ name: interactive-presentation-review
 area: engine
 status: building
 verified_by: ["cargo test -p codeflow-present", "cargo test -p codeflow-cli --test present_cli", "npm run check:browser --prefix crates/codeflow-present/web", "codeflow-core tests/manifest_consistency.rs"]
-epics: [EPC-005]
+epics: [EPC-005, EPC-020]
 adrs: [ADR-0049, ADR-0050, ADR-0052, ADR-0053]
 ```
 
