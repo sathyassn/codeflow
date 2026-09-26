@@ -133,6 +133,21 @@ Never send blind or repeated Enter retries. A mismatched, unarmed, or duplicate
 submission is blocked at the harness (hook exit 2) with run state preserved.
 Prompts are capped at 1 MiB.
 
+A task the turn backgrounds (a Workflow, a background Bash command) finishes
+after its `Stop`, and Claude Code then submits a task notice as a new prompt.
+The hook admits it, without an armed turn, only as a continuation of the
+current turn: the prompt must be exactly one `<task-notification>` envelope
+with nothing around it, the current turn must have stopped with no other
+continuation open, and the session transcript must show the tool call that
+returned that task id made within this turn or one of its continuations. It is
+recorded at `turns/<turn>/continuations/<task-id>/accepted.json` with
+`delivery: task_notification`, and the `Stop` carrying its `prompt_id` writes
+the `result.json` beside it. Any other notice (unknown or earlier task, extra
+text, a second envelope, no accepted turn) is blocked like an unarmed prompt,
+and an armed prompt waits until the open continuation stops. `wait --until
+terminal` still reports the turn's first `Stop`; read a backgrounded result
+from the continuation record.
+
 ## Stable exit states
 
 `wait` exits `0` for the observed state (for `--until terminal`, a completed

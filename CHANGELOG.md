@@ -194,6 +194,17 @@ publication date._
   depends on the process working directory. Reparse points are still
   refused and no path outside the portal root is opened.
 
+<!-- codeflow:release-impact patch -->
+- **Delegate turns survive backgrounded work.** When a delegated session
+  backgrounds a Workflow or a Bash command, Claude Code reports its end with a
+  task notice after the turn stops, and the delegate-turn hook used to block
+  that notice as an unarmed prompt. The hook now admits exactly one notice
+  envelope as a continuation of the current turn when the session transcript
+  shows that turn launched the task, records it under the turn's
+  `continuations/`, and closes it with the Stop that follows instead of
+  poisoning the run. Unknown or earlier tasks, extra text and second
+  envelopes are still blocked.
+
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
 - **Optional agentic operating and estimation method (ADR-0057).** Standard and
