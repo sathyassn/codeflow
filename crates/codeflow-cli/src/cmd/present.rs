@@ -13,6 +13,7 @@ use codeflow_present::{
     browser,
     document::parse_document,
     export::{export_session, ExportMode, ExportTheme},
+    limits,
     service::{serve_session, HealthRecord, ReadyRecord},
     state::{FeedbackResolution, SessionStatus, SessionStore},
     PresentError,
@@ -257,6 +258,7 @@ fn open(store: &SessionStore, document: &Path, no_launch: bool) -> codeflow_pres
             session.id,
             ready.bootstrap_path.display()
         );
+        print_handoff_link(store, &ready.bootstrap_path)?;
         return Ok(());
     }
     let profile = store.runtime_dir(session.id)?.join("browser-profile");
@@ -294,6 +296,7 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
                 ready.bootstrap_path.display(),
                 profile.display()
             );
+            print_handoff_link(store, &ready.bootstrap_path)?;
             return Ok(());
         }
         launch_or_focus_guard(store, id, &ready.bootstrap_path, None, &profile)?;
@@ -327,10 +330,22 @@ fn show(store: &SessionStore, id: Uuid, no_launch: bool) -> codeflow_present::Re
             ready.bootstrap_path.display(),
             profile.display()
         );
+        print_handoff_link(store, &ready.bootstrap_path)?;
     } else {
         browser::launch_isolated(store, id, &ready.bootstrap_path, &profile)?;
         println!("opened {id}");
     }
+    Ok(())
+}
+
+/// Print the openable link an agent hands to the operator when `codeflow` does
+/// not launch the browser itself, such as from an agent sandbox.
+fn print_handoff_link(store: &SessionStore, bootstrap_path: &Path) -> codeflow_present::Result<()> {
+    println!(
+        "handoff link (single use, open within {} seconds): {}",
+        limits::BOOTSTRAP_TTL_SECONDS,
+        browser::handoff_link(store, bootstrap_path)?
+    );
     Ok(())
 }
 

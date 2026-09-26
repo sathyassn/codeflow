@@ -490,3 +490,178 @@ fn update_export_close_and_clear(
     ));
     assert_eq!(sessions.trim(), "[]");
 }
+
+/// Runs `codeflow` the way an agent sandbox does: only `HOME` locates state,
+/// with no `XDG_STATE_HOME` override, so the platform default root is used.
+fn codeflow_default_state(cwd: &Path, home: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(args)
+        .current_dir(cwd)
+        .env("HOME", home)
+        .env_remove("XDG_STATE_HOME")
+        .output()
+        .unwrap()
+}
+
+/// The platform's sandbox write root from the shipped settings preset, with
+/// `~` expanded against the test home.
+fn preset_present_state_root(home: &Path) -> PathBuf {
+    let preset =
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/settings/default.json");
+    let preset: serde_json::Value = serde_json::from_slice(&fs::read(preset).unwrap()).unwrap();
+    let suffix = if cfg!(target_os = "macos") {
+        "Library/Application Support/codeflow/present"
+    } else {
+        ".local/state/codeflow/present"
+    };
+    let entry = preset["sandbox"]["filesystem"]["allowWrite"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(serde_json::Value::as_str)
+        .find(|entry| entry.strip_prefix("~/") == Some(suffix))
+        .unwrap_or_else(|| panic!("the settings preset must allow writes to ~/{suffix}"));
+    home.join(entry.strip_prefix("~/").unwrap())
+}
+
+fn percent_decode(value: &str) -> String {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let hex = std::str::from_utf8(&bytes[index + 1..index + 3]).unwrap();
+            decoded.push(u8::from_str_radix(hex, 16).unwrap());
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).unwrap()
+}
+
+fn entries_below(root: &Path) -> Vec<PathBuf> {
+    let mut found = Vec::new();
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(directory) = pending.pop() {
+        for entry in fs::read_dir(&directory).unwrap() {
+            let path = entry.unwrap().path();
+            if fs::symlink_metadata(&path).unwrap().is_dir() {
+                pending.push(path.clone());
+            }
+            found.push(path);
+        }
+    }
+    found
+}
+
+#[test]
+fn sandboxed_open_keeps_state_in_the_allowed_root_and_prints_a_handoff_link() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fixture = setup_project();
+    let state_root = preset_present_state_root(&fixture.home);
+    let opened = require_success(&codeflow_default_state(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "open",
+            fixture.project.join("first.json").to_str().unwrap(),
+            "--no-launch",
+        ],
+    ));
+    let session_id = opened.split_whitespace().nth(1).unwrap().to_string();
+    let bootstrap_path = PathBuf::from(between(
+        &opened,
+        "owner-private bootstrap file ",
+        " in a qualified",
+    ));
+
+    // AC-2: an openable file link to the same single-use bootstrap page.
+    let link_line = opened
+        .lines()
+        .find(|line| line.starts_with("handoff link (single use, open within 120 seconds): "))
+        .unwrap_or_else(|| panic!("open printed no handoff link:\n{opened}"));
+    let link = link_line.rsplit_once(": ").unwrap().1;
+    assert!(link.starts_with("file:///"), "{link}");
+    assert!(
+        !link.contains(' '),
+        "the link must be percent-encoded: {link}"
+    );
+    assert_eq!(
+        PathBuf::from(percent_decode(link.strip_prefix("file://").unwrap())),
+        bootstrap_path
+    );
+    let bootstrap = fs::read_to_string(&bootstrap_path).unwrap();
+    assert!(bootstrap.contains("action=\"http://127.0.0.1:"));
+
+    // AC-1 and AC-4: all state is under the one root the sandbox preset allows,
+    // owner-private, and nothing else under HOME is written.
+    assert!(
+        bootstrap_path.starts_with(&state_root),
+        "{}",
+        bootstrap_path.display()
+    );
+    for path in entries_below(&fixture.home) {
+        assert!(
+            path.starts_with(&state_root) || state_root.starts_with(&path),
+            "present wrote outside the allowed state root: {}",
+            path.display()
+        );
+        if path.starts_with(&state_root) {
+            let mode = fs::symlink_metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o077, 0, "{} is not owner-private", path.display());
+        }
+    }
+
+    // Session identity is scoped to the project working tree: update works there
+    // and fails with guidance from a directory outside any repository.
+    require_success(&codeflow_default_state(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "update",
+            &session_id,
+            fixture.second.to_str().unwrap(),
+        ],
+    ));
+    let outside = codeflow_default_state(
+        &fixture.home,
+        &fixture.home,
+        &[
+            "present",
+            "update",
+            &session_id,
+            fixture.second.to_str().unwrap(),
+        ],
+    );
+    assert!(!outside.status.success());
+    assert!(String::from_utf8_lossy(&outside.stderr)
+        .contains("run codeflow present from the project's working tree"));
+
+    // Cleanup removes both the durable session and its derived runtime.
+    require_success(&codeflow_default_state(
+        &fixture.project,
+        &fixture.home,
+        &["present", "close", &session_id],
+    ));
+    let ready_path = bootstrap_path.parent().unwrap().join("ready.json");
+    let deadline = Instant::now() + Duration::from_secs(5);
+    while ready_path.exists() && Instant::now() < deadline {
+        thread::sleep(Duration::from_millis(100));
+    }
+    let cleared = require_success(&codeflow_default_state(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", &session_id, "--older-than", "0h"],
+    ));
+    assert!(cleared.contains(&format!("removed {session_id}")));
+    let remaining: Vec<PathBuf> = entries_below(&state_root)
+        .into_iter()
+        .filter(|path| path.to_string_lossy().contains(&session_id))
+        .collect();
+    assert!(remaining.is_empty(), "session state remains: {remaining:?}");
+}

@@ -566,7 +566,9 @@ fn try_runtime_lease(path: &Path) -> Result<Option<RuntimeLease>> {
 impl SessionStore {
     pub fn discover(project: &Path) -> Result<Self> {
         let repository = git2::Repository::discover(project).map_err(|error| {
-            PresentError::InvalidDocument(format!("not a Git repository: {error}"))
+            PresentError::InvalidDocument(format!(
+                "not a Git repository: {error}; run codeflow present from the project's working tree, which scopes its sessions"
+            ))
         })?;
         let common = repository
             .commondir()
