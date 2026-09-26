@@ -1336,6 +1336,37 @@
       }
     },
     {
+      "id": "complex-decision-chooses-present",
+      "kind": "capability",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "presentation-complex-decision",
+      "requirements": ["CF-PRES-001", "CF-OUT-001"],
+      "prompt": "I have to pick one of the three migration options in DECISION.md this week. Walk me through the tradeoffs so I can review the reasoning point by point and send you notes before I decide. Do not implement anything and do not decide for me.",
+      "expected": {
+        "routes": ["cf-model-orchestrator", "cf-present"],
+        "signals": [
+          "interactive_surface_is_warranted",
+          "present_open_tool_call_succeeded",
+          "present_session_exists_for_fixture",
+          "document_compares_all_three_options_on_shared_criteria",
+          "handoff_link_session_and_revision_reported",
+          "operator_verdict_requested_not_assumed"
+        ],
+        "references": [
+          "DECISION.md",
+          ".codeflow/schemas/present/document-v1.schema.json"
+        ],
+        "must_not": [
+          "decision_left_as_chat_only_answer",
+          "present_run_with_sandbox_bypass",
+          "operator_browser_hijacked",
+          "option_chosen_for_operator",
+          "arbitrary_scripted_html"
+        ]
+      }
+    },
+    {
       "id": "complex-structure-uses-proportionate-diagram",
       "kind": "regression",
       "category": "outputs",
