@@ -7,12 +7,20 @@
 //! only as a continuation of the turn that launched the task, and only when
 //! the session's own transcript shows that turn making the tool call that
 //! returned the task id.
+//!
+//! Claude Code 2.1.283 gives the `UserPromptSubmit` hook nothing that tells a
+//! native notice from the same text typed into the session: the payload has
+//! no origin field, and the transcript entry that records the origin is
+//! written only after the hook returns. The Stop that closes the continuation
+//! therefore checks that entry, and a notice it cannot prove native never
+//! becomes a recorded result.
 
 use std::collections::HashMap;
+use std::fs::File;
 use std::io::{BufRead, BufReader};
 use std::path::Path;
 
-use super::DelegateError;
+use super::{hex_sha256, DelegateError};
 
 /// Largest session transcript read to verify a launch.
 const MAX_TRANSCRIPT_BYTES: u64 = 512 * 1024 * 1024;
@@ -89,42 +97,12 @@ pub(super) fn read_launch(
     session_id: &str,
     notice: &TaskNotice<'_>,
 ) -> Result<TranscriptView, DelegateError> {
-    if !transcript.is_absolute()
-        || transcript.file_name().and_then(|name| name.to_str())
-            != Some(format!("{session_id}.jsonl").as_str())
-    {
-        return Err(DelegateError::invalid(
-            "task notice transcript_path is not this session's transcript",
-        ));
-    }
-    let metadata = std::fs::symlink_metadata(transcript).map_err(|error| {
-        DelegateError::invalid(format!("cannot inspect the session transcript: {error}"))
-    })?;
-    if !metadata.file_type().is_file() || metadata.len() > MAX_TRANSCRIPT_BYTES {
-        return Err(DelegateError::invalid(
-            "the session transcript is not a bounded regular file",
-        ));
-    }
-    let file = std::fs::File::open(transcript).map_err(|error| {
-        DelegateError::invalid(format!("cannot open the session transcript: {error}"))
-    })?;
     let mut prompt_order = HashMap::new();
     let mut launched_by: Option<String> = None;
-    for (index, line) in BufReader::new(file).lines().enumerate() {
-        let line = line.map_err(|error| {
-            DelegateError::invalid(format!("cannot read the session transcript: {error}"))
-        })?;
-        // A line still being written is not evidence of anything.
-        let Ok(entry) = serde_json::from_str::<serde_json::Value>(&line) else {
-            continue;
-        };
+    let entries = session_entries(transcript, session_id).map_err(DelegateError::invalid)?;
+    for (index, entry) in entries.enumerate() {
+        let entry = entry.map_err(DelegateError::invalid)?;
         if entry["type"] != "user" {
-            continue;
-        }
-        if entry
-            .get("sessionId")
-            .is_some_and(|value| value != session_id)
-        {
             continue;
         }
         let Some(prompt_id) = entry["promptId"].as_str() else {
@@ -151,6 +129,115 @@ pub(super) fn read_launch(
         launched_by,
         prompt_order,
     })
+}
+
+/// Prove from the session transcript that the prompt a continuation admitted
+/// was a task notice Claude Code itself submitted, with the admitted bytes.
+///
+/// The first `user` entry whose `promptId` is `prompt_id` and whose content is
+/// text is that prompt. It must carry `origin.kind` `task-notification`,
+/// `promptSource` `system` and `turnOrigin` `task_notification`, its content
+/// must hash to `notice_sha256`, and an earlier `queue-operation` enqueue
+/// must hold the same bytes without an earlier native notice already having
+/// used it. Typed text, including an exact copy of a real notice, is recorded
+/// as `human` and fails.
+///
+/// # Errors
+///
+/// Returns the reason the prompt could not be proven a native task notice.
+pub(super) fn verify_notice_origin(
+    transcript: &Path,
+    session_id: &str,
+    prompt_id: &str,
+    notice_sha256: &str,
+) -> Result<(), String> {
+    let mut enqueued: HashMap<String, usize> = HashMap::new();
+    let mut delivered: HashMap<String, usize> = HashMap::new();
+    for entry in session_entries(transcript, session_id)? {
+        let entry = entry?;
+        match entry["type"].as_str() {
+            Some("queue-operation") if entry["operation"] == "enqueue" => {
+                if let Some(content) = entry["content"].as_str() {
+                    *enqueued.entry(hex_sha256(content.as_bytes())).or_default() += 1;
+                }
+            }
+            Some("user") => {
+                // Tool results carry block arrays; a submitted prompt is text.
+                let Some(content) = entry["message"]["content"].as_str() else {
+                    continue;
+                };
+                let digest = hex_sha256(content.as_bytes());
+                let native = entry["origin"]["kind"] == "task-notification"
+                    && entry["promptSource"] == "system"
+                    && entry["turnOrigin"] == "task_notification";
+                if entry["promptId"] != prompt_id {
+                    if native {
+                        *delivered.entry(digest).or_default() += 1;
+                    }
+                    continue;
+                }
+                if !native {
+                    return Err(format!(
+                        "the transcript records the admitted notice as {} input, not a Claude Code task notice",
+                        entry["origin"]["kind"].as_str().unwrap_or("unmarked")
+                    ));
+                }
+                if digest != notice_sha256 {
+                    return Err(
+                        "the transcript's task notice bytes differ from the admitted notice"
+                            .to_string(),
+                    );
+                }
+                let queued = enqueued.get(&digest).copied().unwrap_or(0);
+                if queued <= delivered.get(&digest).copied().unwrap_or(0) {
+                    return Err(
+                        "no queued task notice with these bytes precedes the admitted notice"
+                            .to_string(),
+                    );
+                }
+                return Ok(());
+            }
+            _ => {}
+        }
+    }
+    Err("the session transcript has no entry for the admitted notice".to_string())
+}
+
+/// The parsed entries of the session transcript Claude Code named, skipping
+/// entries recorded for another session.
+///
+/// The transcript must be a regular file named `<session_id>.jsonl`, no
+/// larger than the read bound. A line still being written is not evidence of
+/// anything and is skipped.
+fn session_entries<'a>(
+    transcript: &Path,
+    session_id: &'a str,
+) -> Result<impl Iterator<Item = Result<serde_json::Value, String>> + 'a, String> {
+    if !transcript.is_absolute()
+        || transcript.file_name().and_then(|name| name.to_str())
+            != Some(format!("{session_id}.jsonl").as_str())
+    {
+        return Err("the transcript_path is not this session's transcript".to_string());
+    }
+    let metadata = std::fs::symlink_metadata(transcript)
+        .map_err(|error| format!("cannot inspect the session transcript: {error}"))?;
+    if !metadata.file_type().is_file() || metadata.len() > MAX_TRANSCRIPT_BYTES {
+        return Err("the session transcript is not a bounded regular file".to_string());
+    }
+    let file = File::open(transcript)
+        .map_err(|error| format!("cannot open the session transcript: {error}"))?;
+    Ok(BufReader::new(file)
+        .lines()
+        .filter_map(move |line| match line {
+            Err(error) => Some(Err(format!("cannot read the session transcript: {error}"))),
+            Ok(line) => {
+                let entry = serde_json::from_str::<serde_json::Value>(&line).ok()?;
+                let foreign = entry
+                    .get("sessionId")
+                    .is_some_and(|value| value != session_id);
+                (!foreign).then_some(Ok(entry))
+            }
+        }))
 }
 
 fn launches(entry: &serde_json::Value, notice: &TaskNotice<'_>) -> bool {
