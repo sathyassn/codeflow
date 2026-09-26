@@ -114,8 +114,9 @@ struct Record {
     depends_on: Vec<String>,
 }
 
+/// The three durable record kinds.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum RecordKind {
+pub enum RecordKind {
     Epic,
     Spec,
     Task,
@@ -521,7 +522,7 @@ fn validate_dependencies(
     Ok(())
 }
 
-fn record_kind_for_tree_path(path: &str) -> Option<RecordKind> {
+pub(crate) fn record_kind_for_tree_path(path: &str) -> Option<RecordKind> {
     let parts = path.split('/').collect::<Vec<_>>();
     match parts.as_slice() {
         ["project-management", "tasks", file]
