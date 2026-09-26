@@ -241,7 +241,7 @@ function validateLayout(figure, fail) {
     if (figure.family !== "coverage") fail("the coverage layout draws the coverage family");
     onlyKeys(layout, ["kind", "columns", "rows"], "layout", fail);
     if (!Array.isArray(layout.columns) || layout.columns.length < 1 || layout.columns.length > 8) fail("layout.columns must list 1 to 8 columns");
-    for (const column of layout.columns ?? []) text(column, "layout column", fail, 24);
+    for (const column of layout.columns ?? []) text(column, "layout column", fail, COVERAGE_COLUMN_CHARACTERS);
     if (!Array.isArray(layout.rows) || layout.rows.length < 1 || layout.rows.length > 16) fail("layout.rows must list 1 to 16 rows");
     for (const row of layout.rows ?? []) {
       if (!isObject(row) || !Array.isArray(row.cells) || row.cells.length !== (layout.columns ?? []).length) { fail("each coverage row needs one cell per column"); continue; }
@@ -480,6 +480,8 @@ const LABEL_GAP = Math.ceil(THRESHOLDS.labelClearancePx / MIN_RENDER_SCALE + LIM
 // and keeps at least this much to plot in the 360-unit narrow composition; a
 // layout whose labels would leave less is refused, never drawn reversed.
 const EXTENT_NARROW_WIDTH = 360;
+const COVERAGE_NARROW_WIDTH = 360;
+export const COVERAGE_COLUMN_CHARACTERS = 24;
 export const MIN_PLOT_WIDTH = 160;
 function extentReserve(widestCharacters) {
   return Math.max(40, LABEL_GAP + widestCharacters * MONO_ADVANCE + TEXT_OVERHANG);
@@ -557,20 +559,38 @@ function layoutCompositions(figure, bound) {
     wideDraw.push({ text: row.label, x: 0, y: y + 14 });
     row.cells.forEach((state, columnIndex) => wideDraw.push({ state, shape: "rect", x: round(labelWidth + colStep * columnIndex + colStep / 2 - cell / 2), y, w: cell, h: cell, rx: 2 }));
   });
+  // The narrow composition lists each row's cells on a grid, each with its
+  // column name bound to it and set LABEL_GAP past it, as the extent layout
+  // sets its value labels. Every column takes one slot: its cell, that gap and
+  // the widest name at the value face's advance. That advance is a budget,
+  // not a bound for the label face (a sans name of wide glyphs can run past
+  // it); rule 8 in the browser gate is the bound. Slots sit LABEL_GAP apart,
+  // so a name clears the next cell, and as many fit a line as the width
+  // allows, so every line shares the same column positions. A column name
+  // is at most COVERAGE_COLUMN_CHARACTERS long, so one slot always fits the
+  // width (a test holds that bound).
+  const narrowCell = 16;
+  const narrowLine = 28;
+  const slot = narrowCell + LABEL_GAP + Math.max(...columns.map((column) => column.length)) * MONO_ADVANCE + TEXT_OVERHANG;
+  const perLine = Math.floor((COVERAGE_NARROW_WIDTH + LABEL_GAP) / (slot + LABEL_GAP));
+  const slots = columns.map((_, index) => ({ x: round((index % perLine) * (slot + LABEL_GAP)), line: Math.floor(index / perLine) }));
+  const line = Math.ceil(columns.length / perLine) - 1;
+  const rowPitch = 64 + line * narrowLine;
   const narrowDraw = [];
   rows.forEach((row, rowIndex) => {
-    const y = 20 + rowIndex * 64;
+    const y = 20 + rowIndex * rowPitch;
     narrowDraw.push({ text: row.label, x: 0, y, style: "strong" });
-    const step = Math.min(88, 360 / columns.length);
     row.cells.forEach((state, columnIndex) => {
-      const x = columnIndex * step;
-      narrowDraw.push({ state, shape: "rect", x, y: y + 14, w: 16, h: 16, rx: 2 });
-      narrowDraw.push({ text: columns[columnIndex], x: x + 22, y: y + 27, style: "mute" });
+      const { x, line: slotLine } = slots[columnIndex];
+      const cellY = y + 14 + slotLine * narrowLine;
+      const id = `cell-${rowIndex}-${columnIndex}`;
+      narrowDraw.push({ state, shape: "rect", x, y: cellY, w: narrowCell, h: narrowCell, rx: 2, id });
+      narrowDraw.push({ text: columns[columnIndex], x: round(x + narrowCell + LABEL_GAP), y: cellY + 13, style: "mute", for: [id] });
     });
   });
   return {
     wide: { width: THRESHOLDS.wideMaxWidth, height: 48 + rows.length * 36 + 4, draw: wideDraw },
-    narrow: { width: 360, height: 20 + rows.length * 64, draw: narrowDraw },
+    narrow: { width: COVERAGE_NARROW_WIDTH, height: 20 + rows.length * rowPitch, draw: narrowDraw },
     drawnValues: null,
   };
 }
@@ -861,10 +881,12 @@ function legendKey(state, sample, id) {
       const cross = hasPart("cross") ? `<path class="cf-m-cross" d="${crossPath(14, 8, 9)}"/>` : "";
       return svg(`<path class="${cls}" d="M3 8H${head || open || square ? 20 : 25}"/>${head}${open}${square}${cross}`);
     }
-    case "bar-v": return svg(`<line class="${cls}" x1="14" y1="1" x2="14" y2="15"/>`);
+    // A square-capped stop bar inks half its width past each end, so its key
+    // line is shorter to ink the same 1 to 15 as a limit bar.
+    case "bar-v": return svg(state.mark === "stop" ? `<line class="${cls}" x1="14" y1="3" x2="14" y2="13"/>` : `<line class="${cls}" x1="14" y1="1" x2="14" y2="15"/>`);
     case "ring": return svg(`<circle class="${cls}" cx="14" cy="8" r="6"/>${hasPart("tick") ? `<path class="cf-m-done" d="M10.5 8L13 11L18 5"/>` : ""}`);
     case "disc": return svg(`<circle class="${cls}" cx="14" cy="8" r="6.5"/>`);
-    case "diamond": return svg(`<path class="${cls}" d="M14 1.5L20.5 8L14 14.5L7.5 8Z"/>`);
+    case "diamond": return svg(`<path class="${cls}" d="M14 2.5L19.5 8L14 13.5L8.5 8Z"/>`);
     case "cross": return svg(`<path class="${cls}" d="${crossPath(14, 8, 10)}"/>`);
     case "bar": return svg(`<rect class="${cls}" x="2" y="3" width="24" height="10" rx="3"/>${hasPart("cap") ? `<path class="cf-m-cap" d="M19 3H23Q26 3 26 6V10Q26 13 23 13H19Z"/>` : ""}${hasPart("cross") ? `<path class="cf-m-cross" d="${crossPath(14, 8, 9)}"/>` : ""}`);
     case "box": return svg(`<rect class="${cls}" x="2" y="2" width="24" height="12" rx="3"/>${hasPart("cross") ? `<path class="cf-m-cross" d="${crossPath(14, 8, 9)}"/>` : ""}`);
@@ -1155,10 +1177,33 @@ export function probeFigures(options) {
       }
       for (const [state, entry] of Object.entries(record.states)) record.states[state] = Object.fromEntries(Object.entries(entry).map(([key, values]) => [key, [...values].sort()]));
       record.drawn = [...new Set(record.drawn)].sort();
-      record.boxedText = [...svg.querySelectorAll("[data-state]")].length > 0 && [...svg.querySelectorAll("[data-state]")].every((group) => {
-        const primary = group.tagName.toLowerCase() === "g" ? [...group.children].find((node) => DRAWN.includes(node.tagName.toLowerCase())) : group;
-        return primary?.tagName.toLowerCase() === "rect" && group.querySelectorAll("*").length <= 1;
+      // Rule 7: text boxes as the primary form. Each mark is classified on
+      // its own: it is a text box when its primary is a rect and a label is
+      // in it, either a text whose ink overlaps it by 1px or more (the depth
+      // rule 8 counts as overprint) or, for a container mark (state, optional,
+      // denied) tall enough to hold it, a text bound to it with data-cf-for
+      // wherever it sits. A cell, or a bar too thin to hold its label, is a
+      // mark with its label beside it, not a text box. The figure
+      // fails when two or more marks are text boxes and it draws no travel or
+      // transition mark between them, whatever other empty shapes it draws.
+      const CONTAINERS = ["cf-m-state", "cf-m-optional", "cf-m-denied"];
+      const CONNECTORS = ["cf-m-done", "cf-m-todo", "cf-m-blocked", "cf-m-trans", "cf-m-return"];
+      const primaryOf = (group) => (group.tagName.toLowerCase() === "g" ? [...group.children].find((node) => DRAWN.includes(node.tagName.toLowerCase())) : group);
+      const inkIn = (node) => {
+        const box = node.getBoundingClientRect();
+        return record.texts.some(({ box: [left, top, right, bottom] }) => Math.min(box.right, right) - Math.max(box.left, left) >= 1 && Math.min(box.bottom, bottom) - Math.max(box.top, top) >= 1);
+      };
+      const groups = [...svg.querySelectorAll("[data-state]")];
+      const textBoxes = groups.filter((group) => {
+        const primary = primaryOf(group);
+        if (primary?.tagName.toLowerCase() !== "rect") return false;
+        const container = CONTAINERS.includes(primary.getAttribute("class"));
+        if (!container && group.querySelectorAll("*").length > 1) return false;
+        const height = primary.getBoundingClientRect().height;
+        return inkIn(primary) || (container && group.id !== "" && record.texts.some((text) => text.labels.includes(group.id) && height >= text.box[3] - text.box[1]));
       });
+      const connected = groups.some((group) => CONNECTORS.includes(primaryOf(group)?.getAttribute("class")));
+      record.boxedText = textBoxes.length >= 2 && !connected;
     }
     figures.push(record);
   }
@@ -1246,7 +1291,7 @@ export function figureRuleFailures({ wide, narrow, wideDark = null, narrowDark =
       else if (collision.kind === "overprint") add(8, `${label}: text "${collision.a}" overprints a ${collision.b} mark by ${collision.depth}px`);
       else add(8, `${label}: text "${collision.a}" sits ${collision.distance}px from a ${collision.b} mark it does not label, under ${THRESHOLDS.labelClearancePx}px`);
     }
-    if (record.boxedText) add(7, `${label}: every mark is a box with nothing drawn between them`);
+    if (record.boxedText) add(7, `${label}: labels sit in boxes with nothing drawn between them`);
     for (const [a, b] of pairs(Object.keys(record.states))) {
       const differing = channelDifferences(record.states[a], record.states[b]);
       if (differing.length < THRESHOLDS.minChannels) add(3, `${label}: states ${a} and ${b} differ on ${differing.length ? differing.join(", ") : "no channel"}, need ${THRESHOLDS.minChannels}`);

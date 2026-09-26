@@ -40,6 +40,8 @@ const LABEL_GAP: f64 = 14.0;
 /// An extent layout keeps at least this much to plot in its 360-unit narrow
 /// composition; one whose value labels would leave less is refused.
 const EXTENT_NARROW_WIDTH: f64 = 360.0;
+/// The coverage layout's narrow composition width.
+const COVERAGE_NARROW_WIDTH: f64 = 360.0;
 const MIN_PLOT_WIDTH: f64 = 160.0;
 const LINE: [&str; 3] = ["path", "line", "polyline"];
 
@@ -535,15 +537,40 @@ fn coverage_layout(layout: &Value) -> Result<Composed, String> {
             wide.push(serde_json::json!({ "state": state, "shape": "rect", "x": round(label_width + col_step * column_index as f64 + col_step / 2.0 - cell / 2.0, 0.01), "y": y, "w": cell, "h": cell, "rx": 2 }));
         }
     }
+    // The narrow grid: every column takes one slot (its cell, the label gap
+    // and the widest name at the value face's advance), slots LABEL_GAP
+    // apart, as many to a line as the width allows, so every line shares the
+    // same column positions; each name is bound to its cell.
+    let narrow_cell = 16.0;
+    let narrow_line = 28.0;
+    let widest = columns
+        .iter()
+        .map(|column| column.encode_utf16().count())
+        .max()
+        .unwrap_or(0) as f64;
+    let slot = narrow_cell + LABEL_GAP + widest * MONO_ADVANCE + TEXT_OVERHANG;
+    let per_line = ((COVERAGE_NARROW_WIDTH + LABEL_GAP) / (slot + LABEL_GAP)).floor();
+    let slots: Vec<(f64, f64)> = (0..columns.len())
+        .map(|index| {
+            let index = index as f64;
+            (
+                round((index % per_line) * (slot + LABEL_GAP), 0.01),
+                (index / per_line).floor(),
+            )
+        })
+        .collect();
+    let line = (columns.len() as f64 / per_line).ceil() - 1.0;
+    let row_pitch = 64.0 + line * narrow_line;
     let mut narrow = Vec::new();
     for (row_index, row) in rows.iter().enumerate() {
-        let y = 20.0 + row_index as f64 * 64.0;
+        let y = 20.0 + row_index as f64 * row_pitch;
         narrow.push(serde_json::json!({ "text": label(row), "x": 0, "y": y, "style": "strong" }));
-        let step = f64::min(88.0, 360.0 / columns.len() as f64);
         for (column_index, state) in cells(row).into_iter().enumerate() {
-            let x = column_index as f64 * step;
-            narrow.push(serde_json::json!({ "state": state, "shape": "rect", "x": x, "y": y + 14.0, "w": 16, "h": 16, "rx": 2 }));
-            narrow.push(serde_json::json!({ "text": columns.get(column_index).cloned().unwrap_or_default(), "x": x + 22.0, "y": y + 27.0, "style": "mute" }));
+            let (x, slot_line) = slots.get(column_index).copied().unwrap_or((0.0, 0.0));
+            let cell_y = y + 14.0 + slot_line * narrow_line;
+            let id = format!("cell-{row_index}-{column_index}");
+            narrow.push(serde_json::json!({ "state": state, "shape": "rect", "x": x, "y": cell_y, "w": narrow_cell, "h": narrow_cell, "rx": 2, "id": id }));
+            narrow.push(serde_json::json!({ "text": columns.get(column_index).cloned().unwrap_or_default(), "x": round(x + narrow_cell + LABEL_GAP, 0.01), "y": cell_y + 13.0, "style": "mute", "for": [id] }));
         }
     }
     Ok((
@@ -554,8 +581,8 @@ fn coverage_layout(layout: &Value) -> Result<Composed, String> {
             drops: Vec::new(),
         },
         Composition {
-            width: 360.0,
-            height: 20.0 + rows.len() as f64 * 64.0,
+            width: COVERAGE_NARROW_WIDTH,
+            height: 20.0 + rows.len() as f64 * row_pitch,
             draw: narrow,
             drops: Vec::new(),
         },
@@ -1298,6 +1325,11 @@ fn legend_key(mark_name: &str, sample: Option<&Value>, id: &str) -> Rendered {
                 "<path class=\"{class}\" d=\"M3 8H{stop}\"/>{head}{open}{square}{cross}"
             ))
         }
+        // A square-capped stop bar inks half its width past each end, so its
+        // key line is shorter to ink the same 1 to 15 as a limit bar.
+        "bar-v" if mark_name == "stop" => svg(format!(
+            "<line class=\"{class}\" x1=\"14\" y1=\"3\" x2=\"14\" y2=\"13\"/>"
+        )),
         "bar-v" => svg(format!(
             "<line class=\"{class}\" x1=\"14\" y1=\"1\" x2=\"14\" y2=\"15\"/>"
         )),
@@ -1313,7 +1345,7 @@ fn legend_key(mark_name: &str, sample: Option<&Value>, id: &str) -> Rendered {
             "<circle class=\"{class}\" cx=\"14\" cy=\"8\" r=\"6.5\"/>"
         )),
         "diamond" => svg(format!(
-            "<path class=\"{class}\" d=\"M14 1.5L20.5 8L14 14.5L7.5 8Z\"/>"
+            "<path class=\"{class}\" d=\"M14 2.5L19.5 8L14 13.5L8.5 8Z\"/>"
         )),
         "cross" => svg(format!(
             "<path class=\"{class}\" d=\"{}\"/>",
@@ -1764,6 +1796,9 @@ mod tests {
             .collect();
         names.sort();
         assert_eq!(names.len(), 10, "{names:?}");
+        // The coverage controls pin the narrow coverage layout on one line and
+        // wrapped onto a second.
+        names.extend(["controls/coverage-derived", "controls/coverage-wrapped"].map(str::to_owned));
         let derived = serde_json::json!({"commit_desc_max_len": 50, "commit_subject_max_len": 72});
         for name in names {
             let declaration: serde_json::Value = serde_json::from_slice(

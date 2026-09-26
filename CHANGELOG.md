@@ -70,6 +70,14 @@ publication date._
   No existing CLI or config value is removed.
 
 <!-- codeflow:release-impact patch -->
+- **Figure marks read without colour.** The stop mark is a square-capped bar
+  and the merge diamond an accent stroke, so every mark pair in a figure
+  differs on two channels besides hue. The boxed-text check judges each mark
+  before the figure, so empty shapes no longer hide a figure drawn as
+  labelled boxes, and coverage cells no longer count as boxed text. Narrow
+  coverage grids bind their column labels and share one set of columns.
+
+<!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
   minutes, repairs assertion-red checks without being asked, reports

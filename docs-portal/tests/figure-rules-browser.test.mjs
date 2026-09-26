@@ -6,9 +6,9 @@ import path from "node:path";
 import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { chromium, firefox, webkit } from "@playwright/test";
-import { canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
+import { bindDerivedData, canonicalJson, composeFigure, FIGURE_RULES, figureDomFailures, figureRuleFailures, probeFigures, readFigureDom, renderFigure, THRESHOLDS } from "../scripts/figure-grammar.mjs";
 import { hardenedChildEnvironment } from "../scripts/process-environment.mjs";
-import { specimens } from "./page-shapes.mjs";
+import { specimen, specimens } from "./page-shapes.mjs";
 
 const styles = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/styles");
 
@@ -44,7 +44,7 @@ async function probe(page, css, html, breakage = null, argument = undefined) {
 test("each of the twelve rules fails a figure built to break it", { skip: process.platform === "win32", timeout: 180_000 }, async () => {
   const all = await specimens();
   const layering = all.find(({ name }) => name === "03-layering.json").declaration;
-  const flow = all.find(({ name }) => name === "01-flow.json").declaration;
+  const oneChannel = await specimen("controls/one-channel.json");
   const css = await sheet();
   const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
   try {
@@ -58,7 +58,18 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
       2: () => document.querySelector(".cf-legend li").remove(),
       4: () => { for (const text of document.querySelectorAll(".cf-fig text")) text.style.fontSize = "8px"; },
       5: () => { const [wide, narrow] = document.querySelectorAll(".cf-fig-svg"); narrow.innerHTML = wide.innerHTML; narrow.setAttribute("viewBox", wide.getAttribute("viewBox")); },
-      7: () => { for (const svg of document.querySelectorAll(".cf-fig-svg")) for (const group of svg.querySelectorAll("[data-state]")) group.replaceChildren(Object.assign(document.createElementNS("http://www.w3.org/2000/svg", "rect"), {})); },
+      // Every mark becomes a box drawn around one of the figure's labels.
+      7: () => {
+        for (const svg of document.querySelectorAll(".cf-fig-svg")) {
+          const texts = [...svg.querySelectorAll("text")];
+          [...svg.querySelectorAll("[data-state]")].forEach((group, index) => {
+            const box = texts[index % texts.length].getBBox();
+            const rect = document.createElementNS("http://www.w3.org/2000/svg", "rect");
+            for (const [name, value] of Object.entries({ x: box.x - 6, y: box.y - 4, width: box.width + 12, height: box.height + 8 })) rect.setAttribute(name, String(value));
+            group.replaceChildren(rect);
+          });
+        }
+      },
       8: () => { for (const svg of document.querySelectorAll(".cf-fig-svg")) { const [a, b] = svg.querySelectorAll("text"); b.setAttribute("x", a.getAttribute("x")); b.setAttribute("y", a.getAttribute("y")); } },
       9: () => { document.querySelector(".cf-fig-caption").textContent = "First sentence. Second sentence."; },
       10: () => document.querySelector(".cf-fig-svg [data-state] *").setAttribute("fill", "#ff0000"),
@@ -69,14 +80,80 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
       const observed = await probe(page, css, html, breakage);
       assert.ok(rulesOf(observed).includes(Number(rule)), `rule ${rule} (${FIGURE_RULES[rule]}) did not fail: ${JSON.stringify(figureRuleFailures(observed))}`);
     }
-    // Rule 3: the flow specimen tells done from stop by shape alone.
-    const flowObserved = await probe(page, css, renderFigure(flow, { idPrefix: "f" }));
-    assert.ok(figureRuleFailures(flowObserved).some((failure) => failure.rule === 3 && /states done and stop differ on shape, need 2/.test(failure.message)));
+    // Rule 3: the layering specimen with its remote plane declared on the
+    // local layer mark, so only the cap tells the two planes apart.
+    const oneChannelFailures = figureRuleFailures(await probe(page, css, renderFigure(oneChannel, { idPrefix: "f" })));
+    assert.deepEqual([...new Set(oneChannelFailures.map((failure) => failure.rule))], [3], canonicalJson(oneChannelFailures));
+    assert.ok(oneChannelFailures.some((failure) => /^wide: states layer and layer-remote differ on overlay, need 2$/.test(failure.message)), canonicalJson(oneChannelFailures));
     // Rule 6: the evidence re-derives a value the figure does not draw.
     const fact = layering.figure.facts[0];
     assert.ok(rulesOf(clean, { facts: [{ claim: fact.claim, source: fact.source, drawn: fact.value, derived: false, matches: false }] }).includes(6));
     assert.ok(rulesOf(clean, { facts: [], data: null }).includes(6));
   } finally { await browser.close(); }
+});
+
+// Rule 7 is about text in boxes: a coverage cell is a state mark with no text
+// in it, so a grid of cells with no crossed cell is not boxed text, and boxes
+// that each hold a label still are. The narrow coverage composition binds
+// each column label to its cell and budgets its width, so the label clears
+// every cell it does not label (rule 8) at 390 px, on one line or wrapped,
+// in Chromium, WebKit and Firefox.
+const SIGNING = JSON.stringify({ channels: { release: ["binaries", "archives", "images"], nightly: ["binaries", "archives"] } });
+test("a coverage grid is not boxed text and its narrow labels clear the cells they do not label", { skip: process.platform === "win32", timeout: 300_000 }, async () => {
+  const css = await sheet();
+  for (const [engineName, engine] of Object.entries({ chromium, webkit, firefox })) {
+    const browser = await engine.launch({ headless: true, env: hardenedChildEnvironment() });
+    try {
+      const page = await browser.newPage();
+      for (const name of ["coverage-derived.json", "coverage-wrapped.json"]) {
+        const declaration = await specimen(`controls/${name}`);
+        const bound = declaration.figure.binding === "derived" ? bindDerivedData(declaration.figure, (relative) => (relative === "config/signing.json" ? SIGNING : null)) : null;
+        const failures = figureRuleFailures(await probe(page, css, renderFigure(declaration, { idPrefix: "c", bound })));
+        assert.deepEqual(failures, [], `${engineName}, ${name}: ${canonicalJson(failures)}`);
+      }
+      const boxed = figureRuleFailures(await probe(page, css, renderFigure(await specimen("controls/boxed-text.json"), { idPrefix: "b" })));
+      assert.deepEqual(boxed.filter((failure) => failure.rule === 7).map((failure) => failure.message.split(":")[0]), ["wide", "narrow", "wide dark", "narrow dark"], `${engineName}: ${canonicalJson(boxed)}`);
+    } finally { await browser.close(); }
+  }
+});
+
+// Rule 7 classifies each mark on its own and decides for the figure: labels
+// in boxes with nothing drawn between them fail whatever else the figure
+// draws. An empty box added beside them, or one box left without its label,
+// does not clear the form, and a container box whose bound label sits beside
+// it is still a text box. Bars and cells with their labels beside them, bound
+// or not, are marks, so an extent of bars and a coverage grid pass.
+test("rule 7 finds labels in boxes however the rest of the figure is drawn", { skip: process.platform === "win32", timeout: 300_000 }, async () => {
+  const boxed = await specimen("controls/boxed-text.json");
+  const variant = (change) => { const copy = structuredClone(boxed); for (const name of ["wide", "narrow"]) change(copy.figure[name].draw, name); return copy; };
+  const padded = variant((draw, name) => draw.push({ state: "part", shape: "rect", x: 20, y: name === "wide" ? 110 : 150, w: 16, h: 16, id: "empty" }));
+  const unlabelled = variant((draw) => draw.splice(draw.findIndex((item) => item.text === "Dead letters"), 1));
+  const beside = variant((draw) => {
+    for (const item of draw.filter((entry) => entry.text !== undefined)) {
+      const box = draw.find((entry) => entry.id === item.for[0]);
+      item.y = box.y + box.h + 18;
+    }
+  });
+  const bars = structuredClone(await specimen("10-extent-derived.json"));
+  bars.figure.id = "bars-only";
+  delete bars.figure.layout.limits;
+  bars.figure.states = bars.figure.states.filter((state) => state.name !== "limit");
+  const barsBound = { source: bars.figure.source, derived: POLICY };
+  const coverage = await specimen("controls/coverage-derived.json");
+  const coverageBound = bindDerivedData(coverage.figure, (relative) => (relative === "config/signing.json" ? SIGNING : null));
+  const css = await sheet();
+  for (const [engineName, engine] of Object.entries({ chromium, webkit, firefox })) {
+    const browser = await engine.launch({ headless: true, env: hardenedChildEnvironment() });
+    try {
+      const page = await browser.newPage();
+      const sevens = async (declaration, bound = null) => figureRuleFailures(await probe(page, css, renderFigure(declaration, { idPrefix: "r", bound }))).filter((failure) => failure.rule === 7).map((failure) => failure.message);
+      for (const [name, declaration] of Object.entries({ boxed, padded, unlabelled, beside })) {
+        assert.deepEqual(await sevens(declaration), ["wide", "narrow", "wide dark", "narrow dark"].map((label) => `${label}: labels sit in boxes with nothing drawn between them`), `${engineName}, ${name}`);
+      }
+      assert.deepEqual(await sevens(bars, barsBound), [], `${engineName}, extent bars with bound value labels`);
+      assert.deepEqual(await sevens(coverage, coverageBound), [], `${engineName}, coverage cells with bound column names`);
+    } finally { await browser.close(); }
+  }
 });
 
 // Rule 6 reads the bars and limits themselves: a render whose marks or value
@@ -231,7 +308,7 @@ test("the specimens that hold every rule, and the doctrine conflicts the gate na
     }
   } finally { await browser.close(); }
   assert.deepEqual(outcome, {
-    "01-flow.json": [3],
+    "01-flow.json": [],
     "02-structure.json": [],
     "03-layering.json": [],
     "04-sequence.json": [],
