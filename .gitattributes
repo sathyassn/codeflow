@@ -9,4 +9,4 @@
 crates/codeflow-present/assets/service/*.br binary
 crates/codeflow-present/assets/export/*.gz binary
 # Captured delegate prompts are compared byte for byte; never convert line ends.
-crates/codeflow-core/tests/fixtures/delegate/* -text
+crates/codeflow-core/tests/fixtures/delegate/** -text

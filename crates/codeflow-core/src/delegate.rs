@@ -13,6 +13,8 @@ use fs2::FileExt;
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
+mod continuation;
+
 const SCHEMA_VERSION: u8 = 2;
 /// Maximum exact prompt size accepted by the lifecycle protocol.
 pub const MAX_PROMPT_BYTES: usize = 1024 * 1024;
@@ -139,6 +141,30 @@ struct AcceptedRecord {
     delivery: Option<String>,
 }
 
+/// A Claude Code task notice admitted as a continuation of an accepted turn.
+///
+/// It lives at `turns/<turn>/continuations/<task_id>/accepted.json`, beside
+/// the `result.json` its own Stop writes, so the turn's records stay
+/// write-once.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ContinuationRecord {
+    schema_version: u8,
+    run_id: String,
+    turn_id: String,
+    event: String,
+    session_id: String,
+    prompt_id: String,
+    /// Always `task_notification`.
+    delivery: String,
+    task_id: String,
+    tool_use_id: String,
+    /// The prompt, of this turn or one of its continuations, whose tool call
+    /// launched the task.
+    launched_by_prompt_id: String,
+    notice_sha256: String,
+}
+
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ResultRecord {
@@ -171,6 +197,8 @@ struct HookPayload {
     prompt: Option<String>,
     #[serde(default)]
     prompt_id: Option<String>,
+    #[serde(default)]
+    transcript_path: Option<String>,
     #[serde(default)]
     last_assistant_message: Option<String>,
     #[serde(default)]
@@ -466,6 +494,25 @@ fn accept_prompt(
     }
 
     let states = inspect_turns(run_id, state_dir)?;
+    if let Some(notice) = continuation::parse_task_notice(&prompt) {
+        return accept_continuation(
+            run_id,
+            state_dir,
+            &states,
+            ContinuationSubmit {
+                session_id,
+                prompt_id: payload.prompt_id,
+                transcript_path: payload.transcript_path,
+            },
+            &notice,
+            &prompt,
+        );
+    }
+    if states.iter().any(TurnState::has_open_continuation) {
+        return Err(DelegateError::invalid(
+            "a task-notification continuation is still open; its Stop must arrive first",
+        ));
+    }
     let outstanding: Vec<_> = states
         .iter()
         .filter(|state| state.request.is_some() && state.result.is_none())
@@ -501,6 +548,126 @@ fn accept_prompt(
         &turn_path(state_dir, &state.turn_id, "accepted.json"),
         &accepted,
     )
+}
+
+struct ContinuationSubmit {
+    session_id: String,
+    prompt_id: Option<String>,
+    transcript_path: Option<String>,
+}
+
+/// Admit one Claude Code task notice as a continuation of the current turn.
+///
+/// The current turn is the accepted turn whose prompt appears last in the
+/// session transcript. The notice is admitted only when that turn has already
+/// stopped, no other continuation is open, and the transcript shows the tool
+/// call that returned the noticed task id answered within that turn or one of
+/// its earlier continuations. It consumes no armed request.
+fn accept_continuation(
+    run_id: &str,
+    state_dir: &Path,
+    states: &[TurnState],
+    submit: ContinuationSubmit,
+    notice: &continuation::TaskNotice<'_>,
+    prompt: &str,
+) -> Result<(), DelegateError> {
+    let prompt_id = submit.prompt_id.ok_or_else(|| {
+        DelegateError::invalid("a task notice without a prompt_id is not admitted")
+    })?;
+    let transcript = submit.transcript_path.ok_or_else(|| {
+        DelegateError::invalid("a task notice without a transcript_path is not admitted")
+    })?;
+    let accepted: Vec<(&TurnState, &AcceptedRecord)> = states
+        .iter()
+        .filter_map(|state| state.accepted.as_ref().map(|record| (state, record)))
+        .collect();
+    if accepted.is_empty() {
+        return Err(DelegateError::invalid(
+            "a task notice arrived when no turn is accepted",
+        ));
+    }
+    let view = continuation::read_launch(Path::new(&transcript), &submit.session_id, notice)?;
+    let mut current: Option<(&TurnState, &str, usize)> = None;
+    for (state, record) in &accepted {
+        let turn_prompt = record.prompt_id.as_deref().ok_or_else(|| {
+            DelegateError::invalid("a turn accepted without a prompt_id cannot be continued")
+        })?;
+        let position = *view.prompt_order.get(turn_prompt).ok_or_else(|| {
+            DelegateError::invalid("an accepted turn is missing from the session transcript")
+        })?;
+        if current.is_none_or(|(_, _, best)| position > best) {
+            current = Some((state, turn_prompt, position));
+        }
+    }
+    let (state, turn_prompt, _) =
+        current.ok_or_else(|| DelegateError::invalid("no current accepted turn"))?;
+    let record = ContinuationRecord {
+        schema_version: SCHEMA_VERSION,
+        run_id: run_id.to_string(),
+        turn_id: state.turn_id.clone(),
+        event: "UserPromptSubmit".to_string(),
+        session_id: submit.session_id,
+        prompt_id,
+        delivery: "task_notification".to_string(),
+        task_id: notice.task_id.to_string(),
+        tool_use_id: notice.tool_use_id.to_string(),
+        launched_by_prompt_id: view.launched_by,
+        notice_sha256: hex_sha256(prompt.as_bytes()),
+    };
+    // An exact retry of an admitted notice changes nothing.
+    if state
+        .continuations
+        .iter()
+        .any(|existing| existing.accepted == record)
+    {
+        return Ok(());
+    }
+    if state.result.is_none() {
+        return Err(DelegateError::invalid(
+            "a task notice arrived before the current turn stopped",
+        ));
+    }
+    if states.iter().any(TurnState::has_open_continuation) {
+        return Err(DelegateError::invalid(
+            "another task-notification continuation is still open",
+        ));
+    }
+    let launchers: Vec<&str> = std::iter::once(turn_prompt)
+        .chain(
+            state
+                .continuations
+                .iter()
+                .map(|existing| existing.accepted.prompt_id.as_str()),
+        )
+        .collect();
+    if !launchers.contains(&record.launched_by_prompt_id.as_str()) {
+        return Err(DelegateError::invalid(
+            "the noticed task was not launched during the current accepted turn",
+        ));
+    }
+    let used = states.iter().any(|other| {
+        other
+            .accepted
+            .as_ref()
+            .is_some_and(|accepted| accepted.prompt_id.as_deref() == Some(&record.prompt_id))
+            || other
+                .continuations
+                .iter()
+                .any(|existing| existing.accepted.prompt_id == record.prompt_id)
+    });
+    if used {
+        return Err(DelegateError::invalid(
+            "the task notice reuses a prompt_id this run already recorded",
+        ));
+    }
+    let directory = state_dir
+        .join("turns")
+        .join(&state.turn_id)
+        .join("continuations");
+    create_private_dir(&directory)?;
+    let directory = directory.join(notice.task_id);
+    create_private_dir(&directory)?;
+    install_json(&directory.join("accepted.json"), &record)
 }
 
 /// Classify how a submitted prompt matches the armed digest.
@@ -557,6 +724,9 @@ fn record_terminal(
         .filter(|state| state.accepted.is_some() && state.result.is_none())
         .collect();
     if exact_terminal_retry(run_id, state_dir, &turn_states, &unresolved, &evidence)? {
+        return Ok(());
+    }
+    if close_continuation(run_id, state_dir, &turn_states, &evidence)? {
         return Ok(());
     }
     let [turn] = unresolved.as_slice() else {
@@ -686,6 +856,67 @@ fn exact_terminal_retry(
     Ok(false)
 }
 
+/// Record a Stop or `StopFailure` against the open task-notification
+/// continuation it belongs to. Returns false when the event names no
+/// continuation, so the caller correlates it with a turn as before.
+fn close_continuation(
+    run_id: &str,
+    state_dir: &Path,
+    states: &[TurnState],
+    evidence: &TerminalEvidence,
+) -> Result<bool, DelegateError> {
+    let Some(prompt_id) = evidence.prompt_id.as_deref() else {
+        return Ok(false);
+    };
+    for state in states {
+        for recorded in &state.continuations {
+            if recorded.accepted.prompt_id != prompt_id {
+                continue;
+            }
+            let candidate = evidence.result_for(run_id, &state.turn_id);
+            if let Some(existing) = &recorded.result {
+                // Only an exact retry of the recorded result is accepted.
+                if *existing == candidate {
+                    return Ok(true);
+                }
+                poison(
+                    run_id,
+                    state_dir,
+                    "a different terminal event for a closed continuation",
+                    Some(&evidence.event),
+                    None,
+                    Some(&state.turn_id),
+                )?;
+                return Err(DelegateError::unsafe_state(
+                    "conflicting continuation result poisoned the delegate run",
+                ));
+            }
+            if recorded.accepted.session_id != evidence.session_id {
+                poison(
+                    run_id,
+                    state_dir,
+                    "terminal session_id does not match the continuation",
+                    Some(&evidence.event),
+                    None,
+                    Some(&state.turn_id),
+                )?;
+                return Err(DelegateError::unsafe_state(
+                    "continuation session mismatch poisoned the delegate run",
+                ));
+            }
+            let path = state_dir
+                .join("turns")
+                .join(&state.turn_id)
+                .join("continuations")
+                .join(&recorded.task_id)
+                .join("result.json");
+            install_json(&path, &candidate)?;
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 fn validate_terminal_binding(
     run_id: &str,
     state_dir: &Path,
@@ -729,6 +960,153 @@ struct TurnState {
     request: Option<RequestRecord>,
     accepted: Option<AcceptedRecord>,
     result: Option<ResultRecord>,
+    continuations: Vec<ContinuationState>,
+}
+
+impl TurnState {
+    fn has_open_continuation(&self) -> bool {
+        self.continuations
+            .iter()
+            .any(|continuation| continuation.result.is_none())
+    }
+}
+
+#[derive(Debug)]
+struct ContinuationState {
+    task_id: String,
+    accepted: ContinuationRecord,
+    result: Option<ResultRecord>,
+}
+
+/// Read and validate the continuations recorded under one turn.
+fn inspect_continuations(
+    run_id: &str,
+    turn_dir: &Path,
+    turn_id: &str,
+    accepted: Option<&AcceptedRecord>,
+    result: Option<&ResultRecord>,
+) -> Result<Vec<ContinuationState>, DelegateError> {
+    let directory = turn_dir.join("continuations");
+    match std::fs::symlink_metadata(&directory) {
+        Ok(_) => validate_private_dir(&directory)?,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(error) => {
+            return Err(DelegateError::unsafe_state(format!(
+                "cannot inspect continuations: {error}"
+            )))
+        }
+    }
+    let (Some(accepted), Some(_)) = (accepted, result) else {
+        return Err(DelegateError::unsafe_state(
+            "continuations exist for a turn that has not stopped",
+        ));
+    };
+    let turn_prompt = accepted.prompt_id.as_deref().ok_or_else(|| {
+        DelegateError::unsafe_state("continuations exist for a turn without a prompt_id")
+    })?;
+    let mut entries = std::fs::read_dir(&directory)
+        .map_err(|error| {
+            DelegateError::unsafe_state(format!("cannot read continuations: {error}"))
+        })?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|error| {
+            DelegateError::unsafe_state(format!("cannot read continuations: {error}"))
+        })?;
+    entries.sort_by_key(std::fs::DirEntry::file_name);
+    let mut continuations: Vec<ContinuationState> = Vec::with_capacity(entries.len());
+    for entry in entries {
+        let task_id = entry
+            .file_name()
+            .into_string()
+            .map_err(|_| DelegateError::unsafe_state("continuation name is not UTF-8"))?;
+        validate_id("task", &task_id)
+            .map_err(|error| DelegateError::unsafe_state(error.message))?;
+        let path = entry.path();
+        validate_private_dir(&path)?;
+        let record = read_optional_json::<ContinuationRecord>(&path.join("accepted.json"))?;
+        let terminal = read_optional_json::<ResultRecord>(&path.join("result.json"))?;
+        let Some(record) = record else {
+            if terminal.is_some() {
+                return Err(DelegateError::unsafe_state(
+                    "continuation result lacks a matching acceptance",
+                ));
+            }
+            // A directory created just before its record was committed.
+            continue;
+        };
+        validate_header(
+            record.schema_version,
+            &record.run_id,
+            run_id,
+            "continuation",
+        )?;
+        let launchers_ok = record.launched_by_prompt_id == turn_prompt
+            || continuations
+                .iter()
+                .any(|earlier| earlier.accepted.prompt_id == record.launched_by_prompt_id);
+        if record.turn_id != turn_id
+            || record.task_id != task_id
+            || record.event != "UserPromptSubmit"
+            || record.delivery != "task_notification"
+            || record.session_id != accepted.session_id
+            || record.prompt_id == turn_prompt
+            || !valid_digest(&record.notice_sha256)
+            || !launchers_ok
+        {
+            return Err(DelegateError::unsafe_state(
+                "continuation record is mis-correlated with its turn",
+            ));
+        }
+        validate_prompt_id(Some(&record.prompt_id))
+            .map_err(|error| DelegateError::unsafe_state(error.message))?;
+        validate_prompt_id(Some(&record.launched_by_prompt_id))
+            .map_err(|error| DelegateError::unsafe_state(error.message))?;
+        if let Some(terminal) = &terminal {
+            validate_result_record(
+                terminal,
+                run_id,
+                turn_id,
+                &record.session_id,
+                Some(&record.prompt_id),
+            )?;
+        }
+        continuations.push(ContinuationState {
+            task_id,
+            accepted: record,
+            result: terminal,
+        });
+    }
+    Ok(continuations)
+}
+
+fn validate_result_record(
+    record: &ResultRecord,
+    run_id: &str,
+    turn_id: &str,
+    session_id: &str,
+    prompt_id: Option<&String>,
+) -> Result<(), DelegateError> {
+    validate_header(record.schema_version, &record.run_id, run_id, "result")?;
+    let valid_terminal = (record.event == "Stop" && record.status == "completed")
+        || (record.event == "StopFailure" && record.status == "failed");
+    let valid_content = if record.event == "Stop" {
+        record.last_assistant_message.is_some()
+            && record.error.is_none()
+            && record.error_details.is_none()
+    } else {
+        record.last_assistant_message.is_none()
+    };
+    if record.turn_id != turn_id
+        || !valid_terminal
+        || !valid_content
+        || record.session_id != session_id
+        || record.prompt_id.as_ref() != prompt_id
+    {
+        return Err(DelegateError::unsafe_state(
+            "result record is mis-correlated with its acceptance",
+        ));
+    }
+    Ok(())
 }
 
 fn inspect_turns(run_id: &str, state_dir: &Path) -> Result<Vec<TurnState>, DelegateError> {
@@ -788,39 +1166,36 @@ fn inspect_turns(run_id: &str, state_dir: &Path) -> Result<Vec<TurnState>, Deleg
                 .map_err(|error| DelegateError::unsafe_state(error.message))?;
         }
         if let Some(record) = &result {
-            validate_header(record.schema_version, &record.run_id, run_id, "result")?;
             let Some(accepted) = &accepted else {
+                validate_header(record.schema_version, &record.run_id, run_id, "result")?;
                 return Err(DelegateError::unsafe_state(
                     "result record lacks a matching acceptance",
                 ));
             };
-            let valid_terminal = (record.event == "Stop" && record.status == "completed")
-                || (record.event == "StopFailure" && record.status == "failed");
-            let valid_content = if record.event == "Stop" {
-                record.last_assistant_message.is_some()
-                    && record.error.is_none()
-                    && record.error_details.is_none()
-            } else {
-                record.last_assistant_message.is_none()
-            };
-            if record.turn_id != turn_id
-                || !valid_terminal
-                || !valid_content
-                || record.session_id != accepted.session_id
-                || record.prompt_id != accepted.prompt_id
-            {
-                return Err(DelegateError::unsafe_state(
-                    "result record is mis-correlated with its acceptance",
-                ));
-            }
+            validate_result_record(
+                record,
+                run_id,
+                &turn_id,
+                &accepted.session_id,
+                accepted.prompt_id.as_ref(),
+            )?;
         }
+        let continuations =
+            inspect_continuations(run_id, &path, &turn_id, accepted.as_ref(), result.as_ref())?;
         states.push(TurnState {
             turn_id,
             request,
             accepted,
             result,
+            continuations,
         });
     }
+    ensure_single_open(&states)?;
+    Ok(states)
+}
+
+/// A run holds at most one outstanding turn and one open continuation.
+fn ensure_single_open(states: &[TurnState]) -> Result<(), DelegateError> {
     if states
         .iter()
         .filter(|state| state.request.is_some() && state.result.is_none())
@@ -831,7 +1206,18 @@ fn inspect_turns(run_id: &str, state_dir: &Path) -> Result<Vec<TurnState>, Deleg
             "delegate run contains multiple outstanding turns",
         ));
     }
-    Ok(states)
+    if states
+        .iter()
+        .flat_map(|state| &state.continuations)
+        .filter(|continuation| continuation.result.is_none())
+        .count()
+        > 1
+    {
+        return Err(DelegateError::unsafe_state(
+            "delegate run contains multiple open continuations",
+        ));
+    }
+    Ok(())
 }
 
 fn observe_wait(
@@ -1866,6 +2252,267 @@ mod tests {
             assert_eq!(error.kind, ErrorKind::Invalid, "{near_miss:?}");
             assert!(!path.join("turns/turn-1/accepted.json").exists());
         }
+    }
+
+    /// Hook stdin captured from a live Claude Code 2.1.283 session: a turn
+    /// that launched a Workflow in the background, the task notice Claude Code
+    /// submitted when it finished, then a second turn that launched a
+    /// background Bash command and its notice. The transcript keeps that
+    /// session's `user` entries verbatim.
+    const NOTICE_DIR: &str = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/tests/fixtures/delegate/notice"
+    );
+    const NOTICE_SESSION: &str = "4ef6e185-4a32-4796-9fac-3bbe3ee0501f";
+
+    fn captured(name: &str) -> serde_json::Value {
+        let text = std::fs::read_to_string(format!("{NOTICE_DIR}/{name}.json")).unwrap();
+        let mut value: serde_json::Value = serde_json::from_str(&text).unwrap();
+        if value.get("transcript_path").is_some() {
+            value["transcript_path"] =
+                serde_json::Value::String(format!("{NOTICE_DIR}/{NOTICE_SESSION}.jsonl"));
+        }
+        value
+    }
+
+    fn send(path: &Path, value: &serde_json::Value) -> Result<(), DelegateError> {
+        handle_hook("run-1", path, &value.to_string())
+    }
+
+    fn notice_run() -> (TempDir, PathBuf) {
+        let (temp, path) = state();
+        send(&path, &captured("session-start")).unwrap();
+        (temp, path)
+    }
+
+    /// Arm, accept and stop one captured turn.
+    fn captured_turn(path: &Path, turn_id: &str, submit: &str, stop: &str) {
+        let prompt = captured(submit)["prompt"].as_str().unwrap().to_string();
+        arm("run-1", path, turn_id, prompt.as_bytes()).unwrap();
+        send(path, &captured(submit)).unwrap();
+        send(path, &captured(stop)).unwrap();
+    }
+
+    fn continuation_file(path: &Path, turn: &str, task: &str, file: &str) -> PathBuf {
+        path.join("turns")
+            .join(turn)
+            .join("continuations")
+            .join(task)
+            .join(file)
+    }
+
+    fn assert_blocked(path: &Path, value: &serde_json::Value, reason: &str) {
+        let error = send(path, value).unwrap_err();
+        assert_eq!(error.kind, ErrorKind::Invalid, "{error:?}");
+        assert!(error.message.contains(reason), "{}", error.message);
+        assert!(!path.join("poison.json").exists());
+    }
+
+    #[test]
+    fn admits_captured_task_notices_as_continuations_of_their_turn() {
+        let (_temp, path) = notice_run();
+        captured_turn(&path, "turn-1", "turn1-submit", "turn1-stop");
+        let notice = captured("workflow-notice-submit");
+        send(&path, &notice).unwrap();
+        let record: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(continuation_file(
+                &path,
+                "turn-1",
+                "wkj4tsqcd",
+                "accepted.json",
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(record["delivery"], "task_notification");
+        assert_eq!(record["task_id"], "wkj4tsqcd");
+        assert_eq!(record["tool_use_id"], "toolu_01THy9eKYysgjuWhj9CBoYZF");
+        assert_eq!(record["prompt_id"], notice["prompt_id"]);
+        assert_eq!(
+            record["launched_by_prompt_id"],
+            captured("turn1-submit")["prompt_id"]
+        );
+        assert_eq!(
+            record["notice_sha256"],
+            hex_sha256(notice["prompt"].as_str().unwrap().as_bytes())
+        );
+        // The Stop that follows closes the continuation, not the run.
+        send(&path, &captured("workflow-notice-stop")).unwrap();
+        assert!(continuation_file(&path, "turn-1", "wkj4tsqcd", "result.json").exists());
+        assert!(!path.join("poison.json").exists());
+        // Exact retries of the notice, its Stop and the turn's own Stop hold.
+        send(&path, &notice).unwrap();
+        send(&path, &captured("workflow-notice-stop")).unwrap();
+        send(&path, &captured("turn1-stop")).unwrap();
+        // The run goes on: the next armed turn and its own background notice.
+        captured_turn(&path, "turn-2", "turn2-submit", "turn2-stop");
+        send(&path, &captured("bash-notice-submit")).unwrap();
+        send(&path, &captured("bash-notice-stop")).unwrap();
+        assert!(continuation_file(&path, "turn-2", "b64do3c7c", "result.json").exists());
+        assert_eq!(inspect_turns("run-1", &path).unwrap().len(), 2);
+        assert!(!path.join("poison.json").exists());
+    }
+
+    #[test]
+    fn blocks_a_notice_for_a_task_from_an_earlier_turn() {
+        let (_temp, path) = notice_run();
+        captured_turn(&path, "turn-1", "turn1-submit", "turn1-stop");
+        captured_turn(&path, "turn-2", "turn2-submit", "turn2-stop");
+        assert_blocked(
+            &path,
+            &captured("workflow-notice-submit"),
+            "not launched during the current accepted turn",
+        );
+    }
+
+    #[test]
+    fn blocks_a_notice_when_no_turn_is_accepted_or_stopped() {
+        let (_temp, path) = notice_run();
+        assert_blocked(
+            &path,
+            &captured("workflow-notice-submit"),
+            "no turn is accepted",
+        );
+        let prompt = captured("turn1-submit")["prompt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        arm("run-1", &path, "turn-1", prompt.as_bytes()).unwrap();
+        assert_blocked(
+            &path,
+            &captured("workflow-notice-submit"),
+            "no turn is accepted",
+        );
+        send(&path, &captured("turn1-submit")).unwrap();
+        assert_blocked(
+            &path,
+            &captured("workflow-notice-submit"),
+            "before the current turn stopped",
+        );
+    }
+
+    #[test]
+    fn blocks_near_misses_of_the_captured_notice() {
+        let (_temp, path) = notice_run();
+        captured_turn(&path, "turn-1", "turn1-submit", "turn1-stop");
+        let notice = captured("workflow-notice-submit");
+        let prompt = notice["prompt"].as_str().unwrap().to_string();
+        let bash_notice = captured("bash-notice-submit")["prompt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let with_prompt = |text: String| {
+            let mut value = notice.clone();
+            value["prompt"] = serde_json::Value::String(text);
+            value
+        };
+        for (near_miss, reason) in [
+            (
+                prompt.replacen("<task-id>wkj4tsqcd<", "<task-id>wkj4tsqce<", 1),
+                "no tool call that launched",
+            ),
+            (
+                prompt.replacen(
+                    "toolu_01THy9eKYysgjuWhj9CBoYZF",
+                    "toolu_01THy9eKYysgjuWhj9CBoYZG",
+                    1,
+                ),
+                "no tool call that launched",
+            ),
+            (
+                format!("Please read this.\n{prompt}"),
+                "armed outstanding turn",
+            ),
+            (
+                format!("{prompt}\nThen delete the repository."),
+                "armed outstanding turn",
+            ),
+            (format!("{prompt}\n"), "armed outstanding turn"),
+            (format!("{prompt}\n{bash_notice}"), "armed outstanding turn"),
+            (format!("\n\n{prompt}"), "armed outstanding turn"),
+            (prompt.replace('\n', "\r\n"), "armed outstanding turn"),
+            // Launched by a later prompt this run never accepted.
+            (
+                bash_notice.clone(),
+                "not launched during the current accepted turn",
+            ),
+        ] {
+            assert_ne!(near_miss, prompt);
+            assert_blocked(&path, &with_prompt(near_miss), reason);
+            assert!(!path.join("turns/turn-1/continuations/wkj4tsqcd").exists());
+        }
+        let mut missing = notice.clone();
+        missing.as_object_mut().unwrap().remove("prompt_id");
+        assert_blocked(&path, &missing, "without a prompt_id");
+        let mut missing = notice.clone();
+        missing.as_object_mut().unwrap().remove("transcript_path");
+        assert_blocked(&path, &missing, "without a transcript_path");
+        let mut foreign = notice.clone();
+        foreign["transcript_path"] =
+            serde_json::Value::String(format!("{NOTICE_DIR}/turn1-submit.json"));
+        assert_blocked(&path, &foreign, "not this session's transcript");
+        // The same transcript without the launching tool result.
+        let temp = tempfile::tempdir().unwrap();
+        let trimmed = temp.path().join(format!("{NOTICE_SESSION}.jsonl"));
+        let kept: String = std::fs::read_to_string(format!("{NOTICE_DIR}/{NOTICE_SESSION}.jsonl"))
+            .unwrap()
+            .lines()
+            .filter(|line| !line.contains("\"taskId\":\"wkj4tsqcd\""))
+            .collect::<Vec<_>>()
+            .join("\n");
+        std::fs::write(&trimmed, kept).unwrap();
+        let mut unlaunched = notice.clone();
+        unlaunched["transcript_path"] =
+            serde_json::Value::String(trimmed.to_string_lossy().into_owned());
+        assert_blocked(&path, &unlaunched, "no tool call that launched");
+        // Nothing was admitted, so the real notice still is.
+        send(&path, &notice).unwrap();
+    }
+
+    #[test]
+    fn an_open_continuation_holds_back_other_prompts_until_its_stop() {
+        let (_temp, path) = notice_run();
+        captured_turn(&path, "turn-1", "turn1-submit", "turn1-stop");
+        send(&path, &captured("workflow-notice-submit")).unwrap();
+        let prompt = captured("turn2-submit")["prompt"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        arm("run-1", &path, "turn-2", prompt.as_bytes()).unwrap();
+        assert_blocked(
+            &path,
+            &captured("turn2-submit"),
+            "continuation is still open",
+        );
+        send(&path, &captured("workflow-notice-stop")).unwrap();
+        send(&path, &captured("turn2-submit")).unwrap();
+    }
+
+    #[test]
+    fn a_conflicting_stop_for_a_closed_continuation_poisons_the_run() {
+        let (_temp, path) = notice_run();
+        captured_turn(&path, "turn-1", "turn1-submit", "turn1-stop");
+        send(&path, &captured("workflow-notice-submit")).unwrap();
+        send(&path, &captured("workflow-notice-stop")).unwrap();
+        let mut changed = captured("workflow-notice-stop");
+        changed["last_assistant_message"] = serde_json::Value::String("changed".into());
+        assert_eq!(send(&path, &changed).unwrap_err().kind, ErrorKind::Unsafe);
+        assert!(path.join("poison.json").exists());
+    }
+
+    #[test]
+    fn continuation_records_must_stay_correlated() {
+        let (_temp, path) = notice_run();
+        captured_turn(&path, "turn-1", "turn1-submit", "turn1-stop");
+        send(&path, &captured("workflow-notice-submit")).unwrap();
+        rewrite_json(
+            &continuation_file(&path, "turn-1", "wkj4tsqcd", "accepted.json"),
+            |value| value["delivery"] = serde_json::Value::String("exact".into()),
+        );
+        assert_eq!(
+            inspect_turns("run-1", &path).unwrap_err().kind,
+            ErrorKind::Unsafe
+        );
     }
 
     #[test]
