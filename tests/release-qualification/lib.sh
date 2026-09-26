@@ -475,6 +475,40 @@ deliver_turn() {
 }
 
 # ---------------------------------------------------------------------------
+# Ending the live session
+# ---------------------------------------------------------------------------
+#
+# Herdr has no command that stops an agent: an agent ends when its process
+# exits or its pane closes. Closing the pane would also remove the tab this
+# run created, so teardown asks Claude Code itself to exit, with the double
+# Ctrl-C it answers at its prompt, and confirms through `pane process-info`
+# that the pane's foreground is its own shell again before the tab is closed.
+
+STOP_AGENT_ROUNDS=3
+STOP_AGENT_SETTLE_SECONDS=${STOP_AGENT_SETTLE_SECONDS:-2}
+
+# pane_at_shell <pane> - returns 0 when the pane's foreground process group is
+# its shell, meaning no agent is running in it.
+pane_at_shell() {
+  herdr pane process-info --pane "$1" 2>/dev/null | python3 -c 'import json,sys
+info = json.load(sys.stdin)["result"]["process_info"]
+sys.exit(0 if info["foreground_process_group_id"] == info["shell_pid"] else 1)' 2>/dev/null
+}
+
+# stop_pane_agent <pane> - returns 0 once the pane is back at its shell, 1
+# when the agent is still running after every round.
+stop_pane_agent() {
+  _spa_round=0
+  while [ "$_spa_round" -lt "$STOP_AGENT_ROUNDS" ]; do
+    pane_at_shell "$1" && return 0
+    herdr pane send-keys "$1" ctrl+c ctrl+c >/dev/null 2>&1 || true
+    sleep "$STOP_AGENT_SETTLE_SECONDS"
+    _spa_round=$((_spa_round + 1))
+  done
+  pane_at_shell "$1"
+}
+
+# ---------------------------------------------------------------------------
 # Binding the live session to the candidate
 # ---------------------------------------------------------------------------
 #

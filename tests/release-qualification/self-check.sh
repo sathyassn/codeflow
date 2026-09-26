@@ -53,6 +53,8 @@ TRANSCRIPT="$STUB_DIR/transcript"
 #   start-out / start-rc   the reply and status of `agent start`
 #   get-out / get-rc       the reply and status of `agent get`
 #   enters / accept-at     Enters sent so far, and the one that is accepted
+#   proc-out               what `pane process-info` prints; with exit-on-keys
+#                          present, any send-keys swaps in proc-shell
 {
   printf '#!/bin/sh\n'
   printf 'D=%s\n' "$STUB_DIR"
@@ -64,7 +66,9 @@ TRANSCRIPT="$STUB_DIR/transcript"
   printf '    exit "$(cat "$D/pane-rc")" ;;\n'
   printf '  "agent start") cat "$D/start-out"; exit "$(cat "$D/start-rc")" ;;\n'
   printf '  "agent get") cat "$D/get-out"; exit "$(cat "$D/get-rc")" ;;\n'
+  printf '  "pane process-info") cat "$D/proc-out"; exit 0 ;;\n'
   printf '  "pane send-keys")\n'
+  printf '    [ -f "$D/exit-on-keys" ] && cp "$D/proc-shell" "$D/proc-out"\n'
   printf '    n=$(($(cat "$D/enters") + 1)); printf "%%s" "$n" >"$D/enters"\n'
   printf '    [ "$n" -lt "$(cat "$D/accept-at")" ] || : >"$D/accepted"\n'
   printf '    exit 0 ;;\n'
@@ -86,8 +90,15 @@ stub_herdr() {
   printf 'agent target not found\n' >"$STUB_DIR/get-out"
   printf '0' >"$STUB_DIR/enters"
   printf '99' >"$STUB_DIR/accept-at"
-  rm -f "$STUB_DIR/accepted"
+  rm -f "$STUB_DIR/accepted" "$STUB_DIR/exit-on-keys"
+  printf '%s\n' "$PROC_AGENT" >"$STUB_DIR/proc-out"
+  printf '%s\n' "$PROC_SHELL" >"$STUB_DIR/proc-shell"
 }
+
+# The `pane process-info` replies for a pane running an agent and for one back
+# at its shell: only the foreground process group differs.
+PROC_AGENT='{"result":{"process_info":{"foreground_process_group_id":200,"shell_pid":100},"type":"pane_process_info"}}'
+PROC_SHELL='{"result":{"process_info":{"foreground_process_group_id":100,"shell_pid":100},"type":"pane_process_info"}}'
 
 # agent_get_json <pane> <tab> - the reply shape `herdr agent get` prints.
 agent_get_json() {
@@ -436,6 +447,36 @@ rm -f "$PANE_RECORD"
 pane_codeflow_binding "$PANE_RECORD" "$CANDIDATE" && _r=1 || _r=0
 ok binding.missing "no recorded resolution fails the binding" \
   "$([ "$_r" = 0 ] && [ "$PANE_CF_PATH" = "nothing recorded" ] && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
+# Teardown ends the agent through its own exit keys, then closes the tab
+# ---------------------------------------------------------------------------
+
+# shellcheck disable=SC2034 # read by stop_pane_agent in lib.sh
+STOP_AGENT_SETTLE_SECONDS=0
+
+stub_herdr "$TRUSTED_PANE"
+: >"$STUB_DIR/exit-on-keys"
+stop_pane_agent p1 && _r=0 || _r=$?
+ok teardown.stop "an agent that answers the exit keys leaves the pane at its shell" \
+  "$([ "$_r" = 0 ] && grep -qF 'pane send-keys p1 ctrl+c ctrl+c' "$STUB_DIR/calls" &&
+     [ "$(grep -c 'pane send-keys' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
+
+stub_herdr "$TRUSTED_PANE"
+stop_pane_agent p1 && _r=0 || _r=$?
+ok teardown.stop "an agent that never exits is reported after a bounded number of rounds" \
+  "$([ "$_r" != 0 ] && [ "$(grep -c 'pane send-keys' "$STUB_DIR/calls")" = "$STOP_AGENT_ROUNDS" ] &&
+     echo 0 || echo 1)"
+
+stub_herdr "$TRUSTED_PANE"
+cp "$STUB_DIR/proc-shell" "$STUB_DIR/proc-out"
+stop_pane_agent p1 && _r=0 || _r=$?
+ok teardown.stop "a pane already at its shell gets no keys" \
+  "$([ "$_r" = 0 ] && ! grep -q 'pane send-keys' "$STUB_DIR/calls" && echo 0 || echo 1)"
+
+ok qualify.sh "teardown stops the agent through stop_pane_agent, never a missing herdr command" \
+  "$(grep -qF 'stop_pane_agent "$HERDR_PANE"' "$SCRIPT_DIR/qualify.sh" &&
+     ! grep -q 'herdr agent stop' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
 
 # ---------------------------------------------------------------------------
 # The option the operator drives all of this with

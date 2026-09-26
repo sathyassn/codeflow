@@ -182,8 +182,13 @@ teardown() {
     fi
 
     # The Herdr tab this run created, and only that one.
-    if [ -n "$HERDR_AGENT" ]; then
-      herdr agent stop "$HERDR_AGENT" 2>&1 || true
+    if [ -n "$HERDR_AGENT" ] && [ -n "$HERDR_PANE" ]; then
+      if stop_pane_agent "$HERDR_PANE"; then
+        printf 'herdr agent %s exited: pane %s is back at its shell\n' "$HERDR_AGENT" "$HERDR_PANE"
+      else
+        printf 'herdr agent %s still running in pane %s; closing its tab ends it\n' \
+          "$HERDR_AGENT" "$HERDR_PANE"
+      fi
     fi
     if [ -n "$HERDR_TAB" ]; then
       if herdr tab close "$HERDR_TAB" 2>&1; then
