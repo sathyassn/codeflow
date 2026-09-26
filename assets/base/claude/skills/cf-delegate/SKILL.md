@@ -176,10 +176,10 @@ codeflow delegate wait --run-id run-42 --state-dir "$STATE" --until terminal --t
 ```
 
 When `HERDR_ENV=1`, use the named Herdr tab per `cf-herdr` (launch-local task
-environment, `--settings`, selected model/effort, production
-`bypassPermissions`, consult auto) and deliver the armed file as that skill
-names; never `tmux load-buffer` into a Herdr pane. Lifecycle waits stay the
-completion signal.
+environment, `--settings`, model/effort, production `bypassPermissions`,
+consult auto); deliver the armed file with `herdr pane send-text` as that
+skill names, never `tmux load-buffer`. Lifecycle waits stay the completion
+signal.
 
 - **Turn detection is the lifecycle, not the pane.** `init` creates owner-only
   state outside every Git worktree and wires `SessionStart`, `UserPromptSubmit`, `Stop`, and
