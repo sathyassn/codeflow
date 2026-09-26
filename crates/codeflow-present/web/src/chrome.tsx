@@ -70,6 +70,8 @@ interface DragGesture {
   region: boolean;
   forceRegion: boolean;
   proseOnly: boolean;
+  // The press landed on the highlight of the text pin it discarded.
+  releasedText: boolean;
 }
 
 function targetKindOf(target: Pick<PendingFeedback, "selector" | "element_selector" | "region_selector">): TargetKind {
@@ -196,6 +198,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (selection?.rangeCount && documentRoot.contains(selection.getRangeAt(0).commonAncestorContainer)) {
       selection.removeAllRanges();
     }
+  };
+  // Whether a text pin's live highlight covers a viewport point.
+  const capturedSelectionCovers = (pin: PendingPin | null, x: number, y: number): boolean => {
+    if (!pin?.captured.selector) return false;
+    const selection = window.getSelection();
+    if (!selection?.rangeCount) return false;
+    const range = selection.getRangeAt(0);
+    if (!documentRoot.contains(range.commonAncestorContainer)) return false;
+    return Array.from(range.getClientRects()).some(
+      (rect) => x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom,
+    );
   };
   const setHot = (element: HTMLElement | null): void => {
     if (hotRef.current === element) return;
@@ -462,7 +475,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (!documentRoot.contains(event.target)) return;
       if (event.target.closest(".cf-marker, .cf-marker-layer")) return;
       if (event.target.closest("button, a, input, textarea, select")) return;
+      let releasedText = false;
       if (pendingPinRef.current) {
+        releasedText = capturedSelectionCovers(pendingPinRef.current, event.clientX, event.clientY);
         releaseCapturedSelection(pendingPinRef.current);
         setPendingPin(null);
         lastPinnedSelectionRef.current = "";
@@ -482,6 +497,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         region: false,
         forceRegion: shift,
         proseOnly: textual,
+        releasedText,
       };
     };
 
@@ -560,6 +576,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       // Text selection wins — the selectionchange pin already owns the float.
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed && String(sel).trim().length >= 2) return;
+
+      // A click on the captured highlight only dismisses its text pin.
+      // Pointerdown cleared the range, so the browser placed a caret here.
+      if (g.releasedText) {
+        setHot(null);
+        return;
+      }
 
       // Abandoned non-region drag
       if (!g.proseOnly && dist > 22) {
