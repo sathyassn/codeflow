@@ -476,6 +476,17 @@ const TEXT_OVERHANG = 0.25 * LABEL_FONT;
 const MIN_RENDER_SCALE = 0.9;
 const LIMIT_HALF_STROKE = 1;
 const LABEL_GAP = Math.ceil(THRESHOLDS.labelClearancePx / MIN_RENDER_SCALE + LIMIT_HALF_STROKE + TEXT_OVERHANG);
+// A text box's height is budgeted the same way: an engine may report a 14px
+// label's box up to 1.15em above its baseline and 0.4em below (Firefox
+// reports about 1.14em and 0.38em for the portal's faces). A mark a label
+// does not label starts the rule 8 clearance, half a stroke and that descent
+// below the label's baseline.
+const TEXT_ASCENT = 1.15 * LABEL_FONT;
+const TEXT_DESCENT = 0.4 * LABEL_FONT;
+const LABEL_DROP = Math.ceil(THRESHOLDS.labelClearancePx / MIN_RENDER_SCALE + LIMIT_HALF_STROKE + TEXT_DESCENT);
+// A narrow extent row sets its label this far above its value label, which a
+// short bar puts under the label, so the two never overprint.
+const EXTENT_LABEL_PITCH = Math.ceil(TEXT_DESCENT + TEXT_ASCENT);
 // An extent layout reserves room past its scale for its widest value label,
 // and keeps at least this much to plot in the 360-unit narrow composition; a
 // layout whose labels would leave less is refused, never drawn reversed.
@@ -514,7 +525,8 @@ function layoutCompositions(figure, bound) {
       const top = 30;
       rows.forEach((row, index) => {
         const y = top + index * rowHeight + (narrow ? 22 : 0);
-        const labelY = narrow ? y - 8 : y + 10;
+        const valueY = y + 11;
+        const labelY = narrow ? valueY - EXTENT_LABEL_PITCH : y + 10;
         const length = scale(row.number) - left;
         const id = `row-${index}`;
         draw.push({ text: `${row.label}`, x: narrow ? left : 0, y: labelY, style: "strong", for: [id] });
@@ -528,7 +540,7 @@ function layoutCompositions(figure, bound) {
         for (const limitX of limits.map((limit) => scale(limit.number)).sort((a, b) => a - b)) {
           if (limitX > valueX - LABEL_GAP && limitX < valueX + valueWidth + LABEL_GAP) valueX = limitX + LABEL_GAP;
         }
-        draw.push({ text: valueText, x: round(valueX), y: y + 11, style: ["mono", "mute"], for: [id] });
+        draw.push({ text: valueText, x: round(valueX), y: valueY, style: ["mono", "mute"], for: [id] });
       });
       const axisY = top + rows.length * rowHeight + (narrow ? 22 : 4);
       draw.push({ deco: "axis", shape: "line", x1: left, y1: axisY, x2: right, y2: axisY });
@@ -568,7 +580,8 @@ function layoutCompositions(figure, bound) {
   // so a name clears the next cell, and as many fit a line as the width
   // allows, so every line shares the same column positions. A column name
   // is at most COVERAGE_COLUMN_CHARACTERS long, so one slot always fits the
-  // width (a test holds that bound).
+  // width (a test holds that bound). The row name is not bound to the
+  // cells, so they start LABEL_DROP below it.
   const narrowCell = 16;
   const narrowLine = 28;
   const slot = narrowCell + LABEL_GAP + Math.max(...columns.map((column) => column.length)) * MONO_ADVANCE + TEXT_OVERHANG;
@@ -582,7 +595,7 @@ function layoutCompositions(figure, bound) {
     narrowDraw.push({ text: row.label, x: 0, y, style: "strong" });
     row.cells.forEach((state, columnIndex) => {
       const { x, line: slotLine } = slots[columnIndex];
-      const cellY = y + 14 + slotLine * narrowLine;
+      const cellY = y + LABEL_DROP + slotLine * narrowLine;
       const id = `cell-${rowIndex}-${columnIndex}`;
       narrowDraw.push({ state, shape: "rect", x, y: cellY, w: narrowCell, h: narrowCell, rx: 2, id });
       narrowDraw.push({ text: columns[columnIndex], x: round(x + narrowCell + LABEL_GAP), y: cellY + 13, style: "mute", for: [id] });

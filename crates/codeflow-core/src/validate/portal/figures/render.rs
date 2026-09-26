@@ -37,6 +37,15 @@ const LABEL_FONT: f64 = 14.0;
 const MONO_ADVANCE: f64 = 0.65 * LABEL_FONT;
 const TEXT_OVERHANG: f64 = 0.25 * LABEL_FONT;
 const LABEL_GAP: f64 = 14.0;
+/// The grammar module budgets a 14px text box up to 1.15em above its
+/// baseline and 0.4em below. A mark a label does not label starts the 8px
+/// clearance at a 0.9 render scale, half a stroke and that descent below the
+/// label's baseline, rounded up.
+const LABEL_DROP: f64 = 16.0;
+/// A narrow extent row sets its label this far above its value label, the
+/// two text boxes' budget rounded up, so a short bar's value never
+/// overprints its label.
+const EXTENT_LABEL_PITCH: f64 = 22.0;
 /// An extent layout keeps at least this much to plot in its 360-unit narrow
 /// composition; one whose value labels would leave less is refused.
 const EXTENT_NARROW_WIDTH: f64 = 360.0;
@@ -446,7 +455,12 @@ fn extent_layout(layout: &Value, derived: &Map<String, Value>) -> Result<Compose
         let top = 30.0;
         for (index, (row, number)) in rows.iter().enumerate() {
             let y = top + index as f64 * row_height + if narrow { 22.0 } else { 0.0 };
-            let label_y = if narrow { y - 8.0 } else { y + 10.0 };
+            let value_y = y + 11.0;
+            let label_y = if narrow {
+                value_y - EXTENT_LABEL_PITCH
+            } else {
+                y + 10.0
+            };
             let length = scale(*number) - left;
             let id = format!("row-{index}");
             let label = row.get("label").and_then(Value::as_str).unwrap_or_default();
@@ -468,7 +482,7 @@ fn extent_layout(layout: &Value, derived: &Map<String, Value>) -> Result<Compose
                     value_x = limit_x + LABEL_GAP;
                 }
             }
-            draw.push(serde_json::json!({ "text": value_text, "x": round(value_x, 0.01), "y": y + 11.0, "style": ["mono", "mute"], "for": [id] }));
+            draw.push(serde_json::json!({ "text": value_text, "x": round(value_x, 0.01), "y": value_y, "style": ["mono", "mute"], "for": [id] }));
         }
         let axis_y = top + rows.len() as f64 * row_height + if narrow { 22.0 } else { 4.0 };
         draw.push(serde_json::json!({ "deco": "axis", "shape": "line", "x1": left, "y1": axis_y, "x2": right, "y2": axis_y }));
@@ -567,7 +581,7 @@ fn coverage_layout(layout: &Value) -> Result<Composed, String> {
         narrow.push(serde_json::json!({ "text": label(row), "x": 0, "y": y, "style": "strong" }));
         for (column_index, state) in cells(row).into_iter().enumerate() {
             let (x, slot_line) = slots.get(column_index).copied().unwrap_or((0.0, 0.0));
-            let cell_y = y + 14.0 + slot_line * narrow_line;
+            let cell_y = y + LABEL_DROP + slot_line * narrow_line;
             let id = format!("cell-{row_index}-{column_index}");
             narrow.push(serde_json::json!({ "state": state, "shape": "rect", "x": x, "y": cell_y, "w": narrow_cell, "h": narrow_cell, "rx": 2, "id": id }));
             narrow.push(serde_json::json!({ "text": columns.get(column_index).cloned().unwrap_or_default(), "x": round(x + narrow_cell + LABEL_GAP, 0.01), "y": cell_y + 13.0, "style": "mute", "for": [id] }));
@@ -1732,6 +1746,17 @@ mod tests {
         );
     }
 
+    /// The label drop and the narrow extent label pitch are the grammar
+    /// module's text box budget: 1.15em above a 14px baseline and 0.4em
+    /// below, with the clearance and half a stroke for the drop, rounded up.
+    #[test]
+    fn text_box_heights_are_budgeted_from_worst_case_metrics() {
+        let ascent = 1.15 * super::LABEL_FONT;
+        let descent = 0.4 * super::LABEL_FONT;
+        assert_eq!(super::LABEL_DROP, (8.0_f64 / 0.9 + 1.0 + descent).ceil());
+        assert_eq!(super::EXTENT_LABEL_PITCH, (descent + ascent).ceil());
+    }
+
     /// A value label that would leave the extent less than its minimum plot
     /// width is refused, never drawn with a reversed scale (R5-3); a long
     /// unit inside the budget draws.
@@ -1798,7 +1823,16 @@ mod tests {
         assert_eq!(names.len(), 10, "{names:?}");
         // The coverage controls pin the narrow coverage layout on one line and
         // wrapped onto a second.
-        names.extend(["controls/coverage-derived", "controls/coverage-wrapped"].map(str::to_owned));
+        // The short extent control pins a narrow row whose value sits under
+        // its label.
+        names.extend(
+            [
+                "controls/coverage-derived",
+                "controls/coverage-wrapped",
+                "controls/extent-short",
+            ]
+            .map(str::to_owned),
+        );
         let derived = serde_json::json!({"commit_desc_max_len": 50, "commit_subject_max_len": 72});
         for name in names {
             let declaration: serde_json::Value = serde_json::from_slice(

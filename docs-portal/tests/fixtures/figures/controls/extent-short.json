@@ -1,0 +1,56 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "drill-cadence",
+    "family": "extent",
+    "binding": "authored",
+    "question": "How often does each recovery exercise run?",
+    "idea": "Backups are checked monthly; a full restore is drilled four times a year.",
+    "title": "Recovery exercises a year",
+    "caption": "Backups are checked every month, and a full restore is drilled once a quarter.",
+    "states": [
+      {
+        "name": "used",
+        "mark": "used",
+        "means": "Runs a year"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a full restore is drilled four times a year",
+        "source": "docs/recovery.md#cadence",
+        "derive": "the cadence section",
+        "check": {
+          "kind": "contains",
+          "text": "four times a year"
+        },
+        "value": true
+      }
+    ],
+    "layout": {
+      "kind": "extent",
+      "max": 52,
+      "unit": "a year",
+      "rows": [
+        {
+          "label": "Backup check",
+          "value": 12,
+          "state": "used"
+        },
+        {
+          "label": "Restore drill",
+          "value": 4,
+          "state": "used"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "elongation_max": 2,
+      "reason": "Two rows stacked under their labels need twice the height at phone width."
+    },
+    "twin": "facts"
+  }
+}
