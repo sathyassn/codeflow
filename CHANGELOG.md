@@ -178,6 +178,15 @@ publication date._
   bare or after exactly that two-LF prefix; every other prefix, id or shape
   still fails, and `accepted.json` records which delivery matched.
 
+<!-- codeflow:release-impact patch -->
+- **Portal writes work on Windows.** Every `codeflow portal` write on Windows
+  failed with "The parameter is incorrect" (or a length error for
+  one-character names) when it moved a staged file into place. The rename
+  now goes straight to the kernel with the name resolved under the held
+  destination directory and a correctly sized request, so it no longer
+  depends on the process working directory. Reparse points are still
+  refused and no path outside the portal root is opened.
+
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
 - **Optional agentic operating and estimation method (ADR-0057).** Standard and
