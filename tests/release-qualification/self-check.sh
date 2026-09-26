@@ -412,26 +412,28 @@ $RULE
 # 2026-09-26 in bypassPermissions mode from a folder whose shared project
 # settings print the git branch as the status line, as the scaffolded sample
 # does, and whose local settings came from write_status_line_settings: the
-# marker replaced the branch.
+# marker replaced the branch. These panes drew U+00A0 after the marker, and
+# NBSP keeps that byte sequence here.
+NBSP=$(printf '\302\240')
 STATUS_IDLE_PANE="⚠ 3 MCP servers need authentication · run /mcp
 $RULE
-❯ Try \"refactor <filepath>\"
+❯${NBSP}Try \"refactor <filepath>\"
 $RULE
   codeflow-qualify
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
 STATUS_UNSENT_PANE="⚠ 3 MCP servers need authentication · run /mcp
 $RULE
-❯ Reply with exactly: ok. Do not edit any file.
+❯${NBSP}Reply with exactly: ok. Do not edit any file.
 $RULE
   codeflow-qualify
   ⏵⏵ bypass permissions on (shift+tab to cycle)"
 STATUS_PASTED_PANE="$RULE
-❯ [Pasted text #1 +13 lines]
+❯${NBSP}[Pasted text #1 +13 lines]
 $RULE
   codeflow-qualify
   paste again to expand"
 STATUS_DIRECTIVE_PANE="$RULE
-❯ [Pasted text #1 +13 lines]Carry out the pasted instructions.
+❯${NBSP}[Pasted text #1 +13 lines]Carry out the pasted instructions.
 $RULE
   codeflow-qualify
   paste again to expand"
@@ -614,6 +616,17 @@ no_editor_case 'a frame over the marker twice' \
   "$(frame_under "$(printf '  codeflow-qualify\n  codeflow-qualify\n%s' "$BYPASS_FOOTER")")"
 no_editor_case 'a frame over the marker and an unknown footer' \
   "$(frame_under "$(printf '  codeflow-qualify\n  Continue? (y/n)')")"
+# Separator near misses: the marker takes one ASCII space or one U+00A0.
+# frame_with_marker <marker and separator> - the prompt after them in a frame.
+frame_with_marker() {
+  printf '%s\n%sReply with exactly: ok.\n%s\n%s' "$RULE" "$1" "$RULE" "$BYPASS_FOOTER"
+}
+no_editor_case 'a marker followed by a tab' "$(frame_with_marker "$(printf '❯\t')")"
+no_editor_case 'a marker followed by U+202F' "$(frame_with_marker "$(printf '❯\342\200\257')")"
+no_editor_case 'a marker followed by two U+00A0' "$(frame_with_marker "❯$NBSP$NBSP")"
+no_editor_case 'a marker followed by U+00A0 and a space' "$(frame_with_marker "❯$NBSP ")"
+no_editor_case 'a marker followed by a space and U+00A0' "$(frame_with_marker "❯ $NBSP")"
+no_editor_case 'a marker with no separator' "$(frame_with_marker '❯')"
 
 # log_refused_screen: a refusal leaves the frame region in the transcript, and
 # only that; an accepted screen leaves nothing.
