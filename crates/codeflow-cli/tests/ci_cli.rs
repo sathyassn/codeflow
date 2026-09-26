@@ -809,16 +809,13 @@ fn ci_scaffold_range_skips_unmodified_managed_files() {
     let skill =
         std::fs::read_to_string(dir.path().join(".agents/skills/cf-consult/SKILL.md")).unwrap();
     assert!(skill.contains('\u{2014}'), "fixture lost its em dash");
-    let (_, all) = ci_scaffold_range(dir.path());
-    // No managed skill or project-management file is judged: their bytes
-    // are exactly what this binary ships for those paths.
-    for tree in [".agents/skills/", ".claude/skills/", "project-management/"] {
-        assert!(!all.contains(tree), "{tree}: {all}");
-    }
-    // The user-owned starter docs belong to the project once written, so
-    // their dashes are reported (a warning at the shipped default). This
-    // also proves the added-lines scan ran over the range.
-    assert!(all.contains("docs/product.md:"), "{all}");
+    // The managed skills are exactly what this binary ships for those paths,
+    // and the user-owned starter docs carry no policy character, so the
+    // scaffold range is clean even when the policy blocks.
+    let (code, all) = ci_scaffold_range(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+    assert!(all.contains("added-lines"), "{all}");
 }
 
 #[test]

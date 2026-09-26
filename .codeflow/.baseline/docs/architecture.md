@@ -1,7 +1,7 @@
-# codeflow-lead-model-routing — architecture
+# codeflow-lead-model-routing: architecture
 
 <!-- HOW layer. Updated only inside the ship flow, in the same PR as the code,
-     when an ADR declares architecture impact. Link to decisions by ADR id —
+     when an ADR declares architecture impact. Link to decisions by ADR id,
      never duplicate their content here.
      When an area outgrows this file, graduate it to docs/architecture/<area>.md
      and leave a one-line pointer behind. -->
