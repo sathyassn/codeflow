@@ -203,7 +203,11 @@ publication date._
   shows that turn launched the task, records it under the turn's
   `continuations/`, and closes it with the Stop that follows instead of
   poisoning the run. Unknown or earlier tasks, extra text and second
-  envelopes are still blocked.
+  envelopes are still blocked. That Stop first checks the session transcript:
+  the notice must be recorded as a Claude Code task notice with the admitted
+  bytes, and a typed copy or changed body poisons the run with no result.
+  The model may still act on a forged notice within that turn; the check only
+  keeps it from being recorded as a clean result.
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 

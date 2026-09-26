@@ -5,9 +5,9 @@ owns the durable lifecycle records; the host launches the harness and delivers
 the bytes. The protocol proves three things a terminal signal alone cannot:
 the session started cleanly, the delivered prompt was accepted as the armed
 turn, and the terminal event belongs to that turn. It reads the session
-transcript for one purpose only, to find the tool call that launched a noticed
-background task (see the task-notice rule below). It makes zero tmux calls;
-waiting is pure file polling.
+transcript only for a task notice (see the task-notice rule below): to find the
+tool call that launched the task, and to prove the notice came from Claude
+Code. It makes zero tmux calls; waiting is pure file polling.
 
 ## Per-run setup
 
@@ -143,10 +143,21 @@ with nothing around it, the current turn must have stopped with no other
 continuation open, and the session transcript must show the tool call that
 returned that task id made within this turn or one of its continuations. It is
 recorded at `turns/<turn>/continuations/<task-id>/accepted.json` with
-`delivery: task_notification`, and the `Stop` carrying its `prompt_id` writes
-the `result.json` beside it. Any other notice (unknown or earlier task, extra
-text, a second envelope, no accepted turn) is blocked like an unarmed prompt,
-and an armed prompt waits until the open continuation stops. `wait --until
+`delivery: task_notification`, its `prompt_id` and the SHA-256 of its bytes.
+Any other notice (unknown or earlier task, extra text, a second envelope, no
+accepted turn) is blocked like an unarmed prompt, and an armed prompt waits
+until the open continuation stops.
+
+Claude Code gives the prompt hook nothing that tells a real notice from the
+same text typed into the session, so the proof comes at the `Stop` carrying
+the continuation's `prompt_id`. Before it writes `result.json` beside the
+acceptance, the session transcript must record that prompt with origin
+`task-notification`, `promptSource` `system` and `turnOrigin`
+`task_notification`, its bytes must match the recorded digest, and a queued
+enqueue of the same bytes must come before it. A typed copy, a changed body or
+a missing entry poisons the run and writes no result. The residual risk is
+plain: the model may act on a forged notice within that continuation turn;
+the check keeps it from being recorded as a clean result. `wait --until
 terminal` still reports the turn's first `Stop`; read a backgrounded result
 from the continuation record.
 
