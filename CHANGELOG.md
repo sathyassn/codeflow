@@ -91,6 +91,12 @@ publication date._
   on every exit, including an unexpected error.
 
 <!-- codeflow:release-impact patch -->
+- **Browser verification keeps its results on a long run.** Each engine's
+  trace is kept only when that engine fails, and the results are written
+  before the evidence files are counted. A file over its size cap is recorded
+  as a failed artifact in the results instead of ending the run.
+
+<!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
   minutes, repairs assertion-red checks without being asked, reports
