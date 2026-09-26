@@ -214,13 +214,13 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let writer = JsonlWriter::new(dir.path()).unwrap();
 
-        let event = make_event("task_created");
+        let event = make_event("decision");
         writer
-            .append_event_to_file(files::WORK_GRAPH, event)
+            .append_event_to_file(files::MEMORY_EVENTS, event)
             .unwrap();
 
-        let content = fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH)).unwrap();
-        assert!(content.contains("\"event\":\"task_created\""));
+        let content = fs::read_to_string(base_path(dir.path(), files::MEMORY_EVENTS)).unwrap();
+        assert!(content.contains("\"event\":\"decision\""));
     }
 
     #[test]
@@ -230,7 +230,7 @@ mod tests {
 
         // session_start belongs to sessions, not work-graph
         let event = make_event("session_start");
-        let result = writer.append_event_to_file(files::WORK_GRAPH, event);
+        let result = writer.append_event_to_file(files::MEMORY_EVENTS, event);
 
         assert!(result.is_err());
         let err = result.unwrap_err();
@@ -238,7 +238,7 @@ mod tests {
         assert!(msg.contains("misrouted"), "expected MisroutedEvent: {msg}");
         assert!(msg.contains("session_start"));
         assert!(msg.contains(files::SESSIONS));
-        assert!(msg.contains(files::WORK_GRAPH));
+        assert!(msg.contains(files::MEMORY_EVENTS));
     }
 
     #[test]
@@ -292,9 +292,9 @@ mod tests {
             writer.route_event("session_start").unwrap(),
             files::SESSIONS
         );
-        assert_eq!(
-            writer.route_event("task_created").unwrap(),
-            files::WORK_GRAPH
+        assert!(
+            writer.route_event("task_created").is_err(),
+            "retired work-graph events have no route"
         );
         assert_eq!(
             writer.route_event("decision").unwrap(),
@@ -313,16 +313,16 @@ mod tests {
             "format_id".to_string(),
             serde_json::Value::String("TSK-001-001".to_string()),
         );
-        let event = make_event_with_data("task_created", data);
+        let event = make_event_with_data("finding", data);
         writer.append_event(event).unwrap();
 
-        let content = fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH)).unwrap();
+        let content = fs::read_to_string(base_path(dir.path(), files::MEMORY_EVENTS)).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 1, "should be exactly one line");
 
         // Verify the line is valid JSON.
         let parsed: serde_json::Value = serde_json::from_str(lines[0]).unwrap();
-        assert_eq!(parsed["event"], "task_created");
+        assert_eq!(parsed["event"], "finding");
         assert_eq!(parsed["format_id"], "TSK-001-001");
         assert_eq!(parsed["timestamp"], "2026-03-07T00:00:00Z");
     }
@@ -340,7 +340,7 @@ mod tests {
                     let mut data = HashMap::new();
                     data.insert("index".to_string(), serde_json::json!(i));
                     let event = Event {
-                        event_type: "task_created".to_string(),
+                        event_type: "finding".to_string(),
                         timestamp: format!("2026-03-07T00:00:{i:02}Z"),
                         session_id: None,
                         worktree: None,
@@ -355,14 +355,14 @@ mod tests {
             h.join().unwrap();
         }
 
-        let content = fs::read_to_string(base_path(&dir_path, files::WORK_GRAPH)).unwrap();
+        let content = fs::read_to_string(base_path(&dir_path, files::MEMORY_EVENTS)).unwrap();
         let lines: Vec<&str> = content.lines().collect();
         assert_eq!(lines.len(), 10, "all 10 concurrent writes should succeed");
 
         // Each line should be valid JSON.
         for line in &lines {
             let parsed: serde_json::Value = serde_json::from_str(line).unwrap();
-            assert_eq!(parsed["event"], "task_created");
+            assert_eq!(parsed["event"], "finding");
         }
     }
 
@@ -372,20 +372,12 @@ mod tests {
         let writer = JsonlWriter::new(dir.path()).unwrap();
 
         writer.append_event(make_event("session_start")).unwrap();
-        writer.append_event(make_event("task_created")).unwrap();
         writer.append_event(make_event("decision")).unwrap();
         writer.append_event(make_event("config_set")).unwrap();
 
         // Each subdirectory file should have exactly one event.
         assert_eq!(
             fs::read_to_string(base_path(dir.path(), files::SESSIONS))
-                .unwrap()
-                .lines()
-                .count(),
-            1
-        );
-        assert_eq!(
-            fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH))
                 .unwrap()
                 .lines()
                 .count(),
@@ -434,20 +426,16 @@ mod tests {
 
         // Write to base.
         let base_writer = JsonlWriter::new(dir.path()).unwrap();
-        base_writer
-            .append_event(make_event("task_created"))
-            .unwrap();
+        base_writer.append_event(make_event("finding")).unwrap();
 
         // Write to session fragment.
         let session_writer =
             JsonlWriter::new_with_session(dir.path(), Some("ses-abc".to_string())).unwrap();
-        session_writer
-            .append_event(make_event("task_created"))
-            .unwrap();
+        session_writer.append_event(make_event("finding")).unwrap();
 
-        let base_content = fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH)).unwrap();
+        let base_content = fs::read_to_string(base_path(dir.path(), files::MEMORY_EVENTS)).unwrap();
         let frag_content =
-            fs::read_to_string(session_path(dir.path(), files::WORK_GRAPH, "ses-abc")).unwrap();
+            fs::read_to_string(session_path(dir.path(), files::MEMORY_EVENTS, "ses-abc")).unwrap();
 
         assert_eq!(base_content.lines().count(), 1);
         assert_eq!(frag_content.lines().count(), 1);
@@ -508,7 +496,7 @@ mod tests {
         );
 
         let event = Event {
-            event_type: "task_status_changed".to_string(),
+            event_type: "finding".to_string(),
             timestamp: "2026-03-07T00:00:00Z".to_string(),
             session_id: None,
             worktree: None,
@@ -516,7 +504,7 @@ mod tests {
         };
         writer.append_event(event).unwrap();
 
-        let content = fs::read_to_string(base_path(dir.path(), files::WORK_GRAPH)).unwrap();
+        let content = fs::read_to_string(base_path(dir.path(), files::MEMORY_EVENTS)).unwrap();
         let parsed: serde_json::Value = serde_json::from_str(content.trim()).unwrap();
         assert_eq!(parsed["old_status"], "todo");
         assert_eq!(parsed["new_status"], "in_progress");
