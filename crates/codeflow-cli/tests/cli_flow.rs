@@ -582,7 +582,7 @@ fn work_start_rejects_an_invalid_visible_workgraph() {
     write(
         dir.path(),
         "project-management/epics/EPC-999.md",
-        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- [ ] fixed\n",
+        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
     );
 
     let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);

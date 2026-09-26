@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 mod pr_body;
+mod work_records;
 
 use clap::Args;
 use codeflow_core::hooks::policy::{Policy, PolicySource};
@@ -192,6 +193,9 @@ pub fn run(args: &CiArgs) -> i32 {
         Some(false) => skipped.push("added-lines"),
         None => {}
     }
+
+    // --- work-record transitions (TSK-102) -------------------------------
+    work_records::dispatch(&root, &base_candidates, &head, &mut tagged, &mut ran);
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {

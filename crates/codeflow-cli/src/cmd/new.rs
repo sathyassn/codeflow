@@ -1,9 +1,13 @@
-//! Durable work-record creation. The CLI writes independent `EPC-NNN`,
-//! `SPC-NNN`, and `TSK-NNN` ids in the canonical flat layout.
+//! Durable work-record creation and status verbs. The CLI writes independent
+//! `EPC-NNN`, `SPC-NNN`, and `TSK-NNN` ids in the canonical flat layout, and
+//! changes a record's status only through the lifecycle judge (SPC-013 R-34).
 
-use clap::{Args, Subcommand};
+use std::path::PathBuf;
+
+use clap::{Args, Subcommand, ValueEnum};
 use codeflow_core::scaffold::AssetSource;
-use codeflow_core::workgraph::{allocate, is_valid_epic_format_id, NewRecord};
+use codeflow_core::workgraph::status_verb::{set_status, StatusChange};
+use codeflow_core::workgraph::{allocate, is_valid_epic_format_id, NewRecord, RecordKind};
 
 use crate::embedded::EmbeddedAssets;
 
@@ -22,6 +26,60 @@ pub enum EpicCommand {
         /// Epic title.
         title: String,
     },
+    /// Record an epic terminal act, judged by the epic close rules.
+    Status {
+        /// Epic id.
+        id: String,
+        /// The terminal act to record.
+        status: EpicStatusArg,
+        #[command(flatten)]
+        details: StatusDetails,
+    },
+}
+
+/// Statuses `task status` writes. `in_progress` is never written.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum TaskStatusArg {
+    Todo,
+    Blocked,
+    Complete,
+    Cancelled,
+}
+
+/// Epic terminal acts.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum EpicStatusArg {
+    Complete,
+    Cancelled,
+    Archived,
+}
+
+/// Statuses `spec status` writes; `implemented` is derived.
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum SpecStatusArg {
+    Approved,
+    Superseded,
+}
+
+/// What a transition records beside the status.
+#[derive(Debug, Clone, Default, Args)]
+pub struct StatusDetails {
+    /// Blocker, cancellation or reopen reason.
+    #[arg(long)]
+    pub reason: Option<String>,
+    /// Who owns the blocker.
+    #[arg(long)]
+    pub owner: Option<String>,
+    /// The event that revisits the blocker.
+    #[arg(long)]
+    pub revisit: Option<String>,
+    /// Where a cancelled record's scope went.
+    #[arg(long)]
+    pub scope: Option<String>,
+    /// A file holding the acceptance block (the YAML between the fences) to
+    /// add to the Closeout on completion.
+    #[arg(long, value_name = "FILE")]
+    pub acceptance: Option<PathBuf>,
 }
 
 /// Arguments for `codeflow task`.
@@ -48,6 +106,15 @@ pub enum TaskCommand {
         /// Task title.
         title: String,
     },
+    /// Change a task's status through the transition rules.
+    Status {
+        /// Task id.
+        id: String,
+        /// The new status.
+        status: TaskStatusArg,
+        #[command(flatten)]
+        details: StatusDetails,
+    },
 }
 
 /// Arguments for `codeflow spec`.
@@ -68,11 +135,35 @@ pub enum SpecCommand {
         /// Specification title.
         title: String,
     },
+    /// Approve a draft spec, or supersede an approved one by a new revision.
+    Status {
+        /// Spec id.
+        id: String,
+        /// The new status.
+        status: SpecStatusArg,
+        /// The new revision that supersedes this spec.
+        #[arg(long, value_name = "SPC-NNN")]
+        by: Option<String>,
+    },
 }
 
 /// Run `codeflow epic`.
 pub fn run_epic(args: &EpicArgs) -> i32 {
-    let EpicCommand::New { title } = &args.command;
+    let title = match &args.command {
+        EpicCommand::New { title } => title,
+        EpicCommand::Status {
+            id,
+            status,
+            details,
+        } => {
+            let target = match status {
+                EpicStatusArg::Complete => "complete",
+                EpicStatusArg::Cancelled => "cancelled",
+                EpicStatusArg::Archived => "archived",
+            };
+            return run_status(RecordKind::Epic, id, target, details, None);
+        }
+    };
     let pm = super::repo_root().join("project-management");
     let Some(template) = load_template("base/pm/epic.md.tmpl") else {
         eprintln!("error: epic template unavailable");
@@ -89,12 +180,27 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
 
 /// Run `codeflow task`.
 pub fn run_task(args: &TaskArgs) -> i32 {
-    let TaskCommand::New {
-        epic,
-        standalone_reason,
-        integration_target,
-        title,
-    } = &args.command;
+    let (epic, standalone_reason, integration_target, title) = match &args.command {
+        TaskCommand::New {
+            epic,
+            standalone_reason,
+            integration_target,
+            title,
+        } => (epic, standalone_reason, integration_target, title),
+        TaskCommand::Status {
+            id,
+            status,
+            details,
+        } => {
+            let target = match status {
+                TaskStatusArg::Todo => "todo",
+                TaskStatusArg::Blocked => "blocked",
+                TaskStatusArg::Complete => "complete",
+                TaskStatusArg::Cancelled => "cancelled",
+            };
+            return run_status(RecordKind::Task, id, target, details, None);
+        }
+    };
     if epic
         .as_deref()
         .is_some_and(|value| !is_valid_epic_format_id(value))
@@ -150,7 +256,22 @@ pub fn run_task(args: &TaskArgs) -> i32 {
 
 /// Run `codeflow spec`.
 pub fn run_spec(args: &SpecArgs) -> i32 {
-    let SpecCommand::New { work_item, title } = &args.command;
+    let (work_item, title) = match &args.command {
+        SpecCommand::New { work_item, title } => (work_item, title),
+        SpecCommand::Status { id, status, by } => {
+            let target = match status {
+                SpecStatusArg::Approved => "approved",
+                SpecStatusArg::Superseded => "superseded",
+            };
+            return run_status(
+                RecordKind::Spec,
+                id,
+                target,
+                &StatusDetails::default(),
+                by.clone(),
+            );
+        }
+    };
     let pm = super::repo_root().join("project-management");
     if !allocate::work_item_exists(&pm, work_item) {
         eprintln!(
@@ -167,6 +288,53 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
         Ok(rec) => report(&rec),
         Err(error) => {
             eprintln!("error: {error}");
+            1
+        }
+    }
+}
+
+/// Run one status verb: exit 0 when written, 1 when refused or failed.
+fn run_status(
+    kind: RecordKind,
+    id: &str,
+    target: &str,
+    details: &StatusDetails,
+    by: Option<String>,
+) -> i32 {
+    let acceptance = match &details.acceptance {
+        Some(path) => match std::fs::read_to_string(path) {
+            Ok(text) => Some(text),
+            Err(error) => {
+                eprintln!("error: cannot read {}: {error}", path.display());
+                return 1;
+            }
+        },
+        None => None,
+    };
+    let change = StatusChange {
+        target: target.to_string(),
+        reason: details.reason.clone(),
+        owner: details.owner.clone(),
+        revisit: details.revisit.clone(),
+        scope: details.scope.clone(),
+        by,
+        acceptance,
+    };
+    match set_status(&super::repo_root(), kind, id, &change) {
+        Ok(outcome) => {
+            for warning in &outcome.warnings {
+                eprintln!("warning: {warning}");
+            }
+            println!(
+                "{id}  {} -> {}  {}",
+                outcome.from,
+                outcome.to,
+                outcome.path.display()
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("error: {id}: {error}");
             1
         }
     }

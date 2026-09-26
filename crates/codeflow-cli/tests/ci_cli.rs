@@ -149,7 +149,7 @@ fn ci_blocks_an_invalid_visible_workgraph_on_a_task_branch() {
     std::fs::create_dir_all(&tasks).unwrap();
     std::fs::write(
         tasks.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- [ ] repair verified\n",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
     )
     .unwrap();
     git(dir.path(), &["add", "."]);
@@ -160,7 +160,7 @@ fn ci_blocks_an_invalid_visible_workgraph_on_a_task_branch() {
     std::fs::create_dir_all(&epics).unwrap();
     std::fs::write(
         epics.join("EPC-999.md"),
-        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- [ ] fixed\n",
+        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
     )
     .unwrap();
     std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
@@ -256,7 +256,7 @@ fn ci_recognizes_nested_only_historical_task() {
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(
         nested.join("TSK-001-001.md"),
-        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- [ ] anchored first\n",
+        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- AC-1 anchored first\n",
     )
     .unwrap();
 
