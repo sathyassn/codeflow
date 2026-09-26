@@ -296,58 +296,139 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
 
   // Drag starting on the prose wrapper (padding around the paragraph) must stay
   // Text. Missing that hit-test is how region marquees steal text selection.
-  // A press held past macOS's 150 ms text-drag delay behaves as every press
-  // does on Linux and Windows: on a live highlight it drags the text instead
-  // of selecting. Held drags after Escape and over a showing chip prove a
-  // discarded capture releases its highlight on every platform.
-  const proseDrags = [
-    { steps: 1, hold: 0, dismiss: true },
-    { steps: 10, hold: 0, dismiss: true },
-    { steps: 10, hold: 200, dismiss: false },
-    { steps: 10, hold: 200, dismiss: true },
-  ];
-  for (const { steps, hold, dismiss } of proseDrags) {
-    const label = `Prose drag (${steps} steps${hold ? `, ${hold} ms hold` : ""})`;
+  const glyphs = (from, to) => page.locator("#gesture-target").evaluate((el, [from, to]) => {
+    const range = document.createRange();
+    range.setStart(el.firstChild, from);
+    range.setEnd(el.firstChild, to);
+    const rect = range.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, y: rect.top + rect.height / 2 };
+  }, [from, to]);
+  // Each pin reopens the notes panel, which covers the prose at this width.
+  async function proseDrag(label, { from, to, hold = 0, steps = 10, quote }) {
+    await revealDocumentForGestures();
+    const end = await glyphs(0, to);
+    const target = { x: end.right, y: end.y };
+    const hits = await page.evaluate(({ from, target }) => ({
+      start: document.elementFromPoint(from.x, from.y)?.id,
+      end: document.elementFromPoint(target.x, target.y)?.id,
+      startElement: document.elementFromPoint(from.x, from.y)?.outerHTML.slice(0, 200),
+      endElement: document.elementFromPoint(target.x, target.y)?.outerHTML.slice(0, 200),
+    }), { from, target });
+    const expectedStart = from.onGlyph ? "gesture-target" : "gesture-root";
+    if (hits.start !== expectedStart || hits.end !== "gesture-target") {
+      throw new Error(`${label} is obscured or off-screen: ${JSON.stringify({ from, target, hits })}`);
+    }
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    if (hold) await page.waitForTimeout(hold);
+    await page.mouse.move(target.x, target.y, { steps });
+    const marquee = await page.locator(".cf-region-draft").count();
+    await page.mouse.up();
+    const selected = await page.evaluate(() => String(getSelection()));
+    if (selected !== quote) throw new Error(`${label} selected ${JSON.stringify(selected)}, expected ${quote}`);
+    await waitForTextChip(page, label);
+    await page.waitForFunction(
+      (quote) => document.querySelector("[data-testid=float-chip] .q")?.textContent === quote,
+      quote,
+      { timeout: 5000 },
+    ).catch(() => {});
+    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
+    if (marquee !== 0) throw new Error(`${label} drew a region marquee`);
+    if (kind !== "Text") throw new Error(`${label} opened ${kind}, expected Text`);
+    const pinned = await page.getByTestId("float-chip").locator(".q").innerText();
+    if (pinned !== quote) throw new Error(`${label} pinned ${JSON.stringify(pinned)}, expected ${quote}`);
+  }
+  async function prepareProse() {
     await revealDocumentForGestures();
     const prose = page.locator("#gesture-root");
     await prose.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
     const box = await prose.boundingBox();
     if (!box) throw new Error("Prose review-text-root has no box");
-    const endpoint = await page.locator("#gesture-target").evaluate((el) => {
-      const range = document.createRange();
-      range.setStart(el.firstChild, 0);
-      range.setEnd(el.firstChild, 6);
-      const rect = range.getBoundingClientRect();
-      return { x: rect.right, y: rect.top + rect.height / 2 };
-    });
-    const start = { x: box.x + 4, y: endpoint.y };
-    const hits = await page.evaluate(({ start, endpoint }) => ({
-      start: document.elementFromPoint(start.x, start.y)?.id,
-      end: document.elementFromPoint(endpoint.x, endpoint.y)?.id,
-      startElement: document.elementFromPoint(start.x, start.y)?.outerHTML.slice(0, 200),
-      endElement: document.elementFromPoint(endpoint.x, endpoint.y)?.outerHTML.slice(0, 200),
-    }), { start, endpoint });
-    if (hits.start !== "gesture-root" || hits.end !== "gesture-target") {
-      throw new Error(`Prose drag is obscured or off-screen: ${JSON.stringify({ box, hits })}`);
+    const review = await glyphs(0, 6);
+    // Inside the "e" of "Review": a press there lands on the captured highlight
+    // and a drag from it starts a new selection at offset 1.
+    const e = await glyphs(1, 2);
+    return {
+      padding: { x: box.x + 4, y: review.y },
+      glyph: { x: e.left + 1, y: e.y, onGlyph: true },
+    };
+  }
+  // The press under test must meet a live highlight with its chip showing.
+  async function expectHighlighted(label) {
+    await revealDocumentForGestures();
+    const live = await page.evaluate(() => String(getSelection()));
+    const chips = await page.getByTestId("float-chip").count();
+    if (live !== "Review" || chips !== 1) {
+      throw new Error(`${label} has no live capture: ${JSON.stringify({ live, chips })}`);
     }
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    if (hold) await page.waitForTimeout(hold);
-    await page.mouse.move(endpoint.x, endpoint.y, { steps });
-    const marquee = await page.locator(".cf-region-draft").count();
-    await page.mouse.up();
-    const quote = await page.evaluate(() => String(getSelection()));
-    if (quote !== "Review") throw new Error(`${label} selected ${JSON.stringify(quote)}, expected Review`);
-    await waitForTextChip(page, label);
-    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
-    if (marquee !== 0) throw new Error(`${label} drew a region marquee`);
-    if (kind !== "Text") throw new Error(`${label} opened ${kind}, expected Text`);
-    if ((await page.getByTestId("float-chip").locator(".q").innerText()) !== "Review") throw new Error(`${label} pinned a stale quote`);
-    if (!dismiss) continue;
+  }
+  async function expectReleased(label) {
+    const kept = await page.evaluate(() => String(getSelection()));
+    if (kept) throw new Error(`${label} kept the discarded capture highlighted: ${JSON.stringify(kept)}`);
+  }
+  async function dismissChip() {
     await page.keyboard.press("Escape");
     await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
-    const kept = await page.evaluate(() => String(getSelection()));
-    if (kept) throw new Error(`Escape kept the discarded capture highlighted: ${JSON.stringify(kept)}`);
+  }
+  for (const steps of [1, 10]) {
+    const { padding } = await prepareProse();
+    await proseDrag(`Prose drag (${steps} steps)`, { from: padding, steps, to: 6, quote: "Review" });
+    await dismissChip();
+  }
+
+  // Dropping a text capture must release its highlight. Chromium turns a press
+  // on a live highlight into a native text drag, not a new selection: at once
+  // on Linux and Windows, after 150 ms on macOS. The 200 ms holds below take
+  // that path on every platform. Presses start inside the "e" of the captured
+  // "Review", and the new selection must read "eview me", which a leftover
+  // "Review" cannot satisfy.
+  {
+    const { padding, glyph } = await prepareProse();
+    const reselect = (label) => proseDrag(label, { from: padding, to: 6, quote: "Review" });
+
+    // A held press on the highlight while its chip shows selects anew.
+    await reselect("Prose drag before a held press on the chip's highlight");
+    await expectHighlighted("Held press on the chip's highlight");
+    await proseDrag("Held press on the chip's highlight", { from: glyph, to: 9, hold: 200, quote: "eview me" });
+    await dismissChip();
+    await expectReleased("Escape");
+
+    // Escape releases the highlight, so a held press on those glyphs selects.
+    await reselect("Prose drag before Escape");
+    await dismissChip();
+    await expectReleased("Escape");
+    await proseDrag("Held press after Escape", { from: glyph, to: 9, hold: 200, quote: "eview me" });
+    await dismissChip();
+
+    // A click on the highlight only dismisses its Text chip. It must not fall
+    // through to an Element pin once the press has cleared the highlight.
+    await reselect("Prose drag before a click on its highlight");
+    await expectHighlighted("Click on the captured highlight");
+    const clicked = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.id, glyph);
+    if (clicked !== "gesture-target") throw new Error(`The highlight click would land on ${clicked}`);
+    await page.mouse.click(glyph.x, glyph.y);
+    await page.waitForTimeout(400);
+    const chip = page.getByTestId("float-chip");
+    if (await chip.count()) {
+      const kind = (await chip.locator(".lab").innerText()).trim();
+      throw new Error(`A click on the captured highlight opened ${kind}, expected no chip`);
+    }
+
+    // Composer Cancel leaves no highlight. Chromium already moves the
+    // selection into the focused composer, so this locks the outcome only.
+    await reselect("Prose drag before composer Cancel");
+    await page.getByTestId("float-comment").click();
+    await page.getByTestId("composer").waitFor();
+    await page.getByTestId("composer-cancel").click();
+    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 5000 });
+    await expectReleased("Composer Cancel");
+    // Gesture listeners remount in an effect after the composer closes.
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 50))));
+    // The chip's esc button must release the highlight itself.
+    await reselect("Prose drag before the chip esc button");
+    await page.getByTestId("float-esc").click();
+    await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
+    await expectReleased("The chip esc button");
   }
 
   // Words on an authored SVG stage must pin as Text (same as HTML prose).
