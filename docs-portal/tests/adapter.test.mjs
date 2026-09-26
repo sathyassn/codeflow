@@ -19,6 +19,8 @@ import { GENERATOR, assertGeneratorIdentity } from "../scripts/generator.mjs";
 const adapterPath = fileURLToPath(new URL("../scripts/adapter.mjs", import.meta.url));
 const starterRoot = fileURLToPath(new URL("..", import.meta.url));
 const libUrl = new URL("../scripts/lib.mjs", import.meta.url).href;
+// Windows can hold a fixture briefly after a child exits; retry busy removals.
+const treeRemoval = { recursive: true, force: true, maxRetries: 10, retryDelay: 100 };
 
 test("failed fixture initialization removes its owned root and preserves siblings", async () => {
   const parent = await mkdtemp(path.join(os.tmpdir(), "codeflow-fixture-cleanup-"));
@@ -34,7 +36,7 @@ test("failed fixture initialization removes its owned root and preserves sibling
     assert(allocated);
     await assert.rejects(lstat(allocated), { code: "ENOENT" });
     assert.equal(await readFile(sibling, "utf8"), "unrelated evidence\n");
-  } finally { await rm(parent, { recursive: true, force: true }); }
+  } finally { await rm(parent, treeRemoval); }
 });
 
 test("actual generator identity is bounded, closed and release-pinned", async () => {
@@ -72,7 +74,7 @@ test("an actual fork identity validates its own UTF-8 bounds before module use",
       assert.equal(result.status === 0, accepted, result.stderr);
       if (!accepted) assert.match(result.stderr, /generator does not match this runtime/);
     }
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("a renamed runtime emits its own identity and rejects substituted evidence", async () => {
@@ -106,7 +108,7 @@ test("a renamed runtime emits its own identity and rejects substituted evidence"
     assert.notEqual(result.status, 0);
     assert.match(result.stderr, /generator does not match this runtime/);
     assert.equal(await readFile(evidencePath, "utf8"), forged);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("managed and forked runtimes render their version in pages, stale stubs and the landing", async () => {
@@ -139,7 +141,7 @@ test("managed and forked runtimes render their version in pages, stale stubs and
       const landing = await readFile(path.join(root, "src/content/docs/index.md"), "utf8");
       assert(landing.includes(` · portal <code>${renderedVersion}</code>`), landing);
       assert(!landing.includes("<img"), landing);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -240,7 +242,7 @@ test("browser surface discovery scans beyond the first 64 pages", async () => {
     });
     pages[69].output_markdown_sha256 = "0".repeat(64);
     await assert.rejects(discoverSurfaceRoutes(pages, root), /hash mismatch/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("browser diagnostics ignore only navigation-cancelled local loads", () => {
@@ -287,7 +289,7 @@ test("Astro preserves the explicit canonical route in output and links", { skip:
     assert.match(routeHtml, /data-codeflow-search-root="reference\/Mixed Case \+ café"/);
     assert.match(routeHtml, /id="deep-target"/);
     assert.match(routeHtml, /href="#deep-target"/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("tool output roots never traverse external symlinks", { skip: process.platform === "win32" }, async () => {
@@ -305,8 +307,8 @@ test("tool output roots never traverse external symlinks", { skip: process.platf
     await assertToolOutputRoots(root, ["dist", ".astro", "node_modules/.astro", "node_modules/.vite"]);
     assert.equal(await readFile(sentinel, "utf8"), "must survive\n");
   } finally {
-    await rm(root, { recursive: true, force: true });
-    await rm(outside, { recursive: true, force: true });
+    await rm(root, treeRemoval);
+    await rm(outside, treeRemoval);
   }
 });
 
@@ -323,7 +325,7 @@ test("attribute-breaking base paths fail before generated output", async () => {
       assert.notEqual(result.status, 0);
       assert.match(result.stderr, /base:/);
       await assert.rejects(readFile(path.join(root, "src/content/docs/index.md")), /ENOENT/);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -338,7 +340,7 @@ test("Astro independently rejects remote and encoded base paths", { timeout: 120
       const result = spawnSync(process.execPath, [path.join(starterRoot, "node_modules/astro/bin/astro.mjs"), "build"], { cwd: root, encoding: "utf8", timeout: 110_000 });
       assert.notEqual(result.status, 0, base);
       assert.match(`${result.stderr}\n${result.stdout}`, /base:/, base);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -375,7 +377,7 @@ test("the adapter accepts 256-unit derived titles and stubs 257-unit titles", as
     page = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8")).pages[0];
     assert.equal(page.stale, true);
     assert.match(page.stale_reason, /derived title is invalid/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("shared authority contract is enforced by the JavaScript producer", async () => {
@@ -452,7 +454,7 @@ test("bounded reads refuse oversized, growing, swapped, and symlinked files", as
         await writeFile(target, "replacement");
       },
     }), /changed while/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("unsafe Markdown schemes fail in the AST rewrite and amendments are structural", () => {
@@ -611,7 +613,7 @@ test("an image-suffixed committed directory is not accepted as media", async () 
     await writeFile(path.join(root, "docs/guide.md"), "# Guide\n\n![Not an image](images.png)\n");
     commitFixture(root, "add image-suffixed directory");
     assert.match(runAdapter(root, false).stderr, /referenced media must be one committed regular file/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("portal-owned Markdown fragments must match rendered heading anchors", () => {
@@ -741,7 +743,7 @@ test("corpus publication preserves unknown files and rolls every directory back 
     assert.equal(await readFile(path.join(root, "public/notes.txt"), "utf8"), "keep me");
     await assert.rejects(readFile(path.join(root, "public/markdown/deleted.md")), /ENOENT/);
     await assert.rejects(readFile(path.join(root, "public/media/deleted.png")), /ENOENT/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("authoritative public publication refuses unknown active files", async () => {
@@ -753,7 +755,7 @@ test("authoritative public publication refuses unknown active files", async () =
       { live: "public", preserveUnknown: false, files: new Map([["favicon.svg", "committed"]]) },
     ]), /refusing uncommitted portal file/);
     assert.equal(await readFile(path.join(root, "public/rogue.html"), "utf8"), "<script>rogue()</script>");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("publication recovery is coherent at every crash boundary", async () => {
@@ -776,7 +778,7 @@ test("publication recovery is coherent at every crash boundary", async () => {
       assert.equal(await readFile(path.join(root, "src/content/docs/index.md"), "utf8"), `content-${expected}`);
       assert.equal(await readFile(path.join(root, "public/llms.txt"), "utf8"), `public-${expected}`);
       assert.equal(await readFile(path.join(root, "public/favicon.svg"), "utf8"), "user-owned");
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -792,7 +794,7 @@ test("forged publication journals fail closed without touching outside files", a
     await writeFile(path.join(root, ".portal/publish-transaction.json"), JSON.stringify(forged));
     await assert.rejects(recoverOwnedCorpus(root), /path|journal|stage_root/);
     assert.equal(await readFile(sentinel, "utf8"), "safe");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("an active publication lease blocks contenders without changing live output", async () => {
@@ -810,7 +812,7 @@ test("an active publication lease blocks contenders without changing live output
     ]), /already in progress/);
     assert.equal(await readFile(path.join(root, "public/sentinel.txt"), "utf8"), "untouched");
     await assert.rejects(readFile(path.join(root, ".portal/publish-transaction.json")), /ENOENT/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("one workflow lease covers a complete build or check sequence", async () => {
@@ -824,7 +826,7 @@ test("one workflow lease covers a complete build or check sequence", async () =>
     assert.match(String(contender), /workflow already in progress/);
     assert.equal(await readFile(path.join(root, "sequence.txt"), "utf8"), "adapter\nastro\nevidence\n");
     assert.equal(await withWorkflowLease(root, async () => "next"), "next");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("an ownerless workflow directory is preserved rather than reclaimed without identity", async () => {
@@ -836,7 +838,7 @@ test("an ownerless workflow directory is preserved rather than reclaimed without
     await utimes(lock, stale, stale);
     await assert.rejects(withWorkflowLease(root, async () => "unsafe"), /stable regular|directory/);
     assert.equal((await lstat(lock)).isDirectory(), true);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("a stalled workflow candidate cannot delete the atomic winner", async () => {
@@ -870,7 +872,7 @@ test("a stalled workflow candidate cannot delete the atomic winner", async () =>
     assert.equal(JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token, winnerToken);
     releaseWinner();
     assert.equal(await winner, "winner");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("recovery revalidates a candidate published after its active-claim snapshot", async () => {
@@ -918,7 +920,7 @@ test("recovery revalidates a candidate published after its active-claim snapshot
     releaseWinner();
     assert.equal(await winner, "winner");
     assert.equal(await withWorkflowLease(root, async () => "future"), "future");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("failed creator verification repairs only its identity-bound claim and candidate", async () => {
@@ -939,7 +941,7 @@ test("failed creator verification repairs only its identity-bound claim and cand
     assert.equal(JSON.parse(await readFile(path.join(unrelated, "owner.json"), "utf8")).token, unrelatedToken);
     assert.equal(await withWorkflowLease(root, async () => "future"), "future");
     assert.equal(JSON.parse(await readFile(path.join(unrelated, "owner.json"), "utf8")).token, unrelatedToken);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("a stalled stale-lease reclaimer cannot remove a later winner", async () => {
@@ -975,7 +977,7 @@ test("a stalled stale-lease reclaimer cannot remove a later winner", async () =>
     assert.equal(JSON.parse(await readFile(path.join(root, ".portal/workflow.lock"), "utf8")).token, winnerToken);
     releaseWinner();
     assert.equal(await winner, "winner");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("claim retirement preserves a replacement published after the expected claim leaves", async () => {
@@ -1032,7 +1034,7 @@ test("claim retirement preserves a replacement published after the expected clai
       releaseReplacement();
       assert.equal(await replacement, "replacement");
       assert.equal(await withWorkflowLease(root, async () => "future"), "future");
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -1090,7 +1092,7 @@ test("a replacement released while displaced cannot be resurrected", async () =>
     assert.deepEqual(debris, []);
     await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
     assert.equal(await withWorkflowLease(root, async () => "future"), "future");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("recovery honors displaced-claim liveness at both restoration crash boundaries", async () => {
@@ -1117,7 +1119,7 @@ test("recovery honors displaced-claim liveness at both restoration crash boundar
       }
       assert.equal(await withWorkflowLease(root, async () => "future"), "future");
       assert.deepEqual((await readdir(portal)).filter((name) => name.includes(token)), []);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -1148,7 +1150,7 @@ test("unverified retired claims are quarantined without regaining authority", { 
       assert.equal(entries.some((name) => /^\.workflow-lock-(?:failed|reclaim|release)-/.test(name)), false);
       assert.equal(await withWorkflowLease(root, async () => "future"), "future");
       await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -1168,7 +1170,7 @@ test("recovery quarantines invalid retired debris once and bounds diagnostics", 
     assert.equal(await withWorkflowLease(root, async () => "at-budget"), "at-budget");
     await writeFile(path.join(portal, `.workflow-lock-suspect-${token}-${"f".repeat(24)}`), "over-budget");
     await assert.rejects(withWorkflowLease(root, async () => "unexpected"), /too many candidates/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("workflow interruption reaches the child and releases its lease", { skip: process.platform === "win32", timeout: 15_000 }, async () => {
@@ -1199,7 +1201,7 @@ test("workflow interruption reaches the child and releases its lease", { skip: p
     assert.deepEqual(outcome, { code: null, signal: "SIGTERM" });
     assert.equal(await readFile(path.join(root, ".child-signal"), "utf8"), "SIGTERM\n");
     await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("direct browser lifecycle interruption closes resources and releases its lease", { skip: process.platform === "win32", timeout: 15_000 }, async () => {
@@ -1243,7 +1245,7 @@ test("direct browser lifecycle interruption closes resources and releases its le
     assert.equal(await readFile(path.join(root, ".browser-cleanup-count"), "utf8"), "1\n");
     assert.equal(await readFile(path.join(root, ".browser-cleanup-order"), "utf8"), "cleanup-start\ncleanup-end\n");
     await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("child cleanup forces a stubborn process after its listener closes", { skip: process.platform === "win32", timeout: 5_000 }, async () => {
@@ -1266,7 +1268,7 @@ test("child cleanup forces a stubborn process after its listener closes", { skip
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGKILL");
     await new Promise((resolve) => child.exitCode !== null || child.signalCode !== null ? resolve() : child.once("exit", resolve));
-    await rm(root, { recursive: true, force: true });
+    await rm(root, treeRemoval);
   }
 });
 
@@ -1363,7 +1365,7 @@ test("lifecycle drains a delayed acquisition before re-signalling", { skip: proc
     assert.deepEqual(outcome, { code: null, signal: "SIGTERM" });
     assert.equal(await readFile(path.join(root, ".acquire-cleanup-count"), "utf8"), "1\n");
     assert.equal(await readFile(path.join(root, ".acquire-order"), "utf8"), "acquired\ncleanup-resource\n");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("a stale publication lease is replaced before recovery and publication", async () => {
@@ -1379,7 +1381,7 @@ test("a stale publication lease is replaced before recovery and publication", as
     ]);
     assert.equal(await readFile(path.join(root, "public/llms.txt"), "utf8"), "recovered");
     await assert.rejects(readFile(path.join(root, ".portal/publish.lock/owner.json")), /ENOENT/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("unknown symlinks are refused instead of copied into a staged corpus", { skip: process.platform === "win32" }, async () => {
@@ -1393,7 +1395,7 @@ test("unknown symlinks are refused instead of copied into a staged corpus", { sk
       { live: "public", preserveUnknown: true, files: new Map([["llms.txt", "new"]]) },
     ]), /symlink refused/);
     assert.equal(await readFile(path.join(root, "outside.txt"), "utf8"), "outside");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("preserved unknown files fail closed on growth and swap-to-secret races", { skip: process.platform === "win32" }, async () => {
@@ -1417,7 +1419,7 @@ test("preserved unknown files fail closed on growth and swap-to-secret races", {
         }
       } } }), /changed while it was being read/);
       await assert.rejects(readFile(path.join(root, "public/llms.txt")), /ENOENT/);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -1430,7 +1432,7 @@ test("symlinked corpus roots and unsafe ownership inventories fail closed", { sk
     await symlink(path.join(root, "outside"), path.join(root, "public"));
     await assert.rejects(publishOwnedCorpus(root, [{ live: "public", preserveUnknown: true, files: new Map([["llms.txt", "new"]]) }]), /root is not a regular directory/);
     assert.equal(await readFile(path.join(root, "outside/sentinel.txt"), "utf8"), "outside");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 
   for (const inventory of [
     { schema_version: 1, files: [], extra: true },
@@ -1441,7 +1443,7 @@ test("symlinked corpus roots and unsafe ownership inventories fail closed", { sk
       await mkdir(path.join(owned, "public"));
       await writeFile(path.join(owned, "public/.codeflow-generated.json"), JSON.stringify(inventory));
       await assert.rejects(publishOwnedCorpus(owned, [{ live: "public", preserveUnknown: true, files: new Map([["llms.txt", "new"]]) }]), /invalid generated ownership inventory/);
-    } finally { await rm(owned, { recursive: true, force: true }); }
+    } finally { await rm(owned, treeRemoval); }
   }
 });
 
@@ -1461,7 +1463,7 @@ test("built artifact evidence is deterministic and bounded", async () => {
     await assert.rejects(collectBuiltArtifacts(root, { maximumEntries: 2 }), /entry count exceeds/);
     await assert.rejects(collectBuiltArtifacts(root, { maximumTotalBytes: 1 }), /corpus exceeds/);
     await assert.rejects(collectBuiltArtifacts(root, { maximumDepth: 1 }), /depth exceeds/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("tool output traversal uses one global total-entry budget", async () => {
@@ -1471,7 +1473,7 @@ test("tool output traversal uses one global total-entry budget", async () => {
     await mkdir(path.join(root, "two"));
     await writeFile(path.join(root, "two/file.txt"), "x");
     await assert.rejects(assertToolOutputRoots(root, ["one", "two"], 1), /total entries/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("streamed browser artifact hashes reject growth and path replacement races", { skip: process.platform === "win32" }, async () => {
@@ -1492,7 +1494,7 @@ test("streamed browser artifact hashes reject growth and path replacement races"
           }
         },
       }), /changed while it was being read/);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -1522,7 +1524,7 @@ test("Git snapshot reads scale by corpus phase and disable configured fsmonitor 
     assert.equal(blobs.size, 256);
     assert.deepEqual(commands, ["rev-parse", "ls-tree", "cat-file", "status"]);
     await assert.rejects(readFile(sentinel), /ENOENT/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("Git snapshot accepts native SHA-256 object identities", async (context) => {
@@ -1540,7 +1542,7 @@ test("Git snapshot accepts native SHA-256 object identities", async (context) =>
     snapshot.loadInventory(commit);
     const record = snapshot.requireRegular("page.md", ["100644"], "fixture");
     assert.equal(snapshot.readBlobs([record], { perObjectBytes: 1024, totalBytes: 1024, label: "fixture" }).get("page.md").toString(), "# SHA-256\n");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("Git snapshot child environments exclude inherited credentials and injection controls", () => {
@@ -1670,7 +1672,7 @@ test("the adapter emits one bounded non-searchable current-source stub without a
     assert.doesNotMatch(landing, /Guide/);
     const llms = await readFile(path.join(root, "public/llms.txt"), "utf8");
     assert.doesNotMatch(llms, /reference\/guide/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("the adapter refuses config and output symlinks without changing their targets", { skip: process.platform === "win32" }, async () => {
@@ -1694,8 +1696,8 @@ test("the adapter refuses config and output symlinks without changing their targ
     assert.match(runAdapter(outputRoot, false).stderr, /symlink refused/);
     assert.equal(await readFile(sentinel, "utf8"), "safe");
   } finally {
-    await rm(configRoot, { recursive: true, force: true });
-    await rm(outputRoot, { recursive: true, force: true });
+    await rm(configRoot, treeRemoval);
+    await rm(outputRoot, treeRemoval);
   }
 });
 
@@ -1713,8 +1715,8 @@ test("the adapter rejects reserved routes and stubs non-UTF-8 source bytes", asy
     assert.match(stub, /Source unavailable:/);
     assert.doesNotMatch(stub, /data-pagefind-body|data-codeflow-search-root/);
   } finally {
-    await rm(reservedRoot, { recursive: true, force: true });
-    await rm(encodingRoot, { recursive: true, force: true });
+    await rm(reservedRoot, treeRemoval);
+    await rm(encodingRoot, treeRemoval);
   }
 });
 
@@ -1730,14 +1732,14 @@ test("the adapter refuses dirty snapshot states and dangerous source links", asy
       if (state === "untracked") await writeFile(path.join(root, "docs/new.md"), "# New\n");
       if (state === "deleted") await rm(source);
       assert.match(runAdapter(root, false).stderr, /must match HEAD exactly/);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
   const unsafe = await portalFixture();
   try {
     await writeFile(path.join(unsafe, "docs/guide.md"), "# Guide\n\n[unsafe](javascript:alert(1))\n");
     commitFixture(unsafe, "unsafe link");
     assert.match(runAdapter(unsafe, false).stderr, /unsafe Markdown URL scheme/);
-  } finally { await rm(unsafe, { recursive: true, force: true }); }
+  } finally { await rm(unsafe, treeRemoval); }
 });
 
 test("masked source, token, and media edits block publication", async () => {
@@ -1750,7 +1752,7 @@ test("masked source, token, and media edits block publication", async () => {
       git(root, ["update-index", flag, "docs/guide.md"]);
       await writeFile(source, "# Hidden worktree edit\n\nMust not be published.\n");
       assert.match(runAdapter(root, false).stderr, /portal source does not match/);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 
   const runtime = await portalFixture();
@@ -1762,7 +1764,7 @@ test("masked source, token, and media edits block publication", async () => {
     config.title = "Hidden runtime mutation";
     await writeFile(path.join(runtime, "portal.config.json"), `${JSON.stringify(config)}\n`);
     assert.match(runAdapter(runtime, false).stderr, /runtime input does not match/);
-  } finally { await rm(runtime, { recursive: true, force: true }); }
+  } finally { await rm(runtime, treeRemoval); }
 
   for (const input of ["primitive token import", "referenced media"]) {
     const root = await portalFixture();
@@ -1786,7 +1788,7 @@ test("masked source, token, and media edits block publication", async () => {
       if (input === "primitive token import") await writeFile(path.join(root, inputPath), JSON.stringify({ schema_version: 1, light: { accent: "#006f66" }, dark: { accent: "#82f2df" } }));
       else await writeFile(path.join(root, inputPath), pngHeader(2, 1));
       assert.match(runAdapter(root, false).stderr, new RegExp(`${input} does not match`));
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -1798,7 +1800,7 @@ test("tracked public runtime bytes are authoritative and untracked active conten
       git(root, ["update-index", flag, "public/favicon.svg"]);
       await writeFile(favicon, "<svg><script>masked()</script></svg>");
       assert.match(runLocalAdapter(root, false).stderr, /portal runtime input does not match/);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
   const root = await selfContainedPortalFixture();
   try {
@@ -1807,7 +1809,7 @@ test("tracked public runtime bytes are authoritative and untracked active conten
     await writeFile(nodeVersionPath, nodeVersion.replace(/\r?\n/g, "\r\n"));
     await writeFile(path.join(root, "public/rogue.html"), "<script>rogue()</script>");
     assert.match(runLocalAdapter(root, false).stderr, /must match HEAD exactly|refusing uncommitted portal file/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("Git status pathspecs are split below Windows process limits", () => {
@@ -1832,7 +1834,7 @@ test("a source-root pathspec does not capture a similarly prefixed ignored direc
     runAdapter(root);
     const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
     assert.deepEqual(evidence.pages.map((page) => page.source_path), ["docs/guide.md"]);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("source roots are committed directories with publishable Markdown", async () => {
@@ -1850,7 +1852,7 @@ test("source roots are committed directories with publishable Markdown", async (
       await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
       commitFixture(root, `source root ${scenario}`);
       assert.match(runAdapter(root, false).stderr, scenario === "file" ? /committed directory, not a file/ : /no publishable Markdown/);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -1890,7 +1892,7 @@ test("monorepo source roots produce one deterministic global-to-area route graph
     runAdapter(root);
     const moved = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
     assert.equal(moved.pages.find((page) => page.source_path.endsWith("journey.md")).route, "web/journey");
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("different source roots cannot claim the same semantic route", async () => {
@@ -1905,7 +1907,7 @@ test("different source roots cannot claim the same semantic route", async () => 
     await writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`);
     commitFixture(root, "route collision fixture");
     assert.match(runAdapter(root, false).stderr, /route collision/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("generated strict-ID previews are source-grounded and keyboard-native", async () => {
@@ -1922,7 +1924,7 @@ test("generated strict-ID previews are source-grounded and keyboard-native", asy
     const rendered = await readFile(path.join(root, "src/content/docs/reference/guide.md"), "utf8");
     assert.match(rendered, /<span class="portal-id-preview"><a href="\/system\/decisions\/ADR-0001\/" aria-describedby="portal-preview-[^"]+">ADR-0001<\/a>/);
     assert.match(rendered, /role="tooltip"><strong>Keep source truth<\/strong><span>Status: accepted<\/span><span>Source: <code>docs\/decisions\/ADR-0001.md<\/code><\/span>/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("pinned source links use known provider routes and fall back visibly", async () => {
@@ -1962,7 +1964,7 @@ test("pinned source links use known provider routes and fall back visibly", asyn
         assert.match(output, new RegExp(`${expectedDirectory.replaceAll("/", "\\/")}${commit}\\/docs\\/Mixed%20Case%20%2B%20caf%C3%A9`));
         assert.match(output, /Excluded reference/);
       }
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -1994,7 +1996,7 @@ test("source and configuration metadata cannot inject active generated Markdown"
     const staleBody = stale.slice(stale.indexOf("---", 4) + 3);
     assert.doesNotMatch(staleBody, /<script>|!\[probe\]\(https:|data-pagefind-body|data-codeflow-search-root/);
     assert.match(staleBody, /Source unavailable:/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("stale output never republishes authenticated ancestors or forged prior generated bytes", async () => {
@@ -2020,7 +2022,7 @@ test("stale output never republishes authenticated ancestors or forged prior gen
     assert.match(stale, /Source unavailable:/);
     assert.match(stale, /the previous version of this page is not shown/);
     assert.doesNotMatch(stale, /# Safe ancestor|Grounded content|globalThis\.pwned|<img|attacker\.invalid|built_from_commit=f{40}|codeflow-last-good-provenance/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("the AST adapter rewrites cross-layer documents and copies bounded committed media", async () => {
@@ -2041,7 +2043,7 @@ test("the AST adapter rewrites cross-layer documents and copies bounded committe
     assert.deepEqual(await readFile(path.join(root, "public", mediaRoute)), png);
     assert.match(rendered, /\| A \| B \|/);
     assert.match(rendered, /`\[literal\]\(missing\.md\)`/);
-  } finally { await rm(root, { recursive: true, force: true }); }
+  } finally { await rm(root, treeRemoval); }
 });
 
 test("the adapter rejects raster truncation, type mismatch, and dimension bombs", async () => {
@@ -2057,7 +2059,7 @@ test("the adapter rejects raster truncation, type mismatch, and dimension bombs"
       await writeFile(path.join(root, "docs/guide.md"), `# Guide\n\n![Fixture](media/${name})\n`);
       commitFixture(root, `add ${name}`);
       assert.match(runAdapter(root, false).stderr, expected);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -2068,7 +2070,7 @@ test("the AST adapter fails broken documents and repository traversal", async ()
       await writeFile(path.join(root, "docs/guide.md"), `# Guide\n\n[Broken](${link})\n`);
       commitFixture(root, "add broken link");
       assert.match(runAdapter(root, false).stderr, /does not exist|stay beneath|fragment/);
-    } finally { await rm(root, { recursive: true, force: true }); }
+    } finally { await rm(root, treeRemoval); }
   }
 });
 
@@ -2141,7 +2143,7 @@ async function initializedFixture(prefix, initialize) {
     await initialize(root);
     return root;
   } catch (error) {
-    try { await rm(root, { recursive: true, force: true }); }
+    try { await rm(root, treeRemoval); }
     catch (cleanupError) {
       throw new AggregateError([error, cleanupError], "Fixture initialization and owned-root cleanup failed");
     }
