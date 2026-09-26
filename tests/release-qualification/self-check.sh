@@ -930,11 +930,13 @@ ok pipeline.shape "a rejected verify does not" \
 
 TASK_OUT="$STUB_DIR/task.output"
 MODEL_RESULT="$STUB_DIR/model-result.txt"
-# write_task_tx - a transcript with the pipeline Workflow launched as task
-# wtask0001 and Claude Code's notice naming its output file.
+# write_task_tx [input-json] - a transcript with a Workflow call launched as
+# task wtask0001 and Claude Code's notice naming its output file. The call's
+# input defaults to the pipeline's script path.
 write_task_tx() {
+  _wtt_input=${1:-'{"scriptPath":"/s/.claude/workflows/pipeline.workflow.js"}'}
   {
-    printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Workflow","input":{"scriptPath":"/s/.claude/workflows/pipeline.workflow.js"}}]}}\n'
+    printf '{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"Workflow","input":%s}]}}\n' "$_wtt_input"
     printf '{"type":"user","promptId":"p1","message":{"content":[{"type":"tool_result","tool_use_id":"t1"}]},"toolUseResult":{"status":"async_launched","taskId":"wtask0001","runId":"wf_x"}}\n'
     printf '{"type":"queue-operation","operation":"enqueue","content":"<task-notification>\\n<task-id>wtask0001</task-id>\\n<tool-use-id>toolu_1</tool-use-id>\\n<output-file>%s</output-file>\\n</task-notification>"}\n' "$TASK_OUT"
   } >"$LAUNCH_TX"
@@ -962,6 +964,26 @@ rm -f "$TASK_OUT"
 _task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
 ok pipeline.task "a missing task output is no proof" \
   "$([ "$_r" != 0 ] && printf '%s' "$_task" | grep -q 'output unreadable' && echo 0 || echo 1)"
+
+# The pipeline launched by its registered name, as live Claude Code sessions
+# also do, counts the same as the script path form above.
+printf '{"summary":"s","result":%s}\n' "$GOOD_RESULT" >"$TASK_OUT"
+printf '%s\n' "$GOOD_RESULT" >"$MODEL_RESULT"
+write_task_tx '{"name":"pipeline","args":{"stages":["build","verify"]}}'
+_task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
+ok pipeline.task "a Workflow call naming the pipeline is matched" \
+  "$([ "$_r" = 0 ] && [ "$_task" = "Claude Code task wtask0001 output: status complete, stages build/verify, verify verdict approved; agrees with the result file" ] &&
+     echo 0 || echo 1)"
+
+# Negative controls: another workflow's name, or a name that only contains
+# the word, is not the pipeline.
+for _other in deploy pipeline-canary; do
+  write_task_tx "{\"name\":\"$_other\",\"args\":{}}"
+  _task=$(HOME="$FAKE_HOME" workflow_task_evidence "$STUB_DIR/state" "$MODEL_RESULT") && _r=0 || _r=$?
+  ok pipeline.task "a Workflow call naming $_other is not the pipeline" \
+    "$([ "$_r" != 0 ] && printf '%s' "$_task" | grep -q 'no backgrounded pipeline Workflow task' && echo 0 || echo 1)"
+done
+write_task_tx
 
 # ---------------------------------------------------------------------------
 # The pipeline's work is checked on its own branch

@@ -827,8 +827,12 @@ for line in open(transcript, encoding="utf-8"):
     for block in content:
         if not isinstance(block, dict):
             continue
+        # The pipeline is launched by script path or by its registered name;
+        # the name must be exactly "pipeline", never a substring match.
+        tool_input = block.get("input")
+        by_name = isinstance(tool_input, dict) and tool_input.get("name") == "pipeline"
         if block.get("type") == "tool_use" and block.get("name") == "Workflow" and \
-                "pipeline.workflow" in json.dumps(block.get("input")):
+                (by_name or "pipeline.workflow" in json.dumps(tool_input)):
             calls.add(block.get("id"))
         elif block.get("type") == "tool_result" and block.get("tool_use_id") in calls:
             result = entry.get("toolUseResult")
