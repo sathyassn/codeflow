@@ -449,16 +449,19 @@ EDITOR_UNREADABLE=2
 #   ❯ first editor line         the marker, one space, then text
 #     continued editor line     zero or more, each indented two spaces
 #   ──────────────────────────  the last rule on screen
-#     ⏸ manual mode on          one or two footer lines, indented two spaces
+#     ⏸ manual mode on          exactly one known footer line
 #
-# Every part is checked. A second prompt marker anywhere in the frame or the
-# footer, a body line that is not indented, a footer that is missing, longer
-# than two lines, not indented, or that carries dialog text (a numbered
-# option, "Enter to confirm", "Esc to cancel", a question) all return
-# EDITOR_NONE, as do submitted history and a dialog, which draw no such frame.
-# The printed text has the marker and the two-space indents removed and
-# trailing blanks trimmed. A read that fails, times out or prints nothing
-# returns EDITOR_UNREADABLE.
+# The footer is recognised, never guessed: after two spaces it is one of the
+# lines live 2.1.283 panes showed on 2026-09-26, `⏸ manual mode on` (manual
+# mode), `⏵⏵ bypass permissions on (shift+tab to cycle)` (bypassPermissions,
+# the canary's mode) or `paste again to expand` (a folded paste, with or
+# without the directive after it), optionally followed by the shortcut hints
+# ` · ? for shortcuts` and ` · ← for agents` those panes appended. Any other
+# footer, a missing one or a second footer line returns EDITOR_NONE, as do a
+# second prompt marker in the frame, a body line that is not indented,
+# submitted history and a dialog. The printed text has the marker and the
+# two-space indents removed and trailing blanks trimmed. A read that fails,
+# times out or prints nothing returns EDITOR_UNREADABLE.
 current_editor() {
   _ce_file=${TMPDIR:-/tmp}/cf-current-editor.$$
   pane_read_visible "$1" "$_ce_file" "$TRUST_READ_TIMEOUT" && _ce_read=0 || _ce_read=$?
@@ -487,12 +490,13 @@ current_editor() {
       }
       footer = 0
       for (i = bottom + 1; i <= NR; i++) {
-        if (line[i] ~ /^[[:space:]]*$/) continue
+        text = line[i]
+        sub(/[[:space:]]+$/, "", text)
+        if (text == "") continue
         footer++
-        if (line[i] !~ /^  [^ ]/ || line[i] ~ marker) exit 1
-        if (line[i] ~ /(^[[:space:]]*[0-9]+\.[[:space:]])|Enter to confirm|Esc to cancel|\?[[:space:]]*$/) exit 1
+        if (text !~ /^  (⏸ manual mode on|⏵⏵ bypass permissions on \(shift\+tab to cycle\)|paste again to expand)( · (\? for shortcuts|← for agents))*$/) exit 1
       }
-      if (footer < 1 || footer > 2) exit 1
+      if (footer != 1) exit 1
       printf "%s", body
     }
   ' "$_ce_file") && _ce_status=$EDITOR_FOUND || _ce_status=$EDITOR_NONE

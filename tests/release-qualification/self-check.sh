@@ -401,6 +401,19 @@ $RULE
 $RULE
   ⏵⏵ bypass permissions on (shift+tab to cycle) · ← for agents"
 
+# An unfolded multi-line paste in bypassPermissions mode.
+BYPASS_MULTILINE_PANE="$RULE
+❯ probe line 1 with some more words
+  probe line 2 with some more words
+$RULE
+  ⏵⏵ bypass permissions on (shift+tab to cycle)"
+
+# frame_with_footer <footer line> - the prompt in a well-formed frame over the
+# given footer, for the footer near misses below.
+frame_with_footer() {
+  printf '%s\n%s\n%s\n%s' "$RULE" '❯ Reply with exactly: ok. Do not edit any file.' "$RULE" "$1"
+}
+
 # Two attachments: herdr delivered one long text as two pastes.
 TWO_ATTACHMENTS_PANE="$RULE
 ❯ [Pasted text #1 +15 lines][Pasted text #2 +14 lines]
@@ -511,6 +524,10 @@ found_case 'the live directive layout is an editor holding the attachment and se
   "$DIRECTIVE_PANE" '[Pasted text #1 +12 lines]Carry out the pasted instructions.'
 found_case 'the live bypassPermissions idle layout is an editor' \
   "$BYPASS_IDLE_PANE" 'Try "create a util logging.py that..."'
+found_case 'the live bypassPermissions multi-line layout is an editor' \
+  "$BYPASS_MULTILINE_PANE" "$(printf 'probe line 1 with some more words\nprobe line 2 with some more words')"
+found_case 'the manual mode footer alone is recognised' \
+  "$(frame_with_footer '  ⏸ manual mode on')" 'Reply with exactly: ok. Do not edit any file.'
 
 # no_editor_case <description> <pane text>
 no_editor_case() {
@@ -529,6 +546,17 @@ no_editor_case 'a frame with no footer' "$NO_FOOTER_PANE"
 no_editor_case 'a frame with three lines below it' "$LONG_FOOTER_PANE"
 no_editor_case 'a frame with an unindented line below it' "$FLUSH_FOOTER_PANE"
 no_editor_case 'a screen with no rules' "$TRUSTED_PANE"
+# Footer near misses: indented like a footer, but not one Claude Code draws.
+no_editor_case 'a frame over "Continue? (y/n)"' "$(frame_with_footer '  Continue? (y/n)')"
+no_editor_case 'a frame over "Press Enter to continue"' "$(frame_with_footer '  Press Enter to continue')"
+no_editor_case 'a frame over "Working on earlier request"' \
+  "$(frame_with_footer '  Working on earlier request')"
+no_editor_case 'a frame over a mode line with extra text' \
+  "$(frame_with_footer '  ⏸ manual mode on · Press Enter to continue')"
+no_editor_case 'a frame over the paste hint indented three spaces' \
+  "$(frame_with_footer '   paste again to expand')"
+no_editor_case 'a frame over two known footer lines' \
+  "$(frame_with_footer "$(printf '  ⏸ manual mode on\n  paste again to expand')")"
 stub_herdr "$UNSENT_PANE"
 printf '1' >"$STUB_DIR/pane-rc"
 current_editor p1 >/dev/null && _r=0 || _r=$?
@@ -641,6 +669,11 @@ unavailable_case 'a frame with three lines below it' "$LONG_FOOTER_PANE"
 unavailable_case 'a frame with an unindented line below it' "$FLUSH_FOOTER_PANE"
 unavailable_case 'the prompt with more text in the editor' "$EXTRA_TEXT_PANE"
 unavailable_case 'two attachments in the editor' "$TWO_ATTACHMENTS_PANE"
+unavailable_case 'a frame over "Continue? (y/n)"' "$(frame_with_footer '  Continue? (y/n)')"
+unavailable_case 'a frame over "Press Enter to continue"' \
+  "$(frame_with_footer '  Press Enter to continue')"
+unavailable_case 'a frame over "Working on earlier request"' \
+  "$(frame_with_footer '  Working on earlier request')"
 
 stub_herdr "$PASTED_PANE"
 printf '1' >"$STUB_DIR/pane-rc"
