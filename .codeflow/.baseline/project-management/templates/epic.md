@@ -1,7 +1,7 @@
 ---
 id: EPC-{{NNN}}
 title: {{TITLE_YAML}}
-status: draft            # draft | planning | in_progress | blocked | complete | archived
+status: draft            # draft | planning | in_progress | blocked | complete | cancelled | archived
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
 capabilities: []         # CAP-### ids this epic creates or changes
 adrs: []                 # ADR ids consumed or produced
@@ -26,9 +26,13 @@ created: {{DATE}}
      claim-matched evidence: automate where meaningful, otherwise name a
      bounded observable or review. Do not invent a hard-coded or meaningless
      test merely to make the record look verifiable. "Works correctly" is not
-     a criterion. If the list will not fit on one screen, split the epic. -->
+     a criterion. If the list will not fit on one screen, split the epic.
+     List each as `- AC-n <criterion>` with no checkbox; a task criterion
+     serves one with `(serves EPC-NNN AC-m)`. `codeflow epic status` closes
+     the epic only when every task is terminal and every criterion is
+     verified. -->
 
-- [ ]
+- AC-1
 
 ## Out of scope
 
