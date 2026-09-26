@@ -29,7 +29,7 @@
     ".agents/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "295ef57c7dde41e87aef155deab72dfed123e0026504510f5260e87a07304b2b",
+      "sha256": "f005023e2e8736f41ad969af8a7252f8dd5ea96cb67418d8e818c33d10689d55",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/native-fallback.md": {
@@ -503,7 +503,7 @@
     ".claude/skills/cf-delegate/resources/claude-turn-completion.md": {
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
-      "sha256": "295ef57c7dde41e87aef155deab72dfed123e0026504510f5260e87a07304b2b",
+      "sha256": "f005023e2e8736f41ad969af8a7252f8dd5ea96cb67418d8e818c33d10689d55",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/native-fallback.md": {

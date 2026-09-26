@@ -4,8 +4,10 @@ Use this adapter for the codex-hosted, interactive Claude CLI lane. CodeFlow
 owns the durable lifecycle records; the host launches the harness and delivers
 the bytes. The protocol proves three things a terminal signal alone cannot:
 the session started cleanly, the delivered prompt was accepted as the armed
-turn, and the terminal event belongs to that turn. It never inspects
-transcripts, and it makes zero tmux calls — waiting is pure file polling.
+turn, and the terminal event belongs to that turn. It reads the session
+transcript for one purpose only, to find the tool call that launched a noticed
+background task (see the task-notice rule below). It makes zero tmux calls;
+waiting is pure file polling.
 
 ## Per-run setup
 
@@ -173,12 +175,14 @@ For peer-dependent turns, verify a supported public foreground native return
 within the host turn; an intended wait flag is not proof. Never call plugin-internal
 scripts or cached private paths. Keep host-side monitoring in that accepted
 foreground turn: do not use Claude Bash `run_in_background` watchers or rely on
-their task notifications to resume it. A notification can enter as a new,
-unarmed `UserPromptSubmit` and be rejected. A persistent native peer process
-behind the dedicated pane is permitted; collect its result in-turn. A worker
-that resumes the primary
-after its terminal result can emit an unsolicited second Stop; schema-v2 cannot
-correlate that continuation and deliberately poisons the run. A terminal
+their task notifications to resume it. Only a notice that meets the task-notice
+rule above is admitted, and its result lives in the continuation record, not in
+`wait --until terminal`; any other notification enters as a new, unarmed
+`UserPromptSubmit` and is rejected. A persistent native peer process behind the
+dedicated pane is permitted; collect its result in-turn. A worker that resumes
+the primary after its terminal result without an admitted task notice can emit
+an unsolicited second Stop; schema-v2 cannot correlate that continuation and
+deliberately poisons the run. A terminal
 message saying work is still running is incomplete, not a successful handoff.
 Do not weaken correlation or count a later uncorrelated response as verified.
 Recover in a fresh run and recheck the evidence; no internal worker registry is
