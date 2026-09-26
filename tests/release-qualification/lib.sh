@@ -464,11 +464,16 @@ EDITOR_UNREADABLE=2
 # layout a live Claude Code 2.1.283 pane draws around its editor:
 #
 #   ──────────────────────────  the next-to-last rule on screen
-#   ❯ first editor line         the marker, one space, then text
+#   ❯ first editor line         the marker, one separator, then text
 #     continued editor line     zero or more, each indented two spaces
 #   ──────────────────────────  the last rule on screen
 #     codeflow-qualify          optional: the canary's own status line
 #     ⏸ manual mode on          exactly one known footer line
+#
+# The separator after the marker is one ASCII space or one U+00A0: live
+# 2.1.283 panes drew U+00A0 on 2026-09-26, and the fixtures in self-check.sh
+# keep that byte sequence. Any other separator, or a second space after it,
+# returns EDITOR_NONE.
 #
 # The footer is recognised, never guessed: after two spaces it is one of the
 # lines live 2.1.283 panes showed on 2026-09-26, `⏸ manual mode on` (manual
@@ -492,6 +497,7 @@ current_editor() {
     return "$EDITOR_UNREADABLE"
   fi
   _ce_text=$(LC_ALL=C awk -v marker="$INPUT_LINE_MARKER" -v status="$QUALIFY_STATUS_LINE" '
+    BEGIN { nbsp = "\302\240" }
     { line[NR] = $0 }
     /^[[:space:]]*(─)+[[:space:]]*$/ { top = bottom; bottom = NR }
     END {
@@ -500,8 +506,10 @@ current_editor() {
         text = line[i]
         sub(/[[:space:]]+$/, "", text)
         if (i == top + 1) {
-          if (text !~ /^❯ [^ ]/) exit 1
-          sub(/^❯ /, "", text)
+          if (index(text, "❯ ") == 1) text = substr(text, length("❯ ") + 1)
+          else if (index(text, "❯" nbsp) == 1) text = substr(text, length("❯" nbsp) + 1)
+          else exit 1
+          if (text == "" || text ~ /^ / || index(text, nbsp) == 1) exit 1
         } else {
           if (text ~ marker) exit 1
           if (text != "" && text !~ /^  /) exit 1
