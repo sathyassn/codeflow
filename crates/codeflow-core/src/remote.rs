@@ -596,7 +596,31 @@ mod tests {
         let mut perms = std::fs::metadata(&path).unwrap().permissions();
         perms.set_mode(0o755);
         std::fs::set_permissions(&path, perms).unwrap();
+        wait_until_executable(&path);
         path
+    }
+
+    /// A child forked by a concurrent test can briefly inherit the write
+    /// descriptor of a freshly written shim, and Linux then refuses to run it
+    /// (ETXTBSY). The provider would report that as an unresolvable repo, so
+    /// wait until one run succeeds. Nobody writes the shim again, so every
+    /// later run succeeds too.
+    #[cfg(unix)]
+    fn wait_until_executable(path: &Path) {
+        for _ in 0..200 {
+            match Command::new(path)
+                .arg("repo")
+                .stdout(Stdio::null())
+                .status()
+            {
+                Err(e) if e.kind() == std::io::ErrorKind::ExecutableFileBusy => {
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(e) => panic!("shim {} does not run: {e}", path.display()),
+                Ok(_) => return,
+            }
+        }
+        panic!("shim {} stayed busy for 2 s", path.display());
     }
 
     #[test]
@@ -681,7 +705,7 @@ mod tests {
         let report = provider.apply(&plan);
 
         assert_eq!(report.status, ProtectStatus::Degraded);
-        assert_eq!(report.limitations.len(), 2);
+        assert_eq!(report.limitations.len(), 2, "{:?}", report.limitations);
         assert!(
             report.limitations[0].contains("Upgrade to GitHub Pro"),
             "precise plan limitation expected: {}",
