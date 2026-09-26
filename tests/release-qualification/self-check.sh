@@ -318,7 +318,8 @@ ok mutation.probe "without the guard an unreadable pane reads as answered" \
 # The stub herdr counts Enters and writes `accepted` on the one named in
 # accept-at; the stub candidate answers `delegate wait` with 0 once that file
 # exists and with the timeout exit 124 until then. `pane read` prints
-# pane-text, the screen deliver_turn judges before any re-Enter.
+# pane-text, the screen deliver_turn judges for a paste attachment before the
+# first Enter and for unsent text before any re-Enter.
 
 {
   printf '#!/bin/sh\n'
@@ -365,13 +366,16 @@ run_deliver() {
 _began=$(date +%s)
 run_deliver 1 "$UNSENT_PANE"
 _took=$(($(date +%s) - _began))
-ok deliver_turn.first "accepted on the first Enter: one Enter, no pane read" \
-  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] && [ "$DELIVER_READS" = 0 ] && echo 0 || echo 1)"
+ok deliver_turn.first "accepted on the first Enter: one Enter, one pane read" \
+  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] && [ "$DELIVER_READS" = 1 ] && echo 0 || echo 1)"
 ok deliver_turn.settle "waits the 2 s settle between the text and Enter, took $_took s" \
   "$([ "$_took" -ge 2 ] && echo 0 || echo 1)"
-ok deliver_turn.order "sends the text before the first Enter" \
+ok deliver_turn.order "sends the text, reads the input line, then the first Enter" \
   "$(sed -n '1p' "$STUB_DIR/calls" | grep -qF 'pane send-text p1 Reply with exactly: ok.' &&
-     sed -n '2p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
+     sed -n '2p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
+     sed -n '3p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
+ok deliver_turn.no_directive "a prompt shown as text gets no directive" \
+  "$([ "$(grep -c 'pane send-text' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
 ok deliver_turn.probe "probes acceptance of this turn for 5 s" \
   "$(grep -qF 'delegate wait --run-id run1 --state-dir /tmp/state --until accepted --turn-id t1 --timeout-seconds 5' \
      "$STUB_DIR/calls" && echo 0 || echo 1)"
@@ -387,9 +391,18 @@ ok deliver_turn.reenter "the re-Enter follows a visible-screen read and never re
   "$(grep -qF 'pane read p1 --source visible --lines 120' "$STUB_DIR/calls" &&
      [ "$(grep -c 'pane send-text' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
 
+run_deliver 1 "$PASTED_PANE"
+ok deliver_turn.directive "a paste attachment gets the directive typed, then one Enter" \
+  "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 1 ] &&
+     sed -n '2p' "$STUB_DIR/calls" | grep -qF 'pane read p1 --source visible' &&
+     [ "$(sed -n '3p' "$STUB_DIR/calls")" = 'pane send-text p1 Carry out the pasted instructions.' ] &&
+     sed -n '4p' "$STUB_DIR/calls" | grep -qF 'pane send-keys p1 Enter' && echo 0 || echo 1)"
+
 run_deliver 2 "$PASTED_PANE"
 ok deliver_turn.pasted "a paste attachment on the input line gets a re-Enter" \
   "$([ "$DELIVER_RC" = 0 ] && [ "$DELIVER_ENTERS" = 2 ] && echo 0 || echo 1)"
+ok deliver_turn.directive "the re-Enter never types the directive again" \
+  "$([ "$(grep -c 'pane send-text p1 Carry out' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
 
 # Negative controls: not accepted, but no evidence of unsent text.
 run_deliver 99 "$SENT_PANE"
@@ -406,6 +419,8 @@ printf '99' >"$STUB_DIR/accept-at"
 deliver_turn p1 "$STUB_DIR/prompt.txt" run1 /tmp/state t1 && _r=0 || _r=$?
 ok deliver_turn.unreadable "an unreadable pane is no evidence, so no Enter" \
   "$([ "$_r" != 0 ] && [ "$(cat "$STUB_DIR/enters")" = 1 ] && echo 0 || echo 1)"
+ok deliver_turn.unreadable "an unreadable pane gets no directive" \
+  "$([ "$(grep -c 'pane send-text' "$STUB_DIR/calls")" = 1 ] && echo 0 || echo 1)"
 
 # Still unsent after the one re-Enter: stop and fail.
 run_deliver 99 "$UNSENT_PANE"

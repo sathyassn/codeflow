@@ -417,37 +417,59 @@ resolve_trust_session() {
 # never resending the text, and only when the pane's input line visibly still
 # holds the armed prompt, once, as cf-delegate allows. A blind Enter
 # could answer whatever dialog is on screen, so no evidence means no Enter.
+#
+# Claude Code folds a long or multi-line paste into a `[Pasted text` attachment
+# and acts on pasted text only where the user's own words say so. After the
+# settle, deliver_turn reads the input line once, and when it shows that
+# attachment it types the fixed directive cf-delegate names, pauses again, and
+# only then presses Enter. The delegate-turn hook accepts an attachment only
+# with that sentence after it.
 
 DELIVER_SETTLE_SECONDS=${DELIVER_SETTLE_SECONDS:-2}
+PASTE_DIRECTIVE='Carry out the pasted instructions.'
 DELIVER_ACCEPT_PROBE_SECONDS=5
 DELIVER_MAX_REENTERS=1
 
 # The prompt marker Claude Code paints at the start of its input line.
 INPUT_LINE_MARKER='^([[:space:]]|│)*(❯|>)'
 
-# unsent_prompt_showing <pane-id> <prompt-file> - returns 0 only when a
-# readable pane's input line, the last visible line that starts with the
-# prompt marker, holds the armed prompt: its first 24 characters, or the
-# paste attachment Claude shows for a long paste. Earlier marker lines are
-# submitted history, so a prompt that was sent never matches. An unreadable
-# pane returns non-zero: it is no evidence of unsent text.
-unsent_prompt_showing() {
-  _ups_file=${TMPDIR:-/tmp}/cf-unsent-pane.$$
-  _ups_match=$(head -1 "$2" | cut -c1-24)
-  pane_read_visible "$1" "$_ups_file" "$TRUST_READ_TIMEOUT" && _ups_read=0 || _ups_read=$?
-  _ups_line=""
-  if [ "$_ups_read" = 0 ]; then
-    _ups_line=$(LC_ALL=C grep -E "$INPUT_LINE_MARKER" "$_ups_file" | tail -1)
+# input_line <pane-id> - prints a readable pane's input line, the last
+# visible line that starts with the prompt marker, and nothing for an
+# unreadable pane. Earlier marker lines are submitted history.
+input_line() {
+  _il_file=${TMPDIR:-/tmp}/cf-input-line.$$
+  if pane_read_visible "$1" "$_il_file" "$TRUST_READ_TIMEOUT"; then
+    LC_ALL=C grep -E "$INPUT_LINE_MARKER" "$_il_file" | tail -1
   fi
-  rm -f "$_ups_file"
+  rm -f "$_il_file"
+  unset _il_file
+}
+
+# unsent_prompt_showing <pane-id> <prompt-file> - returns 0 only when the
+# pane's input line holds the armed prompt: its first 24 characters, or the
+# paste attachment Claude shows for a long paste. A prompt that was sent is
+# history and never matches. An unreadable pane returns non-zero: it is no
+# evidence of unsent text.
+unsent_prompt_showing() {
+  _ups_match=$(head -1 "$2" | cut -c1-24)
+  _ups_line=$(input_line "$1")
   set -- 1
   if [ -n "$_ups_line" ] && [ -n "$_ups_match" ]; then
     case $_ups_line in
       *"$_ups_match"* | *"[Pasted text"*) set -- 0 ;;
     esac
   fi
-  unset _ups_file _ups_match _ups_read _ups_line
+  unset _ups_match _ups_line
   return "$1"
+}
+
+# paste_attachment_showing <pane-id> - returns 0 only when the pane's input
+# line shows the attachment Claude Code folds a long paste into.
+paste_attachment_showing() {
+  case $(input_line "$1") in
+    *"[Pasted text"*) return 0 ;;
+  esac
+  return 1
 }
 
 # deliver_turn <pane> <prompt-file> <run-id> <state-dir> <turn-id> - returns 0
@@ -455,6 +477,11 @@ unsent_prompt_showing() {
 deliver_turn() {
   herdr pane send-text "$1" "$(cat "$2")" >>"$TRANSCRIPT" 2>&1 || true
   sleep "$DELIVER_SETTLE_SECONDS"
+  if paste_attachment_showing "$1"; then
+    printf '\nthe input line shows a paste attachment; typing the directive\n' >>"$TRANSCRIPT"
+    herdr pane send-text "$1" "$PASTE_DIRECTIVE" >>"$TRANSCRIPT" 2>&1 || true
+    sleep "$DELIVER_SETTLE_SECONDS"
+  fi
   herdr pane send-keys "$1" Enter >>"$TRANSCRIPT" 2>&1 || true
   _dt_reenters=0
   while :; do
