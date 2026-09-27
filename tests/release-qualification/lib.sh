@@ -1414,3 +1414,27 @@ snapshot_files() {
     fi
   done
 }
+
+# grade_present_resolve <event> <delivered yes|no> <delivered-version>
+#   <resolve-status> <resolve-output> <history-after-json>
+#
+# Print the positive present resolve row's result. Exit status and the
+# acknowledgement are not enough: the session history read after resolve must
+# hold an `addressed` event for this exact event id at a sequence later than
+# the version it was resolved at, and no `dismissed` event for it. Missing,
+# malformed or contradictory history fails the row.
+grade_present_resolve() {
+  if [ -n "$1" ] && [ "$2" = yes ] && [ "$4" = 0 ] &&
+    printf '%s' "$5" | grep -qF "resolved $1 as addressed" &&
+    printf '%s' "$6" | python3 -c 'import json, sys
+event, version = sys.argv[1], int(sys.argv[2])
+events = json.load(sys.stdin)["feedback_events"]
+mine = [e for e in events if e.get("event_id") == event]
+addressed = [e for e in mine if e.get("event") == "addressed" and int(e["sequence"]) > version]
+dismissed = [e for e in mine if e.get("event") == "dismissed"]
+sys.exit(0 if len(addressed) == 1 and not dismissed else 1)' "$1" "${3:-0}" 2>/dev/null; then
+    printf '%s\n' "$RESULT_PASSED"
+  else
+    printf '%s\n' "$RESULT_FAILED"
+  fi
+}

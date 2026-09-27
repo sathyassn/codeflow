@@ -1366,5 +1366,105 @@ ok qualify.sh "exports the candidate into the live pane and records its binding"
      grep -qF 'pane_codeflow_binding "$_pane_codeflow" "$BINARY"' "$SCRIPT_DIR/qualify.sh" &&
      echo 0 || echo 1)"
 
+# ---------------------------------------------------------------------------
+# present-review.py: the positive present resolve row's review client
+# ---------------------------------------------------------------------------
+#
+# A stub session service on loopback checks each request the way the real
+# service does: the bootstrap post carries the capability and no Origin, and
+# the review post carries the cookie the bootstrap set, the session Origin,
+# the request marker and JSON. Mode "refuse" rejects the capability and mode
+# "nocookie" sets no cookie; the client must then print no event id.
+
+review_stub() { # <mode> <bootstrap-file> -> "<client exit> <event id or empty> <stub verdict>"
+  python3 - "$1" "$2" "$SCRIPT_DIR/present-review.py" <<'PY'
+import http.server, json, subprocess, sys, threading
+mode, page, client = sys.argv[1], sys.argv[2], sys.argv[3]
+seen = {"bootstrap": "none", "review": "none"}
+class H(http.server.BaseHTTPRequestHandler):
+    def log_message(self, *a): pass
+    def do_POST(self):
+        body = self.rfile.read(int(self.headers.get("Content-Length", 0))).decode()
+        auth = "127.0.0.1:%d" % self.server.server_port
+        if self.path == "/bootstrap":
+            ok = body == "capability=cap-123" and self.headers.get("Origin") is None
+            seen["bootstrap"] = "ok" if ok else "bad"
+            if mode == "refuse" or not ok:
+                self.send_response(401); self.end_headers(); self.wfile.write(b"invalid"); return
+            self.send_response(200)
+            if mode != "nocookie":
+                self.send_header("Set-Cookie", "cfp=sess-9; Path=/app; HttpOnly; SameSite=Strict")
+            self.end_headers(); return
+        if self.path == "/app/api/reviews":
+            doc = json.loads(body)
+            ok = (self.headers.get("Cookie") == "cfp=sess-9"
+                  and self.headers.get("Origin") == "http://" + auth
+                  and self.headers.get("X-CF-Present") == "1"
+                  and self.headers.get("Content-Type") == "application/json"
+                  and doc["session_id"] == "s-1" and doc["revision"] == 2
+                  and doc["verdict"] == "request_changes" and doc["instruction"])
+            seen["review"] = "ok" if ok else "bad"
+            self.send_response(200 if ok else 403); self.end_headers()
+            self.wfile.write(json.dumps({"event_id": doc["event_id"], "state": "received"}).encode())
+server = http.server.HTTPServer(("127.0.0.1", 0), H)
+threading.Thread(target=server.serve_forever, daemon=True).start()
+open(page, "w").write('<form id="bootstrap" method="post" action="http://127.0.0.1:%d/bootstrap">'
+                      '<input type="hidden" name="capability" value="cap-123"></form>' % server.server_port)
+run = subprocess.run([sys.executable, client, page, "s-1", "2"], capture_output=True, text=True)
+server.shutdown()
+print(run.returncode, run.stdout.strip() or "-", seen["bootstrap"], seen["review"])
+PY
+}
+
+set -- $(review_stub ok "$STUB_DIR/bootstrap.html")
+ok present-review.py "posts the bootstrap, then the review with cookie, Origin and marker" \
+  "$([ "$1" = 0 ] && printf '%s' "$2" | grep -Eq '^[0-9a-f-]{36}$' &&
+     [ "$3" = ok ] && [ "$4" = ok ] && echo 0 || echo 1)"
+set -- $(review_stub refuse "$STUB_DIR/bootstrap.html")
+ok present-review.py "a refused bootstrap gives no event id and sends no review" \
+  "$([ "$1" = 1 ] && [ "$2" = - ] && [ "$4" = none ] && echo 0 || echo 1)"
+set -- $(review_stub nocookie "$STUB_DIR/bootstrap.html")
+ok present-review.py "a bootstrap that sets no cookie gives no event id and sends no review" \
+  "$([ "$1" = 1 ] && [ "$2" = - ] && [ "$4" = none ] && echo 0 || echo 1)"
+set --
+
+ok qualify.sh "the positive present resolve row runs through present-review.py" \
+  "$(grep -qF 'python3 "$SCRIPT_DIR/present-review.py" "$_bootstrap" "$_sid"' "$SCRIPT_DIR/qualify.sh" &&
+     ! grep -q 'hosts no browser' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
+
+# grade_present_resolve: the positive resolve row passes only on the saved
+# effect. Each control changes one input from the passing case: history read
+# after resolve must show this event addressed after the resolved version.
+EV=11111111-2222-4333-8444-555555555555
+ACK="resolved $EV as addressed"
+history_json() { # <extra events JSON, comma-led or empty>
+  printf '{"feedback_events":[{"event":"received","sequence":1,"envelope":{"event_id":"%s"}},' "$EV"
+  printf '{"event":"delivered","sequence":2,"event_id":"%s","at_unix":1}%s]}' "$EV" "$1"
+}
+ADDRESSED=$(printf ',{"event":"addressed","sequence":3,"event_id":"%s","at_unix":2}' "$EV")
+grade_case() { # <name> <expected> <event> <delivered> <version> <status> <output> <history>
+  _gc_name=$1 _gc_want=$2
+  shift 2
+  _gc_got=$(grade_present_resolve "$@")
+  ok "grade_present_resolve.$_gc_name" "the row is $_gc_want" \
+    "$([ "$_gc_got" = "$_gc_want" ] && echo 0 || echo 1)"
+  unset _gc_name _gc_want _gc_got
+}
+grade_case addressed "$RESULT_PASSED" "$EV" yes 2 0 "$ACK" "$(history_json "$ADDRESSED")"
+grade_case ack-only "$RESULT_FAILED" "$EV" yes 2 0 "$ACK" "$(history_json "")"
+grade_case stale "$RESULT_FAILED" "$EV" yes 3 0 "$ACK" "$(history_json "$ADDRESSED")"
+grade_case other-event "$RESULT_FAILED" "$EV" yes 2 0 "$ACK" \
+  "$(history_json ',{"event":"addressed","sequence":3,"event_id":"99999999-2222-4333-8444-555555555555","at_unix":2}')"
+grade_case also-dismissed "$RESULT_FAILED" "$EV" yes 2 0 "$ACK" \
+  "$(history_json "$ADDRESSED$(printf ',{"event":"dismissed","sequence":4,"event_id":"%s","at_unix":3}' "$EV")")"
+grade_case malformed "$RESULT_FAILED" "$EV" yes 2 0 "$ACK" '{"feedback_events":'
+grade_case resolve-failed "$RESULT_FAILED" "$EV" yes 2 1 "$ACK" "$(history_json "$ADDRESSED")"
+grade_case not-delivered "$RESULT_FAILED" "$EV" no 2 0 "$ACK" "$(history_json "$ADDRESSED")"
+grade_case no-ack "$RESULT_FAILED" "$EV" yes 2 0 "" "$(history_json "$ADDRESSED")"
+grade_case no-event "$RESULT_FAILED" "" yes 2 0 "$ACK" "$(history_json "$ADDRESSED")"
+ok qualify.sh "the positive resolve row is graded on history read after resolve" \
+  "$(grep -qF '_s=$(grade_present_resolve "$_event" "$_delivered" "$_version"' "$SCRIPT_DIR/qualify.sh" &&
+     ! grep -qF 'grep -qF "resolved $_event as addressed"; then' "$SCRIPT_DIR/qualify.sh" && echo 0 || echo 1)"
+
 printf '\n%s check(s), %s failed\n' "$CHECKS" "$FAILED"
 [ "$FAILED" = 0 ]

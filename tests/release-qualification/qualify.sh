@@ -1122,8 +1122,8 @@ qualify_portal_build() {
 }
 
 # The presentation surface, once. `open --no-launch` starts the service without
-# a browser; a real reviewer comment is the only source of a feedback envelope,
-# so the positive resolve path stays with its own owner.
+# a browser. A reviewer envelope is submitted through the service's own review
+# endpoint by present-review.py, so the positive resolve runs here too.
 qualify_present() {
   _doc="$DIR/.claude/skills/cf-present/resources/present-document.example.json"
   if [ ! -f "$_doc" ]; then
@@ -1155,6 +1155,11 @@ except Exception:
   }
 
   present_run open "$_doc" --no-launch
+  # open prints the owner-private bootstrap file a reviewer's browser would
+  # load; the review client below uses the same file.
+  _bootstrap=$(printf '%s' "$CF_OUT" |
+    sed -n 's/^.*open the owner-private bootstrap file \(.*\) in a qualified isolated browser profile$/\1/p' |
+    head -1)
   record "$SAMPLE" "$TIER" "present open" "start a validated review session" \
     "$(status_for_match 0 'ready')" \
     "exit 0 and a session ready on an owner-private bootstrap" "$(observed_exit)"
@@ -1222,16 +1227,45 @@ print(sessions[0]["id"] if sessions else "")' 2>/dev/null)
     "$(status_for_match 2 'does not belong to session')" \
     "non-zero exit refusing a cross-session transition" "$(observed_exit)"
 
-  # The only supported producer of a feedback envelope is the review surface,
-  # which posts to the session service from a browser. This harness drives the
-  # CLI and hosts no browser, so it cannot create one. The check is covered
-  # where the browser already runs: crates/codeflow-present/web/scripts/
-  # real-browser-check.mjs submits a real review and resolves the delivered
-  # event at its current version, under TSK-007's gate.
+  # A real reviewer envelope: present-review.py consumes the session's
+  # single-use bootstrap and posts one review to the service's review
+  # endpoint with the session cookie, Origin and request marker, as the
+  # review surface does. The browser journey itself stays covered by
+  # crates/codeflow-present/web/scripts/real-browser-check.mjs (TSK-007).
+  # The envelope must then be delivered by `present feedback` and resolved
+  # at the version the session history reports for it.
+  _event=""
+  if [ -n "$_bootstrap" ] && [ -f "$_bootstrap" ]; then
+    _event=$(python3 "$SCRIPT_DIR/present-review.py" "$_bootstrap" "$_sid" \
+      "$(present_revision "$_sid")" 2>>"$TRANSCRIPT") || _event=""
+  fi
+  printf '\npresent review submitted: event %s from bootstrap %s\n' \
+    "${_event:-none}" "${_bootstrap:-none}" >>"$TRANSCRIPT"
+  present_run feedback "$_sid"
+  _delivered=no
+  if [ -n "$_event" ] && printf '%s' "$CF_OUT" | grep -qF "\"event_id\":\"$_event\""; then
+    _delivered=yes
+  fi
+  present_run history "$_sid"
+  _version=$(printf '%s' "$CF_OUT" | python3 -c 'import json,sys
+try:
+    events = json.load(sys.stdin)["feedback_events"]
+    print(max(e["sequence"] for e in events
+              if sys.argv[1] in (e.get("event_id"), e.get("envelope", {}).get("event_id"))))
+except Exception:
+    print(0)' "${_event:-none}" 2>/dev/null)
+  present_run resolve "$_sid" "${_event:-00000000-0000-0000-0000-000000000000}" \
+    --event-version "${_version:-0}" --status addressed
+  _resolve_status=$CF_STATUS
+  _resolve_out=$CF_OUT
+  # The effect, not the acknowledgement: history is read again and must show
+  # the event addressed after the version it was resolved at.
+  present_run history "$_sid"
+  _s=$(grade_present_resolve "$_event" "$_delivered" "$_version" \
+    "$_resolve_status" "$_resolve_out" "$CF_OUT")
   record "$SAMPLE" "$TIER" "present resolve" "positive: resolve a real reviewer envelope" \
-    "$RESULT_UNAVAILABLE" "a delivered envelope marked addressed at its current version" \
-    "this harness drives the CLI and hosts no browser, and only the review surface produces an envelope; the same transition is exercised by real-browser-check.mjs, which resolves a delivered event at event-version 2" \
-    "TSK-007 presentation qualification, whose real-browser journey already covers it"
+    "$_s" "a submitted envelope delivered by feedback, then marked addressed at its current version, and history read afterwards shows it addressed" \
+    "event ${_event:-not submitted}; delivered $_delivered; version $_version; resolve exit $_resolve_status; history after resolve exit $CF_STATUS"
 
   present_run close "$_sid"
   _close_status=$CF_STATUS
