@@ -1,9 +1,12 @@
-/* CodeFlow figure sheet: frame, legend, caption, table twin and the mark vocabulary of figure-grammar.md.
+/* CodeFlow figure sheet: frame, title line, legend, caption, details with the table twin, and the mark vocabulary of figure-grammar.md.
    Colours, faces and rules come from --cf-fig-* tokens only. Carried byte for byte by the products. */
 
 /* Frame */
 .cf-fig { container-type: inline-size; margin: 18px 0 14px; padding: 14px 14px 12px; border: 1px solid var(--cf-fig-rule); border-radius: 12px; background: var(--cf-fig-ground); color: var(--cf-fig-line); }
-.cf-fig-kicker { display: block; margin: 0 0 12px; font-family: var(--cf-fig-mono); font-size: max(12.5px, calc(12.5px * var(--cf-ui-scale, 1))); font-weight: 500; line-height: 1.4; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cf-fig-line-mid); }
+/* Title line: "Figure N · title", the kicker only a qualifier after it */
+.cf-fig-title { margin: 0 0 12px; max-width: 68ch; font-size: max(15px, calc(15px * var(--cf-ui-scale, 1))); font-weight: 600; line-height: 1.35; color: var(--cf-fig-line); text-wrap: balance; }
+.cf-fig-number { font-family: var(--cf-fig-mono); font-size: 0.86em; font-weight: 500; letter-spacing: 0.02em; color: var(--cf-fig-line-mid); }
+.cf-fig-kicker { margin: 0 0 0 0.4em; font-family: var(--cf-fig-mono); font-size: 0.8em; font-weight: 500; letter-spacing: 0.06em; text-transform: uppercase; color: var(--cf-fig-line-mid); }
 .cf-fig-stage { container-type: inline-size; }
 /* Phones: a slimmer frame leaves the narrow composition at 0.9 scale or more in a 331 px column */
 @media (max-width: 599.98px) { .cf-fig { padding: 12px 8px 10px; } }
@@ -22,17 +25,18 @@
 @container (min-width: 646px) { .cf-legend li[data-cf-wide] { display: inline-flex; } }
 .cf-key { flex: none; width: 28px; height: 16px; overflow: visible; }
 .cf-fig-caption { margin: 10px 0 0; max-width: 68ch; font-size: max(13px, calc(13px * var(--cf-ui-scale, 1))); line-height: 1.45; color: var(--cf-fig-line-mid); text-wrap: pretty; }
-.cf-twin { margin: 10px 0 0; border-top: 1px solid var(--cf-fig-rule); }
-.cf-twin > summary { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 2px 4px 2px 0; font-size: max(13.5px, calc(13.5px * var(--cf-ui-scale, 1))); font-weight: 500; color: var(--cf-fig-line-mid); cursor: pointer; list-style: none; border-radius: 4px; }
-.cf-twin > summary::-webkit-details-marker { display: none; }
-.cf-twin > summary::before { content: ""; width: 6px; height: 6px; margin: 0 4px 0 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform var(--cf-dur-select, 0ms) ease-out; }
-.cf-twin[open] > summary::before { transform: rotate(45deg); }
-.cf-twin > summary:hover { color: var(--cf-fig-line); }
+.cf-fig-details { margin: 10px 0 0; border-top: 1px solid var(--cf-fig-rule); }
+.cf-fig-details > summary { display: inline-flex; align-items: center; gap: 6px; margin-top: 8px; padding: 2px 4px 2px 0; font-size: max(13.5px, calc(13.5px * var(--cf-ui-scale, 1))); font-weight: 500; color: var(--cf-fig-line-mid); cursor: pointer; list-style: none; border-radius: 4px; }
+.cf-fig-details > summary::-webkit-details-marker { display: none; }
+.cf-fig-details > summary::before { content: ""; width: 6px; height: 6px; margin: 0 4px 0 2px; border-right: 1.5px solid currentColor; border-bottom: 1.5px solid currentColor; transform: rotate(-45deg); transition: transform var(--cf-dur-select, 0ms) ease-out; }
+.cf-fig-details[open] > summary::before { transform: rotate(45deg); }
+.cf-fig-details > summary:hover { color: var(--cf-fig-line); }
+.cf-fig-description { margin: 8px 0 0; max-width: 68ch; font-size: max(15px, calc(15px * var(--cf-ui-scale, 1))); line-height: 1.5; color: var(--cf-fig-line); }
 .cf-twin-scroll { overflow-x: auto; margin: 8px 0 2px; }
-.cf-twin table { width: 100%; border-collapse: collapse; font-size: max(15px, calc(15px * var(--cf-ui-scale, 1))); line-height: 1.45; }
-.cf-twin th, .cf-twin td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--cf-fig-rule); text-align: left; vertical-align: top; }
-.cf-twin th { font-size: max(13px, calc(13px * var(--cf-ui-scale, 1))); font-weight: 600; color: var(--cf-fig-line-mid); white-space: nowrap; }
-.cf-twin td code { white-space: nowrap; }
+.cf-fig-details table { width: 100%; border-collapse: collapse; font-size: max(15px, calc(15px * var(--cf-ui-scale, 1))); line-height: 1.45; }
+.cf-fig-details th, .cf-fig-details td { padding: 7px 12px 7px 0; border-bottom: 1px solid var(--cf-fig-rule); text-align: left; vertical-align: top; }
+.cf-fig-details th { font-size: max(13px, calc(13px * var(--cf-ui-scale, 1))); font-weight: 600; color: var(--cf-fig-line-mid); white-space: nowrap; }
+.cf-fig-details td code { white-space: nowrap; }
 
 /* Text inside figures: 14 user units; the stage query keeps render size at 12.5 px or larger */
 .cf-t { font-family: var(--cf-fig-font); font-size: 14px; font-weight: 500; fill: var(--cf-fig-line); }

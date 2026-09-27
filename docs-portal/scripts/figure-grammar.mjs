@@ -599,9 +599,11 @@ function layoutCompositions(figure, bound) {
 // Drawing
 // ---------------------------------------------------------------------------
 
-// The figure as HTML: kicker, the wide and the narrow SVG, the legend keyed
-// from the drawn set, the caption and the table twin. `bound` is the derived
-// data model, or null for an authored figure.
+// The figure as HTML: the title line ("Figure N · title", then the kicker as
+// a qualifier), the wide and the narrow SVG, the legend keyed from the drawn
+// set, the caption and one Details disclosure holding the description and the
+// table twin. `bound` is the derived data model, or null for an authored
+// figure; `number` is the figure's number in its host document, if any.
 // The two compositions a figure draws and, for a layout, the values its
 // marks encode, read back through the scale that placed them.
 export function composeFigure(declaration, bound = null) {
@@ -612,8 +614,9 @@ export function composeFigure(declaration, bound = null) {
   return { wide: composed.wide, narrow: { ...figure.narrow, ...composed.narrow }, drawnValues: composed.drawnValues };
 }
 
-export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, facts = null } = {}) {
+export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, facts = null, number = null } = {}) {
   const figure = declaration.figure;
+  if (number !== null && number !== undefined && !(Number.isSafeInteger(number) && number > 0)) throw new Error(`${figure.id}: the figure number must be a positive whole number, not ${String(number)}`);
   const prefix = `${sanitizeId(idPrefix)}-${figure.id}`;
   const { wide, narrow, drawnValues } = composeFigure(declaration, bound);
   const states = new Map(figure.states.map((state) => [state.name, state]));
@@ -645,7 +648,11 @@ export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, f
     const defs = composition.draw.some((item) => item.state !== undefined && states.get(item.state).mark === "notrun")
       ? `<defs><pattern id="${id}-hatch" width="4.5" height="4.5" patternUnits="userSpaceOnUse" patternTransform="rotate(45)"><line class="cf-m-hatchline" x1="0" y1="0" x2="0" y2="4.5"/></pattern></defs>`
       : "";
-    const body = composition.draw.map((item) => drawItem(item, states, `${id}-hatch`, `${id}-`)).join("");
+    // Review entities (SPC-014 B2): each authored mark with an id, labelled
+    // within its composition. A layout names its marks by position, so a
+    // figure drawn from a layout exposes only its legend entities.
+    const entities = figure.layout === undefined ? markEntityLabels(composition, states) : new Map();
+    const body = composition.draw.map((item) => drawItem(item, states, `${id}-hatch`, `${id}-`, entities)).join("");
     return `<svg class="cf-fig-svg cf-fig-svg--${variant}" viewBox="0 0 ${num(composition.width)} ${num(composition.height)}" role="img" aria-labelledby="${id}-t ${id}-d" data-cf-variant="${variant}"><title id="${id}-t">${escapeText(title)}</title><desc id="${id}-d">${escapeText(description)}</desc>${defs}${body}</svg>`;
   };
   // Two states whose keys draw the same thing cannot be told apart in the
@@ -660,10 +667,39 @@ export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, f
     const drawing = key.replaceAll(keyId, "");
     if (keyed.has(drawing)) throw new Error(`states ${keyed.get(drawing)} and ${name} draw the same legend key`);
     keyed.set(drawing, name);
-    return `<li data-state="${escapeAttribute(name)}"${wideOnly ? " data-cf-wide" : ""}>${key}${escapeText(state.means)}</li>`;
+    const entity = `legend-${name}`;
+    const target = ENTITY_ID.test(entity) ? ` data-cf-entity="${entity}" data-cf-entity-label="${escapeAttribute(entityLabel(state.means))}"` : "";
+    return `<li data-state="${escapeAttribute(name)}"${wideOnly ? " data-cf-wide" : ""}${target}>${key}${escapeText(state.means)}</li>`;
   }).join("");
-  const kicker = figure.kicker ?? title;
-  return `<figure ${attributes}><span class="cf-fig-kicker">Figure · ${escapeText(kicker)}</span>${svg(wide, "wide")}${svg(narrow, "narrow")}<ul class="cf-legend" aria-label="Legend">${legend}</ul><figcaption class="cf-fig-caption">${escapeText(figure.caption)}</figcaption>${twinTable(figure, factValues)}</figure>`;
+  // The title is always visible, numbered when the host numbers its figures;
+  // the kicker only qualifies it. One disclosure holds the description and
+  // the table twin.
+  const kicker = figure.kicker === undefined ? "" : ` <span class="cf-fig-kicker">${escapeText(figure.kicker)}</span>`;
+  const heading = `<p class="cf-fig-title"><span class="cf-fig-number">${number ? `Figure ${number}` : "Figure"}</span> · <span class="cf-fig-name">${escapeText(title)}</span>${kicker}</p>`;
+  const details = `<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">${escapeText(figure.description ?? figure.idea)}</p>${twinTable(figure, factValues)}</details>`;
+  return `<figure ${attributes}>${heading}${svg(wide, "wide")}${svg(narrow, "narrow")}<ul class="cf-legend" aria-label="Legend">${legend}</ul><figcaption class="cf-fig-caption">${escapeText(figure.caption)}</figcaption>${details}</figure>`;
+}
+
+// The entity id rule and label rule of SPC-014 B2, shared with present's Rust
+// entity table: a KEBAB id of at most 64 characters, never the reserved
+// `none`; a label whose whitespace runs collapse to one space, cut to 120
+// characters.
+export const ENTITY_ID = /^(?!none$)(?=.{1,64}$)[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
+export function entityLabel(value) {
+  return [...String(value).replace(/[\t\n\f\r ]+/g, " ").replace(/^ | $/g, "")].slice(0, 120).join("");
+}
+
+// The label of each mark entity in one composition: the text of the draw
+// items there whose `for` lists the mark id, in draw order, joined by one
+// space; else the drawn state's meaning; else the id.
+function markEntityLabels(composition, states) {
+  const labels = new Map();
+  for (const item of composition.draw) {
+    if (item.state === undefined || item.id === undefined || labels.has(item.id) || !ENTITY_ID.test(item.id)) continue;
+    const named = composition.draw.filter((text) => text.text !== undefined && text.for?.includes(item.id)).map((text) => text.text).join(" ");
+    labels.set(item.id, entityLabel(named) || entityLabel(states.get(item.state).means) || item.id);
+  }
+  return labels;
 }
 
 // The accessible description names every state and states every fact, so it
@@ -679,7 +715,7 @@ function drawnStates(composition) {
   return new Set(composition.draw.filter((item) => item.state !== undefined).map((item) => item.state));
 }
 
-function drawItem(item, states, hatchId, idPrefix) {
+function drawItem(item, states, hatchId, idPrefix, entities) {
   if (item.text !== undefined) {
     const styles = item.style === undefined ? [] : Array.isArray(item.style) ? item.style : [item.style];
     const classes = ["cf-t", ...styles.map((style) => TEXT_STYLES[style])].join(" ");
@@ -691,7 +727,8 @@ function drawItem(item, states, hatchId, idPrefix) {
   const state = states.get(item.state);
   const mark = MARKS[state.mark];
   if (!mark.shapes.includes(item.shape)) throw new Error(`state ${item.state} draws the ${state.mark} mark, which takes ${mark.shapes.join(", ")}, not ${item.shape}`);
-  const id = item.id === undefined ? "" : ` id="${escapeAttribute(`${idPrefix}${item.id}`)}"`;
+  const entity = item.id !== undefined && entities.has(item.id) ? ` data-cf-entity="${item.id}" data-cf-entity-label="${escapeAttribute(entities.get(item.id))}"` : "";
+  const id = item.id === undefined ? "" : ` id="${escapeAttribute(`${idPrefix}${item.id}`)}"${entity}`;
   const extra = mark.hatch ? ` fill="url(#${hatchId})"` : "";
   const value = item.value === undefined ? "" : ` data-cf-value="${escapeAttribute(String(item.value))}"`;
   const primary = shapeElement(item, mark.className, extra);
@@ -911,7 +948,7 @@ function twinTable(figure, factValues) {
   }
   const head = columns.map((column) => `<th scope="col">${inlineText(column)}</th>`).join("");
   const body = rows.map((row) => `<tr>${row.map((cell) => `<td>${inlineText(cell)}</td>`).join("")}</tr>`).join("");
-  return `<details class="cf-twin"><summary>Table twin</summary><div class="cf-twin-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div></details>`;
+  return `<div class="cf-twin-scroll"><table><thead><tr>${head}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 // Backticks mark code in a twin cell; everything else is text.
@@ -1071,8 +1108,11 @@ export function probeFigures(options) {
       visibleCount: visible.length,
       legend: [...figure.querySelectorAll(".cf-legend li")].filter(shown).map((item) => ({ state: item.getAttribute("data-state"), text: item.textContent.trim() })),
       caption: [...figure.querySelectorAll("figcaption")].map((caption) => caption.textContent.trim()),
-      twinRows: figure.querySelectorAll("details.cf-twin table tbody tr").length,
-      twinCount: figure.querySelectorAll("details.cf-twin").length,
+      twinRows: figure.querySelectorAll("details.cf-fig-details table tbody tr").length,
+      twinCount: figure.querySelectorAll("details.cf-fig-details").length,
+      // The title as the reader sees it (SPC-014 B5): the name in the title
+      // line, when that line shows.
+      visibleTitle: [...figure.querySelectorAll(".cf-fig-title")].filter(shown).map((line) => line.querySelector(".cf-fig-name")?.textContent.trim() ?? ""),
       literalColours: [],
       title: "",
       description: "",
@@ -1278,6 +1318,7 @@ export function figureRuleFailures({ wide, narrow, wideDark = null, narrowDark =
     if (extra.length) add(2, `${label}: drawn states ${extra.join(", ")} are not declared`);
     if (record.literalColours.length) add(10, `${label}: literal colour ${record.literalColours.slice(0, 3).join("; ")}`);
     if (!record.title) add(11, `${label}: the SVG has no title`);
+    else if (!(record.visibleTitle ?? []).includes(record.title)) add(11, `${label}: the title "${record.title}" is not visible text in the figure`);
     if (!record.description) add(11, `${label}: the SVG has no description`);
     const means = record.legend.map((item) => item.text.toLowerCase());
     const unnamed = means.filter((text) => !record.description.toLowerCase().includes(text));

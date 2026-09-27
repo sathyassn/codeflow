@@ -62,11 +62,11 @@ const FIGCHECK = () => {
     const drawn = [...new Set([...svg.querySelectorAll('[data-state]')].map(e => e.dataset.state))].sort();
     const keyed = [...new Set([...fig.querySelectorAll('.cf-legend li[data-state]')].filter(li => getComputedStyle(li).display !== 'none').map(li => li.dataset.state))].sort();
     out.push({
-      fig: fig.querySelector('.cf-fig-kicker').textContent.trim(),
+      fig: fig.querySelector('.cf-fig-title').textContent.trim(),
       variant: svg.classList.contains('cf-fig-svg--narrow') ? 'narrow' : 'wide',
       minPx: +minPx.toFixed(2), near, drawn, keyed, legendOk: drawn.join() === keyed.join(),
       titleDesc: !!svg.querySelector(':scope > title') && !!svg.querySelector(':scope > desc') && svg.getAttribute('role') === 'img',
-      twin: !!fig.querySelector('details.cf-twin table'), caption: !!fig.querySelector('figcaption.cf-fig-caption')
+      twin: !!fig.querySelector('details.cf-fig-details table'), caption: !!fig.querySelector('figcaption.cf-fig-caption')
     });
   });
   return out;
