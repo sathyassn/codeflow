@@ -82,7 +82,8 @@
         "full": {
           "command": "cargo llvm-cov --workspace --summary-only --fail-under-lines 90"
         }
-      }
+      },
+      "timeout_seconds": 1800
     },
     {
       "name": "release-automation",
