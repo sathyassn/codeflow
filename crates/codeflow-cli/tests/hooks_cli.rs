@@ -2535,7 +2535,10 @@ fn session_orient_adds_the_guidance_block_after_compact_resume_and_fork() {
                 assert!(block.contains("cf-estimate"), "{block}");
                 assert!(block.contains("Agents: cf-reviewer"), "{block}");
             }
-            println!("guidance block {tier} {source}: {} bytes", block.len());
+            println!(
+                "guidance block {tier} {source}: {} bytes (guideline 1536)",
+                block.len()
+            );
         }
     }
 }
