@@ -268,6 +268,19 @@ publication date._
   keeps a value you set. An undeterminable tracking state and pull request
   classification still block.
 
+<!-- codeflow:release-impact minor -->
+- **PR body and spec checks scaled to the change.** A pull request whose
+  range touches only documentation or planning records needs just Summary
+  and Changes, under your mapped headings where you accepted a mapping,
+  and a missing Release impact there reads as no impact unless a commit is
+  marked breaking. Code ranges keep every configured section. The PR
+  template says which sections each kind of change needs. Spec approval
+  now reads a new `open_questions` frontmatter list and needs it empty,
+  in place of guessing from the words under `## Open questions`; the prose
+  stays as context. A spec without the field has no open questions, so
+  existing specs validate unchanged, and `codeflow update` adds
+  `open_questions: []` to an unmodified spec template.
+
 <!-- codeflow:release-impact patch -->
 - **Smaller per-task reading.** The duo quality contract and the
   capability-routing resource are now indexes: each links the sections read

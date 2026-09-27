@@ -148,6 +148,10 @@ HTML never hides a heading, and an unclosed HTML block warns instead of hiding
 later sections. Freshly scaffolded policy also requires Reviews and Release
 impact; without an explicit list the built-in default stays Summary and
 Changes, and existing consumers retain their configured section lists.
+The sections scale to the change class (TSK-135): a range touching only
+documentation or planning records needs Summary and Changes, under a mapped
+heading where the project accepted a mapping, and an absent Release impact
+there reads as no impact unless a commit is marked breaking.
 Summary style, missing `Not tested:`, long fences, prose width and approximate
 rendered rows warn under `pr_sections`. The independent `pr_release_impact`
 check defaults to warn: it validates generic fields, compatibility consistency,
@@ -534,6 +538,9 @@ a task completed before the migration, with no block, records a Closeout line
 `- reopened: <reason>` instead. Sections and blocks inside HTML comments or
 enclosing fences never count. A spec is approved or superseded only in a
 planning-only change, and supersession adds its successor in that change.
+Approval reads the spec's `open_questions` frontmatter list and needs it
+empty; the `## Open questions` prose is context and is not parsed, and a
+spec without the field has none (TSK-135).
 The verbs are safe editors, not the only writers: one core judge rules on a
 verb's proposal, on a hand edit (`validate --docs --since <ref>`) and on each
 record a pull request changes (`codeflow ci`). No verb writes `in_progress`,
