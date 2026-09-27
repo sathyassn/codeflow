@@ -44,8 +44,9 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
   Codex App/interactive CLI route under the fallback contract below. A missing
   plugin is not proof that Codex itself is unavailable.
 - **codex → claude: the interactive `claude` CLI driven through CodeFlow's
-  schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036). Its host and
-  canary rules are in [the lifecycle lane](resources/lane-lifecycle.md).
+  schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036). A Codex host
+  follows its host and canary rules in
+  [the lifecycle lane](resources/lane-lifecycle.md).
 
 **Prohibited at all times** — no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /

@@ -1488,7 +1488,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-ship/SKILL.md",
+          "path": ".agents/skills/cf-ship/references/release-policy.md",
           "markers": [
             "keep native Windows and WSL2/Linux evidence separate",
             "native Windows installer must select its Windows binary",
@@ -2420,7 +2420,7 @@
       "statement": "Cross-compilation is compile/link evidence only; release readiness requires native platform tests and installer canaries, and missing native evidence remains an explicit blocker rather than an inferred pass.",
       "sources": [
         {
-          "path": ".agents/skills/cf-ship/SKILL.md",
+          "path": ".agents/skills/cf-ship/references/release-policy.md",
           "markers": [
             "Cross-build success proves compilation and linking only",
             "never replaces native macOS/Linux/Windows tests or installer canaries",

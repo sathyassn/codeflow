@@ -842,6 +842,38 @@ fn typed_contracts_are_proportionate_and_runtime_aware() {
     );
 }
 
+/// Every shipped text file under `dir`, keyed by its path under `base`.
+fn shipped_texts(base: &Path, dir: &Path, out: &mut BTreeMap<String, String>) {
+    let entries =
+        std::fs::read_dir(dir).unwrap_or_else(|error| panic!("read {}: {error}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("directory entry").path();
+        if path.is_dir() {
+            shipped_texts(base, &path, out);
+        } else if let Ok(text) = std::fs::read_to_string(&path) {
+            let relative = path
+                .strip_prefix(base)
+                .expect("under assets/base")
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.insert(relative, text);
+        }
+    }
+}
+
+/// The sentences of `text`, whitespace-normalized: split on blank lines, then
+/// after each ". ".
+fn sentences(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for paragraph in text.split("\n\n") {
+        let paragraph = normalized(paragraph);
+        for sentence in paragraph.split_inclusive(". ") {
+            found.push(sentence.trim().to_string());
+        }
+    }
+    found
+}
+
 // TSK-129 AC-2: the Claude turn lifecycle adapter serves only the Codex-hosted
 // delegated Claude lane. A Claude host collects an in-session Agent worker by
 // its own-launch task notification (capability-routing), so no shipped text on
@@ -856,80 +888,95 @@ const CODEX_HOST_ONLY_SOURCES: &[&str] = &[
     "scaffold-manifest.toml",
 ];
 
-fn shipped_text_files(dir: &Path, out: &mut Vec<PathBuf>) {
-    let entries =
-        std::fs::read_dir(dir).unwrap_or_else(|error| panic!("read {}: {error}", dir.display()));
-    for entry in entries {
-        let path = entry.expect("directory entry").path();
-        if path.is_dir() {
-            shipped_text_files(&path, out);
-        } else if std::fs::read_to_string(&path).is_ok() {
-            out.push(path);
-        }
-    }
-}
+/// Every other shipped sentence allowed to name the adapter, word for word.
+/// Each one scopes the read to a Codex host. A new sentence, or a changed one,
+/// fails until it is reviewed here.
+const TURN_ADAPTER_READ_EDGES: &[(&str, &str)] = &[
+    (
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "On a Codex host, before every Claude worker or same-session reviewer launch, \
+         load the `claude-turn-completion.md` foreground-return contract.",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
+        "On a Codex host, before launching a Claude worker through the delegated \
+         lifecycle, **read and follow** \
+         `.claude/skills/cf-delegate/resources/claude-turn-completion.md`.",
+    ),
+    (
+        "claude/skills/cf-delegate/resources/lane-lifecycle.md",
+        "On this Codex host lane, use the shipped [turn lifecycle \
+         adapter](claude-turn-completion.md) for exact mechanics; never improvise \
+         a parser, scrape transcripts, or use pane stability as completion.",
+    ),
+];
 
-/// Sentences of `text` that name the adapter, split on blank lines and on
-/// sentence ends after whitespace normalization.
-fn adapter_sentences(text: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    for paragraph in text.split("\n\n") {
-        let paragraph = normalized(paragraph);
-        for sentence in paragraph.split_inclusive(". ") {
-            if sentence.contains(TURN_ADAPTER) {
-                found.push(sentence.to_string());
+/// What in `files` names the turn adapter outside the reviewed Codex-host
+/// sentences, plus any reviewed sentence that went missing.
+fn turn_adapter_violations(files: &BTreeMap<String, String>) -> Vec<String> {
+    let mut violations = Vec::new();
+    let mut seen = BTreeSet::new();
+    for (path, text) in files {
+        if CODEX_HOST_ONLY_SOURCES.contains(&path.as_str()) {
+            continue;
+        }
+        for sentence in sentences(text) {
+            if !sentence.contains(TURN_ADAPTER) {
+                continue;
+            }
+            let edge = TURN_ADAPTER_READ_EDGES
+                .iter()
+                .find(|(source, allowed)| source == path && normalized(allowed) == sentence);
+            match edge {
+                Some(edge) => {
+                    seen.insert(*edge);
+                }
+                None => violations.push(format!(
+                    "{path} names the turn adapter in an unreviewed sentence: {sentence}"
+                )),
             }
         }
     }
-    found
+    for edge in TURN_ADAPTER_READ_EDGES {
+        if !seen.contains(edge) {
+            violations.push(format!(
+                "{} lost its reviewed Codex-host adapter sentence: {}",
+                edge.0, edge.1
+            ));
+        }
+    }
+    violations
 }
 
 #[test]
 fn no_claude_host_path_makes_the_turn_adapter_mandatory() {
-    let base = repo_root().join("assets/base");
-    let mut files = Vec::new();
-    shipped_text_files(&base, &mut files);
-    let mut scoped = BTreeSet::new();
-    for path in files {
-        let relative = path
-            .strip_prefix(&base)
-            .expect("under assets/base")
-            .to_string_lossy()
-            .replace('\\', "/");
-        if CODEX_HOST_ONLY_SOURCES.contains(&relative.as_str()) {
-            continue;
-        }
-        for sentence in adapter_sentences(&read_text(&path)) {
-            let lower = sentence.to_lowercase();
-            assert!(
-                lower.contains("codex host") || lower.contains("codex-host"),
-                "{relative} names the turn adapter outside a Codex-host scope: {sentence}"
-            );
-            scoped.insert(relative.clone());
-        }
-    }
-    // The scoped pointers stay where a Codex host reaches them, so the check
-    // cannot pass by deleting them.
-    for owner in [
-        "agents/skills/cf-model-orchestrator/SKILL.md",
-        "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
-        "claude/skills/cf-delegate/resources/lane-lifecycle.md",
-    ] {
+    // The inventory itself is Codex-only: each sentence names a Codex host and
+    // never a Claude host or both hosts.
+    for (source, sentence) in TURN_ADAPTER_READ_EDGES {
+        let lower = sentence.to_lowercase();
         assert!(
-            scoped.contains(owner),
-            "{owner} lost its Codex-host pointer to the turn adapter"
+            lower.contains("codex host"),
+            "{source}: a reviewed adapter sentence must scope the read to a Codex host"
+        );
+        assert!(
+            !lower.contains("claude host") && !lower.contains("both"),
+            "{source}: a reviewed adapter sentence must not name a Claude or both-host read"
         );
     }
-    let adapter = normalized(&read_text(
-        &base.join("claude/skills/cf-delegate/resources/claude-turn-completion.md"),
-    ));
+    let base = repo_root().join("assets/base");
+    let mut files = BTreeMap::new();
+    shipped_texts(&base, &base, &mut files);
+    let violations = turn_adapter_violations(&files);
+    assert!(violations.is_empty(), "{}", violations.join("\n"));
+
+    let adapter =
+        normalized(&files["claude/skills/cf-delegate/resources/claude-turn-completion.md"]);
     assert!(
         adapter.contains("A Claude host does not load it"),
         "the adapter must state that a Claude host does not load it"
     );
-    let routing = normalized(&read_text(
-        &base.join("agents/skills/cf-model-orchestrator/resources/routing/effort.md"),
-    ));
+    let routing =
+        normalized(&files["agents/skills/cf-model-orchestrator/resources/routing/effort.md"]);
     assert!(
         routing.contains(
             "the verified return is the task notification from this session's own launch"
@@ -938,222 +985,709 @@ fn no_claude_host_path_makes_the_turn_adapter_mandatory() {
     );
 }
 
+#[test]
+fn a_claude_or_both_host_adapter_mandate_fails() {
+    let base = repo_root().join("assets/base");
+    let mut files = BTreeMap::new();
+    shipped_texts(&base, &base, &mut files);
+    // A new mandate appended to the cf-delegate core.
+    let mut added = files.clone();
+    added
+        .get_mut("claude/skills/cf-delegate/SKILL.md")
+        .expect("cf-delegate core")
+        .push_str(
+            "\nBoth Claude and Codex hosts must read \
+             [turn adapter](resources/claude-turn-completion.md).\n",
+        );
+    let violations = turn_adapter_violations(&added);
+    assert!(
+        violations.iter().any(|v| v.contains("unreviewed sentence")),
+        "a both-host adapter mandate must fail: {violations:?}"
+    );
+    // A reviewed sentence rescoped to a Claude host.
+    let mut rescoped = files;
+    let effort = rescoped
+        .get_mut("agents/skills/cf-model-orchestrator/resources/routing/effort.md")
+        .expect("effort section");
+    *effort = effort.replacen(
+        "On a Codex host, before launching",
+        "On a Claude host, before launching",
+        1,
+    );
+    let violations = turn_adapter_violations(&rescoped);
+    assert!(
+        violations.len() == 2,
+        "a Claude-host adapter mandate must fail and lose the reviewed sentence: {violations:?}"
+    );
+}
+
 // TSK-129 AC-1: the per-task reading chain has a tested byte cap.
 //
 // How the chain is derived. It is what a Claude-host session is told to read
-// for one full implementation task after the always-loaded layer (AGENTS.md
-// and CLAUDE.md, budgeted above and by TSK-127):
+// for one full implementation task after the always-loaded layer (AGENTS.md,
+// CLAUDE.md and the rule map, budgeted above and by TSK-127). The entry
+// points are the skills and files that layer and the skills name by name:
 // - orient and route: the routing gate invokes `cf-model-orchestrator`, and
-//   CLAUDE.md says to read and follow cf-method's workflow-lifecycle;
-// - before launch: CLAUDE.md names `current-ensemble.json` and
-//   `capability-routing.md`, which names `routing-policy.json`; the orchestrator
-//   names `cf-delegate`, whose core names the plugin lane for a Claude host;
-// - every exchange: the orchestrator names `quality-contract.md`;
-// - plan, build and ship: `cf-plan`; `cf-develop` and the verification
-//   selection it names; `cf-ship` and its PR evidence reference.
-// A split contract counts its index plus every section whose index row says
-// "every task". A section with a trigger row is read only when that trigger
-// fires, so it is outside the per-task chain; `CONDITIONAL_READS` records each
-// one and why, and the test fails if an index gains or loses a trigger row
-// without that list changing in review.
+//   CLAUDE.md says to read and follow `cf-method`'s workflow lifecycle;
+// - before launch: CLAUDE.md names `current-ensemble.json`, and the
+//   orchestrator names `cf-delegate`;
+// - plan, build and ship: `cf-plan`, `cf-develop` and `cf-ship`.
+// From there the test walks every Markdown link and backticked path in each
+// Markdown file it reaches. An edge is required unless `CONDITIONAL_READS`
+// records it with the trigger text of the sentence that holds it; a required
+// edge adds its target to the chain. So a new pointer is counted, a changed
+// trigger fails until reviewed, and a reference that names no shipped file
+// must be listed in `PROJECT_REFERENCES`.
 //
-// Baseline: 203,489 bytes, measured on the integration line at `95e25f514`
-// (the TSK-129 start) over the same stages, when the turn adapter and the
-// whole cf-delegate skill, quality contract and capability-routing were read.
-const READING_CHAIN_BASELINE_BYTES: usize = 203_489;
+// Baseline: 214,816 bytes, measured on the integration line at `95e25f514`
+// (the TSK-129 start) on this complete basis, when the turn adapter and the
+// whole cf-delegate skill, quality contract and capability-routing were read,
+// and `cf-ship` and its PR evidence reference required
+// `release-policy.md`. The first measurement (203,489) missed that
+// 11,327-byte file; review round 1 found it.
+const READING_CHAIN_BASELINE_BYTES: usize = 214_816;
 const READING_CHAIN_CAP_BYTES: usize = 148 * KIB;
 // AC-1: the cap sits at least 50 KB below the baseline.
 const _: () = assert!(READING_CHAIN_BASELINE_BYTES - READING_CHAIN_CAP_BYTES >= 50_000);
 
-const READING_CHAIN: &[(&str, &str)] = &[
+const READING_ENTRY_POINTS: &[(&str, &str)] = &[
     (
         "orient and route",
         "agents/skills/cf-model-orchestrator/SKILL.md",
     ),
     ("orient and route", "claude/skills/cf-method/SKILL.md"),
     (
-        "orient and route",
-        "claude/skills/cf-method/references/workflow-lifecycle.md",
-    ),
-    (
-        "before launch",
-        "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ),
-    (
         "before launch",
         "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
     ),
-    (
-        "before launch",
-        "agents/skills/cf-model-orchestrator/resources/routing-policy.json",
-    ),
     ("before launch", "claude/skills/cf-delegate/SKILL.md"),
-    (
-        "before launch",
-        "claude/skills/cf-delegate/resources/lane-plugin.md",
-    ),
-    (
-        "every exchange",
-        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
-    ),
     ("plan", "agents/skills/cf-plan/SKILL.md"),
     ("build", "agents/skills/cf-develop/SKILL.md"),
-    (
-        "build",
-        "agents/skills/cf-model-orchestrator/resources/verification-selection.md",
-    ),
     ("ship", "agents/skills/cf-ship/SKILL.md"),
-    ("ship", "agents/skills/cf-ship/references/pr-evidence.md"),
 ];
 
-/// Indexes whose "every task" rows join the chain.
-const SECTION_INDEXES: &[&str] = &[
-    "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
-];
-
-/// Reads outside the per-task chain, each with the reason it is conditional.
-const CONDITIONAL_READS: &[(&str, &str)] = &[
-    (
-        "agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
-        "only when a step is blocked or a check is red or unfinished",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/resources/quality/parallel.md",
-        "only when work fans out into parallel tasks",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/resources/quality/editorial.md",
-        "only for substantial prose or a review of its presentation",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/resources/quality/ui-design.md",
-        "only when a user-facing surface or its design intent changes",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
-        "only before a catastrophic or irreversible action",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/resources/quality/performance.md",
-        "only for a performance-, scale-, or concurrency-sensitive path",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/resources/quality/research-planning.md",
-        "only for a research, analysis or planning-only run",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/resources/routing/route-status.md",
-        "only when a route is qualified or a qualification, promotion or savings claim is made",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/resources/routing/design.md",
-        "only for product, UX, UI, interaction, or visual design work",
-    ),
-    (
-        "claude/skills/cf-delegate/resources/lane-lifecycle.md",
-        "the lifecycle lane is read on a Codex host",
-    ),
-    (
-        "claude/skills/cf-delegate/resources/claude-turn-completion.md",
-        "the turn adapter is read on a Codex host",
-    ),
-    (
-        "claude/skills/cf-delegate/resources/edit-access.md",
-        "only before a write-enabled handoff",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/references/model-overrides.md",
-        "only when `.codeflow/model-selection.json` has project overrides",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/references/estimates.md",
-        "only when the brief concerns estimates, capacity or deadlines",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/references/other-hosts.md",
-        "only on a Grok Build or other host, or when a Grok seat is used",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/references/solo-fallback.md",
-        "only when preflight leaves a required seat unavailable",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/references/parallel-tasks.md",
-        "only when implementation has independent parallel tasks",
-    ),
-    (
-        "agents/skills/cf-model-orchestrator/references/codex-host.md",
-        "the test-running review detail is read on a Codex host",
-    ),
-];
-
-/// The section files an index table links, split by its "Read" column.
-fn index_rows(base: &Path, index: &str) -> (Vec<String>, Vec<String>) {
-    let dir = Path::new(index).parent().expect("index directory");
-    let (mut every, mut triggered) = (Vec::new(), Vec::new());
-    for line in read_text(&base.join(index)).lines() {
-        let Some(start) = line.find("](") else {
-            continue;
-        };
-        let target = &line[start + 2..line[start..].find(')').expect("link end") + start];
-        let path = dir.join(target).to_string_lossy().replace('\\', "/");
-        if line.trim_end().ends_with("| every task |") {
-            every.push(path);
-        } else {
-            assert!(
-                line.contains("| when "),
-                "{index} row has no read rule: {line}"
-            );
-            triggered.push(path);
-        }
-    }
-    assert!(!every.is_empty(), "{index} lists no every-task section");
-    (every, triggered)
+/// A reviewed conditional read: the sentence in `from` that names `to` must
+/// contain `trigger`.
+struct ConditionalRead {
+    from: &'static str,
+    to: &'static str,
+    trigger: &'static str,
+    reason: &'static str,
 }
 
-// The chain fits after every TSK-129 split and the deduplication recorded in
-// `docs/verification/tsk-129-duty-map.md`; the cap was never loosened.
+const ORCH: &str = "agents/skills/cf-model-orchestrator";
+
+macro_rules! conditional {
+    ($from:expr, $to:expr, $trigger:expr, $reason:expr) => {
+        ConditionalRead {
+            from: $from,
+            to: $to,
+            trigger: $trigger,
+            reason: $reason,
+        }
+    };
+}
+
+/// Reads outside the per-task chain, each with its trigger and reason.
+const CONDITIONAL_READS: &[ConditionalRead] = &[
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/references/model-overrides.md",
+        "If `.codeflow/model-selection.json` contains project overrides",
+        "only when the project has model overrides"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/task-graph.md",
+        "For a multi-task plan or a possible dependency/decision change",
+        "only for a multi-task plan"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/task-graph.md",
+        "Multi-task plans use",
+        "only for a multi-task plan"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
+        "high-blast-radius action stops the host and follows",
+        "only before a catastrophic or irreversible action"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/references/other-hosts.md",
+        "| Grok Build, or another harness including Hermes |",
+        "only on a Grok Build or other host"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/references/other-hosts.md",
+        "Grok, when a Grok seat is used",
+        "only when a Grok seat is used"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/references/estimates.md",
+        "When the brief concerns agentic estimates, capacity or deadlines",
+        "only when the brief concerns estimates, capacity or deadlines"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "claude/skills/cf-delegate/resources/claude-turn-completion.md",
+        "On a Codex host, before every Claude worker",
+        "the turn adapter is read on a Codex host"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/references/solo-fallback.md",
+        "A solo `/cf-develop` run follows",
+        "only when preflight leaves a required seat unavailable"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/references/parallel-tasks.md",
+        "For independent parallel tasks",
+        "only when implementation has independent parallel tasks"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/references/codex-host.md",
+        "A Codex host runs this test-running review",
+        "the test-running review detail is read on a Codex host"
+    ),
+    conditional!(
+        "claude/skills/cf-method/SKILL.md",
+        "claude/skills/cf-method/references/project-organization.md",
+        "for new-project boundary choices, brownfield adoption, monorepos",
+        "only for project-organization choices; an obvious bounded task needs none"
+    ),
+    conditional!(
+        "claude/skills/cf-method/SKILL.md",
+        "claude/skills/cf-method/references/skill-authoring.md",
+        "When authoring or editing a skill",
+        "only when authoring or editing a skill"
+    ),
+    conditional!(
+        "claude/skills/cf-delegate/SKILL.md",
+        "claude/skills/cf-delegate/resources/lane-lifecycle.md",
+        "A Codex host follows its host and canary rules",
+        "the lifecycle lane is read on a Codex host"
+    ),
+    conditional!(
+        "claude/skills/cf-delegate/SKILL.md",
+        "claude/skills/cf-delegate/resources/lane-lifecycle.md",
+        "**From codex:**",
+        "the lifecycle lane is read on a Codex host"
+    ),
+    conditional!(
+        "claude/skills/cf-delegate/SKILL.md",
+        "claude/skills/cf-delegate/resources/lane-lifecycle.md",
+        "**From codex (Codex host):**",
+        "the lifecycle lane is read on a Codex host"
+    ),
+    conditional!(
+        "claude/skills/cf-delegate/SKILL.md",
+        "claude/skills/cf-delegate/resources/native-fallback.md",
+        "For an incompatible or unavailable preferred lane",
+        "only when the preferred lane is unavailable"
+    ),
+    conditional!(
+        "claude/skills/cf-delegate/SKILL.md",
+        "claude/skills/cf-delegate/resources/edit-access.md",
+        "Before any write-enabled handoff",
+        "only before a write-enabled handoff"
+    ),
+    conditional!(
+        "claude/skills/cf-delegate/SKILL.md",
+        "claude/skills/cf-delegate/resources/agy.md",
+        "when `agy` is someone's harness",
+        "only when `agy` is someone's harness"
+    ),
+    conditional!(
+        "claude/skills/cf-delegate/resources/lane-plugin.md",
+        "claude/skills/cf-delegate/resources/lane-lifecycle.md",
+        "A Codex host uses",
+        "the lifecycle lane is read on a Codex host"
+    ),
+    conditional!(
+        "claude/skills/cf-delegate/resources/lane-plugin.md",
+        "agents/skills/cf-model-orchestrator/references/model-overrides.md",
+        "With project model overrides",
+        "only when the project has model overrides"
+    ),
+    conditional!(
+        "agents/skills/cf-plan/SKILL.md",
+        "claude/skills/cf-method/references/project-organization.md",
+        "When work spans areas/teams",
+        "only when work spans areas, boundaries or an external method"
+    ),
+    conditional!(
+        "agents/skills/cf-plan/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/task-graph.md",
+        "For CodeFlow multi-task work",
+        "only for a multi-task plan"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+        "agents/skills/cf-model-orchestrator/resources/routing/route-status.md",
+        "| when a route is being qualified, or a claim of scoped qualification, promotion or savings is made |",
+        "only when a route is qualified or a qualification, promotion or savings claim is made"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+        "agents/skills/cf-model-orchestrator/resources/routing/design.md",
+        "| when the task has product, UX, UI, interaction, or visual design work |",
+        "only for product, UX, UI, interaction, or visual design work"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "| when a step is blocked, or a check or CI job is red or did not finish |",
+        "only when a step is blocked or a check is red or unfinished"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/parallel.md",
+        "| when work fans out into parallel tasks |",
+        "only when work fans out into parallel tasks"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/editorial.md",
+        "| when substantial prose is written, or its presentation is reviewed |",
+        "only for substantial prose or a review of its presentation"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/ui-design.md",
+        "| when a user-facing surface or its design intent changes |",
+        "only when a user-facing surface or its design intent changes"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
+        "| when an action is catastrophic or irreversible |",
+        "only before a catastrophic or irreversible action"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/performance.md",
+        "| when a changed path is performance-, scale-, or concurrency-sensitive |",
+        "only for a performance-, scale-, or concurrency-sensitive path"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/research-planning.md",
+        "| when the run is research, analysis or planning only |",
+        "only for a research, analysis or planning-only run"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
+        "agents/skills/cf-model-orchestrator/resources/routing/route-status.md",
+        "Qualifying a route, or claiming scoped qualification",
+        "only when a route is qualified or a qualification, promotion or savings claim is made"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
+        "claude/skills/cf-delegate/resources/claude-turn-completion.md",
+        "On a Codex host, before launching a Claude worker",
+        "the turn adapter is read on a Codex host"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/routing/hosts.md",
+        "agents/skills/cf-model-orchestrator/resources/routing/design.md",
+        "when a task has product, UX, UI, interaction, or visual design work",
+        "only for product, UX, UI, interaction, or visual design work"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality/plan.md",
+        "agents/skills/cf-model-orchestrator/resources/task-graph.md",
+        "For multi-task work, `TASK_GRAPH` follows",
+        "only for a multi-task plan"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality/plan.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/ui-design.md",
+        "holds its full rule when a user-facing surface changes",
+        "only when a user-facing surface or its design intent changes"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality/plan.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/research-planning.md",
+        "Research, analysis and planning-only runs fill the remaining fields",
+        "only for a research, analysis or planning-only run"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality/authority.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
+        "Before a catastrophic or irreversible action",
+        "only before a catastrophic or irreversible action"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality/verification.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/performance.md",
+        "For a performance-, scale-, or concurrency-sensitive path",
+        "only for a performance-, scale-, or concurrency-sensitive path"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality/verification.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/ui-design.md",
+        "If no user-facing surface changed",
+        "only when a user-facing surface or its design intent changes"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality/completion.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "with redness classified as in",
+        "only when a check is red or unfinished"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality/completion.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
+        "every catastrophic action, if any",
+        "only before a catastrophic or irreversible action"
+    ),
+    conditional!(
+        "agents/skills/cf-ship/references/pr-evidence.md",
+        "agents/skills/cf-ship/references/release-policy.md",
+        "when the impact may be minor or major or is disputed, when the PR carries \
+         version or release-note updates, when the project has no adopted release \
+         process, and before publication",
+        "only for a minor, major or disputed impact, release preparation, a missing \
+         release process, or publication; every PR's impact rules sit in PR evidence"
+    ),
+];
+
+/// References that name project files, not shipped instructions: an adopter's
+/// docs and settings, read as the task needs them and outside this budget.
+const PROJECT_REFERENCES: &[&str] = &[
+    ".codeflow/model-selection.json",
+    ".codeflow/docs-portal.json",
+    "docs/product.md",
+    "product.md",
+    "docs/capabilities.md",
+    "capabilities.md",
+    "docs/capabilities/CAP-*.md",
+    "docs/architecture.md",
+    "docs/architecture/<area>.md",
+    "docs/decisions/template.md",
+];
+
+fn has_extension(path: &str, extension: &str) -> bool {
+    Path::new(path)
+        .extension()
+        .is_some_and(|found| found.eq_ignore_ascii_case(extension))
+}
+
+/// Link targets and backticked paths ending in `.md` or `.json` in `sentence`.
+fn path_references(sentence: &str) -> Vec<String> {
+    let is_path = |target: &str| {
+        !target.is_empty()
+            && !target.chars().any(char::is_whitespace)
+            && !target.contains("://")
+            && (has_extension(target, "md") || has_extension(target, "json"))
+    };
+    let mut found = Vec::new();
+    let mut rest = sentence;
+    while let Some(start) = rest.find("](") {
+        let after = &rest[start + 2..];
+        let end = after.find(')').unwrap_or(after.len());
+        let target = after[..end].split('#').next().unwrap_or_default();
+        if is_path(target) {
+            found.push(target.to_string());
+        }
+        rest = &after[end..];
+    }
+    for (index, span) in sentence.split('`').enumerate() {
+        if index % 2 == 1 && is_path(span) {
+            found.push(span.to_string());
+        }
+    }
+    found
+}
+
+/// Markdown outside fenced code, split into sentences within each paragraph,
+/// list item and table row.
+fn reference_sentences(text: &str) -> Vec<String> {
+    let mut blocks: Vec<Vec<&str>> = Vec::new();
+    let mut current: Vec<&str> = Vec::new();
+    let mut fenced = false;
+    for line in text.lines() {
+        let trimmed = line.trim_start();
+        if trimmed.starts_with("```") {
+            fenced = !fenced;
+            blocks.push(std::mem::take(&mut current));
+            continue;
+        }
+        if fenced {
+            continue;
+        }
+        let item = trimmed.starts_with("- ")
+            || trimmed.starts_with("* ")
+            || trimmed.starts_with("| ")
+            || trimmed
+                .split_once(". ")
+                .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
+        if trimmed.is_empty() || item {
+            blocks.push(std::mem::take(&mut current));
+        }
+        if !trimmed.is_empty() {
+            current.push(line);
+        }
+    }
+    blocks.push(current);
+    blocks
+        .iter()
+        .filter(|block| !block.is_empty())
+        .flat_map(|block| sentences(&block.join("\n")))
+        .collect()
+}
+
+fn join_path(dir: &str, target: &str) -> String {
+    let mut parts: Vec<&str> = dir.split('/').filter(|p| !p.is_empty()).collect();
+    for part in target.split('/') {
+        match part {
+            "" | "." => {}
+            ".." => {
+                parts.pop();
+            }
+            _ => parts.push(part),
+        }
+    }
+    parts.join("/")
+}
+
+/// The shipped file `target` names from `source`, as an installed project
+/// resolves it: relative to the file, the skill, or the skill trees (both are
+/// installed side by side), then a unique path suffix.
+fn resolve_reference(
+    files: &BTreeMap<String, String>,
+    source: &str,
+    target: &str,
+) -> Option<String> {
+    const TREES: [&str; 2] = ["agents/skills", "claude/skills"];
+    let dir = source.rsplit_once('/').map_or("", |(dir, _)| dir);
+    let skill = source.split('/').take(3).collect::<Vec<_>>().join("/");
+    let mut candidates = vec![join_path(dir, target), join_path(&skill, target)];
+    for installed in [".claude/skills/", ".agents/skills/"] {
+        if let Some(rest) = target.strip_prefix(installed) {
+            candidates.extend(TREES.iter().map(|tree| join_path(tree, rest)));
+        }
+    }
+    candidates.extend(TREES.iter().map(|tree| join_path(tree, target)));
+    for candidate in candidates.clone() {
+        for tree in TREES {
+            let other = TREES.iter().find(|t| **t != tree).expect("two trees");
+            if let Some(rest) = candidate.strip_prefix(&format!("{tree}/")) {
+                candidates.push(format!("{other}/{rest}"));
+            }
+        }
+    }
+    if let Some(found) = candidates.into_iter().find(|c| files.contains_key(c)) {
+        return Some(found);
+    }
+    let suffix = format!("/{target}");
+    let matches: Vec<&String> = files.keys().filter(|k| k.ends_with(&suffix)).collect();
+    assert!(
+        matches.len() <= 1,
+        "{source} names `{target}`, which matches several shipped files: {matches:?}"
+    );
+    matches.first().map(|m| (*m).clone())
+}
+
+struct ReadingChain {
+    /// Stage, path and authored bytes of each file in the chain.
+    files: Vec<(String, String, usize)>,
+    total: usize,
+}
+
+/// Walk the reading chain in `files` (paths under `assets/base/`) from the
+/// entry points, or return every unreviewed or stale edge.
+fn reading_chain(files: &BTreeMap<String, String>) -> Result<ReadingChain, Vec<String>> {
+    let mut errors = Vec::new();
+    let mut used = vec![false; CONDITIONAL_READS.len()];
+    let mut used_project = BTreeSet::new();
+    let mut conditional_targets = BTreeSet::new();
+    let mut chain: Vec<(String, String)> = Vec::new();
+    let mut queue: std::collections::VecDeque<(String, String)> = READING_ENTRY_POINTS
+        .iter()
+        .map(|(stage, path)| ((*stage).to_string(), (*path).to_string()))
+        .collect();
+    while let Some((stage, path)) = queue.pop_front() {
+        if chain.iter().any(|(_, p)| *p == path) {
+            continue;
+        }
+        let Some(text) = files.get(&path) else {
+            errors.push(format!("{path} is in the chain but is not shipped"));
+            continue;
+        };
+        chain.push((stage.clone(), path.clone()));
+        if !has_extension(&path, "md") {
+            continue;
+        }
+        for sentence in reference_sentences(text) {
+            for target in path_references(&sentence) {
+                let Some(resolved) = resolve_reference(files, &path, &target) else {
+                    if PROJECT_REFERENCES.contains(&target.as_str()) {
+                        used_project.insert(target);
+                    } else {
+                        errors.push(format!(
+                            "{path} names `{target}`, which is no shipped file; \
+                             record it in PROJECT_REFERENCES if it is a project file"
+                        ));
+                    }
+                    continue;
+                };
+                let recorded: Vec<usize> = CONDITIONAL_READS
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, c)| c.from == path && c.to == resolved)
+                    .map(|(index, _)| index)
+                    .collect();
+                if recorded.is_empty() {
+                    queue.push_back((stage.clone(), resolved));
+                    continue;
+                }
+                match recorded.iter().find(|index| {
+                    sentence.contains(&normalized(CONDITIONAL_READS[**index].trigger))
+                }) {
+                    Some(index) => {
+                        used[*index] = true;
+                        conditional_targets.insert(resolved);
+                    }
+                    None => errors.push(format!(
+                        "{path} names {resolved} without a reviewed trigger; \
+                         review the read and its CONDITIONAL_READS entry: {sentence}"
+                    )),
+                }
+            }
+        }
+    }
+    for (read, used) in CONDITIONAL_READS.iter().zip(&used) {
+        assert!(!read.reason.is_empty(), "{} needs a reason", read.to);
+        if !used {
+            errors.push(format!(
+                "stale conditional read {} -> {} (trigger `{}`)",
+                read.from, read.to, read.trigger
+            ));
+        }
+    }
+    for reference in PROJECT_REFERENCES {
+        if !used_project.contains(*reference) {
+            errors.push(format!("stale project reference `{reference}`"));
+        }
+    }
+    for target in &conditional_targets {
+        if chain.iter().any(|(_, p)| p == target) {
+            errors.push(format!(
+                "{target} is recorded as conditional but a required edge reaches it"
+            ));
+        }
+    }
+    if !errors.is_empty() {
+        return Err(errors);
+    }
+    let files: Vec<(String, String, usize)> = chain
+        .into_iter()
+        .map(|(stage, path)| {
+            let bytes = authored_bytes(files[&path].as_bytes()).len();
+            (stage, path, bytes)
+        })
+        .collect();
+    let total = files.iter().map(|(_, _, bytes)| bytes).sum();
+    Ok(ReadingChain { files, total })
+}
+
+fn skill_trees() -> BTreeMap<String, String> {
+    let base = repo_root().join("assets/base");
+    let mut files = BTreeMap::new();
+    for tree in ["agents/skills", "claude/skills"] {
+        shipped_texts(&base, &base.join(tree), &mut files);
+    }
+    files
+}
+
 #[test]
 fn per_task_reading_chain_stays_within_its_cap() {
     use std::fmt::Write as _;
-    let base = repo_root().join("assets/base");
-    let mut chain: Vec<(String, String)> = Vec::new();
-    let mut triggered = BTreeSet::new();
-    for (stage, path) in READING_CHAIN {
-        chain.push(((*stage).to_string(), (*path).to_string()));
-        if SECTION_INDEXES.contains(path) {
-            let (every, conditional) = index_rows(&base, path);
-            chain.extend(every.into_iter().map(|p| ((*stage).to_string(), p)));
-            triggered.extend(conditional);
-        }
-    }
-    let recorded: BTreeSet<String> = CONDITIONAL_READS
-        .iter()
-        .map(|(path, _)| (*path).to_string())
-        .filter(|path| path.contains("/resources/quality/") || path.contains("/resources/routing/"))
-        .collect();
-    assert_eq!(
-        triggered, recorded,
-        "an index trigger row changed; record the conditional read and its reason"
-    );
-    for (path, reason) in CONDITIONAL_READS {
-        assert!(base.join(path).is_file(), "{path} ({reason}) is missing");
-        assert!(
-            chain.iter().all(|(_, p)| p != path),
-            "{path} is conditional ({reason}) but sits in the chain"
-        );
-    }
-    let mut total = 0;
+    let chain =
+        reading_chain(&skill_trees()).unwrap_or_else(|errors| panic!("{}", errors.join("\n")));
     let mut report = String::new();
-    for (stage, path) in &chain {
-        let bytes = authored_bytes(&read(&base.join(path))).len();
-        total += bytes;
+    for (stage, path, bytes) in &chain.files {
         let _ = write!(report, "\n  {stage}: {path} {bytes}");
     }
     assert!(
-        total <= READING_CHAIN_CAP_BYTES,
-        "reading chain exceeds its cap: {total} bytes against {READING_CHAIN_CAP_BYTES} \
-         (baseline {READING_CHAIN_BASELINE_BYTES}){report}"
+        chain.total <= READING_CHAIN_CAP_BYTES,
+        "reading chain exceeds its cap: {} bytes against {READING_CHAIN_CAP_BYTES} \
+         (baseline {READING_CHAIN_BASELINE_BYTES}){report}",
+        chain.total
+    );
+}
+
+#[test]
+fn reading_chain_counts_a_new_every_task_pointer() {
+    let mut files = skill_trees();
+    let index = format!("{ORCH}/resources/quality-contract.md");
+    files
+        .get_mut(&index)
+        .expect("quality index")
+        .push_str("| [New section](quality/new.md) | every task |\n");
+    files.insert(
+        format!("{ORCH}/resources/quality/new.md"),
+        "x".repeat(34_000),
+    );
+    let chain = reading_chain(&files).unwrap_or_else(|errors| panic!("{}", errors.join("\n")));
+    assert!(
+        chain
+            .files
+            .iter()
+            .any(|(_, path, _)| path.ends_with("quality/new.md")),
+        "a new every-task section must join the chain"
+    );
+    assert!(
+        chain.total > READING_CHAIN_CAP_BYTES,
+        "a 34,000-byte every-task section must break the cap"
+    );
+}
+
+#[test]
+fn reading_chain_rejects_a_reclassified_trigger() {
+    let base = skill_trees();
+    // An index row turned always-on.
+    let mut files = base.clone();
+    let index = files
+        .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
+        .expect("quality index");
+    *index = index.replace(
+        "| when an action is catastrophic or irreversible |",
+        "| when any task starts |",
+    );
+    let errors = reading_chain(&files)
+        .err()
+        .expect("a changed index trigger must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("quality/irreversible.md without a reviewed trigger")),
+        "{errors:?}"
+    );
+    // A prose pointer made unconditional.
+    let mut files = base;
+    let evidence = files
+        .get_mut("agents/skills/cf-ship/references/pr-evidence.md")
+        .expect("PR evidence");
+    *evidence = evidence.replace(
+        "Read [release-policy.md](release-policy.md) when the impact may be minor or\nmajor or is disputed",
+        "Always read [release-policy.md](release-policy.md), also when the impact may be\nminor",
+    );
+    let errors = reading_chain(&files)
+        .err()
+        .expect("an always-on release policy must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("release-policy.md without a reviewed trigger")),
+        "{errors:?}"
     );
 }

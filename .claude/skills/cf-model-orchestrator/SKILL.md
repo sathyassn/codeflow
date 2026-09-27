@@ -146,10 +146,12 @@ exhaust qualified routes before recorded solo fallback.
 ## Preflight
 
 1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
-   non-goals, under `cf-plan`'s clarity gate. A mature approved task gets the
-   workflow-lifecycle map's compact currency and acceptance check instead of
-   open-ended discovery. When the brief concerns agentic estimates, capacity or
-   deadlines, read [estimates](references/estimates.md).
+   non-goals. Discover facts yourself; ask the operator only when an answer
+   changes the outcome, public behavior, authority, a material security
+   boundary, or an irreversible action (`cf-plan`'s clarity gate). Reuse a
+   mature approved task after a compact currency, acceptance, dependency and
+   planning-anchor check. When the brief concerns agentic estimates, capacity
+   or deadlines, read [estimates](references/estimates.md).
 2. Identify the active host and required lane from the matrix. Set the current
    session role to `host`; every cross-family entry uses `ROLE: peer` and the
    receiving primary's default effort. Only that primary dispatches its own
