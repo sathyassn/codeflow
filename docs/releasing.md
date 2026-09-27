@@ -90,10 +90,12 @@ When a repair touches a managed baseline or the manifest, each baseline must
 carry the one managed stamp of the release version and the manifest must
 record its exact hash. Published sections are held to their exact public
 source, and version non-reuse and the impact floors still apply. Any other
-PR onto a broken base is refused until the repair lands. The checker a PR
-runs is the one in its own merge tree, so a line whose checker predates the
-typed repair cannot take a green repair PR; see the TSK-106 review record
-for how that line was repaired.
+PR onto a broken base is refused until the repair lands. A base whose
+configuration this checker cannot read (a line that migrated the schema,
+landing on a target that has not) is judged with the PR's configuration, and
+the output names it. The checker a PR runs is the one in its own merge tree,
+so a line whose checker predates the typed repair cannot take a green repair
+PR; the TSK-106 review record replays that case.
 
 **Errata.** Published sections stay byte-frozen. A correction is a dated
 note in the `## Errata` block before the first version section:
