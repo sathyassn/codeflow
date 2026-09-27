@@ -11,10 +11,12 @@
 //!   tree they did not see. Untracked files are part of the working checkout
 //!   and can influence a quick target, which the pass line says.
 //! - The hook blocks on what it can see and never claims more: the range
-//!   leaves out only history known to be on the destination (the sha it
-//!   advertised for the branch, or for a new branch its protected branches'
-//!   tracking refs). When nothing gives a base, the range is reported
-//!   unresolved and left to CI, never compared with a local branch.
+//!   leaves out only history known to be on the destination: the sha it
+//!   advertised for the branch, or for a new branch the branch and tag tips
+//!   it advertises now (`git ls-remote`), falling back to its protected
+//!   branches' tracking refs when it cannot be asked. When nothing gives a
+//!   base, the range is reported unresolved and left to CI, never compared
+//!   with a local branch.
 //! - The whole set is timed; over [`git_hook::PUSH_SET_BUDGET`] the hook names
 //!   the slowest step.
 //!
@@ -22,8 +24,10 @@
 //! check. A failure is a `git.test_gate_on_push` violation at the policy's
 //! level, with the check's own output printed above it.
 
+use std::cell::OnceCell;
+use std::io::Write as _;
 use std::path::Path;
-use std::process::Command;
+use std::process::{Command, Stdio};
 use std::time::Instant;
 
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
@@ -67,11 +71,19 @@ pub(super) fn run(
         }
     };
     let namespace = remote.and_then(|name| tracking_namespace(root, name));
+    // Asked once, and only when a pushed branch is new to the destination.
+    let advertised: OnceCell<Option<Vec<String>>> = OnceCell::new();
+    let destination = Destination {
+        remote,
+        advertised: &advertised,
+        namespace: namespace.as_deref(),
+        protected: &policy.protected_branches,
+    };
     let mut steps: Vec<PushStep> = Vec::new();
 
     for r in &pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        match range_base(root, r, namespace.as_deref(), &policy.protected_branches) {
+        match range_base(root, r, &destination) {
             Some(RangeBase { base, note }) => {
                 report.notes.extend(note);
                 let args = [
@@ -86,8 +98,9 @@ pub(super) fn run(
                 run_check(&exe, root, &args, policy, report, &mut steps);
             }
             None => report.notes.push(format!(
-                "`codeflow ci` did not run for '{branch}': range unresolved (a new branch \
-                 and no tracked protected branch of this destination); CI checks it"
+                "`codeflow ci` did not run for '{branch}': range unresolved (a new branch, \
+                 and none of the destination's advertised tips or tracked protected \
+                 branches is here); CI checks it"
             )),
         }
     }
@@ -203,6 +216,68 @@ fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
     })
 }
 
+/// What is known of the destination's history.
+struct Destination<'a> {
+    /// The hook's remote argument: a configured name, a URL or a path.
+    remote: Option<&'a str>,
+    /// The commits the destination advertises now that exist here; `None`
+    /// when it could not be asked. Filled on first use.
+    advertised: &'a OnceCell<Option<Vec<String>>>,
+    /// The remote's tracking namespace, for the protected-branch fallback.
+    namespace: Option<&'a str>,
+    protected: &'a [String],
+}
+
+impl Destination<'_> {
+    fn advertised(&self, root: &Path) -> Option<&[String]> {
+        self.advertised
+            .get_or_init(|| {
+                self.remote
+                    .and_then(|remote| advertised_commits(root, remote))
+            })
+            .as_deref()
+    }
+}
+
+/// The branch and tag tips `remote` advertises now (tags peeled), kept when
+/// the commit exists in this repository. `None` when it cannot be asked: no
+/// network, no credentials (never prompted for), or no such remote.
+fn advertised_commits(root: &Path, remote: &str) -> Option<Vec<String>> {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["ls-remote", "--heads", "--tags", remote])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .stdin(Stdio::null())
+        .output()
+        .ok()
+        .filter(|out| out.status.success())?;
+    let listed = String::from_utf8_lossy(&out.stdout);
+    let shas: Vec<&str> = listed
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|sha| sha.len() >= 40 && sha.chars().all(|c| c.is_ascii_hexdigit()))
+        .collect();
+    if shas.is_empty() {
+        return Some(Vec::new());
+    }
+    let mut input = shas.join("\n");
+    input.push('\n');
+    let types = git_input(
+        root,
+        &["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        &input,
+    )?;
+    let mut commits: Vec<String> = types
+        .lines()
+        .filter_map(|line| line.strip_suffix(" commit"))
+        .map(ToString::to_string)
+        .collect();
+    commits.sort();
+    commits.dedup();
+    Some(commits)
+}
+
 /// The exclusive base of a pushed branch's range, and a note when the range
 /// is wider than the push itself.
 struct RangeBase {
@@ -221,19 +296,19 @@ struct RangeBase {
 ///    on the destination (a feature or integration branch may have been
 ///    rewritten since the last fetch). With no shared history, `codeflow ci`
 ///    reports the unrelated base;
-/// 2. a new branch: a boundary of the commits not reachable from the
-///    destination's protected branches' tracking refs. Policy forbids
-///    rewriting a protected branch, so even an old cached tip is history the
-///    destination keeps; any such boundary is a safe base. The pushed sha
-///    itself when nothing is new;
-/// 3. else `None`: the range is unresolved and CI checks it. A local branch
+/// 2. a new branch: a boundary of the commits not reachable from the branch
+///    and tag tips the destination advertises now (`git ls-remote`). Those
+///    are exactly the commits it has, so a stale local tracking ref neither
+///    hides nor adds anything, and a branch cut from any integration line is
+///    checked for its own commits only. The pushed sha itself when nothing
+///    is new;
+/// 3. a new branch when the destination cannot be asked, or none of its
+///    tips is here: the same boundary against its protected branches'
+///    tracking refs. Policy forbids rewriting a protected branch, so even an
+///    old cached tip is history the destination keeps. A failed ask is noted;
+/// 4. else `None`: the range is unresolved and CI checks it. A local branch
 ///    is never substituted: it may be stale or not the destination's base.
-fn range_base(
-    root: &Path,
-    r: &PushRef,
-    namespace: Option<&str>,
-    protected: &[String],
-) -> Option<RangeBase> {
+fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option<RangeBase> {
     let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
     if !zero && is_commit(root, &r.remote_sha) {
         let extends = git(
@@ -259,9 +334,28 @@ fn range_base(
             note,
         });
     }
-    let ns = namespace?;
+    let advertised = destination.advertised(root);
+    if let Some(tips) = advertised.filter(|tips| !tips.is_empty()) {
+        let mut input = format!("{}\n", r.local_sha);
+        for tip in tips {
+            input.push('^');
+            input.push_str(tip);
+            input.push('\n');
+        }
+        let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
+        return boundary(&listed, &r.local_sha, None);
+    }
+    let note = advertised.is_none().then(|| {
+        format!(
+            "`git ls-remote {}` failed: the range of new branch '{}' is bounded by the \
+             destination's tracked protected branches instead",
+            destination.remote.unwrap_or("?"),
+            r.remote_branch().unwrap_or_default()
+        )
+    });
+    let ns = destination.namespace?;
     let mut known: Vec<String> = Vec::new();
-    for branch in protected {
+    for branch in destination.protected {
         let reference = format!("{ns}{branch}");
         if branch.contains(['*', '?', '[']) {
             let any = git(
@@ -287,10 +381,16 @@ fn range_base(
     let mut args = vec!["rev-list", "--boundary", r.local_sha.as_str(), "--not"];
     args.extend(known.iter().map(String::as_str));
     let listed = git(root, &args)?;
+    boundary(&listed, &r.local_sha, note)
+}
+
+/// The base from `rev-list --boundary` output: its first boundary commit, or
+/// the pushed sha itself when no commit is new.
+fn boundary(listed: &str, local_sha: &str, note: Option<String>) -> Option<RangeBase> {
     if listed.trim().is_empty() {
         return Some(RangeBase {
-            base: r.local_sha.clone(),
-            note: None,
+            base: local_sha.to_string(),
+            note,
         });
     }
     listed
@@ -298,7 +398,7 @@ fn range_base(
         .find_map(|line| line.strip_prefix('-'))
         .map(|base| RangeBase {
             base: base.to_string(),
-            note: None,
+            note,
         })
 }
 
@@ -337,6 +437,28 @@ fn git(root: &Path, args: &[&str]) -> Option<String> {
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+}
+
+/// [`git`] with `input` on stdin.
+fn git_input(root: &Path, args: &[&str], input: &str) -> Option<String> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    // Written from a thread so a large answer cannot fill the pipe first.
+    let mut stdin = child.stdin.take()?;
+    let input = input.to_string();
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let out = child.wait_with_output().ok()?;
+    writer.join().ok()?.ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 fn rev_parse(root: &Path, rev: &str) -> Option<String> {

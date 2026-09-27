@@ -2215,6 +2215,100 @@ fn push_set_checks_a_commit_only_a_stale_tracking_ref_holds() {
     }
 }
 
+/// An integration line `integration/line` on the destination, cut from
+/// `stable` with a legacy non-conventional commit, fetched here; returns the
+/// line's tip.
+fn integration_line(bare: &Path, local: &Path) -> String {
+    git(local, &["checkout", "-q", "-b", "line", "dest/stable"]);
+    let tip = commit_file(local, "line.txt", "line\n", "Legacy line subject.");
+    receive(bare, local, "line:integration/line");
+    git(local, &["fetch", "-q", "dest"]);
+    tip
+}
+
+#[test]
+fn push_set_checks_only_the_own_commits_of_a_new_branch_off_a_line() {
+    // A new branch cut from an integration line is bounded by what the
+    // destination advertises now, not by its protected branches alone: the
+    // line's legacy commit is not checked again, a bad own commit is.
+    let (bare, local) = stable_destination("chore: legacy base");
+    integration_line(bare.path(), local.path());
+    git(local.path(), &["checkout", "-q", "-b", "feat/new", "line"]);
+    let good = commit_file(local.path(), "n.txt", "n\n", "feat: add new work");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &good)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("did not run for 'feat/new'"), "{err}");
+    assert!(!err.contains("ls-remote"), "{err}");
+
+    let bad = commit_file(local.path(), "m.txt", "m\n", "Not conventional.");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject."), "{err}");
+}
+
+#[test]
+fn push_set_ignores_a_tracking_ref_the_destination_deleted() {
+    // A sibling branch held a bad commit, then was deleted on the
+    // destination; its tracking ref here still holds it. It no longer
+    // bounds a new branch built on it, so the commit is checked.
+    let (bare, local) = stable_destination("chore: legacy base");
+    git(
+        local.path(),
+        &["checkout", "-q", "-b", "sib", "dest/stable"],
+    );
+    let bad = commit_file(local.path(), "b.txt", "b\n", "Not conventional.");
+    receive(bare.path(), local.path(), "sib:integration/sib");
+    git(local.path(), &["fetch", "-q", "dest"]);
+    git(
+        bare.path(),
+        &["update-ref", "-d", "refs/heads/integration/sib"],
+    );
+    assert_eq!(rev(local.path(), "dest/integration/sib"), bad, "stale ref");
+
+    git(
+        local.path(),
+        &["checkout", "-q", "-b", "feat/on-sib", "sib"],
+    );
+    let head = commit_file(local.path(), "c.txt", "c\n", "feat: add new work");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/on-sib", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+}
+
+#[test]
+fn push_set_falls_back_to_protected_refs_when_ls_remote_fails() {
+    // The destination cannot be asked: the range of a new branch is bounded
+    // by the tracked protected branches, and the hook says so.
+    let (bare, local) = stable_destination("Legacy subject.");
+    integration_line(bare.path(), local.path());
+    let gone = local.path().join("no-such-destination");
+    git(
+        local.path(),
+        &["remote", "set-url", "dest", gone.to_str().unwrap()],
+    );
+
+    git(
+        local.path(),
+        &["checkout", "-q", "-b", "feat/f", "dest/stable"],
+    );
+    let good = commit_file(local.path(), "f.txt", "f\n", "feat: add f");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/f", &good)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("`git ls-remote dest` failed: the range of new branch 'feat/f'"),
+        "{err}"
+    );
+    assert!(!err.contains("range unresolved"), "{err}");
+
+    // Bounded by `stable` alone, the line's legacy commit is in range.
+    git(local.path(), &["checkout", "-q", "-b", "feat/g", "line"]);
+    let head = commit_file(local.path(), "g.txt", "g\n", "feat: add g");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/g", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject."), "{err}");
+}
+
 #[test]
 fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     // T132-3: a resolved but unrelated base (an orphan pushed over a branch
