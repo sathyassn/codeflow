@@ -14,12 +14,17 @@ permissions:
   contents: read
 
 jobs:
+  # Ubuntu jobs pin the runner image (ubuntu-24.04), so a move of the
+  # ubuntu-latest label to a new Ubuntu release cannot change the toolchain
+  # under these jobs without a commit here. Move the label deliberately, after
+  # a green run on the new image. Actions are on the node24 runtime.
+  # The Windows job keeps windows-latest; this pin covers Ubuntu only.
   release-impact:
     name: release impact
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
       - name: Validate reviewed release intent
@@ -38,9 +43,9 @@ jobs:
   release-state:
     name: release state
     if: github.event_name == 'push'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
         with:
           fetch-depth: 0
       - name: Validate merged release state without writes
@@ -50,9 +55,9 @@ jobs:
 
   gates:
     name: codeflow gates
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -64,7 +69,7 @@ jobs:
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 26.4.0
           cache: npm
@@ -97,9 +102,9 @@ jobs:
 
   rust:
     name: rust (format + test + clippy)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -123,7 +128,7 @@ jobs:
     name: windows (build + test + clippy)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
       - uses: Swatinem/rust-cache@v2
@@ -134,7 +139,7 @@ jobs:
       - name: cargo clippy --workspace --all-targets -D warnings
         run: cargo clippy --workspace --all-targets -- -D warnings
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24.18.0
           cache: npm
@@ -147,9 +152,9 @@ jobs:
 
   secret-scan:
     name: secret scan
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -168,9 +173,9 @@ jobs:
 
   security-review:
     name: security review
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -222,9 +227,9 @@ jobs:
   commit-lint:
     name: commit standards
     if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -258,9 +263,9 @@ jobs:
   # real regressions instead of letting them land silently).
   coverage:
     name: coverage report
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Install Rust (rust-toolchain.toml)
         run: rustup toolchain install
