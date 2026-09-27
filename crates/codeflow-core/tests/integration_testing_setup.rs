@@ -511,6 +511,45 @@ fn rust_and_go_templates_push_set_is_lint_only() {
     }
 }
 
+/// TSK-134: no shipped template runs a package's test suite twice in its
+/// full mode (a plain run beside a coverage run of the same suite).
+#[test]
+fn templates_run_each_suite_once_in_full_mode() {
+    let runs_suite = |command: &str| {
+        let c = command;
+        (c.contains("cargo test") && !c.contains("--doc"))
+            || c.contains("nextest")
+            || c.contains("llvm-cov")
+            || c.contains("go test")
+            || c.contains("pytest")
+            || c.contains("pnpm test")
+            || c.contains("npm test")
+            || c.contains("run-tests.sh")
+    };
+    for entry in std::fs::read_dir(assets_template_dir()).unwrap() {
+        let path = entry.unwrap().path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+        let config = config::load_test_config(&path).unwrap();
+        let mut per_package: std::collections::BTreeMap<String, usize> =
+            std::collections::BTreeMap::new();
+        for target in &config.targets {
+            let Some(full) = target.modes.get("full") else {
+                continue;
+            };
+            if runs_suite(&full.command) {
+                *per_package
+                    .entry(target.cwd.clone().unwrap_or_else(|| ".".into()))
+                    .or_default() += 1;
+            }
+        }
+        for (package, runs) in per_package {
+            assert_eq!(runs, 1, "{}: package {package}", path.display());
+        }
+    }
+}
+
 #[test]
 fn monorepo_template_declares_explicit_package_targets() {
     let config =

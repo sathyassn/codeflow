@@ -265,6 +265,35 @@ fn run_gate_resolved(
     })
 }
 
+/// Whether a gate run in `mode` would run cargo: an enabled target that
+/// defines the mode (after the `quick` alias) uses the cargo runner or names
+/// `cargo` in its command, or, with no config, a Rust stack is detected. An
+/// unreadable config reads as `false`; [`run_gate`] reports that error itself.
+#[must_use]
+pub fn gate_uses_cargo(project_dir: &Path, mode: &str) -> bool {
+    let config_path = project_dir.join(TEST_CONFIG_PATH);
+    let targets: Vec<TargetConfig> = if config_path.exists() {
+        match load_test_config(&config_path) {
+            Ok(config) => config.targets,
+            Err(_) => return false,
+        }
+    } else {
+        detect_stacks(project_dir)
+            .into_iter()
+            .map(|d| d.config)
+            .collect()
+    };
+    let effective = resolve_mode(mode, &targets);
+    targets
+        .iter()
+        .filter(|t| t.enabled)
+        .filter_map(|t| t.modes.get(&effective).map(|m| (t, m)))
+        .any(|(t, m)| {
+            matches!(t.runner, crate::testing::config::RunnerType::Cargo)
+                || m.command.split_whitespace().any(|word| word == "cargo")
+        })
+}
+
 /// The gate verdict: every target's tests pass AND, for every coverage report,
 /// no threshold failed AND no required coverage data went missing. A file below
 /// its (possibly exception-lowered) threshold fails; a configured-but-absent

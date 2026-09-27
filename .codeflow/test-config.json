@@ -32,9 +32,16 @@
       "modes": {
         "essential": {
           "command": "cargo test --workspace --quiet"
-        },
+        }
+      }
+    },
+    {
+      "name": "rust-doctest",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
         "full": {
-          "command": "cargo test --workspace"
+          "command": "cargo test --workspace --doc"
         }
       }
     },
@@ -96,13 +103,13 @@
       "runner": "custom",
       "modes": {
         "quick": {
-          "command": "python3 scripts/gate-parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py"
         },
         "essential": {
-          "command": "python3 scripts/gate-parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py"
         },
         "full": {
-          "command": "python3 scripts/gate-parity.py"
+          "command": "python3 -B scripts/gate-parity.py && python3 -B scripts/test_gate_parity.py"
         }
       }
     },
