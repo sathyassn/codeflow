@@ -35,31 +35,23 @@ directly. Claude subagents are not Codex; nested duos violate scope.
 
 Read the current Codex primary selector, default effort, and typed internal
 routes from
-`../../cf-model-orchestrator/resources/current-ensemble.json`. Invoke the primary
-directly with that selector and default effort; the receiving primary alone
-selects its permitted internal route. Follow the canonical candidate versus
-scoped-qualified and actual-execution contract in
-`../../cf-model-orchestrator/resources/capability-routing.md`: a candidate with
-proven native routing may perform bounded non-design work without gaining a
-qualification claim. The responsible primary retains scope, integration,
-acceptance and the accountable verdict; record the actual executor and
-authored lineage for review. If `.codeflow/model-selection.json` is nonempty, first require
-`codeflow doctor --check model-bindings` to pass and use only its effective
-qualified override for the active harness.
-
-Include difficulty/triggers. The primary applies capability-routing: default
-effort is not a ceiling; demanding work gets the strongest capable permitted
-reasoning route and direct xhigh when warranted, while substantial bounded routine work
-uses a capable permitted route when available. Select worker effort for the
-unit. Preserve primary accountability and actual-authored-lineage review; do
-not infer economy, qualification, availability or applied selection.
+`../../cf-model-orchestrator/resources/current-ensemble.json`, and invoke the
+primary directly with that selector and default effort; the receiving primary
+alone selects its permitted internal route. Send the difficulty and triggers
+with the task. Worker routing, effort escalation, candidate use,
+accountability and authored lineage follow
+`../../cf-model-orchestrator/resources/capability-routing.md`. With project
+model overrides, apply the orchestrator's
+[project model overrides](../../cf-model-orchestrator/references/model-overrides.md)
+first.
 
 **Output counts as Codex only with a native Codex thread behind it.** Every
 plugin exchange must yield the native thread ID, recheckable afterward
 through the plugin or the native Codex surface. A generic Claude subagent, an
 unverified relay, or any surface that cannot show that thread never counts as
 Codex. Record model and effort as *observed* only when the transport exposes
-the actual values; otherwise record them as *requested*; never silently
+the actual values; otherwise record them as *requested* (a project-level high default is a
+fallback, not evidence that the requested turn used it); never silently
 upgrade requested to observed. When completion is inferred from thread state
 rather than an explicit result, grade it explicitly as inferred and verify it
 through the thread before relying on it.

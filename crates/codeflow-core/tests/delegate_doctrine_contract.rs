@@ -219,12 +219,13 @@ fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
             "grade it explicitly as inferred",
         ],
     );
+    // TSK-129: the plugin-exchange detail moved to the plugin lane (pinned
+    // above); the orchestrator keeps the provenance invariant.
     assert_contains(
         ORCHESTRATOR,
         &[
-            "native Codex thread ID, recheckable",
-            "otherwise label them requested",
-            "never silently upgraded to observed",
+            "the resumable Codex thread ID forward",
+            "otherwise as requested",
             "grade inferred completion explicitly as inferred",
         ],
     );
@@ -244,9 +245,14 @@ fn generic_claude_relay_never_counts_as_codex() {
         DELEGATE_PLUGIN_LANE,
         &["any surface that cannot show that thread never counts as Codex"],
     );
+    // TSK-129: the plugin-lane sentence lives in the plugin lane (pinned
+    // above); the orchestrator keeps its relay and generic-subagent invariants.
     assert_contains(
         ORCHESTRATOR,
-        &["a generic Claude subagent or an unverified relay never counts as Codex"],
+        &[
+            "A relay is transport, not author",
+            "generic same-lineage subagent never satisfies",
+        ],
     );
     assert_contains(
         ROUTING,

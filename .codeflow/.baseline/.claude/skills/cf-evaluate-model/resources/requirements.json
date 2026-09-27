@@ -704,7 +704,7 @@
       "statement": "Project model selection is a reference-only, atomic override of stable roles to locally qualified binding IDs; absent or empty selection preserves the managed default, while malformed, missing, ineligible, drifted, unsupported, or lineage-collapsing selection fails closed without partial fallback.",
       "sources": [
         {
-          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "path": ".agents/skills/cf-model-orchestrator/references/model-overrides.md",
           "markers": [
             ".codeflow/model-selection.json",
             "An absent or empty file keeps the managed defaults",

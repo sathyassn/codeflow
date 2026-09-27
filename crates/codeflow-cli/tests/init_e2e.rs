@@ -829,6 +829,10 @@ const TSK129_SPLIT_FILES: &[(&str, &str)] = &[
         "skills/cf-delegate/SKILL.md",
         "skills/cf-delegate/resources",
     ),
+    (
+        "skills/cf-model-orchestrator/SKILL.md",
+        "skills/cf-model-orchestrator/references",
+    ),
 ];
 
 /// Files the split added beside each whole file, in one skill tree.
@@ -932,7 +936,7 @@ fn split_references_install_and_update_replaces_whole_files_at_standard_and_full
         for tree in [".claude", ".agents"] {
             let added = tsk129_added_files(&root, tree);
             assert!(
-                added.len() >= 3 + 16 + 8,
+                added.len() >= 3 + 16 + 8 + 6,
                 "{tier} {tree}: split files missing: {added:?}"
             );
             for rel in added.iter().cloned().chain(

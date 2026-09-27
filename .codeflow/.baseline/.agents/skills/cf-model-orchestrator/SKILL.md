@@ -25,13 +25,8 @@ review, or implementation, read
 resources own durable quality and task assignment;
 the JSON records own selectors, effort, internal workers, escalation, and
 when a catalog family is named.
-If `.codeflow/model-selection.json` contains project overrides, run
-`codeflow doctor --check model-bindings` and use only the effective qualified
-role bindings it reports. An absent or empty file keeps the managed defaults;
-an invalid or drifted active selection blocks preflight without partial
-application or silent fallback. The project file may reference binding IDs
-only—it never owns raw selectors, worker routes, or commands.
-Harness adapters are not alternate sources of truth.
+If `.codeflow/model-selection.json` contains project overrides, read
+[project model overrides](references/model-overrides.md) before preflight.
 For a multi-task plan or a possible dependency/decision change, also read
 [resources/task-graph.md](resources/task-graph.md). When choosing or reviewing
 test strength, read
@@ -158,17 +153,12 @@ Detect capabilities, not model identity.
 |---|---|---|---|
 | Claude Code | Official `codex-plugin-cc` preferred; qualified native Codex client fallback (`cf-delegate`) | Claude host | Per-task responsible-primary/executor/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
 | Codex App or interactive Codex CLI | Interactive Claude Code CLI via Herdr (tmux degraded) | Codex host | Per-task responsible-primary/executor/reviewer assignment; the Claude judgment primary leads design and integrated judgment |
-| Grok Build (interactive `grok` CLI) ([detail](resources/grok-host.md)) | Herdr `claude` + schema-v2; official `codex` CLI → app-server (Herdr; tmux degraded) | Grok host | Same contract. The Claude design owner authors real design natively. Catalog Grok may execute or take named extra-family review |
-| Other harness, including Hermes | Delegate the repository task to one sanctioned native host by default; coordinate directly only if both lanes and the full contract are proven | One native host | Same capability-routed contract; no nested orchestration |
+| Grok Build, or another harness including Hermes | See [other hosts](references/other-hosts.md) | That host | Same contract |
 
-Herdr/tmux cwd is the project being worked. Same topic reuses the tab; a new
-topic gets a new tab; close it when that work is done. Claude Code reaches
-Codex preferably via plugin/app-server; an incompatible plugin permits the
-qualified native fallback in `cf-delegate`, not simulated Codex. Grok reaches
-Codex via official `codex` CLI and the app-server daemon
-(Herdr CLI if daemon missing; no third-party Grok Codex plugins). Codex reaches
-Claude via Herdr (tmux degraded) plus schema-v2. Missing lane: exhaust
-qualified routes before recorded solo fallback.
+Herdr tabs follow `cf-herdr`, with the project being worked as the cwd. Each
+host reaches the other lineage through its matrix lane or the qualified
+native fallback in `cf-delegate`, never a simulated seat. Missing lane:
+exhaust qualified routes before recorded solo fallback.
 
 ## Preflight
 
@@ -177,10 +167,8 @@ qualified routes before recorded solo fallback.
    facts autonomously, and ask only when a missing answer changes an
    operator-owned outcome, public behavior, authority, material security
    boundary, or irreversible action.
-   When the brief concerns agentic operating/development estimates, capacity or
-   deadlines, route to `cf-estimate` after context discovery: offer a useful
-   preview, reuse compatible adoption or respect decline. Do not turn an
-   estimate request into adoption, installation or implementation authority.
+   When the brief concerns agentic estimates, capacity or deadlines, read
+   [estimates](references/estimates.md).
    When a mature approved task already fixes intent and direction, perform a
    compact currency, acceptance, dependency, and planning-anchor check and
    reuse it. Re-enter open-ended discovery or `cf-plan` only for a material
@@ -221,8 +209,7 @@ qualified routes before recorded solo fallback.
      `--sandbox danger-full-access`. public network and live search are enabled.
      Auto-review is not human authorization; catastrophic work still stops for
      the operator.
-   - Grok: `--always-approve` for production; `--permission-mode auto` for
-     consult/no-edit; `--sandbox <PROFILE>` when required. Never `grok -p`.
+   - Grok, when a Grok seat is used: see [other hosts](references/other-hosts.md).
    - Platform: use native macOS/Linux sandboxes; on Windows, prefer WSL2 for
      Linux-equivalent tooling. Native Windows Codex must use its elevated
      sandbox and the guard must cover PowerShell/Bash. Claude Code has no
@@ -242,11 +229,9 @@ qualified routes before recorded solo fallback.
    advisory unless an explicit hard limit depends on it. Never infer quota,
    availability, applied selection, or savings.
 
-Preflight solo `/cf-develop` requires exhausted qualified `cf-delegate` routes,
-recorded missing seat/reduced assurance, and fresh-context independent review:
-`cf-reviewer` when available, else a separate read-only pass; self-review is not
-review. Auth failure stops; a mid-run failure gets bounded retry/diagnosis, then
-human escalation—never a silent downgrade.
+A solo `/cf-develop` run follows [solo fallback](references/solo-fallback.md).
+Auth failure stops; a mid-run failure gets bounded retry/diagnosis, then
+human escalation, never a silent downgrade.
 
 ## Workflow
 
@@ -271,10 +256,6 @@ that constraint and why option exploration was waived. Codex reviews the
 design for implementation feasibility, failure modes, security, testing, and
 maintainability. It also challenges whether a simpler proportionate design
 satisfies the same requirements. A Grok host does not author that design pass.
-When a user-facing surface materially changes, apply `cf-design` and include its
-evidence-grounded `DESIGN_INTENT` in the plan. A cosmetic correction or
-conformance-only change records the skill's compact `N/A` or `conform` path
-rather than manufacturing design ceremony.
 
 The host reconciles the two drafts into **Plan v1** using the plan contract in
 the quality resource. Both seats review exactly that version. Amendments create
@@ -303,9 +284,6 @@ assignment row:
 - unit, integration, end-to-end, UI, coverage, and security evidence required,
   including the affected journey topology and each real boundary the
   end-to-end run must traverse or explicitly disclose as controlled/unverified;
-- for concurrent UI work, the owner and run-scoped browser profile/context,
-  service/application endpoints, test-data namespace, artifact directory,
-  retention, and teardown verification required by the quality contract;
 - rollback or recovery considerations where relevant.
 
 Multi-task plans use the node/edge notation and mutation boundary in
@@ -316,24 +294,9 @@ trigger evidence for any property/generative, mutation, or architecture
 fitness check—or records `none selected`.
 
 Claude reviews design fidelity; Codex reviews executability. Both approve tasks
-and assignments. A responsible-primary/reviewer seat or lineage change creates
-Plan vN+1 and requires both approvals; trigger-based same-seat escalation and a
-permitted executor change within unchanged ownership/scope/isolation are ledger
-evidence, not reassignment.
-
-If implementation has independent tasks, add an explicit execution graph:
-
-- the settled task graph and a valid integration order;
-- one file/component owner, branch, and worktree per parallel task;
-- shared or conflict-prone files reserved to one integration owner;
-- a host resource budget and maximum concurrent heavyweight builds/browsers,
-  with non-overlapping browser resources for every parallel UI task;
-- the `integration/<epic>` branch and serialized `codeflow integrate` order;
-- focused checks per task and combined checks after each landing.
-
-Do not parallelize a short task when coordination costs more than it saves.
-Never use concurrent writers in one worktree or rebase a shared integration
-branch.
+and assignments; a seat or lineage change is reassignment under
+capability-routing. For independent parallel tasks, add the execution graph in
+[parallel tasks](references/parallel-tasks.md).
 
 After both seats approve the exact Plan vN and task graph, invoke `cf-plan` to
 materialize only the warranted epic/spec/task/ADR records on a `plan/` branch.
@@ -361,34 +324,17 @@ validation is bounded rather than reflexively deferring it. Only uncertain
 secondary observations enter the consolidated deferral batch; work does not
 switch to cosmetic bait while actionable material work remains.
 
-The responsible primary delegates eligible work under capability-routing, then
-inspects, integrates, and accepts it without secretly duplicating it. Candidate
-status permits bounded non-design execution but proves neither qualification
-nor economy. Same-family workers stay primary-owned; cross-family production
-enters the receiving primary, not its worker. Actual authorship determines
-independent review.
+The responsible primary delegates, inspects, integrates and accepts eligible
+work under capability-routing; actual authorship determines independent review.
 
-For a Claude host, prefer the official plugin for Codex-produced or Codex-reviewed
-units; its qualified native fallback follows `cf-delegate`:
-
-- `/codex:review` or `/codex:adversarial-review` for read-only critiques;
-- `/codex:rescue --model <primary-selector> --effort <primary-default>` for
-  production/verification; the receiving primary owns worker escalation;
-- `/codex:transfer` for a persistent task visible in Codex App/TUI.
-
-Apply the same explicit selector and effort selection to every plugin task
-that starts a primary Codex reasoning turn. Every plugin exchange must yield a
-native Codex thread ID, recheckable through the plugin or the native Codex
-surface — a generic Claude subagent or an unverified relay never counts as
-Codex. Record model and effort as observed only when the transport exposes the
-actual values; otherwise label them requested — a project-level high default is
-a fallback, not evidence that the requested turn used it, and requested is
-never silently upgraded to observed.
-
-Each unit stays in its assigned worktree and uses its recorded primary, worker,
-or approved cross-family primary. Do not infer authorship from host/worktree.
-A lineage different from the actual author's reviews before integration.
-Workers return to their primary and never approve plans or replace reviewers.
+For a Claude host, prefer the official plugin for Codex-produced or
+Codex-reviewed units, with its qualified native fallback, as the `cf-delegate`
+plugin lane sets out: `/codex:review` or `/codex:adversarial-review` for
+read-only critiques, `/codex:rescue --model <primary-selector> --effort <primary-default>`
+for production or verification (the receiving primary owns worker escalation),
+and `/codex:transfer` for a persistent task. Each unit stays in its assigned
+worktree with its recorded executor; do not infer authorship from host or
+worktree.
 
 ### 5. Cross-lineage review and integrated Claude judgment
 
@@ -409,13 +355,8 @@ pass only as integrated judgment.
 For research/analysis/plan modes, Claude instead final-reviews the settled
 artifact and its source/evidence coverage.
 
-From a Codex host, this test-running review uses a separate interactive Claude
-session in auto mode under the same fail-closed sandbox—not plan or bypass
-mode—so Bash/UI verification can proceed without an unattended permission
-stall. Keep shell classification enabled, grant only the scoped test and
-inspection actions, explicitly prohibit source edits, and require the worktree
-diff to remain unchanged after review. This is verification authority, not an
-implementation handoff.
+A Codex host runs this test-running review as [Codex host](references/codex-host.md)
+sets out.
 
 Any confirmed issue returns to its responsible primary and designated executor.
 Rework is bounded to two rounds and requires fresh evidence. A deterministic
@@ -424,17 +365,10 @@ completion. If the selected Claude judgment primary is unavailable, record the
 fallback and reduced assurance;
 never report that the selected Claude judgment primary reviewed the work.
 
-Before closeout, both primary seats inspect the consolidated deferral batch
-once. They choose `fix now`, `track once`, or `drop` for each related set,
-challenge any convenience-based postponement, and investigate repeated minor
-symptoms as one possible material cause. A fix returns to its responsible
-primary and designated executor and repeats the affected verification/review. A worthwhile deferral
-uses one existing tracking altitude and an event-based revisit trigger; no
-batch, missing seat, or preference-only note is silently upgraded to agreement
-or durable work. A scheduled/background peer task, notification promise, or
-transport completion is not a disposition: the host waits for the actual
-bounded result, verifies its native provenance and content, and only then
-closes the checkpoint.
+Before closeout, both primary seats dispose of the consolidated deferral batch
+once under the quality contract's materiality rules; a fix returns to its
+responsible primary and designated executor and repeats the affected
+verification and review.
 
 ### 6. Joint closeout
 
@@ -456,9 +390,6 @@ Only an implementation or repository-editing documentation run hands off to
 `cf-ship`. If a remote exists, push committed logical units for durability, but
 never use a backup push to imply review or merge approval.
 
-When a stage fails, return only to its owner and then repeat the affected
-verification and review: planning for a changed or unclear contract;
-responsible primary/executor for implementation defects; the producing stage
-for review findings; `cf-ship` or the standalone docs owner for documentation
-and PR-evidence gaps. Do not restart the whole lifecycle, force a development
-stage for docs-only work, or treat a failed gate as authority to bypass it.
+When a stage fails, return it to its owner as the workflow-lifecycle map sets
+out, then repeat only the affected verification and review; a failed gate is
+never authority to bypass it.

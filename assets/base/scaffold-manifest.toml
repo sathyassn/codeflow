@@ -610,6 +610,42 @@ dest = ".claude/skills/cf-model-orchestrator/resources/grok-host.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/codex-host.md"
+dest = ".claude/skills/cf-model-orchestrator/references/codex-host.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/estimates.md"
+dest = ".claude/skills/cf-model-orchestrator/references/estimates.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/model-overrides.md"
+dest = ".claude/skills/cf-model-orchestrator/references/model-overrides.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/other-hosts.md"
+dest = ".claude/skills/cf-model-orchestrator/references/other-hosts.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/parallel-tasks.md"
+dest = ".claude/skills/cf-model-orchestrator/references/parallel-tasks.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/solo-fallback.md"
+dest = ".claude/skills/cf-model-orchestrator/references/solo-fallback.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # Product/UX/UI/visual design direction stays on demand: the always-loaded
 # contract carries the obligation and this skill owns the adaptive method.
 [[entry]]
@@ -1202,6 +1238,42 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/grok-host.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/grok-host.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/codex-host.md"
+dest = ".agents/skills/cf-model-orchestrator/references/codex-host.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/estimates.md"
+dest = ".agents/skills/cf-model-orchestrator/references/estimates.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/model-overrides.md"
+dest = ".agents/skills/cf-model-orchestrator/references/model-overrides.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/other-hosts.md"
+dest = ".agents/skills/cf-model-orchestrator/references/other-hosts.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/parallel-tasks.md"
+dest = ".agents/skills/cf-model-orchestrator/references/parallel-tasks.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/references/solo-fallback.md"
+dest = ".agents/skills/cf-model-orchestrator/references/solo-fallback.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

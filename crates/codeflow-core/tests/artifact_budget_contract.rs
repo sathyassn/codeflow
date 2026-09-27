@@ -1062,6 +1062,30 @@ const CONDITIONAL_READS: &[(&str, &str)] = &[
         "claude/skills/cf-delegate/resources/edit-access.md",
         "only before a write-enabled handoff",
     ),
+    (
+        "agents/skills/cf-model-orchestrator/references/model-overrides.md",
+        "only when `.codeflow/model-selection.json` has project overrides",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/references/estimates.md",
+        "only when the brief concerns estimates, capacity or deadlines",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/references/other-hosts.md",
+        "only on a Grok Build or other host, or when a Grok seat is used",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/references/solo-fallback.md",
+        "only when preflight leaves a required seat unavailable",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/references/parallel-tasks.md",
+        "only when implementation has independent parallel tasks",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/references/codex-host.md",
+        "the test-running review detail is read on a Codex host",
+    ),
 ];
 
 /// The section files an index table links, split by its "Read" column.
@@ -1088,10 +1112,12 @@ fn index_rows(base: &Path, index: &str) -> (Vec<String>, Vec<String>) {
     (every, triggered)
 }
 
-// The one expected failure: the chain stays over its cap until TSK-129 splits
-// `cf-model-orchestrator/SKILL.md` after TSK-127 lands (SPC-013 R-118,
-// amended 2026-09-27). That change removes this attribute; the cap is not
-// loosened. Any other panic still fails the test.
+// The one expected failure: after every TSK-129 split, including
+// `cf-model-orchestrator/SKILL.md` (SPC-013 R-118, amended 2026-09-27), the
+// chain still exceeds its cap; closing the rest is an operator decision
+// recorded in the TSK-129 Closeout. The change that brings the chain under
+// the cap removes this attribute; the cap is not loosened. Any other panic
+// still fails the test.
 #[test]
 #[should_panic(expected = "reading chain exceeds its cap")]
 fn per_task_reading_chain_stays_within_its_cap() {
