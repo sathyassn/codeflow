@@ -883,7 +883,10 @@ fn a_quote_search_past_its_budget_falls_to_the_block_with_a_notice() {
 #[test]
 fn a_whole_document_note_survives_a_revision() {
     let first = supported("documents/v2-framed.json");
-    let second = supported("reanchor/revision-2.json");
+    // The revision also drops `intro`, the first block, which carried the
+    // note's digest: the document is still there, so the note holds.
+    let mut second = supported("reanchor/revision-2.json");
+    second.blocks.retain(|block| block.id() != "intro");
     let (_temp, store) = store();
     let session = store
         .create(ParsedDocument::Supported(first.clone()))

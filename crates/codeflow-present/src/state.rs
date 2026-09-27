@@ -2794,6 +2794,12 @@ fn reanchor_note(
             };
         }
     };
+    // A whole-document note names the document, not the block that carried
+    // its digest, so it holds while the document does (QA defect 8), even
+    // when that first block is gone.
+    if let Some(selector) = note.region_selector.as_ref().filter(|s| whole_document(s)) {
+        return region_anchor(selector, source_revision != current_revision);
+    }
     let Some(block) = find_block(&document.blocks, &note.block_id) else {
         return FeedbackAnchor::Orphaned {
             reason: "the referenced block is absent from the current revision".to_string(),
@@ -2989,46 +2995,60 @@ fn reanchor_region(
     current_revision: u64,
     block: &crate::document::Block,
 ) -> Option<FeedbackAnchor> {
-    let anchored = |reanchored: bool| {
-        if reanchored {
-            FeedbackAnchor::RegionReanchored {
-                scope: selector.scope.clone(),
-                anchor_id: selector.anchor_id.clone(),
-                x_ppm: selector.x_ppm,
-                y_ppm: selector.y_ppm,
-                width_ppm: selector.width_ppm,
-                height_ppm: selector.height_ppm,
-            }
-        } else {
-            FeedbackAnchor::RegionAnchored {
-                scope: selector.scope.clone(),
-                anchor_id: selector.anchor_id.clone(),
-                x_ppm: selector.x_ppm,
-                y_ppm: selector.y_ppm,
-                width_ppm: selector.width_ppm,
-                height_ppm: selector.height_ppm,
-            }
-        }
-    };
     if source_revision == current_revision {
-        return Some(anchored(false));
+        return Some(region_anchor(selector, false));
     }
     match selector.scope {
-        RegionScope::Block if selector.block_digest == block_digest(block) => Some(anchored(true)),
-        RegionScope::Block => None,
-        // A whole-document note names no layout, so every revision holds it
-        // (QA defect 8); a part of the document stays pinned to its revision.
-        RegionScope::Document
-            if selector.x_ppm == 0
-                && selector.y_ppm == 0
-                && selector.width_ppm == limits::REGION_COORDINATE_SCALE
-                && selector.height_ppm == limits::REGION_COORDINATE_SCALE =>
-        {
-            Some(anchored(true))
+        RegionScope::Block if selector.block_digest == block_digest(block) => {
+            Some(region_anchor(selector, true))
         }
+        RegionScope::Block => None,
+        // A part of the document stays pinned to its revision; the whole
+        // document is held before the block lookup (`whole_document`).
         RegionScope::Document => Some(FeedbackAnchor::Orphaned {
             reason: "a document-wide visual region is pinned to its source revision".to_string(),
         }),
+    }
+}
+
+/// A validated selector over the whole document: it names no layout, so
+/// every revision holds it.
+fn whole_document(selector: &RegionSelector) -> bool {
+    matches!(selector.scope, RegionScope::Document)
+        && selector.anchor_id == "document"
+        && selector.x_ppm == 0
+        && selector.y_ppm == 0
+        && selector.width_ppm == limits::REGION_COORDINATE_SCALE
+        && selector.height_ppm == limits::REGION_COORDINATE_SCALE
+}
+
+fn region_anchor(selector: &RegionSelector, reanchored: bool) -> FeedbackAnchor {
+    let scope = selector.scope.clone();
+    let anchor_id = selector.anchor_id.clone();
+    let (x_ppm, y_ppm, width_ppm, height_ppm) = (
+        selector.x_ppm,
+        selector.y_ppm,
+        selector.width_ppm,
+        selector.height_ppm,
+    );
+    if reanchored {
+        FeedbackAnchor::RegionReanchored {
+            scope,
+            anchor_id,
+            x_ppm,
+            y_ppm,
+            width_ppm,
+            height_ppm,
+        }
+    } else {
+        FeedbackAnchor::RegionAnchored {
+            scope,
+            anchor_id,
+            x_ppm,
+            y_ppm,
+            width_ppm,
+            height_ppm,
+        }
     }
 }
 
