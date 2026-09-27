@@ -252,6 +252,21 @@ publication date._
   The model may still act on a forged notice within that turn; the check only
   keeps it from being recorded as a clean result.
 
+<!-- codeflow:release-impact patch -->
+- **Scaffolded CI leaves the Node 20 action runtime and pins its runner.**
+  The GitHub workflow that `codeflow init` writes to
+  `.github/workflows/codeflow-ci.yml` now uses `actions/checkout@v6`, which
+  runs on Node 24, instead of `actions/checkout@v4`, which runs on the
+  deprecated Node 20 runtime. Its four jobs run on `ubuntu-24.04` instead of
+  `ubuntu-latest`, so GitHub moving that label to Ubuntu 26 on 2026-10-19
+  does not change the tools under them; the jobs check the same things. An
+  unmodified copy is replaced by `codeflow update`. An edited copy is merged
+  three ways; on a conflict your file is left unchanged with the new version
+  beside it as `codeflow-ci.yml.new`, so change each `actions/checkout@v4`
+  to `@v6` and each `runs-on: ubuntu-latest` to `ubuntu-24.04` by hand. A
+  self-hosted runner needs Actions runner 2.327.1 or later for Node 24
+  actions.
+
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
 - **Optional agentic operating and estimation method (ADR-0057).** Standard and
