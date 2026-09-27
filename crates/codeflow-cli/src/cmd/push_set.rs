@@ -128,6 +128,13 @@ pub(super) fn run(
         }
     }
 
+    if codeflow_core::release_local::adopted(root) {
+        let remote = remote.unwrap_or("origin");
+        for r in &pushed {
+            release_preflight(root, r, remote, policy, report, &mut steps);
+        }
+    }
+
     let head = rev_parse(root, "HEAD");
     let incomplete = incomplete_checkout(root);
     let clean = incomplete.is_none() && tracked_tree_clean(root);
@@ -174,6 +181,52 @@ fn violation(policy: &GitPolicy, message: String, remedy: String) -> Violation {
         message,
         remedy,
     )
+}
+
+/// The local release preflight of a project that adopted `CodeFlow`'s
+/// calculator (SPC-013 R-93): it reads git data only, so it runs for every
+/// pushed branch. A missing entry is a note; only a push that breaks a
+/// release tree its base kept valid is a violation.
+fn release_preflight(
+    root: &Path,
+    pushed: &PushRef,
+    remote: &str,
+    policy: &GitPolicy,
+    report: &mut StageReport,
+    steps: &mut Vec<PushStep>,
+) {
+    let branch = pushed.remote_branch().unwrap_or_default();
+    let started = Instant::now();
+    let result =
+        codeflow_core::release_local::preflight(root, &pushed.local_sha, branch, remote);
+    steps.push(PushStep {
+        name: format!("release preflight ({branch})"),
+        duration: started.elapsed(),
+        configurable: false,
+    });
+    match result {
+        Ok(outcome) => {
+            report.notes.extend(
+                outcome
+                    .notes
+                    .iter()
+                    .map(|note| format!("release preflight ({branch}): {note}")),
+            );
+            if outcome.blocked() {
+                report.violations.push(violation(
+                    policy,
+                    format!("release preflight ({branch}): this push breaks the release tree"),
+                    format!(
+                        "fix the release state named above, then rerun `python3 {} preflight --branch {branch}`",
+                        codeflow_core::release_local::SCRIPT
+                    ),
+                ));
+            }
+        }
+        Err(error) => report.notes.push(format!(
+            "release preflight did not run for '{branch}': {error}; the pull request job checks it"
+        )),
+    }
 }
 
 /// Run one built-in check through this binary and time it.

@@ -209,8 +209,19 @@ pub fn integrate(
     // below only guards the target ref, not the branch).
     let tested_oid = resolve_branch(&repo, branch)?;
 
-    // Stage 3: test gate (full mode).
+    // Stage 3: test gate (full mode), then the release structure of a
+    // project that adopted CodeFlow's calculator (SPC-013 R-94).
     let test_gate = run_test_stage(repo_root, &original)?;
+    if crate::release_local::adopted(repo_root) {
+        if let Err(message) =
+            crate::release_local::structural(repo_root, &tested_oid.to_string())
+        {
+            let _ = restore_checkout(repo_root, &original);
+            return Err(IntegrateError::TestGateFailed {
+                summary: format!("  release state (structural, not checked against the host): {message}"),
+            });
+        }
+    }
 
     // The branch must still point at the exact commit that was tested, and the
     // target must be an ancestor of it (a real fast-forward), before we advance.
@@ -857,6 +868,54 @@ mod tests {
         // Restored to the original checkout.
         let head = git(dir.path(), &["rev-parse", "--abbrev-ref", "HEAD"]);
         assert_eq!(String::from_utf8_lossy(&head.stdout).trim(), "main");
+    }
+
+    /// A project that adopted `CodeFlow`'s release calculator, with a stub
+    /// `release.py` that records its arguments and exits with `code`.
+    fn adopt_release_calculator(dir: &Path, code: i32) {
+        fs::write(
+            dir.join(".codeflow/project.toml"),
+            "scaffold_version = \"3.0.0\"\n\n[release]\nbackend = \"codeflow\"\n",
+        )
+        .unwrap();
+        fs::create_dir_all(dir.join("scripts")).unwrap();
+        fs::write(
+            dir.join("scripts/release.py"),
+            format!(
+                "import sys\nopen('release-args.txt', 'w').write(' '.join(sys.argv[1:]))\n\
+                 sys.stderr.write('release error: coupled stamps disagree')\nsys.exit({code})\n"
+            ),
+        )
+        .unwrap();
+    }
+
+    /// SPC-013 R-94: `codeflow integrate` runs the release structure check in
+    /// its test stage, on the exact commit it would land.
+    #[test]
+    fn integrate_runs_the_structural_release_check_in_its_test_stage() {
+        if Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = repo_with_feature_branch();
+        write_test_config(dir.path(), "exit 0");
+        adopt_release_calculator(dir.path(), 2);
+        let before = branch_oid(dir.path(), "main");
+        let tested = branch_oid(dir.path(), "feat/x");
+        let err = integrate(dir.path(), "feat/x", "main").unwrap_err();
+        assert!(
+            matches!(err, IntegrateError::TestGateFailed { .. }),
+            "expected TestGateFailed, got {err}"
+        );
+        let text = err.to_string();
+        assert!(text.contains("release state (structural, not checked against the host)"), "{text}");
+        assert!(text.contains("coupled stamps disagree"), "{text}");
+        assert_eq!(branch_oid(dir.path(), "main"), before, "main untouched");
+        let args = fs::read_to_string(dir.path().join("release-args.txt")).unwrap();
+        assert_eq!(args, format!("check-state --structural --ref {tested}"));
+
+        adopt_release_calculator(dir.path(), 0);
+        integrate(dir.path(), "feat/x", "main").expect("a valid release tree lands");
+        assert_eq!(branch_oid(dir.path(), "main"), tested);
     }
 
     #[test]

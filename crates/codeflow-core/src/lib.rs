@@ -20,6 +20,7 @@ pub mod models;
 pub mod reading;
 pub mod recall;
 pub mod registry;
+pub mod release_local;
 pub mod remote;
 pub mod scaffold;
 pub mod security;
