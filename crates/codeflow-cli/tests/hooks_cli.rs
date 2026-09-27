@@ -1106,6 +1106,90 @@ fn exec_guard_honours_no_system_directory_as_tmpdir() {
     }
 }
 
+/// Run git in `dir` with the hook environment, returning its output.
+fn git_out(dir: &Path, args: &[&str]) -> Output {
+    Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE")
+        .output()
+        .unwrap()
+}
+
+#[test]
+fn reference_transaction_lets_ref_packing_through_and_blocks_a_move() {
+    // `git pack-refs` and `git gc` move protected refs between loose files
+    // and packed-refs without changing what they point to; that is not an
+    // update. A real move or deletion of `main` still blocks.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(
+        dir.path(),
+        &["commit", "--allow-empty", "-q", "-m", "chore: second"],
+    );
+    git(dir.path(), &["checkout", "-q", "-b", "other"]);
+    let main = rev(dir.path(), "main");
+    let loose = dir.path().join(".git/refs/heads/main");
+    wire_reference_transaction_hook(dir.path());
+
+    // A loose-only `main` cannot be deleted by naming its value.
+    let out = git_out(dir.path(), &["update-ref", "-d", "refs/heads/main", &main]);
+    assert!(!out.status.success(), "loose-only delete must block");
+
+    let out = git_out(dir.path(), &["pack-refs", "--all"]);
+    assert!(
+        out.status.success(),
+        "pack-refs: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rev(dir.path(), "main"), main);
+    assert!(!loose.exists(), "the loose copy was pruned");
+    let packed = std::fs::read_to_string(dir.path().join(".git/packed-refs")).unwrap();
+    assert!(
+        packed.contains(&format!("{main} refs/heads/main")),
+        "{packed}"
+    );
+
+    // A loose copy equal to the packed value, as before a prune, can be
+    // pruned by `git gc`, but not deleted outright.
+    std::fs::write(&loose, format!("{main}\n")).unwrap();
+    let out = git_out(dir.path(), &["update-ref", "-d", "refs/heads/main", &main]);
+    assert!(
+        !out.status.success(),
+        "delete with a packed copy must block"
+    );
+    let out = git_out(dir.path(), &["gc", "--quiet"]);
+    assert!(
+        out.status.success(),
+        "gc: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(rev(dir.path(), "main"), main);
+    assert!(!loose.exists(), "gc packed the loose copy");
+
+    // Real changes to the packed `main` still block.
+    for args in [
+        &["update-ref", "refs/heads/main", "HEAD~1"][..],
+        &["update-ref", "-d", "refs/heads/main", &main],
+        &["branch", "-D", "main"],
+    ] {
+        let out = git_out(dir.path(), args);
+        assert!(!out.status.success(), "{args:?} must block");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("git.local_ref_protection") || stderr.contains("git.delete_protected"),
+            "{args:?}: {stderr}"
+        );
+    }
+    assert_eq!(rev(dir.path(), "main"), main);
+}
+
 #[test]
 fn git_guard_blocks_pr_body_attribution() {
     // AC #13: attribution in a PR body blocked at gh pr create.
