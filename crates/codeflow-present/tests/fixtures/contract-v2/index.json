@@ -1,0 +1,342 @@
+{
+  "spec": "SPC-014",
+  "placeholders": {
+    "{{digest:<block-id>}}": "the block digest the store computes (state.rs block_digest) for that block in the named document",
+    "{{form_digest:<block-id>}}": "SHA-256 of the form block's canonical JSON",
+    "{{answer_id:<n>}}": "the answer_id of the receipt returned for request n of the same fixture",
+    "{{head}}": "the HEAD commit of the test repository"
+  },
+  "fixtures": [
+    {
+      "file": "documents/v1-html-title.json",
+      "clause": "B5 (v1 fixes), C1",
+      "valid": true,
+      "expect": "renders as in 3.0.0 plus the visible stage title; `[fig:stage]` stays literal; the unlabelled rect is labelled from the block, never 'rect'; the rect inside the labelled g resolves to 'Node A'",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-framed.json",
+      "clause": "I1, B2, B5",
+      "valid": true,
+      "expect": "Figure 1 'Two landing paths from a task branch to main', Figure 2 the answer-flow stage, Figure 3 the nested stage, Table 1 'Answer limits'; references resolve to those numbers; entities: landing m1..m15, a1..b3, n1..n7, s1, s2 and legend-<state>; answer-flow browser, submit-edge, service, ledger; nested-stage box",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-html-missing-caption.json",
+      "clause": "B5",
+      "valid": false,
+      "expect": "refused: answer-flow needs a caption",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-table-missing-title.json",
+      "clause": "B5",
+      "valid": false,
+      "expect": "refused: limits needs a title",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-reference-missing.json",
+      "clause": "B5",
+      "valid": false,
+      "expect": "refused: [fig:missing] names no block",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-reference-wrong-kind.json",
+      "clause": "B5",
+      "valid": false,
+      "expect": "refused: [fig:limits] names a table",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-figure-mark-without-id.json",
+      "clause": "B2",
+      "valid": false,
+      "expect": "refused: an authored mark in landing has no id",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-vocabulary-unknown-name.json",
+      "clause": "B2",
+      "valid": false,
+      "expect": "refused: data-cf-owner is outside the closed vocabulary",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-vocabulary-duplicate-id.json",
+      "clause": "B2",
+      "valid": false,
+      "expect": "refused: browser is used twice in answer-flow",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-vocabulary-for-missing.json",
+      "clause": "B2",
+      "valid": false,
+      "expect": "refused: data-cf-for names missing-edge, which is not an entity",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-vocabulary-target-in-group.json",
+      "clause": "B2",
+      "valid": false,
+      "expect": "refused: a data-cf-target inside the browser group",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-vocabulary-bad-id.json",
+      "clause": "B2",
+      "valid": false,
+      "expect": "refused: Service does not match the entity id grammar",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-forms.json",
+      "clause": "B6, I1",
+      "valid": true,
+      "expect": "renders store-choice with six fields in order, 'Recommended' on local and nothing preselected; d-scope renders as a form with one choice field `choice` and an optional rationale",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "documents/v2-form-required-unknown.json",
+      "clause": "B6",
+      "valid": false,
+      "expect": "refused: required names missing",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "documents/v2-form-two-recommended.json",
+      "clause": "B6",
+      "valid": false,
+      "expect": "refused: two recommended options in home",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "documents/v2-form-default-value.json",
+      "clause": "B6",
+      "valid": false,
+      "expect": "refused: fields take no default",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "documents/v2-decision-with-status.json",
+      "clause": "B6",
+      "valid": false,
+      "expect": "refused: a v2 decision has no status",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "anchors/entity-valid-figure.json",
+      "clause": "B4, I2",
+      "valid": true,
+      "expect": "accepted; stored label 'Human merge'; no crop_check field",
+      "first_passing_task": "TSK-118",
+      "note": "against documents/v2-framed.json at revision 1; m15 is the circle at (630, 100) r 9"
+    },
+    {
+      "file": "anchors/entity-valid-stage.json",
+      "clause": "B4, I2",
+      "valid": true,
+      "expect": "accepted; label 'Service'",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "anchors/entity-transformed-unverified.json",
+      "clause": "B4, I2",
+      "valid": true,
+      "expect": "accepted with crop_check 'unverified' (the ledger group is transformed)",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "anchors/entity-forged-id.json",
+      "clause": "B4, I3",
+      "valid": false,
+      "expect": "unknown_entity",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "anchors/entity-crop-outside.json",
+      "clause": "B4, I3",
+      "valid": false,
+      "expect": "crop_outside_entity",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "anchors/entity-label-mismatch.json",
+      "clause": "B4, I3",
+      "valid": false,
+      "expect": "label_mismatch",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "anchors/entity-digest-mismatch.json",
+      "clause": "B4, I3",
+      "valid": false,
+      "expect": "digest_mismatch",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "anchors/entity-label-from-for.json",
+      "clause": "B2, B4",
+      "valid": true,
+      "expect": "accepted; the label of submit-edge is its data-cf-for text 'submit'",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "reanchor/revision-2.json",
+      "clause": "B1",
+      "valid": true,
+      "expect": "the second revision the reanchor cases are shown on",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "reanchor/cases.json",
+      "clause": "B1",
+      "valid": true,
+      "expect": "each case reaches its expected state; no note is dropped",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "answers/submit-valid.json",
+      "clause": "B6, I4",
+      "valid": true,
+      "expect": "receipt state stored, replayed false; one answer line appended",
+      "first_passing_task": "TSK-119",
+      "note": "against documents/v2-forms.json at revision 1"
+    },
+    {
+      "file": "answers/decline.json",
+      "clause": "B6",
+      "valid": true,
+      "expect": "stored with empty values and the reason",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/cancel.json",
+      "clause": "B6",
+      "valid": true,
+      "expect": "stored with empty values",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/missing-required.json",
+      "clause": "B6, I3",
+      "valid": false,
+      "expect": "invalid_answer with fields [{keep-days, required}]",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/malformed-values.json",
+      "clause": "B6, I3",
+      "valid": false,
+      "expect": "invalid_answer with unknown_option (home), not_integer (keep-days), wrong_kind (share), too_many (channels), format (contact), unknown_field (extra)",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/rationale-not-allowed.json",
+      "clause": "B6, I3",
+      "valid": false,
+      "expect": "invalid_answer with rationale_not_allowed (notes)",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/stale-revision.json",
+      "clause": "B6, I3",
+      "valid": false,
+      "expect": "stale_revision with current_revision 1, form_present true and current_form_digest",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/form-digest-mismatch.json",
+      "clause": "B6, I3",
+      "valid": false,
+      "expect": "form_digest_mismatch",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/oversized.json",
+      "clause": "B6, I3",
+      "valid": false,
+      "expect": "answer_too_large (the body exceeds 64 KiB before field validation)",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/retry-identical.json",
+      "clause": "B6",
+      "valid": true,
+      "expect": "both return the same receipt (second has replayed true); exactly one answer line",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/request-id-conflict.json",
+      "clause": "B6, I3",
+      "valid": false,
+      "expect": "second refused with request_id_conflict; exactly one answer line",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/amendment.json",
+      "clause": "B6, I4",
+      "valid": true,
+      "expect": "two lines: answer then amendment naming the answer; both readable in order",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "answers/amend-an-amendment.json",
+      "clause": "B6",
+      "valid": false,
+      "expect": "third refused with invalid_amendment: an amendment names the original answer, not an amendment",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "ledger/torn-tail.jsonl",
+      "clause": "I4",
+      "valid": true,
+      "expect": "open truncates the torn second line; one answer remains; the next append gets sequence 2",
+      "first_passing_task": "TSK-119"
+    },
+    {
+      "file": "ledger/queries.jsonl",
+      "clause": "B8, I4",
+      "valid": true,
+      "expect": "the ledger the query cases in ledger/queries.json read",
+      "first_passing_task": "TSK-120"
+    },
+    {
+      "file": "ledger/queries.json",
+      "clause": "B8",
+      "valid": true,
+      "expect": "each case lists exactly the ids in order",
+      "first_passing_task": "TSK-120"
+    },
+    {
+      "file": "streams/session.json",
+      "clause": "B8, C1, I4, I5",
+      "valid": true,
+      "expect": "as the expect fields state",
+      "first_passing_task": "TSK-120"
+    },
+    {
+      "file": "snapshots/clean.json",
+      "clause": "B10, I6",
+      "valid": true,
+      "expect": "snapshot recorded as expected; revision context has no uncommitted_digest",
+      "first_passing_task": "TSK-121"
+    },
+    {
+      "file": "snapshots/dirty.json",
+      "clause": "B10, I6",
+      "valid": true,
+      "expect": "snapshot marked uncommitted; revision context carries uncommitted_digest",
+      "first_passing_task": "TSK-121"
+    },
+    {
+      "file": "snapshots/escape.json",
+      "clause": "B10",
+      "valid": false,
+      "expect": "refused: the path escapes the work tree (exit 5)",
+      "first_passing_task": "TSK-121"
+    }
+  ]
+}

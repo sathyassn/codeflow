@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "title": "A v1 document",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "intro",
+      "markdown": "See [fig:stage] literally."
+    },
+    {
+      "type": "html",
+      "id": "stage",
+      "title": "A stage title",
+      "html": "<svg viewBox='0 0 100 40'><g aria-label='Node A'><rect x='5' y='5' width='40' height='30'/></g><rect x='55' y='5' width='40' height='30'/></svg>"
+    },
+    {
+      "type": "decision",
+      "id": "d1",
+      "title": "An old decision",
+      "status": "proposed",
+      "markdown": "Pick A."
+    }
+  ]
+}
