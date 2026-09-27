@@ -1,0 +1,12 @@
+79836e8e/scratchpad/eval-tsk113-ac2/workspaces/4435f4076e6fc8919723/repository on fixture/same-family-native-subagent ✔         [9cc85e4]  2:19
+> pwd; command -v codeflow; shasum -a 256 "$(command -v codeflow)"; codeflow --version; claude --version
+/private/tmp/claude-501/-Volumes-DATA-Local-software-workspace-projects-agentic-systems/b10bd2b1-c9e2-4199-ae6f-b26a79836e8e/scratchpad/eval-tsk
+113-ac2/workspaces/4435f4076e6fc8919723/repository
+/Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-113/target/debug/codeflow
+5dcc204a76a28f5cb603d27cd3dc6c2b21aac174eeeb1fa86f47aedcf59becee  /Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.work
+trees/tsk-113/target/debug/codeflow
+codeflow 3.0.0
+2.1.283 (Claude Code)
+<user> at <host> in /private/tmp/claude-501/-Volumes-DATA-Local-software-workspace-projects-agentic-systems/b10bd2b1-c9e2-4199-ae6f-b26a
+79836e8e/scratchpad/eval-tsk113-ac2/workspaces/4435f4076e6fc8919723/repository on fixture/same-family-native-subagent ✔         [9cc85e4]  2:19
+>
