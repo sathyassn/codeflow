@@ -4167,7 +4167,8 @@ mod registry_guard_tests {
             current_branch: "task/TSK-101-id-registry",
             integrate_token: false,
             pr_base_lookup: None,
-            dir_branch_lookup: None,
+            dir_target_lookup: None,
+            alias_lookup: None,
         };
         evaluate(command, &ctx)
             .into_iter()
