@@ -698,3 +698,57 @@ fn a_page_cannot_set_crop_check() {
         .crop_check = Some(CropCheck::Unverified);
     assert!(store.append_feedback(envelope).is_err());
 }
+
+/// Path data the server cannot read, non-ASCII included, leaves the part
+/// unverified: validation, the entity table, rendering and a submitted note
+/// all complete without a panic (T118-1).
+#[test]
+fn unreadable_path_data_leaves_the_part_unverified() {
+    let mut value: Value = fixture_json("documents/v2-framed.json");
+    let stage = value["blocks"]
+        .as_array_mut()
+        .unwrap()
+        .iter_mut()
+        .find(|block| block["id"] == "answer-flow")
+        .unwrap();
+    let html = stage["html"].as_str().unwrap().to_string();
+    stage["html"] = Value::String(html.replace(
+        "</svg>",
+        "<path data-cf-target='odd-path' data-cf-label='Odd path' d='M0 0 \u{2603} L\u{e9}1 2'/></svg>",
+    ));
+    let document = match parse_document(&serde_json::to_vec(&value).unwrap()).unwrap() {
+        ParsedDocument::Supported(document) => document,
+        ParsedDocument::Unsupported { .. } => panic!("unsupported"),
+    };
+    let block = find(&document, "answer-flow");
+    let entity = crate::entity::block_entities(block)
+        .unwrap()
+        .into_iter()
+        .find(|entity| entity.id == "odd-path")
+        .expect("the odd path is an entity");
+    assert!(entity.bounds.is_none());
+    assert!(render(&document, true).contains("data-cf-entity=\"odd-path\""));
+    let (_temp, store) = store();
+    let session = store
+        .create(ParsedDocument::Supported(document.clone()))
+        .unwrap();
+    let mut envelope = envelope_from(
+        &fixture_json("anchors/entity-valid-stage.json"),
+        session.id,
+        1,
+        &document,
+    );
+    let selector = envelope.notes[0].entity_selector.as_mut().unwrap();
+    selector.entity_id = "odd-path".to_string();
+    selector.label = "Odd path".to_string();
+    store.append_feedback(envelope).unwrap();
+    let stored = store.pending_feedback(session.id).unwrap();
+    assert_eq!(
+        stored[0].notes[0]
+            .entity_selector
+            .as_ref()
+            .unwrap()
+            .crop_check,
+        Some(CropCheck::Unverified)
+    );
+}

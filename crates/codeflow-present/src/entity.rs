@@ -778,6 +778,11 @@ enum PathToken {
 }
 
 fn path_tokens(d: &str) -> Option<Vec<PathToken>> {
+    // Path data the server reads is ASCII; anything else leaves the entity
+    // unverified, and every slice below then falls on a character boundary.
+    if !d.is_ascii() {
+        return None;
+    }
     let bytes = d.as_bytes();
     let mut tokens = Vec::new();
     let mut index = 0;
@@ -796,7 +801,7 @@ fn path_tokens(d: &str) -> Option<Vec<PathToken>> {
             index += 1;
             continue;
         }
-        if byte.is_ascii_alphabetic() && !matches!(byte, b'e' | b'E') {
+        if !(byte.is_ascii_digit() || matches!(byte, b'.' | b'-' | b'+')) {
             return None;
         }
         let start = index;
@@ -981,6 +986,10 @@ mod tests {
             "L0 0",
             "M0",
             "",
+            "M0 0 \u{2603}",
+            "M0 0 L\u{e9}1 2",
+            "M0 0 #1 2",
+            "M0 0 e5",
         ] {
             assert!(path_extent(unread).is_none(), "{unread}");
         }
