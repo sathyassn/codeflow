@@ -670,7 +670,15 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("git.push_to_protected"));
 
     // Feature branch with sanctioned prefix passes (test gate note allowed).
-    let stdin = format!("refs/heads/feat/x abc123 refs/heads/feat/x {ZERO}\n");
+    // The push set runs `codeflow ci` on the pushed range, so the local sha
+    // must be a real commit, as it always is under git.
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .expect("git rev-parse");
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    let stdin = format!("refs/heads/feat/x {head} refs/heads/feat/x {ZERO}\n");
     let out = run_with_stdin(
         codeflow()
             .args([
@@ -682,7 +690,12 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
             .current_dir(dir.path()),
         &stdin,
     );
-    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]

@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use clap::Args;
-use codeflow_core::hooks::{git_hook, policy::Policy, policy_schema};
+use codeflow_core::hooks::{git_hook, policy::Policy, policy_schema, Violation};
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::{
     check_work_start, declared_work_target, durable_work_tracking_enabled, resolve_work_target,
@@ -107,10 +107,19 @@ pub fn run(args: &GitHookArgs) -> i32 {
                 }
             };
             let refs = git_hook::parse_push_refs(&stdin);
-            (
-                "pre-push",
-                git_hook::pre_push(&root, &policy.git, &refs, token),
-            )
+            let started = std::time::Instant::now();
+            let mut result = git_hook::pre_push(&root, &policy.git, &refs, token);
+            if let Ok(report) = result.as_mut() {
+                let remote = args.args.first().map(String::as_str);
+                run_push_checks(&root, &policy.git, &refs, remote, report);
+                if pushes_branches(&refs) && policy.git.test_gate_on_push.is_active() {
+                    report.notes.push(format!(
+                        "push set finished in {:.1}s",
+                        started.elapsed().as_secs_f64()
+                    ));
+                }
+            }
+            ("pre-push", result)
         }
     };
 
@@ -123,6 +132,148 @@ pub fn run(args: &GitHookArgs) -> i32 {
             0
         }
     }
+}
+
+fn pushes_branches(refs: &[git_hook::PushRef]) -> bool {
+    refs.iter()
+        .any(|r| r.remote_branch().is_some() && !r.is_delete())
+}
+
+/// The built-in half of the push set (TSK-132): `codeflow validate --docs`
+/// once and `codeflow ci` on each pushed branch's range, run by this same
+/// binary so the hook checks what CI will check. Both take milliseconds, so
+/// every tier gets a fast blocking push set without a test config. A failure
+/// is a `git.test_gate_on_push` violation at the policy's level, with the
+/// command's own output printed above it.
+fn run_push_checks(
+    root: &Path,
+    policy: &codeflow_core::hooks::policy::GitPolicy,
+    refs: &[git_hook::PushRef],
+    remote: Option<&str>,
+    report: &mut git_hook::StageReport,
+) {
+    if !pushes_branches(refs) || !policy.test_gate_on_push.is_active() {
+        return;
+    }
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            report.violations.push(Violation::new(
+                "git.test_gate_on_push",
+                policy.test_gate_on_push,
+                format!("push set could not locate the codeflow binary: {error}"),
+                "run `codeflow validate --docs` and `codeflow ci` by hand".to_string(),
+            ));
+            return;
+        }
+    };
+    let mut checks: Vec<Vec<String>> = vec![vec!["validate".into(), "--docs".into()]];
+    // Indexes of `ci` checks left to detect their own base (a first push with
+    // no remote-tracking history). Their exit 2 means the range could not be
+    // resolved, so commit checks were skipped: a legible note, not a block.
+    let mut detected_base: Vec<usize> = Vec::new();
+    for r in refs {
+        let Some(branch) = r.remote_branch() else {
+            continue;
+        };
+        if r.is_delete() {
+            continue;
+        }
+        let mut ci = vec!["ci".to_string()];
+        match push_range_base(root, r, remote) {
+            Some(base) => ci.extend(["--base".to_string(), base]),
+            None => detected_base.push(checks.len()),
+        }
+        ci.extend([
+            "--head".to_string(),
+            r.local_sha.clone(),
+            "--branch".to_string(),
+            branch.to_string(),
+        ]);
+        checks.push(ci);
+    }
+    for (index, check) in checks.into_iter().enumerate() {
+        let shown = format!("codeflow {}", check.join(" "));
+        let output = Command::new(&exe)
+            .args(&check)
+            .current_dir(root)
+            .env_remove("CODEFLOW_PR_BODY")
+            .output();
+        match output {
+            Ok(out) if out.status.success() => {
+                // A passing check can still have degraded (e.g. `ci` could not
+                // resolve a base on a first push); keep that legible.
+                let stderr = String::from_utf8_lossy(&out.stderr);
+                report.notes.extend(
+                    stderr
+                        .lines()
+                        .filter(|line| line.contains("warning:") && !line.contains("registry"))
+                        .map(|line| format!("`{shown}`: {}", line.trim())),
+                );
+            }
+            Ok(out) if out.status.code() == Some(2) && detected_base.contains(&index) => {
+                report.notes.push(format!(
+                    "`{shown}` could not resolve a base for this push (no remote-tracking or \
+                     protected branch to compare with); commit checks skipped, CI runs them"
+                ));
+            }
+            Ok(out) => {
+                eprint!("{}", String::from_utf8_lossy(&out.stdout));
+                eprint!("{}", String::from_utf8_lossy(&out.stderr));
+                report.violations.push(Violation::new(
+                    "git.test_gate_on_push",
+                    policy.test_gate_on_push,
+                    format!("push set check failed: `{shown}` (output above)"),
+                    format!("fix the findings, then rerun `{shown}`"),
+                ));
+            }
+            Err(error) => {
+                report.violations.push(Violation::new(
+                    "git.test_gate_on_push",
+                    policy.test_gate_on_push,
+                    format!("push set check could not run: `{shown}`: {error}"),
+                    format!("run `{shown}` by hand"),
+                ));
+            }
+        }
+    }
+}
+
+/// The exclusive base of a pushed branch's range: the remote's current sha
+/// when this updates a known remote branch, else the newest commit the new
+/// branch shares with the remote's tracking refs. `None` lets `codeflow ci`
+/// fall back to its own detection (the protected branches).
+fn push_range_base(root: &Path, r: &git_hook::PushRef, remote: Option<&str>) -> Option<String> {
+    let known = |sha: &str| {
+        Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["cat-file", "-e", &format!("{sha}^{{commit}}")])
+            .output()
+            .is_ok_and(|o| o.status.success())
+    };
+    if !r.remote_sha.is_empty() && !r.remote_sha.chars().all(|c| c == '0') && known(&r.remote_sha) {
+        return Some(r.remote_sha.clone());
+    }
+    let remotes = match remote {
+        Some(name) if !name.contains(['/', ':']) => format!("--remotes={name}"),
+        _ => "--remotes".to_string(),
+    };
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["rev-list", "--boundary", &r.local_sha, "--not", &remotes])
+        .output()
+        .ok()
+        .filter(|o| o.status.success())?;
+    let text = String::from_utf8_lossy(&out.stdout);
+    if text.trim().is_empty() {
+        // Nothing new: the branch points at a commit the remote already has.
+        return Some(r.local_sha.clone());
+    }
+    text.lines()
+        .find_map(|line| line.strip_prefix('-'))
+        .map(str::to_string)
 }
 
 /// Enforce a valid visible workgraph and stable planning anchor on task branches.
