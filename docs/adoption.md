@@ -6,11 +6,12 @@ loop. Every claim here reflects current behavior; nothing aspirational.
 
 ## Install the binary
 
-`codeflow` is a single binary. Each release publishes `.tar.xz` archives for
-`aarch64-apple-darwin`, `x86_64-apple-darwin` and `x86_64-unknown-linux-gnu`,
-a `.zip` archive for `x86_64-pc-windows-msvc`, a `.sha256` file for each
-archive, a `sha256.sum`, a shell installer, a PowerShell installer and a
-source archive. Install the latest release on macOS or Linux:
+`codeflow` is a single binary. From 3.0.0 on, each release publishes
+`.tar.xz` archives for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
+`x86_64-unknown-linux-gnu`, a `.zip` archive for `x86_64-pc-windows-msvc`, a
+`.sha256` file for each archive, a `sha256.sum`, a shell installer, a
+PowerShell installer and a source archive. Install the latest release on macOS
+or Linux:
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
@@ -30,17 +31,26 @@ cargo install --path crates/codeflow-cli
 
 To pin a version or script the install, download one platform archive and
 check it against its `.sha256` file. Substitute the version you pin and your
-platform's target (the Windows archive is a `.zip`); each archive unpacks to a
-directory of the same name containing the `codeflow` binary:
+platform's target (the Windows archive is a `.zip`). Releases before 3.0.0
+publish fewer assets, so check a release's asset list before pinning it. Each
+archive unpacks to a directory of the same name containing the `codeflow`
+binary. The commands run in a subshell that stops at the first failure, so
+nothing is extracted or installed unless the download and the checksum pass;
+`D` must be a directory on your `PATH`:
 
 ```sh
-V=v3.0.0 A=codeflow-cli-aarch64-apple-darwin
+V=v3.0.0 A=codeflow-cli-aarch64-apple-darwin D="$HOME/.cargo/bin"
 B=https://github.com/sathyassn/codeflow/releases/download/$V
-mkdir -p /tmp/cf && cd /tmp/cf
-curl -fsSLO "$B/$A.tar.xz" && curl -fsSLO "$B/$A.tar.xz.sha256"
-shasum -a 256 -c "$A.tar.xz.sha256"
-tar -xf "$A.tar.xz"
-install "$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
+(
+  set -e
+  mkdir -p /tmp/cf && cd /tmp/cf
+  curl -fsSLO "$B/$A.tar.xz"
+  curl -fsSLO "$B/$A.tar.xz.sha256"
+  shasum -a 256 -c "$A.tar.xz.sha256"
+  tar -xf "$A.tar.xz"
+  mkdir -p "$D"
+  install "$A/codeflow" "$D/"
+)
 ```
 
 Upgrading the binary improves every repo at once, because hooks call `codeflow`

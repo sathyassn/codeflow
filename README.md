@@ -28,9 +28,9 @@ hooks, harness integration, CI requirements, and remote rules.
 
 ## Install
 
-Each release publishes archives for macOS (arm64 and x64), Linux x64 and
-Windows x64, each with a `.sha256` file, plus a shell installer and a
-PowerShell installer. Install the latest release on macOS or Linux:
+From 3.0.0 on, each release publishes archives for macOS (arm64 and x64),
+Linux x64 and Windows x64, each with a `.sha256` file, plus a shell installer
+and a PowerShell installer. Install the latest release on macOS or Linux:
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh

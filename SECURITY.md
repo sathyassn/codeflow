@@ -6,7 +6,7 @@ Please **do not** open a public issue for security vulnerabilities.
 
 Report privately through GitHub's built-in **private vulnerability reporting**:
 the repository's **Security** tab, then **Report a vulnerability**. This opens
-an advisory visible only to the maintainers.
+a private advisory.
 
 If the **Report a vulnerability** button is not shown, open a public issue
 titled "Security contact request" that contains no details of the problem. A
