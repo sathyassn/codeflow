@@ -18,7 +18,7 @@ use crate::security::pattern::is_path_targeted;
 
 use super::git_target::{
     self, assignment, expand_word, flat_top_level, join_path, launcher_env, map_top_level, Cwd,
-    Join, ShellState, Val, GIT_LOCATION_VARS,
+    Join, ShellState, Val, GIT_LOCATION_VARS, SUBSTITUTED,
 };
 use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
@@ -272,7 +272,11 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
         // A `cd <dir>` (as its own simple command) retargets later git ops.
         if let Some(dir) = cd_target(&tokens) {
             if top_level {
-                shell.cd(&dir);
+                if tokens[0] == "cd" {
+                    shell.cd(&dir);
+                } else {
+                    shell.observe(&tokens[0], &tokens[1..]);
+                }
             }
             continue;
         }
@@ -292,7 +296,9 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
         let words = command_argv(segment);
         let launched = strip_launchers(&words);
         if top_level {
-            shell.assign(&tokens, launched.map(|(program, _)| program));
+            // A redirection can fail, and the assignment with it.
+            let redirected = words.len() != tokens.len();
+            shell.assign(&tokens, launched.map(|(program, _)| program), redirected);
         }
         let Some((program, args)) = launched else {
             continue;
@@ -845,12 +851,16 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
         if c == '$' && chars.get(i + 1) == Some(&'(') {
             let (inner, ni) = capture_balanced(&chars, i + 2);
             line.substitution(inner, &cur, code_context, out, depth);
+            // The segment keeps a placeholder for the text the shell will
+            // substitute, so a word built from it is never read as known.
+            cur.push(SUBSTITUTED);
             i = ni;
             continue;
         }
         if c == '`' {
             let (inner, ni) = capture_backtick(&chars, i + 1);
             line.substitution(inner, &cur, code_context, out, depth);
+            cur.push(SUBSTITUTED);
             i = ni;
             continue;
         }
@@ -1412,11 +1422,19 @@ impl LineFacts {
             mentions_location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
         };
         for (idx, segment) in segments.iter().enumerate() {
-            let tokens = shell_tokens(segment);
-            let words = command_argv(segment);
+            let mut tokens = shell_tokens(segment);
+            let mut words = command_argv(segment);
+            // `! cd x`: the negation runs the command all the same.
+            if tokens.first().is_some_and(|t| t == "!") {
+                tokens.remove(0);
+            }
+            if words.first().is_some_and(|w| w == "!") {
+                words.remove(0);
+            }
             let program = strip_launchers(&words).map(|(program, _)| program);
-            let mover =
-                cd_target(&tokens).is_some() || program.is_some_and(git_target::moves_directory);
+            let mover = cd_target(&tokens).is_some()
+                || program
+                    .is_some_and(|p| git_target::moves_directory(p) || p.contains(SUBSTITUTED));
             let nested = roles.is_some_and(|r| r[idx].is_none());
             facts.any_mover |= mover;
             let sets_var = program.is_none_or(|p| p == "export")
@@ -5387,6 +5405,78 @@ mod tests {
             "main",
         );
         assert!(r.violations.is_empty(), "{:?}", r.violations);
+    }
+
+    // R2-1: a location word or assignment built from a substitution is
+    // unknown; the shell puts the command's output there.
+    #[test]
+    fn test_tsk112_substituted_locations_are_unresolved() {
+        for cmd in [
+            "R=/scratch$(printf /protected); git -C \"$R\" commit -m x",
+            "R=/scratch`printf /protected`; git -C \"$R\" commit -m x",
+            "git -C \"$(printf /scratch)\" commit -m x",
+            "git -C /scratch --git-dir=\"$(printf /x)\" commit -m x",
+            "cd \"$(printf /scratch)\" && git commit -m x",
+            "git -C \"$(printf /scratch)\" commit -m x | cat",
+            "$(printf cd) /scratch-main; git commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // A substitution in the message does not touch the location.
+        for cmd in [
+            "git -C /scratch commit -m \"$(printf 'fix: x')\"",
+            "cd /scratch && git commit -m `printf x`",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    // R2-2: `&&` stays proven across a continuation newline or comment; a
+    // newline after a complete command is still a sequence.
+    #[test]
+    fn test_tsk112_and_list_continues_across_newlines() {
+        for cmd in [
+            "cd /scratch &&\ngit commit -m x",
+            "cd /scratch && # into the scratch repo\ngit commit -m x",
+            "cd /scratch &&\n\n  git commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+        let r = report("cd /scratch\ngit commit -m x", "main");
+        assert!(has_rule(&r.violations, "git.commit_to_protected"));
+    }
+
+    // Forms the tracker cannot follow stay unknown: `pushd` (its `-n` does
+    // not move), a negated `cd`, and an assignment whose redirection can fail.
+    #[test]
+    fn test_tsk112_unmodeled_moves_stay_unknown() {
+        for (cmd, session) in [
+            ("pushd -n /scratch && git commit -m x", "main"),
+            ("pushd /scratch && git commit -m x", "main"),
+            ("! cd /scratch-main && git commit -m x", "feat/s"),
+            (
+                "R=/scratch-main; export R=/scratch > /absent/x; git -C \"$R\" commit -m x",
+                "feat/s",
+            ),
+            (
+                "R=/scratch-main; R=/scratch 2>/absent/x; git -C \"$R\" commit -m x",
+                "feat/s",
+            ),
+        ] {
+            let r = report(cmd, session);
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
     }
 
     // A commit message built by a heredoc substitution keeps the line flat.

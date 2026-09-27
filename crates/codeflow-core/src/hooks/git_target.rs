@@ -17,6 +17,11 @@ use std::collections::HashMap;
 
 use super::git_guard::{capture_backtick, capture_balanced, starts_word};
 
+/// Stands in a segment's text for a `$(…)` or backtick substitution the
+/// splitter cut out: the shell will put that command's output there, which
+/// the guard cannot know.
+pub(super) const SUBSTITUTED: char = '\u{1}';
+
 /// How a top-level simple command is joined to the one before it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Join {
@@ -51,14 +56,16 @@ pub(super) fn flat_top_level(command: &str) -> Option<Vec<(String, Join)>> {
     while i < chars.len() {
         let c = chars[i];
         let next = chars.get(i + 1).copied();
-        // Substitutions run in a subshell; the splitter drops them from the
-        // segment text, and so does this scanner.
+        // Substitutions run in a subshell; the splitter replaces each with a
+        // placeholder in the segment text, and so does this scanner.
         if c == '$' && next == Some('(') {
             i = capture_balanced(&chars, i + 2).1;
+            cur.push(SUBSTITUTED);
             continue;
         }
         if c == '`' {
             i = capture_backtick(&chars, i + 1).1;
+            cur.push(SUBSTITUTED);
             continue;
         }
         if c == '$' && matches!(next, Some('\'' | '"')) {
@@ -149,9 +156,11 @@ pub(super) fn flat_top_level(command: &str) -> Option<Vec<(String, Join)>> {
     Some(out)
 }
 
-/// End the current top-level command. An empty one (`;;`, a trailing `;`)
-/// records nothing, and the next command keeps the weaker join. `None` when
-/// the command opens a control structure.
+/// End the current top-level command. An empty one records nothing: after a
+/// `&&` still waiting for its command (a newline or a comment continues the
+/// and-list) the join stays `&&`; otherwise (`;;`, a trailing `;`) the next
+/// command gets the weaker join. `None` when the command opens a control
+/// structure, negates a directory change, or runs substituted text.
 fn close_segment(
     cur: &mut String,
     out: &mut Vec<(String, Join)>,
@@ -160,13 +169,17 @@ fn close_segment(
 ) -> Option<()> {
     let text = std::mem::take(cur);
     let text = text.trim();
-    let Some(first) = text.split_whitespace().next() else {
-        if *pending != Join::Start {
+    let mut words = text.split_whitespace();
+    let Some(first) = words.next() else {
+        if *pending == Join::Seq || (*pending == Join::And && next == Join::And) {
             *pending = Join::Seq;
         }
         return Some(());
     };
-    if CONTROL_WORDS.contains(&first) {
+    if CONTROL_WORDS.contains(&first) || first.contains(SUBSTITUTED) {
+        return None;
+    }
+    if first == "!" && words.next().is_some_and(moves_directory) {
         return None;
     }
     out.push((text.to_string(), *pending));
@@ -215,6 +228,9 @@ pub(super) fn expand_word(word: &str, vars: &HashMap<String, Val>) -> Result<Str
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
+        if c == SUBSTITUTED {
+            return Err("a command substitution".to_string());
+        }
         if matches!(c, '*' | '?' | '[') {
             return Err(format!("the pattern in `{word}`"));
         }
@@ -454,8 +470,9 @@ impl ShellState {
 
     /// Record the variables a command sets: standalone `NAME=value` words or
     /// an `export`. `program` is the command's program after its leading
-    /// assignments, `None` when there is none.
-    pub(super) fn assign(&mut self, tokens: &[String], program: Option<&str>) {
+    /// assignments, `None` when there is none. A `redirected` command can fail
+    /// before it assigns, so what it sets becomes unknown.
+    pub(super) fn assign(&mut self, tokens: &[String], program: Option<&str>, redirected: bool) {
         if !self.flat {
             return;
         }
@@ -487,6 +504,9 @@ impl ShellState {
                 continue;
             };
             let val = match expand_word(value, &self.vars) {
+                Ok(_) if redirected => Val::Unknown(format!(
+                    "`${name}`, set by a command whose redirection can fail"
+                )),
                 Ok(v) => Val::Known(v),
                 Err(why) => Val::Unknown(why),
             };
@@ -546,12 +566,25 @@ mod tests {
             Some(vec![Join::Start, Join::And])
         );
         assert_eq!(joins(";; git status;"), Some(vec![Join::Start]));
+        // R2-2: a newline or a comment after `&&` continues the and-list.
+        assert_eq!(
+            joins("cd a &&\ngit commit"),
+            Some(vec![Join::Start, Join::And])
+        );
+        assert_eq!(
+            joins("cd a && # into a\n\ngit commit"),
+            Some(vec![Join::Start, Join::And])
+        );
+        assert_eq!(
+            joins("cd a\ngit commit"),
+            Some(vec![Join::Start, Join::Seq])
+        );
         // A substitution in a word runs in a subshell; the line stays flat.
         assert_eq!(
             flat_top_level("cd /w && git commit -m \"$(cat <<'EOF'\nmsg (x)\nEOF\n)\""),
             Some(vec![
                 ("cd /w".to_string(), Join::Start),
-                ("git commit -m \"\"".to_string(), Join::And)
+                ("git commit -m \"\u{1}\"".to_string(), Join::And)
             ])
         );
     }
@@ -573,6 +606,8 @@ mod tests {
             "git -C $'/x' commit",
             "git -C \"unterminated",
             "diff <(git show a) b",
+            "! cd a && git commit",
+            "$(printf cd) a; git commit",
         ] {
             assert_eq!(flat_top_level(cmd), None, "{cmd}");
         }

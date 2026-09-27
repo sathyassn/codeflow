@@ -436,11 +436,27 @@ fn git_guard_blocks_targets_it_cannot_prove() {
     let failed_cd = format!("R={f}; cd \"$R\" > {absent}; git commit -m 'fix: p'");
     assert_eq!(guard_run(&failed_cd, &main_session).status.code(), Some(2));
 
-    // Controls: proven targets on a feature branch pass.
+    // Round 2 (R2-1): a protected repository nested in the feature one,
+    // reached through a substitution in the path.
+    let nested = feature.join("protected");
+    std::fs::create_dir_all(&nested).unwrap();
+    init_repo(&nested, "main");
+    for command in [
+        format!("R={f}$(printf /protected); git -C \"$R\" commit -m 'fix: p'"),
+        format!("R={f}`printf /protected`; git -C \"$R\" commit -m 'fix: p'"),
+    ] {
+        let out = guard_run(&command, &session);
+        assert_eq!(out.status.code(), Some(2), "{command}");
+    }
+
+    // Controls: proven targets on a feature branch pass, including an
+    // and-list continued on the next line (R2-2).
     for command in [
         format!("R={f}; git -C \"$R\" commit -m 'fix: p'"),
         format!("R={f}; cd \"$R\" && git commit -m 'fix: p'"),
         format!("cd {f} && git commit -m \"$(printf 'fix: p')\""),
+        format!("cd {f} &&\ngit commit -m 'fix: p'"),
+        format!("cd {f} && # continue\ngit commit -m 'fix: p'"),
     ] {
         let out = guard_run(&command, &main_session);
         assert_eq!(
