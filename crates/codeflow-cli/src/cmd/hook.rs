@@ -191,12 +191,17 @@ fn git_guard(stdin: &str) -> i32 {
     let dir_target = move |spec: &git_guard::Retarget<'_>| {
         git_guard::read_target(&dir_cwd, session_common.as_deref(), spec)
     };
+    // Resolve a subcommand that is not a builtin through the alias it names,
+    // as git reads it where the command runs (TSK-112).
+    let alias_cwd = cwd.clone();
+    let alias = move |query: &git_guard::AliasQuery<'_>| git_guard::read_alias(&alias_cwd, query);
     let ctx = git_guard::GuardContext {
         policy: &policy.git,
         current_branch: &branch,
         integrate_token: super::integrate_token_present(),
         pr_base_lookup: Some(&lookup),
         dir_target_lookup: Some(&dir_target),
+        alias_lookup: Some(&alias),
     };
     let report = git_guard::evaluate_report(command, &ctx);
     super::render_outcome("git-guard", &report.violations, &report.notes, 2)

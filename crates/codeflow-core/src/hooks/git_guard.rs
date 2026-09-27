@@ -62,6 +62,72 @@ pub struct TargetRepo {
 /// planning resolution 13). The CLI wires a git2 reader; tests inject a stub.
 pub type DirTargetLookup<'a> = Option<&'a dyn Fn(&Retarget<'_>) -> Option<TargetRepo>>;
 
+/// An alias lookup for a git subcommand that is not a git builtin (TSK-112).
+#[derive(Debug, Clone, Copy)]
+pub struct AliasQuery<'s> {
+    /// Where git would run: `None` for the session's working directory.
+    pub target: Option<Retarget<'s>>,
+    /// The command's own `-c <name>=<value>` settings, in order. They can
+    /// define the alias or an `include.path` that does.
+    pub config: &'s [String],
+    /// The subcommand as written.
+    pub name: &'s str,
+}
+
+/// What an alias lookup found.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AliasAnswer {
+    /// No `alias.<name>` is set: git runs no alias.
+    NotAlias,
+    /// The alias value, as `git config --get` prints it.
+    Expansion(String),
+    /// The configuration could not be read; the reason.
+    Unreadable(String),
+}
+
+/// Resolves a git alias the way git reads it: `git config --get
+/// alias.<name>` in the target repository with the command's own `-c`
+/// settings, so `include.path` and conditional includes apply. The CLI wires
+/// [`read_alias`]; tests inject a stub. `None` resolves nothing, so any
+/// subcommand that is not a builtin is unclassifiable.
+pub type AliasLookup<'a> = Option<&'a dyn Fn(&AliasQuery<'_>) -> AliasAnswer>;
+
+/// Read `alias.<name>` for the guard by running `git config --get` where the
+/// command would run (`query.target`, relative to `cwd`), with the command's
+/// own `-c` settings. Exit 1 means the key is not set; any other failure is
+/// [`AliasAnswer::Unreadable`].
+#[must_use]
+pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer {
+    let mut cmd = std::process::Command::new("git");
+    cmd.current_dir(cwd).stdin(std::process::Stdio::null());
+    match query.target {
+        Some(t) if t.git_dir => {
+            cmd.arg(format!("--git-dir={}", t.path));
+        }
+        Some(t) => {
+            cmd.arg("-C").arg(t.path);
+        }
+        None => {}
+    }
+    for setting in query.config {
+        cmd.arg("-c").arg(setting);
+    }
+    cmd.args(["config", "--get", &format!("alias.{}", query.name)]);
+    match cmd.output() {
+        Ok(out) if out.status.success() => AliasAnswer::Expansion(
+            String::from_utf8_lossy(&out.stdout)
+                .trim_end_matches(['\n', '\r'])
+                .to_string(),
+        ),
+        Ok(out) if out.status.code() == Some(1) => AliasAnswer::NotAlias,
+        Ok(out) => AliasAnswer::Unreadable(format!(
+            "`git config` failed: {}",
+            String::from_utf8_lossy(&out.stderr).trim()
+        )),
+        Err(e) => AliasAnswer::Unreadable(format!("git could not run: {e}")),
+    }
+}
+
 /// Read a retargeted repository for the guard: its branch and, unless it
 /// shares the session repository's common git dir (`session_common`), its own
 /// effective git policy, which is the defaults when it has no policy file.
@@ -186,6 +252,9 @@ pub struct GuardContext<'a> {
     /// resolution and the guard evaluates against `current_branch` — the
     /// behavior in unit tests that do not exercise retargeting.
     pub dir_target_lookup: DirTargetLookup<'a>,
+    /// How to resolve a subcommand that is not a git builtin to the alias it
+    /// names (injected). `None` leaves every such subcommand unclassifiable.
+    pub alias_lookup: AliasLookup<'a>,
 }
 
 /// The outcome of one guard run.
@@ -310,14 +379,17 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
         match program_kind(program) {
             ProgramKind::Git => {
                 let moved = line.moves_for(&shell, top_level, &tokens);
-                check_git(args, &mut branches, &moved, ctx, violations, &mut notes);
+                check_git(args, &mut branches, &moved, ctx, violations, &mut notes, 0);
             }
             ProgramKind::Gh => check_gh(args, ctx, violations),
             // A program named by a substitution could be git itself.
             ProgramKind::Other if has_substitution(program) => {
-                if let Some(v) = unclassifiable_violation(ctx.policy, None, "its program name") {
-                    violations.push(v);
-                }
+                violations.extend(unclassifiable_violation(
+                    ctx.policy,
+                    None,
+                    &substitution_reason("its program name"),
+                    UNCLASSIFIABLE_REMEDY,
+                ));
             }
             ProgramKind::Other => {}
         }
@@ -1417,8 +1489,17 @@ struct LineFacts {
     any_mover: bool,
     /// On a flat line: some *nested* segment can, or sets a variable.
     nested_mover: bool,
-    /// The line mentions a git location variable (`GIT_DIR`, …).
-    mentions_location_var: bool,
+    /// Variables the line mentions that change what git reads.
+    mentions: Mentions,
+}
+
+/// Variables a line mentions that change what git reads.
+struct Mentions {
+    /// A git location variable (`GIT_DIR`, …).
+    location_var: bool,
+    /// Where git reads its configuration from (`GIT_CONFIG_*`, `HOME`,
+    /// `XDG_CONFIG_HOME`), which the alias reader cannot see.
+    config_env: bool,
 }
 
 impl LineFacts {
@@ -1426,7 +1507,10 @@ impl LineFacts {
         let mut facts = Self {
             any_mover: false,
             nested_mover: false,
-            mentions_location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
+            mentions: Mentions {
+                location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
+                config_env: mentions_config_env(command),
+            },
         };
         for (idx, segment) in segments.iter().enumerate() {
             let mut tokens = shell_tokens(segment);
@@ -1475,7 +1559,8 @@ impl LineFacts {
             vars: tracked.then_some(&shell.vars),
             // A location variable the line sets outside the op's own launcher
             // environment is only modeled at top level of a flat line.
-            location_unknown: self.mentions_location_var && !tracked,
+            location_unknown: self.mentions.location_var && !tracked,
+            config_unknown: self.mentions.config_env,
             tokens,
         }
     }
@@ -1489,6 +1574,8 @@ struct Moves<'r> {
     vars: Option<&'r HashMap<String, Val>>,
     /// A git location variable may be set in a way the guard cannot scope.
     location_unknown: bool,
+    /// The line may change where git reads its configuration from.
+    config_unknown: bool,
     /// The op's full token list (its leading assignments and launchers).
     tokens: &'r [String],
 }
@@ -1500,6 +1587,7 @@ fn check_git(
     ctx: &GuardContext<'_>,
     out: &mut Vec<Violation>,
     notes: &mut Vec<String>,
+    depth: usize,
 ) {
     let policy = ctx.policy;
 
@@ -1518,18 +1606,36 @@ fn check_git(
 
     // Classification uncertainty adds its own verdict; it never ends the
     // judgment, so every other applicable rule still runs (R4-1).
-    let unclassified = unclassifiable_git(args);
+    let mut unclassified = unclassifiable_git(args);
     let Some((sub, rest)) = git_subcommand(args) else {
         if let Some(u) = &unclassified {
-            out.extend(unclassifiable_violation(ctx.policy, None, u.place()));
+            out.extend(u.violation(ctx.policy, None));
         }
         return;
     };
 
+    // A subcommand that is not a builtin may be an alias: judge what it
+    // expands to, as if written literally. One the guard cannot read is
+    // unclassifiable.
+    if unclassified.is_none() && !GIT_BUILTINS.contains(&sub) {
+        match expand_alias(args, sub, moved, ctx, depth) {
+            Ok(expansions) => {
+                for expanded in expansions {
+                    check_git(&expanded, branches, moved, ctx, out, notes, depth + 1);
+                }
+            }
+            Err(why) => {
+                unclassified = Some(Unclassified::Alias(format!(
+                    "`git {sub}` may be an alias the guard cannot resolve ({why})"
+                )));
+            }
+        }
+    }
+
     let judged = judge_target(args, branches, moved, ctx);
     if let Some(u) = &unclassified {
         let known = match u {
-            Unclassified::Subcommand(_) => None,
+            Unclassified::Subcommand(_) | Unclassified::Alias(_) => None,
             Unclassified::Arguments(_) => Some(sub),
         };
         // A subcommand that acts on the branch it runs on can only reach a
@@ -1546,25 +1652,13 @@ fn check_git(
             let strictest = judged
                 .cases
                 .iter()
-                .filter_map(|(_, rules)| unclassifiable_violation(rules, known, u.place()))
+                .filter_map(|(_, rules)| u.violation(rules, known))
                 .max_by_key(|v| severity(v.level));
             out.extend(strictest);
         }
     }
+    track_branch_move(sub, rest, &judged.track, branches, ctx.policy);
     if matches!(sub, "checkout" | "switch") {
-        // A checkout in a retargeted dir moves that dir's branch, not the
-        // session's. One the guard cannot place moves nothing it tracks, and
-        // a substituted target is assumed to be protected.
-        if let Some(mut target) = checkout_target(rest) {
-            if has_substitution(&target) {
-                target = assumed_protected_branch(ctx.policy).unwrap_or(target);
-            }
-            match &judged.track {
-                Track::Session => branches.session = target,
-                Track::Dir(dir) => branches.switch_in(dir, target),
-                Track::Nothing => {}
-            }
-        }
         return;
     }
 
@@ -1576,6 +1670,7 @@ fn check_git(
             integrate_token: ctx.integrate_token,
             pr_base_lookup: ctx.pr_base_lookup,
             dir_target_lookup: ctx.dir_target_lookup,
+            alias_lookup: ctx.alias_lookup,
         };
         let mut case = Vec::new();
         judge_git_sub(sub, rest, branch, &view, &mut case);
@@ -1601,6 +1696,39 @@ fn check_git(
     out.extend(found);
 }
 
+/// Follow a branch change the op makes for the rest of the line: a checkout
+/// or switch, or a rebase given a `<branch>`, which checks it out first. A
+/// move in a retargeted dir moves that dir's branch, not the session's; one
+/// the guard cannot place moves nothing it tracks; a substituted checkout
+/// target is assumed to be protected.
+fn track_branch_move(
+    sub: &str,
+    rest: &[String],
+    track: &Track,
+    branches: &mut BranchTracker,
+    policy: &GitPolicy,
+) {
+    let target = match sub {
+        "checkout" | "switch" => checkout_target(rest).map(|target| {
+            if has_substitution(&target) {
+                assumed_protected_branch(policy).unwrap_or(target)
+            } else {
+                target
+            }
+        }),
+        "rebase" => rebase_branch(rest).map(str::to_string),
+        _ => None,
+    };
+    let Some(target) = target else {
+        return;
+    };
+    match track {
+        Track::Session => branches.session = target,
+        Track::Dir(dir) => branches.switch_in(dir, target),
+        Track::Nothing => {}
+    }
+}
+
 /// Subcommands whose arguments the guard judges. A substitution in their
 /// arguments can change what they do to a branch.
 const JUDGED_SUBCOMMANDS: &[&str] = &[
@@ -1624,20 +1752,35 @@ const JUDGED_SUBCOMMANDS: &[&str] = &[
 /// `<branch>` argument checks that branch out first.
 const CURRENT_BRANCH_SUBCOMMANDS: &[&str] = &["commit", "merge", "cherry-pick", "reset"];
 
-/// Which part of a git invocation a substitution leaves unknown.
+/// Which part of a git invocation the guard cannot classify.
 enum Unclassified {
-    /// A global option or the subcommand itself: any git command may run.
+    /// A substitution in a global option or the subcommand itself: any git
+    /// command may run.
     Subcommand(&'static str),
-    /// Arguments of a subcommand the guard judges.
+    /// A substitution in the arguments of a subcommand the guard judges.
     Arguments(&'static str),
+    /// An alias the guard cannot resolve; the reason. Any git command may run.
+    Alias(String),
 }
 
 impl Unclassified {
-    fn place(&self) -> &'static str {
+    /// The verdict under `policy`, for the subcommand `sub` when it is known.
+    fn violation(&self, policy: &GitPolicy, sub: Option<&str>) -> Option<Violation> {
         match self {
-            Self::Subcommand(place) | Self::Arguments(place) => place,
+            Self::Subcommand(place) | Self::Arguments(place) => unclassifiable_violation(
+                policy,
+                sub,
+                &substitution_reason(place),
+                UNCLASSIFIABLE_REMEDY,
+            ),
+            Self::Alias(reason) => unclassifiable_violation(policy, sub, reason, ALIAS_REMEDY),
         }
     }
+}
+
+/// Why a substitution in `place` makes a git command unclassifiable.
+fn substitution_reason(place: &str) -> String {
+    format!("a command substitution in {place} decides what this git command does")
 }
 
 /// Where a substitution makes a git invocation unclassifiable, if anywhere
@@ -1744,7 +1887,8 @@ fn severity(level: PolicyLevel) -> u8 {
 fn unclassifiable_violation(
     policy: &GitPolicy,
     sub: Option<&str>,
-    place: &str,
+    reason: &str,
+    remedy: &str,
 ) -> Option<Violation> {
     // The strictest level; on a tie, the first rule listed.
     let (rule, level) = exposed_rules(sub, policy)
@@ -1756,9 +1900,9 @@ fn unclassifiable_violation(
         rule,
         level,
         format!(
-            "command unresolved: a command substitution in {place} decides what this git command does, so the guard cannot prove it leaves protected branches alone"
+            "command unresolved: {reason}, so the guard cannot prove it leaves protected branches alone"
         ),
-        UNCLASSIFIABLE_REMEDY.to_string(),
+        remedy.to_string(),
     ))
 }
 
@@ -1767,6 +1911,302 @@ const UNCLASSIFIABLE_REMEDY: &str = "write the git command, its options and its 
 
 /// How to make an unresolved target resolvable.
 const UNRESOLVED_REMEDY: &str = "name the repository with a literal path (`git -C /path/to/repo …`) or change to it first (`cd /path/to/repo && git …`), so the guard can read its branch and policy";
+
+/// How to make an alias the guard cannot resolve classifiable.
+const ALIAS_REMEDY: &str = "write the git command the alias stands for, or make the alias readable: a git-command alias (not a `!` shell alias) set in git config, not through `--config-env` or configuration environment variables";
+
+/// Git's builtin commands (`git --list-cmds=builtins`, Git 2.53). Git runs a
+/// builtin even when an alias of the same name exists, so only another name
+/// is looked up as an alias.
+const GIT_BUILTINS: &[&str] = &[
+    "add",
+    "am",
+    "annotate",
+    "apply",
+    "archive",
+    "backfill",
+    "bisect",
+    "blame",
+    "branch",
+    "bugreport",
+    "bundle",
+    "cat-file",
+    "check-attr",
+    "check-ignore",
+    "check-mailmap",
+    "check-ref-format",
+    "checkout",
+    "checkout--worker",
+    "checkout-index",
+    "cherry",
+    "cherry-pick",
+    "clean",
+    "clone",
+    "column",
+    "commit",
+    "commit-graph",
+    "commit-tree",
+    "config",
+    "count-objects",
+    "credential",
+    "credential-cache",
+    "credential-cache--daemon",
+    "credential-store",
+    "describe",
+    "diagnose",
+    "diff",
+    "diff-files",
+    "diff-index",
+    "diff-pairs",
+    "diff-tree",
+    "difftool",
+    "fast-export",
+    "fast-import",
+    "fetch",
+    "fetch-pack",
+    "fmt-merge-msg",
+    "for-each-ref",
+    "for-each-repo",
+    "format-patch",
+    "fsck",
+    "fsck-objects",
+    "fsmonitor--daemon",
+    "gc",
+    "get-tar-commit-id",
+    "grep",
+    "hash-object",
+    "help",
+    "hook",
+    "index-pack",
+    "init",
+    "init-db",
+    "interpret-trailers",
+    "last-modified",
+    "log",
+    "ls-files",
+    "ls-remote",
+    "ls-tree",
+    "mailinfo",
+    "mailsplit",
+    "maintenance",
+    "merge",
+    "merge-base",
+    "merge-file",
+    "merge-index",
+    "merge-ours",
+    "merge-recursive",
+    "merge-recursive-ours",
+    "merge-recursive-theirs",
+    "merge-subtree",
+    "merge-tree",
+    "mktag",
+    "mktree",
+    "multi-pack-index",
+    "mv",
+    "name-rev",
+    "notes",
+    "pack-objects",
+    "pack-redundant",
+    "pack-refs",
+    "patch-id",
+    "pickaxe",
+    "prune",
+    "prune-packed",
+    "pull",
+    "push",
+    "range-diff",
+    "read-tree",
+    "rebase",
+    "receive-pack",
+    "reflog",
+    "refs",
+    "remote",
+    "remote-ext",
+    "remote-fd",
+    "repack",
+    "replace",
+    "replay",
+    "repo",
+    "rerere",
+    "reset",
+    "restore",
+    "rev-list",
+    "rev-parse",
+    "revert",
+    "rm",
+    "send-pack",
+    "shortlog",
+    "show",
+    "show-branch",
+    "show-index",
+    "show-ref",
+    "sparse-checkout",
+    "stage",
+    "stash",
+    "status",
+    "stripspace",
+    "submodule--helper",
+    "switch",
+    "symbolic-ref",
+    "tag",
+    "unpack-file",
+    "unpack-objects",
+    "update-index",
+    "update-ref",
+    "update-server-info",
+    "upload-archive",
+    "upload-archive--writer",
+    "upload-pack",
+    "var",
+    "verify-commit",
+    "verify-pack",
+    "verify-tag",
+    "version",
+    "whatchanged",
+    "worktree",
+    "write-tree",
+];
+
+/// How deep an alias may expand into further aliases before the guard stops.
+const MAX_ALIAS_DEPTH: usize = 8;
+
+/// Does the line touch where git reads its configuration from? Any mention
+/// of a `GIT_CONFIG*` variable or `XDG_CONFIG_HOME`, or `HOME` as a word not
+/// read as `$HOME`, counts.
+fn mentions_config_env(command: &str) -> bool {
+    if command.contains("GIT_CONFIG") || command.contains("XDG_CONFIG_HOME") {
+        return true;
+    }
+    let bytes = command.as_bytes();
+    command.match_indices("HOME").any(|(at, _)| {
+        let before = at.checked_sub(1).map(|i| bytes[i]);
+        let after = bytes.get(at + 4).copied();
+        let word = |b: u8| b.is_ascii_alphanumeric() || b == b'_';
+        !before.is_some_and(|b| word(b) || b == b'$' || b == b'{') && !after.is_some_and(word)
+    })
+}
+
+/// Expand `sub`, a subcommand that is not a builtin, through the alias it
+/// names in every repository the op could target (TSK-112). Each result is
+/// the op's argument vector with the alias replaced by its expansion, the way
+/// git prepends it; a name that is no alias adds nothing. `Err` names why the
+/// alias cannot be read: an unresolved target, configuration the reader
+/// cannot see, a `!` shell alias, one that starts with an option, a chain
+/// deeper than [`MAX_ALIAS_DEPTH`], or a failed lookup.
+fn expand_alias(
+    args: &[String],
+    sub: &str,
+    moved: &Moves<'_>,
+    ctx: &GuardContext<'_>,
+    depth: usize,
+) -> Result<Vec<Vec<String>>, String> {
+    if depth >= MAX_ALIAS_DEPTH {
+        return Err("an alias chain deeper than the guard follows".to_string());
+    }
+    let lookup = ctx
+        .alias_lookup
+        .ok_or_else(|| "no alias reader".to_string())?;
+    if moved.config_unknown {
+        return Err("the line changes where git reads its configuration".to_string());
+    }
+    let at = git_subcommand(args).map_or(args.len(), |(_, rest)| args.len() - rest.len() - 1);
+    let mut config = Vec::new();
+    let mut idx = 0;
+    while idx < at {
+        let t = args[idx].as_str();
+        if t == "--config-env" || t.starts_with("--config-env=") {
+            return Err("`--config-env` sets configuration from the environment".to_string());
+        }
+        if t == "-c" {
+            config.extend(args.get(idx + 1).cloned());
+            idx += 2;
+        } else if GIT_GLOBAL_VALUE_FLAGS.contains(&t) {
+            idx += 2;
+        } else {
+            idx += 1;
+        }
+    }
+    let specs = compose_targets(args, moved)?;
+    let mut expansions: Vec<Vec<String>> = Vec::new();
+    for spec in &specs {
+        let query = AliasQuery {
+            target: spec.as_ref().map(|s| Retarget {
+                path: &s.path,
+                git_dir: s.git_dir,
+            }),
+            config: &config,
+            name: sub,
+        };
+        let value = match lookup(&query) {
+            AliasAnswer::NotAlias => continue,
+            AliasAnswer::Unreadable(why) => return Err(why),
+            AliasAnswer::Expansion(value) => value,
+        };
+        if value.trim_start().starts_with('!') {
+            return Err("a `!` shell alias".to_string());
+        }
+        let words =
+            split_alias(&value).ok_or_else(|| "an alias value git cannot split".to_string())?;
+        match words.first() {
+            None => return Err("an empty alias".to_string()),
+            Some(first) if first.starts_with('-') => {
+                return Err("an alias that starts with an option".to_string())
+            }
+            Some(_) => {}
+        }
+        let mut expanded = args[..at].to_vec();
+        expanded.extend(words);
+        expanded.extend_from_slice(&args[at + 1..]);
+        if !expansions.contains(&expanded) {
+            expansions.push(expanded);
+        }
+    }
+    Ok(expansions)
+}
+
+/// Split an alias value into words as git's `split_cmdline` does: on
+/// whitespace, with single and double quotes grouping and a backslash
+/// escaping the next character outside single quotes. `None` for an
+/// unterminated quote or a trailing backslash.
+fn split_alias(value: &str) -> Option<Vec<String>> {
+    let mut words = Vec::new();
+    let mut word = String::new();
+    let mut in_word = false;
+    let mut quote: Option<char> = None;
+    let mut chars = value.chars();
+    while let Some(c) = chars.next() {
+        match (quote, c) {
+            (Some('\''), '\'') | (Some('"'), '"') => quote = None,
+            (Some('\''), _) => word.push(c),
+            (_, '\\') => {
+                word.push(chars.next()?);
+                in_word = true;
+            }
+            (Some(_), _) => word.push(c),
+            (None, '\'' | '"') => {
+                quote = Some(c);
+                in_word = true;
+            }
+            (None, c) if c.is_whitespace() => {
+                if in_word {
+                    words.push(std::mem::take(&mut word));
+                    in_word = false;
+                }
+            }
+            (None, _) => {
+                word.push(c);
+                in_word = true;
+            }
+        }
+    }
+    if quote.is_some() {
+        return None;
+    }
+    if in_word {
+        words.push(word);
+    }
+    Some(words)
+}
 
 /// Which branch a checkout in the judged op moves.
 enum Track {
@@ -2016,6 +2456,9 @@ fn judge_git_sub(
             maybe_no_verify(sub, rest, branch, policy, out);
         }
         "rebase" => {
+            // `git rebase <upstream> <branch>` checks `<branch>` out first and
+            // rewrites it, not the branch the command starts on.
+            let branch = rebase_branch(rest).unwrap_or(branch);
             if policy.hard_reset_protected.is_active() && policy.branch_is_protected(branch) {
                 out.push(Violation::new(
                     "git.hard_reset_protected",
@@ -2829,6 +3272,41 @@ const GIT_RESET_OPTIONS: OptionSpec = OptionSpec {
     git_style: true,
 };
 
+/// `git rebase` (git-rebase(1)). The options that take a value, so none of
+/// them is read as the `<upstream>` or `<branch>` operand.
+const GIT_REBASE_OPTIONS: OptionSpec = OptionSpec {
+    short: &[
+        ('s', Arity::Value),
+        ('X', Arity::Value),
+        ('x', Arity::Value),
+        ('C', Arity::Value),
+        ('S', Arity::AttachedValue),
+        ('r', Arity::Flag),
+    ],
+    long: &[
+        ("--onto", Arity::Value),
+        ("--strategy", Arity::Value),
+        ("--strategy-option", Arity::Value),
+        ("--exec", Arity::Value),
+        ("--whitespace", Arity::Value),
+        ("--empty", Arity::Value),
+        ("--trailer", Arity::Value),
+        ("--gpg-sign", Arity::AttachedValue),
+        ("--rebase-merges", Arity::AttachedValue),
+        ("--root", Arity::Flag),
+        (END_OF_OPTIONS, Arity::Flag),
+    ],
+    git_style: true,
+};
+
+/// The `<branch>` a `git rebase` checks out and rewrites, when one is given:
+/// the second operand, or the first with `--root`.
+fn rebase_branch(rest: &[String]) -> Option<&str> {
+    let parsed = parse_options(rest, &GIT_REBASE_OPTIONS);
+    let at = usize::from(!parsed.has_long("--root"));
+    parsed.operands.get(at).copied()
+}
+
 /// `git push` (git-push(1)). The destructive options are what the guard reads,
 /// so they resolve through the same abbreviation rule as every other command.
 const GIT_PUSH_OPTIONS: OptionSpec = OptionSpec {
@@ -3514,6 +3992,7 @@ mod tests {
             integrate_token: false,
             pr_base_lookup: None,
             dir_target_lookup: None,
+            alias_lookup: None,
         }
     }
 
@@ -3529,6 +4008,7 @@ mod tests {
             integrate_token: false,
             pr_base_lookup: Some(lookup),
             dir_target_lookup: None,
+            alias_lookup: None,
         }
     }
 
@@ -3544,6 +4024,7 @@ mod tests {
             integrate_token: false,
             pr_base_lookup: None,
             dir_target_lookup: Some(resolver),
+            alias_lookup: Some(&fixture_alias),
         }
     }
 
@@ -3660,6 +4141,7 @@ mod tests {
             integrate_token: true,
             pr_base_lookup: None,
             dir_target_lookup: None,
+            alias_lookup: None,
         };
         assert!(evaluate("git commit -m 'feat: x'", &c).is_empty());
     }
@@ -3682,6 +4164,7 @@ mod tests {
             integrate_token: true,
             pr_base_lookup: None,
             dir_target_lookup: None,
+            alias_lookup: None,
         };
         assert!(evaluate("git merge feat/x", &c).is_empty());
     }
@@ -5387,7 +5870,9 @@ mod tests {
         };
         match (spec.path, spec.git_dir) {
             ("/scratch" | "/work/scratch", false) => other("feat/x", GitPolicy::default()),
-            ("/scratch-main", false) => other("main", GitPolicy::default()),
+            ("/scratch-main" | "/aliased" | "/unreadable", false) => {
+                other("main", GitPolicy::default())
+            }
             ("/release-repo", false) => other("release/1.0", release_policy()),
             ("/session/.git", true) => same_repo("main"),
             _ => None,
@@ -5518,9 +6003,188 @@ mod tests {
         assert!(cases > 200, "{cases}");
     }
 
+    /// An alias reader over fixed configuration. The session defines `ci`
+    /// (commit) and `st` (status); `/aliased` defines `x` (commit), `sh` (a
+    /// `!` shell alias), `opt` (starts with an option), `loop` (itself) and
+    /// `quoted` (split by quotes); `/unreadable` cannot be read. The command's
+    /// own `-c alias.<name>=…` wins, and `-c include.path=/aliases.ini`
+    /// defines `x` as commit.
+    fn fixture_alias(q: &AliasQuery<'_>) -> AliasAnswer {
+        let mut found: Option<&str> = match (q.target.map(|t| t.path), q.name) {
+            (None, "ci") | (Some("/aliased"), "x") => Some("commit"),
+            (None, "st") => Some("status --short"),
+            (Some("/aliased"), "sh") => Some("!git commit"),
+            (Some("/aliased"), "opt") => Some("-C /elsewhere commit"),
+            (Some("/aliased"), "loop") => Some("loop"),
+            (Some("/aliased"), "quoted") => Some("commit -m 'a b'"),
+            (Some("/unreadable"), _) => {
+                return AliasAnswer::Unreadable("fixture".to_string());
+            }
+            _ => None,
+        };
+        let key = format!("alias.{}", q.name);
+        for setting in q.config {
+            if let Some((k, v)) = setting.split_once('=') {
+                if k == key {
+                    found = Some(v);
+                } else if k == "include.path" && v == "/aliases.ini" && q.name == "x" {
+                    found = Some("commit");
+                }
+            }
+        }
+        found.map_or(AliasAnswer::NotAlias, |v| {
+            AliasAnswer::Expansion(v.to_string())
+        })
+    }
+
     fn report(cmd: &str, session: &str) -> Evaluation {
         let p = default_policy();
         evaluate_report(cmd, &ctx_with_dir_branch(&p, session, &fixture_resolver))
+    }
+
+    // Aliases (TSK-112, primary ruling after round 4): a subcommand that is
+    // not a builtin is judged by the alias it expands to; one the guard
+    // cannot read is unclassifiable.
+    #[test]
+    fn test_tsk112_aliases_are_judged_by_their_expansion() {
+        let has = |r: &Evaluation, rule: &str| r.violations.iter().any(|v| v.rule == rule);
+        // Codex round 4 reproductions and their relatives, on main.
+        for cmd in [
+            "git -c alias.x=commit x --allow-empty -m \"$(printf x)\"",
+            "git -c alias.x=commit x $(printf '') --allow-empty -m x",
+            "git -c include.path=/aliases.ini x --allow-empty -m \"$(printf x)\"",
+            "git -c include.path=/aliases.ini x $(printf '') --allow-empty -m x",
+            "git ci --allow-empty -m x",
+            "git -c alias.y=ci y -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+            assert!(
+                has(&r, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // The alias is read in the repository the op targets.
+        let r = report("git -C /aliased x -m y", "feat/s");
+        assert!(has(&r, "git.commit_to_protected"), "{:?}", r.violations);
+        // The expansion is judged like a literal command.
+        let r = report("git -c alias.x='commit --no-verify' x -m y", "main");
+        assert!(has(&r, "git.no_verify_bypass"), "{:?}", r.violations);
+        let r = report("git -c alias.p=push p origin main", "feat/s");
+        assert!(has(&r, "git.push_to_protected"), "{:?}", r.violations);
+        // Aliases the guard cannot read are unclassifiable, on any branch.
+        for cmd in [
+            "git -C /aliased sh",
+            "git -C /aliased opt",
+            "git -C /aliased loop",
+            "git -C /unreadable x -m y",
+            "git -c alias.x='!git commit' x -m y",
+            "git --config-env=alias.x=V x -m y",
+            "git --config-env alias.x=V x -m y",
+            "GIT_CONFIG_GLOBAL=/tmp/g git x -m y",
+            "export GIT_CONFIG_COUNT=1; git x -m y",
+            "HOME=/tmp git x -m y",
+            "unset HOME; git x -m y",
+            "XDG_CONFIG_HOME=/tmp git x -m y",
+            "git -C \"$UNSET\" x -m y",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.message.contains("an alias the guard cannot resolve")),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // Without an alias reader, a subcommand that is not a builtin blocks.
+        let p = default_policy();
+        assert!(blocks(&evaluate("git frobnicate", &ctx(&p, "feat/x"))));
+        // Controls: a builtin wins over an alias of its name, as in git; an
+        // alias to a read-only command, a name that is no alias, and a commit
+        // alias on a feature branch pass.
+        for (cmd, session) in [
+            ("git -c alias.log=commit log", "main"),
+            ("git st", "main"),
+            ("git frobnicate", "main"),
+            ("git ci -m x", "feat/s"),
+            ("git -c alias.x=commit x -m y", "feat/s"),
+            ("echo \"$HOME\" && git -c alias.x=status x", "main"),
+            ("CODEFLOW_HOME=/tmp git -c alias.x=status x", "main"),
+        ] {
+            let r = report(cmd, session);
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    #[test]
+    fn test_tsk112_alias_values_split_like_git() {
+        assert_eq!(
+            split_alias("commit -m 'a b'"),
+            Some(vec!["commit".into(), "-m".into(), "a b".into()])
+        );
+        assert_eq!(
+            split_alias(" a \"b c\"  d\\ e "),
+            Some(vec!["a".into(), "b c".into(), "d e".into()])
+        );
+        assert_eq!(split_alias("a 'b"), None);
+        assert_eq!(split_alias("a\\"), None);
+        assert!(mentions_config_env("HOME=/x git y"));
+        assert!(mentions_config_env("unset HOME"));
+        assert!(!mentions_config_env("git -C \"$HOME/r\" y"));
+        assert!(!mentions_config_env("git -C ${HOME}/r y"));
+        assert!(!mentions_config_env("CODEFLOW_HOME=1 git y"));
+    }
+
+    // A rebase given a `<branch>` checks it out and rewrites it: that branch
+    // is the one judged (primary ruling after round 4).
+    #[test]
+    fn test_tsk112_rebase_judges_its_branch_argument() {
+        for cmd in [
+            "git rebase feat/y main",
+            "git rebase --onto feat/z feat/y main",
+            "git rebase --onto=feat/z feat/y main",
+            "git rebase --root main",
+            "git rebase -s ours -X theirs feat/y main",
+            "git rebase -x 'make test' --exec 'true' feat/y master",
+            "git rebase -i --autosquash feat/y -- main",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.rule == "git.hard_reset_protected" && v.level == PolicyLevel::Block),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        for (cmd, session) in [
+            ("git rebase main", "feat/s"),
+            ("git rebase --onto main feat/y", "feat/s"),
+            ("git rebase main feat/s", "feat/s"),
+            ("git rebase --continue", "feat/s"),
+            ("git rebase -S feat/y", "feat/s"),
+            ("git rebase feat/y feat/x", "main"),
+        ] {
+            let r = report(cmd, session);
+            assert!(
+                r.violations.is_empty(),
+                "{cmd} ({session}): {:?}",
+                r.violations
+            );
+        }
+        assert!(blocks(&report("git rebase main", "main").violations));
+        // The rebased branch stays checked out for the rest of the line.
+        let mut p = default_policy();
+        p.hard_reset_protected = PolicyLevel::Off;
+        let c = ctx_with_dir_branch(&p, "feat/s", &fixture_resolver);
+        let r = evaluate_report("git rebase feat/y main && git commit -m x", &c);
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+        let c = ctx_with_dir_branch(&p, "main", &fixture_resolver);
+        let r = evaluate_report("git rebase main feat/x && git commit -m x", &c);
+        assert!(r.violations.is_empty(), "{:?}", r.violations);
     }
 
     // R4-1: classification uncertainty never ends the judgment early. With

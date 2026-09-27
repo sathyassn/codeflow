@@ -526,6 +526,77 @@ fn git_guard_uncertainty_keeps_the_protected_commit_check() {
     }
 }
 
+// TSK-112 (primary ruling after round 4): an alias is read the way git reads
+// it, in the repository the command targets, and its expansion is judged; a
+// rebase's `<branch>` is the branch judged. Codex's round 4 reproductions.
+#[test]
+fn git_guard_resolves_aliases_and_rebase_branches() {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("main");
+    let feat = tmp.path().join("feat");
+    for (dir, branch) in [(&main, "main"), (&feat, "feat/x")] {
+        std::fs::create_dir_all(dir).unwrap();
+        init_repo(dir, branch);
+        write_policy(dir, r#"{"git":{"protected_branches":["main","master"]}}"#);
+    }
+    let inc = tmp.path().join("aliases.ini");
+    std::fs::write(&inc, "[alias]\n    x = commit\n").unwrap();
+    let inc = inc.to_string_lossy();
+    let m = main.to_string_lossy();
+
+    let blocked = [
+        "git -c alias.x=commit x --allow-empty -m \"$(printf x)\"".to_string(),
+        "git -c alias.x=commit x $(printf '') --allow-empty -m x".to_string(),
+        format!("git -c include.path={inc} x --allow-empty -m \"$(printf x)\""),
+        format!("git -c include.path={inc} x $(printf '') --allow-empty -m x"),
+    ];
+    for command in &blocked {
+        let out = guard_run(command, &main);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // An alias in the repository's own config.
+    git(&main, &["config", "alias.x", "commit"]);
+    git(&main, &["config", "alias.st", "status"]);
+    git(&feat, &["config", "alias.x", "commit"]);
+    git(&feat, &["config", "alias.sh", "!git commit"]);
+    for (command, from) in [
+        ("git x --allow-empty -m \"$(printf x)\"".to_string(), &main),
+        (format!("git -C {m} x --allow-empty -m x"), &feat),
+        ("git sh -m x".to_string(), &feat),
+        ("git rebase feat/y main".to_string(), &feat),
+        ("git rebase --onto feat/z feat/y main".to_string(), &feat),
+    ] {
+        let out = guard_run(&command, from);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // Controls: the same alias on a feature branch, a read-only alias, a
+    // name that is no alias, and a rebase of the current branch.
+    for (command, from) in [
+        ("git x --allow-empty -m x", &feat),
+        ("git st", &main),
+        ("git frobnicate", &main),
+        ("git rebase main", &feat),
+    ] {
+        let out = guard_run(command, from);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 #[test]
 fn git_guard_allows_force_push_to_feature_branch() {
     let dir = tempfile::tempdir().unwrap();
