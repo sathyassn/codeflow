@@ -35,7 +35,7 @@ The release chain is the longest. Some records in these chains still read
 
 ## Technical
 
-67 decisions, 3 with `status: superseded`. A
+68 decisions, 3 with `status: superseded`. A
 decision is proposed, then accepted, and may later be superseded; its
 content is never rewritten, and only `superseded_by` or a dated note is added.
 [Architecture](architecture.md) links each area to its consequence, and the
@@ -109,5 +109,6 @@ that shaped it.
 | Presentation and documentation portal | [ADR-0063](decisions/ADR-0063-utility-presentation-doctrine-home.md) | one shared utility presentation doctrine with a durable architecture home | accepted | none |
 | Presentation and documentation portal | [ADR-0064](decisions/ADR-0064-portal-as-a-guide-to-the-project-as-it-stands.md) | the portal is a guide to the project as it stands | accepted | none |
 | Presentation and documentation portal | [ADR-0068](decisions/ADR-0068-figure-grammar-as-default-form.md) | Figure grammar is the default form of a utility figure | accepted | none |
+| Presentation and documentation portal | [ADR-0073](decisions/ADR-0073-present-review-contract-v2.md) | Present review contract v2 | accepted | none |
 | Agentic estimation | [ADR-0057](decisions/ADR-0057-optional-agentic-estimation.md) | Optional agentic operating and estimation method | accepted | none |
 | Written content | [ADR-0067](decisions/ADR-0067-written-content-policy.md) | Written content policy for new text | accepted | none |

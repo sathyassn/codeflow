@@ -28,12 +28,12 @@
     ],
     "facts": [
       {
-        "claim": "67 decisions, 3 superseded",
+        "claim": "68 decisions, 3 superseded",
         "source": "docs/decision-map.md#technical",
         "derive": "the count sentence",
         "check": {
           "kind": "contains",
-          "text": "67 decisions, 3 with `status: superseded`."
+          "text": "68 decisions, 3 with `status: superseded`."
         },
         "value": true
       },
