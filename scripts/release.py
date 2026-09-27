@@ -1044,7 +1044,7 @@ def check_pr(args: argparse.Namespace) -> None:
             "assessed at its impact, never as wording by default"
         )
     if assessed_impact == "major" and fields[MIGRATION_GUIDANCE] != "yes":
-        fail("an added major entry requires migration guidance")
+        fail("an added or edited major entry requires migration guidance")
     if fields["impact"] != "none":
         if "CHANGELOG.md" not in paths or "changelog" not in fields["evidence"].casefold():
             fail("non-none impact requires curated changelog change and evidence")

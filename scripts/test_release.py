@@ -907,7 +907,7 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("docs: clarify breaking note")
         for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
-                with self.assertRaisesRegex(release.ReleaseError, "added major entry"):
+                with self.assertRaisesRegex(release.ReleaseError, "added or edited major entry"):
                     self.run_check(base, head, filled_template("none", "no", value))
         for value in SUBSTANTIVE_MIGRATIONS:
             with self.subTest(migration=value):
@@ -918,7 +918,7 @@ class PullRequestTests(unittest.TestCase):
         base = self.repo.commit("feat!: pending break")
         self.repo.pending("3.0.0", [("major", "Replace old command", "after migration")])
         head = self.repo.commit("docs: clarify breaking note")
-        with self.assertRaisesRegex(release.ReleaseError, "added major entry"):
+        with self.assertRaisesRegex(release.ReleaseError, "added or edited major entry"):
             self.run_check(base, head, filled_template("none", "no", "none"))
         with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
             self.run_check(base, head, filled_template("none", "no"))
@@ -1019,7 +1019,7 @@ class PullRequestTests(unittest.TestCase):
         base = self.repo.commit("feat!: pending break")
         self.repo.pending("3.0.0", [("major", "Replace old command", "after migration")])
         head = self.repo.commit("docs: clarify breaking note")
-        with self.assertRaisesRegex(release.ReleaseError, "added major entry"):
+        with self.assertRaisesRegex(release.ReleaseError, "added or edited major entry"):
             self.run_check(base, head, self.repo.body("none", contract="not-applicable"))
         self.run_check(
             base,
