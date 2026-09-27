@@ -197,7 +197,10 @@ targets with a `quick` mode) plus `codeflow validate --docs` and `codeflow ci` o
 the pushed range, blocking by default under `test_gate_on_push`. It blocks on
 what it can see and names what it left to CI (an unresolved range, a sibling
 ref, a dirty, sparse or submodule-incomplete checkout); the test suite belongs
-to the full gate. File and aggregate coverage thresholds all contribute to the gate
+to the full gate. One full gate runs at a time on a machine (a second refuses,
+naming the holder), a gate that runs cargo refuses a `CARGO_TARGET_DIR`
+outside the worktree, and each target prints a start line on stderr as it begins.
+File and aggregate coverage thresholds all contribute to the gate
 verdict; `changed_files` rules are rejected until an explicit comparison base is
 available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
 `codeflow test setup` safely fills absent/empty root-detected configs, lists and

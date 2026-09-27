@@ -125,6 +125,25 @@ publication date._
   keep the advisory push, set `"test_gate_on_push": "warn"` under `git` in
   `.codeflow/policy.json`.
 
+<!-- codeflow:release-impact minor -->
+- **One full gate at a time, running the suite once.** Public behaviour
+  change: `codeflow test --mode full` takes a gate lock before any target
+  runs, and a second full gate on the machine refuses, naming the holder's
+  pid, directory and start time. A lock left by a killed gate is reclaimed.
+  The locks are `locks/full-gate.lock` under the CodeFlow home
+  (`CODEFLOW_HOME`, else `~/.codeflow`), which spans the machine, and
+  `codeflow/full-gate.lock` in the repository's git common directory, which
+  spans its worktrees; where one cannot be opened, as in a sandbox, the gate
+  says so and holds the other. In every mode, a gate that runs cargo refuses
+  a `CARGO_TARGET_DIR` outside the worktree, since another worktree's build
+  would overwrite its binaries; unset it or point it inside the worktree.
+  Each target now prints `[codeflow test] starting target '<name>' (<mode>
+  mode)` on stderr as it starts, so a killed gate's log names the target it
+  died in; stdout, the summary lines and the exit codes are unchanged, and
+  targets skipped by `enabled` or `ci_skip` print nothing. CodeFlow's own
+  full gate runs the Rust suite once, under coverage, plus
+  `cargo test --workspace --doc`, which coverage skips.
+
 <!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
