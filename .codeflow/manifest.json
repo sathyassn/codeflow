@@ -1409,7 +1409,7 @@
     ".codeflow/rules/writing.md": {
       "src": "rules/writing.md",
       "ownership": "managed",
-      "sha256": "28b6e23632eea3a257a934ffe9921ffbe4ebc5090d3eec788871725edc1eb3d9",
+      "sha256": "9eb601de16596117014c3d7347037388748e7d8ac388eb95c57cc40674289557",
       "exec": false
     },
     ".codeflow/schemas/present/document-v1.schema.json": {
