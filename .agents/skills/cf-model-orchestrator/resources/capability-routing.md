@@ -175,8 +175,12 @@ Before launching any Claude worker, **read and follow**
 "Sequential turns." The dispatch must keep worker collection inside the
 accepted foreground turn: collect the worker result before the primary returns,
 do not use background Bash watchers or task notifications as completion, and do
-not accept a terminal response that says work is still running. If the harness
-cannot provide that supported foreground return, the route is unavailable for
+not accept a terminal response that says work is still running. Claude Code
+backgrounds subagents by default, so when the turn needs the result, launch the
+worker with the Agent tool's `run_in_background: false` and collect its return
+in that turn; a backgrounded worker's result counts only when collected from
+that same launch before the turn reports completion. If the harness cannot
+provide that supported foreground return, the route is unavailable for
 this dispatch; use another bounded native route and preserve the existing
 Stop-hook and lifecycle safety policy unchanged.
 

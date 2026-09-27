@@ -329,7 +329,7 @@
     ".agents/skills/cf-model-orchestrator/resources/capability-routing.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
       "ownership": "managed",
-      "sha256": "e52b8e3ab94fa34c672219bcecdd3307330674f10ff62a1ea126a03767ea9de9",
+      "sha256": "dfa3a94c1d49a6f0255f25cf533c5e530eda1e71509500fabb9efed4d42aeb6e",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/current-ensemble.json": {
@@ -803,7 +803,7 @@
     ".claude/skills/cf-model-orchestrator/resources/capability-routing.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
       "ownership": "managed",
-      "sha256": "e52b8e3ab94fa34c672219bcecdd3307330674f10ff62a1ea126a03767ea9de9",
+      "sha256": "dfa3a94c1d49a6f0255f25cf533c5e530eda1e71509500fabb9efed4d42aeb6e",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/current-ensemble.json": {
