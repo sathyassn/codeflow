@@ -1258,6 +1258,64 @@ class PublicationTests(unittest.TestCase):
         self.assertNotIn("legacy-group", notes)
         self.assertNotIn("legacy-group-end", notes)
 
+    def notes_for(self, section: str) -> str:
+        self.repo.write(
+            "CHANGELOG.md",
+            f"# Changelog\n\n## [3.0.0]\n\n{section}\n## [2.0.0] - 2026-01-01\n\n- public\n",
+        )
+        head = self.repo.commit("docs: notes fixture")
+        return release.release_notes(self.repo.root, head, "v3.0.0", head)
+
+    def test_release_notes_strip_one_line_and_wrapped_staging_notes(self) -> None:
+        for note in [
+            "_Staging evidence: staged on 2026-08-02._\n",
+            "_Staging evidence: this section was first staged on 2026-08-02; that was not a\n"
+            "publication date._\n",
+            "_Staging evidence: first\nsecond line\nthird line._  \n",
+        ]:
+            with self.subTest(note=note):
+                notes = self.notes_for(f"{note}\n### Added\n\n- kept entry\n")
+                self.assertNotIn("Staging evidence", notes)
+                self.assertNotIn("publication date", notes)
+                self.assertTrue(notes.startswith("### Added\n\n- kept entry\n"))
+
+    def test_release_notes_merge_repeated_headings_in_order(self) -> None:
+        notes = self.notes_for(
+            "Lead paragraph.\n\n### Added\n\n- a1\n\n### Changed\n\n- c1\n\n"
+            "> quoted migration\n\n### Added\n\n- a2\n\n### Fixed\n\n- f1\n\n"
+            "### Changed\n\n- c2\n"
+        )
+        body = notes.split("\n\n<!-- codeflow-release-source")[0]
+        self.assertEqual(
+            body,
+            "Lead paragraph.\n\n### Added\n\n- a1\n\n- a2\n\n### Changed\n\n- c1\n\n"
+            "> quoted migration\n\n- c2\n\n### Fixed\n\n- f1",
+        )
+
+    def test_release_notes_fail_closed_on_leftover_marker(self) -> None:
+        for leftover in [
+            "<!-- codeflow:release-impact huge -->\n- entry\n",
+            "<!-- codeflow:legacy-group-begin -->\n- entry\n",
+            "- entry\n\nSee _Staging evidence: inline_ for details.\n",
+        ]:
+            with self.subTest(leftover=leftover), self.assertRaisesRegex(
+                release.ReleaseError, "internal marker or staging note"
+            ):
+                self.notes_for(leftover)
+
+    def test_working_tree_changelog_renders_clean_3_0_0_notes(self) -> None:
+        # Renders the real CHANGELOG.md this checkout carries, not a fixture.
+        text = (Path(__file__).resolve().parent.parent / "CHANGELOG.md").read_text()
+        self.repo.write("CHANGELOG.md", text)
+        head = self.repo.commit("docs: real changelog")
+        notes = release.release_notes(self.repo.root, head, "v3.0.0", head)
+        self.assertNotIn("Staging evidence", notes)
+        self.assertNotIn("staged on 2026-08-02", notes)
+        self.assertNotRegex(notes, r"<!--\s*codeflow:")
+        headings = [line for line in notes.splitlines() if line.startswith("### ")]
+        self.assertTrue(headings)
+        self.assertEqual(len(headings), len(set(headings)), headings)
+
     def test_published_assets_require_exact_same_run_bytes(self) -> None:
         source = "c" * 40
         artifacts = self.repo.root / "artifacts"
