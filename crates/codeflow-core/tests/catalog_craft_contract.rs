@@ -45,7 +45,7 @@ fn develop_and_quality_contract_require_a_failing_symptom_command() {
         &["named interfaces first", "exact reported symptom"],
     );
     assert_contains(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "assets/base/agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
         &["exact reported symptom"],
     );
 }

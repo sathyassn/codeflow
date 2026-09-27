@@ -784,7 +784,9 @@ fn orchestration_byte_efficiency_cannot_delete_semantic_duties() {
 fn typed_contracts_are_proportionate_and_runtime_aware() {
     let root = repo_root();
     assert_contains_all(
-        &root.join("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md"),
+        &root.join(
+            "assets/base/agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+        ),
         &[
             ("existing type system", "existing stack's type system"),
             ("material bypasses", "unchecked casts, broad escape types"),

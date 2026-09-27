@@ -14,6 +14,23 @@ fn read(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
 
+/// TSK-129: the quality contract loads by section from an index, so a pin on
+/// "the quality contract" reads the index and every section file together.
+fn read_quality_contract() -> String {
+    let resources = "assets/base/agents/skills/cf-model-orchestrator/resources";
+    let mut sections: Vec<_> = std::fs::read_dir(repo_root().join(resources).join("quality"))
+        .expect("quality sections")
+        .map(|entry| entry.expect("section entry").path())
+        .collect();
+    sections.sort();
+    let mut contract = read(&format!("{resources}/quality-contract.md"));
+    for section in sections {
+        contract.push('\n');
+        contract.push_str(&std::fs::read_to_string(&section).expect("read section"));
+    }
+    contract
+}
+
 fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -362,9 +379,7 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
     let routing = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
     ));
-    let quality = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
-    ));
+    let quality = normalize_whitespace(&read_quality_contract());
     let design = normalize_whitespace(&read("assets/base/agents/skills/cf-design/SKILL.md"));
     let cases = read("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     let packs = read("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
@@ -381,6 +396,9 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
         "Full primary-binding promotion still requires the existing complete suite",
         "Savings or economical-default recommendations separately require measured all-attempt",
         "review lineage is opposite the session that authored the work",
+        // TSK-129: the unknown-usage duty's one home is capability-routing.
+        "Unknown usage is advisory while task fit, capability and quality still decide the route",
+        "It blocks only when the brief declares an explicit hard limit",
     ] {
         assert!(
             routing.contains(required),
@@ -391,7 +409,6 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
     for required in [
         "Primary responsibility and actual execution are separate",
         "does not become its author",
-        "unknown and advisory unless an explicit hard limit depends on it",
     ] {
         assert!(
             quality.contains(required),
@@ -540,8 +557,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
     let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
     let reviewer = read("assets/base/claude/agents/cf-reviewer.md");
     let security = read("assets/base/claude/agents/cf-security-reviewer.md");
-    let quality =
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md");
+    let quality = read_quality_contract();
     let normalized = normalize_whitespace(&skill);
 
     for required in [
@@ -607,9 +623,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
 
 #[test]
 fn responsible_autonomy_has_detailed_quality_and_security_owners() {
-    let quality = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
-    ));
+    let quality = normalize_whitespace(&read_quality_contract());
     let security = normalize_whitespace(&read("assets/base/claude/agents/cf-security-reviewer.md"));
 
     for required in [
@@ -828,7 +842,7 @@ fn solo_fallback_requires_fresh_context_independent_review() {
 fn quality_contract_pins_evidence_coverage_and_ui() {
     let contract = normalize_whitespace(&format!(
         "{}\n{}",
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md"),
+        read_quality_contract(),
         read("assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md")
     ));
 
