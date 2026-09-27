@@ -66,6 +66,21 @@ pub(crate) fn crop_png_refusal(bytes: &[u8]) -> Option<&'static str> {
             {
                 return Some("is larger than a crop may be");
             }
+            // Bit depth, colour type, compression, filter, interlace.
+            let header = &bytes[offset + 16..offset + 21];
+            let depth_allowed: &[u8] = match header[1] {
+                0 => &[1, 2, 4, 8, 16],
+                3 => &[1, 2, 4, 8],
+                2 | 4 | 6 => &[8, 16],
+                _ => &[],
+            };
+            if !depth_allowed.contains(&header[0])
+                || header[2] != 0
+                || header[3] != 0
+                || header[4] > 1
+            {
+                return Some("is a PNG with an invalid header");
+            }
             first = false;
         } else if kind == b"IHDR" {
             return Some("is a PNG with two headers");
@@ -82,6 +97,18 @@ pub(crate) fn crop_png_refusal(bytes: &[u8]) -> Option<&'static str> {
             };
         }
     }
+}
+
+/// A test PNG with one header byte (bit depth 24 to interlace 28) changed
+/// and the header CRC recomputed.
+#[cfg(test)]
+pub(crate) fn test_png_with_header_byte(index: usize, value: u8) -> Vec<u8> {
+    assert!((24..29).contains(&index));
+    let mut png = test_png(1, 1);
+    png[index] = value;
+    let crc = crc32(&png[12..29]);
+    png[29..33].copy_from_slice(&crc.to_be_bytes());
+    png
 }
 
 /// A minimal valid PNG of the given size (one stored zlib block of grey
@@ -438,6 +465,30 @@ mod tests {
             crop_png_refusal(&huge),
             Some("is larger than a crop may be")
         );
+        // Header fields (round 2): the finder's grey PNG at bit depth 3, a
+        // depth illegal for its colour type, unknown colour type, and the
+        // compression, filter and interlace methods. Adam7 stays legal.
+        for (index, value) in [
+            (24, 3),
+            (24, 32),
+            (25, 1),
+            (25, 5),
+            (26, 1),
+            (27, 1),
+            (28, 2),
+        ] {
+            assert_eq!(
+                crop_png_refusal(&test_png_with_header_byte(index, value)),
+                Some("is a PNG with an invalid header"),
+                "byte {index} = {value}"
+            );
+        }
+        for (index, value) in [(24, 1), (24, 16), (28, 1)] {
+            assert_eq!(
+                crop_png_refusal(&test_png_with_header_byte(index, value)),
+                None
+            );
+        }
     }
 
     #[test]

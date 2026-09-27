@@ -778,6 +778,8 @@ fn an_entity_note_refuses_a_broken_or_oversized_png_crop() {
         valid[..valid.len() - 5].to_vec(),
         huge,
         crate::media::test_png(481, 10),
+        // Round 2: a CRC-correct grey PNG declaring bit depth 3.
+        crate::media::test_png_with_header_byte(24, 3),
     ] {
         let mut envelope = envelope_from(
             &fixture_json("anchors/entity-valid-figure.json"),
