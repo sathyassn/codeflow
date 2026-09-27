@@ -83,7 +83,7 @@
         {
           "text": "Claude seat",
           "x": 50,
-          "y": 52,
+          "y": 51,
           "style": "strong",
           "for": [
             "c"
@@ -108,7 +108,7 @@
         {
           "text": "Codex seat",
           "x": 50,
-          "y": 166,
+          "y": 165,
           "style": "strong",
           "for": [
             "x"
@@ -172,7 +172,7 @@
         {
           "text": "Plan vN",
           "x": 250,
-          "y": 110,
+          "y": 109,
           "style": "strong",
           "for": [
             "p"
@@ -206,7 +206,7 @@
         {
           "text": "executor",
           "x": 406,
-          "y": 110,
+          "y": 109,
           "style": "strong",
           "for": [
             "e"
@@ -240,7 +240,7 @@
         {
           "text": "other lineage",
           "x": 574,
-          "y": 110,
+          "y": 107,
           "style": "strong",
           "for": [
             "r"
@@ -249,7 +249,7 @@
         {
           "text": "reviews",
           "x": 574,
-          "y": 130,
+          "y": 128,
           "for": [
             "r"
           ]
@@ -299,7 +299,7 @@
         {
           "text": "Claude seat",
           "x": 42,
-          "y": 22,
+          "y": 21,
           "style": "strong",
           "for": [
             "c"
@@ -324,7 +324,7 @@
         {
           "text": "Codex seat",
           "x": 222,
-          "y": 22,
+          "y": 21,
           "style": "strong",
           "for": [
             "x"

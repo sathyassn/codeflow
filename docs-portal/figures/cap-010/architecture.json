@@ -80,7 +80,7 @@
         {
           "text": "Claude Code",
           "x": 30,
-          "y": 64,
+          "y": 63,
           "style": "strong",
           "for": [
             "cl"
@@ -107,7 +107,7 @@
         {
           "text": "Codex",
           "x": 538,
-          "y": 64,
+          "y": 63,
           "style": "strong",
           "for": [
             "cx"
@@ -182,7 +182,7 @@
         {
           "text": "Grok Build",
           "x": 284,
-          "y": 228,
+          "y": 227,
           "style": "strong",
           "for": [
             "g"
@@ -286,7 +286,7 @@
         {
           "text": "via the Codex plugin, app-server",
           "x": 8,
-          "y": 66,
+          "y": 67,
           "for": [
             "n1"
           ]
@@ -341,7 +341,7 @@
         {
           "text": "via a Herdr named tab",
           "x": 8,
-          "y": 142,
+          "y": 143,
           "for": [
             "n2"
           ]
@@ -395,7 +395,7 @@
         {
           "text": "via tmux, degraded",
           "x": 8,
-          "y": 218,
+          "y": 219,
           "style": "mute",
           "for": [
             "n3"
@@ -451,7 +451,7 @@
         {
           "text": "via the codex CLI, app-server",
           "x": 8,
-          "y": 294,
+          "y": 295,
           "for": [
             "n4"
           ]
@@ -506,7 +506,7 @@
         {
           "text": "via Herdr",
           "x": 8,
-          "y": 370,
+          "y": 371,
           "for": [
             "n5"
           ]

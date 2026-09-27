@@ -63,7 +63,7 @@
         {
           "text": "ships in the codeflow binary",
           "x": 32,
-          "y": 52,
+          "y": 51,
           "style": "head"
         },
         {
@@ -88,7 +88,7 @@
         {
           "text": "crates/codeflow-core",
           "x": 48,
-          "y": 114,
+          "y": 112,
           "style": "mono",
           "for": [
             "e"
@@ -97,7 +97,7 @@
         {
           "text": "crates/codeflow-cli",
           "x": 48,
-          "y": 134,
+          "y": 133,
           "style": "mono",
           "for": [
             "e"
@@ -134,7 +134,7 @@
         {
           "text": "assets/base",
           "x": 288,
-          "y": 114,
+          "y": 113,
           "style": "mono",
           "for": [
             "s"
@@ -223,7 +223,7 @@
         {
           "text": "ships in the codeflow binary",
           "x": 20,
-          "y": 48,
+          "y": 46,
           "style": "head"
         },
         {
@@ -248,7 +248,7 @@
         {
           "text": "crates/codeflow-core, -cli,",
           "x": 34,
-          "y": 110,
+          "y": 109,
           "style": "mono",
           "for": [
             "e"

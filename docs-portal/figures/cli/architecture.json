@@ -72,7 +72,7 @@
           "shape": "rect",
           "x": 16,
           "y": 110,
-          "w": 170,
+          "w": 150,
           "h": 48,
           "rx": 8,
           "cap": "end",
@@ -81,7 +81,7 @@
         {
           "text": "one parser",
           "x": 30,
-          "y": 132,
+          "y": 129,
           "style": "strong",
           "for": [
             "d"
@@ -99,37 +99,37 @@
         {
           "state": "calls",
           "shape": "path",
-          "d": "M188 122C230 122 236 50 276 50",
+          "d": "M168 122C210 122 216 50 256 50",
           "head": "end",
           "id": "e1"
         },
         {
           "state": "calls",
           "shape": "path",
-          "d": "M188 134H276",
+          "d": "M168 134H256",
           "head": "end",
           "id": "e2"
         },
         {
           "state": "calls",
           "shape": "path",
-          "d": "M188 146C230 146 236 218 276 218",
+          "d": "M168 146C210 146 216 218 256 218",
           "head": "end",
           "id": "e3"
         },
         {
           "state": "handler",
           "shape": "rect",
-          "x": 278,
+          "x": 258,
           "y": 28,
-          "w": 190,
+          "w": 220,
           "h": 44,
           "rx": 8,
           "id": "h1"
         },
         {
           "text": "init and update inline",
-          "x": 292,
+          "x": 272,
           "y": 55,
           "for": [
             "h1"
@@ -138,16 +138,16 @@
         {
           "state": "handler",
           "shape": "rect",
-          "x": 278,
+          "x": 258,
           "y": 112,
-          "w": 190,
+          "w": 220,
           "h": 44,
           "rx": 8,
           "id": "h2"
         },
         {
           "text": "one handler per command",
-          "x": 292,
+          "x": 272,
           "y": 139,
           "for": [
             "h2"
@@ -156,16 +156,16 @@
         {
           "state": "handler",
           "shape": "rect",
-          "x": 278,
+          "x": 258,
           "y": 196,
-          "w": 190,
+          "w": 220,
           "h": 44,
           "rx": 8,
           "id": "h3"
         },
         {
           "text": "present handler",
-          "x": 292,
+          "x": 272,
           "y": 223,
           "for": [
             "h3"
@@ -174,21 +174,21 @@
         {
           "state": "calls",
           "shape": "path",
-          "d": "M470 50C520 50 520 110 548 118",
+          "d": "M480 50C525 50 525 110 548 118",
           "head": "end",
           "id": "e4"
         },
         {
           "state": "calls",
           "shape": "path",
-          "d": "M470 134H546",
+          "d": "M480 134H546",
           "head": "end",
           "id": "e5"
         },
         {
           "state": "calls",
           "shape": "path",
-          "d": "M470 218H546",
+          "d": "M480 218H546",
           "head": "end",
           "id": "e6"
         },
@@ -205,7 +205,7 @@
         {
           "text": "codeflow-core",
           "x": 562,
-          "y": 128,
+          "y": 127,
           "style": "mono",
           "for": [
             "c"
