@@ -81,12 +81,16 @@ runner — copy the one you need to your repo root (`.gitlab-ci.yml`,
 > per host) and wiring the alt templates into `scaffold-manifest.toml` are
 > deferred — for now they ship as available files only.
 
-## The Install-codeflow placeholder
+## The pinned install
 
-Each wrapper's install step is a **PLACEHOLDER**. Until you replace it with the
-release installer, the gate **fails RED** — a missing binary is an unarmed
-perimeter, not a pass. Do not "fix" the red by skipping when the binary is
-absent; that hands branch protection a job that ran nothing.
+`codeflow-ci.yml`, `codeflow-policy.yml` and `codeflow-registry.yml` install
+the `codeflow` release named by `scaffold_version` in the target branch's
+`.codeflow/project.toml`, verified against the release's published
+`sha256.sum`. A missing checksum file, a missing entry or a mismatch fails the
+job; nothing unverified is installed. The enforcing jobs run on
+`pull_request_target` and read the pull request head only as git data. The
+GitLab, Bitbucket and generic wrappers still carry a placeholder install step
+that fails red until you wire it.
 
 ## Two planes, deliberately
 
