@@ -135,6 +135,34 @@ impl GateOutcome {
 /// Returns `TestingError` when a present config file cannot be loaded —
 /// a broken config is a failure, never a silent skip.
 pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingError> {
+    run_gate_resolved(project_dir, mode, true)
+}
+
+/// Run only the targets that define `mode` themselves, with no `quick` to
+/// `essential` alias. The pre-push hook uses this for its push set: a target
+/// is in the push set exactly when it defines a `quick` mode, so a config
+/// whose `essential` mode runs the whole test suite never turns into a slow
+/// blocking push (TSK-132).
+///
+/// # Errors
+///
+/// Returns `TestingError` when a present config file cannot be loaded.
+pub fn run_gate_exact(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingError> {
+    run_gate_resolved(project_dir, mode, false)
+}
+
+fn run_gate_resolved(
+    project_dir: &Path,
+    mode: &str,
+    alias_quick: bool,
+) -> Result<GateOutcome, TestingError> {
+    let resolve = |targets: &[TargetConfig]| {
+        if alias_quick {
+            resolve_mode(mode, targets)
+        } else {
+            mode.to_string()
+        }
+    };
     let config_path = project_dir.join(TEST_CONFIG_PATH);
 
     let (targets, parallel, fail_fast, effective_mode) = if config_path.exists() {
@@ -144,7 +172,7 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
                 reason: format!("{TEST_CONFIG_PATH} defines no targets"),
             });
         }
-        let effective = resolve_mode(mode, &config.targets);
+        let effective = resolve(&config.targets);
         (
             config.targets,
             config.execution.parallel,
@@ -159,7 +187,7 @@ pub fn run_gate(project_dir: &Path, mode: &str) -> Result<GateOutcome, TestingEr
             });
         }
         let targets: Vec<TargetConfig> = detected.into_iter().map(|d| d.config).collect();
-        let effective = resolve_mode(mode, &targets);
+        let effective = resolve(&targets);
         (targets, false, false, effective)
     };
 
