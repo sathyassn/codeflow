@@ -1,7 +1,13 @@
 //! `codeflow test` — the generic test gate (charter §3.1, AC #7).
 
 use clap::{ArgGroup, Args, Subcommand};
-use codeflow_core::testing::gate::{run_gate, CoverageReport, FailureReport, GateOutcome};
+use codeflow_core::registry::codeflow_home;
+use codeflow_core::testing::gate::{
+    gate_uses_cargo, run_gate, CoverageReport, FailureReport, GateOutcome,
+};
+use codeflow_core::testing::gate_guard::{
+    acquire_full_gate_lock, check_cargo_target_dir, lock_dirs, GateLock,
+};
 use codeflow_core::testing::setup::prompt::TerminalPromptProvider;
 use codeflow_core::testing::setup::{self, SetupError, SetupResult};
 
@@ -63,6 +69,13 @@ pub fn run(args: &TestArgs) -> i32 {
     }
 
     let root = super::repo_root();
+    let _lock = match guard_gate(&root, &args.mode) {
+        Ok(lock) => lock,
+        Err(message) => {
+            eprintln!("codeflow test: refused: {message}");
+            return 1;
+        }
+    };
 
     match run_gate(&root, &args.mode) {
         Ok(GateOutcome::NoTargets { reason }) => {
@@ -132,6 +145,26 @@ pub fn run(args: &TestArgs) -> i32 {
             1
         }
     }
+}
+
+/// TSK-134 guards, checked before any target runs: a gate that runs cargo
+/// refuses a `CARGO_TARGET_DIR` outside the worktree, and a full gate takes
+/// the machine-wide gate lock (held until the returned value drops) or
+/// refuses naming the gate that holds it.
+fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, String> {
+    if gate_uses_cargo(root, mode) {
+        let cwd = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
+        check_cargo_target_dir(root, &cwd, std::env::var_os("CARGO_TARGET_DIR").as_deref())?;
+    }
+    if mode != "full" {
+        return Ok(None);
+    }
+    let dirs = lock_dirs(root, codeflow_home().as_deref());
+    let lock = acquire_full_gate_lock(&dirs, root).map_err(|held| held.to_string())?;
+    for note in &lock.notes {
+        eprintln!("codeflow test: {note}");
+    }
+    Ok(Some(lock))
 }
 
 /// Print the parsed failure summary (counts + failing test IDs + `file:line`)

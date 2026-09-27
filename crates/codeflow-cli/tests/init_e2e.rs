@@ -482,3 +482,67 @@ fn init_full_tier_preserves_representative_brownfield_present_files() {
     assert_update_round_trips(&root);
     assert_present_artifact_parity(&root);
 }
+
+/// TSK-134: in a freshly scaffolded project at every tier, `codeflow test`
+/// refuses a `CARGO_TARGET_DIR` outside the worktree and refuses a full gate
+/// while another holds the gate lock.
+#[test]
+fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
+    use codeflow_core::testing::gate_guard::{acquire_full_gate_lock, lock_dirs};
+
+    for tier in ["--minimal", "--standard", "--full"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir(&root).unwrap();
+        let init = codeflow(&root, &["init", "--yes", tier]);
+        assert!(init.status.success(), "{tier}: init failed");
+        std::fs::write(
+            root.join(".codeflow/test-config.json"),
+            r#"{"schema_version": "1.0", "targets": [
+  {"name": "rust", "runner": "custom", "modes": {"full": {"command": "cargo --version"}}}]}"#,
+        )
+        .unwrap();
+        let home = tmp.path().join("home");
+        let gate = |target_dir: Option<&Path>| {
+            let mut cmd = Command::new(env!("CARGO_BIN_EXE_codeflow"));
+            cmd.arg("test")
+                .current_dir(&root)
+                .env("CODEFLOW_HOME", &home)
+                .env_remove("CARGO_TARGET_DIR");
+            if let Some(dir) = target_dir {
+                cmd.env("CARGO_TARGET_DIR", dir);
+            }
+            cmd.output().expect("codeflow test runs")
+        };
+
+        let outside = tmp.path().join("shared-target");
+        let refused = gate(Some(&outside));
+        let err = String::from_utf8_lossy(&refused.stderr).to_string();
+        assert_eq!(refused.status.code(), Some(1), "{tier}: {err}");
+        assert!(
+            err.contains("never shared between worktrees"),
+            "{tier}: {err}"
+        );
+
+        let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)), &root).unwrap();
+        let locked = gate(None);
+        let err = String::from_utf8_lossy(&locked.stderr).to_string();
+        assert_eq!(locked.status.code(), Some(1), "{tier}: {err}");
+        assert!(
+            err.contains("another full gate is running"),
+            "{tier}: {err}"
+        );
+        drop(held);
+
+        // A child forked by a sibling test can hold the released descriptor
+        // until its exec; allow that short window.
+        let passed = (0..40).any(|_| {
+            let out = gate(Some(&root.join("target")));
+            out.status.success() || {
+                std::thread::sleep(std::time::Duration::from_millis(50));
+                false
+            }
+        });
+        assert!(passed, "{tier}: the gate runs once the lock is free");
+    }
+}

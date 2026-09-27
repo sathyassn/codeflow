@@ -5,20 +5,18 @@
 use std::path::Path;
 use std::process::{Command, Output};
 
-/// Shared isolated `CODEFLOW_HOME` so no invocation's registry touch can
-/// reach the developer's real `~/.codeflow` (per the `recall_remote_cli.rs`
-/// pattern).
-fn isolated_home() -> &'static Path {
-    static HOME: std::sync::OnceLock<tempfile::TempDir> = std::sync::OnceLock::new();
-    HOME.get_or_init(|| tempfile::tempdir().expect("home tempdir"))
-        .path()
-}
-
+/// Runs the binary with its own isolated `CODEFLOW_HOME` per call, so no
+/// registry touch reaches the developer's real `~/.codeflow` and parallel
+/// full gates never meet on one machine-wide gate lock (TSK-134). The
+/// harness's own `CARGO_TARGET_DIR` lies outside these temp repositories, so
+/// it is removed, as the gate would refuse it.
 fn codeflow(dir: &Path, args: &[&str]) -> Output {
+    let home = tempfile::tempdir().expect("home tempdir");
     Command::new(env!("CARGO_BIN_EXE_codeflow"))
         .args(args)
         .current_dir(dir)
-        .env("CODEFLOW_HOME", isolated_home())
+        .env("CODEFLOW_HOME", home.path())
+        .env_remove("CARGO_TARGET_DIR")
         .output()
         .expect("codeflow binary runs")
 }
