@@ -508,6 +508,20 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
             ));
         }
     }
+    // The same field rules as `scripts/release.py`; both parsers pass
+    // `scripts/fixtures/release_impact_cases.json`.
+    if fields
+        .get("rationale")
+        .is_some_and(|value| !value.is_empty() && placeholder(value))
+    {
+        issue("PR Rationale must give the reason, not a placeholder".into());
+    }
+    if fields
+        .get("migration")
+        .is_some_and(|value| TEMPLATE_ALTERNATIVES.contains(&guidance(value).as_str()))
+    {
+        issue("PR Migration still holds the template's alternatives; choose one".into());
+    }
     let impact = fields
         .get("impact")
         .copied()
@@ -569,28 +583,35 @@ fn guidance(value: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// Real migration guidance, not a placeholder or the template's unresolved
-/// alternatives. Only whole-field forms are rejected, so a step containing a
-/// pipe or angle brackets in a command still counts.
-fn substantive(value: &str) -> bool {
+/// The PR template's Migration choice text, left in place instead of a
+/// chosen value (`UNRESOLVED_ALTERNATIVES` in `scripts/release.py`).
+const TEMPLATE_ALTERNATIVES: [&str; 3] = [
+    "none, steps, or see breaking change",
+    "none | steps | see breaking change",
+    "steps",
+];
+
+/// A value that says nothing: empty of letters and digits, a whole
+/// `<placeholder>`, or a placeholder word (`PLACEHOLDERS` in
+/// `scripts/release.py`).
+fn placeholder(value: &str) -> bool {
     let value = guidance(value);
     let whole_placeholder = value.starts_with('<')
         && value.ends_with('>')
         && !value[1..value.len() - 1].contains(['<', '>']);
-    !whole_placeholder
-        && value.chars().any(char::is_alphanumeric)
-        && !matches!(
-            value.as_str(),
-            "none"
-                | "n/a"
-                | "na"
-                | "tbd"
-                | "todo"
-                | "steps"
-                | "see breaking change"
-                | "none, steps, or see breaking change"
-                | "none | steps | see breaking change"
-        )
+    whole_placeholder
+        || !value.chars().any(char::is_alphanumeric)
+        || matches!(value.as_str(), "none" | "n/a" | "na" | "tbd" | "todo")
+}
+
+/// Real migration guidance, not a placeholder or the template's unresolved
+/// alternatives. Only whole-field forms are rejected, so a step containing a
+/// pipe or angle brackets in a command still counts.
+fn substantive(value: &str) -> bool {
+    let normalized = guidance(value);
+    !placeholder(value)
+        && normalized != "see breaking change"
+        && !TEMPLATE_ALTERNATIVES.contains(&normalized.as_str())
 }
 
 #[cfg(test)]
@@ -1069,6 +1090,32 @@ mod tests {
         ] {
             assert!(!substantive(placeholder), "{placeholder}");
         }
+    }
+
+    /// TSK-106 AC-8: the Release impact parsers share one fixture set;
+    /// `scripts/test_release.py` runs the same cases through `release.py`.
+    #[test]
+    fn release_impact_block_passes_the_shared_fixture_set() {
+        let fixtures: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../../scripts/fixtures/release_impact_cases.json"
+        ))
+        .unwrap();
+        let cases = fixtures["cases"].as_array().unwrap();
+        assert!(cases.len() >= 20, "the shared set covers the block");
+        let mut disagreements = Vec::new();
+        for case in cases {
+            let body = case["body"].as_str().unwrap();
+            let valid = case["valid"].as_bool().unwrap();
+            let findings = release(&GitPolicy::default(), body, false);
+            if findings.is_empty() != valid {
+                disagreements.push(format!(
+                    "{}: expected valid={valid}, got {:?}",
+                    case["name"],
+                    findings.iter().map(|f| f.message.clone()).collect::<Vec<_>>()
+                ));
+            }
+        }
+        assert!(disagreements.is_empty(), "{disagreements:#?}");
     }
 
     #[test]
