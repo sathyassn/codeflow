@@ -107,6 +107,25 @@ publication date._
   coverage grids bind their column labels and share one set of columns.
 
 <!-- codeflow:release-impact patch -->
+- **Narrow figure labels clear their marks in every engine.** A narrow extent
+  row sets its label a full text box above its value, so a short bar's value
+  no longer runs into its label in Firefox, and narrow coverage cells sit
+  clear of their row name. The figure rule checks now measure text in the
+  portal's own typefaces, not an engine's fallback.
+
+<!-- codeflow:release-impact patch -->
+- **Browser verification cleans up after a failed fetch.** A page fetch that
+  fails during the portal figure check fails the check instead of ending the
+  run. The verifier releases its workflow lock and stops its preview server
+  on every exit, including an unexpected error.
+
+<!-- codeflow:release-impact patch -->
+- **Browser verification keeps its results on a long run.** Each engine's
+  trace is kept only when that engine fails, and the results are written
+  before the evidence files are counted. A file over its size cap is recorded
+  as a failed artifact in the results instead of ending the run.
+
+<!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
   minutes, repairs assertion-red checks without being asked, reports

@@ -1,10 +1,15 @@
 const SIGNALS = ["SIGINT", "SIGTERM"];
+// An error nothing awaited would end the process on the spot, leaving the
+// workflow lease and every tracked child behind. The lifecycle takes it as
+// fatal instead: it shuts down as a signal would, then fails with it.
+const FATAL_EVENTS = ["unhandledRejection", "uncaughtException"];
 const GRACE_MS = 5_000;
 const stopAttempts = new WeakMap();
 
 export async function withSignalAwareChildLifecycle(action) {
   if (typeof action !== "function") throw new Error("child lifecycle action must be a function");
   let interruptedBy = null;
+  let fatal = null;
   let rejectInterruption;
   const interruption = new Promise((_, reject) => { rejectInterruption = reject; });
   interruption.catch(() => {});
@@ -60,6 +65,8 @@ export async function withSignalAwareChildLifecycle(action) {
     return shutdownPromise;
   };
 
+  const stopError = () => fatal ?? interruptedError(interruptedBy ?? "SIGTERM");
+
   const lifecycle = {
     get interruptedBy() { return interruptedBy; },
     trackChild(child) {
@@ -85,7 +92,7 @@ export async function withSignalAwareChildLifecycle(action) {
     },
     async acquire(value, cleanup) {
       if (typeof cleanup !== "function") throw new Error("acquired resource cleanup must be a function");
-      if (state !== "open") throw interruptedError(interruptedBy ?? "SIGTERM");
+      if (state !== "open") throw stopError();
       const record = { promise: null, cleanupPromise: null };
       acquisitions.add(record);
       record.promise = Promise.resolve(value).then(async (resource) => {
@@ -98,6 +105,7 @@ export async function withSignalAwareChildLifecycle(action) {
       return Promise.race([record.promise, interruption]);
     },
     throwIfInterrupted() {
+      if (fatal !== null) throw fatal;
       if (interruptedBy !== null) throw interruptedError(interruptedBy);
     },
   };
@@ -110,6 +118,14 @@ export async function withSignalAwareChildLifecycle(action) {
     beginShutdown(interruptedBy).catch(() => {});
   }]));
   for (const [signal, handler] of handlers) process.on(signal, handler);
+  const onFatal = (error) => {
+    if (fatal === null) {
+      fatal = error instanceof Error ? error : new Error(`unhandled rejection: ${boundedMessage(error)}`);
+      rejectInterruption(fatal);
+    }
+    beginShutdown(interruptedBy ?? "SIGTERM").catch(() => {});
+  };
+  for (const event of FATAL_EVENTS) process.on(event, onFatal);
 
   let result;
   let actionError = null;
@@ -120,6 +136,7 @@ export async function withSignalAwareChildLifecycle(action) {
     try { await beginShutdown(interruptedBy ?? "SIGTERM"); }
     catch (error) { shutdownError = error; }
     for (const [signal, handler] of handlers) process.off(signal, handler);
+    for (const event of FATAL_EVENTS) process.off(event, onFatal);
   }
   if (shutdownError && actionError) {
     throw new AggregateError([actionError, shutdownError], "portal workflow and child cleanup both failed");
@@ -128,6 +145,9 @@ export async function withSignalAwareChildLifecycle(action) {
   if (interruptedBy !== null) {
     process.kill(process.pid, interruptedBy);
     await new Promise(() => {});
+  }
+  if (fatal !== null) {
+    throw actionError === null || actionError === fatal ? fatal : new AggregateError([fatal, actionError], "portal workflow failed after an unhandled error");
   }
   if (actionError) throw actionError;
   return result;
