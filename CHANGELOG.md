@@ -269,6 +269,18 @@ publication date._
   classification still block.
 
 <!-- codeflow:release-impact patch -->
+- **Smaller per-task reading.** The duo quality contract and the
+  capability-routing resource are now indexes: each links the sections read
+  on every task and the sections read only when a named trigger fires, such
+  as a UI change, a red gate or a route qualification. cf-delegate is a
+  common core plus one file per lane, so a Claude host reads the plugin lane
+  and a Codex host the lifecycle lane, and the Claude turn lifecycle adapter
+  is read only on a Codex host. Duplicated rules now live in one place with
+  pointers from the others. `codeflow update` replaces the old whole files
+  and installs the new section files at the standard and full tiers. A new
+  test caps the per-task reading chain at 148 KiB.
+
+<!-- codeflow:release-impact patch -->
 - **Work start past a stale local target.** `codeflow work start` and the
   `codeflow ci` work-start and classification checks resolve a
   task's integration target, such as `main`, to its local branch when one
