@@ -58,6 +58,14 @@ pub fn launch_isolated(
     launch_url(store, session_id, &app_url, profile_dir)
 }
 
+/// The `file:` link to an owner-private bootstrap page, for an operator to
+/// open when `codeflow` does not launch the browser itself (for example from an
+/// agent sandbox). The page is single-use and expires with the bootstrap TTL.
+pub fn handoff_link(store: &SessionStore, bootstrap_path: &Path) -> Result<String> {
+    verify_runtime_descendant(store.runtime_root(), bootstrap_path)?;
+    file_url(bootstrap_path)
+}
+
 pub fn launch_application(
     store: &SessionStore,
     session_id: Uuid,

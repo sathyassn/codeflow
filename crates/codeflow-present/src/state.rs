@@ -566,7 +566,9 @@ fn try_runtime_lease(path: &Path) -> Result<Option<RuntimeLease>> {
 impl SessionStore {
     pub fn discover(project: &Path) -> Result<Self> {
         let repository = git2::Repository::discover(project).map_err(|error| {
-            PresentError::InvalidDocument(format!("not a Git repository: {error}"))
+            PresentError::InvalidDocument(format!(
+                "not a Git repository: {error}; run codeflow present from the project's working tree, which scopes its sessions"
+            ))
         })?;
         let common = repository
             .commondir()
@@ -582,7 +584,7 @@ impl SessionStore {
             .canonicalize()
             .map_err(|error| PresentError::io(worktree, error))?;
         let config = ProjectConfig::load(&project_root)?;
-        let state_root = platform_state_root()?;
+        let state_root = open_state_root()?;
         let root = state_root.join("projects").join(&project_key);
         let runtime_root = state_root
             .join("runtime")
@@ -2645,6 +2647,42 @@ fn validate_selector_anchor(selector: &TextSelector, canonical: &str) -> Result<
         ));
     }
     Ok(())
+}
+
+/// Create the per-user cf-present state root with owner-only permissions.
+///
+/// `codeflow init` and `codeflow update` call this outside any agent sandbox,
+/// because the sandbox settings preset allows writes only inside this root and
+/// so cannot create its missing ancestors.
+pub fn provision_state_root() -> Result<PathBuf> {
+    let root = platform_state_root()?;
+    create_private_dir_all(&root)?;
+    ensure_safe_dir(&root)?;
+    Ok(root)
+}
+
+/// Resolve the state root for a session store. A missing root is created when
+/// possible; when that fails (for example inside an agent sandbox) the error
+/// names the command that provisions it.
+fn open_state_root() -> Result<PathBuf> {
+    let root = platform_state_root()?;
+    let missing = match fs::symlink_metadata(&root) {
+        Ok(_) => false,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => true,
+        Err(error) => return Err(PresentError::io(&root, error)),
+    };
+    if missing {
+        if let Err(error) = create_private_dir_all(&root) {
+            return Err(match error {
+                PresentError::Io { source, .. } => {
+                    PresentError::StateRootUnavailable { path: root, source }
+                }
+                other => other,
+            });
+        }
+    }
+    ensure_safe_dir(&root)?;
+    Ok(root)
 }
 
 fn platform_state_root() -> Result<PathBuf> {

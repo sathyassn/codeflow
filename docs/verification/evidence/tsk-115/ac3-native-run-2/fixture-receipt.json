@@ -1,0 +1,18 @@
+{
+  "case_id": "complex-decision-chooses-present",
+  "codeflow_executable": {
+    "path": "/Volumes/DATA/Local/software-workspace/projects/agentic-systems/codeflow/.worktrees/tsk-115/target/debug/codeflow",
+    "sha256": "sha256:6fc9a78dd21e78e64988903a085a195744e59cf99f183dd01399f98b772d69f5"
+  },
+  "fixture_digest": "sha256:e8313534476d0bd4152eafd05eeee1c8f5ca0fa81fa832ce69ede5d817b36551",
+  "fixture_id": "presentation-complex-decision",
+  "fixture_state": {
+    "branch": "fixture/presentation-decision",
+    "codeflow_present": "available",
+    "review_session": "not-opened"
+  },
+  "path": "/private/tmp/claude-501/-Volumes-DATA-Local-software-workspace-projects-agentic-systems/b10bd2b1-c9e2-4199-ae6f-b26a79836e8e/scratchpad/eval-tsk115-ac3/workspaces/d9819cd717e4e86b40f8/repository",
+  "run_id": "20260927T053355Z-9b5eaca2",
+  "schema_version": 1,
+  "trial": 2
+}

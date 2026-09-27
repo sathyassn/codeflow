@@ -102,6 +102,21 @@ publication date._
   `PATH` before `codeflow update`, since an older binary rejects the key.
 
 <!-- codeflow:release-impact minor -->
+- **cf-present from the agent sandbox.** The Claude settings presets add
+  one sandbox write root, the per-user `codeflow present` state directory
+  (`~/Library/Application Support/codeflow/present` on macOS,
+  `~/.local/state/codeflow/present` on Linux), so an agent can open, update,
+  read feedback on and close a session without a sandbox bypass.
+  `codeflow update` merges the entry into existing settings, and `codeflow
+  init` and `codeflow update` create that directory owner-only, since the
+  sandbox cannot create its parents; a sandboxed first use without it names
+  `codeflow update` as the fix. `present open
+  --no-launch` and `present show --no-launch` also print a percent-encoded
+  `file:` handoff link to the single-use bootstrap page, which the operator
+  opens within 120 seconds. A Linux `XDG_STATE_HOME` outside the default is
+  not covered by the preset.
+
+<!-- codeflow:release-impact minor -->
 - **Portable pull request checks.** `codeflow ci` reads Markdown sections,
   rejects explicitly empty PR bodies and ambiguous headings, and warns about
   summary detail, missing testing limits and oversized evidence. Generic release

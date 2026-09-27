@@ -164,6 +164,7 @@ fn main() -> anyhow::Result<()> {
             };
             let report = scaffold::init(&assets, &cwd, &options)?;
             print!("{report}");
+            cmd::present::provision_state_root_or_warn();
         }
         Command::Update { diff, force } => {
             let options = scaffold::UpdateOptions {
@@ -173,6 +174,7 @@ fn main() -> anyhow::Result<()> {
             };
             let report = scaffold::update(&assets, &cwd, &options)?;
             print!("{report}");
+            cmd::present::provision_state_root_or_warn();
             let portal_report = scaffold::portal::update_adopted_portal(&assets, &cwd)?;
             if let Some(portal_report) = &portal_report {
                 print!("{portal_report}");
