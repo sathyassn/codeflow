@@ -1,0 +1,48 @@
+    weeks of slack. But it needs a 40-minute outage that Product hasn't
+    approved. Its rollback throws away writes. It's also the same kind of                                                                      ✕
+    migration that caused both of last year's outages.
+  - B (dual-write with backfill) is the only option with no downtime, and it has
+    the cleanest rollback. But it has a known bug that isn't fixed: the
+    backfill left 0.3% of records mismatched in staging. It also depends on
+    driver 4.2, which has no confirmed release date.
+  - C (new service with cutover) has the lowest data-loss risk going forward.
+    But it has only 1 week of slack, costs 24 engineer-weeks, still needs a
+    5-minute outage, and a rollback loses every session created after cutover.
+  - All options: if the Q4 forecast holds, the current database survives even if
+    the migration slips. The forecast (1.6x today's peak) is about 12.5% below
+    the point where the database saturates (1.8x). That margin matters for how
+    much weight you give C's missing slack and B's driver risk.
+
+  What else is on the page:
+  - Numbered points: every point has an ID (A1 to C5, and X1 for the one that
+    covers all options). Each says which part of DECISION.md it comes from, or
+    that it's my inference.
+  - Gaps in DECISION.md (G1 to G7):
+    - It's unclear whether option A actually moves the store off the single
+      Postgres database, which is the stated goal.
+    - The data-loss and rollback rows contradict each other.                                         No changes this session
+    - It never says what losing a session means for a user: a forced sign-in, or
+      something worse.
+  - Questions only you or Product can answer (H1 to H6): each one shows how its
+    answer shifts the tradeoffs.
+  - Two ideas outside A, B and C: these aren't part of the doc and engineering
+    hasn't evaluated them. One is dual-writing for one full session lifetime so
+    no backfill is needed. The other is extra temporary capacity on the current
+    database to buy time.
+
+  What this analysis doesn't cover:
+  - No independent Codex check was done, since you asked me to skip it, so this
+    reflects one model's view.
+  - I took the numbers in DECISION.md as given and didn't re-check them.
+
+  To leave notes, press C on the page, mark any point, then click Submit review.
+  Tell me when you've submitted and I'll read your notes and update the page. I
+  won't pick an option or implement anything.
+
+✻ Crunched for 2m 57s · done 1:40 AM
+
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+❯
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  fixture/presentation-decision
+  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents
