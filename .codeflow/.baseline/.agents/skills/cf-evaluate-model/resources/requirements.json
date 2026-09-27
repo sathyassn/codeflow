@@ -1232,25 +1232,17 @@
       "statement": "Cross-lineage evidence requires native runtime provenance; unproven attribution is reclassified as the author seat's lineage and the cross half redone; relays are transports while genuine workers remain authors in their own lineage; vendor self-simulation is prohibited; delegated work is verified on launch and its provenance, scoped diff, and cited evidence are verified on return; idle or completion signals are never evidence.",
       "sources": [
         {
-          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
-          "markers": [
-            "**Cross-lineage evidence carries native provenance.**",
-            "A relay is transport, not author",
-            "same-lineage worker output remains same-lineage",
-            "vendor self-simulation is fabrication",
-            "scoped diff and cited evidence",
-            "idle or completion signal is evidence of neither"
-          ]
-        },
-        {
           "path": ".agents/skills/cf-model-orchestrator/resources/routing/evidence.md",
           "markers": [
             "## Admissible cross-lineage evidence",
             "only with native runtime provenance",
             "reclassified as the author seat's own lineage",
+            "A relay (plugin, adapter, relay subagent, or transport session) is transport, not author",
             "same-lineage worker that produces work remains same-lineage",
+            "no seat may simulate a missing vendor",
             "verify the delegated task started",
-            "scoped worktree diff, and cited evidence"
+            "scoped worktree diff, and cited evidence",
+            "idle or completion signal is evidence of neither"
           ]
         }
       ]
@@ -2343,9 +2335,9 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
           "markers": [
-            "Ordinary task-scoped project",
+            "Ordinary recoverable task-scoped project",
             "Model consensus, Claude auto mode",
             "human operator performs it through a separate"
           ]
@@ -2358,20 +2350,15 @@
       "statement": "Before a host-permitted high-blast-radius action, the host requires exact bounded scope, preview or dry-run evidence where supported, a current verified checkpoint or backup, a tested restore path, and explicit authenticated human approval; missing evidence fails closed, and approved execution advances one verified bounded step at a time.",
       "sources": [
         {
-          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
           "markers": [
             "Present the exact bounded action",
             "current verified checkpoint or backup",
             "missing evidence, an untested restore path",
-            "execute one bounded step at a time"
-          ]
-        },
-        {
-          "path": ".agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
-          "markers": [
             "exact scope and command/tool input",
             "current checkpoint/backup and tested restore path",
-            "postcondition verification"
+            "postcondition verification",
+            "execute one bounded step at a time"
           ]
         }
       ]

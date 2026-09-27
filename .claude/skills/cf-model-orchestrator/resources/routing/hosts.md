@@ -11,7 +11,7 @@ entry command. Instead, send complexity and the required outcome to that
 primary; it chooses its own permitted worker when appropriate and reviews the
 return.
 Later primary-approval prose cannot repair an incorrect initial dispatch.
-Claude retains integrated judgment. Concrete selectors, model classes, effort
+Concrete selectors, model classes, effort
 defaults, and escalation triggers live only in
 [current-ensemble.json](../current-ensemble.json).
 When a catalog family is named, follow
@@ -24,7 +24,6 @@ the duty. Design authority and UI assignment follow
 [design routing](design.md) when a task has product, UX, UI, interaction, or
 visual design work.
 
-Treat model names as current catalog bindings, not permanent doctrine. Record
-actual model, effort, route, and canary evidence. An unverified worker route is
+Treat model names as current catalog bindings, not permanent doctrine. An unverified worker route is
 unavailable, not an invitation to guess or invoke it headlessly; candidate
 status alone is not that unavailability evidence.

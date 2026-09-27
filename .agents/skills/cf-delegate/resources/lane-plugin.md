@@ -28,16 +28,15 @@ Collect peer in-turn via public foreground/qualified native fallback; no host
 
 Start every delegated plugin prompt with an explicit bounded role, for example
 `ROLE: peer. Complete only this bounded assignment. Do not start the top-level
-model orchestrator or delegate back to the host lineage (Claude).` Cross-family
-entry always targets the primary at default effort. Only that primary may
-dispatch same-family `ROLE: worker` escalation; never call a foreign worker
-directly. Claude subagents are not Codex; nested duos violate scope.
+model orchestrator or delegate back to the host lineage (Claude).` Claude
+subagents are not Codex; nested duos violate scope.
 
 Read the current Codex primary selector, default effort, and typed internal
 routes from
 `../../cf-model-orchestrator/resources/current-ensemble.json`, and invoke the
 primary directly with that selector and default effort; the receiving primary
-alone selects its permitted internal route. Send the difficulty and triggers
+alone selects its permitted internal route, so never call a foreign worker
+directly. Send the difficulty and triggers
 with the task. Worker routing, effort escalation, candidate use,
 accountability and authored lineage follow
 `../../cf-model-orchestrator/resources/capability-routing.md`. With project

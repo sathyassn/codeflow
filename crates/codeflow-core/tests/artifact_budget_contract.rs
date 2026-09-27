@@ -1112,14 +1112,9 @@ fn index_rows(base: &Path, index: &str) -> (Vec<String>, Vec<String>) {
     (every, triggered)
 }
 
-// The one expected failure: after every TSK-129 split, including
-// `cf-model-orchestrator/SKILL.md` (SPC-013 R-118, amended 2026-09-27), the
-// chain still exceeds its cap; closing the rest is an operator decision
-// recorded in the TSK-129 Closeout. The change that brings the chain under
-// the cap removes this attribute; the cap is not loosened. Any other panic
-// still fails the test.
+// The chain fits after every TSK-129 split and the deduplication recorded in
+// `docs/verification/tsk-129-duty-map.md`; the cap was never loosened.
 #[test]
-#[should_panic(expected = "reading chain exceeds its cap")]
 fn per_task_reading_chain_stays_within_its_cap() {
     use std::fmt::Write as _;
     let base = repo_root().join("assets/base");

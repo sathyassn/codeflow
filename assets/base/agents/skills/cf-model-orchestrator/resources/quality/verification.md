@@ -38,8 +38,7 @@ material performance behavior, state/environment interactions, and emergent
 anomalies. A deterministic red result cannot be overridden by model agreement;
 an agentic verdict cannot claim an analyzer ran when it did not. If a relevant
 SAST/taint lane is unavailable, record the residual risk and disposition rather
-than turning absence into a pass. Each layer may mark a category `N/A` only with
-surface evidence.
+than turning absence into a pass.
 
 Quality review is also longitudinal when the repository has relevant history.
 Inspect the changed surface, nearby patterns, and the smallest useful history

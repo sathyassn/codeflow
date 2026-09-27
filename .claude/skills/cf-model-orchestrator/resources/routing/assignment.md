@@ -39,10 +39,9 @@ may break a tie among capable routes; they never excuse a weaker quality gate,
 prove savings, or silently replace another criterion.
 
 Propagate current observed unavailability into every later worker choice in the
-same task. When a native error or canary proves an exact selector/route
-unavailable, record that exclusion and give it to the primary that dispatches
-workers so it does not choose the known-unavailable route again. Scope the
-exclusion to its evidenced harness, account/bucket, selector/route, and
+same task: when a native error or canary proves an exact selector/route
+unavailable, record that exclusion for the primary that dispatches workers.
+Scope it to its evidenced harness, account/bucket, selector/route, and
 freshness; do not infer that sibling models or another account are unavailable.
 A materially fresh native signal may clear or replace the exclusion.
 
@@ -58,8 +57,7 @@ primary, in the desktop app or the CLI alike, launches Fable or Opus through
 Claude Code's Agent tool with a subagent definition (see
 [Claude worker effort preflight](effort.md)). A Codex
 or Grok primary follows the same rule once native evidence shows a subagent
-route for that model in its harness; none is recorded yet. Record requested
-versus observed selector/effort. Where the harness has no native route for
+route for that model in its harness; none is recorded yet. Where the harness has no native route for
 that model, the recorded fallback is `primary-retained`: keep the high
 primary, record the missing route as a limitation, and do not infer a pass.
 A permitted worker change within the approved responsible-primary seat remains
@@ -82,7 +80,7 @@ specialization without being cheaper. A tool-collection worker is not an equival
 substitute for that reasoning. An xhigh trigger requires the owning primary to
 obtain xhigh reasoning through a supported same-family worker route; do not spend
 a high attempt merely to fail first. Routine, well-specified work stays at the
-unit's selected worker effort without automatically escalating every worker.
+unit's selected worker effort.
 The primary critically integrates worker findings and retains approvals; both
 families still plan independently and cross-lineage review remains mandatory.
 If no required capable route is available, record the unresolved quality gap and
@@ -95,14 +93,12 @@ The managed ensemble is the only worker-route catalog. `candidate` and
 configured candidate is usable for bounded non-design work when current native
 routing evidence confirms that exact harness route is currently reachable and
 compatible with the required permissions and sandbox. Executable presence alone
-is not readiness, and no prior completed workload canary is required. The first
+is not readiness, and no prior completed workload canary is required: the first
 bounded assignment may itself supply start, return, and applied-provenance
-evidence under the responsible primary's inspection and acceptance. Requested
-selector/effort remains requested until the public native surface exposes the
-applied values. This does not make the candidate qualified, cheaper, generally
-reliable, or applied in a later run. Conversely, a configured route without that
-native readiness evidence is unavailable for dispatch even if its selector
-parses.
+evidence under the responsible primary's inspection and acceptance. That does
+not make the candidate qualified, cheaper, generally reliable, or applied in a
+later run. A configured route without that native readiness evidence is
+unavailable for dispatch even if its selector parses.
 
 Candidate reasoning and review-support routes may advise under the same bounded
 native-evidence and primary-review rules; they do not own plan, design,

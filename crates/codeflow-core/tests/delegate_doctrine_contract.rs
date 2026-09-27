@@ -220,19 +220,15 @@ fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
         ],
     );
     // TSK-129: the plugin-exchange detail moved to the plugin lane (pinned
-    // above); the orchestrator keeps the provenance invariant.
-    assert_contains(
-        ORCHESTRATOR,
-        &[
-            "the resumable Codex thread ID forward",
-            "otherwise as requested",
-            "grade inferred completion explicitly as inferred",
-        ],
-    );
+    // above); the orchestrator's provenance invariant points at the routing
+    // evidence section, which owns the recheck and labelling rules.
+    assert_contains(ORCHESTRATOR, &["routing/evidence.md"]);
     assert_contains(
         ROUTING,
         &[
             "native Codex thread ID",
+            "the resumable Codex thread forward",
+            "otherwise label them requested",
             "never silently upgrade requested to observed",
             "Grade inferred completion explicitly as inferred.",
         ],
@@ -246,13 +242,11 @@ fn generic_claude_relay_never_counts_as_codex() {
         &["any surface that cannot show that thread never counts as Codex"],
     );
     // TSK-129: the plugin-lane sentence lives in the plugin lane (pinned
-    // above); the orchestrator keeps its relay and generic-subagent invariants.
+    // above); the relay rule lives in the routing evidence section (pinned
+    // below), and the orchestrator keeps its generic-subagent rule.
     assert_contains(
         ORCHESTRATOR,
-        &[
-            "A relay is transport, not author",
-            "generic same-lineage subagent never satisfies",
-        ],
+        &["generic same-lineage subagent never satisfies"],
     );
     assert_contains(
         ROUTING,
@@ -395,7 +389,7 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     );
     assert_contains(
         ORCHESTRATOR,
-        &["five-obligation evidence contract — launch, provenance, return, failure, recheck"],
+        &["five-obligation evidence contract: launch, provenance, return, failure, recheck"],
     );
     assert_contains(
         CONSULT,
@@ -409,7 +403,7 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     );
     assert_contains(
         ORCHESTRATOR,
-        &["evidence contract — launch, provenance, return, failure, recheck"],
+        &["evidence contract: launch, provenance, return, failure, recheck"],
     );
     // Every tier installs the one tier-neutral provenance sentence.
     let provenance = "Work attributed to another model or harness counts only with native, \

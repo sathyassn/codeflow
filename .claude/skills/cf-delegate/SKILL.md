@@ -64,8 +64,7 @@ safety boundary; it is not permission to route around a security denial.
 
 ## Preflight — is the delegate even available
 
-Check the preferred lane, then any qualified native fallback. Additional edit
-handoffs are optional; the orchestrator's required independent review is not.
+Check the preferred lane, then any qualified native fallback.
 
 - **From Claude Code:** the plugin surface and Codex authentication, as
   [the plugin lane](resources/lane-plugin.md) lists them.
@@ -117,8 +116,6 @@ guard binding when `agy` is someone's harness, read
 
 ## Guardrails
 
-- **Never automate vendor auth.** The user logs in manually, one account per
-  side; degrade legibly on missing/401.
 - **Every delegate prompt narrows authority and data.** Name purpose, permitted
   actions/files/resources/data/processors/destinations/effects and step budget;
   ambiguity blocks—never guess. Send only necessary minimized data to an

@@ -42,18 +42,12 @@ boundaries, without speculative generality.
 Both seats grade design proportionality before approval. Each actual executor
 first-verifies its implementation for necessity, clarity, idiomatic structure,
 maintainability, failure behavior, and security; the responsible primary
-inspects and accepts it, then the independent cross-lineage reviewer reviews that
-unit independently. The directly invoked model qualified for the
-`claude-judgment-primary` role reviews the settled design and actual integrated
-diff and owns the final quality verdict; helpers may collect evidence but cannot
-replace that judgment. Its integrated judgment is not independent review of a
-unit it authored.
-Material avoidable complexity is `changes_requested`, even when tests pass.
-A fallback records reduced assurance and never claims that the selected Claude
-judgment primary reviewed the work.
+inspects and accepts it, and review follows
+[review and degradation](../routing/review.md). The `claude-judgment-primary`
+owns the final quality verdict; helpers may collect evidence but cannot
+replace that judgment. Material avoidable complexity is `changes_requested`,
+even when tests pass.
 
-Primary responsibility and actual execution are separate. The recorded
-executor first-verifies the unit, and a primary inspecting a worker return
-does not become its author and must not secretly duplicate the
-implementation. Delegation, direct execution, and design authority follow
+Primary responsibility and actual execution are separate: a primary inspecting
+a worker return does not become its author. Delegation, direct execution, and design authority follow
 [capability-routing](../capability-routing.md).

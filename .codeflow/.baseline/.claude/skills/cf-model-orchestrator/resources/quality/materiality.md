@@ -57,10 +57,9 @@ do not translate that vocabulary inside the security report. When a general
 review consumes a security verdict, a confirmed or likely critical/high
 security finding is a blocker.
 
-Do not silently absorb out-of-scope work. An evidenced imminent severe risk is
-escalated immediately; another material observation becomes one tracked item
-with evidence and a proposed route. Isolated nits are noted or batched, not
-turned into one issue each. No external mutation or scope expansion follows
+Do not silently absorb out-of-scope work: escalate an evidenced imminent severe
+risk immediately, and make another material observation one tracked item with
+evidence and a proposed route. No external mutation or scope expansion follows
 from discovery without the authority required by the task. "Nothing material
 found" is a valid result; issue farming and fabricated proactive signals are
 failures.
