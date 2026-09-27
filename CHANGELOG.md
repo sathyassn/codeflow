@@ -566,7 +566,9 @@ publication date._
   `cd <path> &&` first. A git command whose subcommand, global options or,
   for a commit, merge, push or other judged command, arguments come from a
   command substitution is refused too; generated text is accepted only in a
-  quoted message such as `-m "$(…)"`. This also blocks a commit written inside a
+  quoted message such as `-m "$(…)"`. A read-only command keeps working
+  with a substitution after its subcommand, as in `git show "$(…)"`, since
+  its arguments cannot turn it into a mutation. This also blocks a commit written inside a
   subshell such as `(cd <repo> && git commit)`.
 
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
