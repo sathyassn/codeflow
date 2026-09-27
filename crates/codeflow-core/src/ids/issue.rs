@@ -391,8 +391,18 @@ pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
 
 /// R-10: refuse when the fetched tip does not descend from the last tip
 /// this clone verified.
+/// A registry absent from the authority is new only while this clone has
+/// never verified one; after a checkpoint it is a deletion, refused before
+/// any push so nothing can replace the lost history.
 pub(super) fn verify_descent(git: &Git, remote: &str) -> Result<(), IdsError> {
     let Some(tip) = git.rev(&tracking_ref(remote)) else {
+        if let Some(last) = state::load(git)?.last_verified.get(remote) {
+            return Err(IdsError::Rewritten(format!(
+                "`{branch}` is absent from {remote} although this clone verified {} there; nothing was pushed. A maintainer republishes the verified history (`git push {remote} {last}:refs/heads/{branch}`), then repairs any file it lacks with `codeflow ids restore <id>`",
+                short(last),
+                branch = super::REGISTRY_BRANCH,
+            )));
+        }
         return Ok(());
     };
     checkpoint(git, remote, &tip)

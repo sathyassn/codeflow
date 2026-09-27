@@ -709,6 +709,66 @@ fn seed_cannot_move_the_checkpoint_across_a_rewrite() {
     );
 }
 
+/// One registry command run for its outcome alone.
+type Attempt<'a> = &'a dyn Fn() -> Result<(), IdsError>;
+
+#[test]
+fn a_deleted_and_pruned_registry_is_never_replaced() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    let first = task(&a, "one").unwrap();
+    task(&a, "two").unwrap();
+    // The records are on main, so a clone that never saw the registry is
+    // told to seed rather than start a new one.
+    git(&a, &["checkout", "-q", "-b", "records"]);
+    write_record(&a, "TSK-001", Some(&first.uid));
+    commit_all(&a, "a record");
+    git(&a, &["push", "-q", "origin", "records:main"]);
+    git(&a, &["checkout", "-q", "main"]);
+    git(&a, &["merge", "-q", "--ff-only", "records"]);
+    // The host loses the registry and an ordinary prune drops the tracking
+    // ref, so only the saved checkpoint remembers it.
+    git(
+        &world.bare(),
+        &["update-ref", "-d", "refs/heads/codeflow/registry"],
+    );
+    git(&a, &["fetch", "-q", "--prune", "origin"]);
+    assert!(Git::new(&a)
+        .rev("refs/remotes/origin/codeflow/registry")
+        .is_none());
+    let epic = a.join("project-management/epics/EPC-001.md");
+    std::fs::create_dir_all(epic.parent().unwrap()).unwrap();
+    std::fs::write(&epic, record_text("EPC-001", None)).unwrap();
+    commit_all(&a, "an epic");
+
+    let attempts: [(&str, Attempt); 3] = [
+        ("seed", &|| seed::seed(&a, None).map(|_| ())),
+        ("issue", &|| task(&a, "after").map(|_| ())),
+        ("sync", &|| issue::sync(&a).map(|_| ())),
+    ];
+    for (what, attempt) in attempts {
+        let outcome = attempt();
+        assert!(
+            world.remote_ledger().tip.is_none(),
+            "{what} published nothing: {outcome:?}"
+        );
+        match outcome {
+            Err(IdsError::Rewritten(reason)) => assert!(
+                reason.contains("is absent from origin") && reason.contains("codeflow ids restore"),
+                "{what}: {reason}"
+            ),
+            other => panic!("{what} must refuse a deleted registry, got {other:?}"),
+        }
+    }
+    // A clone that never verified a registry cannot start a new one either.
+    let b = world.clone_as("b", "b@example.test");
+    assert!(matches!(
+        task(&b, "fresh clone").unwrap_err(),
+        IdsError::NotSeeded
+    ));
+    assert!(world.remote_ledger().tip.is_none());
+}
+
 #[test]
 fn seed_reports_a_permission_refusal_once_even_beside_a_lock_message() {
     let world = World::new();
