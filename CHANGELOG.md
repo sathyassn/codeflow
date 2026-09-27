@@ -129,7 +129,11 @@ publication date._
 - **One full gate at a time, running the suite once.** Public behaviour
   change: `codeflow test --mode full` takes a gate lock before any target
   runs, and a second full gate on the machine refuses, naming the holder's
-  pid, directory and start time. A lock left by a killed gate is reclaimed.
+  pid, directory and start time. A killed gate's lock stays held while the
+  targets it started are still running, and is reclaimed once they exit.
+  On Windows the lock covers the gate process only; a target left running
+  by a killed gate is not detected. Follow-up: a job object that ends the
+  target tree with the gate.
   The locks are `locks/full-gate.lock` under the CodeFlow home
   (`CODEFLOW_HOME`, else `~/.codeflow`), which spans the machine, and
   `codeflow/full-gate.lock` in the repository's git common directory, which
