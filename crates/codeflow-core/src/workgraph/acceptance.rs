@@ -183,7 +183,7 @@ pub fn uncommitted_outside(repo: &Repository, task: &RecordView) -> Vec<Finding>
     vec![finding(
         BINDING_RULE,
         format!(
-            "{}: uncommitted changes outside the record were never reviewed ({}); commit them and review the result again",
+            "{}: uncommitted changes outside the record were never reviewed ({}); commit, remove or ignore them, then review the result again",
             task.id,
             paths.join(", ")
         ),

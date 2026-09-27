@@ -706,13 +706,18 @@ fn task_status_complete_refuses_uncommitted_code() {
         }
         let result = status_complete(root, "TSK-001");
         assert_ne!(result.0, 0, "{what}: {}", result.1);
-        assert!(
-            result
-                .1
-                .contains("uncommitted changes outside the record were never reviewed"),
-            "{what}: {}",
-            result.1
-        );
+        let named = if what == "untracked" {
+            "src/new.rs"
+        } else {
+            "src/lib.rs"
+        };
+        for needle in [
+            "uncommitted changes outside the record were never reviewed",
+            named,
+            "commit, remove or ignore them",
+        ] {
+            assert!(result.1.contains(needle), "{what}: {needle}: {}", result.1);
+        }
         let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
         assert!(record.contains("status: in_progress"), "{what}: {record}");
     }
