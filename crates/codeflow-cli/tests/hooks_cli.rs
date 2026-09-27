@@ -361,9 +361,95 @@ fn git_guard_judges_the_repository_a_command_targets() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
         stderr.contains("target unresolved: `$UNSET_DIR`")
-            && stderr.contains("does not prove the target safe"),
+            && stderr.contains("cannot prove it is not a protected branch"),
         "{stderr}"
     );
+}
+
+// TSK-112 review round 1 (Codex probe table), on real repositories. The
+// session is on an unprotected branch, so every block below comes from the
+// repository git would actually write to, which is on `main`.
+#[test]
+fn git_guard_blocks_targets_it_cannot_prove() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session = tmp.path().join("session");
+    let feature = tmp.path().join("feature");
+    let protected = tmp.path().join("protected");
+    for (dir, branch) in [
+        (&session, "feat/s"),
+        (&feature, "feat/x"),
+        (&protected, "main"),
+    ] {
+        std::fs::create_dir_all(dir).unwrap();
+        init_repo(dir, branch);
+    }
+    // A directory literally named `$R` inside the session, a repository on main.
+    let literal = session.join("$R");
+    std::fs::create_dir_all(&literal).unwrap();
+    init_repo(&literal, "main");
+    let f = feature.to_string_lossy();
+    let pg = protected.join(".git");
+    let pg = pg.to_string_lossy();
+    let absent = tmp.path().join("absent/out");
+    let absent = absent.to_string_lossy();
+
+    for (case, command) in [
+        (
+            "escaped dollar, quoted",
+            format!("R={f}; git -C \"\\$R\" commit -m 'fix: p'"),
+        ),
+        (
+            "escaped dollar, bare",
+            format!("R={f}; git -C \\$R commit -m 'fix: p'"),
+        ),
+        (
+            "env GIT_DIR",
+            format!("R={f}; env GIT_DIR={pg} git -C \"$R\" commit -m 'fix: p'"),
+        ),
+        (
+            "command env GIT_DIR",
+            format!("R={f}; command env GIT_DIR={pg} git -C \"$R\" commit -m 'fix: p'"),
+        ),
+        (
+            "unresolved variable",
+            "git -C \"$DEST\" commit -m 'fix: p'".to_string(),
+        ),
+        (
+            "subshell assignment",
+            format!("(R={f}); git -C \"$R\" commit -m 'fix: p'"),
+        ),
+    ] {
+        let out = guard_run(&command, &session);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{case}: {command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    // The failed `cd` probe needs a protected session: after `;` the commit
+    // may run where the shell started.
+    let main_session = tmp.path().join("main-session");
+    std::fs::create_dir_all(&main_session).unwrap();
+    init_repo(&main_session, "main");
+    let failed_cd = format!("R={f}; cd \"$R\" > {absent}; git commit -m 'fix: p'");
+    assert_eq!(guard_run(&failed_cd, &main_session).status.code(), Some(2));
+
+    // Controls: proven targets on a feature branch pass.
+    for command in [
+        format!("R={f}; git -C \"$R\" commit -m 'fix: p'"),
+        format!("R={f}; cd \"$R\" && git commit -m 'fix: p'"),
+        format!("cd {f} && git commit -m \"$(printf 'fix: p')\""),
+    ] {
+        let out = guard_run(&command, &main_session);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
 }
 
 #[test]

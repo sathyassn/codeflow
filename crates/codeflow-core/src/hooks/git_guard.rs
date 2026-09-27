@@ -17,7 +17,8 @@ use serde::Deserialize;
 use crate::security::pattern::is_path_targeted;
 
 use super::git_target::{
-    expand_word, flat_joins, is_name, join_path, ShellState, Val, GIT_LOCATION_VARS,
+    self, assignment, expand_word, flat_top_level, join_path, launcher_env, map_top_level, Cwd,
+    Join, ShellState, Val, GIT_LOCATION_VARS,
 };
 use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
@@ -43,7 +44,7 @@ pub struct Retarget<'s> {
 /// What the resolver reads from a retargeted repository.
 #[derive(Debug, Clone)]
 pub struct TargetRepo {
-    /// The branch checked out there (never empty).
+    /// The branch checked out there (empty on a detached HEAD).
     pub branch: String,
     /// The repository's own git policy, or `None` when it is the session
     /// repository (same common git dir), whose policy is already in force. A
@@ -66,7 +67,7 @@ pub type DirTargetLookup<'a> = Option<&'a dyn Fn(&Retarget<'_>) -> Option<Target
 /// A relative `spec.path` is taken from `cwd`. A git-dir spec opens exactly
 /// that git directory, as git does with `--git-dir`/`GIT_DIR`; any other
 /// path is discovered upward, as `-C` and `cd` are. `None` when the path does
-/// not exist, is not in a repository, or has a detached or unreadable HEAD.
+/// not exist or is not in a repository.
 #[must_use]
 pub fn read_target(
     cwd: &std::path::Path,
@@ -98,10 +99,8 @@ pub fn read_target(
         };
         git2::Repository::discover(&start).ok()?
     };
+    // Empty on a detached HEAD, which no branch rule protects.
     let branch = super::repo::current_branch(&repo);
-    if branch.is_empty() {
-        return None;
-    }
     let same = session_common.is_some_and(|s| same_path(s, repo.commondir()));
     let policy = if same {
         None
@@ -215,12 +214,13 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
     let violations = &mut report.violations;
     // Chained checkout/switch dodges change the branch later segments run on.
     let mut branches = BranchTracker::new(ctx.current_branch);
-    // A `cd <dir>` earlier in the chain retargets subsequent git ops.
-    let mut cd_dir: Option<String> = None;
     let segments = expand_commands(command);
-    // The top-level shell state, tracked only on a flat line (TSK-112).
-    let mut shell = ShellState::new(flat_joins(command).filter(|j| j.len() == segments.len()));
-    let mentions_location_var = GIT_LOCATION_VARS.iter().any(|v| command.contains(v));
+    // Where each segment sits (TSK-112): on a flat line, `Some(join)` for a
+    // top-level command and `None` for one nested in a substitution or a
+    // `bash -c` string; `None` for the whole line when it is not flat.
+    let roles = flat_top_level(command).and_then(|top| map_top_level(&segments, &top));
+    let mut shell = ShellState::new(roles.is_some());
+    let line = LineFacts::read(&segments, roles.as_deref(), command);
     let mut notes = Vec::new();
 
     // `expand_commands` unwraps the shell constructs an agent can hide a git
@@ -229,7 +229,13 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
     // invocation is evaluated wherever it sits, not only as a segment's first
     // word (the review's wrapper evasions).
     for (idx, segment) in segments.iter().enumerate() {
-        shell.begin(idx);
+        let top_level = match roles.as_ref().map(|r| r[idx]) {
+            Some(Some(join)) => {
+                shell.begin(join);
+                true
+            }
+            _ => false,
+        };
         let tokens = shell_tokens(segment);
         if tokens.is_empty() {
             continue;
@@ -265,8 +271,9 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
 
         // A `cd <dir>` (as its own simple command) retargets later git ops.
         if let Some(dir) = cd_target(&tokens) {
-            shell.cd(&dir);
-            cd_dir = Some(dir);
+            if top_level {
+                shell.cd(&dir);
+            }
             continue;
         }
 
@@ -284,20 +291,18 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
         // redirections are the shell's, not arguments.
         let words = command_argv(segment);
         let launched = strip_launchers(&words);
-        shell.assign(&tokens, launched.map(|(program, _)| program));
+        if top_level {
+            shell.assign(&tokens, launched.map(|(program, _)| program));
+        }
         let Some((program, args)) = launched else {
             continue;
         };
-        shell.observe(program, args);
+        if top_level {
+            shell.observe(program, args);
+        }
         match program_kind(program) {
             ProgramKind::Git => {
-                let moved = Moves {
-                    cd_dir: cd_dir.as_deref(),
-                    git_dir_env: git_dir_env_prefix(&tokens),
-                    tokens: &tokens,
-                    shell: &shell,
-                    mentions_location_var,
-                };
+                let moved = line.moves_for(&shell, top_level, &tokens);
                 check_git(args, &mut branches, &moved, ctx, violations, &mut notes);
             }
             ProgramKind::Gh => check_gh(args, ctx, violations),
@@ -547,20 +552,6 @@ fn cd_target(tokens: &[String]) -> Option<String> {
         .find(|t| !t.starts_with('-'))
         .map(|t| t.trim_matches(|c| c == '"' || c == '\'').to_string())
         .filter(|d| !d.is_empty())
-}
-
-/// A leading `GIT_DIR=<dir>` env-prefix assignment, when present.
-fn git_dir_env_prefix(tokens: &[String]) -> Option<String> {
-    for t in tokens {
-        let (name, val) = t.split_once('=')?;
-        if !is_identifier(name) {
-            break;
-        }
-        if name == "GIT_DIR" {
-            return Some(val.to_string());
-        }
-    }
-    None
 }
 
 /// The hook shims and the integrity files: directory prefixes and exact files
@@ -1176,7 +1167,7 @@ fn substitution_output_runs(prefix: &str) -> bool {
 /// `true` when the character at `i` begins a shell word, where an unquoted
 /// `#` opens a comment. After a closing `)` or a backtick it continues the
 /// word instead (`$(x)#y`), so neither counts.
-fn starts_word(chars: &[char], i: usize) -> bool {
+pub(super) fn starts_word(chars: &[char], i: usize) -> bool {
     i == 0 || matches!(chars[i - 1], ' ' | '\t' | '\n' | ';' | '&' | '|' | '(')
 }
 
@@ -1333,7 +1324,7 @@ fn body_substitutions(body: &str, out: &mut Vec<String>, depth: usize) {
 
 /// Capture up to the matching `)` for a `$(` opened before `start`, honoring
 /// nesting. Returns the inner text and the index just past the `)`.
-fn capture_balanced(chars: &[char], start: usize) -> (String, usize) {
+pub(super) fn capture_balanced(chars: &[char], start: usize) -> (String, usize) {
     let mut depth = 1;
     let mut s = String::new();
     let mut i = start;
@@ -1356,7 +1347,7 @@ fn capture_balanced(chars: &[char], start: usize) -> (String, usize) {
 
 /// Capture up to the closing backtick. Returns the inner text and the index
 /// just past the backtick.
-fn capture_backtick(chars: &[char], start: usize) -> (String, usize) {
+pub(super) fn capture_backtick(chars: &[char], start: usize) -> (String, usize) {
     let mut s = String::new();
     let mut i = start;
     while i < chars.len() {
@@ -1403,17 +1394,79 @@ impl BranchTracker {
 
 const SANCTIONED: &str = "land work via PR (gh pr create → merge on evidenced-green checks) or `codeflow integrate <branch> --into <target>`";
 
+/// What the whole line reveals about moves the tracker cannot follow.
+struct LineFacts {
+    /// Some segment can move a shell's directory (`cd`, `pushd`, `source`, …).
+    any_mover: bool,
+    /// On a flat line: some *nested* segment can, or sets a variable.
+    nested_mover: bool,
+    /// The line mentions a git location variable (`GIT_DIR`, …).
+    mentions_location_var: bool,
+}
+
+impl LineFacts {
+    fn read(segments: &[String], roles: Option<&[Option<Join>]>, command: &str) -> Self {
+        let mut facts = Self {
+            any_mover: false,
+            nested_mover: false,
+            mentions_location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
+        };
+        for (idx, segment) in segments.iter().enumerate() {
+            let tokens = shell_tokens(segment);
+            let words = command_argv(segment);
+            let program = strip_launchers(&words).map(|(program, _)| program);
+            let mover =
+                cd_target(&tokens).is_some() || program.is_some_and(git_target::moves_directory);
+            let nested = roles.is_some_and(|r| r[idx].is_none());
+            facts.any_mover |= mover;
+            let sets_var = program.is_none_or(|p| p == "export")
+                && tokens.iter().any(|t| assignment(t).is_some());
+            facts.nested_mover |= nested && (mover || sets_var);
+        }
+        facts
+    }
+
+    /// Where a git op can run and which variables it can see.
+    fn moves_for<'r>(
+        &self,
+        shell: &'r ShellState,
+        top_level: bool,
+        tokens: &'r [String],
+    ) -> Moves<'r> {
+        let (cwd, tracked) = if !shell.flat() {
+            let cwd = if self.any_mover {
+                Cwd::Unknown("a directory change on a line the guard does not model".to_string())
+            } else {
+                Cwd::Paths(vec![String::new()])
+            };
+            (cwd, false)
+        } else if !top_level && self.nested_mover {
+            let why = "a directory or variable change inside a nested command".to_string();
+            (Cwd::Unknown(why), false)
+        } else {
+            (shell.cwd.clone(), top_level)
+        };
+        Moves {
+            cwd,
+            vars: tracked.then_some(&shell.vars),
+            // A location variable the line sets outside the op's own launcher
+            // environment is only modeled at top level of a flat line.
+            location_unknown: self.mentions_location_var && !tracked,
+            tokens,
+        }
+    }
+}
+
 /// Where the line has moved the directory a git op runs in.
 struct Moves<'r> {
-    /// The last `cd` in the line, read as before TSK-112 (not composed).
-    cd_dir: Option<&'r str>,
-    /// A `GIT_DIR=` prefix on the git op itself.
-    git_dir_env: Option<String>,
-    /// The git op's full token list (its leading assignments included).
+    /// The directories the op could run in.
+    cwd: Cwd,
+    /// Variables the op's words can expand from (`None`: none are known).
+    vars: Option<&'r HashMap<String, Val>>,
+    /// A git location variable may be set in a way the guard cannot scope.
+    location_unknown: bool,
+    /// The op's full token list (its leading assignments and launchers).
     tokens: &'r [String],
-    shell: &'r ShellState,
-    /// The line mentions `GIT_DIR` or `GIT_COMMON_DIR` somewhere.
-    mentions_location_var: bool,
 }
 
 fn check_git(
@@ -1428,9 +1481,8 @@ fn check_git(
 
     // Global-flag pass, ahead of the subcommand: hook-path override (`git -c
     // core.hooksPath=…` or `git --config-env=core.hooksPath=<VAR>`) disarms
-    // the client hooks (ADR-0009); `-C`/`--git-dir` retarget the op at
-    // another repository.
-    let (hooks_path_override, retarget_flag) = scan_git_globals(args);
+    // the client hooks (ADR-0009).
+    let (hooks_path_override, _) = scan_git_globals(args);
     if hooks_path_override && policy.hook_integrity.is_active() {
         out.push(hook_integrity_violation(
             policy.hook_integrity,
@@ -1444,14 +1496,15 @@ fn check_git(
         return;
     };
 
-    let judged = judge_target(args, retarget_flag, branches, moved, ctx);
+    let judged = judge_target(args, branches, moved, ctx);
     if matches!(sub, "checkout" | "switch") {
         // A checkout in a retargeted dir moves that dir's branch, not the
-        // session's.
+        // session's. One the guard cannot place moves nothing it tracks.
         if let Some(target) = checkout_target(rest) {
-            match &judged.key {
-                Some(dir) => branches.switch_in(dir, target),
-                None => branches.session = target,
+            match &judged.track {
+                Track::Session => branches.session = target,
+                Track::Dir(dir) => branches.switch_in(dir, target),
+                Track::Nothing => {}
             }
         }
         return;
@@ -1477,195 +1530,131 @@ fn check_git(
             }
         }
     }
-    if let Some(note) = judged.note {
+    if let Some(why) = judged.unresolved {
+        let note = format!(
+            "target unresolved: {why}; the guard cannot prove it is not a protected branch, so it judged it as one"
+        );
         for v in &mut found {
             v.message = format!("{} ({note})", v.message);
+            v.remedy = UNRESOLVED_REMEDY.to_string();
         }
         notes.push(format!("`git {sub}`: {note}"));
     }
     out.extend(found);
 }
 
-/// The branch and policy pairs a git op is judged against, with the key its
-/// checkouts are tracked under and a note when the target was not resolved.
+/// How to make an unresolved target resolvable.
+const UNRESOLVED_REMEDY: &str = "name the repository with a literal path (`git -C /path/to/repo …`) or change to it first (`cd /path/to/repo && git …`), so the guard can read its branch and policy";
+
+/// Which branch a checkout in the judged op moves.
+enum Track {
+    Session,
+    Dir(String),
+    Nothing,
+}
+
+/// The branch and policy pairs a git op is judged against.
 struct Judged<'p> {
-    key: Option<String>,
+    track: Track,
     cases: Vec<(String, Cow<'p, GitPolicy>)>,
-    note: Option<String>,
+    /// Set when the target could not be resolved; the cases then assume a
+    /// protected branch.
+    unresolved: Option<String>,
 }
 
 /// Decide which repository a git op targets (TSK-112).
 ///
-/// On a flat line whose moves all resolve, the op is judged by the target
-/// repository alone: its branch and its own policy. Otherwise the guard keeps
-/// its earlier reading (the first `-C`/`--git-dir`, else a `GIT_DIR=` prefix,
-/// else the last `cd`, judged by the session policy and by the target's own)
-/// and adds candidates, never removes them: the composed target where it
-/// resolves, and the session repository when the target is unresolved or a
-/// `GIT_DIR`/`GIT_COMMON_DIR` setting cannot be scoped. A verdict built this
-/// way is never more permissive than the earlier one (SPC-013 planning
-/// resolution 13), and its note says the target was not resolved.
+/// When every directory the shell could run the op in resolves to a readable
+/// repository, the op is judged against each of them, by that repository's
+/// branch and its own policy, and blocks if any of them is protected.
+/// Otherwise the target is unresolved: the op is judged as if it ran on a
+/// protected branch under the session policy, so a mutation blocks, and the
+/// verdict says why and how to make the target resolvable.
 fn judge_target<'p>(
     args: &[String],
-    retarget_flag: Option<String>,
     branches: &BranchTracker,
     moved: &Moves<'_>,
     ctx: &GuardContext<'p>,
 ) -> Judged<'p> {
-    let session = || (branches.session.clone(), Cow::Borrowed(ctx.policy));
-    let shell = moved.shell;
-    let no_vars = HashMap::new();
-    let (base, vars) = if shell.flat() {
-        (shell.cwd.clone(), &shell.vars)
-    } else {
-        (
-            Val::Known(moved.cd_dir.unwrap_or_default().to_string()),
-            &no_vars,
-        )
-    };
-    let composed = compose_target(args, moved.tokens, &base, vars);
-
-    let mut unresolved: Option<String> = None;
-    if shell.flat() {
-        match &composed {
-            Ok(None) => {
-                return Judged {
-                    key: None,
-                    cases: vec![session()],
-                    note: None,
-                }
-            }
-            Ok(Some(spec)) => match resolve_target(spec, branches, ctx) {
-                Some((branch, rules)) => {
-                    return Judged {
-                        key: Some(spec.path.clone()),
-                        cases: vec![(branch, rules)],
-                        note: None,
-                    }
-                }
-                None => unresolved = Some(format!("no readable repository at `{}`", spec.path)),
-            },
-            Err(why) => unresolved = Some(why.clone()),
-        }
-    }
-
-    // The earlier reading, kept whole.
-    let legacy_dir = retarget_flag
-        .or_else(|| moved.git_dir_env.clone())
-        .or_else(|| moved.cd_dir.map(str::to_string));
-    let mut cases = Vec::new();
-    match &legacy_dir {
-        None => cases.push(session()),
-        Some(dir) => {
-            let spec = Retarget {
-                path: dir,
-                git_dir: false,
-            };
-            if let Some(repo) = lookup(&spec, ctx) {
-                let branch = branches.switched_in(dir).unwrap_or(repo.branch);
-                cases.push((branch.clone(), Cow::Borrowed(ctx.policy)));
-                if let Some(own) = repo.policy {
-                    cases.push((branch, Cow::Owned(own)));
-                }
-            } else {
-                cases.push(match branches.switched_in(dir) {
-                    Some(branch) => (branch, Cow::Borrowed(ctx.policy)),
-                    None => session(),
-                });
-                unresolved.get_or_insert_with(|| format!("no readable repository at `{dir}`"));
+    let resolved = compose_targets(args, moved).and_then(|specs| {
+        let mut cases = Vec::new();
+        for spec in &specs {
+            match spec {
+                None => cases.push((branches.session.clone(), Cow::Borrowed(ctx.policy))),
+                Some(spec) => cases.push(
+                    resolve_target(spec, branches, ctx)
+                        .ok_or_else(|| format!("no readable repository at `{}`", spec.path))?,
+                ),
             }
         }
-    }
-    // Candidates the earlier reading missed.
-    match composed {
-        Ok(Some(spec)) => match resolve_target(&spec, branches, ctx) {
-            Some(case) => cases.push(case),
-            None => {
-                unresolved
-                    .get_or_insert_with(|| format!("no readable repository at `{}`", spec.path));
-            }
+        let track = match specs.as_slice() {
+            [None] => Track::Session,
+            [Some(spec)] => Track::Dir(spec.path.clone()),
+            _ => Track::Nothing,
+        };
+        Ok((track, cases))
+    });
+    match resolved {
+        Ok((track, cases)) => Judged {
+            track,
+            cases,
+            unresolved: None,
         },
-        Ok(None) => cases.push(session()),
         Err(why) => {
-            unresolved.get_or_insert(why);
+            let branch =
+                assumed_protected_branch(ctx.policy).unwrap_or_else(|| branches.session.clone());
+            Judged {
+                track: Track::Nothing,
+                cases: vec![(branch, Cow::Borrowed(ctx.policy))],
+                unresolved: Some(why),
+            }
         }
-    }
-    cases.extend(exported_git_dir_case(args, &base, branches, moved, ctx));
-    let retargeted = legacy_dir.is_some() || unresolved.is_some();
-    if unresolved.is_some() || (moved.mentions_location_var && retargeted) {
-        cases.push(session());
-    }
-    Judged {
-        key: legacy_dir,
-        cases,
-        note: unresolved.map(|why| {
-            format!(
-                "target unresolved: {why}; the verdict includes the session repository's branch and policy and does not prove the target safe"
-            )
-        }),
     }
 }
 
-/// A `GIT_DIR` the line set as a shell variable applies if it was exported:
-/// the case for that git dir, composed with the op's own `-C`, when it
-/// resolves.
-fn exported_git_dir_case<'p>(
-    args: &[String],
-    base: &Val,
-    branches: &BranchTracker,
-    moved: &Moves<'_>,
-    ctx: &GuardContext<'p>,
-) -> Option<(String, Cow<'p, GitPolicy>)> {
-    let shell = moved.shell;
-    let Some(Val::Known(dir)) = shell.vars.get("GIT_DIR").filter(|_| shell.flat()) else {
-        return None;
-    };
-    let mut plain = shell.vars.clone();
-    for name in GIT_LOCATION_VARS {
-        plain.remove(*name);
-    }
-    let mut tokens = vec![format!("GIT_DIR={dir}")];
-    tokens.extend(moved.tokens.iter().cloned());
-    let spec = compose_target(args, &tokens, base, &plain).ok()??;
-    resolve_target(&spec, branches, ctx)
+/// A branch name the policy protects, to judge an unresolved target by.
+fn assumed_protected_branch(policy: &GitPolicy) -> Option<String> {
+    policy
+        .protected_branches
+        .iter()
+        .map(|p| p.replace(['*', '?'], "x"))
+        .find(|b| policy.branch_is_protected(b))
 }
 
 /// An owned [`Retarget`].
+#[derive(PartialEq, Eq)]
 struct TargetSpec {
     path: String,
     git_dir: bool,
 }
 
-/// Compose the repository a git op targets from the directory it starts in
-/// (`base`), each `-C` in order, and the git dir (`--git-dir`, else a
-/// `GIT_DIR=` prefix), which git reads relative to the `-C` directory.
-/// `Ok(None)` is the session's own working directory; `Err` names what could
-/// not be resolved.
-fn compose_target(
-    args: &[String],
-    tokens: &[String],
-    base: &Val,
-    vars: &HashMap<String, Val>,
-) -> Result<Option<TargetSpec>, String> {
-    let mut git_dir: Option<String> = None;
-    for token in tokens {
-        let Some((name, value)) = token.split_once('=') else {
-            break;
-        };
-        if !is_name(name) {
-            break;
-        }
-        if name == "GIT_COMMON_DIR" {
-            return Err("`GIT_COMMON_DIR` moves the refs git writes".to_string());
-        }
-        if name == "GIT_DIR" {
-            git_dir = Some(expand_word(value, vars)?);
-        }
+/// Compose every repository location a git op could target: each directory
+/// the shell could be in, then each `-C` in order, then the git dir
+/// (`--git-dir`, else a `GIT_DIR` in the op's launcher environment), which git
+/// reads relative to the `-C` directory. `None` in the result is the session's
+/// own working directory. `Err` names what could not be resolved.
+fn compose_targets(args: &[String], moved: &Moves<'_>) -> Result<Vec<Option<TargetSpec>>, String> {
+    let no_vars = HashMap::new();
+    let vars = moved.vars.unwrap_or(&no_vars);
+    if moved.location_unknown {
+        return Err(
+            "a git location variable (`GIT_DIR`, `GIT_COMMON_DIR`, `GIT_WORK_TREE`) set where the guard cannot scope it".to_string(),
+        );
     }
     if let Some(name) = GIT_LOCATION_VARS.iter().find(|v| vars.contains_key(**v)) {
         return Err(format!("`{name}` set earlier in the line"));
     }
-    let mut dir = base.clone();
+    let mut git_dir: Option<String> = None;
+    for (name, value) in launcher_env(moved.tokens)? {
+        match name.as_str() {
+            "GIT_DIR" => git_dir = Some(expand_word(&value, vars)?),
+            "GIT_COMMON_DIR" | "GIT_WORK_TREE" => {
+                return Err(format!("`{name}` in the command's environment"))
+            }
+            _ => {}
+        }
+    }
+    let mut dash_c: Vec<String> = Vec::new();
     let mut idx = 0;
     while idx < args.len() {
         let t = args[idx].as_str();
@@ -1675,12 +1664,7 @@ fn compose_target(
         };
         match t {
             "-C" => {
-                let next = expand_word(value()?, vars)?;
-                dir = match dir {
-                    Val::Known(d) => Val::Known(join_path(&d, &next)),
-                    Val::Unknown(_) if next.starts_with('/') => Val::Known(next),
-                    unknown @ Val::Unknown(_) => unknown,
-                };
+                dash_c.push(expand_word(value()?, vars)?);
                 idx += 2;
             }
             "--git-dir" => {
@@ -1698,22 +1682,47 @@ fn compose_target(
             }
         }
     }
-    match (git_dir, dir) {
-        (Some(g), Val::Known(d)) => Ok(Some(TargetSpec {
-            path: join_path(&d, &g),
-            git_dir: true,
-        })),
-        (Some(g), Val::Unknown(_)) if g.starts_with('/') => Ok(Some(TargetSpec {
-            path: g,
-            git_dir: true,
-        })),
-        (_, Val::Unknown(why)) => Err(why),
-        (None, Val::Known(d)) if d.is_empty() => Ok(None),
-        (None, Val::Known(d)) => Ok(Some(TargetSpec {
-            path: d,
-            git_dir: false,
-        })),
+    // A base the -C chain or git dir does not make irrelevant must be known.
+    let bases: Vec<Option<String>> = match &moved.cwd {
+        Cwd::Paths(paths) => paths.iter().cloned().map(Some).collect(),
+        Cwd::Unknown(_) => vec![None],
+    };
+    let mut specs: Vec<Option<TargetSpec>> = Vec::new();
+    for base in bases {
+        let mut dir = base;
+        for next in &dash_c {
+            dir = match dir {
+                Some(d) => Some(join_path(&d, next)),
+                None if next.starts_with('/') => Some(next.clone()),
+                None => None,
+            };
+        }
+        let spec = match (&git_dir, dir) {
+            (Some(g), Some(d)) => Some(TargetSpec {
+                path: join_path(&d, g),
+                git_dir: true,
+            }),
+            (Some(g), None) if g.starts_with('/') => Some(TargetSpec {
+                path: g.clone(),
+                git_dir: true,
+            }),
+            (None, Some(d)) if d.is_empty() => None,
+            (None, Some(d)) => Some(TargetSpec {
+                path: d,
+                git_dir: false,
+            }),
+            (_, None) => {
+                return Err(match &moved.cwd {
+                    Cwd::Unknown(why) => why.clone(),
+                    Cwd::Paths(_) => "the working directory".to_string(),
+                })
+            }
+        };
+        if !specs.contains(&spec) {
+            specs.push(spec);
+        }
     }
+    Ok(specs)
 }
 
 fn lookup(spec: &Retarget<'_>, ctx: &GuardContext<'_>) -> Option<TargetRepo> {
@@ -4662,23 +4671,23 @@ mod tests {
     }
 
     #[test]
-    fn test_retarget_resolver_none_falls_back_to_session_branch() {
-        // The resolver cannot read the target repo's branch (returns None); the
-        // guard falls back to the session branch (documented residual — the
-        // target repo's git-hook plane backstops). Session on a feature branch:
-        // allowed; session on a protected branch: still blocked.
+    fn test_retarget_resolver_none_blocks_as_unresolved() {
+        // The resolver cannot read the target repository (TSK-112, T112-4):
+        // the guard cannot prove the target is unprotected, so a commit
+        // blocks whatever the session branch is, and says how to resolve it.
         let p = default_policy();
         let resolver = |_: &Retarget<'_>| None;
-        assert!(evaluate(
-            "git -C /root commit -m x",
-            &ctx_with_dir_branch(&p, "feat/x", &resolver)
-        )
-        .is_empty());
-        let v = evaluate(
-            "git -C /root commit -m x",
-            &ctx_with_dir_branch(&p, "main", &resolver),
-        );
-        assert!(has_rule(&v, "git.commit_to_protected"), "{v:?}");
+        for session in ["feat/x", "main"] {
+            let v = evaluate(
+                "git -C /root commit -m x",
+                &ctx_with_dir_branch(&p, session, &resolver),
+            );
+            assert!(has_rule(&v, "git.commit_to_protected"), "{session}: {v:?}");
+            assert!(v[0]
+                .message
+                .contains("target unresolved: no readable repository at `/root`"));
+            assert!(v[0].remedy.contains("literal path"));
+        }
     }
 
     // -- unknown ref-writers (4c) --
@@ -5191,7 +5200,6 @@ mod tests {
     fn test_tsk112_relative_dash_c_after_cd() {
         for cmd in [
             "cd /work && git -C scratch commit -m x",
-            "cd /work; git -C scratch commit -m x",
             "cd / && cd work && git -C scratch commit -m x",
         ] {
             let r = report(cmd, "main");
@@ -5253,28 +5261,119 @@ mod tests {
         }
     }
 
-    // AC-3: an unresolved target is judged against the session repository,
-    // and the output says so without claiming the target was proved safe.
+    // AC-3 (T112-4): an unresolved mutation target blocks, even from an
+    // unprotected session, and the output names what could not be resolved
+    // and how to make it resolvable. It never claims the target is safe.
     #[test]
-    fn test_tsk112_unresolved_target_discloses_the_session_fallback() {
-        let r = report("git -C \"$UNSET_DIR\" commit -m x", "main");
-        assert!(has_rule(&r.violations, "git.commit_to_protected"));
-        let message = &r.violations[0].message;
-        assert!(
-            message.contains("target unresolved: `$UNSET_DIR`"),
-            "{message}"
-        );
-        assert!(
-            message.contains("the verdict includes the session repository's branch and policy and does not prove the target safe"),
-            "{message}"
-        );
-        assert_eq!(r.notes.len(), 1, "{:?}", r.notes);
-        assert!(r.notes[0].starts_with("`git commit`: target unresolved: `$UNSET_DIR`"));
-
-        // Allowed on an unprotected session branch, the note still discloses it.
-        let r = report("git -C \"$UNSET_DIR\" commit -m x", "feat/s");
+    fn test_tsk112_unresolved_target_blocks_and_says_how_to_resolve() {
+        for session in ["main", "feat/s"] {
+            let r = report("git -C \"$DEST\" commit -m x", session);
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{session}"
+            );
+            let v = &r.violations[0];
+            assert!(
+                v.message.contains("target unresolved: `$DEST`"),
+                "{}",
+                v.message
+            );
+            assert!(
+                v.message
+                    .contains("the guard cannot prove it is not a protected branch"),
+                "{}",
+                v.message
+            );
+            assert!(v.remedy.contains("literal path") && v.remedy.contains("cd /path/to/repo &&"));
+            assert_eq!(r.notes.len(), 1, "{:?}", r.notes);
+            assert!(r.notes[0].starts_with("`git commit`: target unresolved: `$DEST`"));
+        }
+        // A read of an unresolved target is not a mutation: allowed, noted.
+        let r = report("git -C \"$DEST\" status", "feat/s");
         assert!(r.violations.is_empty(), "{:?}", r.violations);
-        assert!(r.notes[0].contains("does not prove the target safe"));
+        assert_eq!(r.notes.len(), 1);
+    }
+
+    // T112-3: a `cd` can fail, so after `;` the old directory stays a
+    // candidate; `&&` proves the move.
+    #[test]
+    fn test_tsk112_failing_cd_keeps_the_old_directory() {
+        for cmd in [
+            "R=/scratch; cd \"$R\" > /absent/out; git commit -m x",
+            "cd /scratch; git commit -m x",
+            "cd /scratch && true; git commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(has_rule(&r.violations, "git.commit_to_protected"), "{cmd}");
+            assert!(
+                r.notes.is_empty(),
+                "{cmd}: both directories resolve: {:?}",
+                r.notes
+            );
+        }
+        for cmd in [
+            "R=/scratch; cd \"$R\" > /tmp/out && git commit -m x",
+            "cd /scratch && git commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+        // From an unprotected session both candidates are unprotected.
+        assert!(report("cd /scratch; git commit -m x", "feat/s")
+            .violations
+            .is_empty());
+    }
+
+    // T112-1: an escaped or quoted `$` is literal to the shell; the guard
+    // never expands it.
+    #[test]
+    fn test_tsk112_escaped_dollar_is_not_expanded() {
+        for cmd in [
+            "R=/scratch; git -C \"\\$R\" commit -m x",
+            "R=/scratch; git -C \\$R commit -m x",
+            "R=\\$X; git -C \"$R\" commit -m x",
+            "git -C $'/scratch' commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+    }
+
+    // T112-2: launcher environment (`env`, `command env`) is modeled; an
+    // unmodeled `env` option or location variable leaves the target
+    // unresolved.
+    #[test]
+    fn test_tsk112_launcher_environment_is_modeled() {
+        for cmd in [
+            "R=/scratch; env GIT_DIR=/session/.git git -C \"$R\" commit -m x",
+            "R=/scratch; command env GIT_DIR=/session/.git git -C \"$R\" commit -m x",
+            "env -u GIT_DIR git -C /scratch commit -m x",
+            "env GIT_COMMON_DIR=/session/.git git -C /scratch commit -m x",
+            "GIT_WORK_TREE=/x git -C /scratch commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        let r = report("env FOO=1 git -C /scratch commit -m x", "main");
+        assert!(r.violations.is_empty(), "{:?}", r.violations);
+    }
+
+    // A commit message built by a heredoc substitution keeps the line flat.
+    #[test]
+    fn test_tsk112_heredoc_message_keeps_the_move_resolvable() {
+        let cmd = "cd /scratch && git commit -m \"$(cat <<'EOF'\nfix: x (y)\nEOF\n)\"";
+        let r = report(cmd, "main");
+        assert!(r.violations.is_empty(), "{:?}", r.violations);
+        let r = report("cd /scratch-main && git commit -m \"$(echo x)\"", "feat/s");
+        assert!(has_rule(&r.violations, "git.commit_to_protected"));
     }
 
     // AC-3: moves the guard cannot be sure of never loosen the verdict: the
