@@ -288,8 +288,9 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
     // Fault: a waiver naming a commit that is not the amendment on the
     // target; the verb refuses before it writes.
     git(&root, &["reset", "-q", "--hard", &reviewed]);
-    // The commit that landed the plan is on the target but did not amend
-    // AC-1 (it created the record).
+    // The commit that landed the plan is on the target, but it also changed
+    // the policy, so it is not a planning amendment (a target commit that
+    // changes records only but not AC-1 is covered in `acceptance_cli`).
     let unamended = acceptance(dir.path(), &reviewed, &format!("waived | {planned}"));
     let refused = codeflow(
         &root,
@@ -305,7 +306,7 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
     fails(
         &refused,
         "a waiver without its amendment",
-        "which does not amend AC-1 of TSK-001",
+        "which also changes .codeflow/policy.json; a planning amendment changes planning records only",
     );
     assert!(text(&refused).contains(SCOPE), "{}", text(&refused));
     let branch_only = acceptance(dir.path(), &reviewed, &format!("waived | {reviewed}"));
