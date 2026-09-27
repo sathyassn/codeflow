@@ -280,7 +280,8 @@ publication date._
   other hosts and parallel tasks, to references. Duplicated rules now live
   in one place with pointers from the others. `codeflow update` replaces the
   old whole files and installs the new section files at the standard and
-  full tiers. A new test caps the per-task reading chain at 148 KiB.
+  full tiers. A new test caps the per-task reading chain at 148 KiB, down
+  from about 199 KiB.
 
 <!-- codeflow:release-impact patch -->
 - **Work start past a stale local target.** `codeflow work start` and the
