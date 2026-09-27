@@ -87,7 +87,8 @@ pub struct SeedReport {
 /// # Errors
 ///
 /// Returns [`IdsError::Clash`] naming every id whose copies provenance
-/// cannot decide, without writing anything; or a push failure.
+/// cannot decide, and [`IdsError::Shallow`] on a shallow clone, without
+/// writing anything; or a push failure.
 pub fn seed(root: &Path, map: Option<&SeedMap>) -> Result<SeedReport, IdsError> {
     let git = Git::new(root);
     let _lock = state::lock(&git)?;
@@ -96,6 +97,11 @@ pub fn seed(root: &Path, map: Option<&SeedMap>) -> Result<SeedReport, IdsError> 
 
 /// [`seed`] under a lock the caller holds.
 pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport, IdsError> {
+    // A seed is permanent, so it never reads introductions from a shallow
+    // clone, whose boundary commits look like adds (R-111).
+    if git.is_shallow()? {
+        return Err(IdsError::Shallow);
+    }
     let online = git.has_remote(AUTHORITY);
     let tracking = tracking_ref(AUTHORITY);
     let mut reason = String::new();

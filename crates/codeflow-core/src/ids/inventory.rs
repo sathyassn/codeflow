@@ -230,8 +230,10 @@ fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
 ///
 /// # Errors
 ///
-/// Returns an error when git fails.
+/// Returns [`IdsError::Shallow`] on a shallow clone, and an error when git
+/// fails.
 pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, IdsError> {
+    complete_history(git)?;
     let mut held = None;
     let mut out = BTreeMap::new();
     for (id, (shas, paths)) in add_log(git, rev)? {
@@ -246,8 +248,10 @@ pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, Id
 ///
 /// # Errors
 ///
-/// Returns an error when git fails.
+/// Returns [`IdsError::Shallow`] on a shallow clone, and an error when git
+/// fails.
 pub fn introduction(git: &Git, rev: &str, id: &RegId) -> Result<Option<String>, IdsError> {
+    complete_history(git)?;
     let Some((shas, paths)) = add_log(git, rev)?.remove(id) else {
         return Ok(None);
     };
@@ -524,6 +528,15 @@ fn raw_fields<'a>(mut fields: impl Iterator<Item = &'a str>) -> Vec<RawChange> {
         });
     }
     changes
+}
+
+/// Fail on a shallow clone: its boundary commits look like adds, so an
+/// introduction read from it would be invented (R-111).
+fn complete_history(git: &Git) -> Result<(), IdsError> {
+    if git.is_shallow()? {
+        return Err(IdsError::Shallow);
+    }
+    Ok(())
 }
 
 #[cfg(test)]

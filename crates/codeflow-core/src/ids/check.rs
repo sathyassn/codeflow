@@ -49,6 +49,12 @@ pub fn registry_ref(git: &Git) -> Option<String> {
 /// Returns an error when git fails.
 pub fn check(git: &Git, registry: Option<&str>) -> Result<Report, IdsError> {
     let mut report = Report::default();
+    // Reconciling needs every introduction, and a shallow clone would
+    // invent them at its boundary: fail closed instead (R-111).
+    if git.is_shallow()? {
+        report.blocks.push(IdsError::Shallow.to_string());
+        return Ok(report);
+    }
     let Some(registry) = registry.map(str::to_string).or_else(|| registry_ref(git)) else {
         report.blocks.push(
             "no `codeflow/registry` found: CI fetches it explicitly; a maintainer seeds it once with `codeflow ids seed`"

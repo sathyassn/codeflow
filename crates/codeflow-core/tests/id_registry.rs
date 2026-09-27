@@ -1817,6 +1817,53 @@ fn a_record_renamed_back_changed_in_a_merge_is_a_new_record() {
     );
 }
 
+#[test]
+fn a_shallow_clone_neither_seeds_nor_checks_until_it_is_unshallowed() {
+    // Review round 2, SL-5: a depth-one clone whose boundary commit only
+    // edits a record would read that edit as the record's introduction.
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    write_titled(&m, "TSK-001", "original");
+    let original = commit_all(&m, "original");
+    write_titled(&m, "TSK-001", "edited original");
+    commit_all(&m, "edit the record");
+    git(&m, &["push", "-q", "origin", "main"]);
+    let url = format!("file://{}", world.bare().display());
+    git(
+        world.dir.path(),
+        &["clone", "-q", "--depth", "1", &url, "shallow"],
+    );
+    let shallow = world.dir.path().join("shallow");
+    git(&shallow, &["config", "user.email", "shallow@example.test"]);
+    git(&shallow, &["config", "user.name", "shallow"]);
+
+    let refused = seed::seed(&shallow, None).unwrap_err();
+    assert!(matches!(refused, IdsError::Shallow), "{refused}");
+    assert!(refused.to_string().contains("git fetch --unshallow"));
+    assert!(world.remote_ledger().tip.is_none(), "nothing was written");
+    assert!(Git::new(&shallow).rev(REGISTRY_REF).is_none());
+    let report = check::check(&Git::new(&shallow), None).unwrap();
+    assert!(
+        report
+            .blocks
+            .iter()
+            .any(|b| b.contains("git fetch --unshallow")),
+        "{:?}",
+        report.blocks
+    );
+
+    // With the full history the seed credits the real introduction.
+    git(&shallow, &["fetch", "-q", "--unshallow"]);
+    seed::seed(&shallow, None).unwrap();
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(
+        tsk1.introduced.starts_with(&original),
+        "{}",
+        tsk1.introduced
+    );
+    assert!(check::check(&Git::new(&shallow), None).unwrap().passed());
+}
+
 // --- AC-11 (library part): a no-remote repository ---------------------------
 
 #[test]
