@@ -7,7 +7,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 An undated version section above the latest verified public release is pending
 source state, not a claim that the version is available. The public release
 records the actual publication date; published sections and their impact
-annotations are frozen.
+annotations are frozen. A correction to a published section is a dated
+erratum below, never an edit of the section.
+
+## Errata
+
+- 2026-09-27, 2.1.0: the `v2.1.0` tag and the published `source.tar.gz`
+  identify different commits. The published archive is the release's source;
+  the tag stays where it is. See "Historical bridge into v3" in
+  `docs/releasing.md`.
 
 ## [3.0.0]
 

@@ -12,6 +12,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from unittest import mock
 
@@ -57,6 +58,9 @@ class Repository:
 
     def cleanup(self) -> None:
         self.temp.cleanup()
+
+    def load(self) -> dict[str, object]:
+        return release.load_config(self.config)
 
     def write(self, path: str, value: str) -> None:
         destination = self.root / path
@@ -147,10 +151,14 @@ class Repository:
         command(self.root, "git", "commit", "-q", "-m", message)
         return command(self.root, "git", "rev-parse", "HEAD")
 
-    def pending(self, version: str, entries: list[tuple[str, str]]) -> None:
+    def pending(self, version: str, entries: list[tuple[str, ...]]) -> None:
+        """Pending entries as (impact, label) or (impact, label, body): each
+        is written `- **Label.** body`, identified by its label (R-92)."""
         body = "\n".join(
-            f"<!-- codeflow:release-impact {impact} -->\n- {note}\n"
-            for impact, note in entries
+            f"<!-- codeflow:release-impact {entry[0]} -->\n- **{entry[1]}.**"
+            + (f" {entry[2]}" if len(entry) > 2 else "")
+            + "\n"
+            for entry in entries
         )
         self.write(
             "CHANGELOG.md",
@@ -240,7 +248,7 @@ class PendingVersionTests(unittest.TestCase):
         self.config["legacy_pending_group"]["sha256"] = digest
         text = (
             "# Changelog\n\n## [3.0.0]\n\n"
-            "<!-- codeflow:release-impact minor -->\n- new guidance\n\n"
+            "<!-- codeflow:release-impact minor -->\n- **New guidance.**\n\n"
             f"<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256={digest} -->\n"
             f"{backlog}\n<!-- codeflow:legacy-group-end -->\n\n"
             "## [2.0.0] - 2026-01-01\n\n- public\n"
@@ -254,7 +262,7 @@ class PendingVersionTests(unittest.TestCase):
         text = (self.repo.root / "CHANGELOG.md").read_text().replace("## [2.0.1]", "## [2.0.1] - 2026-02-02")
         with self.assertRaisesRegex(release.ReleaseError, "undated"):
             release.expected_pending(text, self.baseline, self.config)
-        text = text.replace("## [2.0.1] - 2026-02-02", "## [2.1.0]\n\n<!-- codeflow:release-impact minor -->\n- feature\n\n## [2.0.1]")
+        text = text.replace("## [2.0.1] - 2026-02-02", "## [2.1.0]\n\n<!-- codeflow:release-impact minor -->\n- **Feature.**\n\n## [2.0.1]")
         with self.assertRaisesRegex(release.ReleaseError, "more than one"):
             release.expected_pending(text, self.baseline, self.config)
 
@@ -441,7 +449,7 @@ class BaselineTests(unittest.TestCase):
         state = self.state({"v3.0.0": source}, [self.published("3.0.0", source)])
         baseline = release.resolve_baseline(self.config, state, cwd=self.repo.root)
         self.assertEqual((baseline.version, baseline.source), ("3.0.0", source))
-        text = "# Changelog\n\n## [3.0.1]\n\n<!-- codeflow:release-impact patch -->\n- later fix\n\n## [3.0.0]\n\n- public\n\n## [2.0.0] - 2026-01-01\n\n- old\n"
+        text = "# Changelog\n\n## [3.0.1]\n\n<!-- codeflow:release-impact patch -->\n- **Later fix.**\n\n## [3.0.0]\n\n- public\n\n## [2.0.0] - 2026-01-01\n\n- old\n"
         self.assertEqual(release.expected_pending(text, baseline, self.config)[0], "3.0.1")
 
     def test_public_release_target_may_be_branch_when_tag_and_marker_are_exact(self) -> None:
@@ -585,9 +593,9 @@ QUOTED_MIGRATION_PLACEHOLDERS = [
 SUBSTANTIVE_MIGRATIONS = [
     "Run the new command to convert saved records.",
     '"docs/migrate.md"',
-    "see Breaking change",
     "Run `cat old.json | tool migrate` to convert saved records.",
 ]
+BREAKING_CHANGE = "\n## Breaking change\n\nRun the new command to convert saved records.\n"
 
 
 def filled_template(
@@ -679,9 +687,16 @@ class ReleaseImpactFieldTests(unittest.TestCase):
             self.parse(self.body("minor", breaking="no", migration=None))
         for placeholder in ["none", "", "N/A"]:
             with self.subTest(migration=placeholder):
-                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                with self.assertRaisesRegex(
+                    release.ReleaseError, "migration guidance|migration is required"
+                ):
                     self.parse(self.body("major", breaking="yes", migration=placeholder))
-        self.parse(self.body("major", breaking="yes", migration="see Breaking change"))
+        reference = self.body("major", breaking="yes", migration="see Breaking change")
+        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+            self.parse(reference)
+        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+            self.parse(reference + "\n## Breaking change\n\n<!-- steps -->\n")
+        self.parse(reference + BREAKING_CHANGE)
 
     def test_unresolved_migration_alternatives_are_rejected(self) -> None:
         for impact, breaking in [("minor", "no"), ("major", "yes")]:
@@ -691,9 +706,11 @@ class ReleaseImpactFieldTests(unittest.TestCase):
                         self.parse(self.body(impact, breaking=breaking, migration=value))
 
     def test_breaking_rejects_empty_and_placeholder_migration(self) -> None:
-        for value in ["``", " NONE ", "n/a", "TODO", "TBD", "-", "`none`"]:
+        for value in ["``", " NONE ", "n/a", "na", "TODO", "TBD", "-", "`none`", "<steps>"]:
             with self.subTest(migration=value):
-                with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+                with self.assertRaisesRegex(
+                    release.ReleaseError, "migration guidance|migration is required"
+                ):
                     self.parse(self.body("major", breaking="yes", migration=value))
 
     def test_quoted_migration_placeholders_are_rejected(self) -> None:
@@ -708,7 +725,7 @@ class ReleaseImpactFieldTests(unittest.TestCase):
                 fields = release.parse_release_impact(filled_template(impact, "no", "none"))
                 self.assertEqual(("no", "none"), (fields["breaking"], fields["migration"]))
         fields = release.parse_release_impact(
-            filled_template("major", "yes", "see Breaking change")
+            filled_template("major", "yes", "see Breaking change") + BREAKING_CHANGE
         )
         self.assertEqual("yes", fields["breaking"])
         with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
@@ -757,7 +774,7 @@ class PullRequestTests(unittest.TestCase):
         self.repo.config.write_text(json.dumps(config))
         return (
             "# Changelog\n\n## [3.0.0]\n\n"
-            "<!-- codeflow:release-impact minor -->\n- existing feature\n\n"
+            "<!-- codeflow:release-impact minor -->\n- **Existing feature.**\n\n"
             f"<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256={digest} -->\n"
             f"{backlog}\n<!-- codeflow:legacy-group-end -->\n\n"
             "## [2.0.0] - 2026-01-01\n\n- public\n\n"
@@ -778,18 +795,18 @@ class PullRequestTests(unittest.TestCase):
         self.repo.write_stamps("3.0.0")
         base = self.repo.commit("chore: existing migration")
         self.repo.write("CHANGELOG.md", changelog.replace(
-            "## [3.0.0]\n", "## [3.0.0]\n\n<!-- codeflow:release-impact patch -->\n- repair\n", 1
+            "## [3.0.0]\n", "## [3.0.0]\n\n<!-- codeflow:release-impact patch -->\n- **Repair.**\n", 1
         ))
         head = self.repo.commit("docs: describe repair")
         self.run_check(base, head, self.repo.body("patch"))
-        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
+        with self.assertRaisesRegex(release.ReleaseError, "must equal the impact"):
             self.run_check(base, head, self.repo.body("none"))
 
     def test_declared_impact_must_equal_new_annotation(self) -> None:
         base = self.repo.target
         self.repo.pending("2.0.1", [("patch", "small fix")])
         head = self.repo.commit("feat: overstated declaration")
-        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
+        with self.assertRaisesRegex(release.ReleaseError, "must equal the impact"):
             self.run_check(base, head, self.repo.body("minor"))
 
     def test_release_bearing_commit_cannot_reuse_existing_pending_label(self) -> None:
@@ -798,25 +815,25 @@ class PullRequestTests(unittest.TestCase):
         changelog = self.repo.root / "CHANGELOG.md"
         changelog.write_text(changelog.read_text() + "\n", encoding="utf-8")
         head = self.repo.commit("feat!: unrelated release-bearing commit")
-        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
+        with self.assertRaisesRegex(release.ReleaseError, "must equal the impact"):
             self.run_check(base, head, self.repo.body("major", migration="docs/migrate.md"))
 
     def test_new_major_entry_cannot_hide_behind_none_declaration(self) -> None:
         base = self.repo.target
         self.repo.pending("3.0.0", [("major", "hidden break")])
         head = self.repo.commit("docs: claim none")
-        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
+        with self.assertRaisesRegex(release.ReleaseError, "must equal the impact"):
             self.run_check(base, head, self.repo.body("none"))
 
     def test_new_major_cannot_hide_behind_a_same_label_rewrite(self) -> None:
-        self.repo.pending("3.0.0", [("major", "existing break")])
+        self.repo.pending("3.0.0", [("major", "Existing break", "removes a flag")])
         base = self.repo.commit("feat!: existing break")
         self.repo.pending(
             "3.0.0",
-            [("patch", "existing break was narrowed"), ("major", "new hidden break")],
+            [("patch", "Existing break", "narrowed to a default"), ("major", "New hidden break")],
         )
         head = self.repo.commit("fix: mix reclassification and new break")
-        with self.assertRaisesRegex(release.ReleaseError, "must equal newly added"):
+        with self.assertRaisesRegex(release.ReleaseError, "must equal the impact"):
             self.run_check(
                 base,
                 head,
@@ -867,7 +884,7 @@ class PullRequestTests(unittest.TestCase):
         head = self.repo.commit("feat!: replace old command")
         with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
             self.run_check(base, head, filled_template("major", "yes"))
-        with self.assertRaisesRegex(release.ReleaseError, "migration guidance"):
+        with self.assertRaisesRegex(release.ReleaseError, "migration is required"):
             self.run_check(base, head, filled_template("major", "yes", "``"))
         self.run_check(base, head, filled_template("major", "yes", "run the new command"))
 
@@ -884,9 +901,9 @@ class PullRequestTests(unittest.TestCase):
                 self.run_check(base, head, filled_template("major", "yes", value))
 
     def test_reconciled_major_normalizes_quoted_migration_guidance(self) -> None:
-        self.repo.pending("3.0.0", [("major", "replace old command")])
+        self.repo.pending("3.0.0", [("major", "Replace old command", "now")])
         base = self.repo.commit("feat!: pending break")
-        self.repo.pending("3.0.0", [("major", "replace old command after migration")])
+        self.repo.pending("3.0.0", [("major", "Replace old command", "after migration")])
         head = self.repo.commit("docs: clarify breaking note")
         for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
@@ -897,9 +914,9 @@ class PullRequestTests(unittest.TestCase):
                 self.run_check(base, head, filled_template("none", "no", value))
 
     def test_filled_template_refinement_of_pending_major_keeps_migration(self) -> None:
-        self.repo.pending("3.0.0", [("major", "replace old command")])
+        self.repo.pending("3.0.0", [("major", "Replace old command", "now")])
         base = self.repo.commit("feat!: pending break")
-        self.repo.pending("3.0.0", [("major", "replace old command after migration")])
+        self.repo.pending("3.0.0", [("major", "Replace old command", "after migration")])
         head = self.repo.commit("docs: clarify breaking note")
         with self.assertRaisesRegex(release.ReleaseError, "added major entry"):
             self.run_check(base, head, filled_template("none", "no", "none"))
@@ -985,9 +1002,9 @@ class PullRequestTests(unittest.TestCase):
                 )
 
     def test_prose_only_pending_note_edit_uses_existing_rationale(self) -> None:
-        self.repo.pending("2.0.1", [("patch", "fix a crash")])
+        self.repo.pending("2.0.1", [("patch", "Fix a crash", "on start")])
         base = self.repo.commit("fix: pending behavior")
-        self.repo.pending("2.0.1", [("patch", "clarify when the crash occurs")])
+        self.repo.pending("2.0.1", [("patch", "Fix a crash", "when the cache is empty")])
         head = self.repo.commit("docs: clarify pending notes")
         self.run_check(
             base,
@@ -998,9 +1015,9 @@ class PullRequestTests(unittest.TestCase):
         )
 
     def test_major_note_refinement_still_requires_migration_guidance(self) -> None:
-        self.repo.pending("3.0.0", [("major", "replace old command")])
+        self.repo.pending("3.0.0", [("major", "Replace old command", "now")])
         base = self.repo.commit("feat!: pending break")
-        self.repo.pending("3.0.0", [("major", "replace old command after migration")])
+        self.repo.pending("3.0.0", [("major", "Replace old command", "after migration")])
         head = self.repo.commit("docs: clarify breaking note")
         with self.assertRaisesRegex(release.ReleaseError, "added major entry"):
             self.run_check(base, head, self.repo.body("none", contract="not-applicable"))
@@ -1026,7 +1043,7 @@ class PullRequestTests(unittest.TestCase):
         self.repo.write(".release/config.json", json.dumps(config, indent=2) + "\n")
         new = (
             "# Changelog\n\n## [3.0.0]\n\n"
-            "<!-- codeflow:release-impact minor -->\n- new guidance\n\n"
+            "<!-- codeflow:release-impact minor -->\n- **New guidance.**\n\n"
             f"<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256={digest} -->\n"
             f"{legacy}\n<!-- codeflow:legacy-group-end -->\n\n"
             "## [2.0.0] - 2026-01-01\n\n- public\n"
@@ -1347,6 +1364,527 @@ class PublicationTests(unittest.TestCase):
         for removed in ["prepare", "finalize", "guard-refresh", "authorize-event"]:
             with self.assertRaises(SystemExit), contextlib.redirect_stderr(io.StringIO()):
                 release.parser().parse_args([removed])
+
+
+REPOSITORY = SCRIPT.parent.parent
+IMPACT_CASES = REPOSITORY / "scripts" / "fixtures" / "release_impact_cases.json"
+
+
+class SharedReleaseImpactFixtureTests(unittest.TestCase):
+    """TSK-106 AC-8: release.py passes the fixture set the Rust PR-body check
+    (`pr_body::tests::release_impact_block_passes_the_shared_fixture_set`)
+    passes too."""
+
+    def test_release_impact_block_passes_the_shared_fixture_set(self) -> None:
+        cases = json.loads(IMPACT_CASES.read_text(encoding="utf-8"))["cases"]
+        self.assertGreaterEqual(len(cases), 20)
+        self.assertEqual(len(cases), len({case["name"] for case in cases}))
+        self.assertTrue(any(case["valid"] for case in cases))
+        self.assertTrue(any(not case["valid"] for case in cases))
+        for case in cases:
+            with self.subTest(case=case["name"]):
+                try:
+                    release.parse_release_impact(case["body"])
+                    valid = True
+                except release.ReleaseError:
+                    valid = False
+                self.assertEqual(case["valid"], valid)
+
+
+class EntryIdentityTests(unittest.TestCase):
+    """TSK-106 AC-3 (R-92): a pending entry is its bold label."""
+
+    def setUp(self) -> None:
+        self.repo = Repository()
+        self.config = release.load_config(self.repo.config)
+        self.baseline = release.Baseline("2.0.0", "v2.0.0", self.repo.baseline, self.repo.baseline)
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def pending_text(self, entries: list[tuple[str, ...]]) -> str:
+        self.repo.pending("2.1.0", entries)
+        return (self.repo.root / "CHANGELOG.md").read_text()
+
+    def test_labels_are_unique_among_pending_entries(self) -> None:
+        text = self.pending_text([("minor", "Add a flag", "one"), ("patch", "add a FLAG", "two")])
+        with self.assertRaisesRegex(release.ReleaseError, "not unique"):
+            release.expected_pending(text, self.baseline, self.config)
+        text = self.pending_text([("minor", "Add a flag", "one"), ("patch", "Fix a flag", "two")])
+        self.assertEqual(release.expected_pending(text, self.baseline, self.config)[0], "2.1.0")
+
+    def test_an_entry_without_a_bold_label_blocks(self) -> None:
+        text = self.pending_text([("minor", "Add a flag")]).replace("- **Add a flag.**", "- add a flag")
+        with self.assertRaisesRegex(release.ReleaseError, "needs a bold label"):
+            release.expected_pending(text, self.baseline, self.config)
+
+    def test_the_legacy_group_keeps_an_explicit_identity(self) -> None:
+        backlog = "- **Add a flag.** historical"
+        digest = release.hashlib.sha256(backlog.encode()).hexdigest()
+        self.config["legacy_pending_group"]["sha256"] = digest
+        text = (
+            "# Changelog\n\n## [3.0.0]\n\n"
+            "<!-- codeflow:release-impact minor -->\n- **Add a flag.** new\n\n"
+            f"<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256={digest} -->\n"
+            f"{backlog}\n<!-- codeflow:legacy-group-end -->\n\n"
+            "## [2.0.0] - 2026-01-01\n\n- public\n"
+        )
+        section = release.changelog_sections(text)[0]
+        items = release.pending_items(section, self.config)
+        self.assertEqual(sorted(items), ["add a flag", "legacy:pre-policy-v3"])
+        self.assertEqual(items["legacy:pre-policy-v3"].impact, "major")
+
+    def test_an_entry_is_one_bullet_not_the_heading_after_it(self) -> None:
+        self.assertEqual(
+            release.entry_extent("- **A.** one\n  two\n\n  three\n\n### Fixed\n\nmore"),
+            "- **A.** one\n  two\n\n  three",
+        )
+
+
+class EntryEditTests(unittest.TestCase):
+    """TSK-106 AC-3: a changed body or impact under an existing label is an
+    edit whose net change is assessed, never wording by default."""
+
+    def setUp(self) -> None:
+        self.repo = Repository()
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def check(self, base: str, head: str, body: str) -> dict[str, object]:
+        body_path = self.repo.root / ".git" / "body.md"
+        body_path.write_text(body)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            release.check_pr(
+                self.repo.args(base=base, head=head, target_ref=base, body_file=body_path, body_env=None)
+            )
+        return json.loads(output.getvalue())
+
+    def test_a_body_edit_with_code_is_assessed_at_the_entry_impact(self) -> None:
+        self.repo.pending("2.1.0", [("minor", "Add a flag", "to the command")])
+        base = self.repo.commit("feat: add a flag")
+        self.repo.pending("2.1.0", [("minor", "Add a flag", "to the command and its alias")])
+        self.repo.write("product.txt", "alias\n")
+        head = self.repo.commit("chore: wire the alias")
+        with self.assertRaisesRegex(release.ReleaseError, "never as wording"):
+            self.check(base, head, self.repo.body("none"))
+        result = self.check(base, head, self.repo.body("minor"))
+        self.assertEqual((result["added"], result["edited"]), ([], ["Add a flag."]))
+
+    def test_a_wording_edit_is_none_only_when_declared_and_docs_only(self) -> None:
+        self.repo.pending("2.1.0", [("minor", "Add a flag", "to the command")])
+        base = self.repo.commit("feat: add a flag")
+        self.repo.pending("2.1.0", [("minor", "Add a flag", "to the `run` command")])
+        head = self.repo.commit("docs: name the command")
+        self.assertEqual(self.check(base, head, self.repo.body("none"))["edited"], ["Add a flag."])
+
+    def test_raising_an_entry_impact_is_assessed_at_the_new_impact(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "Fix a flag", "parsing")])
+        base = self.repo.commit("fix: flag parsing")
+        self.repo.pending("2.1.0", [("minor", "Fix a flag", "parsing, and accept a new form")])
+        head = self.repo.commit("docs: reclassify")
+        with self.assertRaisesRegex(release.ReleaseError, r"\(minor\)"):
+            self.check(base, head, self.repo.body("none"))
+        self.check(base, head, self.repo.body("minor"))
+
+    def test_lowering_an_entry_impact_needs_a_withdrawal(self) -> None:
+        self.repo.pending("2.1.0", [("minor", "Add a flag", "and a mode")])
+        base = self.repo.commit("feat: add a flag")
+        self.repo.pending("2.0.1", [("patch", "Add a flag", "only")])
+        head = self.repo.commit("docs: narrow the entry")
+        with self.assertRaisesRegex(release.ReleaseError, "withdrawal rationale"):
+            self.check(base, head, self.repo.body("patch"))
+        self.check(base, head, self.repo.body("patch", withdrawal="The mode was dropped before release."))
+
+    def test_a_relabel_is_a_withdrawal_and_an_addition(self) -> None:
+        self.repo.pending("2.1.0", [("minor", "Add a flag")])
+        base = self.repo.commit("feat: add a flag")
+        self.repo.pending("2.1.0", [("minor", "Add an option")])
+        head = self.repo.commit("docs: rename the entry")
+        with self.assertRaisesRegex(release.ReleaseError, "withdrawal rationale"):
+            self.check(base, head, self.repo.body("minor"))
+        result = self.check(base, head, self.repo.body("minor", withdrawal="Renamed; same content."))
+        self.assertEqual((result["added"], result["withdrawn"]), (["Add an option."], ["Add a flag."]))
+
+
+class TypedRepairTests(unittest.TestCase):
+    """TSK-106 AC-6 (R-95): a PR repairs a base that fails its own release
+    state only by changing the changelog and the coupled version stamps."""
+
+    def setUp(self) -> None:
+        self.repo = Repository()
+        # The base is broken: a patch entry landed without its stamps.
+        self.repo.pending("2.0.1", [("patch", "Fix a crash")])
+        self.repo.write_stamps("2.0.0")
+        self.base = self.repo.commit("fix: a crash")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def check(self, head: str, body: str | None = None) -> dict[str, object]:
+        body_path = self.repo.root / ".git" / "body.md"
+        body_path.write_text(body or self.repo.body("none"))
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            release.check_pr(
+                self.repo.args(
+                    base=self.base, head=head, target_ref=self.base, body_file=body_path, body_env=None
+                )
+            )
+        return json.loads(output.getvalue())
+
+    def test_a_broken_base_blocks_ordinary_work(self) -> None:
+        self.repo.write("product.txt", "work\n")
+        head = self.repo.commit("chore: unrelated work")
+        with self.assertRaisesRegex(release.ReleaseError, "a repair changes only CHANGELOG.md"):
+            self.check(head)
+
+    def test_a_stamp_repair_is_accepted_and_names_the_invariant(self) -> None:
+        self.repo.write_stamps("2.0.1")
+        head = self.repo.commit("chore(release): sync stamps")
+        result = self.check(head)
+        self.assertEqual(result["repair"], "coupled stamps 2.0.0 disagree with pending target 2.0.1")
+        self.assertEqual(result["version"], "2.0.1")
+
+    def test_a_changelog_repair_is_accepted(self) -> None:
+        self.repo.pending("2.0.0", [])
+        self.repo.write("CHANGELOG.md", "# Changelog\n\n## [2.0.0] - 2026-01-01\n\n- public\n")
+        self.repo.write_stamps("2.0.0")
+        head = self.repo.commit("docs(changelog): withdraw the entry")
+        with self.assertRaisesRegex(release.ReleaseError, "withdrawal rationale"):
+            self.check(head)
+        result = self.check(head, self.repo.body("none", withdrawal="The fix was reverted."))
+        self.assertIn("disagree", str(result["repair"]))
+
+    def test_a_repair_that_changes_more_than_a_stamp_is_refused(self) -> None:
+        self.repo.write_stamps("2.0.1")
+        cargo = self.repo.root / "Cargo.toml"
+        cargo.write_text(cargo.read_text() + '\n[workspace.dependencies]\nserde = "1"\n')
+        head = self.repo.commit("chore(release): sync stamps")
+        with self.assertRaisesRegex(release.ReleaseError, "version stamp of Cargo.toml"):
+            self.check(head)
+
+    def test_a_repair_cannot_change_the_release_configuration(self) -> None:
+        self.repo.write_stamps("2.0.1")
+        config = json.loads(self.repo.config.read_text())
+        config["watched_contract_paths"] = []
+        self.repo.write(".release/config.json", json.dumps(config, indent=2) + "\n")
+        head = self.repo.commit("chore(release): sync stamps")
+        with self.assertRaisesRegex(release.ReleaseError, "cannot change .release/config.json"):
+            self.check(head)
+
+    def test_the_repair_is_judged_with_the_base_configuration(self) -> None:
+        # The working-tree configuration a CI checkout reads comes from the
+        # head; a repair never runs on it.
+        self.repo.write_stamps("2.0.1")
+        head = self.repo.commit("chore(release): sync stamps")
+        config = json.loads(self.repo.config.read_text())
+        config["bootstrap"]["published"]["changelog_sha256"] = "0" * 64
+        self.repo.config.write_text(json.dumps(config))
+        result = self.check(head)
+        self.assertEqual(result["repair"], "coupled stamps 2.0.0 disagree with pending target 2.0.1")
+        with self.assertRaisesRegex(release.ReleaseError, "head's release configuration differs"):
+            release.typed_repair(
+                self.base, head, head, ["Cargo.toml"], config, "x", cwd=self.repo.root
+            )
+
+    def test_the_proposed_merge_must_pass(self) -> None:
+        self.repo.write_stamps("2.0.2")
+        head = self.repo.commit("chore(release): wrong stamps")
+        with self.assertRaisesRegex(release.ReleaseError, "coupled stamps 2.0.2 disagree"):
+            self.check(head)
+
+    def test_frozen_sections_stay_frozen(self) -> None:
+        self.repo.write_stamps("2.0.1")
+        changelog = self.repo.root / "CHANGELOG.md"
+        changelog.write_text(changelog.read_text().replace("- public", "- public, amended"))
+        head = self.repo.commit("chore(release): sync stamps")
+        with self.assertRaisesRegex(release.ReleaseError, "published changelog sections differ"):
+            self.check(head)
+
+    def test_version_non_reuse_holds(self) -> None:
+        self.repo.write_host(tags={"v2.0.0": self.repo.baseline, "v2.0.1": "b" * 40})
+        self.repo.write_stamps("2.0.1")
+        head = self.repo.commit("chore(release): sync stamps")
+        with self.assertRaisesRegex(release.ReleaseError, "without a verified public release"):
+            self.check(head)
+
+    def test_impact_floors_hold(self) -> None:
+        self.repo.pending("2.1.0", [("patch", "Fix a crash"), ("minor", "Add a flag")])
+        head = self.repo.commit("feat(release): repair and add")
+        with self.assertRaisesRegex(release.ReleaseError, "must equal the impact"):
+            self.check(head)
+        with self.assertRaisesRegex(release.ReleaseError, "below marker floor"):
+            self.check(head, self.repo.body("patch"))
+        self.assertIn("repair", self.check(head, self.repo.body("minor")))
+
+    def test_an_entry_moved_out_of_the_legacy_group_is_a_repair(self) -> None:
+        backlog = "### Fixed\n\n- **Old fix.** kept"
+        digest = release.hashlib.sha256(backlog.encode()).hexdigest()
+        config = json.loads(self.repo.config.read_text())
+        config["legacy_pending_group"]["sha256"] = digest
+        self.repo.write(".release/config.json", json.dumps(config, indent=2) + "\n")
+        entry = "<!-- codeflow:release-impact patch -->\n- **New fix.** landed in the group\n\n"
+        broken = (
+            "# Changelog\n\n## [3.0.0]\n\n"
+            f"<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256={digest} -->\n"
+            f"### Fixed\n\n{entry}- **Old fix.** kept\n<!-- codeflow:legacy-group-end -->\n\n"
+            "## [2.0.0] - 2026-01-01\n\n- public\n"
+        )
+        self.repo.write("CHANGELOG.md", broken)
+        self.repo.write_stamps("3.0.0")
+        self.base = self.repo.commit("fix: the new fix")
+        repaired = (
+            "# Changelog\n\n## [3.0.0]\n\n### Fixed\n\n" + entry +
+            f"<!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256={digest} -->\n"
+            f"{backlog}\n<!-- codeflow:legacy-group-end -->\n\n"
+            "## [2.0.0] - 2026-01-01\n\n- public\n"
+        )
+        self.repo.write("CHANGELOG.md", repaired)
+        head = self.repo.commit("docs(changelog): move the entry out of the group")
+        result = self.check(head)
+        self.assertEqual(result["repair"], "legacy marker is not the bounded bootstrap group")
+        self.assertEqual((result["added"], result["edited"]), ([], []))
+
+    def test_manifest_hashes_must_be_the_managed_baselines(self) -> None:
+        for version, commit in [("2.0.0", True), ("2.0.1", False)]:
+            marker = f"<!-- codeflow:managed:begin scaffold={version} -->\nrules\n"
+            self.repo.write(".codeflow/.baseline/AGENTS.md", marker)
+            digest = release.hashlib.sha256(marker.encode()).hexdigest()
+            self.repo.write(
+                ".codeflow/manifest.json",
+                json.dumps({"scaffold_version": version, "files": {"AGENTS.md": {"sha256": digest}}}) + "\n",
+            )
+            if commit:
+                self.base = self.repo.commit("chore: record the baseline")
+        self.repo.write_stamps("2.0.1")
+        self.repo.write(
+            ".codeflow/manifest.json",
+            json.dumps({"scaffold_version": "2.0.1", "files": {"AGENTS.md": {"sha256": digest}}}) + "\n",
+        )
+        good = self.repo.commit("chore(release): sync stamps")
+        self.assertIn("repair", self.check(good))
+        self.repo.write(
+            ".codeflow/manifest.json",
+            json.dumps({"scaffold_version": "2.0.1", "files": {"AGENTS.md": {"sha256": "0" * 64}}}) + "\n",
+        )
+        bad = self.repo.commit("chore(release): forge a hash")
+        with self.assertRaisesRegex(release.ReleaseError, "managed baseline"):
+            self.check(bad)
+
+
+class PreflightTests(unittest.TestCase):
+    """TSK-106 AC-4 (R-93): the local release checks pre-push runs."""
+
+    def setUp(self) -> None:
+        self.repo = Repository()
+        command(self.repo.root, "git", "switch", "-q", "-c", "feat/work")
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def preflight(self, *, body: str | None = None, **values: object) -> tuple[dict[str, object], int]:
+        body_path = None
+        if body is not None:
+            body_path = self.repo.root / ".git" / "draft.md"
+            body_path.write_text(body)
+        args = self.repo.args(
+            head="HEAD", branch="feat/work", remote="origin", target="", base="", body_file=body_path
+        )
+        for key, value in values.items():
+            setattr(args, key, value)
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output), mock.patch.dict(os.environ, {"CODEFLOW_PR_DRAFT": ""}):
+            release.preflight(args)
+        return json.loads(output.getvalue()), getattr(args, "exit_code", 0)
+
+    def test_a_behaviour_change_without_an_entry_warns_and_never_blocks(self) -> None:
+        self.repo.write("src/tool.rs", "fn main() {}\n")
+        self.repo.commit("wip: start the tool")
+        result, code = self.preflight()
+        self.assertEqual((result["status"], code), ("warn", 0))
+        self.assertIn("src/tool.rs", " ".join(result["notes"]))
+        self.assertIn("not checked against the host", result["notes"][0])
+        self.assertEqual(result["host"], "not checked against the host")
+
+    def test_an_entry_or_a_none_intent_silences_the_warning(self) -> None:
+        self.repo.write("src/tool.rs", "fn main() {}\n")
+        self.repo.commit("chore: internal tool")
+        result, _ = self.preflight(body=self.repo.body("none"))
+        self.assertEqual(result["status"], "ok")
+        self.repo.pending("2.0.1", [("patch", "Fix the tool")])
+        self.repo.commit("fix: the tool")
+        self.assertEqual(self.preflight()[0]["status"], "ok")
+
+    def test_documentation_and_records_are_not_behaviour(self) -> None:
+        self.repo.write("docs/guide.md", "guide\n")
+        self.repo.write("project-management/tasks/TSK-001.md", "record\n")
+        self.repo.commit("docs: guide")
+        self.assertEqual(self.preflight()[0]["status"], "ok")
+
+    def test_a_push_that_breaks_a_valid_tree_blocks(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "Fix the tool")])
+        self.repo.write_stamps("2.0.0")
+        self.repo.commit("fix: the tool")
+        result, code = self.preflight()
+        self.assertEqual((result["status"], code), ("blocked", 1))
+        self.assertIn("breaks the release tree", " ".join(result["notes"]))
+
+    def test_a_tree_already_invalid_at_the_base_only_warns(self) -> None:
+        command(self.repo.root, "git", "switch", "-q", "main")
+        self.repo.pending("2.0.1", [("patch", "Fix the tool")])
+        self.repo.write_stamps("2.0.0")
+        self.repo.commit("fix: the tool")
+        command(self.repo.root, "git", "switch", "-q", "-C", "feat/work")
+        self.repo.write("docs/note.md", "note\n")
+        self.repo.commit("docs: note")
+        result, code = self.preflight()
+        self.assertEqual((result["status"], code), ("warn", 0))
+        self.assertIn("typed repair", " ".join(result["notes"]))
+
+    def test_a_task_branch_is_compared_with_its_recorded_target(self) -> None:
+        command(self.repo.root, "git", "switch", "-q", "-c", "integration/EPC-001-line", "main")
+        self.repo.write("line.txt", "line\n")
+        line = self.repo.commit("chore: line work")
+        command(self.repo.root, "git", "switch", "-q", "-c", "task/TSK-001-work")
+        self.repo.write(
+            "project-management/tasks/TSK-001.md",
+            '---\nid: TSK-001\nintegration_target: "integration/EPC-001-line" # target\n---\n',
+        )
+        self.repo.commit("docs: record")
+        head = command(self.repo.root, "git", "rev-parse", "HEAD")
+        self.assertEqual(
+            release.target_for_branch("task/TSK-001-work", head, self.repo.load(), cwd=self.repo.root),
+            "integration/EPC-001-line",
+        )
+        result, _ = self.preflight(branch="task/TSK-001-work")
+        self.assertEqual(result["status"], "ok", result)
+        self.assertNotIn("line.txt", json.dumps(result))
+        self.assertEqual(release.resolve_pr_base(self.repo.args(
+            base="", target="", branch="task/TSK-001-work", remote="origin"
+        ), head, self.repo.load())[0], line)
+
+    def test_structural_check_state_reports_the_host_as_unchecked(self) -> None:
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            release.check_state(self.repo.args(ref="HEAD", structural=True))
+        result = json.loads(output.getvalue())
+        self.assertEqual((result["status"], result["host"]), ("ok", "not checked against the host"))
+
+
+class BehaviourPathTests(unittest.TestCase):
+    """TSK-106 AC-10: the behaviour paths and release contract members of the
+    one path-set table, read the way `classify.rs` reads them."""
+
+    sets = tomllib.loads((REPOSITORY / release.PATH_SETS).read_text(encoding="utf-8"))
+
+    def test_every_member_example_classifies(self) -> None:
+        for member in self.sets["not_behaviour"]:
+            self.assertFalse(release.is_behaviour_path(member["example"], self.sets), member)
+        for member in self.sets["behaviour_always"]:
+            self.assertTrue(release.is_behaviour_path(member["example"], self.sets), member)
+        for path, behaviour in [
+            ("crates/codeflow-core/src/lib.rs", True),
+            ("scripts/release.py", True),
+            ("README.md", True),
+            ("assets/base/agents/skills/cf-ship/SKILL.md", True),
+            ("docs/releasing.md", False),
+            ("docs/verification/evidence/tsk-106/journey.txt", False),
+            ("project-management/templates/task.md", False),
+            ("assets/base/pm/spec.md.tmpl", False),
+        ]:
+            with self.subTest(path=path):
+                self.assertEqual(release.is_behaviour_path(path, self.sets), behaviour)
+
+    def test_each_release_contract_member_is_watched(self) -> None:
+        watched = release.load_config(release.DEFAULT_CONFIG)["watched_contract_paths"]
+        members = [m for m in self.sets["adopter_facing"] if m.get("release_contract")]
+        self.assertEqual([m["member"] for m in members], ["policy", "record_schema"])
+        for member in members:
+            for path in [member["example"], *(g.replace("**", "x/y.md") for g in member["patterns"])]:
+                with self.subTest(path=path):
+                    self.assertTrue(release.matches_any(path, watched), path)
+
+
+class ErrataTests(unittest.TestCase):
+    """TSK-106 AC-7 (R-96): errata are dated notes outside frozen bytes."""
+
+    PUBLISHED = "## [2.1.0] - 2026-02-01\n\n- feature\n\n## [2.0.0] - 2026-01-01\n\n- public\n"
+
+    def test_a_dated_erratum_before_the_sections_is_accepted(self) -> None:
+        text = "# Changelog\n\n## Errata\n\n- 2026-09-27, 2.0.0: the note meant `run`.\n\n" + self.PUBLISHED
+        release.validate_errata(text)
+        self.assertEqual(
+            release.published_snapshot(text, "2.1.0"),
+            release.published_snapshot("# Changelog\n\n" + self.PUBLISHED, "2.1.0"),
+        )
+
+    def test_misplaced_undated_or_unpublished_errata_fail(self) -> None:
+        for text, message in [
+            ("# Changelog\n\n" + self.PUBLISHED + "\n## Errata\n\n- 2026-09-27, 2.0.0: x\n", "before the first"),
+            ("# Changelog\n\n## Errata\n\n- 2.0.0: x\n\n" + self.PUBLISHED, "YYYY-MM-DD"),
+            ("# Changelog\n\n## Errata\n\n- 2026-09-27, 9.9.9: x\n\n" + self.PUBLISHED, "not a published"),
+        ]:
+            with self.subTest(message=message), self.assertRaisesRegex(release.ReleaseError, message):
+                release.validate_errata(text)
+
+    def test_the_repository_errata_sit_outside_frozen_bytes(self) -> None:
+        text = (REPOSITORY / "CHANGELOG.md").read_text(encoding="utf-8")
+        release.validate_errata(text)
+        self.assertIn("## Errata", text)
+        self.assertLess(text.index("## Errata"), text.index("## ["))
+
+
+class PublicationWorkflowTests(unittest.TestCase):
+    """TSK-106 AC-8: the release-state job moved to its own workflow, and
+    publication reads each configured workflow's latest main-push run."""
+
+    def setUp(self) -> None:
+        self.repo = Repository()
+        config = json.loads(self.repo.config.read_text())
+        config["publication_workflows"] = [
+            ".github/workflows/codeflow-ci.yml",
+            ".github/workflows/codeflow-release.yml",
+        ]
+        self.repo.config.write_text(json.dumps(config))
+
+    def tearDown(self) -> None:
+        self.repo.cleanup()
+
+    def test_checks_come_from_each_workflow_latest_main_push(self) -> None:
+        source = self.repo.target
+        names = release.load_config(self.repo.config)["required_publication_checks"]
+        checks = [
+            {
+                "id": index,
+                "name": name,
+                "head_sha": source,
+                "status": "completed",
+                "conclusion": "success",
+                "app": {"slug": "github-actions"},
+                "check_suite": {"id": 901 if name == "release state" else 900},
+            }
+            for index, name in enumerate(names, 1)
+        ]
+        state = self.repo.root / "checks.json"
+        state.write_text(json.dumps([{"check_runs": checks}]))
+        def run(path: str, suite: int, conclusion: str = "success") -> dict[str, object]:
+            return {
+                "id": suite, "run_number": suite, "run_attempt": 1, "check_suite_id": suite,
+                "event": "push", "head_branch": "main", "head_sha": source, "path": path,
+                "status": "completed", "conclusion": conclusion,
+            }
+        ci, rel = self.repo.root / "ci.json", self.repo.root / "release.json"
+        ci.write_text(json.dumps([{"workflow_runs": [run(".github/workflows/codeflow-ci.yml", 900)]}]))
+        rel.write_text(json.dumps([{"workflow_runs": [run(".github/workflows/codeflow-release.yml", 901)]}]))
+        args = self.repo.args(state=state, runs_state=[ci, rel], source=source)
+        release.verify_checks(args)
+        with self.assertRaisesRegex(release.ReleaseError, "lacks its codeflow-release main-push"):
+            release.verify_checks(self.repo.args(state=state, runs_state=[ci], source=source))
+        rel.write_text(json.dumps([{"workflow_runs": [run(".github/workflows/codeflow-release.yml", 901, "failure")]}]))
+        with self.assertRaisesRegex(release.ReleaseError, "codeflow-release main-push workflow run is not"):
+            release.verify_checks(args)
 
 
 if __name__ == "__main__":

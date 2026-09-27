@@ -1,0 +1,135 @@
+{
+  "description": "One fixture set for both parsers of a pull request's Release impact block (SPC-013 R-96, TSK-106 AC-8): scripts/release.py (parse_release_impact) and the Rust PR-body check (codeflow ci, pr_body::release at the default policy). Each case is a whole PR body and whether its block is valid. The cases cover the block's shared structure and field rules; CodeFlow's own rules (Unit and Evidence, the legacy Contract field, and Breaking if and only if major) are tested by scripts/test_release.py alone, so every body carries Unit and Evidence.",
+  "cases": [
+    {
+      "name": "valid_patch",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_major_with_steps",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: Run `codeflow update`, then rename `old` to `new`.\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_emphasised_keys",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- **Impact:** minor\n- **Breaking**: no\n- __Rationale:__ Add a flag.\n- *Migration*: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_values_in_any_case",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: Patch\n- Breaking: No\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_plain_field_lines",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nImpact: patch\nBreaking: no\nRationale: Clarify the command output.\nMigration: none\nUnit: codeflow\nEvidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_depth_three_section",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n### Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "valid_reference_to_a_populated_breaking_change",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Rename a policy key.\n- Migration: see Breaking change\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n## Breaking change\n\nRename `old` to `new` in `.codeflow/policy.json`, then run `codeflow update`.\n"
+    },
+    {
+      "name": "invalid_missing_section",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Testing\n\nRan 3 tests.\n"
+    },
+    {
+      "name": "invalid_two_sections",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_fields_only_in_a_code_fence",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n```text\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n```\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_fields_only_in_a_comment",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n<!--\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n-->\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_migration_borrowed_from_a_subsection",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n### Notes\n\n- Migration: none\n"
+    },
+    {
+      "name": "invalid_duplicate_impact",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n- Impact: minor\n"
+    },
+    {
+      "name": "invalid_impact_value",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: medium\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_breaking_value",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: maybe\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_breaking_without_migration",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_breaking_below_major",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: minor\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: Use the new flag.\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_reference_without_a_breaking_change_section",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Rename a policy key.\n- Migration: see Breaking change\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_reference_to_an_empty_breaking_change",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Rename a policy key.\n- Migration: see Breaking change\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n## Breaking change\n\n<!-- steps go here -->\n"
+    },
+    {
+      "name": "invalid_template_alternatives_left_in_place",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: `none`, steps, or \"see Breaking change\"\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_empty_rationale",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale:\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_placeholder_rationale",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: TODO\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_empty_migration",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration:\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_quoted_placeholder_migration_on_a_break",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: \"none\"\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_whole_placeholder_migration_on_a_break",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: major\n- Breaking: yes\n- Rationale: Remove the old flag.\n- Migration: <steps>\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
+      "name": "invalid_setext_heading",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\nRelease impact\n---\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    }
+  ]
+}
