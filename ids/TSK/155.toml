@@ -1,0 +1,11 @@
+id = "TSK-155"
+uid = "ff09657c-8a60-40b9-882b-79dd1b5d6c72"
+kind = "TSK"
+title = "criterion tags read with sentence punctuation"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T23:03:17Z"
+target = "main"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
