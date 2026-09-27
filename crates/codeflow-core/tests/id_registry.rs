@@ -1526,6 +1526,66 @@ fn check_blocks_a_different_record_after_a_merge_deleted_the_registered_one() {
     );
 }
 
+/// TSK-109: seed joins a rewritten or cherry-picked copy of a landed record
+/// by its landing, and the reconcile check reads the same rule (R-111): the
+/// copy's nonempty landing equal to the entry's `landed` is a replica. A
+/// different record under the id still warns, and blocks on a landing line.
+#[test]
+fn check_accepts_an_unlanded_copy_whose_landing_is_the_registered_one() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    let base = git(&m, &["rev-parse", "HEAD"]);
+    write_titled(&m, "TSK-001", "landed");
+    commit_all(&m, "land the record");
+    git(&m, &["push", "-q", "origin", "main"]);
+    seed::seed(&m, None).unwrap();
+    // A rewritten line carries the identical file under another commit.
+    git(&m, &["checkout", "-q", "-b", "feat/rewritten", &base]);
+    write_titled(&m, "TSK-001", "landed");
+    let rewritten = commit_all(&m, "the same record, rewritten");
+    assert!(!entry(&world, "TSK-001").introduced.starts_with(&rewritten));
+    git(&m, &["checkout", "-q", "main"]);
+    let report = check::check(&Git::new(&m), None).unwrap();
+    assert!(report.passed(), "{:?}", report.blocks);
+    assert!(
+        !report.warns.iter().any(|w| w.contains("TSK-001")),
+        "{:?}",
+        report.warns
+    );
+
+    // Fault: a different record under the same id warns off a landing line.
+    git(&m, &["checkout", "-q", "-b", "feat/other", &base]);
+    write_titled(&m, "TSK-001", "other");
+    commit_all(&m, "a different record");
+    git(&m, &["checkout", "-q", "main"]);
+    let report = check::check(&Git::new(&m), None).unwrap();
+    assert!(report.passed(), "{:?}", report.blocks);
+    assert!(
+        report
+            .warns
+            .iter()
+            .any(|w| w.contains("collision: TSK-001 on feat/other")),
+        "{:?}",
+        report.warns
+    );
+    assert!(
+        !report.warns.iter().any(|w| w.contains("feat/rewritten")),
+        "{:?}",
+        report.warns
+    );
+    // On a landing line the same copy blocks.
+    git(&m, &["branch", "-q", "integration/other", "feat/other"]);
+    let report = check::check(&Git::new(&m), None).unwrap();
+    assert!(
+        report
+            .blocks
+            .iter()
+            .any(|b| b.contains("collision: TSK-001 on integration/other")),
+        "{:?}",
+        report.blocks
+    );
+}
+
 #[test]
 fn a_record_deleted_by_a_merge_and_restored_unchanged_stays_registered() {
     let world = World::new();

@@ -436,20 +436,52 @@ fn added_blob(git: &Git, commit: &str, id: &RegId) -> Option<String> {
 ///
 /// Returns an error when git fails.
 pub fn landed_for(git: &Git, id: &RegId, intro: &str) -> Result<Option<String>, IdsError> {
-    let landing: Vec<(String, String)> = code_refs(git)?
-        .into_iter()
-        .filter(|(name, _)| is_landing_branch(branch_name(name)))
-        .collect();
-    if landing.iter().any(|(_, sha)| git.is_ancestor(intro, sha)) {
+    landed_among(git, &landing_tips(git)?, id, intro, &mut HashMap::new())
+}
+
+/// The tips of every landing line (`main`, `master`, `integration/*`),
+/// local and remote-tracking, in ref order.
+///
+/// # Errors
+///
+/// Returns an error when git fails.
+pub(crate) fn landing_tips(git: &Git) -> Result<Vec<String>, IdsError> {
+    let mut tips: Vec<String> = Vec::new();
+    for (name, sha) in code_refs(git)? {
+        if is_landing_branch(branch_name(&name)) && !tips.contains(&sha) {
+            tips.push(sha);
+        }
+    }
+    Ok(tips)
+}
+
+/// [`landed_for`] against given landing tips, reading each tip's
+/// introductions once into `intros` (keyed by tip) so a caller judging
+/// many copies walks each landing history only once.
+///
+/// # Errors
+///
+/// Returns an error when git fails.
+pub(crate) fn landed_among(
+    git: &Git,
+    tips: &[String],
+    id: &RegId,
+    intro: &str,
+    intros: &mut HashMap<String, BTreeMap<RegId, String>>,
+) -> Result<Option<String>, IdsError> {
+    if tips.iter().any(|sha| git.is_ancestor(intro, sha)) {
         return Ok(Some(intro.to_string()));
     }
     let Some(blob) = added_blob(git, intro, id) else {
         return Ok(None);
     };
-    for (_, sha) in &landing {
-        if let Some(theirs) = introduction(git, sha, id)? {
-            if added_blob(git, &theirs, id).as_deref() == Some(blob.as_str()) {
-                return Ok(Some(theirs));
+    for sha in tips {
+        if !intros.contains_key(sha) {
+            intros.insert(sha.clone(), introductions(git, sha)?);
+        }
+        if let Some(theirs) = intros[sha].get(id) {
+            if added_blob(git, theirs, id).as_deref() == Some(blob.as_str()) {
+                return Ok(Some(theirs.clone()));
             }
         }
     }
