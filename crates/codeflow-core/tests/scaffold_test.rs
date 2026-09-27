@@ -1790,3 +1790,43 @@ fn update_adds_product_paths_once_and_keeps_a_project_value() {
     scaffold::update(&assets, &root, &update_opts("2.2.0")).unwrap();
     assert_eq!(product_paths(&root), serde_json::json!(["engine/**"]));
 }
+
+// --- headless peer runs (TSK-136) --------------------------------------------
+
+fn headless_level(root: &Path) -> serde_json::Value {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+    policy["security"]["headless_peer_runs"].clone()
+}
+
+#[test]
+fn update_adds_headless_peer_runs_at_warn_and_keeps_an_explicit_level() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    // Installed before the key existed; the next release ships it at warn,
+    // as `assets/base/policy.json` does.
+    assert!(headless_level(&root).is_null());
+    let (a2, assets) = fixture_assets(true);
+    let shipped = a2.path().join("base/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&shipped).unwrap()).unwrap();
+    policy["security"] = serde_json::json!({"headless_peer_runs": "warn"});
+    std::fs::write(&shipped, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
+
+    scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(headless_level(&root), "warn");
+
+    for (version, level) in [("2.2.0", "block"), ("2.3.0", "off")] {
+        let mut policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        policy["security"]["headless_peer_runs"] = level.into();
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+        scaffold::update(&assets, &root, &update_opts(version)).unwrap();
+        assert_eq!(headless_level(&root), level, "{version}");
+    }
+}

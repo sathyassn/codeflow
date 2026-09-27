@@ -766,3 +766,104 @@ fn fresh_policy_has_no_human_authorization_at_every_tier() {
         );
     }
 }
+
+/// Every `PreToolUse` hook command in a harness wiring file.
+fn pretooluse_commands(root: &Path, rel: &str) -> Vec<String> {
+    let wiring: serde_json::Value = serde_json::from_str(&read(root, rel)).unwrap();
+    wiring["hooks"]["PreToolUse"]
+        .as_array()
+        .unwrap_or_else(|| panic!("{rel}: no PreToolUse"))
+        .iter()
+        .flat_map(|entry| entry["hooks"].as_array().cloned().unwrap_or_default())
+        .filter_map(|hook| hook["command"].as_str().map(ToString::to_string))
+        .collect()
+}
+
+/// Run a wired hook command through the shell, as the harness does, with a
+/// Bash tool call for `command` on stdin.
+fn run_wired(root: &Path, hook: &str, command: &str) -> Output {
+    use std::io::Write as _;
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("joinable PATH");
+    let payload = serde_json::json!({
+        "tool_name": "Bash",
+        "tool_input": {"command": command},
+        "cwd": root,
+    });
+    let mut child = Command::new("sh")
+        .args(["-c", hook])
+        .current_dir(root)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("PATH", path)
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("hook runs");
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(payload.to_string().as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+#[cfg(unix)]
+#[test]
+fn headless_peer_runs_warn_in_every_harness_wiring_at_every_tier() {
+    // TSK-136 AC-4: a fresh install at every tier ships the guard at `warn`,
+    // and the Claude, Codex and Grok wiring each run it; `block` refuses.
+    for tier in ["--minimal", "--standard", "--full"] {
+        let (_tmp, root) = project();
+        init(&root, tier);
+        let policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(
+            policy["security"]["headless_peer_runs"], "warn",
+            "{tier}: fresh policy level"
+        );
+        for wiring in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".grok/hooks/codeflow.json",
+        ] {
+            let hook = pretooluse_commands(&root, wiring)
+                .into_iter()
+                .find(|command| command.contains("hook exec-guard"))
+                .unwrap_or_else(|| panic!("{tier} {wiring}: exec-guard not wired"));
+            let out = run_wired(&root, &hook, "codex exec 'review the diff'");
+            let stderr = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{tier} {wiring}: {stderr}");
+            assert!(
+                stderr.contains("headless peer run"),
+                "{tier} {wiring}: {stderr}"
+            );
+            let out = run_wired(&root, &hook, "codex --version");
+            assert!(out.stderr.is_empty(), "{tier} {wiring}: negative warned");
+        }
+
+        let mut policy = policy;
+        policy["security"]["headless_peer_runs"] = "block".into();
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+        for wiring in [
+            ".claude/settings.json",
+            ".codex/hooks.json",
+            ".grok/hooks/codeflow.json",
+        ] {
+            let hook = pretooluse_commands(&root, wiring)
+                .into_iter()
+                .find(|command| command.contains("hook exec-guard"))
+                .unwrap();
+            let out = run_wired(&root, &hook, "claude -p 'summarize'");
+            assert_eq!(out.status.code(), Some(2), "{tier} {wiring}: block level");
+        }
+    }
+}
