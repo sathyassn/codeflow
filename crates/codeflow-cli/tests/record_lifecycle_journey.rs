@@ -457,3 +457,62 @@ fn a_standard_tier_project_without_records_sees_no_record_rule() {
     assert!(validate.status.success(), "{text}");
     assert!(!text.contains("warning"), "{text}");
 }
+
+/// A branch forked before its target adopted `work_records_baseline` is
+/// judged by the target's list in `codeflow ci` and `validate --since`
+/// alike, so its own list cannot exempt its own new record (BL-R2-1).
+#[test]
+fn a_branch_forked_before_the_target_adopted_a_baseline_cannot_exempt_itself() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    ok(
+        &codeflow(&root, &["init", "--yes", "--full"]),
+        "init --full",
+    );
+    let target = "integration/EPC-001-line";
+    git(&root, &["switch", "-q", "-c", target]);
+    std::fs::write(root.join("notes.txt"), "seed\n").unwrap();
+    let fork = commit(&root, "docs: seed the line");
+    let config = root.join(".codeflow/project.toml");
+    let state = std::fs::read_to_string(&config).unwrap();
+    let with = |commit: &str| format!("{state}work_records_baseline = \"{commit}\"\n");
+    std::fs::write(&config, with(&fork)).unwrap();
+    commit(&root, "chore: adopt the records baseline");
+
+    let branch = "fix/older-branch";
+    git(&root, &["switch", "-q", "-c", branch, &fork]);
+    std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+    std::fs::write(
+        root.join(SECOND),
+        "---\nid: TSK-002\nepic_id: null\nstandalone_reason: \"one change\"\n\
+integration_target: main\ntitle: \"work\"\nstatus: complete\nwork_type: feat\n\
+specs: []\ndepends_on: []\ncreated: 2026-09-26\n---\n\n# TSK-002: work\n\n\
+## Description\n\nWork.\n\n## Acceptance Criteria\n\n- [x] AC-1 Checked.\n\n\
+## Closeout\n\nNo block.\n",
+    )
+    .unwrap();
+    let own = commit(&root, "docs: add a finished task");
+    std::fs::write(&config, with(&own)).unwrap();
+    commit(&root, "chore: exempt the task");
+
+    let ci = codeflow(
+        &root,
+        &["ci", "--base", target, "--head", "HEAD", "--branch", branch],
+    );
+    let ci_err = String::from_utf8_lossy(&ci.stderr);
+    assert!(!ci.status.success(), "{ci_err}");
+    assert!(
+        ci_err.contains("TSK-002.md: a complete record needs an acceptance block"),
+        "{ci_err}"
+    );
+    assert!(!ci_err.contains("introduces"), "{ci_err}");
+    let (code, errors) = verdict(&root, target);
+    assert_ne!(code, Some(0), "{errors:?}");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("TSK-002.md: a complete record needs an acceptance block")),
+        "{errors:?}"
+    );
+}

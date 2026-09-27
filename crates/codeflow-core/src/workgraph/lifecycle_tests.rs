@@ -1985,6 +1985,64 @@ fn a_change_that_introduces_the_baseline_is_judged_by_its_own_list() {
     );
 }
 
+/// A branch forked before its target adopted a baseline is judged by the
+/// target's list, not by the list-less merge-base, so its own list cannot
+/// exempt its own record; a target list the branch cannot contain is refused
+/// rather than replaced by the branch's list (BL-R2-1).
+#[test]
+fn a_branch_forked_before_the_target_adopted_a_baseline_is_judged_by_the_target() {
+    let repo = Repo::new();
+    repo.write("README.md", "# fixture\n");
+    let fork = repo.commit("seed");
+    repo.set_baseline(&fork);
+    repo.commit("adopt the baseline on the target");
+    repo.git(&["switch", "-q", "-c", "fix/older-branch", &fork]);
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &task("TSK-002", "complete", "- [x] AC-1 first", "No block."),
+    );
+    let own = repo.commit("a record the branch wants exempt");
+    repo.set_baseline(&own);
+    repo.commit("exempt it");
+
+    let refused = |verdict: &Verdict| {
+        verdict
+            .errors
+            .iter()
+            .any(|e| e.contains("TSK-002.md") && e.contains("needs an acceptance block"))
+    };
+    let ci = judge_pull_request(repo.root(), "main", "HEAD").unwrap();
+    assert!(refused(&ci), "{ci:?}");
+    assert!(
+        !ci.notices.iter().any(|n| n.contains("introduces")),
+        "{ci:?}"
+    );
+    assert!(
+        ci.notices
+            .iter()
+            .any(|n| n.contains(&format!("added {own}"))),
+        "{ci:?}"
+    );
+    let since = judge_range(repo.root(), "main", None).unwrap();
+    assert!(refused(&since), "{since:?}");
+
+    // The target adopts a list naming a commit this branch lacks.
+    repo.git(&["switch", "-q", "main"]);
+    repo.write("later.txt", "later\n");
+    let later = repo.commit("later target work");
+    repo.set_baseline(&later);
+    repo.commit("move the target's baseline");
+    repo.git(&["switch", "-q", "fix/older-branch"]);
+    let needle = format!("the target's {BASELINE_KEY} entry {later} is not an ancestor");
+    let ci = judge_pull_request(repo.root(), "main", "HEAD").unwrap();
+    assert!(ci.errors.iter().any(|e| e.contains(&needle)), "{ci:?}");
+    assert!(refused(&ci), "{ci:?}");
+    assert!(
+        !ci.notices.iter().any(|n| n.contains("introduces")),
+        "{ci:?}"
+    );
+}
+
 /// The single-string form reads as a one-item list, and repeats collapse.
 #[test]
 fn the_single_string_baseline_still_works() {

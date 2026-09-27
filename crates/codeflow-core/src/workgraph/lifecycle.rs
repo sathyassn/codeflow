@@ -488,20 +488,23 @@ fn baseline_at(repo: &Repository, commit: git2::Oid) -> Vec<String> {
 }
 
 /// The baseline that governs a range, and the notices about it. Trust comes
-/// from the target: when the range's base records a baseline, that list
+/// from the target (the pull request's base tip, or the `--since` revision),
+/// never from the merge-base: when the target records a baseline, that list
 /// exempts records and a change to it inside the range only takes effect
-/// after it lands. When the base records none, the range introduces the
-/// migration (an adopter's first update, or a release into a target that
-/// predates the rules); the head's list governs, every entry must be an
-/// ancestor of the head, and every entry is named for the human reviewer.
+/// after it lands. A target list that cannot be evaluated against the
+/// proposed history is refused, never replaced by the head's list. When the
+/// target records none, the range introduces the migration (an adopter's
+/// first update, or a release into a target that predates the rules); the
+/// head's list governs, every entry must be an ancestor of the head, and
+/// every entry is named for the human reviewer.
 fn range_baseline(
     repo_root: &Path,
     repo: &Repository,
-    base: git2::Oid,
+    target: git2::Oid,
     head: Option<&str>,
 ) -> (Baseline, Vec<String>) {
     let head_commit = resolve_commit(repo, head.unwrap_or("HEAD"));
-    let base_list = baseline_at(repo, base);
+    let base_list = baseline_at(repo, target);
     let head_list = match head {
         Some(_) => head_commit
             .map(|commit| baseline_at(repo, commit))
@@ -546,10 +549,23 @@ fn range_baseline(
             if added.is_empty() && removed.is_empty() { "; reordered" } else { "" }
         ));
     }
-    (
-        Baseline::from_entries(repo, &base_list, head_commit),
-        notices,
-    )
+    let baseline = match Baseline::from_entries(repo, &base_list, head_commit) {
+        Baseline::Refused(reasons) => Baseline::Refused(
+            reasons
+                .into_iter()
+                .map(|reason| {
+                    let hint = if reason.contains("not an ancestor") {
+                        "; bring the branch up to date with its target"
+                    } else {
+                        ""
+                    };
+                    format!("the target's {reason}{hint}")
+                })
+                .collect(),
+        ),
+        governed => governed,
+    };
+    (baseline, notices)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1277,10 +1293,22 @@ pub fn judge_change(
 ///
 /// Returns a message when the repository or a revision cannot be read.
 pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<Verdict, String> {
+    judge_range_against(repo_root, base, base, head)
+}
+
+/// [`judge_range`] with the records diffed from `base` and the governing
+/// baseline list read from `target`, which differ for a pull request whose
+/// branch forked before the target's current tip.
+fn judge_range_against(
+    repo_root: &Path,
+    base: &str,
+    target: &str,
+    head: Option<&str>,
+) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
-    let base_commit =
-        resolve_commit(&repo, base).ok_or_else(|| format!("cannot resolve {base} to a commit"))?;
-    let (baseline, notices) = range_baseline(repo_root, &repo, base_commit, head);
+    let target_commit = resolve_commit(&repo, target)
+        .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
+    let (baseline, notices) = range_baseline(repo_root, &repo, target_commit, head);
     let base_graph = Graph::from_revision(&repo, base)?;
     let after = match head {
         Some(head) => Graph::from_revision(&repo, head)?,
@@ -1398,7 +1426,9 @@ pub fn working_context(repo_root: &Path) -> (Option<Graph>, Option<Vec<String>>)
 
 /// Judge a pull request: the records changed from the merge-base of `base`
 /// and `head` to `head`, so work that landed on the target after the branch
-/// point is not mistaken for a change of this range.
+/// point is not mistaken for a change of this range. The governing baseline
+/// list is read from `base` itself, not from the merge-base, so a branch
+/// forked before the target adopted its list cannot re-enter migration.
 ///
 /// # Errors
 ///
@@ -1411,10 +1441,16 @@ pub fn judge_pull_request(repo_root: &Path, base: &str, head: &str) -> Result<Ve
             .map(|commit| commit.id())
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
+    let target = commit(base)?;
     let anchor = repo
-        .merge_base(commit(base)?, commit(head)?)
+        .merge_base(target, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
-    judge_range(repo_root, &anchor.to_string(), Some(head))
+    judge_range_against(
+        repo_root,
+        &anchor.to_string(),
+        &target.to_string(),
+        Some(head),
+    )
 }
 
 /// Judge the whole checked-out tree against the migration baseline, and add
