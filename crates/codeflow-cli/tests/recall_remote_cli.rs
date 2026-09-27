@@ -248,15 +248,14 @@ fn registry_touch_skips_hooks_and_is_silent_in_a_read_only_home() {
         &["git-hook", "commit-msg", "missing-file"][..],
         &["ci", "--base", "HEAD", "--head", "HEAD"],
         &["validate"],
-        &["status"],
-        &["orient"],
+        &["work", "start", "TSK-001"],
     ] {
         run_in(repo.path(), home.path(), args);
         assert!(!registry.exists(), "{args:?} touched the registry");
     }
-    let recorded = run_in(repo.path(), home.path(), &["recall", "anything"]);
-    assert!(recorded.status.success());
-    assert!(registry.exists(), "a regular command records the repo");
+    // The session-start orient is the main sign a repository is in use.
+    run_in(repo.path(), home.path(), &["orient"]);
+    assert!(registry.exists(), "orient records the repo");
 
     let locked = tempfile::tempdir().unwrap();
     let read_only = locked.path().join("home");

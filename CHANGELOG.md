@@ -116,10 +116,10 @@ publication date._
 
 <!-- codeflow:release-impact patch -->
 - **Quieter and narrower guards in a sandbox.** Hook entry points, `codeflow
-  ci` and the read-only commands (`orient`, `status`, `validate`, `work`,
-  `estimate`) no longer record the repository in `~/.codeflow/registry.json`,
-  and a registry this process may not write, as in a sandbox, is skipped
-  without the `registry touch failed` warning. exec-guard allows recursive
+  ci` and the read-only checks (`validate`, `work`, `estimate`) no longer
+  record the repository in `~/.codeflow/registry.json`, and a registry
+  this process may not write, as in a sandbox, is skipped without the
+  `registry touch failed` warning. exec-guard allows recursive
   removal strictly below a temp root (`$TMPDIR`, `/tmp`, `/var/tmp` and the
   macOS per-user `/var/folders/<xx>/<id>/T`, each also under `/private`);
   the roots themselves and every system directory stay blocked.

@@ -99,16 +99,15 @@ enum Command {
 }
 
 /// Whether a command records its repository in the user registry. Hook
-/// entry points, `ci` and the read-only commands (`orient`, `status`,
-/// `validate`, `work`, `estimate`) do not.
+/// entry points, `ci` and the read-only checks (`validate`, `work`,
+/// `estimate`) do not; `orient` and `status` do, since the session-start
+/// orient is the main sign that a repository is in use.
 fn touches_registry(command: &Command) -> bool {
     !matches!(
         command,
         Command::Hook(_)
             | Command::GitHook(_)
             | Command::Ci(_)
-            | Command::Orient
-            | Command::Status(_)
             | Command::Validate(_)
             | Command::Work(_)
             | Command::Estimate(_)
