@@ -215,8 +215,9 @@ publication date._
   managed `AGENTS.md` block is now a map of about 7 KB (was 28.7 KB at
   standard and full, 16.4 KB at minimal), rendered with `CLAUDE.md` from one
   kernel: at most 12 one-line always rules and a "when you are about to"
-  table (estimate, status, explanation, plan, design, build, branch, ship,
-  consult, instruction change, resume), each pointing one hop away. The
+  table (estimate, status, explanation, plan, design, build, review,
+  blocker, branch, ship, consult, instruction change, session start or
+  resume), each pointing one hop away. The
   doctrine moved unchanged in substance to four references installed at
   every tier under `.codeflow/rules/` (workflow discipline, git rules,
   worktrees, writing). Always rules now include: durations for agent work
