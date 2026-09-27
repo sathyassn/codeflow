@@ -1573,6 +1573,19 @@ fn check_update_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Viola
         return;
     };
 
+    // The fetched registry is what issue and CI verify against (R-10, R-11);
+    // only a real, non-forced fetch may move it.
+    if refname
+        .strip_prefix("refs/remotes/")
+        .and_then(|rest| rest.split_once('/'))
+        .is_some_and(|(_, branch)| branch == crate::ids::REGISTRY_BRANCH)
+    {
+        out.push(registry_violation(format!(
+            "`git update-ref` writes the fetched registry `{refname}`; only a non-forced fetch moves it (R-11)"
+        )));
+        return;
+    }
+
     if let Some(branch) = protected_component_of_remote_ref(refname, policy) {
         if policy.local_ref_protection.is_active() {
             out.push(Violation::new(
@@ -1650,9 +1663,45 @@ fn check_symbolic_ref(rest: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Vio
     }
 }
 
+/// The registry rule (SPC-013 R-8): `codeflow/registry` only grows. It
+/// always blocks, whatever the policy levels say.
+fn registry_violation(message: String) -> Violation {
+    Violation::new(
+        "registry.append_only",
+        PolicyLevel::Block,
+        message,
+        "issue ids with `codeflow task|epic|spec new`; a maintainer repairs damage with `codeflow ids restore <id>...`".to_string(),
+    )
+}
+
+/// Refuse a push that could remove or rewrite registry history: a delete, a
+/// force (including `--mirror` and a forced wildcard or `--all`), or a push
+/// that skips the pre-push range check with `--no-verify`.
+fn check_registry_push(push: &PushIntent, rest: &[String], out: &mut Vec<Violation>) {
+    let registry = crate::ids::REGISTRY_BRANCH;
+    let named = |list: &[String]| list.iter().any(|target| target == registry);
+    if named(&push.deletions) || (push.mirror && push.touches_all_branches) {
+        out.push(registry_violation(format!(
+            "`git push` could delete `{registry}`; the registry only grows (R-8)"
+        )));
+    }
+    let reaches = named(&push.updates) || push.touches_all_branches;
+    if reaches && push.force {
+        out.push(registry_violation(format!(
+            "force push reaches `{registry}`; the registry only grows (R-8)"
+        )));
+    }
+    if named(&push.updates) && has_no_verify("push", rest) {
+        out.push(registry_violation(format!(
+            "`--no-verify` skips the pre-push range check of `{registry}` (R-8)"
+        )));
+    }
+}
+
 fn check_push(rest: &[String], branch: &str, ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
     let policy = ctx.policy;
     let push = parse_push(rest, branch);
+    check_registry_push(&push, rest, out);
 
     // `--no-verify` skips the pre-push hook; on a protected target that is a
     // gate bypass (an anti-bypass structural block, ADR-0007).
@@ -2753,6 +2802,67 @@ fn flag_value<'a>(args: &'a [&'a str], names: &[&str]) -> Option<&'a str> {
         idx += 1;
     }
     None
+}
+
+#[cfg(test)]
+mod registry_guard_tests {
+    use super::*;
+
+    fn verdict(command: &str) -> Vec<Violation> {
+        let policy = GitPolicy::default();
+        let ctx = GuardContext {
+            policy: &policy,
+            current_branch: "task/TSK-101-id-registry",
+            integrate_token: false,
+            pr_base_lookup: None,
+            dir_branch_lookup: None,
+        };
+        evaluate(command, &ctx)
+            .into_iter()
+            .filter(|v| v.rule == "registry.append_only")
+            .collect()
+    }
+
+    #[test]
+    fn registry_deletion_force_and_no_verify_are_refused() {
+        for command in [
+            "git push origin --delete codeflow/registry",
+            "git push origin :codeflow/registry",
+            "git push origin :refs/heads/codeflow/registry",
+            "git push --force origin codeflow/registry",
+            "git push origin +codeflow/registry",
+            "git push -f origin abc123:refs/heads/codeflow/registry",
+            "git push --force-with-lease origin codeflow/registry",
+            "git push --mirror origin",
+            "git push --force --all origin",
+            "git push --no-verify origin codeflow/registry",
+            "git update-ref refs/remotes/origin/codeflow/registry abc123",
+            "git update-ref -d refs/remotes/origin/codeflow/registry",
+        ] {
+            let found = verdict(command);
+            assert!(!found.is_empty(), "{command} must be refused");
+            assert!(
+                found.iter().all(|v| v.level == PolicyLevel::Block),
+                "{command}"
+            );
+        }
+    }
+
+    #[test]
+    fn plain_registry_pushes_and_other_branches_pass() {
+        for command in [
+            "git push origin codeflow/registry",
+            "git push origin abc123:refs/heads/codeflow/registry",
+            "git push --force-with-lease origin task/TSK-101-id-registry",
+            "git fetch origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry",
+            "git update-ref refs/heads/codeflow/registry abc123",
+        ] {
+            assert!(
+                verdict(command).is_empty(),
+                "{command} must pass the registry rule"
+            );
+        }
+    }
 }
 
 #[cfg(test)]
