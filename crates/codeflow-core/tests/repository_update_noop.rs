@@ -144,3 +144,39 @@ fn codeflow_update_is_a_no_op_on_this_repository() {
         drift.join("\n  ")
     );
 }
+
+/// The installed-manifest invariant (TSK-135 review R4), checked apart from
+/// the no-op replay: every recorded digest is the digest of the committed
+/// pristine baseline for that path, never of a live copy the repository
+/// customized. The replay alone misses a stale digest when the live copy
+/// already differs from its baseline, because update then leaves the record
+/// as it is.
+#[test]
+fn every_recorded_digest_is_its_pristine_baseline() {
+    let root = repo_root();
+    let manifest: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join(".codeflow/manifest.json"))
+            .expect("installed manifest is readable"),
+    )
+    .expect("installed manifest parses");
+    let files = manifest["files"]
+        .as_object()
+        .expect("installed manifest lists its files");
+    let mut wrong = Vec::new();
+    for (dest, record) in files {
+        let baseline = root.join(".codeflow/.baseline").join(dest);
+        let Ok(bytes) = std::fs::read(&baseline) else {
+            wrong.push(format!("{dest}: no committed baseline"));
+            continue;
+        };
+        let recorded = record["sha256"].as_str().unwrap_or_default();
+        let actual = codeflow_core::scaffold::sha256_hex(&bytes);
+        if recorded != actual {
+            wrong.push(format!("{dest}: recorded {recorded}, baseline {actual}"));
+        }
+    }
+    assert!(
+        wrong.is_empty(),
+        "manifest digests that are not their baseline: {wrong:#?}"
+    );
+}
