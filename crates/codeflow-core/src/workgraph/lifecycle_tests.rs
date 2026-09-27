@@ -752,6 +752,47 @@ fn a_spec_is_superseded_only_by_a_revision_that_lists_it() {
 }
 
 #[test]
+fn approving_a_spec_reads_open_questions_from_the_structured_field() {
+    let repo = Repo::new();
+    let open = "open_questions:\n  - \"Which channel is authoritative?\"\n";
+    repo.write(
+        "project-management/specs/SPC-001.md",
+        &spec("SPC-001", "draft", open),
+    );
+    let base = repo.commit("draft with an open question");
+    let refused = refusal(
+        set_status(
+            repo.root(),
+            RecordKind::Spec,
+            "SPC-001",
+            &change("approved"),
+        )
+        .map(drop),
+    );
+    assert!(
+        refused.contains("still open: Which channel is authoritative?"),
+        "{refused}"
+    );
+
+    repo.write(
+        "project-management/specs/SPC-001.md",
+        &spec("SPC-001", "approved", "open_questions: not a list\n"),
+    );
+    assert!(repo
+        .judge(&base)
+        .errors
+        .iter()
+        .any(|e| e.contains("open_questions must be a list")));
+
+    // The prose section is no longer parsed: a question mark there is
+    // context, and an empty list is what approval reads.
+    let prose = spec("SPC-001", "approved", "open_questions: []\n")
+        .replace("None.\n", "Was this settled? Yes, see Decisions.\n");
+    repo.write("project-management/specs/SPC-001.md", &prose);
+    assert!(repo.judge(&base).is_clean(), "{:?}", repo.judge(&base));
+}
+
+#[test]
 fn completing_against_a_superseded_spec_is_refused() {
     let repo = Repo::new();
     repo.write(

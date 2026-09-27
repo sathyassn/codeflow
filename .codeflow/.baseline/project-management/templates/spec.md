@@ -3,6 +3,7 @@ id: SPC-{{NNN}}
 uid: {{UID}}              # hidden record identity, written once by `new`; never edit
 title: {{TITLE_YAML}}
 status: draft            # draft | approved | superseded; change it with `codeflow spec status`
+open_questions: []       # each question still open, one string per item; approval needs []
 created: {{DATE}}
 ---
 
@@ -12,7 +13,7 @@ created: {{DATE}}
      EPC-NNN|TSK-NNN` allocates this file and links it from the consuming work
      item. Write one only when interfaces, formats, or behavior need pinning
      down before building; many work items need no spec. `approved` requires
-     no unresolved open question and freezes the criteria. `implemented` is
+     an empty `open_questions` list and freezes the criteria. `implemented` is
      derived, never written: every consumer is terminal and at least one is
      complete. A changed contract is a new spec that lists
      `supersedes: [SPC-old]`; `codeflow spec status SPC-old superseded --by
@@ -53,4 +54,6 @@ created: {{DATE}}
 
 ## Open questions
 
-<!-- Before building starts, leave empty or state explicitly that all are resolved. -->
+<!-- Context for the questions only. What approval reads is the
+     `open_questions` frontmatter list: add each unresolved question there and
+     remove it once it is settled, so the list is `[]` before building. -->

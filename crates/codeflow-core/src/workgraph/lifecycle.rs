@@ -50,6 +50,8 @@ pub struct RecordView {
     pub integration_target: Option<String>,
     pub body: String,
     pub criteria: CriteriaList,
+    /// A spec's `open_questions` frontmatter list, or why it is unreadable.
+    pub open_questions: Result<Vec<String>, String>,
 }
 
 impl RecordView {
@@ -91,6 +93,7 @@ impl RecordView {
         Ok(Self {
             kind,
             criteria: parse_criteria(&body),
+            open_questions: crate::validate::open_questions(&data),
             status: field("status").unwrap_or_default(),
             epic_id: field("epic_id"),
             specs: list("specs"),
@@ -803,10 +806,15 @@ fn state_problems(record: &RecordView, graph: &Graph, is_new: bool) -> Vec<Strin
         RecordKind::Task => problems.extend(task_state_problems(record, graph)),
         RecordKind::Epic => problems.extend(epic_state_problems(record, graph)),
         RecordKind::Spec => {
-            if record.status == "approved"
-                && crate::validate::section_has_unresolved_questions(record.body.as_bytes())
-            {
-                problems.push("an approved spec leaves no open question".into());
+            match &record.open_questions {
+                Err(message) => problems.push(message.clone()),
+                Ok(open) if record.status == "approved" && !open.is_empty() => {
+                    problems.push(format!(
+                        "an approved spec leaves no open question; still open: {}",
+                        open.join("; ")
+                    ));
+                }
+                Ok(_) => {}
             }
             if record.status == "implemented" && is_new {
                 problems.push(
