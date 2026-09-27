@@ -6,6 +6,7 @@ use std::path::PathBuf;
 
 use clap::{Args, Subcommand, ValueEnum};
 use codeflow_core::scaffold::AssetSource;
+use codeflow_core::workgraph::light_paths;
 use codeflow_core::workgraph::status_verb::{set_status, StatusChange};
 use codeflow_core::workgraph::{allocate, is_valid_epic_format_id, NewRecord, RecordKind};
 
@@ -23,6 +24,10 @@ pub struct EpicArgs {
 pub enum EpicCommand {
     /// Allocate the next `EPC-NNN` and scaffold the epic from the template.
     New {
+        /// Also cut `integration/EPC-NNN-<slug>` from main (or master) and
+        /// push it to origin when that remote exists.
+        #[arg(long)]
+        integration: bool,
         /// Epic title.
         title: String,
     },
@@ -103,6 +108,14 @@ pub enum TaskCommand {
         /// Existing local or remote-tracking non-task branch this task will integrate into.
         #[arg(long = "into", value_name = "BRANCH")]
         integration_target: Option<String>,
+        /// File a follow-up of this task: records `follow_up_of`, inherits its
+        /// epic and target, and must run on a plan/ branch of that target.
+        #[arg(
+            long,
+            value_name = "TSK-NNN",
+            conflicts_with_all = ["epic", "standalone_reason", "integration_target"]
+        )]
+        follow_up_of: Option<String>,
         /// Task title.
         title: String,
     },
@@ -149,8 +162,8 @@ pub enum SpecCommand {
 
 /// Run `codeflow epic`.
 pub fn run_epic(args: &EpicArgs) -> i32 {
-    let title = match &args.command {
-        EpicCommand::New { title } => title,
+    let (integration, title) = match &args.command {
+        EpicCommand::New { integration, title } => (*integration, title),
         EpicCommand::Status {
             id,
             status,
@@ -169,10 +182,33 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
         eprintln!("error: epic template unavailable");
         return 1;
     };
-    match allocate::create_epic(&pm, &template, title) {
-        Ok(rec) => report(&rec),
+    let rec = match allocate::create_epic(&pm, &template, title) {
+        Ok(rec) => rec,
         Err(e) => {
             eprintln!("error: {e}");
+            return 1;
+        }
+    };
+    report(&rec);
+    if !integration {
+        return 0;
+    }
+    match light_paths::create_integration_branch(&super::repo_root(), &rec.id, title) {
+        Ok(branch) => {
+            println!(
+                "{}  from {}{}",
+                branch.name,
+                branch.from,
+                if branch.pushed {
+                    ", pushed to origin"
+                } else {
+                    ", local only (no origin remote)"
+                }
+            );
+            0
+        }
+        Err(error) => {
+            eprintln!("error: integration branch: {error}");
             1
         }
     }
@@ -182,10 +218,16 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
 pub fn run_task(args: &TaskArgs) -> i32 {
     let (epic, standalone_reason, integration_target, title) = match &args.command {
         TaskCommand::New {
+            follow_up_of: Some(source),
+            title,
+            ..
+        } => return run_follow_up(source, title),
+        TaskCommand::New {
             epic,
             standalone_reason,
             integration_target,
             title,
+            ..
         } => (epic, standalone_reason, integration_target, title),
         TaskCommand::Status {
             id,
@@ -249,6 +291,63 @@ pub fn run_task(args: &TaskArgs) -> i32 {
         Ok(rec) => report(&rec),
         Err(e) => {
             eprintln!("error: {e}");
+            1
+        }
+    }
+}
+
+/// `task new --follow-up-of`: one command, one planning pull request.
+fn run_follow_up(source: &str, title: &str) -> i32 {
+    let Some(template) = load_template("base/pm/task.md.tmpl") else {
+        eprintln!("error: task template unavailable");
+        return 1;
+    };
+    match light_paths::create_follow_up(&super::repo_root(), &template, source, title) {
+        Ok(rec) => {
+            report(&rec);
+            println!("  follow_up_of: {source}");
+            0
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
+            1
+        }
+    }
+}
+
+/// Arguments for `codeflow adr`.
+#[derive(Debug, Args)]
+pub struct AdrArgs {
+    #[command(subcommand)]
+    pub command: AdrCommand,
+}
+
+/// ADR subcommands.
+#[derive(Debug, Subcommand)]
+pub enum AdrCommand {
+    /// Number the next ADR and write it from the template as `proposed`.
+    New {
+        /// Decision title.
+        title: String,
+    },
+}
+
+/// Run `codeflow adr`. The project's `docs/decisions/template.md` is used
+/// when present, the shipped template otherwise.
+pub fn run_adr(args: &AdrArgs) -> i32 {
+    let AdrCommand::New { title } = &args.command;
+    let root = super::repo_root();
+    let template = std::fs::read_to_string(root.join("docs/decisions/template.md"))
+        .ok()
+        .or_else(|| load_template("base/docs/decisions/template.md"));
+    let Some(template) = template else {
+        eprintln!("error: ADR template unavailable");
+        return 1;
+    };
+    match light_paths::create_adr(&root, &template, title) {
+        Ok(rec) => report(&rec),
+        Err(error) => {
+            eprintln!("error: {error}");
             1
         }
     }

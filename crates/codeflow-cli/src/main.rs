@@ -88,6 +88,8 @@ enum Command {
     Task(cmd::new::TaskArgs),
     /// Durable-work lifecycle checks.
     Work(cmd::work::WorkArgs),
+    /// Create an ADR: number the next ADR-NNNN and write it as proposed.
+    Adr(cmd::new::AdrArgs),
     /// Check explicit forecast allocations and pinned evidence without writes.
     Estimate(cmd::estimate::EstimateArgs),
     /// Review this session on the utility presentation surface (catalog JSON, Comment).
@@ -179,6 +181,7 @@ fn main() -> anyhow::Result<()> {
         Command::Spec(args) => std::process::exit(cmd::new::run_spec(&args)),
         Command::Task(args) => std::process::exit(cmd::new::run_task(&args)),
         Command::Work(args) => std::process::exit(cmd::work::run(&args)),
+        Command::Adr(args) => std::process::exit(cmd::new::run_adr(&args)),
         Command::Estimate(args) => std::process::exit(cmd::estimate::run(&args)),
         Command::Present(args) => std::process::exit(cmd::present::run(&args)),
     }

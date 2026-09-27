@@ -1067,7 +1067,7 @@
     "docs/decisions/template.md": {
       "src": "docs/decisions/template.md",
       "ownership": "user-owned",
-      "sha256": "9d26f7cd3c5b93c3ba3c58f8135206e73a60779b0823b271c962b8bab74f0be0",
+      "sha256": "1479c8c8385c59be3442c3f304b687ab3a6e9501f5360703e402de9fcf96ec9d",
       "exec": false
     },
     "docs/product.md": {
