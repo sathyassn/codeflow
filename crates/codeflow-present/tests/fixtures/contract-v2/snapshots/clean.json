@@ -11,6 +11,8 @@
     "path": "src/main.rs",
     "commit": "{{head}}",
     "digest": "sha256 of the block code bytes",
+    "file_digest": "sha256 of src/main.rs in the working tree",
+    "contains": true,
     "uncommitted": false
   }
 }

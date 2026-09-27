@@ -63,7 +63,8 @@ numbering and legend rules land in the shared `figure-grammar.md`.
   session closes.
 - The v1 surfaces stay: v1 documents, the v1 feedback stream and 3.0.0
   sessions. Schema v2 documents cannot be opened by a 3.0.0 binary, and
-  sessions carrying v2 revision data cannot be read by one.
+  sessions carrying an entity note or v2 revision data cannot be read by
+  one.
 - Present gains a second append-only ledger (`responses.jsonl`) and more
   service routes to keep bounded and tested.
 - Ruled out without a new decision: scripts in pages, remote viewers,

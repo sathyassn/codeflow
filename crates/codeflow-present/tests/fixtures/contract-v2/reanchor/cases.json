@@ -55,12 +55,16 @@
     },
     {
       "name": "text edited, fuzzy match",
+      "canonical_text": {
+        "1": "The paths are in Figure 1 and the stage in Figure 2; the limits are in Table 1.",
+        "2": "The two paths are in Figure 1 and the stage is in Figure 2."
+      },
       "note": {
         "block_id": "intro",
         "selector": {
           "exact": "The paths are in",
           "prefix": "",
-          "suffix": " [fig:landing]",
+          "suffix": " Figure 1 and the stage in Figur",
           "start_utf16": 0,
           "end_utf16": 16
         }
@@ -68,7 +72,32 @@
       "shown_on": 2,
       "expect": {
         "state": "reanchored",
-        "changed": true
+        "changed": true,
+        "start_utf16": 0,
+        "end_utf16": 20,
+        "score": 0.8625
+      }
+    },
+    {
+      "name": "text rewritten, fuzzy below threshold",
+      "canonical_text": {
+        "1": "Answers stay on this machine.",
+        "2": "Everything is stored privately."
+      },
+      "note": {
+        "block_id": "outro",
+        "selector": {
+          "exact": "Answers stay on this machine",
+          "prefix": "",
+          "suffix": ".",
+          "start_utf16": 0,
+          "end_utf16": 28
+        }
+      },
+      "shown_on": 2,
+      "expect": {
+        "state": "block_fallback",
+        "best_score": 0.5833
       }
     },
     {

@@ -13,7 +13,7 @@
       "body": "This part is wrong.",
       "element_selector": {
         "element_path": "svg:nth-of-type(1) > line:nth-of-type(1)",
-        "tag_name": "g",
+        "tag_name": "line",
         "label": "submit",
         "block_digest": "{{digest:answer-flow}}"
       },

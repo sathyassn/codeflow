@@ -6,7 +6,7 @@
     {
       "type": "narrative",
       "id": "intro",
-      "markdown": "The landing paths are drawn in [fig:landing], and the stage is in [fig:answer-flow]."
+      "markdown": "The two paths are in [fig:landing] and the stage is in [fig:answer-flow]."
     },
     {
       "type": "figure",
@@ -550,6 +550,11 @@
           ]
         }
       ]
+    },
+    {
+      "type": "narrative",
+      "id": "outro",
+      "markdown": "Everything is stored privately."
     }
   ]
 }

@@ -337,6 +337,48 @@
       "valid": false,
       "expect": "refused: the path escapes the work tree (exit 5)",
       "first_passing_task": "TSK-121"
+    },
+    {
+      "file": "threads/reopen-note.json",
+      "clause": "B9, I4",
+      "valid": true,
+      "expect": "a reopen line with target and note_id; delivered on the next --format v2 wait as kind reopen",
+      "first_passing_task": "TSK-121"
+    },
+    {
+      "file": "threads/reopen-answer.json",
+      "clause": "B9, I4",
+      "valid": true,
+      "expect": "a reopen line with target only; delivered as kind reopen",
+      "first_passing_task": "TSK-121"
+    },
+    {
+      "file": "threads/reopen-unknown-note.json",
+      "clause": "B9",
+      "valid": false,
+      "expect": "refused (422, the note is not in that review); nothing appended",
+      "first_passing_task": "TSK-121"
+    },
+    {
+      "file": "threads/tombstone.json",
+      "clause": "B9",
+      "valid": true,
+      "expect": "a tombstone line; every later output shows the tombstone and never the note body 'This part is wrong.', its quote or crop",
+      "first_passing_task": "TSK-121"
+    },
+    {
+      "file": "export/default.json",
+      "clause": "B12",
+      "valid": true,
+      "expect": "the export holds the framed document and none of: note body, answer values, replies, ledger lines",
+      "first_passing_task": "TSK-121"
+    },
+    {
+      "file": "export/include-feedback.json",
+      "clause": "B12",
+      "valid": true,
+      "expect": "a read-only appendix with the answer and the tombstone; the tombstoned note body is absent",
+      "first_passing_task": "TSK-121"
     }
   ]
 }
