@@ -1417,9 +1417,9 @@ impl SessionStore {
     /// immediate `clear` finds nothing running. `false` when it is still
     /// running at the deadline.
     pub fn wait_for_service_exit(&self, id: Uuid, timeout: std::time::Duration) -> Result<bool> {
-        if self.load(id)?.service_instance.is_none() {
-            return Ok(true);
-        }
+        // The lease, not the registration, proves the service gone: a service
+        // holds it before it registers and after its registration is cleared.
+        self.load(id)?;
         let deadline = std::time::Instant::now() + timeout;
         loop {
             if let Some(lease) =
@@ -5535,6 +5535,37 @@ mod tests {
             );
             assert!(store.history(id).is_err(), "{name}");
             assert!(store.feedback_snapshot(id).is_err(), "{name}");
+        }
+    }
+
+    /// `close` waits on the service lease itself (TSK-071 C071-4): a service
+    /// holds it before it registers and after its registration is cleared,
+    /// so an absent registration never proves the service gone.
+    #[test]
+    fn the_close_wait_holds_while_the_service_lease_is_held() {
+        use std::time::Duration;
+        for registration_cleared in [false, true] {
+            let (_temp, store) = store();
+            let id = store.create(parsed()).unwrap().id;
+            let lease = store.acquire_service_lease(id).unwrap();
+            if registration_cleared {
+                let instance = Uuid::new_v4();
+                store
+                    .set_service(id, 4321, std::process::id(), instance)
+                    .unwrap();
+                assert!(store.clear_service(id, instance).unwrap());
+            }
+            store.close(id).unwrap();
+            assert!(store.load(id).unwrap().service_instance.is_none());
+            assert!(
+                !store.wait_for_service_exit(id, Duration::ZERO).unwrap(),
+                "registration cleared: {registration_cleared}"
+            );
+            drop(lease);
+            assert!(
+                store.wait_for_service_exit(id, Duration::ZERO).unwrap(),
+                "registration cleared: {registration_cleared}"
+            );
         }
     }
 }
