@@ -924,6 +924,49 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
 }
 
 #[test]
+fn exec_guard_allows_removal_below_temp_roots_and_blocks_system_paths() {
+    // TSK-137 AC-5: an agent's scratch space sits below `/private` and
+    // `/var` on macOS; removal there is allowed, the same command on a
+    // system directory is still blocked.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let tmpdir = "/private/var/folders/ab/cd123/T/";
+    let guard = |command: &str| {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .env("TMPDIR", tmpdir)
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        )
+    };
+    for command in [
+        "rm -rf /private/var/folders/ab/cd123/T/scratch",
+        "rm -rf /var/folders/xy/zz9/T/build",
+        "rm -rf /private/tmp/claude-501/work",
+        "rm -rf /var/tmp/cache && ls",
+    ] {
+        let out = guard(command);
+        assert!(
+            out.status.success(),
+            "should allow: {command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    for command in [
+        "rm -rf /private/var/db/receipts",
+        "rm -rf /var/lib/dpkg",
+        "rm -rf /private/tmp",
+        "rm -rf /private/var/folders/ab/cd123/T",
+        "rm -rf /private/tmp/claude-501/../../etc",
+    ] {
+        let out = guard(command);
+        assert_eq!(out.status.code(), Some(2), "should block: {command}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("security.dangerous_commands"));
+    }
+}
+
+#[test]
 fn git_guard_blocks_pr_body_attribution() {
     // AC #13: attribution in a PR body blocked at gh pr create.
     let dir = tempfile::tempdir().unwrap();

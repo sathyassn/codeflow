@@ -342,6 +342,10 @@ fn dangerous_rm_target(op: &str) -> Option<&'static str> {
     if norm == "/" || norm == "/*" {
         return Some("/");
     }
+    let tmpdir = std::env::var("TMPDIR").ok();
+    if is_below_temp_root(&norm, tmpdir.as_deref()) {
+        return None;
+    }
     if let Some(rest) = norm.strip_prefix('/') {
         let mut parts = rest.split('/');
         let first = parts.next().unwrap_or("");
@@ -354,6 +358,38 @@ fn dangerous_rm_target(op: &str) -> Option<&'static str> {
         }
     }
     None
+}
+
+/// Whether a normalized absolute path lies strictly below a temp root: the
+/// process's `$TMPDIR`, the shared `/tmp` and `/var/tmp`, or the macOS
+/// per-user `/var/folders/<xx>/<id>/T`, each also under `/private`. An
+/// agent's own scratch space often lives there, below system directories
+/// such as `/private` and `/var`; the root itself stays protected, and `..`
+/// was already resolved, so an escape is classified by where it lands.
+fn is_below_temp_root(norm: &str, tmpdir: Option<&str>) -> bool {
+    let below = |root: &str| {
+        let root = root.trim_end_matches('/');
+        !root.is_empty()
+            && norm
+                .strip_prefix(root)
+                .is_some_and(|rest| rest.len() > 1 && rest.starts_with('/'))
+    };
+    if let Some(tmpdir) = tmpdir.map(normalize_path) {
+        // A `$TMPDIR` that is itself a system directory or the root is not
+        // an exemption.
+        if tmpdir.matches('/').count() >= 2 && below(&tmpdir) {
+            return true;
+        }
+    }
+    let path = norm.strip_prefix("/private").unwrap_or(norm);
+    if ["/tmp", "/var/tmp"].into_iter().any(|root| {
+        path.strip_prefix(root)
+            .is_some_and(|rest| rest.len() > 1 && rest.starts_with('/'))
+    }) {
+        return true;
+    }
+    let parts: Vec<&str> = path.split('/').skip(1).collect();
+    matches!(parts.as_slice(), ["var", "folders", _, _, "T", rest @ ..] if !rest.is_empty())
 }
 
 /// Classify Windows drive, system, profile, and share roots. Comparisons are
@@ -1238,6 +1274,39 @@ mod tests {
     #[test]
     fn test_safe_rm() {
         assert!(DangerousModule.check(&ctx("rm -rf /tmp/test")).is_none());
+    }
+
+    #[test]
+    fn removal_below_a_temp_root_is_allowed_and_system_paths_stay_blocked() {
+        let tmpdir = Some("/private/var/folders/ab/cd123/T/");
+        for path in [
+            "/private/var/folders/ab/cd123/T/scratch",
+            "/var/folders/xy/zz9/T/build/out",
+            "/private/tmp/claude-501/work",
+            "/private/var/tmp/cache",
+            "/var/tmp/cache",
+        ] {
+            assert!(is_below_temp_root(path, tmpdir), "{path}");
+        }
+        for path in [
+            "/private/var/folders/ab/cd123/T",
+            "/private/tmp",
+            "/private/var/db/x",
+            "/var/folders/ab/cd123",
+            "/var/folders/ab/cd123/C/cache",
+            "/var/lib/x",
+            "/private/etc",
+        ] {
+            assert!(!is_below_temp_root(path, tmpdir), "{path}");
+        }
+        // A custom `$TMPDIR` below a system directory is honoured; one that
+        // is a system directory itself is not.
+        assert!(is_below_temp_root(
+            "/opt/agent-tmp/x",
+            Some("/opt/agent-tmp")
+        ));
+        assert!(!is_below_temp_root("/usr/lib", Some("/usr")));
+        assert!(!is_below_temp_root("/etc/x", Some("/")));
     }
 
     #[test]
