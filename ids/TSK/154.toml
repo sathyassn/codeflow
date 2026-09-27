@@ -1,0 +1,11 @@
+id = "TSK-154"
+uid = "04705cd3-b389-43a0-bca3-d04fbf5e3fcd"
+kind = "TSK"
+title = "operator decisions restored to the reserved list"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T22:44:44Z"
+target = "integration/EPC-018-autonomy-roster"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
