@@ -47,7 +47,8 @@ publication date._
   code dependency complete only on another line waits until its change is
   in this base. A join can carry `awaiting_selection`, which only a `plan/`
   pull request removes, and `spec new --for` accepts several consumers.
-  `work start` now names a blocked task's reason instead of its status.
+  `work start` now names a blocked task's reason instead of its status, and
+  refuses a task whose epic is complete, cancelled or archived.
 
 <!-- codeflow:release-impact minor -->
 - **Work record lifecycle.** `codeflow task status`, `epic status` and
