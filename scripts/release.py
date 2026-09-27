@@ -897,9 +897,24 @@ def release_notes(root: Path, ref: str, tag: str, source: str) -> str:
         fail(f"CHANGELOG.md lacks curated notes for {tag}")
     body = IMPACT_MARKER.sub("", section.body)
     body = body.replace(LEGACY_END, "")
-    body = re.sub(r"(?m)^_Staging evidence:.*_\s*$", "", body)
-    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    # The staging note is one paragraph however it wraps: drop it to the blank line.
+    body = re.sub(r"(?m)^_Staging evidence:.*(?:\n(?![ \t]*$).*)*", "", body)
+    body = merge_subsections(body)
+    if re.search(r"<!--\s*codeflow:", body) or "staging evidence" in body.lower():
+        fail(f"{tag} release notes would publish an internal marker or staging note")
     return f"{body}\n\n{SOURCE_MARKER.format(source=source)}\n"
+
+
+def merge_subsections(body: str) -> str:
+    """Render each `### ` kind once, in first-appearance order, bodies in source order."""
+    preamble, *parts = re.split(r"(?m)^(### .*?)[ \t]*$", body)
+    kinds: dict[str, list[str]] = {}
+    for heading, text in zip(parts[::2], parts[1::2], strict=True):
+        kinds.setdefault(heading, []).append(text.strip())
+    blocks = [preamble.strip()] + [
+        "\n\n".join([heading, *filter(None, texts)]) for heading, texts in kinds.items()
+    ]
+    return re.sub(r"\n{3,}", "\n\n", "\n\n".join(filter(None, blocks))).strip()
 
 
 def write_release_notes(args: argparse.Namespace) -> None:
