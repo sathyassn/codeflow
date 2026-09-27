@@ -902,28 +902,30 @@ class PullRequestTests(unittest.TestCase):
                 self.run_check(base, head, filled_template("major", "yes", value))
 
     def test_reconciled_major_normalizes_quoted_migration_guidance(self) -> None:
+        # An edit of a pending major entry is assessed at major (R-92), so it
+        # declares the break and keeps real migration guidance.
         self.repo.pending("3.0.0", [("major", "Replace old command", "now")])
         base = self.repo.commit("feat!: pending break")
         self.repo.pending("3.0.0", [("major", "Replace old command", "after migration")])
         head = self.repo.commit("docs: clarify breaking note")
         for value in QUOTED_MIGRATION_PLACEHOLDERS:
             with self.subTest(migration=value):
-                with self.assertRaisesRegex(release.ReleaseError, "added or edited major entry"):
-                    self.run_check(base, head, filled_template("none", "no", value))
+                with self.assertRaisesRegex(release.ReleaseError, "migration"):
+                    self.run_check(base, head, filled_template("major", "yes", value))
         for value in SUBSTANTIVE_MIGRATIONS:
             with self.subTest(migration=value):
-                self.run_check(base, head, filled_template("none", "no", value))
+                self.run_check(base, head, filled_template("major", "yes", value))
 
     def test_filled_template_refinement_of_pending_major_keeps_migration(self) -> None:
         self.repo.pending("3.0.0", [("major", "Replace old command", "now")])
         base = self.repo.commit("feat!: pending break")
         self.repo.pending("3.0.0", [("major", "Replace old command", "after migration")])
         head = self.repo.commit("docs: clarify breaking note")
-        with self.assertRaisesRegex(release.ReleaseError, "added or edited major entry"):
-            self.run_check(base, head, filled_template("none", "no", "none"))
+        with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(major\)"):
+            self.run_check(base, head, filled_template("none", "no", "docs/migrate.md"))
         with self.assertRaisesRegex(release.ReleaseError, "template alternatives"):
-            self.run_check(base, head, filled_template("none", "no"))
-        self.run_check(base, head, filled_template("none", "no", "docs/migrate.md"))
+            self.run_check(base, head, filled_template("major", "yes"))
+        self.run_check(base, head, filled_template("major", "yes", "docs/migrate.md"))
 
     def test_additive_task_on_cumulative_major_pending_declares_minor(self) -> None:
         self.repo.pending("3.0.0", [("major", "earlier break")])
@@ -1002,31 +1004,31 @@ class PullRequestTests(unittest.TestCase):
                     self.repo.body("none", withdrawal="Breaking change was fully reverted."),
                 )
 
-    def test_prose_only_pending_note_edit_uses_existing_rationale(self) -> None:
+    def test_prose_only_pending_note_edit_is_assessed_at_its_impact(self) -> None:
+        # R-92: changed words are an edit at the entry's impact, never wording.
         self.repo.pending("2.0.1", [("patch", "Fix a crash", "on start")])
         base = self.repo.commit("fix: pending behavior")
         self.repo.pending("2.0.1", [("patch", "Fix a crash", "when the cache is empty")])
         head = self.repo.commit("docs: clarify pending notes")
-        self.run_check(
-            base,
-            head,
-            self.repo.body("none", contract="not-applicable").replace(
-                "reviewed fixture.", "Clarifies the existing pending note only."
-            ),
-        )
+        rationale = ("reviewed fixture.", "Clarifies the existing pending note only.")
+        with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(patch\)"):
+            self.run_check(
+                base, head, self.repo.body("none", contract="not-applicable").replace(*rationale)
+            )
+        self.run_check(base, head, self.repo.body("patch").replace(*rationale))
 
     def test_major_note_refinement_still_requires_migration_guidance(self) -> None:
         self.repo.pending("3.0.0", [("major", "Replace old command", "now")])
         base = self.repo.commit("feat!: pending break")
         self.repo.pending("3.0.0", [("major", "Replace old command", "after migration")])
         head = self.repo.commit("docs: clarify breaking note")
-        with self.assertRaisesRegex(release.ReleaseError, "added or edited major entry"):
-            self.run_check(base, head, self.repo.body("none", contract="not-applicable"))
-        self.run_check(
-            base,
-            head,
-            self.repo.body("none", contract="not-applicable", migration="docs/migrate.md"),
-        )
+        with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(major\)"):
+            self.run_check(
+                base,
+                head,
+                self.repo.body("none", contract="not-applicable", migration="docs/migrate.md"),
+            )
+        self.run_check(base, head, self.repo.body("major", migration="docs/migrate.md"))
 
     def test_actual_unreleased_and_staged_section_can_adopt_new_model(self) -> None:
         old = (
@@ -1476,17 +1478,75 @@ class EntryEditTests(unittest.TestCase):
         self.repo.pending("2.1.0", [("minor", "Add a flag", "to the command and its alias")])
         self.repo.write("product.txt", "alias\n")
         head = self.repo.commit("chore: wire the alias")
-        with self.assertRaisesRegex(release.ReleaseError, "never as wording"):
+        with self.assertRaisesRegex(release.ReleaseError, "only rewrapping is not an edit"):
             self.check(base, head, self.repo.body("none"))
         result = self.check(base, head, self.repo.body("minor"))
         self.assertEqual((result["added"], result["edited"]), ([], ["Add a flag."]))
 
-    def test_a_wording_edit_is_none_only_when_declared_and_docs_only(self) -> None:
+    def test_a_none_declaration_never_makes_a_rewrite_wording(self) -> None:
+        # F4: a same-impact rewrite that changes what the entry says is an
+        # edit at the entry's impact, whatever the declaration and paths.
+        self.repo.pending("2.1.0", [("minor", "Publication", "Requires human approval.")])
+        base = self.repo.commit("feat: publication")
+        self.repo.pending(
+            "2.1.0", [("minor", "Publication", "Publishes automatically without human approval.")]
+        )
+        head = self.repo.commit("docs: reword the entry")
+        with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(minor\)"):
+            self.check(base, head, self.repo.body("none"))
+        result = self.check(base, head, self.repo.body("minor"))
+        self.assertEqual(result["edited"], ["Publication."])
+
+    def test_rewrapping_an_entry_is_not_an_edit(self) -> None:
+        # The wording change the checker can prove: every word, the label and
+        # the impact stay; only line breaks and spacing move.
+        self.repo.pending("2.1.0", [("minor", "Add a flag", "to the run command and its alias")])
+        base = self.repo.commit("feat: add a flag")
+        text = (self.repo.root / "CHANGELOG.md").read_text()
+        self.repo.write("CHANGELOG.md", text.replace("the run command and", "the run\n  command  and"))
+        head = self.repo.commit("docs: rewrap the entry")
+        result = self.check(base, head, self.repo.body("none"))
+        self.assertEqual((result["added"], result["edited"], result["withdrawn"]), ([], [], []))
+
+    def test_lazy_continuation_text_belongs_to_the_entry(self) -> None:
+        # F3: an unindented line that continues the bullet's paragraph renders
+        # as part of the entry, so changing or deleting it is an edit.
+        self.repo.pending("2.1.0", [("minor", "Publication", "First line.\nRequires human approval.")])
+        base = self.repo.commit("feat: publication")
+        text = (self.repo.root / "CHANGELOG.md").read_text()
+        self.assertIn("\nRequires human approval.", text)
+        for change in ["Publishes automatically without human approval.", None]:
+            with self.subTest(change=change):
+                if change is None:
+                    self.repo.write("CHANGELOG.md", text.replace("\nRequires human approval.", ""))
+                else:
+                    self.repo.write("CHANGELOG.md", text.replace("Requires human approval.", change))
+                head = self.repo.commit("docs: change the continuation")
+                with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(minor\)"):
+                    self.check(base, head, self.repo.body("none"))
+                self.assertEqual(self.check(base, head, self.repo.body("minor"))["edited"], ["Publication."])
+
+    def test_an_entry_ends_where_markdown_ends_its_paragraph(self) -> None:
+        cases = {
+            "- **A.** one\ntwo\n\nthree": "- **A.** one\ntwo",
+            "- **A.** one\n  two\n\n  three\nfour": "- **A.** one\n  two\n\n  three\nfour",
+            "- **A.** one\n### Fixed": "- **A.** one",
+            "- **A.** one\n- **B.** two": "- **A.** one",
+            "- **A.** one\n> quote": "- **A.** one",
+            "- **A.** one\n---": "- **A.** one",
+        }
+        for text, extent in cases.items():
+            with self.subTest(text=text):
+                self.assertEqual(release.entry_extent(text), extent)
+
+    def test_moving_an_entry_between_headings_is_release_neutral(self) -> None:
         self.repo.pending("2.1.0", [("minor", "Add a flag", "to the command")])
         base = self.repo.commit("feat: add a flag")
-        self.repo.pending("2.1.0", [("minor", "Add a flag", "to the `run` command")])
-        head = self.repo.commit("docs: name the command")
-        self.assertEqual(self.check(base, head, self.repo.body("none"))["edited"], ["Add a flag."])
+        text = (self.repo.root / "CHANGELOG.md").read_text()
+        self.repo.write("CHANGELOG.md", text.replace("## [2.1.0]\n", "## [2.1.0]\n\n### Added\n", 1))
+        head = self.repo.commit("docs: add a heading")
+        result = self.check(base, head, self.repo.body("none"))
+        self.assertEqual((result["added"], result["edited"], result["withdrawn"]), ([], [], []))
 
     def test_raising_an_entry_impact_is_assessed_at_the_new_impact(self) -> None:
         self.repo.pending("2.0.1", [("patch", "Fix a flag", "parsing")])
@@ -1681,6 +1741,77 @@ class TypedRepairTests(unittest.TestCase):
         bad = self.repo.commit("chore(release): forge a hash")
         with self.assertRaisesRegex(release.ReleaseError, "managed baseline"):
             self.check(bad)
+
+
+    def record_baselines(self, version: str, *, hashed: str | None = None) -> None:
+        """Write both managed baselines at `version` and record their hashes
+        in the manifest, as `sync` does; `hashed` records another version's."""
+        files = {}
+        for name in ["AGENTS.md", "CLAUDE.md"]:
+            text = f"<!-- codeflow:managed:begin scaffold={version} -->\nrules\n"
+            self.repo.write(f".codeflow/.baseline/{name}", text)
+            recorded = f"<!-- codeflow:managed:begin scaffold={hashed or version} -->\nrules\n"
+            files[name] = {"sha256": release.hashlib.sha256(recorded.encode()).hexdigest()}
+        manifest = json.loads((self.repo.root / ".codeflow/manifest.json").read_text())
+        manifest["files"] = files
+        self.repo.write(".codeflow/manifest.json", json.dumps(manifest) + "\n")
+
+    def broken_base_with_baselines(self) -> None:
+        self.record_baselines("2.0.0")
+        self.base = self.repo.commit("chore: record the baselines")
+        with self.assertRaises(release.ReleaseError):
+            release.check_state(self.repo.args(ref=self.base, structural=False))
+
+    def test_a_synchronized_baseline_repair_is_accepted(self) -> None:
+        self.broken_base_with_baselines()
+        self.repo.write_stamps("2.0.1")
+        self.record_baselines("2.0.1")
+        head = self.repo.commit("chore(release): sync stamps")
+        self.assertIn("disagree", self.check(head)["repair"])
+
+    def test_a_baseline_with_a_stale_manifest_hash_is_refused(self) -> None:
+        # F2: the baseline changes and the manifest keeps the old hash.
+        self.broken_base_with_baselines()
+        self.repo.write_stamps("2.0.1")
+        self.record_baselines("2.0.1", hashed="2.0.0")
+        head = self.repo.commit("chore(release): sync stamps without hashes")
+        with self.assertRaisesRegex(release.ReleaseError, "manifest hash of AGENTS.md"):
+            self.check(head)
+
+    def test_a_baseline_stamp_off_the_release_version_is_refused(self) -> None:
+        # F2: the hash matches the baseline, but its stamp is not the release's.
+        self.broken_base_with_baselines()
+        self.repo.write_stamps("2.0.1")
+        self.record_baselines("99.0.0")
+        head = self.repo.commit("chore(release): poison the baseline")
+        with self.assertRaisesRegex(release.ReleaseError, "managed stamp of the release version 2.0.1"):
+            self.check(head)
+
+    def test_a_baseline_left_behind_the_live_stamps_is_refused(self) -> None:
+        self.broken_base_with_baselines()
+        self.repo.write_stamps("2.0.1")
+        self.record_baselines("2.0.0")
+        head = self.repo.commit("chore(release): sync live stamps only")
+        with self.assertRaisesRegex(release.ReleaseError, "managed stamp of the release version"):
+            self.check(head)
+
+    def test_a_repair_cannot_rewrite_an_existing_entry(self) -> None:
+        # F4: the repair restores the stamps and also changes what an entry
+        # says; a none declaration does not make that wording.
+        self.repo.pending("2.0.1", [("patch", "Fix a crash", "and publish automatically")])
+        self.repo.write_stamps("2.0.1")
+        head = self.repo.commit("chore(release): sync stamps")
+        with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
+            self.check(head)
+        with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
+            self.check(head, self.repo.body("patch"))
+
+    def test_a_repair_may_rewrap_an_existing_entry(self) -> None:
+        text = (self.repo.root / "CHANGELOG.md").read_text()
+        self.repo.write("CHANGELOG.md", text.replace("- **Fix a crash.**", "- **Fix a\n  crash.**"))
+        self.repo.write_stamps("2.0.1")
+        head = self.repo.commit("chore(release): sync stamps")
+        self.assertEqual(self.check(head)["edited"], [])
 
 
 class PreflightTests(unittest.TestCase):

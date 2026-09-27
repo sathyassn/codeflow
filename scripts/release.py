@@ -712,16 +712,34 @@ def label_key(label: str) -> str:
     return label.rstrip(".").casefold()
 
 
+# A line that starts a new Markdown block, so it can never be a lazy
+# continuation of the entry's paragraph (CommonMark 0.31.2, 5.2).
+BLOCK_START = re.compile(
+    r"#{1,6}(?:\s|$)|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|>|<!--|```|~~~"
+    r"|(?:-[ \t]*){3,}$|(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$"
+)
+
+
 def entry_extent(text: str) -> str:
-    """One bullet: its first line and the indented or blank lines after it,
-    never a following heading, paragraph or marker."""
+    """One bullet, as Markdown renders it: its first line, the indented or
+    blank lines after it, and lazy continuation lines of its paragraph. It
+    ends at a blank line followed by an unindented line, or at an unindented
+    line that starts a new block (a heading, list item, quote, fence, rule
+    or marker)."""
     lines = text.splitlines()
     kept = lines[:1]
     for line in lines[1:]:
-        if line.strip() and not line[0].isspace():
+        unindented = bool(line.strip()) and not line[0].isspace()
+        if unindented and (not kept[-1].strip() or BLOCK_START.match(line)):
             break
         kept.append(line)
     return "\n".join(kept).strip()
+
+
+def entry_words(text: str) -> str:
+    """An entry's text with line wrapping removed: rewrapping an entry is the
+    one change that is not an edit."""
+    return " ".join(text.split())
 
 
 def pending_items(section: ChangelogSection, config: dict[str, Any]) -> dict[str, PendingItem]:
@@ -999,6 +1017,8 @@ def check_pr(args: argparse.Namespace) -> None:
             repair = typed_repair(base, head, proposed, paths, config, str(error), cwd=args.root)
             before_version = None
         after = validate_release_tree(proposed, config, state, cwd=args.root)
+        if repair is not None:
+            repair_baselines(base, proposed, paths, after["version"], repair, cwd=args.root)
         comparable_before = before_text
     baseline = resolve_baseline(config, state, cwd=args.root)
     if repair is None:
@@ -1029,19 +1049,19 @@ def check_pr(args: argparse.Namespace) -> None:
         key=lambda item: IMPACT_ORDER[item],
         default="none",
     )
-    wording_refinement = (
-        fields["impact"] == "none"
-        and change.edited
-        and not change.added
-        and not change.removed
-        and all(before.impact == after.impact for before, after in change.edited)
-        and all(path == "CHANGELOG.md" or path.startswith("docs/") for path in paths)
-    )
-    if fields["impact"] != assessed_impact and not wording_refinement:
+    if repair is not None and change.edited:
+        # A repair restores the release state; it never rewrites what an
+        # existing entry says (R-95). Edits wait for their own pull request.
+        fail(
+            f"base release state is invalid ({repair}); a repair keeps every existing pending "
+            f"entry's text and impact, and this PR edits: "
+            f"{', '.join(after.label for _, after in change.edited)}"
+        )
+    if fields["impact"] != assessed_impact:
         fail(
             f"declared impact {fields['impact']} must equal the impact of the pending entries "
             f"this PR adds or edits ({assessed_impact}); an edit under an existing label is "
-            "assessed at its impact, never as wording by default"
+            "assessed at its impact, and only rewrapping is not an edit"
         )
     if assessed_impact == "major" and fields[MIGRATION_GUIDANCE] != "yes":
         fail("an added or edited major entry requires migration guidance")
@@ -1097,7 +1117,8 @@ def entry_change(
 ) -> EntryChange:
     """Pending entries matched by identity (R-92): a label new to the section
     is an addition, a label gone is a withdrawal, and a changed body or impact
-    under a kept label is an edit of that item."""
+    under a kept label is an edit of that item. Only rewrapping, which leaves
+    every word in place, is no change."""
     added = [
         item
         for key, item in after.items()
@@ -1107,7 +1128,8 @@ def entry_change(
     edited = [
         (before[key], item)
         for key, item in after.items()
-        if key in before and (before[key].impact, before[key].text) != (item.impact, item.text)
+        if key in before
+        and (before[key].impact, entry_words(before[key].text)) != (item.impact, entry_words(item.text))
     ]
     return EntryChange(added, removed, edited)
 
@@ -1154,18 +1176,43 @@ def typed_repair(
                 f"base release state is invalid ({invariant}); a repair changes only the "
                 f"version stamp of {path}"
             )
-    if ".codeflow/manifest.json" in paths:
-        manifest = json.loads(file_at_ref(proposed, ".codeflow/manifest.json", cwd=cwd))
-        for baseline in REPAIR_BASELINES:
-            name = baseline.removeprefix(".codeflow/.baseline/")
-            actual = file_at_optional(proposed, baseline, cwd=cwd)
-            recorded = ((manifest.get("files") or {}).get(name) or {}).get("sha256")
-            if actual is not None and recorded != hashlib.sha256(actual).hexdigest():
-                fail(
-                    f"base release state is invalid ({invariant}); the manifest hash of "
-                    f"{name} must be its managed baseline's"
-                )
     return invariant
+
+
+MANAGED_STAMP = re.compile(rb"<!-- codeflow:managed:begin scaffold=(\d+\.\d+\.\d+) -->")
+
+
+def repair_baselines(
+    base: str, proposed: str, paths: list[str], version: str, invariant: str, *, cwd: Path
+) -> None:
+    """A repair that touches a managed baseline or the manifest leaves the
+    three consistent, as `sync` writes them: each baseline carries the one
+    managed stamp of the release version, and the manifest records its exact
+    hash. Neither may drift from the other or from the live stamps."""
+    if not any(path in paths for path in [*REPAIR_BASELINES, ".codeflow/manifest.json"]):
+        return
+    manifest = json.loads(file_at_ref(proposed, ".codeflow/manifest.json", cwd=cwd))
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    for baseline in REPAIR_BASELINES:
+        name = baseline.removeprefix(".codeflow/.baseline/")
+        actual = file_at_optional(proposed, baseline, cwd=cwd)
+        if actual is None:
+            if file_at_optional(base, baseline, cwd=cwd) is not None:
+                fail(f"base release state is invalid ({invariant}); a repair cannot remove {baseline}")
+            continue
+        stamps = [stamp.decode() for stamp in MANAGED_STAMP.findall(actual)]
+        if stamps != [version]:
+            fail(
+                f"base release state is invalid ({invariant}); {baseline} must carry one "
+                f"managed stamp of the release version {version}, not {stamps}"
+            )
+        entry = files.get(name) if isinstance(files, dict) else None
+        recorded = entry.get("sha256") if isinstance(entry, dict) else None
+        if recorded != hashlib.sha256(actual).hexdigest():
+            fail(
+                f"base release state is invalid ({invariant}); the manifest hash of "
+                f"{name} must be its managed baseline's"
+            )
 
 
 def file_at_optional(ref: str, path: str, *, cwd: Path) -> bytes | None:
