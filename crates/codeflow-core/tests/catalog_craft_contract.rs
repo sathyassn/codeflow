@@ -222,8 +222,9 @@ fn reviewer_labels_axis_and_disposition() {
     );
 }
 
-/// TSK-105 (review round 1, T105-6): the reviewer and ship state the same
-/// binding the checker applies, the head or a record-only ancestor.
+/// TSK-105 (review round 1, T105-6): the reviewer refuses a block reviewed
+/// before a later change; ship states the default completion in the task's
+/// own pull request and the late completion the checker's merge rule takes.
 #[test]
 fn reviewer_and_ship_state_the_acceptance_binding() {
     assert_contains(
@@ -235,7 +236,10 @@ fn reviewer_and_ship_state_the_acceptance_binding() {
     assert_contains(
         "assets/base/agents/skills/cf-ship/SKILL.md",
         &[
-            "names as `reviewed` this head, or an ancestor after which only its record's status and Closeout changed",
+            "a task PR's last commit runs `codeflow task status <id>",
+            "a late completion names",
+            "the clean landing merge's second parent",
+            "`deferred`, never verified at build time",
         ],
     );
     for path in [
