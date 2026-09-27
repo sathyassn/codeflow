@@ -335,7 +335,8 @@ publication date._
   changes them needs a journey criterion, as other adopter-facing changes
   do. `release.py` identifies each pending entry by its bold label (a
   duplicate blocks) and assesses an edit under a kept label at that entry's
-  impact whatever the pull request declares; only rewrapping is not an edit.
+  impact whatever the pull request declares; only rewrapping prose is not an
+  edit.
   It accepts a typed repair of a base whose release state is invalid, which
   keeps every existing entry's words and every stamp, baseline and hash
   consistent, and takes errata as dated notes in a `## Errata` block.

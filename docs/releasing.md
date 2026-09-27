@@ -47,8 +47,11 @@ or impact under a kept label is an edit of that item. An entry is the whole
 bullet as Markdown renders it, including unindented lines that continue its
 paragraph. An edit is assessed at its impact like an addition, whatever the
 declaration: the checker cannot prove that changed words keep their meaning,
-so only rewrapping, which keeps every word, the label and the impact, is not
-an edit. Moving an entry under another heading is not an edit either.
+so only rewrapping prose, which keeps every word, paragraph, code span, the
+label and the impact, is not an edit. An entry that holds code or nested
+structure (a list, quote, table, fence or hard break) is compared byte for
+byte, since there indentation and line breaks carry meaning. Moving an entry
+under another heading is not an edit either.
 Lowering an entry's impact needs `Withdrawal`, and a renamed label is a
 withdrawal plus an addition. Notes outside entries, such as the upgrade steps,
 carry no impact and are judged in review.
@@ -90,10 +93,13 @@ When a repair touches a managed baseline or the manifest, each baseline must
 carry the one managed stamp of the release version and the manifest must
 record its exact hash. Published sections are held to their exact public
 source, and version non-reuse and the impact floors still apply. Any other
-PR onto a broken base is refused until the repair lands. A base whose
-configuration this checker cannot read (a line that migrated the schema,
-landing on a target that has not) is judged with the PR's configuration, and
-the output names it. The checker a PR runs is the one in its own merge tree,
+PR onto a broken base is refused until the repair lands. The base is always
+judged by the configuration it carries; a PR never supplies the authority for
+the history it is judged against. One older shape is read: a bootstrap record
+without its comparison tree (as `main` carries), whose tree is derived from
+the recorded comparison commit when the tag carries the same tree, and the
+output says so. Any other configuration the checker cannot read refuses the
+PR. The checker a PR runs is the one in its own merge tree,
 so a line whose checker predates the typed repair cannot take a green repair
 PR; the TSK-106 review record replays that case.
 

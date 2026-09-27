@@ -111,7 +111,8 @@ Give each pending entry a stable identity, such as a unique bold label, so a
 checker can tell an addition, an edit and a withdrawal apart. An edit under
 an existing label is assessed at its impact like an addition, whatever the
 PR declares: a checker cannot prove that changed words keep their meaning, so
-only rewrapping, which keeps every word, is no edit. The entry is the whole
+only rewrapping prose is no edit; where an entry holds code or nested
+structure, its whitespace is meaning. The entry is the whole
 rendered bullet, continuation lines included. Renaming a label withdraws the
 old entry and adds a new one.
 

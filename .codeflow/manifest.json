@@ -653,7 +653,7 @@
     ".agents/skills/cf-ship/references/release-policy.md": {
       "src": "agents/skills/cf-ship/references/release-policy.md",
       "ownership": "managed",
-      "sha256": "319fbe24bf6704c2dfb6fcd34ba90a12bfb0fdefd31ad896de08cd8b0555459d",
+      "sha256": "4947c78caf63fd936ff4c25fb938b0f15f443c349433ee7ffee24080856e6901",
       "exec": false
     },
     ".agents/skills/cf-stack/SKILL.md": {
@@ -1331,7 +1331,7 @@
     ".claude/skills/cf-ship/references/release-policy.md": {
       "src": "agents/skills/cf-ship/references/release-policy.md",
       "ownership": "managed",
-      "sha256": "319fbe24bf6704c2dfb6fcd34ba90a12bfb0fdefd31ad896de08cd8b0555459d",
+      "sha256": "4947c78caf63fd936ff4c25fb938b0f15f443c349433ee7ffee24080856e6901",
       "exec": false
     },
     ".claude/skills/cf-stack/SKILL.md": {
