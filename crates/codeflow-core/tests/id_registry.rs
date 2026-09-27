@@ -1300,6 +1300,185 @@ fn seed_creates_an_orphan_root_that_adds_only_ids_files() {
     assert!(ledger.violations.is_empty() && !ledger.is_damaged());
 }
 
+// --- Live copies: a record renamed or deleted on its line is history --------
+
+fn write_titled(root: &Path, id: &str, title: &str) {
+    let path = root
+        .join("project-management/tasks")
+        .join(format!("{id}.md"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        format!("---\nid: {id}\ntitle: \"{title}\"\nstatus: todo\n---\n\n# {id}\n"),
+    )
+    .unwrap();
+}
+
+/// Renumber a task record by hand, as a plan revision did before the
+/// registry existed: the old id's file is gone and the new one is added.
+fn renumber(root: &Path, from: &str, to: &str) {
+    let dir = root.join("project-management/tasks");
+    let text = std::fs::read_to_string(dir.join(format!("{from}.md"))).unwrap();
+    std::fs::remove_file(dir.join(format!("{from}.md"))).unwrap();
+    std::fs::write(dir.join(format!("{to}.md")), text.replace(from, to)).unwrap();
+}
+
+/// Commit everything with a fixed author and committer date, so which add
+/// is older does not depend on how fast the test runs.
+fn commit_at(root: &Path, message: &str, date: &str) -> String {
+    git(root, &["add", "-A"]);
+    let out = Command::new("git")
+        .args(["commit", "-q", "-m", message])
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(root, &["rev-parse", "HEAD"])
+}
+
+fn entry(world: &World, id: &str) -> codeflow_core::ids::Entry {
+    world
+        .remote_ledger()
+        .entry(&RegId::parse(id).unwrap())
+        .cloned()
+        .unwrap_or_else(|| panic!("{id} is registered"))
+}
+
+#[test]
+fn seed_registers_the_tip_copy_when_a_renamed_records_add_survives_only_in_history() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    // Line a planned TSK-001, then renumbered it to TSK-002; its TSK-001
+    // add stays in the line's history although no tip holds it.
+    git(&m, &["checkout", "-q", "-b", "integration/a"]);
+    write_titled(&m, "TSK-001", "doctrine");
+    commit_all(&m, "plan the doctrine task");
+    renumber(&m, "TSK-001", "TSK-002");
+    let renumbered = commit_all(&m, "renumber the doctrine task");
+    // Line b holds a different TSK-001 at its tip.
+    git(&m, &["checkout", "-q", "-b", "integration/b", "main"]);
+    write_titled(&m, "TSK-001", "catalog");
+    let catalog = commit_all(&m, "plan the catalog task");
+    git(&m, &["checkout", "-q", "main"]);
+    git(&m, &["push", "-q", "origin", "--all"]);
+
+    let seeded = seed::seed(&m, None).unwrap();
+    assert_eq!(seeded.registered.len(), 2, "{:?}", seeded.registered);
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(tsk1.introduced.starts_with(&catalog), "{}", tsk1.introduced);
+    assert_eq!(tsk1.title, "catalog");
+    assert!(tsk1.mapped.is_empty(), "decided by provenance, not a map");
+    let tsk2 = entry(&world, "TSK-002");
+    assert!(
+        tsk2.introduced.starts_with(&renumbered),
+        "{}",
+        tsk2.introduced
+    );
+    assert_eq!(tsk2.title, "doctrine");
+}
+
+#[test]
+fn seed_still_refuses_when_no_tip_holds_the_id() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    git(&m, &["checkout", "-q", "-b", "integration/a"]);
+    write_titled(&m, "TSK-001", "doctrine");
+    commit_all(&m, "plan the doctrine task");
+    renumber(&m, "TSK-001", "TSK-002");
+    commit_all(&m, "renumber the doctrine task");
+    git(&m, &["checkout", "-q", "-b", "integration/b", "main"]);
+    write_titled(&m, "TSK-001", "catalog");
+    commit_all(&m, "plan the catalog task");
+    renumber(&m, "TSK-001", "TSK-003");
+    commit_all(&m, "renumber the catalog task");
+    git(&m, &["checkout", "-q", "main"]);
+    git(&m, &["push", "-q", "origin", "--all"]);
+
+    let stop = seed::seed(&m, None).unwrap_err().to_string();
+    assert!(
+        stop.contains("TSK-001: 2 copies that provenance cannot decide"),
+        "{stop}"
+    );
+    assert!(world.remote_ledger().tip.is_none(), "nothing was written");
+}
+
+#[test]
+fn seed_still_refuses_two_tips_that_hold_different_records() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    git(&m, &["checkout", "-q", "-b", "integration/a"]);
+    write_titled(&m, "TSK-001", "doctrine");
+    commit_all(&m, "plan the doctrine task");
+    git(&m, &["checkout", "-q", "-b", "integration/b", "main"]);
+    write_titled(&m, "TSK-001", "catalog");
+    commit_all(&m, "plan the catalog task");
+    git(&m, &["checkout", "-q", "main"]);
+    git(&m, &["push", "-q", "origin", "--all"]);
+
+    let stop = seed::seed(&m, None).unwrap_err().to_string();
+    assert!(
+        stop.contains("TSK-001: 2 copies that provenance cannot decide"),
+        "{stop}"
+    );
+    assert!(world.remote_ledger().tip.is_none(), "nothing was written");
+}
+
+#[test]
+fn seed_credits_the_add_the_tips_copy_came_from_not_the_oldest_add() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    // The doctrine add is the oldest, and its line renumbers it away; the
+    // catalog add is newer and is the copy main holds after both merge.
+    git(&m, &["checkout", "-q", "-b", "plan/a"]);
+    write_titled(&m, "TSK-001", "doctrine");
+    let doctrine = commit_at(&m, "plan the doctrine task", "2026-09-23T14:00:00Z");
+    renumber(&m, "TSK-001", "TSK-002");
+    commit_at(&m, "renumber the doctrine task", "2026-09-23T14:02:00Z");
+    git(&m, &["checkout", "-q", "-b", "plan/b", "main"]);
+    write_titled(&m, "TSK-001", "catalog");
+    let catalog = commit_at(&m, "plan the catalog task", "2026-09-23T14:01:00Z");
+    git(&m, &["checkout", "-q", "main"]);
+    for line in ["plan/a", "plan/b"] {
+        git(&m, &["merge", "-q", "--no-ff", "-m", "land", line]);
+    }
+    git(&m, &["branch", "-q", "-D", "plan/a", "plan/b"]);
+    git(&m, &["push", "-q", "origin", "main"]);
+
+    seed::seed(&m, None).unwrap();
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(
+        tsk1.introduced.starts_with(&catalog) && !tsk1.introduced.starts_with(&doctrine),
+        "credited to the add main's copy came from: {}",
+        tsk1.introduced
+    );
+    assert_eq!(tsk1.title, "catalog");
+    assert_eq!(tsk1.landed, catalog);
+}
+
+#[test]
+fn a_record_moved_under_the_same_id_keeps_its_first_introduction() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    let nested = m.join("project-management/epics/EPC-001/EPC-001.md");
+    std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    std::fs::write(&nested, "---\nid: EPC-001\ntitle: \"bootstrap\"\n---\n").unwrap();
+    let first = commit_all(&m, "record the epic");
+    let flat = m.join("project-management/epics/EPC-001.md");
+    std::fs::rename(&nested, &flat).unwrap();
+    commit_all(&m, "flatten the epic");
+    git(&m, &["push", "-q", "origin", "main"]);
+
+    seed::seed(&m, None).unwrap();
+    let epic = entry(&world, "EPC-001");
+    assert!(epic.introduced.starts_with(&first), "{}", epic.introduced);
+}
+
 // --- AC-11 (library part): a no-remote repository ---------------------------
 
 #[test]

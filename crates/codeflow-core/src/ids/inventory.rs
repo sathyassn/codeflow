@@ -184,7 +184,11 @@ fn max_seq_in<'a>(paths: impl Iterator<Item = &'a str>, kind: Kind) -> u64 {
 }
 
 /// For each id in `rev`'s history, the first commit that added a record
-/// file for it (R-111 `introduced`).
+/// file for it (R-111 `introduced`). When the id was also removed in that
+/// history (deleted, or renamed to another id), an add that a later removal
+/// descends from is a record that ended; the first add no removal descends
+/// from is the one `rev`'s copy came from. A move of the record to another
+/// path under the same id is not a removal.
 ///
 /// # Errors
 ///
@@ -194,8 +198,8 @@ pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, Id
         "log",
         "--reverse",
         "--no-renames",
-        "--diff-filter=A",
-        "--name-only",
+        "--diff-filter=AD",
+        "--name-status",
         "-z",
         "--format=%x1e%H",
         rev,
@@ -203,15 +207,42 @@ pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, Id
     ];
     args.extend_from_slice(&RECORD_ROOTS);
     let log = git.run(&args)?;
-    let mut out = BTreeMap::new();
+    let mut adds: BTreeMap<RegId, Vec<String>> = BTreeMap::new();
+    let mut removals: BTreeMap<RegId, Vec<String>> = BTreeMap::new();
     for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
         let mut fields = z_fields(record);
         let sha = fields.next().unwrap_or_default().trim().to_string();
-        for path in fields {
-            if let Some(id) = record_id_from_path(path) {
-                out.entry(id).or_insert_with(|| sha.clone());
+        let mut added = Vec::new();
+        let mut deleted = Vec::new();
+        while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
+            let Some(id) = record_id_from_path(path) else {
+                continue;
+            };
+            if status == "A" {
+                added.push(id);
+            } else {
+                deleted.push(id);
             }
         }
+        for id in deleted.into_iter().filter(|id| !added.contains(id)) {
+            removals.entry(id).or_default().push(sha.clone());
+        }
+        for id in added {
+            let shas = adds.entry(id).or_default();
+            if !shas.contains(&sha) {
+                shas.push(sha.clone());
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    for (id, shas) in adds {
+        let ended = removals.get(&id).map_or(&[][..], Vec::as_slice);
+        let live = shas.iter().find(|add| {
+            !ended
+                .iter()
+                .any(|removal| removal != *add && git.is_ancestor(add, removal))
+        });
+        out.insert(id, live.unwrap_or(&shas[0]).clone());
     }
     Ok(out)
 }
