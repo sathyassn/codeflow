@@ -764,9 +764,9 @@ class SuiteContractTests(unittest.TestCase):
         retry = figure("retry-state-figure-survives-a-review-note", "retry-states")
         self.assertEqual("state", retry["family"])
         self.assertEqual({"state", "trans", "return", "blocked"}, {item["state"] for item in drawn(retry["wide"])})
-        # Two channels: travelled and stopped differ on shape alone.
+        # Two channels: pending and held differ by hue alone.
         deploy = figure("deploy-flow-states-read-without-hue", "deploy-flow")
-        self.assertEqual({"shipped": "done", "pending": "todo", "halted": "stop"},
+        self.assertEqual({"shipped": "done", "pending": "todo", "held": "warn"},
                          {state["name"]: state["mark"] for state in deploy["states"]})
         self.assertFalse([item for item in drawn(deploy["wide"]) if "head" in item or "cross" in item])
         # Narrow: the wide marks stacked into a column past the ceiling.
