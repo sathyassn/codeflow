@@ -53,7 +53,7 @@
     ".agents/skills/cf-design/references/composition-and-design-system.md": {
       "src": "agents/skills/cf-design/references/composition-and-design-system.md",
       "ownership": "managed",
-      "sha256": "8d752ec396c6dc3f419b57fe2ee533d84978d9e1942f24c1765d8879184dbfd4",
+      "sha256": "cde6baebbe106bdc1d4134eb593032fd89ff8688aba3a7caf9b2ce74900eb420",
       "exec": false
     },
     ".agents/skills/cf-design/references/design-choice-audit.md": {
@@ -305,7 +305,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "6ebddcd2a9e93b1cf0b64ea5943dd8bc2e90ed83fbe945c6d895110b4a925736",
+      "sha256": "a7109a33dcf5ecbcb36ea9b45015ee001cc5f24b2f20e6250d7e067f24a361bd",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -659,7 +659,7 @@
     ".claude/skills/cf-design/references/composition-and-design-system.md": {
       "src": "agents/skills/cf-design/references/composition-and-design-system.md",
       "ownership": "managed",
-      "sha256": "8d752ec396c6dc3f419b57fe2ee533d84978d9e1942f24c1765d8879184dbfd4",
+      "sha256": "cde6baebbe106bdc1d4134eb593032fd89ff8688aba3a7caf9b2ce74900eb420",
       "exec": false
     },
     ".claude/skills/cf-design/references/design-choice-audit.md": {
@@ -911,7 +911,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "6ebddcd2a9e93b1cf0b64ea5943dd8bc2e90ed83fbe945c6d895110b4a925736",
+      "sha256": "a7109a33dcf5ecbcb36ea9b45015ee001cc5f24b2f20e6250d7e067f24a361bd",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {

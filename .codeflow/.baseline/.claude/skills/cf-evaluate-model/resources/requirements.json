@@ -423,7 +423,7 @@
         {
           "path": ".agents/skills/cf-design/references/composition-and-design-system.md",
           "markers": [
-            "the governing idea — not the fact inventory — as the thing that must survive",
+            "the governing idea, not the fact inventory, as the thing that must survive",
             "A declared alternate composition is a design decision"
           ]
         },
