@@ -1,5 +1,6 @@
 ---
 id: ADR-0056
+uid: b8347aae-67fc-41f6-88a8-689c3babe070
 title: High primary effort with bounded workers
 date: 2026-09-07
 status: accepted

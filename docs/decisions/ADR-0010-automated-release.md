@@ -1,5 +1,6 @@
 ---
 id: ADR-0010
+uid: be944dda-fece-4c97-9824-582cd4056bc7
 title: automated release — release-plz owns version/changelog/tag, cargo-dist owns artifacts
 date: 2026-07-04
 status: superseded

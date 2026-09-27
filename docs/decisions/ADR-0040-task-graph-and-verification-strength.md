@@ -1,5 +1,6 @@
 ---
 id: ADR-0040
+uid: f497ce8a-be43-4a6e-93c4-8913d8beacc9
 title: settle task graphs and select verification strength by evidence
 date: 2026-07-25
 status: accepted

@@ -1,5 +1,6 @@
 ---
 id: ADR-0017
+uid: 1ad6586e-20a9-48e2-92c2-3fe3a47bee5f
 title: codeflow ci — CI-portable, binary-sourced verification
 date: 2026-07-11
 status: accepted

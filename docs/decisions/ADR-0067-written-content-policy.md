@@ -1,5 +1,6 @@
 ---
 id: ADR-0067
+uid: 53b71ead-ada5-4b4c-a3a7-05fe3f4d51eb
 title: "Written content policy for new text"
 status: accepted
 date: 2026-09-22

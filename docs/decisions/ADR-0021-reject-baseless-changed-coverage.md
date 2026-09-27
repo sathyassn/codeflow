@@ -1,5 +1,6 @@
 ---
 id: ADR-0021
+uid: 2780c478-0c00-42e1-be8c-adac0329ebfe
 title: reject changed-file coverage without a comparison base
 date: 2026-07-14
 status: accepted

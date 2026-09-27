@@ -1,5 +1,6 @@
 ---
 id: ADR-0072
+uid: 091c7334-d4ec-489c-b030-7c110906faae
 title: Shared id registry on a protected data branch
 date: 2026-09-26
 status: accepted

@@ -1,5 +1,6 @@
 ---
 id: ADR-0041
+uid: 022b3ef1-05b6-466b-bc2e-61a6a576949a
 title: select qualified model bindings by stable project roles
 date: 2026-07-25
 status: accepted

@@ -1,5 +1,6 @@
 ---
 id: ADR-0038
+uid: 4302c423-27af-4612-aede-75fb07053941
 title: preserve critical-path focus without reflexive deferral or escalation
 date: 2026-07-24
 status: accepted

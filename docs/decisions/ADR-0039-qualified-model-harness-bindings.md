@@ -1,5 +1,6 @@
 ---
 id: ADR-0039
+uid: d3d8ad7d-0649-4d16-8c0d-6528f60d120b
 title: separate durable orchestration doctrine from qualified model and harness bindings
 date: 2026-07-25
 status: accepted

@@ -1,5 +1,6 @@
 ---
 id: ADR-0001
+uid: adbd005d-27cd-4494-8916-5b45bd66efe5
 title: stack choice — rust
 date: 2026-06-12
 status: accepted

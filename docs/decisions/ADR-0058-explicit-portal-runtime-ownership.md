@@ -1,5 +1,6 @@
 ---
 id: ADR-0058
+uid: de5163f3-8f5e-4c61-a428-1c329b55b11b
 title: replace portal source merging with explicit runtime ownership
 date: 2026-09-10
 status: accepted

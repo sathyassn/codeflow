@@ -1,5 +1,6 @@
 ---
 id: ADR-0046
+uid: 04d829d4-1017-4f0a-90e9-b2107482636d
 title: use independent work ids and a stable planning anchor
 date: 2026-07-29
 status: accepted

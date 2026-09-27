@@ -1,5 +1,6 @@
 ---
 id: ADR-0031
+uid: 76c88d4f-54e4-48ef-919e-af92cf352f24
 title: safe adaptive test setup and fail-closed configured gates
 date: 2026-07-18
 status: accepted
