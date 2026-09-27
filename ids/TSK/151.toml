@@ -1,0 +1,11 @@
+id = "TSK-151"
+uid = "47ea3c7b-204b-4b48-9639-c2905f0c76b8"
+kind = "TSK"
+title = "pipeline example names a resolved selector"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T17:43:06Z"
+target = "integration/EPC-018-autonomy-roster"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
