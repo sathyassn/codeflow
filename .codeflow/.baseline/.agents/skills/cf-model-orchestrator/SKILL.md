@@ -170,7 +170,8 @@ exhaust qualified routes before recorded solo fallback.
      `cf-herdr` when `HERDR_ENV=1` and its degraded TTY route otherwise. On a
      Codex, Grok or other non-Claude host, before every Claude worker or
      same-session reviewer launch through the delegated lifecycle, load the
-     `claude-turn-completion.md` foreground-return contract.
+     `.claude/skills/cf-delegate/resources/claude-turn-completion.md`
+     foreground-return contract.
    - Use only the ensemble's recorded same-family fallback after native
      preflight, and never report the fallback as the selected primary.
    - Never use a headless peer command or third-party substitute. Authentication

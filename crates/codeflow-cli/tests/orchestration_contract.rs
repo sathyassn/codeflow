@@ -213,7 +213,8 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "never a silent third vote",
         "Name extra families on trigger if available",
         "strongest capable permitted reasoning route",
-        "[detail](../resources/grok-host.md)",
+        // TSK-150 (H24): the Grok host detail is a named read before launch.
+        "Before a Grok preflight or launch, also read [the Grok host detail](../resources/grok-host.md)",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",

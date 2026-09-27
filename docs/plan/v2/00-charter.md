@@ -175,14 +175,14 @@ so every host reports the same number; line counts are not measured.
 |---|---:|
 | Kernel: one tier's `AGENTS.md` managed block | 10 KiB |
 | Always rules in one tier's map | 12 rules, 450 B per rule line |
-| Per-task reading chain | 148 KiB |
+| Per-task reading chain | 150 KiB |
 | Shipped `CLAUDE.md` (standard and full / minimal) | 6 KiB / 3 KiB |
-| `cf-reviewer` / `cf-security-reviewer` agent definition | 9 KiB + 640 B / 12 KiB |
+| `cf-reviewer` / `cf-security-reviewer` agent definition | 10 KiB / 12 KiB |
 | Routing skill without its own number / any other skill | 29 KiB / 24 KiB |
 
 | Skill | Guideline | Skill | Guideline |
 |---|---:|---|---:|
-| `cf-consult` | 6 KiB + 512 B | `cf-herdr` | 8 KiB |
+| `cf-consult` | 7 KiB | `cf-herdr` | 9 KiB |
 | `cf-customize` | 22 KiB | `cf-method` | 19 KiB + 512 B |
 | `cf-delegate` | 20 KiB + 512 B | `cf-model-orchestrator` | 29 KiB |
 | `cf-design` | 19 KiB + 512 B | `cf-plan` | 9 KiB |
@@ -192,10 +192,11 @@ so every host reports the same number; line counts are not measured.
 | `cf-estimate` | 6 KiB | `cf-evaluate-model` | 9 KiB + 256 B |
 
 The numbers live in `codeflow_core::reading` and
-`codeflow_core::scaffold::rule_map`; a new skill gets its own number in the
-same change. The chain guideline sits at least 50,000 bytes below the
-214,816-byte chain measured at the TSK-129 start, when every quality and
-routing section and the whole delegate skill were read on every task.
+`codeflow_core::scaffold::rule_map`. Every shipped file sits within its
+number, so a fresh install reports clean and a warning always points at
+something that changed. A new skill gets its own number in the same change,
+and a change that moves a shipped file past its number sets the new number
+in the same change, with the reason in the pull request.
 
 **One byte check still fails.** The complete generated `AGENTS.md` with a
 realistic project section must fit Codex's 32 KiB instruction limit

@@ -124,9 +124,10 @@ caller pane; no closing tabs this run did not create.
 
 Wait until the agent is ready. Split a pane only for a same-tab log/server
 sibling. From a Grok or another qualified non-Claude, non-Codex host,
-`herdr agent start --kind claude|codex` is the interactive seat. From Claude Code, Codex still uses the official plugin. From
-Codex, Claude still uses schema-v2; when `HERDR_ENV=1`, **start that Claude
-process in the Herdr pane**. Lifecycle records remain the completion signal.
+`herdr agent start --kind claude|codex` is the interactive seat. From Claude
+Code, Codex still uses the official plugin. From Codex, Claude still uses
+schema-v2; when `HERDR_ENV=1`, **start that Claude process in the Herdr
+pane**. Lifecycle records remain the completion signal.
 
 ## Deliver an armed prompt
 

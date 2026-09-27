@@ -29,9 +29,9 @@ before the combined release is ready.
 | Q01 | LOST | Restored: the turn adapter loads on every host that launches Claude through the delegated lifecycle (Codex, Grok or another non-Claude host); a Claude host's in-session launch stays exempt | `cf-model-orchestrator/SKILL.md` preflight step 3; `resources/routing/effort.md`; the adapter's scope sentence in `cf-delegate/resources/claude-turn-completion.md` |
 | Q52 | LOST | Pending: restores into `cf-ship/references/pr-evidence.md` from TSK-106's landed head (SPC-013 R-118), since TSK-106 rewrites the release policy it reconciles with. Planned text: `none` normally when nonbreaking, and a nonbreaking PR that refines or reconciles a pending breaking entry carries that entry's migration reference | not yet restored |
 | H27 | LOST | Restored: the dangerous-permissions flag needs the operator to name it | `cf-herdr/SKILL.md`, launch paragraph |
-| H24 | LOST | Proposed restore, for the design seat to confirm: the Grok host detail is a named read before a Grok preflight or launch, and the interactive canary must authenticate | `cf-model-orchestrator/references/other-hosts.md`; `resources/grok-host.md`, Launch |
-| H26 | LOST | Proposed superseded, for the design seat to confirm: `020ec2c8e` (operator direction, "Production never+full-access; Grok always-approve") made the former unattended overlay the default production launch, so no optional overlay remains whose requester or seat scope could be stated. The surviving safety fact of that paragraph, that Herdr is not an external sandbox, is restored; H27 carries the one remaining operator-named flag | `cf-herdr/SKILL.md`, launch paragraph |
-| H29 | LOST | Proposed restore, for the design seat to confirm: the orchestrator still admits another qualified harness as host, so the Herdr seat rule covers it | `cf-herdr/SKILL.md`, seat paragraph |
+| H24 | LOST | Restored; the design seat confirmed restore (Fable review of `5d0b18447`): the Grok host detail is a named read before a Grok preflight or launch, and the interactive canary must authenticate; neither Grok peer lane is claimed complete until its own canary succeeds | `cf-model-orchestrator/references/other-hosts.md`; `resources/grok-host.md`, Launch and Peer lanes; the read is a reviewed conditional read in the structure test |
+| H26 | LOST | Superseded; the design seat confirmed (Fable review of `5d0b18447`): `020ec2c8e` (operator direction, "Production never+full-access; Grok always-approve") made the former unattended overlay the default production launch, so no optional overlay remains whose requester or seat scope could be stated. The surviving safety fact of that paragraph, that Herdr is not an external sandbox, is restored; H27 carries the one remaining operator-named flag | `cf-herdr/SKILL.md`, launch paragraph |
+| H29 | LOST | Restored; the design seat confirmed restore (Fable review of `5d0b18447`): the orchestrator still admits another qualified harness as host, so the Herdr seat rule covers it | `cf-herdr/SKILL.md`, seat paragraph |
 | Q27 | LOST-MINOR | Restored the reason for passing on an exclusion | `resources/routing/assignment.md` |
 | Q53 | LOST-MINOR | Restored the staged-loading rationale in the loading index | `cf-model-orchestrator/SKILL.md`, loading paragraph |
 | Q60 | LOST-MINOR | Restored why the docs check differs by tier | `claude/agents/cf-reviewer.md`, step 4 |
@@ -39,8 +39,8 @@ before the combined release is ready.
 | Q65 | LOST-MINOR | Restored the shared-vocabulary note | `cf-consult/SKILL.md`, step 4 |
 | H04 | LOST-MINOR | Restored "bounded" | `cf-present/SKILL.md`, opening |
 | H06 | LOST-MINOR | Restored the naming examples | `cf-herdr/SKILL.md`, Naming |
-| H31 | LOST-MINOR | Restored in the triggered git reference, read at every tier before a branch, commit, push or cleanup: the local planes are fast feedback, the remote plane is armed with `codeflow remote protect` and verified, and an override env is not authentication | `assets/base/rules/git-rules.md`, Enforcement |
-| X03 | LOST-MINOR | Proposed superseded, for the design seat to confirm: PR366 (`031bf8e07`) deliberately stopped advertising vestigial `priority`, `estimate` and `work_type` defaults and made the typed fields serde-defaulted; the audit found no acceptance duty lost and no budget motive. Restoring them is a product decision, not a byte-cut repair | not restored |
+| H31 | LOST-MINOR | Restored, placement confirmed by the design seat, in the triggered git reference, read at every tier before a branch, commit, push or cleanup: the local planes are fast feedback, the remote plane is armed with `codeflow remote protect` and verified, and an override env is not authentication | `assets/base/rules/git-rules.md`, Enforcement |
+| X03 | LOST-MINOR | Superseded; the design seat confirmed (Fable review of `5d0b18447`): PR366 (`031bf8e07`) deliberately stopped advertising vestigial `priority`, `estimate` and `work_type` defaults and made the typed fields serde-defaulted; the audit found no acceptance duty lost and no budget motive. Restoring them is a product decision, not a byte-cut repair | not restored |
 
 ### Other lines, not edited by TSK-150
 
@@ -58,14 +58,18 @@ before the combined release is ready.
 
 ### Found by the structure test
 
-The new orphan check found three shipped files no instruction pointed at.
-Two pointers had been lost in `1d7c52b23`; they are restored where the read
-happens. The third file was a superseded example and is retired.
+The new orphan check found four shipped files no instruction pointed at. The
+`cf-present` token example lost its pointer in `eb3718896` ("fix(present):
+pass10 comment parity and layout"). The `cf-estimate` fixture inputs
+`profile.md` and `brief.md` never had a prose pointer: `f54775c76` added them,
+and only `forecast.json` named their paths. These are not byte-budget cuts.
+Both are now linked where they are read. The fourth file was a superseded
+example and is retired.
 
 | File | Disposition | Where it is read now |
 |---|---|---|
-| `cf-estimate/examples/brief.md`, `profile.md` | Pointer restored: the fixture's inputs are linked where the worked example names them | `cf-estimate/references/worked-example.md` |
-| `cf-present/assets/primitive-tokens.example.json` (with `config.example.toml`) | Pointer restored with its lost rule: use only during an explicit `cf-customize` opt-in; examples, not files to copy | `cf-present/references/document-authoring.md`, Utility tokens |
+| `cf-estimate/examples/brief.md`, `profile.md` | Pointer added: the fixture's inputs are linked where the worked example names them | `cf-estimate/references/worked-example.md` |
+| `cf-present/assets/primitive-tokens.example.json` (with `config.example.toml`) | Pointer restored with the rule `eb3718896` removed: use only during an explicit `cf-customize` opt-in; examples, not files to copy | `cf-present/references/document-authoring.md`, Utility tokens |
 | `cf-present/assets/review-document.example.json` | Retired: `present-document.example.json` replaced it as the starting shape in `1d7c52b23`, and it leads with a Mermaid diagram the current guidance rejects as a primary carrier. `codeflow update` removes an unmodified copy and keeps a modified one | removed |
 
 ## The audit, as returned

@@ -317,7 +317,7 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "2e221454f033636321220135ec25da86f053e6df79cc2d9887e7911a8b85ad70",
+      "sha256": "d1a47692c8b58922eb5c2a13833529553096bca2742259e1f022dc049ad189f2",
       "exec": false
     },
     ".agents/skills/cf-method/SKILL.md": {
@@ -347,7 +347,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "b0bbcd691215acf5918b002bcc821508d74f1a55189ec0e1adfc6f96eee1341e",
+      "sha256": "a4bbd4eb307a9c39577943af42e93640bf970b2a8219fb7f8053297a2791e32f",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -371,7 +371,7 @@
     ".agents/skills/cf-model-orchestrator/references/other-hosts.md": {
       "src": "agents/skills/cf-model-orchestrator/references/other-hosts.md",
       "ownership": "managed",
-      "sha256": "68bbe821ac8216b49fa688c907fa6ded25f301605d306b78f6d3034675362eb1",
+      "sha256": "65359ace9f802c5f372572e3c6f24f98e1641243b100027a69e1077d332b099b",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/references/parallel-tasks.md": {
@@ -401,7 +401,7 @@
     ".agents/skills/cf-model-orchestrator/resources/grok-host.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/grok-host.md",
       "ownership": "managed",
-      "sha256": "7d19e588eba0046c55af4c62de88c0ae032acf2eb6bc6d39fa1b7eb157b921cd",
+      "sha256": "16ba807cc4c809d9ca2386becb4fac8068f8e45b7b1e38ea315e4c0fdbd66123",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
@@ -995,7 +995,7 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "2e221454f033636321220135ec25da86f053e6df79cc2d9887e7911a8b85ad70",
+      "sha256": "d1a47692c8b58922eb5c2a13833529553096bca2742259e1f022dc049ad189f2",
       "exec": false
     },
     ".claude/skills/cf-method/SKILL.md": {
@@ -1025,7 +1025,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "b0bbcd691215acf5918b002bcc821508d74f1a55189ec0e1adfc6f96eee1341e",
+      "sha256": "a4bbd4eb307a9c39577943af42e93640bf970b2a8219fb7f8053297a2791e32f",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/codex-host.md": {
@@ -1049,7 +1049,7 @@
     ".claude/skills/cf-model-orchestrator/references/other-hosts.md": {
       "src": "agents/skills/cf-model-orchestrator/references/other-hosts.md",
       "ownership": "managed",
-      "sha256": "68bbe821ac8216b49fa688c907fa6ded25f301605d306b78f6d3034675362eb1",
+      "sha256": "65359ace9f802c5f372572e3c6f24f98e1641243b100027a69e1077d332b099b",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/references/parallel-tasks.md": {
@@ -1079,7 +1079,7 @@
     ".claude/skills/cf-model-orchestrator/resources/grok-host.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/grok-host.md",
       "ownership": "managed",
-      "sha256": "7d19e588eba0046c55af4c62de88c0ae032acf2eb6bc6d39fa1b7eb157b921cd",
+      "sha256": "16ba807cc4c809d9ca2386becb4fac8068f8e45b7b1e38ea315e4c0fdbd66123",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {

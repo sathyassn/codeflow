@@ -1754,8 +1754,17 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
         .any(|file| file.path.ends_with("quality/findings.md")));
     assert_eq!(reading::orphans(&installed), Vec::<String>::new());
 
-    // Doctor reports sizes: a skill doubled past its guideline warns and
+    // Doctor reports sizes: the fresh install is within every guideline, so
+    // the report is clean; a skill doubled past its guideline then warns and
     // names the step that clears it, and doctor still exits 0.
+    let fresh_report = codeflow(&root, &["doctor", "--check", "reading"]);
+    let clean = output_text(&fresh_report);
+    assert_eq!(fresh_report.status.code(), Some(0), "{clean}");
+    assert!(
+        clean.starts_with("ok    reading: within guidelines:"),
+        "{clean}"
+    );
+    assert!(!clean.contains("differ from the shipped map"), "{clean}");
     let skill = root.join(".claude/skills/cf-herdr/SKILL.md");
     let text = std::fs::read_to_string(&skill).unwrap();
     std::fs::write(&skill, format!("{text}\n{text}")).unwrap();
