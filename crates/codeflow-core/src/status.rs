@@ -12,7 +12,8 @@ use std::process::Command;
 
 use crate::capability::{parse_capabilities, CapabilityEntry};
 use crate::models::{Epic, EpicFilter, Task, TaskFilter, TaskStatus};
-use crate::workgraph::{MarkdownStore, RecordStore};
+use crate::workgraph::readiness::{self, Backlog, State};
+use crate::workgraph::{durable_work_tracking_enabled, MarkdownStore, RecordStore};
 
 /// A git worktree attached to the repository.
 #[derive(Debug, Clone)]
@@ -41,6 +42,8 @@ pub enum CleanupDisposition {
     PreserveDirty,
     /// Clean, but landing could not be proven from local Git evidence.
     RetainUnproven,
+    /// An integration line an open task still targets (SPC-013 R-44).
+    RetainLive,
 }
 
 impl CleanupDisposition {
@@ -49,6 +52,7 @@ impl CleanupDisposition {
             Self::Removable => "removable",
             Self::PreserveDirty => "preserve-dirty",
             Self::RetainUnproven => "retain-unproven",
+            Self::RetainLive => "retain-live",
         }
     }
 }
@@ -113,6 +117,9 @@ pub struct StatusView {
     pub cleanup: Vec<CleanupInfo>,
     /// `None` when the project-management tier is absent.
     pub work: Option<WorkSummary>,
+    /// Derived task states from the readiness core (SPC-013 R-27); `None`
+    /// when durable work tracking is off or the refs cannot be read.
+    pub derived: Option<Backlog>,
     /// `None` when `docs/capabilities.md` is absent.
     pub capabilities: Option<Vec<CapabilityEntry>>,
     /// Per-capability delivery rollup. `None` when either the registry or the
@@ -149,6 +156,16 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         };
 
     let work = collect_work(repo_root, &mut notes);
+    let derived = match durable_work_tracking_enabled(repo_root) {
+        Ok(true) => match readiness::backlog(repo_root) {
+            Ok(backlog) => Some(backlog),
+            Err(error) => {
+                notes.push(format!("derived task states unavailable: {error}"));
+                None
+            }
+        },
+        _ => None,
+    };
     let capabilities = collect_capabilities(repo_root, &mut notes);
     let delivery = collect_delivery(repo_root, capabilities.as_deref());
 
@@ -158,6 +175,7 @@ pub fn collect_status(repo_root: &Path) -> StatusView {
         cleanup_target,
         cleanup,
         work,
+        derived,
         capabilities,
         delivery,
         notes,
@@ -325,6 +343,12 @@ fn classify_cleanup(
         Some(false) => {}
     }
 
+    if branch.is_some_and(|name| readiness::is_live_integration_line(repo_root, name)) {
+        return (
+            CleanupDisposition::RetainLive,
+            "live integration line: an open task targets it".to_string(),
+        );
+    }
     let (Some(oid), Some(target)) = (oid, target) else {
         return (
             CleanupDisposition::RetainUnproven,
@@ -585,6 +609,9 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
             let _ = writeln!(out, "work: (no project-management tier)");
         }
     }
+    if let Some(backlog) = &view.derived {
+        render_derived(&mut out, backlog);
+    }
 
     match &view.capabilities {
         Some(entries) => {
@@ -626,6 +653,40 @@ pub fn render_status(view: &StatusView, capabilities_table: bool) -> String {
     }
 
     out
+}
+
+fn render_derived(out: &mut String, backlog: &Backlog) {
+    let _ = writeln!(out, "tasks: {}", backlog.counts_line());
+    let _ = writeln!(out, "  {}", backlog.snapshot_line());
+    for entry in backlog.in_state(State::Active) {
+        let _ = writeln!(
+            out,
+            "  active: {} {} ({})",
+            entry.task_id,
+            entry.title,
+            entry.branches.join(", ")
+        );
+    }
+    for entry in backlog.in_state(State::Ready) {
+        let _ = writeln!(out, "  ready: {} {}", entry.task_id, entry.title);
+    }
+    for (task_id, branches) in &backlog.conflicts {
+        let _ = writeln!(
+            out,
+            "  conflict: {task_id} is carried by {} (claims are advisory; settle one owner)",
+            branches.join(", ")
+        );
+    }
+    for branch in &backlog.landed {
+        let _ = writeln!(out, "  landed: {branch}");
+    }
+    for (epic, progress) in &backlog.epics {
+        let _ = writeln!(
+            out,
+            "  epic {epic}: {}/{} complete, {} cancelled",
+            progress.complete, progress.total, progress.cancelled
+        );
+    }
 }
 
 fn render_cleanup(out: &mut String, view: &StatusView) {

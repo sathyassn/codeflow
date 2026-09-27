@@ -44,6 +44,10 @@ pub fn generate(root: &Path) -> String {
         let _ = writeln!(out, "{line}");
     }
 
+    if let Some(line) = tasks_line(root) {
+        let _ = writeln!(out, "{line}");
+    }
+
     if let Some(line) = capabilities_line(root) {
         let _ = writeln!(out, "{line}");
     }
@@ -190,6 +194,24 @@ fn work_line(root: &Path) -> Option<String> {
         epics.len(),
         tasks.len(),
     ))
+}
+
+/// Derived task states from the readiness core (SPC-013 R-44), with the
+/// first ready task. Only where durable work tracking is on.
+fn tasks_line(root: &Path) -> Option<String> {
+    if !crate::workgraph::durable_work_tracking_enabled(root).ok()? {
+        return None;
+    }
+    let backlog = crate::workgraph::readiness::backlog(root).ok()?;
+    if backlog.entries.is_empty() {
+        return None;
+    }
+    let next = backlog
+        .in_state(crate::workgraph::readiness::State::Ready)
+        .next()
+        .map(|entry| format!("; next: {} {}", entry.task_id, truncate(&entry.title, 60)))
+        .unwrap_or_default();
+    Some(format!("tasks: {}{next} (`codeflow work next`)", backlog.counts_line()))
 }
 
 /// Count capability statuses from `docs/capabilities.md` yaml entries.
