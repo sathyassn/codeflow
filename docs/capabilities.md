@@ -543,8 +543,10 @@ A completion is bound to the reviewed commit (SPC-013 R-52 to R-54, R-60 to
 R-62): `task status complete` and `codeflow ci` check that the block's
 `reviewed` commit, named by object id, is the head or an ancestor after
 which only the record's status and Closeout changed, and that each waiver
-names the planning amendment on the target that changed that criterion. A
-task branch cannot change its record's criteria. A range touching the
+names a planning-only amendment on the target that changed that criterion;
+the verb also refuses uncommitted changes outside the record. Only a
+planning-only change or a checked epic line can change a task's criteria;
+the pull request's class decides it, not the branch prefix. A range touching the
 adopter-facing path set needs a `(journey)` criterion or one serving the
 epic's journey, and a leaf serving it says what ran or its narrower path. A
 criterion tagged `(after release)` is `deferred` with owner, window and a

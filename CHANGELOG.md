@@ -21,9 +21,11 @@ publication date._
   `task status complete`, and every completion in a pull request range in
   `codeflow ci`, now checks that the acceptance block's `reviewed` commit is
   the head or an ancestor after which only the record's status and Closeout
-  changed, and that each waiver names the planning amendment commit on the
-  target that changed that criterion. A task branch that changes its
-  record's criteria is refused. A range touching the adopter-facing path set
+  changed, and that each waiver names a planning-only amendment commit on
+  the target that changed that criterion. `task status complete` also
+  refuses uncommitted changes outside the record. A pull request that
+  changes a task's criteria is refused unless its validated class is
+  planning-only or a checked epic line, whatever its branch prefix. A range touching the adopter-facing path set
   needs a task with a `(journey)` criterion or one serving the epic's
   journey, and a leaf serving it links the evidence that ran or names its
   narrower path. A criterion tagged `(after release)` is `deferred` with an
