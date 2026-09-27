@@ -1065,3 +1065,162 @@ fn ci_reports_a_named_task_anchor_at_the_policy_level() {
         );
     }
 }
+
+/// A repository whose target holds the `work_planning` level, a planned
+/// TSK-001 (waiting on the open TSK-002 when `waits`), and, when `bad_graph`,
+/// an unrelated epic file whose id does not match its name; the branch
+/// `fix/TSK-001-work` adds code. Returns the branch head.
+fn planning_repo(dir: &Path, level: &str, waits: bool, bad_graph: bool) -> String {
+    git(dir, &["init", "-b", "main"]);
+    git(dir, &["config", "user.email", "t@example.com"]);
+    git(dir, &["config", "user.name", "t"]);
+    std::fs::create_dir_all(dir.join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.join(".codeflow/policy.json"),
+        format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+    )
+    .unwrap();
+    let tasks = dir.join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    let dep = if waits { "TSK-002" } else { "" };
+    std::fs::write(tasks.join("TSK-001.md"), planned_task("TSK-001", dep)).unwrap();
+    if waits {
+        std::fs::write(tasks.join("TSK-002.md"), planned_task("TSK-002", "")).unwrap();
+    }
+    if bad_graph {
+        let epics = dir.join("project-management/epics");
+        std::fs::create_dir_all(&epics).unwrap();
+        std::fs::write(
+            epics.join("EPC-999.md"),
+            "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
+        )
+        .unwrap();
+    }
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "chore: anchor planning"]);
+    git(dir, &["switch", "-c", "fix/TSK-001-work"]);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/lib.rs"), "fn work() {}\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "fix: implement work"]);
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn combined(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+/// TSK-133 review R1: tracked work gets the visible-workgraph check once,
+/// at the `git.work_planning` level, whether the task comes from the branch
+/// (`fix/TSK-001-work`) or only from the `Task:` line (`fix/work`), and from
+/// the target checkout as the shipped workflow runs it.
+#[test]
+fn ci_checks_the_visible_graph_once_for_any_tracked_context() {
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        let head = planning_repo(dir.path(), level, false, true);
+        let body = format!("Task: TSK-001\n\n{FULL_BODY}");
+        let run = |branch: &str, head: &str| {
+            run_in(
+                dir.path(),
+                &[
+                    "ci",
+                    "--base",
+                    "main",
+                    "--head",
+                    head,
+                    "--branch",
+                    branch,
+                    "--pr-body",
+                    &body,
+                ],
+            )
+        };
+        let shown = format!("work.valid_graph ({level})");
+        let mut cases = vec![
+            ("own", run("fix/TSK-001-work", "HEAD")),
+            ("named", run("fix/work", "HEAD")),
+        ];
+        git(dir.path(), &["checkout", "-q", "--detach", "main"]);
+        cases.push(("target checkout", run("fix/work", &head)));
+        for (case, output) in cases {
+            let out = combined(&output);
+            assert!(
+                out.contains("pull request class: tracked TSK-001"),
+                "{case} {level}: {out}"
+            );
+            assert_eq!(
+                out.matches("work.valid_graph (").count(),
+                1,
+                "{case} {level}: {out}"
+            );
+            assert!(
+                out.contains(&shown) && out.contains("EPC-999.md"),
+                "{case} {level}: {out}"
+            );
+            assert_eq!(
+                output.status.code(),
+                Some(i32::from(level == "block")),
+                "{case} {level}: {out}"
+            );
+        }
+    }
+}
+
+/// TSK-133 review R2: an unreadable tracking state blocks `work start` and
+/// CI alike, whatever `git.work_planning` says; with the state readable, a
+/// genuine planning finding still only warns at `warn`.
+#[test]
+fn an_unreadable_tracking_state_blocks_work_start_and_ci_at_any_level() {
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        planning_repo(dir.path(), level, true, false);
+        std::fs::write(dir.path().join(".codeflow/project.toml"), "not valid [").unwrap();
+        let start = run_in(dir.path(), &["work", "start", "TSK-001"]);
+        let out = combined(&start);
+        assert_eq!(start.status.code(), Some(1), "{level}: {out}");
+        assert!(
+            out.contains("cannot determine durable-work tracking"),
+            "{level}: {out}"
+        );
+        assert!(!out.contains("continuing"), "{level}: {out}");
+        assert!(!out.contains("not valid ["), "state is not echoed: {out}");
+        let ci = run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--branch",
+                "fix/TSK-001-work",
+            ],
+        );
+        let out = combined(&ci);
+        assert_eq!(ci.status.code(), Some(1), "{level}: {out}");
+        assert!(
+            out.contains("work.tracking_state (block)"),
+            "{level}: {out}"
+        );
+
+        std::fs::remove_file(dir.path().join(".codeflow/project.toml")).unwrap();
+        let start = run_in(dir.path(), &["work", "start", "TSK-001"]);
+        let out = combined(&start);
+        assert_eq!(
+            start.status.code(),
+            Some(i32::from(level == "block")),
+            "{level}: {out}"
+        );
+        assert!(out.contains("TSK-002"), "{level}: {out}");
+    }
+}

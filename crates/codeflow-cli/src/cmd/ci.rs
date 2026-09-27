@@ -267,7 +267,7 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
-    work_checks(
+    let tracked_claim = work_checks(
         &root,
         git,
         pr_body.as_deref(),
@@ -278,13 +278,13 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut ran,
     );
 
-    own_branch_preflight(
-        &root,
-        &branch,
-        git.work_planning_level(),
-        &mut tagged,
-        &mut ran,
-    );
+    let level = git.work_planning_level();
+    let own_task = own_branch_preflight(&root, &branch, level, &mut tagged, &mut ran);
+    // The visible workgraph is checked once for tracked work, whether the
+    // task comes from the branch or from the `Task:` line (TSK-133).
+    if own_task || tracked_claim {
+        visible_graph_check(&root, level, &mut tagged);
+    }
 
     // --- PR-body check ----------------------------------------------------
     // A Bitbucket PR without a body channel was warned about when resolving
@@ -309,7 +309,8 @@ pub fn run(args: &CiArgs) -> i32 {
 
 /// Pull request classification (TSK-104), which needs the body, and
 /// acceptance bound to the reviewed commit (TSK-105), which runs for any
-/// range: a completion is bound to the head it lands with.
+/// range: a completion is bound to the head it lands with. Returns whether
+/// the pull request is tracked work (TSK-133's visible-workgraph check).
 #[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
 fn work_checks<'a>(
     root: &Path,
@@ -320,7 +321,7 @@ fn work_checks<'a>(
     head: &str,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&'a str>,
-) {
+) -> bool {
     let base = base_candidates
         .iter()
         .find_map(|name| rev_parse(root, name).map(|sha| (name.as_str(), sha)));
@@ -341,6 +342,7 @@ fn work_checks<'a>(
         tagged,
         ran,
     );
+    matches!(class, Some(classification::Class::Tracked { .. }))
 }
 
 /// The durable-record rows of the dispatch, in their append-only order
@@ -525,18 +527,21 @@ fn evaluate_commit_range(
 /// implementation only after its planning record is present on the
 /// declared integration target: the same read-only merge-base preflight as
 /// `codeflow work start`.
+/// Returns whether the branch's task was checked, so the caller runs the
+/// visible-workgraph check for it.
 fn own_branch_preflight(
     root: &Path,
     branch: &str,
     level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
-) {
+) -> bool {
     if branch.starts_with("task/") || branch_claims_task_id(root, branch) {
         match durable_work_tracking_enabled(root) {
             Ok(true) => {
                 evaluate_work_start(root, branch, level, tagged);
                 ran.push("work-start");
+                return true;
             }
             Ok(false) => {}
             Err(error) => {
@@ -553,16 +558,12 @@ fn own_branch_preflight(
             }
         }
     }
+    false
 }
 
-/// The planning checks for the task the branch carries, at the
+/// The visible workgraph, checked once per run for tracked work at the
 /// `git.work_planning` level (TSK-133).
-fn evaluate_work_start(
-    root: &Path,
-    branch: &str,
-    level: PolicyLevel,
-    tagged: &mut Vec<TaggedViolation>,
-) {
+fn visible_graph_check(root: &Path, level: PolicyLevel, tagged: &mut Vec<TaggedViolation>) {
     let workgraph = validate_workgraph(root);
     if !workgraph.is_clean() {
         let findings = workgraph
@@ -581,6 +582,16 @@ fn evaluate_work_start(
             ),
         });
     }
+}
+
+/// The task checks for the task the branch carries, at the
+/// `git.work_planning` level (TSK-133).
+fn evaluate_work_start(
+    root: &Path,
+    branch: &str,
+    level: PolicyLevel,
+    tagged: &mut Vec<TaggedViolation>,
+) {
     if let Some(task_id) = task_id_from_branch(root, branch) {
         let declared = declared_work_target(root, &task_id);
         let target = match resolve_work_target_checked(root, declared.as_deref()) {

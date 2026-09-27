@@ -8,7 +8,8 @@ use codeflow_core::hooks::PolicyLevel;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::readiness::{self, Backlog, Entry, State};
 use codeflow_core::workgraph::{
-    check_work_start, declared_work_target, resolve_work_target_checked,
+    check_work_start, declared_work_target, durable_work_tracking_enabled,
+    resolve_work_target_checked,
 };
 use serde_json::json;
 
@@ -164,9 +165,19 @@ fn claim(task_id: &str) -> i32 {
 
 /// `work start`: the planning checks, once per task, at the
 /// `git.work_planning` level (TSK-133). At `warn` a finding is reported and
-/// the command succeeds; CI reports the same finding at the same level.
+/// the command succeeds; CI reports the same finding at the same level. An
+/// unreadable tracking state always blocks.
 fn start(task_id: &str, target: Option<&str>) -> i32 {
     let root = super::repo_root();
+    // An undeterminable tracking state blocks whatever the level says, as in
+    // CI's `work.tracking_state`.
+    if let Err(error) = durable_work_tracking_enabled(&root) {
+        eprintln!("work start: error: cannot determine durable-work tracking: {error}");
+        eprintln!(
+            "work start: repair CodeFlow state or task-home access; this blocks whatever git.work_planning says"
+        );
+        return 1;
+    }
     let (policy, _armed) = Policy::load_effective(&root);
     let level = policy.git.work_planning_level();
     let Err(findings) = plan_check(&root, task_id, target) else {
