@@ -3,7 +3,9 @@
 //! The structural rules of an acceptance block live in
 //! [`super::record_text`]; this module adds what needs git: the block names
 //! the commit that was reviewed, and nothing but the record's status and
-//! Closeout changed after it; a waiver names the planning amendment on the
+//! Closeout changed after it, or it landed by a clean merge that only
+//! merges and planning records follow ([`bind_completion`]); `task status
+//! complete` and `codeflow ci` share that judge; a waiver names the planning amendment on the
 //! target that changed that criterion; a task pull request leaves its
 //! record's criteria as the target has them; and a range touching the
 //! adopter-facing path set belongs to a task with a journey criterion.
@@ -102,17 +104,48 @@ fn reviewed_part(content: &str) -> String {
         .to_string()
 }
 
+/// Where a completion lands: the commit that introduced the active block,
+/// or the working tree `task status complete` is about to commit on top of
+/// `head`, with every path it changes.
+#[derive(Debug, Clone, Copy)]
+pub enum Landing<'a> {
+    /// A commit of the range (C in the binding rule).
+    Commit(Oid),
+    /// The working tree over `head`; `changed` lists staged, unstaged and
+    /// untracked paths, the record's own included.
+    Worktree { head: Oid, changed: &'a [String] },
+}
+
+impl Landing<'_> {
+    /// The commit the completion sits on: C itself, or the working tree's
+    /// `HEAD`.
+    fn commit(&self) -> Oid {
+        match *self {
+            Self::Commit(oid) | Self::Worktree { head: oid, .. } => oid,
+        }
+    }
+}
+
 /// Bind a completed task's active acceptance block to the reviewed commit
-/// (R-60): the reviewed commit is `head`, or an ancestor after which only
-/// this record's status and Closeout changed; every waiver names a commit on
-/// the target, not `head`, that amended this record's criterion. A leaf that
-/// serves its epic's journey says what ran (R-53).
+/// R (R-60), for the completion at `landing` (C). R is accepted when
+///
+/// 1. R is C or an ancestor of C, and R..C touches only this record's
+///    status and Closeout; or
+/// 2. R is the second parent of a merge M on C's first-parent chain, M's
+///    tree is the clean re-merge of its parents, every first-parent commit
+///    from M to C is a merge or changes planning records only, and the
+///    completion changes planning records only (several records may
+///    complete together).
+///
+/// Every waiver names a commit on the target, not C, that amended this
+/// record's criterion. A leaf that serves its epic's journey says what ran
+/// (R-53).
 #[must_use]
 pub fn bind_completion(
     repo: &Repository,
     task: &RecordView,
     graph: &Graph,
-    head: Oid,
+    landing: Landing<'_>,
     target_tip: Option<Oid>,
 ) -> Vec<Finding> {
     let Some(block) = active_block(task) else {
@@ -125,24 +158,22 @@ pub fn bind_completion(
             "{}: reviewed commit {} is not in this repository",
             task.id, block.reviewed
         )),
-        Some(reviewed) if !is_ancestor_or_same(repo, reviewed, head) => bind(format!(
-            "{}: reviewed commit {} is not the head or an ancestor of it; review the result that lands",
-            task.id, block.reviewed
-        )),
         Some(reviewed) => {
-            if let Some(problem) = later_change(repo, task, reviewed, head) {
-                bind(format!(
-                    "{}: {problem} after the reviewed commit {}; review the result again",
-                    task.id, block.reviewed
-                ));
+            if let Some(problem) = unreviewed(repo, task, landing, reviewed) {
+                bind(format!("{}: {problem}", task.id));
             }
         }
     }
     for (id, result) in &block.criteria {
         if result.outcome == "waived" {
-            if let Some(problem) =
-                waiver_problem(repo, task, id, &result.evidence, head, target_tip)
-            {
+            if let Some(problem) = waiver_problem(
+                repo,
+                task,
+                id,
+                &result.evidence,
+                landing.commit(),
+                target_tip,
+            ) {
                 bind(format!("{}: {id} waiver {problem}", task.id));
             }
         }
@@ -151,48 +182,199 @@ pub fn bind_completion(
     findings
 }
 
-/// Uncommitted changes outside the task record, for a completion made in a
-/// working tree (`task status complete`): the reviewed result is a commit,
-/// so a staged, unstaged or new file outside this record was never reviewed
-/// (R-60). Ignored files do not count. Empty when the record has no active
-/// block to bind.
-#[must_use]
-pub fn uncommitted_outside(repo: &Repository, task: &RecordView) -> Vec<Finding> {
-    if active_block(task).is_none() {
-        return Vec::new();
-    }
+/// Every path the working tree changes against `HEAD`: staged, unstaged and
+/// untracked, ignored files excepted. The reviewed result is a commit, so
+/// these are what a completion made here adds to it.
+///
+/// # Errors
+///
+/// Returns the git error when the working tree's state cannot be read.
+pub fn worktree_changes(repo: &Repository) -> Result<Vec<String>, git2::Error> {
     let mut options = git2::StatusOptions::new();
     options
         .include_untracked(true)
         .recurse_untracked_dirs(true)
         .include_ignored(false);
-    let Ok(statuses) = repo.statuses(Some(&mut options)) else {
-        return vec![finding(
-            BINDING_RULE,
-            format!("{}: the working tree's state cannot be read", task.id),
-        )];
-    };
-    let paths: Vec<String> = statuses
+    Ok(repo
+        .statuses(Some(&mut options))?
         .iter()
         .map(|entry| String::from_utf8_lossy(entry.path_bytes()).replace('\\', "/"))
-        .filter(|path| *path != task.path)
-        .collect();
-    if paths.is_empty() {
-        return Vec::new();
-    }
-    vec![finding(
-        BINDING_RULE,
-        format!(
-            "{}: uncommitted changes outside the record were never reviewed ({}); commit, remove or ignore them, then review the result again",
-            task.id,
-            paths.join(", ")
-        ),
-    )]
+        .collect())
 }
 
-/// Why the diff from `reviewed` to `head` is more than this record's status
-/// and Closeout, if it is.
-fn later_change(repo: &Repository, task: &RecordView, reviewed: Oid, head: Oid) -> Option<String> {
+/// Why neither rule accepts `reviewed` for the completion at `landing`, if
+/// neither does. When a merge on C's first-parent chain lands `reviewed`,
+/// the second rule's reason is the one reported; otherwise the first's.
+fn unreviewed(
+    repo: &Repository,
+    task: &RecordView,
+    landing: Landing<'_>,
+    reviewed: Oid,
+) -> Option<String> {
+    let direct = direct_problem(repo, task, landing, reviewed)?;
+    match landed_problem(repo, task, landing, reviewed) {
+        Landed::NoMerge => Some(direct),
+        Landed::Accepted => None,
+        Landed::Refused(problem) => Some(problem),
+    }
+}
+
+/// Rule 1: why `reviewed` is not C or an ancestor after which only this
+/// record's status and Closeout changed, if it is not.
+fn direct_problem(
+    repo: &Repository,
+    task: &RecordView,
+    landing: Landing<'_>,
+    reviewed: Oid,
+) -> Option<String> {
+    if let Landing::Worktree { changed, .. } = landing {
+        let outside: Vec<&str> = changed
+            .iter()
+            .map(String::as_str)
+            .filter(|path| *path != task.path)
+            .collect();
+        if !outside.is_empty() {
+            return Some(format!(
+                "uncommitted changes outside the record were never reviewed ({}); commit, remove or ignore them, then review the result again",
+                outside.join(", ")
+            ));
+        }
+    }
+    let at = landing.commit();
+    // The record as the completion wrote it: a later planning amendment on
+    // the line is not part of this completion.
+    let completed = match landing {
+        Landing::Commit(oid) => blob_at(repo, oid, &task.path),
+        Landing::Worktree { .. } => None,
+    }
+    .unwrap_or_else(|| task.content.clone());
+    if !is_ancestor_or_same(repo, reviewed, at) {
+        return Some(format!(
+            "reviewed commit {reviewed} is not the head or an ancestor of it; review the result that lands"
+        ));
+    }
+    later_change(repo, &task.path, &completed, reviewed, at).map(|problem| {
+        format!("{problem} after the reviewed commit {reviewed}; review the result again")
+    })
+}
+
+/// What the second rule found.
+enum Landed {
+    /// No merge on C's first-parent chain has `reviewed` as its second
+    /// parent.
+    NoMerge,
+    /// The landing merge and everything after it pass.
+    Accepted,
+    /// A landing merge exists, and this is why it does not carry the review.
+    Refused(String),
+}
+
+/// Rule 2: `reviewed` is the second parent of a merge M on C's first-parent
+/// chain whose tree is the clean re-merge of its parents; only merges and
+/// planning-only commits follow M up to C, and the completion itself
+/// changes planning records only.
+fn landed_problem(
+    repo: &Repository,
+    task: &RecordView,
+    landing: Landing<'_>,
+    reviewed: Oid,
+) -> Landed {
+    let unreadable = |what: &str| Landed::Refused(format!("{what} cannot be read"));
+    let (start, completion) = match landing {
+        Landing::Worktree { head, changed } => (
+            Some(head),
+            changed
+                .iter()
+                .find(|path| **path != task.path && !is_planning_path(path))
+                .cloned(),
+        ),
+        Landing::Commit(at) => {
+            let Ok(commit) = repo.find_commit(at) else {
+                return unreadable("the completing commit");
+            };
+            let parent = commit.parent_id(0).ok();
+            match non_planning_change(repo, parent, at) {
+                Ok(outside) => (parent, outside),
+                Err(_) => return unreadable("the completing commit's change"),
+            }
+        }
+    };
+    let mut after_merge = None;
+    let mut at = start;
+    let merge = loop {
+        let Some(oid) =
+            at.filter(|oid| *oid != reviewed && is_ancestor_or_same(repo, reviewed, *oid))
+        else {
+            return Landed::NoMerge;
+        };
+        let Ok(commit) = repo.find_commit(oid) else {
+            return unreadable("the first-parent chain");
+        };
+        if commit.parent_count() == 2 && commit.parent_id(1).ok() == Some(reviewed) {
+            break commit;
+        }
+        if commit.parent_count() < 2 && after_merge.is_none() {
+            match non_planning_change(repo, commit.parent_id(0).ok(), oid) {
+                Ok(None) => {}
+                Ok(Some(path)) => after_merge = Some((oid, path)),
+                Err(_) => return unreadable("the first-parent chain"),
+            }
+        }
+        at = commit.parent_id(0).ok();
+    };
+    if let Some(path) = completion {
+        return Landed::Refused(format!(
+            "the completion also changes {path}; a completion after the landing merge {} of the reviewed commit {reviewed} changes planning records only",
+            merge.id()
+        ));
+    }
+    if let Some((commit, path)) = after_merge {
+        return Landed::Refused(format!(
+            "{commit} changes {path} after the landing merge {} of the reviewed commit {reviewed}; only merges and planning records may follow it",
+            merge.id()
+        ));
+    }
+    match is_clean_remerge(repo, &merge) {
+        Ok(true) => Landed::Accepted,
+        Ok(false) => Landed::Refused(format!(
+            "the landing merge {} of the reviewed commit {reviewed} is not the clean re-merge of its parents; review the result that landed",
+            merge.id()
+        )),
+        Err(_) => unreadable("the landing merge"),
+    }
+}
+
+/// Whether `merge`'s tree is what merging its two parents gives with no
+/// conflict: a merge that added or dropped anything of its own (an evil
+/// merge) or resolved a conflict landed a result nobody reviewed.
+fn is_clean_remerge(repo: &Repository, merge: &git2::Commit<'_>) -> Result<bool, git2::Error> {
+    let merged = repo.merge_commits(&merge.parent(0)?, &merge.parent(1)?, None)?;
+    if merged.has_conflicts() {
+        return Ok(false);
+    }
+    let mut recorded = git2::Index::new()?;
+    recorded.read_tree(&merge.tree()?)?;
+    let entries = |index: &git2::Index| {
+        let mut entries: Vec<(Vec<u8>, Oid, u32)> = index
+            .iter()
+            .map(|entry| (entry.path, entry.id, entry.mode))
+            .collect();
+        entries.sort();
+        entries
+    };
+    Ok(entries(&merged) == entries(&recorded))
+}
+
+/// Why the diff from `reviewed` to `head` is more than the status and
+/// Closeout of the record at `path`, which reads `completed` at `head`, if
+/// it is.
+fn later_change(
+    repo: &Repository,
+    path: &str,
+    completed: &str,
+    reviewed: Oid,
+    head: Oid,
+) -> Option<String> {
     let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree()).ok();
     let (Some(before), Some(after)) = (tree(reviewed), tree(head)) else {
         return Some("the trees cannot be read".to_string());
@@ -204,19 +386,18 @@ fn later_change(repo: &Repository, task: &RecordView, reviewed: Oid, head: Oid) 
         .deltas()
         .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
         .flatten()
-        .map(|path| path.to_string_lossy().replace('\\', "/"))
-        .filter(|path| *path != task.path)
+        .map(|changed| changed.to_string_lossy().replace('\\', "/"))
+        .filter(|changed| changed.as_str() != path)
         .collect();
-    if let Some(path) = other.first() {
-        return Some(format!("{path} changed"));
+    if let Some(changed) = other.first() {
+        return Some(format!("{changed} changed"));
     }
-    let Some(then) = blob_at(repo, reviewed, &task.path) else {
+    let Some(then) = blob_at(repo, reviewed, path) else {
         return Some(format!(
-            "{} is not in the reviewed commit, so its scope was never reviewed; it appeared",
-            task.path
+            "{path} is not in the reviewed commit, so its scope was never reviewed; it appeared"
         ));
     };
-    (reviewed_part(&then) != reviewed_part(&task.content))
+    (reviewed_part(&then) != reviewed_part(completed))
         .then(|| "the record changed outside its status and Closeout".to_string())
 }
 
@@ -394,8 +575,21 @@ pub fn frozen_criteria(head: &Graph, target: &Graph, changed_paths: &[String]) -
         .collect()
 }
 
-/// The binding findings of a pull request: every task record the range
-/// completes, or whose active block it changes, bound to `head`.
+/// Where a range's completions are bound: at the head for a task pull
+/// request, or at the commit of the range that introduced each block.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BindAt {
+    /// A task pull request: C is the head, so nothing after the completion
+    /// escapes the binding.
+    Head,
+    /// A planning or epic line range: C is the commit that introduced the
+    /// block, found by a first-parent walk from the head that follows a
+    /// merge's second parent when the block came from that side.
+    Introduced,
+}
+
+/// The binding findings of a range: every task record it completes, or
+/// whose active block it changes, bound at the commit `at` chooses.
 ///
 /// # Errors
 ///
@@ -406,6 +600,7 @@ pub fn completions_in_range(
     base: &str,
     head: &str,
     target_tip: Option<Oid>,
+    at: BindAt,
 ) -> Result<Vec<Finding>, String> {
     let oid = |revision: &str| {
         repo.revparse_single(revision)
@@ -431,10 +626,44 @@ pub fn completions_in_range(
             .get(&task.id)
             .is_some_and(|then| then.status == "complete" && active_block(then) == block);
         if !unchanged {
-            findings.extend(bind_completion(repo, task, &after, head_oid, target_tip));
+            let landing = match (at, &block) {
+                (BindAt::Introduced, Some(block)) => introduced_at(repo, task, block, head_oid),
+                _ => head_oid,
+            };
+            findings.extend(bind_completion(
+                repo,
+                task,
+                &after,
+                Landing::Commit(landing),
+                target_tip,
+            ));
         }
     }
     Ok(findings)
+}
+
+/// The commit of the range that introduced `task`'s completion with
+/// `block`: walk from `head` while a parent still holds it, the first
+/// parent before the second. It ends at the first commit whose parents do
+/// not hold it; the range's merge-base never does, or the range would not
+/// bind this completion.
+fn introduced_at(repo: &Repository, task: &RecordView, block: &AcceptanceBlock, head: Oid) -> Oid {
+    let holds = |oid: Oid| {
+        blob_at(repo, oid, &task.path)
+            .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok())
+            .is_some_and(|record| {
+                record.status == "complete" && active_block(&record).as_ref() == Some(block)
+            })
+    };
+    let mut at = head;
+    while let Some(parent) = repo
+        .find_commit(at)
+        .ok()
+        .and_then(|commit| commit.parent_ids().take(2).find(|parent| holds(*parent)))
+    {
+        at = parent;
+    }
+    at
 }
 
 /// [`journey_requirement`] for the task as the `head` revision has it.
@@ -465,7 +694,9 @@ pub enum Criteria {
 
 /// The findings of a pull request from `base` (the target tip) to `head`:
 /// criteria frozen unless `criteria` is [`Criteria::Amendable`], and every
-/// completion in the range bound to `head`.
+/// completion in the range bound. A frozen range is a task pull request and
+/// binds at its head; an amendable one binds each completion where it was
+/// introduced ([`BindAt`]).
 ///
 /// # Errors
 ///
@@ -486,7 +717,7 @@ pub fn pull_request_findings(
     };
     let target_tip = oid(base)?;
     let mut found = Vec::new();
-    if criteria == Criteria::Frozen {
+    let at = if criteria == Criteria::Frozen {
         let anchor = repo
             .merge_base(target_tip, oid(head)?)
             .map_err(|error| error.message().to_string())?;
@@ -494,8 +725,17 @@ pub fn pull_request_findings(
         let at_head = Graph::from_revision(&repo, head)?;
         let at_target = Graph::from_revision(&repo, base)?;
         found.extend(frozen_criteria(&at_head, &at_target, &paths));
-    }
-    found.extend(completions_in_range(&repo, base, head, Some(target_tip))?);
+        BindAt::Head
+    } else {
+        BindAt::Introduced
+    };
+    found.extend(completions_in_range(
+        &repo,
+        base,
+        head,
+        Some(target_tip),
+        at,
+    )?);
     Ok(found)
 }
 
@@ -516,6 +756,76 @@ mod tests {
         assert_ne!(reviewed_part(base), reviewed_part(&title));
         let after_closeout = format!("{base}\n## Notes\n\nNew.\n");
         assert_ne!(reviewed_part(base), reviewed_part(&after_closeout));
+    }
+
+    fn git(dir: &std::path::Path, args: &[&str]) {
+        let out = std::process::Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("GIT_DIR")
+            .env_remove("GIT_WORK_TREE")
+            .env_remove("GIT_INDEX_FILE")
+            .output()
+            .expect("git runs");
+        assert!(
+            out.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    /// The merge rule takes a landing merge only when its tree is the clean
+    /// re-merge of its parents: a plain merge is; a merge that adds a file
+    /// of its own (an evil merge) or resolves a conflict is not.
+    #[test]
+    fn a_landing_merge_is_its_clean_re_merge() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let write = |path: &str, text: &str| std::fs::write(root.join(path), text).unwrap();
+        git(root, &["init", "-q", "-b", "line"]);
+        git(root, &["config", "user.email", "t@example.com"]);
+        git(root, &["config", "user.name", "t"]);
+        write("a.txt", "a\n");
+        write("b.txt", "b\n");
+        git(root, &["add", "."]);
+        git(root, &["commit", "-qm", "base"]);
+        git(root, &["switch", "-qc", "task"]);
+        write("a.txt", "task\n");
+        git(root, &["commit", "-qam", "task"]);
+        git(root, &["switch", "-q", "line"]);
+        write("b.txt", "line\n");
+        git(root, &["commit", "-qam", "line"]);
+        let repo = Repository::open(root).unwrap();
+        let clean = || {
+            let tip = repo.head().unwrap().peel_to_commit().unwrap();
+            is_clean_remerge(&repo, &tip).unwrap()
+        };
+
+        git(root, &["merge", "-q", "--no-ff", "-m", "clean", "task"]);
+        assert!(clean(), "a plain merge");
+
+        git(root, &["reset", "-q", "--hard", "HEAD^"]);
+        git(root, &["merge", "-q", "--no-ff", "--no-commit", "task"]);
+        write("evil.txt", "evil\n");
+        git(root, &["add", "evil.txt"]);
+        git(root, &["commit", "-qm", "evil"]);
+        assert!(!clean(), "an evil merge");
+
+        git(root, &["reset", "-q", "--hard", "HEAD^"]);
+        write("a.txt", "line too\n");
+        git(root, &["commit", "-qam", "conflicting"]);
+        let merged = std::process::Command::new("git")
+            .args(["merge", "-q", "--no-ff", "task"])
+            .current_dir(root)
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .output()
+            .unwrap();
+        assert!(!merged.status.success(), "the merge conflicts");
+        write("a.txt", "resolved\n");
+        git(root, &["commit", "-qam", "resolved"]);
+        assert!(!clean(), "a resolved conflict");
     }
 
     /// A `## Closeout` line inside a comment or a fence is not the Closeout,

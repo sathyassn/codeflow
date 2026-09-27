@@ -1,7 +1,9 @@
 //! Acceptance bound to the reviewed commit in `codeflow ci` (TSK-105,
 //! SPC-013 R-52, R-60): a task pull request leaves its record's criteria as
-//! the target has them, and every completion in the range is bound to the
-//! pull request head, with waivers that name their amendment on the target.
+//! the target has them, and every completion in the range is bound to its
+//! reviewed commit (at the head of a task pull request, where the block was
+//! introduced otherwise), with waivers that name their amendment on the
+//! target.
 //! The journey criterion for adopter-facing ranges (R-53) runs with the
 //! classification of the pull request, which knows its task.
 
