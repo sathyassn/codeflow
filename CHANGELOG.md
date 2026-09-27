@@ -76,6 +76,14 @@ publication date._
   presentations applies to `codeflow present`, which is also new here.
 
 <!-- codeflow:release-impact patch -->
+- **Privilege escalation asks in both shells.** The scaffolded Claude
+  settings presets now ask before `pkexec`, `gsudo`, `runas` and
+  `Start-Process -Verb RunAs`, as well as `sudo`, `su` and `doas`, for both
+  the Bash and the PowerShell tool. Deny rules and the fail-closed sandbox
+  are unchanged. `codeflow update` refreshes the managed region of
+  `.claude/settings.json` and keeps project-owned keys.
+
+<!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
   minutes, repairs assertion-red checks without being asked, reports
