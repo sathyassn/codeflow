@@ -233,6 +233,19 @@ fn target_matches_tag_filter(target: &TargetConfig, only_tags: &[Tag], skip_tags
     tags.iter().any(|t| only_tags.contains(t))
 }
 
+/// The stderr line written as a target starts (TSK-094), so a killed gate's
+/// log names the target it died in. One `eprintln!` holds the stderr lock for
+/// the whole line, so parallel targets never interleave inside a line; stdout
+/// and the final summary are unchanged.
+#[must_use]
+pub fn start_line(target: &str, mode: &str) -> String {
+    format!("[codeflow test] starting target '{target}' ({mode} mode)")
+}
+
+fn announce_start(target: &TargetConfig, mode: &str) {
+    eprintln!("{}", start_line(&target.name, mode));
+}
+
 fn run_sequential(
     targets: &[&TargetConfig],
     mode: &str,
@@ -241,6 +254,7 @@ fn run_sequential(
 ) -> Vec<Result<TargetRunResult, TestingError>> {
     let mut results = Vec::new();
     for target in targets {
+        announce_start(target, mode);
         let result = run_target(target, mode, project_dir);
         let should_stop = fail_fast && result.as_ref().is_ok_and(|r| r.exit_code != 0);
         results.push(result);
@@ -264,7 +278,10 @@ fn run_parallel(
             let target = (*target).clone();
             let mode = mode.to_string();
             let project_dir = project_dir.to_path_buf();
-            thread::spawn(move || run_target(&target, &mode, &project_dir))
+            thread::spawn(move || {
+                announce_start(&target, &mode);
+                run_target(&target, &mode, &project_dir)
+            })
         })
         .collect();
 
