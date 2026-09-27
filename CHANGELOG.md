@@ -74,6 +74,16 @@ publication date._
 
 ### Changed
 
+<!-- codeflow:release-impact patch -->
+- **Managed skills follow the dash guideline.** Em and en dashes in the
+  shipped skills are rewritten as commas, colons, full stops, hyphens or
+  parentheses with no change of meaning; a dash stays only in a numeric
+  range, a literal record string or text a test pins. The managed contract
+  now states the dash rule as a prose guideline that `git.policy_characters`
+  checks at the level policy sets. `codeflow update` replaces an unmodified
+  swept file; an adopter who edited one gets a 3-way merge, or a `.new`
+  sidecar where the edit conflicts.
+
 <!-- codeflow:release-impact minor -->
 - **Shared portal and present chrome.** Graphite, Slate and Sage use the
   approved design kit in both utilities and the installed portal starter.
