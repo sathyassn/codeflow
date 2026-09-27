@@ -1,0 +1,11 @@
+id = "TSK-144"
+uid = "4b1c466a-6182-4d20-9f9a-f2df5e956fb4"
+kind = "TSK"
+title = "Herdr delivery confirms a started turn"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T14:00:20Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
