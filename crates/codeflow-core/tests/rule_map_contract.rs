@@ -1,7 +1,11 @@
 //! Contract for the root rule map (TSK-127): every tier's AGENTS.md and
-//! CLAUDE.md template is rendered from one kernel, stays inside its budget,
-//! carries the pinned always rules and moments, points only at files its tier
-//! installs, and reaches existing projects through `codeflow update`.
+//! CLAUDE.md template is rendered from one kernel, carries the pinned always
+//! rules and moments as one-line rules with pointers, points only at files its
+//! tier installs, and reaches existing projects through `codeflow update`.
+//! The block size, the rule count and the rule length are guideline numbers
+//! that `codeflow doctor` reports (TSK-150); the one byte failure is the
+//! complete `AGENTS.md` with a realistic project section against Codex's
+//! 32 KiB instruction limit.
 //!
 //! Regenerate the templates after a kernel edit with
 //! `CODEFLOW_BLESS=1 cargo test -p codeflow-core --test rule_map_contract`.
@@ -10,8 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
 
 use codeflow_core::scaffold::rule_map::{
-    self, is_skill_pointer, managed_block, File, Kernel, CODEX_INSTRUCTION_LIMIT_BYTES,
-    MAX_MANAGED_BLOCK_BYTES, MAX_RULES, OUTPUTS,
+    self, codex_overflow, is_skill_pointer, managed_block, File, Kernel,
+    CODEX_INSTRUCTION_LIMIT_BYTES, MANAGED_BLOCK_GUIDELINE_BYTES, OUTPUTS, RULES_GUIDELINE,
+    RULE_LINE_GUIDELINE_BYTES,
 };
 use codeflow_core::scaffold::{
     self, AssetSource, DirSource, InitAnswers, InitOptions, Tier, UpdateOptions,
@@ -134,25 +139,23 @@ fn every_root_template_is_rendered_from_the_one_kernel() {
     );
 }
 
-/// AC-1: budget, rule count, one-line rules with pointers, and the moments.
+/// AC-1: one-line rules with pointers and every moment. The block size, the
+/// rule count and each rule's length are reported against their guideline
+/// numbers, never failed (TSK-150).
 #[test]
-fn each_tier_map_fits_its_budget_with_one_line_rules_and_every_moment() {
+fn each_tier_map_has_one_line_rules_and_every_moment() {
     let kernel = Kernel::shipped();
     for tier in Kernel::tiers() {
         let rendered = kernel.render(agents_output(tier));
         let block = managed_block(&rendered).expect("managed markers");
-        assert!(
-            block.len() <= MAX_MANAGED_BLOCK_BYTES,
-            "{tier} managed block is {} bytes, over {MAX_MANAGED_BLOCK_BYTES}",
-            block.len()
+        println!(
+            "{tier}: kernel {} of {MANAGED_BLOCK_GUIDELINE_BYTES} bytes, {} of {RULES_GUIDELINE} always rules",
+            block.len(),
+            kernel.rules_for(tier).len()
         );
 
         let rules = kernel.rules_for(tier);
-        assert!(
-            !rules.is_empty() && rules.len() <= MAX_RULES,
-            "{tier} carries {} always rules",
-            rules.len()
-        );
+        assert!(!rules.is_empty(), "{tier} carries no always rules");
         let mut ids = BTreeSet::new();
         for rule in &rules {
             assert!(
@@ -167,12 +170,13 @@ fn each_tier_map_fits_its_budget_with_one_line_rules_and_every_moment() {
             );
             let line = Kernel::render_rule(rule);
             assert!(!line.contains('\n'), "{tier}: rule {} spans lines", rule.id);
-            assert!(
-                line.len() <= 450,
-                "{tier}: rule {} is {} bytes, too long for one line",
-                rule.id,
-                line.len()
-            );
+            if line.len() > RULE_LINE_GUIDELINE_BYTES {
+                println!(
+                    "{tier}: rule {} is {} bytes, above its {RULE_LINE_GUIDELINE_BYTES}-byte guideline",
+                    rule.id,
+                    line.len()
+                );
+            }
             assert!(
                 block.contains(&line),
                 "{tier}: rule {} is not in the map",
@@ -420,8 +424,8 @@ fn project_section(bytes: usize) -> String {
     section
 }
 
-/// AC-5: with a 16 KiB project section the whole AGENTS.md stays within
-/// Codex's 32 KiB limit at every tier.
+/// AC-5, and TSK-150's one byte failure: with a 16 KiB project section the
+/// whole AGENTS.md stays within Codex's 32 KiB limit at every tier.
 #[test]
 fn a_sixteen_kib_project_section_fits_under_the_codex_limit_at_every_tier() {
     let source = assets();
@@ -431,12 +435,33 @@ fn a_sixteen_kib_project_section_fits_under_the_codex_limit_at_every_tier() {
         let mut text = read(&path);
         text.push_str(&project_section(16 * 1024));
         std::fs::write(&path, &text).unwrap();
-        assert!(
-            text.len() <= CODEX_INSTRUCTION_LIMIT_BYTES,
+        assert_eq!(
+            codex_overflow(&text),
+            None,
             "{tier}: AGENTS.md with a 16 KiB project section is {} bytes",
             text.len()
         );
     }
+}
+
+/// TSK-150 AC-2 fault fixture: the Codex check measures the complete
+/// document. A managed block well under 32 KiB still fails once the project
+/// section carries the whole file past the limit, because Codex cuts the end,
+/// where the project section lives.
+#[test]
+fn the_codex_check_fails_a_complete_document_past_the_limit_with_a_small_block() {
+    let source = assets();
+    let project = scaffold(&source, Tier::Standard);
+    let mut text = read(&project.path().join("AGENTS.md"));
+    let block = managed_block(&text).expect("managed markers").len();
+    assert!(
+        block < CODEX_INSTRUCTION_LIMIT_BYTES,
+        "the fixture needs a block under the limit, got {block} bytes"
+    );
+    text.push_str(&project_section(CODEX_INSTRUCTION_LIMIT_BYTES));
+    let over = codex_overflow(&text).expect("the complete document must fail the Codex check");
+    assert_eq!(over, text.len() - CODEX_INSTRUCTION_LIMIT_BYTES);
+    assert!(managed_block(&text).expect("managed markers").len() < CODEX_INSTRUCTION_LIMIT_BYTES);
 }
 
 /// An asset source that serves the previous release's root contracts and

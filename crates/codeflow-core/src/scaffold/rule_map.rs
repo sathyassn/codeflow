@@ -18,17 +18,39 @@ use super::Tier;
 /// tree.
 pub const KERNEL: &str = include_str!("../../../../assets/base/rule-map.toml");
 
-/// The most always rules one tier's map may carry.
-pub const MAX_RULES: usize = 12;
+/// Guideline for the number of always rules one tier's map carries. A
+/// reported measure, never a failure (TSK-150): a rule past it is a prompt
+/// to move detail behind a moment row, not a reason to cut a duty.
+pub const RULES_GUIDELINE: usize = 12;
 
-/// The most bytes the managed block of one tier's `AGENTS.md` may take,
-/// markers included, so a realistic project section still fits under
-/// Codex's 32 KiB instruction limit.
-pub const MAX_MANAGED_BLOCK_BYTES: usize = 10 * 1024;
+/// Guideline for the bytes of one rendered always rule. Reported, never a
+/// failure; one line per rule is the structural rule.
+pub const RULE_LINE_GUIDELINE_BYTES: usize = 450;
+
+/// Guideline for the managed block of one tier's `AGENTS.md`, markers
+/// included: the always-read kernel. It leaves a realistic project section
+/// room under Codex's instruction limit. `codeflow doctor` reports the kernel
+/// against it; it is never a failure (TSK-150).
+pub const MANAGED_BLOCK_GUIDELINE_BYTES: usize = 10 * 1024;
 
 /// Codex reads at most this many bytes of project instructions
-/// (`project_doc_max_bytes`); the rest of an `AGENTS.md` is cut.
+/// (`project_doc_max_bytes`) and silently cuts the rest of an `AGENTS.md`.
+/// This is a host truncation point, not a reading budget: it is the one byte
+/// check that stays a failure for the generated document (TSK-150).
 pub const CODEX_INSTRUCTION_LIMIT_BYTES: usize = 32 * 1024;
+
+/// The bytes by which a complete `AGENTS.md` (managed block and project
+/// section together) passes Codex's instruction limit, or `None` when the
+/// whole document fits. The whole document is measured because Codex cuts
+/// the end, where the project section lives, even when the managed block
+/// alone is small.
+#[must_use]
+pub fn codex_overflow(document: &str) -> Option<usize> {
+    document
+        .len()
+        .checked_sub(CODEX_INSTRUCTION_LIMIT_BYTES)
+        .filter(|over| *over > 0)
+}
 
 const ALL_TIERS: [Tier; 3] = [Tier::Minimal, Tier::Standard, Tier::Full];
 
@@ -347,6 +369,18 @@ text = "min"
         let standard = kernel.render(&OUTPUTS[1]);
         assert_eq!(minimal, "all\n\nmin\n");
         assert_eq!(standard, "all\n");
+    }
+
+    #[test]
+    fn codex_overflow_measures_the_whole_document() {
+        assert_eq!(
+            codex_overflow(&"x".repeat(CODEX_INSTRUCTION_LIMIT_BYTES)),
+            None
+        );
+        assert_eq!(
+            codex_overflow(&"x".repeat(CODEX_INSTRUCTION_LIMIT_BYTES + 3)),
+            Some(3)
+        );
     }
 
     #[test]
