@@ -1,10 +1,10 @@
 // TSK-062 controls on a real render: each faulty answer fails exactly the
-// figure rules recorded for it and each passing answer holds every rule (or
-// only a recorded, dated module false positive), read off Chromium at 1280
-// and 390 px in light and dark with facts re-derived from the case's shipped
-// fixture, the way figure-rules-browser.test.mjs reads the specimens. Every
-// figure a committed method answer carries is rendered too and must hold
-// every rule.
+// figure rules recorded for it and each passing answer holds every rule,
+// read off Chromium at 1280 and 390 px in light and dark with facts
+// re-derived from the case's shipped fixture, the way
+// figure-rules-browser.test.mjs reads the specimens (graphite skin, 720 px
+// content box). Every figure a committed method answer carries is rendered
+// too and must hold every rule.
 //
 // Run: npm run deps:install --prefix docs-portal
 //      npx --prefix docs-portal playwright install chromium   (once)
@@ -21,7 +21,7 @@ const styles = new URL("../../docs-portal/src/styles/", import.meta.url);
 const css = (await Promise.all(["utility-tokens.css", "portal.css", "figure-roles.css", "figure.css"].map((name) => readFile(new URL(name, styles), "utf8")))).join("\n");
 
 async function probe(page, html) {
-  const document = (theme) => `<!doctype html><html data-theme="${theme}" data-cfp-skin="instrument"><head><style>${css} body{margin:0;background:var(--cf-canvas);font-family:var(--cf-font-sans)} main{max-width:720px;margin:0 auto;padding:0 16px}</style></head><body><main>${html}</main></body></html>`;
+  const document = (theme) => `<!doctype html><html data-theme="${theme}" data-cfp-skin="graphite"><head><style>${css} body{margin:0;background:var(--cf-canvas);font-family:var(--cf-font-sans)} main{box-sizing:content-box;max-width:720px;margin:0 auto;padding:0 16px}</style></head><body><main>${html}</main></body></html>`;
   const observed = {};
   for (const [label, width, theme] of [["wide", 1280, "light"], ["narrow", 390, "light"], ["wideDark", 1280, "dark"], ["narrowDark", 390, "dark"]]) {
     await page.setViewportSize({ width, height: 900 });
