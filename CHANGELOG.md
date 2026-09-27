@@ -256,18 +256,20 @@ publication date._
   the pre-push hook no longer runs the test suite. It runs the push set and
   blocks on what it can see, leaving the rest to CI. `codeflow ci` runs on
   each pushed branch's range, leaving out only history known to be on the
-  destination: the commit the destination advertises for the branch, or,
-  for a new branch, the branch and tag tips the push location advertises
-  now (one `git ls-remote`, which never prompts, gives up after 10 seconds
-  and downloads nothing, even in a partial clone), so a branch cut from an
-  integration line is checked for its own commits. When the destination
-  cannot be asked, the hook says why and uses the tracking refs of its
-  protected branches, which policy keeps from being rewritten, but only
-  when the remote fetches from the location pushed to. Other tracking refs may be stale and never shrink the
-  range. After a rebase the range therefore also holds the
-  commits the rebase brought in, and the hook says so. When nothing gives a
-  base, the hook reports the range unresolved and never compares with a
-  local branch. `codeflow validate
+  destination: the branch and tag tips the push location advertises now
+  (one `git ls-remote`, which never prompts, gives up after 10 seconds and
+  downloads nothing, even in a partial clone), plus the commit it
+  advertises for an existing branch. A branch cut from an integration line,
+  or rebased onto one and force-pushed, is checked for its own commits, and
+  a rewrite notes how many commits are checked. When the destination
+  cannot be asked, the hook says why: an existing branch is then bounded
+  by its advertised commit alone, so after a rebase the range also holds
+  the commits the rebase brought in, and a new branch by the tracking refs
+  of its protected branches, which policy keeps from being rewritten, but
+  only when the remote fetches from the location pushed to. Other tracking
+  refs may be stale and never shrink the range. When nothing gives a base,
+  the hook reports the range unresolved and never compares with a local
+  branch. `codeflow validate
   --docs` and the `.codeflow/test-config.json` targets that define a `quick`
   mode run only when the pushed commit is the checked-out one, with no
   tracked changes, no sparse checkout and every submodule initialized at its
