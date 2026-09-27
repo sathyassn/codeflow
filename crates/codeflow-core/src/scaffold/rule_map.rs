@@ -142,7 +142,12 @@ fn applies(tiers: Option<&Vec<Tier>>, tier: Tier) -> bool {
     tiers.is_none_or(|tiers| tiers.contains(&tier))
 }
 
-/// A skill or agent pointer (`cf-name`) renders as its invocation; a path
+/// The skill tree every harness can read; the Claude tree mirrors it.
+pub const SHARED_SKILL_TREE: &str = ".agents/skills";
+
+/// A skill or agent pointer (`cf-name`) renders as its invocation; a
+/// skill-relative path (`cf-name/...`) renders as its path from the
+/// repository root, so a cold reader opens it in one hop; any other path
 /// renders as code.
 #[must_use]
 pub fn render_pointer(pointer: &str) -> String {
@@ -152,6 +157,9 @@ pub fn render_pointer(pointer: &str) -> String {
             return "`cf-reviewer`".to_string();
         }
         return format!("`/{pointer}`");
+    }
+    if pointer.starts_with("cf-") {
+        return format!("`{SHARED_SKILL_TREE}/{pointer}`");
     }
     format!("`{pointer}`")
 }
@@ -313,8 +321,12 @@ mod tests {
     }
 
     #[test]
-    fn the_reviewer_agent_is_named_not_invoked() {
+    fn pointers_render_as_their_invocation_or_root_path() {
         assert_eq!(render_pointer("cf-reviewer"), "`cf-reviewer`");
+        assert_eq!(
+            render_pointer("cf-ship/references/release-policy.md"),
+            "`.agents/skills/cf-ship/references/release-policy.md`"
+        );
         assert!(!is_skill_pointer("cf-ship/references/release-policy.md"));
     }
 

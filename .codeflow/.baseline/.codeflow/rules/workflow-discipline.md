@@ -8,9 +8,9 @@ and proportional. Think deeply for consequential or novel work and take a
 light pass for the trivial; knowing which weight a task warrants is itself
 judgment. These are principles, not a rote checklist. At the standard and
 full tiers, after the orchestrator selects the outcome mode, read and follow
-`cf-method/references/workflow-lifecycle.md`, the stage transition map for
-research, planning, design, implementation, review, documentation, repair and
-ship. Load only the stage owners the work needs.
+`.agents/skills/cf-method/references/workflow-lifecycle.md`, the stage
+transition map for research, planning, design, implementation, review,
+documentation, repair and ship. Load only the stage owners the work needs.
 
 ## The kernel
 
@@ -77,9 +77,9 @@ ship. Load only the stage owners the work needs.
   worker as a native subagent of your own session, never as a separate CLI
   session or Herdr tab; without a native route, the primary keeps the work
   and records the missing route. Where installed,
-  `cf-model-orchestrator/resources/capability-routing.md` governs routing;
-  the primary retains judgment and safety, and inspects, integrates and
-  accepts delegated work.
+  `.agents/skills/cf-model-orchestrator/resources/capability-routing.md`
+  governs routing; the primary retains judgment and safety, and inspects,
+  integrates and accepts delegated work.
 - **Write only what earns its keep.** Make the smallest clear, idiomatic,
   durable change that fully satisfies approved behavior, not minimum LOC. Add
   no speculative feature, abstraction, configuration, dependency,
@@ -162,8 +162,8 @@ irreversible tradeoff is an operator decision: ask, never assume. Resolve a
 local reversible implementation detail from repository evidence and disclose
 the choice. In-session execution detail uses the harness's native task tools.
 Durable records (full tier) are allocated by the CLI and governed by
-`cf-method/references/project-organization.md`. Status views are generated
-(`codeflow status`); never hand-maintain a dashboard.
+`.agents/skills/cf-method/references/project-organization.md`. Status views
+are generated (`codeflow status`); never hand-maintain a dashboard.
 
 ## Sessions and state
 
