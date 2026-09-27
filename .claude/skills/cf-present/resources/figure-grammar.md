@@ -125,7 +125,7 @@ value and the legend key.
 | layer-remote | fill with line edge 2 and a solid cap | bar | none | rounded rect with end cap | a plane covers this span and is the boundary |
 | act | accent fill on ground stroke 2.5 | disc | none | 8 px radius disc | the plane acts here |
 | cov | line fill | cell | none | solid square | covered |
-| part | line 1.4 | cell | 2.5 1.8 | outline square | partial |
+| part | line 1.4 on line-soft fill at half opacity | cell | 2.5 1.8 | shaded square, dashed edge | partial |
 | notrun | hatch 1 | cell | none | 45 degree hatch fill | not run |
 | na | line-soft 1 at na-alpha | cell | none | empty square | not applicable |
 | nc | line-soft box 1.4 with a stop cross | cell | none | crossed square, cross inset 6 percent | not claimed |
