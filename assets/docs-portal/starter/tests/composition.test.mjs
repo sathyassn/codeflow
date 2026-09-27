@@ -10,7 +10,8 @@ import {
 } from "../scripts/page-classes.mjs";
 import { markdownToHtml } from "satteri";
 import { asIsMarkdownPlugin, DEMOTE_HEADINGS } from "../scripts/as-is-markdown.mjs";
-import { altitudeWords, asIsHeadingsDemoted, asIsRegionStart, insertPanelFigures } from "../scripts/lib.mjs";
+import { altitudeWords, asIsHeadingsDemoted, asIsRegionStart, insertPanelFigures, wrapLookupTables } from "../scripts/lib.mjs";
+import { LOOKUP_COLUMNS } from "../scripts/page-classes.mjs";
 import { COMPOSED_PAGE, SHELL_PAGE, panelBindings } from "./page-shapes.mjs";
 import { commitFixture, configureFixture, portalFixture, runAdapter } from "./portal-fixture.mjs";
 
@@ -380,4 +381,20 @@ test("palette pills must show the live tokens of the palette they select", () =>
   assert.deepEqual(paletteSwatchFailures({ tokens, groups: [group.slice(0, 2)] }, PALETTE_PILL_GROUPS), [
     "display panel 1 offers graphite, slate, the tokens define graphite, slate, sage",
   ]);
+});
+
+test("a generated lookup table is wrapped to stack at phone width, and only that table", () => {
+  const header = `| ${LOOKUP_COLUMNS["policy-reference"].join(" | ")} |\n|${"---|".repeat(6)}`;
+  const page = `Lead.\n\n## Git keys\n\n${header}\n| \`a\` | b \\| c | d | e | f | g |\n\n## Top-level keys\n\n${header}\n| h | i | j | k | l | m |\n\n\`\`\`\n${header}\n\`\`\`\n\n| Stage | What it checks |\n|---|---|\n| s | t |\n`;
+  const wrapped = wrapLookupTables(page, "policy-reference", "docs/policy-reference.md");
+  assert.equal(wrapped.match(/<div class="portal-lookup" data-cf-lookup="policy-reference">\n\n\| Key /g).length, 2);
+  assert.equal(wrapped.match(/\n\n<\/div>/g).length, 2);
+  // The fenced copy and the authored stage table keep their own layout.
+  assert.match(wrapped, /```\n\| Key /);
+  assert.match(wrapped, /\| s \| t \|\n$/);
+  // The site's Markdown step nests each table inside its wrapper.
+  const { html } = markdownToHtml(wrapped);
+  assert.equal(html.match(/<div class="portal-lookup" data-cf-lookup="policy-reference">\s*<table>/g).length, 2, html);
+  // A lookup page whose generated table lost its columns fails closed.
+  assert.throws(() => wrapLookupTables("| Skill | Notes |\n|---|---|\n| a | b |\n", "skill-catalog", "docs/skills.md"), /docs\/skills\.md: the skill-catalog page carries no table with the generated columns Skill, Use it for, Installed at tiers, Installed in/);
 });

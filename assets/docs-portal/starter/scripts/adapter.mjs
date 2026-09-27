@@ -7,10 +7,10 @@ import {
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown, placeCapabilityTable,
   pinnedSourceUrl as providerSourceUrl, recordFilesFor, referencedIds, renderCapabilityFences, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
-  altitudeWords, asIsHeadingsDemoted, asIsRegionStart, tableRowCount, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks,
+  altitudeWords, asIsHeadingsDemoted, asIsRegionStart, tableRowCount, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks, wrapLookupTables,
 } from "./lib.mjs";
 import { bindDerivedData, checkFacts, composeFigure, GRAMMAR_VERSION, markdownSections, parseFactSource, renderFigure, validateDeclaration } from "./figure-grammar.mjs";
-import { ALTITUDE_PANELS, PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
+import { ALTITUDE_PANELS, LOOKUP_COLUMNS, PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { DEMOTE_HEADINGS } from "./as-is-markdown.mjs";
 import { GENERATOR } from "./generator.mjs";
@@ -584,7 +584,8 @@ function renderPage(page, bindings, routesById, previews, referencedMedia, ancho
     panelBlocks.get(binding.panel).push(binding.anchor === undefined ? value : { value, heading: sections.find((section) => section.anchor === binding.anchor).text });
   });
   const withFigures = insertPanelFigures(sourceMarkdown, panelBlocks, page.source_path);
-  const safeBody = decorateAltitude(page.source_path === CAPABILITY_REGISTRY ? renderCapabilityRegistry(withFigures, page.source_path) : withFigures);
+  const lookupBody = page.page_class === PAGE_CLASSES.derivedLookup.id && Object.hasOwn(LOOKUP_COLUMNS, page.derive) ? wrapLookupTables(withFigures, page.derive, page.source_path) : withFigures;
+  const safeBody = decorateAltitude(page.source_path === CAPABILITY_REGISTRY ? renderCapabilityRegistry(lookupBody, page.source_path) : lookupBody);
   return `${pageFrontmatter(page)}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}">\n\n${safeBody}${recordContextFor(page, routesById)}\n\n</div>\n`;
 }
 

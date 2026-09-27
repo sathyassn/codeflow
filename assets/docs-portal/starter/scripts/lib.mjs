@@ -9,7 +9,7 @@ import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import YAML from "yaml";
 import { slugHeading } from "./figure-grammar.mjs";
-import { ALTITUDE_PANELS, DERIVED_LOOKUPS, PAGE_CLASS_REASONS, PANEL_CARRIER_ALTERNATES } from "./page-classes.mjs";
+import { ALTITUDE_PANELS, DERIVED_LOOKUPS, LOOKUP_COLUMNS, PAGE_CLASS_REASONS, PANEL_CARRIER_ALTERNATES } from "./page-classes.mjs";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -1096,4 +1096,34 @@ export function insertPanelFigures(markdown, blocksByPanel, sourcePath) {
 // block, so no open fence or raw HTML block in the source can swallow them.
 export function topLevelHtmlBlocks(markdown) {
   return markdownTree(markdown).children.filter((node) => node.type === "html").map((node) => node.value.trim());
+}
+
+// A generated lookup's tables, each wrapped so the starter's stylesheet
+// stacks it at phone width under its column labels. Only a table whose
+// header is the generator's column list is wrapped (an authored table on the
+// same page keeps its own layout), and a page with no such table fails, since
+// its generated region has lost its shape.
+export function wrapLookupTables(markdown, derive, sourcePath) {
+  const columns = LOOKUP_COLUMNS[derive].join("\u0000");
+  const lines = markdown.split("\n");
+  const out = [];
+  let fence = null;
+  let wrapped = 0;
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    const marker = line.match(/^\s*(`{3,}|~{3,})/);
+    if (marker !== null && (fence === null || marker[1].startsWith(fence))) fence = fence === null ? marker[1] : null;
+    if (fence !== null || !line.startsWith("|")) { out.push(line); index += 1; continue; }
+    let end = index;
+    while (end < lines.length && lines[end].startsWith("|")) end += 1;
+    const block = lines.slice(index, end);
+    const header = block[0].replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim()).join("\u0000");
+    if (header === columns) {
+      out.push(`<div class="portal-lookup" data-cf-lookup="${derive}">`, "", ...block, "", "</div>");
+      wrapped += 1;
+    } else out.push(...block);
+    index = end;
+  }
+  if (wrapped === 0) throw new Error(`${sourcePath}: the ${derive} page carries no table with the generated columns ${LOOKUP_COLUMNS[derive].join(", ")}`);
+  return out.join("\n");
 }

@@ -58,14 +58,14 @@ pub const SKILL_COLUMNS: [&str; 4] = ["Skill", "Use it for", "Installed at tiers
 pub const POLICY_COLUMNS: [&str; 6] =
     ["Key", "Type", "Default", "Valid values", "Purpose", "Notes"];
 
-/// A generated table inside the wrapper the portal stacks at phone width:
-/// each row reads as a block, its first cell as the heading and every other
-/// cell under the column label the starter's stylesheet gives it
-/// (`.portal-lookup[data-cf-lookup]` in `portal.css`, pinned to these
-/// columns by a test).
-fn lookup_table(derive: &str, columns: &[&str], rows: &[String]) -> String {
+/// A generated table. The portal adapter stacks it at phone width: it wraps a
+/// table with these columns (`LOOKUP_COLUMNS` in the starter's
+/// `page-classes.mjs`) in `.portal-lookup`, and the starter's stylesheet
+/// labels every cell after the first with its column. A test pins both to
+/// these column lists.
+fn lookup_table(columns: &[&str], rows: &[String]) -> String {
     format!(
-        "<div class=\"portal-lookup\" data-cf-lookup=\"{derive}\">\n\n| {} |\n|{}\n{}\n\n</div>",
+        "| {} |\n|{}\n{}",
         columns.join(" | "),
         "---|".repeat(columns.len()),
         rows.join("\n")
@@ -135,7 +135,7 @@ pub fn skill_catalog(assets: &dyn AssetSource) -> Result<Generated, String> {
     let text = format!(
         "{}\n\nThe skills CodeFlow installs, one row per skill. Each description is the skill's own, from its `SKILL.md`; the harness reads it to decide when the skill applies. The minimal tier installs no skill.\n\n{}\n\n{}\n",
         begin_marker(SKILL_CATALOG),
-        lookup_table(SKILL_CATALOG, &SKILL_COLUMNS, &rows),
+        lookup_table(&SKILL_COLUMNS, &rows),
         end_marker(SKILL_CATALOG)
     );
     Ok(Generated { text, rows: count })
@@ -188,7 +188,7 @@ pub fn policy_reference() -> Generated {
         write!(
             text,
             "\n## {group}\n\n{}\n",
-            lookup_table(POLICY_REFERENCE, &POLICY_COLUMNS, rows)
+            lookup_table(&POLICY_COLUMNS, rows)
         )
         .expect("writing to a String cannot fail");
     }
@@ -334,32 +334,35 @@ mod tests {
     }
 
     #[test]
-    fn each_lookup_table_sits_in_the_wrapper_the_starter_stacks() {
-        let css = std::fs::read_to_string(
-            Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../../assets/docs-portal/starter/src/styles/portal.css"),
-        )
-        .unwrap();
+    fn the_starter_stacks_each_lookup_under_its_generated_columns() {
+        let starter =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/docs-portal/starter");
+        let css = std::fs::read_to_string(starter.join("src/styles/portal.css")).unwrap();
+        let classes = std::fs::read_to_string(starter.join("scripts/page-classes.mjs")).unwrap();
         let catalog = skill_catalog(&assets()).unwrap().text;
         let reference = policy_reference().text;
-        for (derive, columns, text, tables) in [
-            (SKILL_CATALOG, &SKILL_COLUMNS[..], &catalog, 1),
-            (POLICY_REFERENCE, &POLICY_COLUMNS[..], &reference, 3),
+        for (derive, columns, text) in [
+            (SKILL_CATALOG, &SKILL_COLUMNS[..], &catalog),
+            (POLICY_REFERENCE, &POLICY_COLUMNS[..], &reference),
         ] {
-            let open = format!(
-                "<div class=\"portal-lookup\" data-cf-lookup=\"{derive}\">\n\n| {} |",
-                columns.join(" | ")
+            // The generator writes the header from the column list.
+            assert!(
+                text.contains(&format!("\n| {} |\n", columns.join(" | "))),
+                "{text}"
             );
-            assert_eq!(text.matches(&open).count(), tables, "{text}");
-            assert_eq!(text.matches("\n\n</div>").count(), tables, "{text}");
-            // Every column after the first carries its label at phone width,
-            // taken from the same column list the header row is written from.
+            // The adapter wraps a table with exactly these columns.
+            let quoted: Vec<String> = columns
+                .iter()
+                .map(|column| format!("\"{column}\""))
+                .collect();
+            let entry = format!("\"{derive}\": [{}]", quoted.join(", "));
+            assert!(classes.contains(&entry), "page-classes.mjs lacks {entry}");
+            // The stylesheet labels every column after the first, and no more.
             for (index, column) in columns.iter().enumerate().skip(1) {
                 let rule = format!(
-                    ".portal-lookup[data-cf-lookup=\"{derive}\"] td:nth-child({}) ::before {{ content: \"{column}\"; }}",
+                    ".portal-lookup[data-cf-lookup=\"{derive}\"] td:nth-child({})::before {{ content: \"{column}\"; }}",
                     index + 1
-                )
-                .replace(") ::", ")::");
+                );
                 assert!(css.contains(&rule), "portal.css lacks {rule}");
             }
             let extra = format!(
@@ -402,15 +405,6 @@ mod tests {
             .contains("regenerate it"));
         let catalog = page_with_title("Skills", &skill_catalog(&dir).unwrap());
         assert!(verify_lookup_page(SKILL_CATALOG, &catalog, &inputs).is_ok());
-        // A table taken out of its stacking wrapper is an edit of the region.
-        let unwrapped = catalog.replacen(
-            "<div class=\"portal-lookup\" data-cf-lookup=\"skill-catalog\">\n\n",
-            "",
-            1,
-        );
-        assert!(verify_lookup_page(SKILL_CATALOG, &unwrapped, &inputs)
-            .unwrap_err()
-            .contains("regenerate it"));
         assert!(
             verify_lookup_page(SKILL_CATALOG, &format!("{catalog}\nMore.\n"), &inputs).is_err()
         );
