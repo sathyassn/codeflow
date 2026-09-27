@@ -182,7 +182,7 @@ see = [".codeflow/rules/workflow-discipline.md"]
 id = "route"
 tiers = ["standard", "full"]
 title = "Route by touched paths."
-text = "Orchestration entry is decided by touched paths: a change to an adopter-facing path (product code, managed instructions, hooks, policy, CI, shipped templates, watched contracts), and any plan, design, security or irreversible work, starts with `/cf-model-orchestrator`; other edits and conversation go direct; when unsure, route."
+text = "Orchestration entry is decided by touched paths: a change to an adopter-facing path (product code, managed instructions, hooks, policy, CI, shipped templates, watched contracts), research or analysis that will drive one, and plan, design, security or irreversible work start with `/cf-model-orchestrator`; other edits and conversation go direct; when unsure, route."
 see = ["cf-model-orchestrator"]
 
 [[rule]]
@@ -395,8 +395,8 @@ text = """
 
 The paths a task will touch decide its entry. Work that changes an
 adopter-facing path (product code, managed instructions, hooks, policy, CI,
-shipped templates, watched contracts), and plan, design, security or
-irreversible work, is routed. Before repository or external research,
+shipped templates, watched contracts), research or analysis that will drive
+such a change, and plan, design, security or irreversible work are routed. Before repository or external research,
 analysis, planning, design, substantive review or docs, implementation, or
 multi-step verification of routed work, invoke
 `/cf-model-orchestrator`. Do not inspect first and route later: its preflight

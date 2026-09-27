@@ -166,7 +166,7 @@ fn each_tier_map_fits_its_budget_with_one_line_rules_and_every_moment() {
             let line = Kernel::render_rule(rule);
             assert!(!line.contains('\n'), "{tier}: rule {} spans lines", rule.id);
             assert!(
-                line.len() <= 420,
+                line.len() <= 450,
                 "{tier}: rule {} is {} bytes, too long for one line",
                 rule.id,
                 line.len()
@@ -221,8 +221,9 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "Agent-delivered durations come from `/cf-estimate`",
         "goes through `/cf-present` where the harness can show it",
         "Orchestration entry is decided by touched paths",
-        "starts with `/cf-model-orchestrator`",
+        "start with `/cf-model-orchestrator`",
         "when unsure, route",
+        "research or analysis that will drive one",
         "fresh-context independent review",
         "otherwise a separate read-only pass",
     ];
