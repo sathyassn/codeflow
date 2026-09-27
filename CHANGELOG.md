@@ -563,7 +563,10 @@ publication date._
   a path built from a command substitution, a subshell, `pushd` or an `env`
   option, it blocks a commit, merge, push or other
   mutation and says how to name the repository: a literal path, or
-  `cd <path> &&` first. This also blocks a commit written inside a
+  `cd <path> &&` first. A git command whose subcommand, global options or,
+  for a commit, merge, push or other judged command, arguments come from a
+  command substitution is refused too; generated text is accepted only in a
+  quoted message such as `-m "$(…)"`. This also blocks a commit written inside a
   subshell such as `(cd <repo> && git commit)`.
 
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
