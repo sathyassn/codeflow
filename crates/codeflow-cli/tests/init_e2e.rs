@@ -1421,15 +1421,15 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
 }
 
 /// Run one wired hook command (`codeflow hook <name>`) in `dir` with `payload`
-/// on stdin, the way a harness does.
-fn run_wired_hook(dir: &Path, command: &str, payload: &str) -> Output {
+/// on stdin, the way a harness does, with `exe` standing in for `codeflow`.
+fn run_wired_hook_with(exe: &Path, dir: &Path, command: &str, payload: &str) -> Output {
     use std::io::Write as _;
     let args: Vec<&str> = command
         .strip_prefix("codeflow ")
         .unwrap_or_else(|| panic!("not a codeflow hook: {command}"))
         .split_whitespace()
         .collect();
-    let mut child = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+    let mut child = Command::new(exe)
         .args(&args)
         .current_dir(dir)
         .env("CODEFLOW_HOME", isolated_home())
@@ -1442,7 +1442,7 @@ fn run_wired_hook(dir: &Path, command: &str, payload: &str) -> Output {
         .stdout(std::process::Stdio::piped())
         .stderr(std::process::Stdio::piped())
         .spawn()
-        .expect("codeflow binary runs");
+        .expect("hook executable runs");
     child
         .stdin
         .as_mut()
@@ -1450,6 +1450,15 @@ fn run_wired_hook(dir: &Path, command: &str, payload: &str) -> Output {
         .write_all(payload.as_bytes())
         .unwrap();
     child.wait_with_output().unwrap()
+}
+
+fn run_wired_hook(dir: &Path, command: &str, payload: &str) -> Output {
+    run_wired_hook_with(
+        Path::new(env!("CARGO_BIN_EXE_codeflow")),
+        dir,
+        command,
+        payload,
+    )
 }
 
 /// The hook commands wired for `event` in a harness hook file, with the
@@ -1471,23 +1480,42 @@ fn wired_hooks(file: &serde_json::Value, event: &str) -> Vec<(Option<String>, St
         .collect()
 }
 
+const ADVISORY: &str = "codeflow hook session-orient";
+const CLAUDE_SOURCES: &str = "startup|resume|clear|compact|fork";
+const CODEX_SOURCES: &str = "startup|resume|clear|compact";
+
+fn start(source: &str) -> String {
+    format!(r#"{{"hook_event_name":"SessionStart","source":"{source}"}}"#)
+}
+
+fn prompt(text: &str) -> String {
+    serde_json::json!({"hook_event_name": "UserPromptSubmit", "prompt": text}).to_string()
+}
+
+/// A fresh scaffold of `flag` in a tempdir.
+fn fresh(flag: &str) -> (tempfile::TempDir, PathBuf) {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let init = codeflow(&root, &["init", "--yes", flag]);
+    assert!(
+        init.status.success(),
+        "{flag}: init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    (tmp, root)
+}
+
 /// TSK-128 AC-5 (serves EPC-020 AC-13): a fresh scaffold at every tier
-/// wires the compaction re-injection and the prompt reminder for Claude and
-/// Codex, and the wired commands put the guidance block and the rule line
-/// out through the real binary. Grok Build discards the output of both
-/// events, so its file keeps the prompt reminder unwired.
+/// wires one advisory command, `session-orient`, on `SessionStart` and
+/// `UserPromptSubmit` for Claude (sources with fork) and Codex (its four
+/// documented sources), and that same wired command gives each event its
+/// text through the real binary. Grok wires only the guards: its events
+/// exist but carry no context to the model.
 #[test]
 fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
     for flag in ["--minimal", "--standard", "--full"] {
-        let tmp = tempfile::tempdir().unwrap();
-        let root = tmp.path().join("proj");
-        std::fs::create_dir(&root).unwrap();
-        let init = codeflow(&root, &["init", "--yes", flag]);
-        assert!(
-            init.status.success(),
-            "{flag}: init failed: {}",
-            String::from_utf8_lossy(&init.stderr)
-        );
+        let (_tmp, root) = fresh(flag);
         let claude: serde_json::Value =
             serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
         let codex: serde_json::Value =
@@ -1495,63 +1523,75 @@ fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
         let grok: serde_json::Value =
             serde_json::from_str(&read(&root, ".grok/hooks/codeflow.json")).unwrap();
 
-        for (harness, file) in [("claude", &claude), ("codex", &codex)] {
-            let start = wired_hooks(file, "SessionStart");
+        for (harness, file, sources) in [
+            ("claude", &claude, CLAUDE_SOURCES),
+            ("codex", &codex, CODEX_SOURCES),
+        ] {
             assert_eq!(
-                start,
-                vec![(
-                    Some("startup|resume|clear|compact".to_string()),
-                    "codeflow hook session-orient".to_string()
-                )],
+                wired_hooks(file, "SessionStart"),
+                vec![(Some(sources.to_string()), ADVISORY.to_string())],
                 "{flag} {harness}: SessionStart wiring"
             );
-            let prompt = wired_hooks(file, "UserPromptSubmit");
             assert_eq!(
-                prompt,
-                vec![(None, "codeflow hook prompt-reminder".to_string())],
+                wired_hooks(file, "UserPromptSubmit"),
+                vec![(None, ADVISORY.to_string())],
                 "{flag} {harness}: UserPromptSubmit wiring"
             );
 
-            let compact = run_wired_hook(
-                &root,
-                &start[0].1,
-                r#"{"hook_event_name":"SessionStart","source":"compact"}"#,
-            );
-            assert_eq!(compact.status.code(), Some(0));
-            let text = String::from_utf8(compact.stdout).unwrap();
-            let Some((_, block)) = text.split_once("\n## Rules after compaction or resume") else {
-                panic!("{flag} {harness}: no guidance block\n{text}");
-            };
-            assert!(
-                block.len() < 1536,
-                "{flag} {harness}: {} bytes",
-                block.len()
-            );
+            let startup = run_wired_hook(&root, ADVISORY, &start("startup"));
+            assert_eq!(startup.status.code(), Some(0));
+            let digest = String::from_utf8(startup.stdout).unwrap();
+            assert!(digest.contains("# orient"), "{flag} {harness}: {digest}");
+            assert!(!digest.contains("## Rules after"), "{flag} {harness}");
+            for source in sources
+                .split('|')
+                .filter(|s| *s != "startup" && *s != "clear")
+            {
+                let out = run_wired_hook(&root, ADVISORY, &start(source));
+                assert_eq!(out.status.code(), Some(0));
+                let text = String::from_utf8(out.stdout).unwrap();
+                let Some((head, block)) = text.split_once("\n## Rules after compaction or resume")
+                else {
+                    panic!("{flag} {harness} {source}: no guidance block\n{text}");
+                };
+                assert_eq!(head, digest, "{flag} {harness} {source}");
+                let heading = "## Rules after compaction or resume";
+                println!(
+                    "{flag} {harness} {source}: block {} bytes (guideline 1536)",
+                    heading.len() + block.len()
+                );
+            }
 
             let reminder = run_wired_hook(
                 &root,
-                &prompt[0].1,
-                r#"{"hook_event_name":"UserPromptSubmit","prompt":"How long will the login page take?"}"#,
+                ADVISORY,
+                &prompt("How long will the login page take?"),
             );
             assert_eq!(reminder.status.code(), Some(0));
             let line = String::from_utf8(reminder.stdout).unwrap();
+            assert_eq!(line.lines().count(), 1, "{flag} {harness}: {line}");
             assert!(
                 line.starts_with("codeflow reminder: Durations"),
                 "{flag} {harness}: {line}"
             );
-            let quiet = run_wired_hook(
-                &root,
-                &prompt[0].1,
-                r#"{"hook_event_name":"UserPromptSubmit","prompt":"Rename foo to bar"}"#,
-            );
-            assert_eq!(quiet.status.code(), Some(0));
-            assert!(quiet.stdout.is_empty(), "{flag} {harness}");
+            for payload in [
+                prompt("Rename foo to bar"),
+                r#"{"hook_event_name":"UserPromptSubmit","prompt":null}"#.to_string(),
+                r#"{"hook_event_name":"SomeFutureEvent"}"#.to_string(),
+            ] {
+                let quiet = run_wired_hook(&root, ADVISORY, &payload);
+                assert_eq!(quiet.status.code(), Some(0), "{flag} {harness} {payload}");
+                assert!(quiet.stdout.is_empty(), "{flag} {harness} {payload}");
+            }
         }
 
-        assert!(
-            wired_hooks(&grok, "UserPromptSubmit").is_empty(),
-            "{flag}: Grok discards prompt-hook output; the reminder stays unwired"
+        let grok_events: Vec<&String> = grok["hooks"].as_object().unwrap().keys().collect();
+        assert_eq!(
+            grok_events,
+            vec!["PreToolUse"],
+            "{flag}: Grok wires only guards"
         );
+
         // The key is not written into the file, so an older binary can
         // still read it; the built-in default (warn) applies.
         let policy: serde_json::Value =
@@ -1564,5 +1604,92 @@ fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
             .find(|line| line.contains("guidance.prompt_reminders"))
             .unwrap_or_else(|| panic!("{flag}: policy show omits the key\n{shown}"));
         assert!(line.contains("warn"), "{flag}: {line}");
+    }
+}
+
+/// Compile a stand-in for an older `codeflow` (public v2.1.0 and pre-change
+/// 3.0.0 builds behave alike here): it knows `hook session-orient`, prints a
+/// digest for it and exits 0, and exits 2 for any hook name it does not
+/// know, as clap does. Built with the test's own `rustc`, so the fixture runs
+/// wherever the suite does (macOS, Linux, native Windows).
+fn older_binary_stub(dir: &Path) -> PathBuf {
+    let source = dir.join("old.rs");
+    std::fs::write(
+        &source,
+        r##"use std::io::Read;
+fn main() {
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let mut input = String::new();
+    let _ = std::io::stdin().read_to_string(&mut input);
+    if args == ["hook", "session-orient"] {
+        println!("# orient old binary");
+    } else {
+        eprintln!("error: invalid value for '<NAME>'");
+        std::process::exit(2);
+    }
+}
+"##,
+    )
+    .unwrap();
+    let exe = dir.join(format!("codeflow-old{}", std::env::consts::EXE_SUFFIX));
+    let rustc = std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into());
+    let built = Command::new(rustc)
+        .arg(&source)
+        .arg("-o")
+        .arg(&exe)
+        .output()
+        .expect("rustc runs");
+    assert!(
+        built.status.success(),
+        "stub build failed: {}",
+        String::from_utf8_lossy(&built.stderr)
+    );
+    exe
+}
+
+/// TSK-128 F1: version skew. An updated project on a machine whose
+/// `codeflow` is older must not have its prompts refused. Every advisory
+/// command both hosts wire, run by the older-binary stub with each event,
+/// exits 0 (the old binary prints its digest; the reminder is simply
+/// missing until the machine upgrades). The control shows the stub refuses
+/// an unknown hook name with 2, which is what a new command name would do.
+#[test]
+fn older_binary_never_refuses_a_prompt_through_either_host() {
+    let stubs = tempfile::tempdir().unwrap();
+    let old = older_binary_stub(stubs.path());
+    let (_tmp, root) = fresh("--standard");
+    let control = run_wired_hook_with(&old, &root, "codeflow hook prompt-reminder", &prompt("x"));
+    assert_eq!(
+        control.status.code(),
+        Some(2),
+        "the stub models clap's refusal"
+    );
+
+    for (host, rel) in [
+        ("claude", ".claude/settings.json"),
+        ("codex", ".codex/hooks.json"),
+    ] {
+        let file: serde_json::Value = serde_json::from_str(&read(&root, rel)).unwrap();
+        for (event, payload) in [
+            ("SessionStart", start("startup")),
+            ("SessionStart", start("compact")),
+            (
+                "UserPromptSubmit",
+                prompt("How long will the login page take?"),
+            ),
+            ("UserPromptSubmit", prompt("Rename foo to bar")),
+        ] {
+            let wired = wired_hooks(&file, event);
+            assert!(!wired.is_empty(), "{host}: {event} not wired");
+            for (_, command) in wired {
+                let out = run_wired_hook_with(&old, &root, &command, &payload);
+                assert_eq!(
+                    out.status.code(),
+                    Some(0),
+                    "{host} {event}: `{command}` would refuse the prompt with an older binary: {}",
+                    String::from_utf8_lossy(&out.stderr)
+                );
+            }
+        }
     }
 }

@@ -13,13 +13,12 @@ use std::path::PathBuf;
 const PRESET_FILES: [&str; 3] = ["default.json", "acceptEdits.json", "bypass-sandboxed.json"];
 
 /// The known hook subcommands wired by the presets (charter §3.3; the
-/// `exec-guard` security stage added in ADR-0008; the prompt reminder of
-/// TSK-128).
-const HOOK_NAMES: [&str; 5] = [
+/// `exec-guard` security stage added in ADR-0008). `session-orient` also
+/// carries the TSK-128 prompt reminder, dispatched on the event.
+const HOOK_NAMES: [&str; 4] = [
     "git-guard",
     "exec-guard",
     "session-orient",
-    "prompt-reminder",
     "session-summary",
 ];
 
@@ -273,18 +272,20 @@ fn every_hook_command_is_a_known_codeflow_hook() {
     }
 }
 
-/// TSK-128 AC-2: every preset names the `SessionStart` sources explicitly,
-/// the same list as the Codex hooks file, and wires the prompt reminder on
-/// `UserPromptSubmit` (which takes no matcher in Claude Code).
+/// TSK-128 AC-2 (as amended): each host names the `SessionStart` sources it
+/// supports. Claude Code adds `fork`, which carries an older conversation
+/// and gets the resume guidance; Codex keeps its documented four. Both wire
+/// `UserPromptSubmit` to the same stable advisory entry, `session-orient`,
+/// which an older binary also accepts, and never to `prompt-reminder`.
 #[test]
-fn session_start_matcher_is_explicit_and_matches_codex() {
+fn session_start_sources_are_explicit_per_host() {
     let codex_path = settings_dir().join("../codex/hooks.json");
     let codex: serde_json::Value =
         serde_json::from_str(&std::fs::read_to_string(&codex_path).unwrap()).unwrap();
-    let codex_matcher = codex["hooks"]["SessionStart"][0]["matcher"]
-        .as_str()
-        .expect("codex SessionStart matcher");
-    assert_eq!(codex_matcher, "startup|resume|clear|compact");
+    assert_eq!(
+        codex["hooks"]["SessionStart"][0]["matcher"].as_str(),
+        Some("startup|resume|clear|compact")
+    );
     for name in preset_files() {
         let value = load(&name);
         let groups = value["hooks"]["SessionStart"]
@@ -293,21 +294,27 @@ fn session_start_matcher_is_explicit_and_matches_codex() {
         assert_eq!(groups.len(), 1, "{name}: one SessionStart group");
         assert_eq!(
             groups[0]["matcher"].as_str(),
-            Some(codex_matcher),
-            "{name}: SessionStart matcher must be explicit and match Codex"
+            Some("startup|resume|clear|compact|fork"),
+            "{name}: SessionStart must name every Claude source, fork included"
         );
         let mut prompt = Vec::new();
         collect_hook_commands(&value["hooks"]["UserPromptSubmit"], &mut prompt);
         assert_eq!(
             prompt,
-            vec!["codeflow hook prompt-reminder".to_string()],
-            "{name}: UserPromptSubmit must wire only the prompt reminder"
+            vec!["codeflow hook session-orient".to_string()],
+            "{name}: UserPromptSubmit must use the stable advisory entry"
         );
         assert!(
             value["hooks"]["UserPromptSubmit"][0]
                 .get("matcher")
                 .is_none(),
             "{name}: UserPromptSubmit takes no matcher"
+        );
+        let mut all = Vec::new();
+        collect_hook_commands(&value["hooks"], &mut all);
+        assert!(
+            !all.iter().any(|c| c.contains("prompt-reminder")),
+            "{name}: prompt-reminder is a manual command, never wired"
         );
     }
 }
