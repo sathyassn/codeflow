@@ -712,7 +712,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
     ));
 
     for required in [
-        "Use the duo for every non-trivial repository task.",
+        "Use the duo for routed work, decided by touched paths as AGENTS.md states; when unsure, route.",
         "## Outcome modes",
         "**Research/analysis:**",
         "**Plan/design:**",
