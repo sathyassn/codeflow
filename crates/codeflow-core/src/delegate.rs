@@ -1434,17 +1434,38 @@ fn provenance(
     if let Some(launch) = &launch {
         validate_header(launch.schema_version, &launch.run_id, run_id, "launch")?;
     }
-    let ready: Option<ReadyRecord> = read_optional_json(&state_dir.join("ready.json"))?;
     let (requested_model, requested_effort) =
         launch.map_or_else(|| (unknown(), unknown()), |l| (l.model, l.effort));
-    let (observed_model, observed_effort) = ready
-        .filter(|ready| ready.session_id == session_id)
-        .map_or_else(|| (unknown(), unknown()), |r| (r.model, r.effort));
-    Ok(serde_json::json!({
+    let (observed_model, observed_effort, reason) =
+        match observed_ready(run_id, state_dir, session_id) {
+            Ok(ready) => (ready.model, ready.effort, None),
+            Err(reason) => (unknown(), unknown(), Some(reason)),
+        };
+    let mut provenance = serde_json::json!({
         "thread_id": session_id,
         "model": {"requested": requested_model, "observed": observed_model},
         "effort": {"requested": requested_effort, "observed": observed_effort},
-    }))
+    });
+    if let Some(reason) = reason {
+        provenance["observed_unknown_reason"] = reason.into();
+    }
+    Ok(provenance)
+}
+
+/// The ready record whose observed model and effort a terminal result may
+/// cite: present, valid by the same rule as `wait --until ready`, and from
+/// the session that produced the result. Otherwise why it cannot be used.
+fn observed_ready(run_id: &str, state_dir: &Path, session_id: &str) -> Result<ReadyRecord, String> {
+    let ready: Option<ReadyRecord> = read_optional_json(&state_dir.join("ready.json"))
+        .map_err(|_| "the ready record could not be read".to_string())?;
+    let ready = ready.ok_or_else(|| "no ready record".to_string())?;
+    validate_ready_record(&ready, run_id).map_err(|_| {
+        "the ready record is malformed or mis-correlated (schema, run, event or source)".to_string()
+    })?;
+    if ready.session_id != session_id {
+        return Err("the ready record is from another session".to_string());
+    }
+    Ok(ready)
 }
 
 fn serialize_wait(record: &impl Serialize, failed: bool) -> Result<WaitResult, DelegateError> {
