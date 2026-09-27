@@ -129,7 +129,8 @@
     "narrow": {
       "recompose": "list",
       "drops": [],
-      "marks": "same"
+      "marks": "same",
+      "reason": "Each commitment lists its three tiers as the same marks at phone width, with the tier named beside each mark."
     },
     "twin": {
       "columns": [

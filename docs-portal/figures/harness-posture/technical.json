@@ -86,7 +86,8 @@
     "narrow": {
       "recompose": "list",
       "drops": [],
-      "marks": "same"
+      "marks": "same",
+      "reason": "Each platform lists its two harnesses as the same marks at phone width, with the harness named beside each mark."
     },
     "twin": {
       "columns": [

@@ -411,6 +411,7 @@
       "recompose": "stack",
       "drops": [],
       "marks": "same",
+      "reason": "Each group stays one row of the same marks at phone width; its members wrap under the group name instead of changing form.",
       "width": 360,
       "height": 342,
       "draw": [
@@ -425,7 +426,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 19,
-          "r": 6,
+          "r": 7,
           "id": "g0c0"
         },
         {
@@ -441,7 +442,7 @@
           "shape": "circle",
           "cx": 171,
           "cy": 19,
-          "r": 6,
+          "r": 7,
           "id": "g0c1"
         },
         {
@@ -457,7 +458,7 @@
           "shape": "circle",
           "cx": 258,
           "cy": 19,
-          "r": 6,
+          "r": 7,
           "id": "g0c2"
         },
         {
@@ -473,7 +474,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 47,
-          "r": 6,
+          "r": 7,
           "id": "g0c3"
         },
         {
@@ -503,7 +504,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 85,
-          "r": 6,
+          "r": 7,
           "id": "g1c0"
         },
         {
@@ -519,7 +520,7 @@
           "shape": "circle",
           "cx": 208,
           "cy": 85,
-          "r": 6,
+          "r": 7,
           "id": "g1c1"
         },
         {
@@ -535,7 +536,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 113,
-          "r": 6,
+          "r": 7,
           "id": "g1c2"
         },
         {
@@ -565,7 +566,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 151,
-          "r": 6,
+          "r": 7,
           "id": "g2c0"
         },
         {
@@ -581,7 +582,7 @@
           "shape": "circle",
           "cx": 209,
           "cy": 151,
-          "r": 6,
+          "r": 7,
           "id": "g2c1"
         },
         {
@@ -611,7 +612,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 189,
-          "r": 6,
+          "r": 7,
           "id": "g3c0"
         },
         {
@@ -627,7 +628,7 @@
           "shape": "circle",
           "cx": 260,
           "cy": 189,
-          "r": 6,
+          "r": 7,
           "id": "g3c1"
         },
         {
@@ -657,7 +658,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 227,
-          "r": 6,
+          "r": 7,
           "id": "g4c0"
         },
         {
@@ -673,7 +674,7 @@
           "shape": "circle",
           "cx": 221,
           "cy": 227,
-          "r": 6,
+          "r": 7,
           "id": "g4c1"
         },
         {
@@ -689,7 +690,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 255,
-          "r": 6,
+          "r": 7,
           "id": "g4c2"
         },
         {
@@ -705,7 +706,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 283,
-          "r": 6,
+          "r": 7,
           "id": "g4c3"
         },
         {
@@ -735,7 +736,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 321,
-          "r": 6,
+          "r": 7,
           "id": "g5c0"
         },
         {
@@ -751,7 +752,7 @@
           "shape": "circle",
           "cx": 190,
           "cy": 321,
-          "r": 6,
+          "r": 7,
           "id": "g5c1"
         },
         {

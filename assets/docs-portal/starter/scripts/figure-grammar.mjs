@@ -582,7 +582,7 @@ function layoutCompositions(figure, bound) {
   // is at most COVERAGE_COLUMN_CHARACTERS long, so one slot always fits the
   // width (a test holds that bound). The row name is not bound to the
   // cells, so they start LABEL_DROP below it.
-  const narrowCell = 16;
+  const narrowCell = 18;
   const narrowLine = 28;
   const slot = narrowCell + LABEL_GAP + Math.max(...columns.map((column) => column.length)) * MONO_ADVANCE + TEXT_OVERHANG;
   const perLine = Math.floor((COVERAGE_NARROW_WIDTH + LABEL_GAP) / (slot + LABEL_GAP));
@@ -653,6 +653,9 @@ export function renderFigure(declaration, { idPrefix = "cf-fig", bound = null, f
     ["data-cf-binding", figure.binding],
     ["data-cf-states", declared.join(" ")],
     ["data-cf-elongation-max", String(figure.narrow.elongation_max ?? THRESHOLDS.elongationMax)],
+    // Rule 5 accepts a narrow that draws the wide mark set again only when
+    // the declaration says so (marks "same") and states why.
+    ...(figure.narrow.marks === "same" && typeof figure.narrow.reason === "string" ? [["data-cf-same-marks", "declared"]] : []),
     ["data-cf-facts", JSON.stringify(factValues)],
     ...(drawnValues === null ? [] : [["data-cf-values", JSON.stringify(drawnValues)]]),
   ].map(([name, value]) => `${name}="${escapeAttribute(value)}"`).join(" ");
@@ -1114,6 +1117,7 @@ export function probeFigures(options) {
       companion: figure.closest("[data-cf-companion]")?.getAttribute("data-cf-companion") ?? null,
       declaredStates: (figure.getAttribute("data-cf-states") ?? "").split(/\s+/).filter(Boolean),
       elongationMax: Number(figure.getAttribute("data-cf-elongation-max") ?? "1.5"),
+      sameMarksDeclared: figure.getAttribute("data-cf-same-marks") === "declared",
       facts: (() => { try { return JSON.parse(figure.getAttribute("data-cf-facts") ?? "[]"); } catch { return null; } })(),
       values: (() => { try { return JSON.parse(figure.getAttribute("data-cf-values") ?? "null"); } catch { return "invalid"; } })(),
       variants: svgs.map((svg) => ({ variant: svg.getAttribute("data-cf-variant"), shown: shown(svg), height: svg.getBoundingClientRect().height, width: svg.getBoundingClientRect().width })),
@@ -1364,7 +1368,7 @@ export function figureRuleFailures({ wide, narrow, wideDark = null, narrowDark =
   const wideSet = wide.signatures.wide ?? [];
   const narrowSet = narrow.signatures.narrow ?? [];
   if (!narrowSet.length) add(5, "the figure declares no narrow composition");
-  else if (wideSet.join("|") === narrowSet.join("|")) add(5, "the narrow mark set is a permutation of the wide set, a reflow and not a recomposition");
+  else if (wideSet.join("|") === narrowSet.join("|") && !wide.sameMarksDeclared) add(5, "the narrow mark set is a permutation of the wide set, a reflow and not a recomposition; a narrow that keeps the marks declares marks \"same\" with a reason");
   if (wide.facts === null) add(6, "the drawn facts are unreadable");
   if (evidence) {
     const recorded = evidence.facts ?? [];

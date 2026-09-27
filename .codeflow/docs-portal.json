@@ -78,7 +78,7 @@
     },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "38d8e84dbaa51677ae0afbedb10eee720491b8ffa260fcdbe6d75502a5a73fd4"
+      "pristine_sha256": "367041d3048b7e32062535644fa0e29b0e1b73441fcaed5de3e752ee1a0b205e"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -234,7 +234,7 @@
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "c8f272d66394f07f21c9289ca852aacd65b6d29c4ddf1fe5d5af22e700ae7c9a"
+      "pristine_sha256": "708e767ab262463e1c24f7903ea7041466b536ab0616fe8b06524ab4efb4a6ce"
     },
     "tests/fixtures/altitude-words.json": {
       "ownership": "managed",
@@ -294,7 +294,7 @@
     },
     "tests/fixtures/figures/controls/coverage-derived.json": {
       "ownership": "managed",
-      "pristine_sha256": "4e8d466184aad2f928fa5c83fc47ac209a42743b328a6cd9afa853f795827dc2"
+      "pristine_sha256": "a5bb83a806833d29d3d940595c2f984ab20bd5c8087b12cb7387731f99602795"
     },
     "tests/fixtures/figures/controls/coverage-wrapped.json": {
       "ownership": "managed",
@@ -346,19 +346,19 @@
     },
     "tests/fixtures/figures/rendered/10-extent-derived.html": {
       "ownership": "managed",
-      "pristine_sha256": "63916d4ac3825d3e8540bfc4379f27e5d14a0fe6189a93be7efe3013638a1e58"
+      "pristine_sha256": "977a487acca49c91b93b60cd46b2407a9bb270462d5e0b846a1c6ef69b3321ee"
     },
     "tests/fixtures/figures/rendered/controls/coverage-derived.html": {
       "ownership": "managed",
-      "pristine_sha256": "4d65076f566a77753c9066291ef1372f271509e202179e92077aa0b5cc4947ab"
+      "pristine_sha256": "fffb6278facb8a2c0eabed72f0b5792ec0e2c7d8c3933aee0351143983e5a218"
     },
     "tests/fixtures/figures/rendered/controls/coverage-wrapped.html": {
       "ownership": "managed",
-      "pristine_sha256": "72e24d052c92613836bc9101f376b2ed68fd06e3cec103d5e2f122b561e58ec8"
+      "pristine_sha256": "d971fef0b0d1a8822a23b57e9dd960136b08dba1a3e4f25a4bd1cdd85c01e264"
     },
     "tests/fixtures/figures/rendered/controls/extent-short.html": {
       "ownership": "managed",
-      "pristine_sha256": "110374a80ae7f1eea15517930131ff6c0e196b99c9699be6338e86fc4cc558ab"
+      "pristine_sha256": "a1daaf9ab208e0fb41bfb3ea3aec7ea3bebc85c8e143556a0de0a39196c752d0"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",

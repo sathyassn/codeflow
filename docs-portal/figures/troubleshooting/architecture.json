@@ -393,6 +393,7 @@
       "recompose": "stack",
       "drops": [],
       "marks": "same",
+      "reason": "Each surface stays one row of the same marks at phone width, with its name on its own line above its checks.",
       "width": 360,
       "height": 426,
       "draw": [
@@ -407,7 +408,7 @@
           "shape": "circle",
           "cx": 26,
           "cy": 47,
-          "r": 6,
+          "r": 7,
           "id": "g0c0"
         },
         {
@@ -424,7 +425,7 @@
           "shape": "circle",
           "cx": 109,
           "cy": 47,
-          "r": 6,
+          "r": 7,
           "id": "g0c1"
         },
         {
@@ -455,7 +456,7 @@
           "shape": "circle",
           "cx": 26,
           "cy": 113,
-          "r": 6,
+          "r": 7,
           "id": "g1c0"
         },
         {
@@ -472,7 +473,7 @@
           "shape": "circle",
           "cx": 117,
           "cy": 113,
-          "r": 6,
+          "r": 7,
           "id": "g1c1"
         },
         {
@@ -489,7 +490,7 @@
           "shape": "circle",
           "cx": 200,
           "cy": 113,
-          "r": 6,
+          "r": 7,
           "id": "g1c2"
         },
         {
@@ -520,7 +521,7 @@
           "shape": "circle",
           "cx": 26,
           "cy": 179,
-          "r": 6,
+          "r": 7,
           "id": "g2c0"
         },
         {
@@ -537,7 +538,7 @@
           "shape": "circle",
           "cx": 117,
           "cy": 179,
-          "r": 6,
+          "r": 7,
           "id": "g2c1"
         },
         {
@@ -568,7 +569,7 @@
           "shape": "circle",
           "cx": 26,
           "cy": 245,
-          "r": 6,
+          "r": 7,
           "id": "g3c0"
         },
         {
@@ -585,7 +586,7 @@
           "shape": "circle",
           "cx": 142,
           "cy": 245,
-          "r": 6,
+          "r": 7,
           "id": "g3c1"
         },
         {
@@ -602,7 +603,7 @@
           "shape": "circle",
           "cx": 26,
           "cy": 273,
-          "r": 6,
+          "r": 7,
           "id": "g3c2"
         },
         {
@@ -619,7 +620,7 @@
           "shape": "circle",
           "cx": 218,
           "cy": 273,
-          "r": 6,
+          "r": 7,
           "id": "g3c3"
         },
         {
@@ -650,7 +651,7 @@
           "shape": "circle",
           "cx": 26,
           "cy": 339,
-          "r": 6,
+          "r": 7,
           "id": "g4c0"
         },
         {
@@ -667,7 +668,7 @@
           "shape": "circle",
           "cx": 185,
           "cy": 339,
-          "r": 6,
+          "r": 7,
           "id": "g4c1"
         },
         {
@@ -698,7 +699,7 @@
           "shape": "circle",
           "cx": 26,
           "cy": 405,
-          "r": 6,
+          "r": 7,
           "id": "g5c0"
         },
         {
@@ -715,7 +716,7 @@
           "shape": "circle",
           "cx": 176,
           "cy": 405,
-          "r": 6,
+          "r": 7,
           "id": "g5c1"
         },
         {

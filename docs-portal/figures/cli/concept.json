@@ -513,6 +513,7 @@
       "recompose": "stack",
       "drops": [],
       "marks": "same",
+      "reason": "Each job stays one row of the same marks at phone width; its subcommands wrap under the job name instead of changing form.",
       "width": 360,
       "height": 370,
       "draw": [
@@ -527,7 +528,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 19,
-          "r": 6,
+          "r": 7,
           "id": "g0c0"
         },
         {
@@ -544,7 +545,7 @@
           "shape": "circle",
           "cx": 184,
           "cy": 19,
-          "r": 6,
+          "r": 7,
           "id": "g0c1"
         },
         {
@@ -561,7 +562,7 @@
           "shape": "circle",
           "cx": 275,
           "cy": 19,
-          "r": 6,
+          "r": 7,
           "id": "g0c2"
         },
         {
@@ -578,7 +579,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 47,
-          "r": 6,
+          "r": 7,
           "id": "g0c3"
         },
         {
@@ -595,7 +596,7 @@
           "shape": "circle",
           "cx": 184,
           "cy": 47,
-          "r": 6,
+          "r": 7,
           "id": "g0c4"
         },
         {
@@ -612,7 +613,7 @@
           "shape": "circle",
           "cx": 258,
           "cy": 47,
-          "r": 6,
+          "r": 7,
           "id": "g0c5"
         },
         {
@@ -643,7 +644,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 85,
-          "r": 6,
+          "r": 7,
           "id": "g1c0"
         },
         {
@@ -660,7 +661,7 @@
           "shape": "circle",
           "cx": 184,
           "cy": 85,
-          "r": 6,
+          "r": 7,
           "id": "g1c1"
         },
         {
@@ -677,7 +678,7 @@
           "shape": "circle",
           "cx": 292,
           "cy": 85,
-          "r": 6,
+          "r": 7,
           "id": "g1c2"
         },
         {
@@ -694,7 +695,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 113,
-          "r": 6,
+          "r": 7,
           "id": "g1c3"
         },
         {
@@ -711,7 +712,7 @@
           "shape": "circle",
           "cx": 201,
           "cy": 113,
-          "r": 6,
+          "r": 7,
           "id": "g1c4"
         },
         {
@@ -742,7 +743,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 151,
-          "r": 6,
+          "r": 7,
           "id": "g2c0"
         },
         {
@@ -759,7 +760,7 @@
           "shape": "circle",
           "cx": 184,
           "cy": 151,
-          "r": 6,
+          "r": 7,
           "id": "g2c1"
         },
         {
@@ -776,7 +777,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 179,
-          "r": 6,
+          "r": 7,
           "id": "g2c2"
         },
         {
@@ -793,7 +794,7 @@
           "shape": "circle",
           "cx": 226,
           "cy": 179,
-          "r": 6,
+          "r": 7,
           "id": "g2c3"
         },
         {
@@ -810,7 +811,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 207,
-          "r": 6,
+          "r": 7,
           "id": "g2c4"
         },
         {
@@ -841,7 +842,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 245,
-          "r": 6,
+          "r": 7,
           "id": "g3c0"
         },
         {
@@ -858,7 +859,7 @@
           "shape": "circle",
           "cx": 201,
           "cy": 245,
-          "r": 6,
+          "r": 7,
           "id": "g3c1"
         },
         {
@@ -875,7 +876,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 273,
-          "r": 6,
+          "r": 7,
           "id": "g3c2"
         },
         {
@@ -906,7 +907,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 311,
-          "r": 6,
+          "r": 7,
           "id": "g4c0"
         },
         {
@@ -937,7 +938,7 @@
           "shape": "circle",
           "cx": 110,
           "cy": 349,
-          "r": 6,
+          "r": 7,
           "id": "g5c0"
         },
         {
@@ -954,7 +955,7 @@
           "shape": "circle",
           "cx": 201,
           "cy": 349,
-          "r": 6,
+          "r": 7,
           "id": "g5c1"
         },
         {

@@ -107,6 +107,13 @@ publication date._
   coverage grids bind their column labels and share one set of columns.
 
 <!-- codeflow:release-impact patch -->
+- **A narrow figure may keep its marks when it says why.** The figure gate
+  accepts a narrow composition that draws the wide mark set again only when
+  its declaration sets `marks: "same"` and gives a `reason`; without one it
+  still fails as a reflow, and the height ceiling still applies. Narrow
+  coverage cells are drawn at the wide size again.
+
+<!-- codeflow:release-impact patch -->
 - **Narrow figure labels clear their marks in every engine.** A narrow extent
   row sets its label a full text box above its value, so a short bar's value
   no longer runs into its label in Firefox, and narrow coverage cells sit
