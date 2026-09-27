@@ -340,13 +340,21 @@ mod tests {
         assert_eq!(names, ["policy", "record_schema"]);
         for member in members {
             let example = member.example.as_deref().unwrap();
-            for path in member.patterns.iter().map(|glob| glob.replace("**", "x/y.md")).chain([example.to_string()]) {
+            for path in member
+                .patterns
+                .iter()
+                .map(|glob| glob.replace("**", "x/y.md"))
+                .chain([example.to_string()])
+            {
                 assert_eq!(
                     sets.adopter_facing_member(&path, &project),
                     Some(member.member.as_str()),
                     "{path}"
                 );
-                assert!(sets.direct_change_refusal(&path, &project).is_some(), "{path}");
+                assert!(
+                    sets.direct_change_refusal(&path, &project).is_some(),
+                    "{path}"
+                );
                 assert!(
                     watched.iter().any(|glob| glob_matches(glob, &path)),
                     "{path} is not in .release/config.json watched_contract_paths"

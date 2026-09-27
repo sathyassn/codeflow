@@ -212,16 +212,7 @@ pub fn integrate(
     // Stage 3: test gate (full mode), then the release structure of a
     // project that adopted CodeFlow's calculator (SPC-013 R-94).
     let test_gate = run_test_stage(repo_root, &original)?;
-    if crate::release_local::adopted(repo_root) {
-        if let Err(message) =
-            crate::release_local::structural(repo_root, &tested_oid.to_string())
-        {
-            let _ = restore_checkout(repo_root, &original);
-            return Err(IntegrateError::TestGateFailed {
-                summary: format!("  release state (structural, not checked against the host): {message}"),
-            });
-        }
-    }
+    run_release_structure(repo_root, &original, &tested_oid.to_string())?;
 
     // The branch must still point at the exact commit that was tested, and the
     // target must be an ancestor of it (a real fast-forward), before we advance.
@@ -328,6 +319,26 @@ fn finish_integration(
 }
 
 /// Run the full-mode test gate; restores `original` checkout on failure.
+/// The structural release check of a project that adopted `CodeFlow`'s
+/// calculator, on the tested commit; any other project runs nothing.
+fn run_release_structure(
+    repo_root: &Path,
+    original: &str,
+    tested: &str,
+) -> Result<(), IntegrateError> {
+    if !crate::release_local::adopted(repo_root) {
+        return Ok(());
+    }
+    crate::release_local::structural(repo_root, tested).map_err(|message| {
+        let _ = restore_checkout(repo_root, original);
+        IntegrateError::TestGateFailed {
+            summary: format!(
+                "  release state (structural, not checked against the host): {message}"
+            ),
+        }
+    })
+}
+
 fn run_test_stage(repo_root: &Path, original: &str) -> Result<TestGateSummary, IntegrateError> {
     match run_gate(repo_root, "full") {
         Ok(GateOutcome::NoTargets { reason }) => Ok(TestGateSummary::SkippedNoTargets { reason }),
@@ -907,7 +918,10 @@ mod tests {
             "expected TestGateFailed, got {err}"
         );
         let text = err.to_string();
-        assert!(text.contains("release state (structural, not checked against the host)"), "{text}");
+        assert!(
+            text.contains("release state (structural, not checked against the host)"),
+            "{text}"
+        );
         assert!(text.contains("coupled stamps disagree"), "{text}");
         assert_eq!(branch_oid(dir.path(), "main"), before, "main untouched");
         let args = fs::read_to_string(dir.path().join("release-args.txt")).unwrap();

@@ -557,19 +557,22 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
             git.pr_breaking_level
         ));
     }
-    if breaking == "yes" {
-        let migration = fields.get("migration").copied().unwrap_or_default();
-        let substantive = if guidance(migration) == "see breaking change" {
-            let guidance = matching_sections(&parsed, "Breaking change");
-            guidance.len() == 1 && substantive(&visible_text(guidance[0].content(), true))
-        } else {
-            substantive(migration)
-        };
-        if !substantive {
-            issue("PR Breaking: yes requires substantive Migration steps or a populated Breaking change reference".into());
-        }
+    let migration = fields.get("migration").copied().unwrap_or_default();
+    if breaking == "yes" && !migration_guidance(&parsed, migration) {
+        issue("PR Breaking: yes requires substantive Migration steps or a populated Breaking change reference".into());
     }
     out
+}
+
+/// Whether `migration` gives real steps, or points at exactly one populated
+/// Breaking change section.
+fn migration_guidance(parsed: &[Section<'_>], migration: &str) -> bool {
+    if guidance(migration) == "see breaking change" {
+        let sections = matching_sections(parsed, "Breaking change");
+        sections.len() == 1 && substantive(&visible_text(sections[0].content(), true))
+    } else {
+        substantive(migration)
+    }
 }
 
 /// Lowercased text without Markdown quoting or repeated whitespace, as
@@ -1111,7 +1114,10 @@ mod tests {
                 disagreements.push(format!(
                     "{}: expected valid={valid}, got {:?}",
                     case["name"],
-                    findings.iter().map(|f| f.message.clone()).collect::<Vec<_>>()
+                    findings
+                        .iter()
+                        .map(|f| f.message.clone())
+                        .collect::<Vec<_>>()
                 ));
             }
         }

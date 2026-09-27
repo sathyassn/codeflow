@@ -95,38 +95,15 @@ pub(super) fn run(
     };
     let mut steps: Vec<PushStep> = Vec::new();
 
-    for r in &pushed {
-        let branch = r.remote_branch().unwrap_or_default();
-        if let Some(RangeBase { base, note }) = range_base(root, r, &destination) {
-            report.notes.extend(note);
-            let mut args = vec![
-                "ci",
-                "--base",
-                &base,
-                "--head",
-                &r.local_sha,
-                "--branch",
-                branch,
-            ];
-            // The push's target is the branch itself: its current tip's
-            // baseline list governs the record check, not the boundary's,
-            // which can be another line's tip. A new branch keeps the base.
-            if let Some(tip) = existing_tip(root, r) {
-                args.extend(["--baseline-from", tip]);
-            }
-            run_check(&exe, root, &args, policy, report, &mut steps);
-        } else {
-            let why = destination
-                .failure()
-                .map(|why| format!("; asking it: {why}"))
-                .unwrap_or_default();
-            report.notes.push(format!(
-                "`codeflow ci` did not run for '{branch}': range unresolved (a new \
-                     branch, and neither the destination's advertised tips nor tracking \
-                     refs bound to it give a base{why}); CI checks it"
-            ));
-        }
-    }
+    run_ci_ranges(
+        &exe,
+        root,
+        &pushed,
+        &destination,
+        policy,
+        report,
+        &mut steps,
+    );
 
     if codeflow_core::release_local::adopted(root) {
         let remote = remote.unwrap_or("origin");
@@ -183,6 +160,50 @@ fn violation(policy: &GitPolicy, message: String, remedy: String) -> Violation {
     )
 }
 
+/// Run `codeflow ci` over each pushed ref's range, or note why it could not.
+fn run_ci_ranges(
+    exe: &Path,
+    root: &Path,
+    pushed: &[&PushRef],
+    destination: &Destination<'_>,
+    policy: &GitPolicy,
+    report: &mut StageReport,
+    steps: &mut Vec<PushStep>,
+) {
+    for r in pushed {
+        let branch = r.remote_branch().unwrap_or_default();
+        if let Some(RangeBase { base, note }) = range_base(root, r, destination) {
+            report.notes.extend(note);
+            let mut args = vec![
+                "ci",
+                "--base",
+                &base,
+                "--head",
+                &r.local_sha,
+                "--branch",
+                branch,
+            ];
+            // The push's target is the branch itself: its current tip's
+            // baseline list governs the record check, not the boundary's,
+            // which can be another line's tip. A new branch keeps the base.
+            if let Some(tip) = existing_tip(root, r) {
+                args.extend(["--baseline-from", tip]);
+            }
+            run_check(exe, root, &args, policy, report, steps);
+        } else {
+            let why = destination
+                .failure()
+                .map(|why| format!("; asking it: {why}"))
+                .unwrap_or_default();
+            report.notes.push(format!(
+                "`codeflow ci` did not run for '{branch}': range unresolved (a new \
+                     branch, and neither the destination's advertised tips nor tracking \
+                     refs bound to it give a base{why}); CI checks it"
+            ));
+        }
+    }
+}
+
 /// The local release preflight of a project that adopted `CodeFlow`'s
 /// calculator (SPC-013 R-93): it reads git data only, so it runs for every
 /// pushed branch. A missing entry is a note; only a push that breaks a
@@ -197,8 +218,7 @@ fn release_preflight(
 ) {
     let branch = pushed.remote_branch().unwrap_or_default();
     let started = Instant::now();
-    let result =
-        codeflow_core::release_local::preflight(root, &pushed.local_sha, branch, remote);
+    let result = codeflow_core::release_local::preflight(root, &pushed.local_sha, branch, remote);
     steps.push(PushStep {
         name: format!("release preflight ({branch})"),
         duration: started.elapsed(),

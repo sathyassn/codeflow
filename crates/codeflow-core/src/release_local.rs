@@ -1,4 +1,4 @@
-//! CodeFlow's release calculator as the local planes run it (SPC-013 R-93,
+//! `CodeFlow`'s release calculator as the local planes run it (SPC-013 R-93,
 //! R-94).
 //!
 //! A project that adopted the calculator (`release.backend = "codeflow"` in
@@ -56,7 +56,17 @@ impl Preflight {
 /// that the check did not run.
 pub fn preflight(root: &Path, head: &str, branch: &str, remote: &str) -> Result<Preflight, String> {
     let output = Command::new(PYTHON)
-        .args(["-B", SCRIPT, "preflight", "--head", head, "--branch", branch, "--remote", remote])
+        .args([
+            "-B",
+            SCRIPT,
+            "preflight",
+            "--head",
+            head,
+            "--branch",
+            branch,
+            "--remote",
+            remote,
+        ])
         .current_dir(root)
         .output()
         .map_err(|error| format!("{PYTHON} {SCRIPT}: {error}"))?;
@@ -75,7 +85,14 @@ pub fn preflight(root: &Path, head: &str, branch: &str, remote: &str) -> Result<
 /// or the calculator could not run; the message says which.
 pub fn structural(root: &Path, reference: &str) -> Result<(), String> {
     let output = Command::new(PYTHON)
-        .args(["-B", SCRIPT, "check-state", "--structural", "--ref", reference])
+        .args([
+            "-B",
+            SCRIPT,
+            "check-state",
+            "--structural",
+            "--ref",
+            reference,
+        ])
         .current_dir(root)
         .output()
         .map_err(|error| format!("{PYTHON} {SCRIPT} could not run: {error}"))?;
@@ -89,7 +106,11 @@ pub fn structural(root: &Path, reference: &str) -> Result<(), String> {
 fn failure(output: &std::process::Output) -> String {
     let stderr = String::from_utf8_lossy(&output.stderr);
     let stdout = String::from_utf8_lossy(&output.stdout);
-    let text = if stderr.trim().is_empty() { stdout } else { stderr };
+    let text = if stderr.trim().is_empty() {
+        stdout
+    } else {
+        stderr
+    };
     let text = text.trim();
     if text.is_empty() {
         format!("{SCRIPT} exited with {}", output.status)
@@ -148,8 +169,14 @@ mod tests {
         if !python_available() {
             return;
         }
-        let dir = project("codeflow", Some("import sys\nsys.stderr.write('release error: boom')\nsys.exit(2)\n"));
-        assert_eq!(preflight(dir.path(), "HEAD", "b", "origin").unwrap_err(), "release error: boom");
+        let dir = project(
+            "codeflow",
+            Some("import sys\nsys.stderr.write('release error: boom')\nsys.exit(2)\n"),
+        );
+        assert_eq!(
+            preflight(dir.path(), "HEAD", "b", "origin").unwrap_err(),
+            "release error: boom"
+        );
         let silent = project("codeflow", Some("print('not json')\n"));
         assert!(preflight(silent.path(), "HEAD", "b", "origin")
             .unwrap_err()
@@ -163,7 +190,13 @@ mod tests {
         }
         let ok = project("codeflow", Some("print('{}')\n"));
         assert!(structural(ok.path(), "HEAD").is_ok());
-        let bad = project("codeflow", Some("import sys\nsys.stderr.write('release error: stamps disagree')\nsys.exit(2)\n"));
-        assert_eq!(structural(bad.path(), "HEAD").unwrap_err(), "release error: stamps disagree");
+        let bad = project(
+            "codeflow",
+            Some("import sys\nsys.stderr.write('release error: stamps disagree')\nsys.exit(2)\n"),
+        );
+        assert_eq!(
+            structural(bad.path(), "HEAD").unwrap_err(),
+            "release error: stamps disagree"
+        );
     }
 }

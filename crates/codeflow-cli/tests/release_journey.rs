@@ -1,9 +1,9 @@
 //! Journey (TSK-106 AC-9, SPC-013 R-93 and R-96).
 //!
 //! - An adopter project, scaffolded and then updated by the binary Cargo
-//!   built, receives a managed CI file with no CodeFlow release job, at every
+//!   built, receives a managed CI file with no `CodeFlow` release job, at every
 //!   tier.
-//! - A project that adopted CodeFlow's release calculator the way this
+//! - A project that adopted `CodeFlow`'s release calculator the way this
 //!   repository does (`release.backend = "codeflow"`, `scripts/release.py`,
 //!   the path-set table and a release configuration) gets a warning from its
 //!   real pre-push hook when a behaviour change carries no pending entry, is
@@ -13,6 +13,7 @@
 //! The hooks `init` installs resolve `codeflow` to the built binary through
 //! `PATH`; `release.py` and the path-set table are this checkout's own.
 
+use std::fmt::Write as _;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
@@ -107,7 +108,17 @@ fn commit(root: &Path, message: &str) -> String {
 /// work branch runs the real hooks.
 fn landed(root: &Path, message: &str) -> String {
     git(root, &["add", "-A"]);
-    git(root, &["-c", "core.hooksPath=/dev/null", "commit", "-q", "-m", message]);
+    git(
+        root,
+        &[
+            "-c",
+            "core.hooksPath=/dev/null",
+            "commit",
+            "-q",
+            "-m",
+            message,
+        ],
+    );
     git(root, &["rev-parse", "HEAD"])
 }
 
@@ -124,8 +135,8 @@ const RELEASE_JOBS: [&str; 5] = [
 ];
 
 /// TSK-106 AC-8 and AC-9: the managed CI file an adopter receives, on init
-/// and after an update by the built binary, carries no CodeFlow release job,
-/// and no CodeFlow-only release workflow is installed.
+/// and after an update by the built binary, carries no `CodeFlow` release job,
+/// and no `CodeFlow`-only release workflow is installed.
 #[test]
 fn an_updated_adopter_ci_file_carries_no_codeflow_release_job() {
     for tier in ["--minimal", "--standard", "--full"] {
@@ -151,9 +162,9 @@ fn an_updated_adopter_ci_file_carries_no_codeflow_release_job() {
     }
 }
 
-/// CodeFlow's own copy of the managed file keeps no release job either, so a
+/// `CodeFlow`'s own copy of the managed file keeps no release job either, so a
 /// three-way update merge has none to carry, and its release jobs run from
-/// the CodeFlow-only workflow on pull requests, main and integration lines.
+/// the `CodeFlow`-only workflow on pull requests, main and integration lines.
 #[test]
 fn codeflow_release_jobs_live_outside_the_managed_ci_file() {
     let root = workspace();
@@ -175,9 +186,13 @@ fn codeflow_release_jobs_live_outside_the_managed_ci_file() {
         "name: release state",
         "python3 scripts/release.py check-state --ref \"$GITHUB_SHA\"",
     ] {
-        assert!(own.contains(required), "codeflow-release.yml lacks {required}");
+        assert!(
+            own.contains(required),
+            "codeflow-release.yml lacks {required}"
+        );
     }
-    let manifest = std::fs::read_to_string(root.join("assets/base/scaffold-manifest.toml")).unwrap();
+    let manifest =
+        std::fs::read_to_string(root.join("assets/base/scaffold-manifest.toml")).unwrap();
     assert!(!manifest.contains("codeflow-release.yml"));
 }
 
@@ -193,7 +208,10 @@ impl Adopted {
         let root = dir.path().join("project");
         std::fs::create_dir(&root).unwrap();
         git(&root, &["init", "-q", "-b", "main"]);
-        ok(&codeflow(&root, &["init", "--yes", "--full"]), "init --full");
+        ok(
+            &codeflow(&root, &["init", "--yes", "--full"]),
+            "init --full",
+        );
         let project = std::fs::read_to_string(root.join(".codeflow/project.toml")).unwrap();
         let project = match project.find("[release]") {
             Some(at) => format!("{}[release]\nbackend = \"codeflow\"\n", &project[..at]),
@@ -201,8 +219,15 @@ impl Adopted {
         };
         write(&root, ".codeflow/project.toml", &project);
         let checkout = workspace();
-        for file in ["scripts/release.py", "crates/codeflow-core/src/workgraph/path_sets.toml"] {
-            write(&root, file, &std::fs::read_to_string(checkout.join(file)).unwrap());
+        for file in [
+            "scripts/release.py",
+            "crates/codeflow-core/src/workgraph/path_sets.toml",
+        ] {
+            write(
+                &root,
+                file,
+                &std::fs::read_to_string(checkout.join(file)).unwrap(),
+            );
         }
         write(
             &root,
@@ -211,10 +236,16 @@ impl Adopted {
         );
         let packages: String = ["codeflow-cli", "codeflow-core", "codeflow-present"]
             .iter()
-            .map(|name| format!("[[package]]\nname = \"{name}\"\nversion = \"3.0.0\"\n"))
-            .collect();
+            .fold(String::new(), |mut out, name| {
+                let _ = write!(out, "[[package]]\nname = \"{name}\"\nversion = \"3.0.0\"\n");
+                out
+            });
         write(&root, "Cargo.lock", &format!("version = 4\n\n{packages}"));
-        write(&root, "CHANGELOG.md", "# Changelog\n\n## [3.0.0] - 2026-01-01\n\n- public\n");
+        write(
+            &root,
+            "CHANGELOG.md",
+            "# Changelog\n\n## [3.0.0] - 2026-01-01\n\n- public\n",
+        );
         let baseline = landed(&root, "chore: published baseline");
         git(&root, &["tag", "v3.0.0"]);
         let tree = git(&root, &["rev-parse", "HEAD^{tree}"]);
@@ -262,10 +293,20 @@ impl Adopted {
                 "body": "", "assets": [{"name": "source.tar.gz", "digest": format!("sha256:{}", "a".repeat(64))}],
             }],
         });
-        write(&root, ".git/host.json", &serde_json::to_string(&host).unwrap());
+        write(
+            &root,
+            ".git/host.json",
+            &serde_json::to_string(&host).unwrap(),
+        );
         let remote = dir.path().join("remote.git");
-        git(&root, &["clone", "-q", "--bare", ".", remote.to_str().unwrap()]);
-        git(&root, &["remote", "add", "origin", remote.to_str().unwrap()]);
+        git(
+            &root,
+            &["clone", "-q", "--bare", ".", remote.to_str().unwrap()],
+        );
+        git(
+            &root,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
         git(&root, &["fetch", "-q", "origin"]);
         Self { _dir: dir, root }
     }
@@ -342,9 +383,15 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
     let head = commit(root, "fix: start the tool");
     let pushed = project.push("feat/tool", None);
     let text = stderr(&pushed);
-    assert!(pushed.status.success(), "a missing entry never blocks:\n{text}");
+    assert!(
+        pushed.status.success(),
+        "a missing entry never blocks:\n{text}"
+    );
     assert!(text.contains("release preflight (feat/tool)"), "{text}");
-    assert!(text.contains("behaviour paths changed (src/tool.rs)"), "{text}");
+    assert!(
+        text.contains("behaviour paths changed (src/tool.rs)"),
+        "{text}"
+    );
     assert!(text.contains("not checked against the host"), "{text}");
 
     // The pull request job's full check blocks the same change.
@@ -353,10 +400,18 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
     assert!(stderr(&no_block).contains("exactly one '## Release impact' section"));
     let floor = project.check_pr(&head, &body("none"));
     assert_eq!(floor.status.code(), Some(2));
-    assert!(stderr(&floor).contains("below marker floor patch"), "{}", stderr(&floor));
+    assert!(
+        stderr(&floor).contains("below marker floor patch"),
+        "{}",
+        stderr(&floor)
+    );
     let no_entry = project.check_pr(&head, &body("patch"));
     assert_eq!(no_entry.status.code(), Some(2));
-    assert!(stderr(&no_entry).contains("must equal the impact"), "{}", stderr(&no_entry));
+    assert!(
+        stderr(&no_entry).contains("must equal the impact"),
+        "{}",
+        stderr(&no_entry)
+    );
 
     // A declared `Impact: none` intent in the local PR draft silences the
     // warning for a change that has no release impact.
@@ -394,17 +449,31 @@ fn a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job() 
     // its base kept valid, so the preflight blocks it.
     let blocked = project.push("feat/tool", None);
     let text = stderr(&blocked);
-    assert!(!blocked.status.success(), "a broken release tree blocks:\n{text}");
+    assert!(
+        !blocked.status.success(),
+        "a broken release tree blocks:\n{text}"
+    );
     assert!(text.contains("breaks the release tree"), "{text}");
     let broken_pr = project.check_pr(&broken, &body("patch"));
     assert_eq!(broken_pr.status.code(), Some(2));
 
     git(root, &["switch", "-q", "feat/tool"]);
-    for path in [".codeflow/project.toml", ".codeflow/manifest.json", "AGENTS.md", "CLAUDE.md"] {
+    for path in [
+        ".codeflow/project.toml",
+        ".codeflow/manifest.json",
+        "AGENTS.md",
+        "CLAUDE.md",
+    ] {
         let text = std::fs::read_to_string(root.join(path)).unwrap();
         let text = text
-            .replace("scaffold_version = \"3.0.0\"", "scaffold_version = \"3.0.1\"")
-            .replace("\"scaffold_version\": \"3.0.0\"", "\"scaffold_version\": \"3.0.1\"")
+            .replace(
+                "scaffold_version = \"3.0.0\"",
+                "scaffold_version = \"3.0.1\"",
+            )
+            .replace(
+                "\"scaffold_version\": \"3.0.0\"",
+                "\"scaffold_version\": \"3.0.1\"",
+            )
             .replace("scaffold=3.0.0 -->", "scaffold=3.0.1 -->");
         write(root, path, &text);
     }
