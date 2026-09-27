@@ -1,0 +1,73 @@
+# codeflow policy: the enforcing CodeFlow check for pull requests. Written by
+# `codeflow init` and managed by `codeflow update`.
+#
+# It runs on `pull_request_target`, so GitHub runs this file as it is on the
+# target branch: a pull request that edits this workflow cannot change the job
+# that judges it. The job checks out the target, installs the codeflow version
+# the target pins in .codeflow/project.toml (`scaffold_version`), verified
+# against the release's published sha256.sum (SPC-013 R-113), fetches the
+# pull request head only as git data and never runs its code. The token is
+# read-only and no secret is used. Builds and tests of the head run in
+# codeflow-ci.yml on `pull_request`.
+#
+# `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
+# breaking-footer, branch-naming and PR-body checks as the git hooks and the
+# Claude git-guard, reading the target's .codeflow/policy.json (CodeFlow
+# ADR-0017). `edited` reruns it when the PR body changes. Trusted automation
+# profiles (git.automation_profiles) apply only for the actor passed here, and
+# never on a fork pull request.
+#
+# This repository's copy: CodeFlow is its own first consumer, so the install
+# step builds the target branch's own source in place of the pinned release.
+# `codeflow update` keeps it as a user-modified file.
+name: codeflow-policy
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, edited]
+
+permissions:
+  contents: read
+
+jobs:
+  commit-lint:
+    name: commit standards
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      # This repository IS codeflow, so it builds the checked-out TARGET
+      # branch's own source instead of installing a pinned release. The PR
+      # head is never checked out or built. The toolchain is pinned in
+      # rust-toolchain.toml.
+      - name: Install Rust (rust-toolchain.toml)
+        run: rustup toolchain install
+
+      - name: Build codeflow from the target's source
+        run: |
+          cargo build --release -p codeflow-cli
+          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
+
+      - name: Fetch the pull request head as data
+        env:
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          git fetch --no-tags origin "+refs/pull/${PR_NUMBER}/head:refs/codeflow/pr-head"
+          fetched=$(git rev-parse refs/codeflow/pr-head)
+          if [ "$fetched" != "$HEAD_SHA" ]; then
+            echo "::error::the pull request head moved (${fetched}, event ${HEAD_SHA}); the newer run judges it"; exit 1
+          fi
+
+      # The PR body reaches `codeflow ci` through `env:`, never interpolated
+      # into the script, so an untrusted body cannot inject shell.
+      - name: codeflow ci (commit + branch + PR-body standards)
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_REF: ${{ github.event.pull_request.head.ref }}
+          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
+          ACTOR: ${{ github.event.pull_request.head.repo.full_name == github.repository && github.actor || 'unknown' }}
+        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF" --actor "$ACTOR"

@@ -2,6 +2,9 @@
 # depends on local state. Written by `codeflow init` and managed by `codeflow
 # update` (charter §4.3): an unmodified copy is replaced on update; your edits
 # are preserved via 3-way merge, never clobbered.
+#
+# The commit, branch and PR-body standards run in codeflow-policy.yml on
+# `pull_request_target`, so a pull request cannot edit the job that judges it.
 name: codeflow-ci
 
 on:
@@ -223,40 +226,6 @@ jobs:
           else
             echo "::warning::dependency advisories found (or scan error, exit ${rc}); policy git.security_review=${sr} / git.dep_audit=${da} → reporting only. Harden either to block once triaged."
           fi
-
-  commit-lint:
-    name: commit standards
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-24.04
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-
-      # Dogfood: this repo IS codeflow, so it runs the SAME `codeflow ci` binary
-      # the shipped template runs — one source of truth with the git-client hooks
-      # and the Claude git-guard, no inline regex to drift (CodeFlow ADR-0017).
-      # It builds
-      # from source (as the gates job does) rather than the release installer a
-      # consumer project would use.
-      - name: Install Rust (rust-toolchain.toml)
-        run: rustup toolchain install
-      - uses: Swatinem/rust-cache@v2
-
-      - name: Build codeflow from source
-        run: |
-          cargo build --release -p codeflow-cli
-          echo "${GITHUB_WORKSPACE}/target/release" >> "$GITHUB_PATH"
-
-      # The PR body is passed via CODEFLOW_PR_BODY in `env:` (not interpolated
-      # into the script), so an untrusted body cannot inject shell.
-      - name: codeflow ci (commit + branch + PR-body standards)
-        env:
-          BASE_SHA: ${{ github.event.pull_request.base.sha }}
-          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          HEAD_REF: ${{ github.event.pull_request.head.ref }}
-          CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}
-        run: codeflow ci --base "$BASE_SHA" --head "$HEAD_SHA" --branch "$HEAD_REF"
 
   # Line-coverage floor: fails the build when workspace line coverage drops
   # below 90% (current ~95% — headroom to avoid flakiness while still catching
