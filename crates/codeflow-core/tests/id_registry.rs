@@ -662,6 +662,26 @@ fn a_number_an_invalid_commit_introduced_is_never_issued_again() {
 }
 
 #[test]
+fn seed_reports_a_permission_refusal_once_even_beside_a_lock_message() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    write_record(&a, "TSK-001", None);
+    commit_all(&a, "legacy record");
+    world.hook(
+        "pre-receive",
+        "echo x >> attempts\necho \"error: cannot lock ref 'refs/heads/codeflow/registry': Unable to create 'registry.lock': Permission denied\" >&2\nexit 1",
+    );
+    match seed::seed(&a, None) {
+        Err(IdsError::Permission(reason)) => {
+            assert!(reason.contains("Permission denied"), "{reason}");
+        }
+        other => panic!("expected a permission error, got {other:?}"),
+    }
+    let attempts = std::fs::read_to_string(world.bare().join("attempts")).unwrap();
+    assert_eq!(attempts.lines().count(), 1, "never retried as a race");
+}
+
+#[test]
 fn a_first_uid_backfill_must_be_the_registry_binding() {
     let world = World::new();
     let a = world.clone_as("a", "a@example.test");

@@ -426,9 +426,11 @@ fn push(git: &Git, remote: &str, commit: &str) -> Result<Pushed, IdsError> {
     Ok(classify_push(&text))
 }
 
-/// Classify a failed push (R-13): a moved tip retries; permission,
-/// unsupported and hook refusals are reported as such; anything else is
-/// unclear and read back.
+/// Classify a failed push (R-13). A refusal that names permission, an
+/// unsupported operation or a transport failure is reported as such even
+/// when it also mentions a ref lock, so it is never retried as a race. Only
+/// the diagnostics of a lost compare-and-swap count as a moved tip; a hook
+/// refusal is reported; anything else is unclear and read back.
 fn classify_push(text: &str) -> Pushed {
     let lower = text.to_lowercase();
     let reason = text
@@ -438,17 +440,6 @@ fn classify_push(text: &str) -> Pushed {
         .collect::<Vec<_>>()
         .join("; ");
     let has = |needles: &[&str]| needles.iter().any(|needle| lower.contains(needle));
-    if has(&[
-        "fetch first",
-        "non-fast-forward",
-        "cannot lock ref",
-        "stale info",
-        "failed to update ref",
-        "reference already exists",
-        "incorrect old value",
-    ]) {
-        return Pushed::Moved(reason);
-    }
     if has(&["codeflow pre-push"]) {
         return Pushed::Failed(IdsError::Refused(reason));
     }
@@ -460,11 +451,9 @@ fn classify_push(text: &str) -> Pushed {
         "protected branch",
         "not allowed",
         "authentication failed",
+        "read-only",
     ]) {
         return Pushed::Failed(IdsError::Permission(reason));
-    }
-    if has(&["hook declined", "pre-receive hook"]) {
-        return Pushed::Failed(IdsError::Refused(reason));
     }
     if has(&["not supported", "unsupported", "does not support"]) {
         return Pushed::Failed(IdsError::Unsupported(reason));
@@ -477,7 +466,30 @@ fn classify_push(text: &str) -> Pushed {
     ]) {
         return Pushed::Failed(IdsError::Transport(reason));
     }
+    if is_lost_race(&lower) {
+        return Pushed::Moved(reason);
+    }
+    if has(&["hook declined", "pre-receive hook"]) {
+        return Pushed::Failed(IdsError::Refused(reason));
+    }
     Pushed::Unclear(reason)
+}
+
+/// The diagnostics of a lost compare-and-swap: the client saw a newer tip
+/// (`fetch first`, `non-fast-forward`, `stale info`), or the host's ref
+/// transaction found another old value (`is at X but expected Y`,
+/// `incorrect old value`, a creation that met an existing ref).
+fn is_lost_race(lower: &str) -> bool {
+    [
+        "(fetch first)",
+        "(non-fast-forward)",
+        "(stale info)",
+        "incorrect old value",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
+        || (lower.contains("cannot lock ref")
+            && (lower.contains("but expected") || lower.contains("reference already exists")))
 }
 
 /// What a sync did.
@@ -967,5 +979,44 @@ mod tests {
             classify_push("fatal: the remote end hung up unexpectedly"),
             Pushed::Unclear(_)
         ));
+    }
+
+    #[test]
+    fn overlapping_refusals_are_never_retried_as_a_race() {
+        let moved = [
+            "! x:refs/heads/codeflow/registry [remote rejected] (cannot lock ref 'refs/heads/codeflow/registry': reference already exists)",
+            "error: cannot update ref 'refs/heads/codeflow/registry': incorrect old value provided",
+            " ! [rejected] x -> codeflow/registry (stale info)",
+        ];
+        for text in moved {
+            assert!(matches!(classify_push(text), Pushed::Moved(_)), "{text}");
+        }
+        let permission = [
+            "! [remote rejected] (cannot lock ref 'refs/heads/codeflow/registry': Unable to create '/srv/x.git/refs/heads/codeflow/registry.lock': Permission denied)",
+            "remote: error: cannot lock ref 'refs/heads/codeflow/registry': is at a but expected b\nremote: error: GH013: Repository rule violations found",
+        ];
+        for text in permission {
+            assert!(
+                matches!(classify_push(text), Pushed::Failed(IdsError::Permission(_))),
+                "{text}"
+            );
+        }
+        assert!(matches!(
+            classify_push("cannot lock ref 'refs/heads/codeflow/registry': unable to resolve reference: No such file or directory"),
+            Pushed::Failed(IdsError::Transport(_))
+        ));
+        assert!(matches!(
+            classify_push(
+                "fatal: cannot lock ref: the receiving end does not support this operation"
+            ),
+            Pushed::Failed(IdsError::Unsupported(_))
+        ));
+        assert!(
+            matches!(
+                classify_push("error: failed to update ref 'refs/heads/codeflow/registry'"),
+                Pushed::Unclear(_)
+            ),
+            "a bare update failure is read back, not retried"
+        );
     }
 }
