@@ -17,6 +17,23 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Review findings, repair and a copy guide.** The duo quality contract has a
+  new section on review findings and repair, read when a defect is fixed or
+  review findings are briefed, written or acted on. A defect fix states its
+  evidenced mechanism and adds a regression test that fails before the fix.
+  Every change names its bounded impact set, and each blocker or major
+  finding carries the smallest evidenced remedy. One review round runs every
+  reviewer in parallel, the reviewer who raised a fixed finding confirms it,
+  and a minor fix needs no new round. Rounds are bounded by change class: two
+  repair cycles for code, and two rounds per submitted version for docs and
+  records. cf-develop's bound for code drops from three cycles to two.
+  Blocker navigation now stops before a change departs from what was
+  approved. The writing reference gains a copy guide with ten sections, each
+  with an example quoted from a named source. `codeflow update` installs the
+  new section and the changed skills at the standard and full tiers, and the
+  writing reference at every tier.
+
+<!-- codeflow:release-impact minor -->
 - **Acceptance bound to the reviewed commit.** Completing a task with
   `task status complete`, and every completion in a pull request range in
   `codeflow ci`, now checks that the acceptance block's `reviewed` commit is

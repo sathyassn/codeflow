@@ -473,6 +473,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/findings.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/quality/findings.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/quality/irreversible.md"
 dest = ".claude/skills/cf-model-orchestrator/resources/quality/irreversible.md"
 ownership = "managed"
@@ -1100,6 +1106,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/quality/evidence.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/quality/evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/quality/findings.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/quality/findings.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

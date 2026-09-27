@@ -1221,3 +1221,201 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
         "{all}"
     );
 }
+
+/// TSK-131 AC-5 (serves EPC-020 AC-13): the installed doctrine files and the
+/// assets they come from. The skill files install in both trees.
+const TSK131_DOCTRINE_FILES: &[(&str, &str)] = &[
+    (
+        "skills/cf-model-orchestrator/resources/quality/findings.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+    ),
+    (
+        "skills/cf-model-orchestrator/resources/quality-contract.md",
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+    ),
+    (
+        "skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+    ),
+    (
+        "skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/design-implementation.md",
+    ),
+    (
+        "skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+    ),
+    (
+        "skills/cf-develop/SKILL.md",
+        "agents/skills/cf-develop/SKILL.md",
+    ),
+    (
+        "skills/cf-consult/SKILL.md",
+        "agents/skills/cf-consult/SKILL.md",
+    ),
+];
+
+/// Every installed doctrine path and its asset, at the standard and full
+/// tiers.
+fn tsk131_installed() -> Vec<(String, String)> {
+    let mut files: Vec<(String, String)> = TSK131_DOCTRINE_FILES
+        .iter()
+        .flat_map(|(rel, src)| {
+            [".claude", ".agents"]
+                .iter()
+                .map(move |tree| (format!("{tree}/{rel}"), (*src).to_string()))
+        })
+        .collect();
+    files.extend([
+        (
+            ".claude/agents/cf-reviewer.md".to_string(),
+            "claude/agents/cf-reviewer.md".to_string(),
+        ),
+        (
+            ".codeflow/rules/writing.md".to_string(),
+            "rules/writing.md".to_string(),
+        ),
+        (
+            ".codeflow/rules/workflow-discipline.md".to_string(),
+            "rules/workflow-discipline.md".to_string(),
+        ),
+    ]);
+    files
+}
+
+/// Record `older` as the unmodified install of `rel`: the file, its
+/// baseline and its manifest hash agree, as a release before TSK-131 left
+/// them. `None` removes the file and its records, as for a file that release
+/// did not ship.
+fn record_as_installed(root: &Path, rel: &str, older: Option<&str>) {
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap();
+    let files = manifest["files"].as_object_mut().expect("manifest files");
+    let baseline = root.join(".codeflow/.baseline").join(rel);
+    if let Some(text) = older {
+        std::fs::write(root.join(rel), text).unwrap();
+        std::fs::write(&baseline, text).unwrap();
+        files.get_mut(rel).expect("manifest record")["sha256"] =
+            codeflow_core::scaffold::sha256_hex(text.as_bytes()).into();
+    } else {
+        std::fs::remove_file(root.join(rel)).unwrap();
+        let _ = std::fs::remove_file(&baseline);
+        assert!(files.remove(rel).is_some(), "{rel} had no manifest record");
+    }
+    std::fs::write(
+        root.join(".codeflow/manifest.json"),
+        format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
+    )
+    .unwrap();
+}
+
+#[test]
+fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
+    const FINDINGS_ROW: &str = "| [Review findings and repair](quality/findings.md) | when a defect is fixed, or review findings are briefed, written or acted on |\n";
+    for tier in ["--standard", "--full"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir(&root).unwrap();
+        let init = codeflow(&root, &["init", "--yes", tier]);
+        assert!(init.status.success(), "{tier}: {}", output_text(&init));
+
+        // Installed through the real binary, byte-identical to the assets.
+        let assets = repo_root().join("assets/base");
+        for (rel, src) in tsk131_installed() {
+            assert_eq!(
+                normalize_crlf(&read(&root, &rel)),
+                normalize_crlf(&std::fs::read_to_string(assets.join(&src)).unwrap()),
+                "{tier}: {rel} differs from its asset"
+            );
+        }
+        // The doctrine an agent in this project reads.
+        for (rel, sentence) in [
+            (
+                ".claude/skills/cf-model-orchestrator/resources/quality/findings.md",
+                "Every blocker or major finding carries the smallest evidenced remedy",
+            ),
+            (
+                ".agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+                "Docs and records: two review rounds per submitted version",
+            ),
+            (
+                ".claude/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+                "An already approved departure is reused and not asked again.",
+            ),
+            (
+                ".claude/skills/cf-develop/SKILL.md",
+                "Maximum 2 evidence-moving cycles for code",
+            ),
+            (
+                ".claude/agents/cf-reviewer.md",
+                "remedy: <blocker and major",
+            ),
+            (".codeflow/rules/writing.md", "## Copy guide"),
+            (".codeflow/rules/writing.md", "### Microcopy"),
+        ] {
+            let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join(" ");
+            assert!(
+                words(&read(&root, rel)).contains(sentence),
+                "{tier}: {rel} lacks `{sentence}`"
+            );
+        }
+        let fresh = skill_tree_snapshot(&root);
+        let fresh_rules = (
+            read(&root, ".codeflow/rules/writing.md"),
+            read(&root, ".codeflow/rules/workflow-discipline.md"),
+            read(&root, ".claude/agents/cf-reviewer.md"),
+        );
+
+        // An existing project from before TSK-131: no findings section, the
+        // index without its row, the three-cycle bound, and the writing
+        // reference without the copy guide, each recorded as unmodified.
+        for tree in [".claude", ".agents"] {
+            let base = format!("{tree}/skills/cf-model-orchestrator/resources");
+            record_as_installed(&root, &format!("{base}/quality/findings.md"), None);
+            let index = read(&root, &format!("{base}/quality-contract.md"));
+            assert!(index.contains(FINDINGS_ROW), "{tier}: findings row");
+            record_as_installed(
+                &root,
+                &format!("{base}/quality-contract.md"),
+                Some(&index.replace(FINDINGS_ROW, "")),
+            );
+            let develop = format!("{tree}/skills/cf-develop/SKILL.md");
+            let older = read(&root, &develop).replace(
+                "Maximum 2 evidence-moving cycles for code",
+                "Maximum 3 evidence-moving cycles",
+            );
+            record_as_installed(&root, &develop, Some(&older));
+        }
+        let writing = read(&root, ".codeflow/rules/writing.md");
+        let (older, _) = writing.split_once("\n## Copy guide\n").expect("copy guide");
+        record_as_installed(&root, ".codeflow/rules/writing.md", Some(older));
+        assert!(!root
+            .join(".claude/skills/cf-model-orchestrator/resources/quality/findings.md")
+            .exists());
+
+        let update = codeflow(&root, &["update"]);
+        let report = output_text(&update);
+        assert!(update.status.success(), "{tier}: update failed: {report}");
+        assert!(!report.contains("CONFLICT"), "{tier}: {report}");
+        assert_eq!(
+            skill_tree_snapshot(&root),
+            fresh,
+            "{tier}: update left the skill trees different from a fresh scaffold"
+        );
+        assert_eq!(
+            (
+                read(&root, ".codeflow/rules/writing.md"),
+                read(&root, ".codeflow/rules/workflow-discipline.md"),
+                read(&root, ".claude/agents/cf-reviewer.md"),
+            ),
+            fresh_rules,
+            "{tier}: update did not bring the writing reference and reviewer"
+        );
+        let again = codeflow(&root, &["update"]);
+        let again_report = output_text(&again);
+        assert!(
+            again.status.success() && !again_report.contains("CONFLICT"),
+            "{tier}: second update was not clean: {again_report}"
+        );
+    }
+}

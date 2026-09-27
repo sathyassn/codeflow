@@ -39,7 +39,10 @@ documentation, repair and ship. Load only the stage owners the work needs.
   authority, and quality. Escalate only an external dependency or a choice
   that changes intent, public behavior, risk, authority, or an irreversible
   tradeoff; include evidence, attempts, real options, consequences, and a
-  recommendation. Honor a red check. An unfinished CI job is missing
+  recommendation. Before applying a change that newly departs from the
+  approved contract, scope, authority, or risk boundary, stop and surface it
+  in that form first; the dependent action waits while authorized independent
+  work continues. Honor a red check. An unfinished CI job is missing
   evidence, not a failed test; a completed same-check counts. Job redness is
   not an operator decision.
 - **Find broadly; act by materiality.** Do not let easy cosmetics displace
@@ -145,7 +148,9 @@ documentation, repair and ship. Load only the stage owners the work needs.
 - **Review verdicts need an independent pass.** Review verdicts require
   `cf-reviewer` in Claude Code or, elsewhere, a separate read-only qualified
   interactive pass, never headless, against criteria and evidence.
-  Self-review is not review.
+  Self-review is not review. Run one review round at a time with every
+  reviewer in parallel; a reviewer whose blocker or major finding was fixed
+  confirms it, and a fix for a minor finding needs no new round.
 
 ## Durations
 

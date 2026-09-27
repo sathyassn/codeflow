@@ -14,6 +14,16 @@ impediment before escalating it:
 - a choice that changes desired outcome, public contract, scope or authority,
   risk tolerance, or an irreversible tradeoff belongs to the operator.
 
+Before applying a change that newly departs from the approved contract, scope,
+authority or risk boundary (a public contract break, a moved security
+boundary, scope growth, an irreversible action), stop and surface it in the
+departure form: situation with evidence, the boundary crossed, options with
+cost and reversibility, and one recommendation. The dependent action waits for
+the answer while authorized independent work continues. An already approved
+departure is reused and not asked again. Compatibility is judged by the git
+rules' breaking-change rule and the cf-ship release-policy reference (affected
+consumers, migration or deprecation, mixed-version operation, recovery).
+
 Record the last failed attempt and what evidence changed. One bounded
 confirmation of a prior failure is allowed when current provenance or freshness
 materially matters; state that evidence question. If it reproduces the same

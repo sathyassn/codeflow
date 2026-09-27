@@ -1243,8 +1243,9 @@ const CONDITIONAL_READS: &[ConditionalRead] = &[
     conditional!(
         "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
         "agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
-        "| when a step is blocked, or a check or CI job is red or did not finish |",
-        "only when a step is blocked or a check is red or unfinished"
+        "| when a step is blocked or would depart from what was approved, or a check or CI job is red or did not finish |",
+        "only when a step is blocked or would depart from what was approved (TSK-131 \
+         added the departure rule), or a check is red or unfinished"
     ),
     conditional!(
         "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
@@ -1356,6 +1357,38 @@ const CONDITIONAL_READS: &[ConditionalRead] = &[
          process, and before publication",
         "only for a minor, major or disputed impact, release preparation, a missing \
          release process, or publication; every PR's impact rules sit in PR evidence"
+    ),
+    // TSK-131: the holistic-fix doctrine and the review rounds load when a
+    // defect is fixed or review findings are briefed, written or acted on.
+    conditional!(
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "| when a defect is fixed, or review findings are briefed, written or acted on |",
+        "only when a defect is fixed or review findings are briefed, written or acted on"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "When review findings are acted on",
+        "only when review findings are acted on"
+    ),
+    conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "Any confirmed issue returns to its responsible primary",
+        "only when review confirms an issue"
+    ),
+    conditional!(
+        "agents/skills/cf-develop/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "On `changes_requested`",
+        "only when a review returns changes requested"
+    ),
+    conditional!(
+        "agents/skills/cf-develop/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "When the change fixes a defect",
+        "only when the change fixes a defect"
     ),
 ];
 
@@ -1689,5 +1722,63 @@ fn reading_chain_rejects_a_reclassified_trigger() {
             .iter()
             .any(|e| e.contains("release-policy.md without a reviewed trigger")),
         "{errors:?}"
+    );
+}
+
+/// TSK-131 AC-4: the findings section is a conditional read. Turning its
+/// index row, or cf-develop's pointer, into an every-task read fails until
+/// the trigger is reviewed, and reading it on every task breaks the cap.
+#[test]
+fn reading_chain_keeps_the_findings_section_conditional() {
+    let base = skill_trees();
+    let mut files = base.clone();
+    let index = files
+        .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
+        .expect("quality index");
+    *index = index.replace(
+        "| when a defect is fixed, or review findings are briefed, written or acted on |",
+        "| every task |",
+    );
+    let errors = reading_chain(&files)
+        .err()
+        .expect("an every-task findings row must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("quality/findings.md without a reviewed trigger")),
+        "{errors:?}"
+    );
+
+    let mut files = base;
+    let develop = files
+        .get_mut("agents/skills/cf-develop/SKILL.md")
+        .expect("cf-develop");
+    *develop = develop.replace("On `changes_requested`, act", "Always act");
+    let errors = reading_chain(&files)
+        .err()
+        .expect("an unconditional cf-develop pointer must fail");
+    assert!(
+        errors
+            .iter()
+            .any(|e| e.contains("quality/findings.md without a reviewed trigger")),
+        "{errors:?}"
+    );
+
+    // Read on every task, the section would put the chain over its cap.
+    let files = skill_trees();
+    let chain = reading_chain(&files).unwrap_or_else(|errors| panic!("{}", errors.join("\n")));
+    assert!(
+        !chain
+            .files
+            .iter()
+            .any(|(_, path, _)| path.ends_with("quality/findings.md")),
+        "the findings section must stay outside the per-task chain"
+    );
+    let findings =
+        authored_bytes(files[&format!("{ORCH}/resources/quality/findings.md")].as_bytes()).len();
+    assert!(
+        chain.total + findings > READING_CHAIN_CAP_BYTES,
+        "chain {} plus findings {findings} should exceed the cap",
+        chain.total
     );
 }

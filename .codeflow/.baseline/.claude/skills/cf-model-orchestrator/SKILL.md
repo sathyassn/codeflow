@@ -33,7 +33,7 @@ test strength, read
 [resources/verification-selection.md](resources/verification-selection.md).
 For a new or materially reshaped user-facing surface, load `cf-design` before
 settling Plan vN; a bounded change may record its explicit `conform` or `N/A`
-path instead. Staged routes keep startup concise.
+path instead.
 
 ## Outcome modes
 
@@ -114,12 +114,11 @@ implementation stage for an analysis-only request.
   harness with its configured tools and MCP servers. Never use `codex exec`,
   `claude -p` / `--print`, `grok -p` / `--single`, or another headless peer
   invocation.
-- **Bounded, evidence-moving loops.** Plan reconciliation and post-review
-  rework are each bounded to at most two rounds. A repeated attempt without a
-  new hypothesis or changed evidence is not another round. At the bound,
-  diagnose the persistent constraint and either take an
-  approved-outcome-preserving strategic route with fresh evidence or surface a
-  genuine external/owner block. A deterministic or safety gate is fixed or
+- **Bounded, evidence-moving loops.** Plan reconciliation is bounded to at
+  most two rounds. When review findings are acted on, a round runs every
+  reviewer in parallel and [findings](resources/quality/findings.md) bounds
+  rounds by change class. A repeat without a new hypothesis or changed
+  evidence is not another round. A deterministic or safety gate is fixed or
   honored; its redness alone neither authorizes bypass nor makes the operator
   choose an implementation tactic.
 - **Bounded parallelism.** Parallelize independent discovery and implementation
@@ -319,8 +318,8 @@ coverage.
 A Codex host runs this test-running review as [Codex host](references/codex-host.md)
 sets out.
 
-Any confirmed issue returns to its responsible primary and designated executor.
-Rework is bounded to two rounds and requires fresh evidence. A deterministic
+Any confirmed issue returns to its responsible primary and designated executor
+within the [findings](resources/quality/findings.md) round bounds. A deterministic
 failure or unverified criterion blocks
 completion. If the selected Claude judgment primary is unavailable, record the
 fallback and reduced assurance;
