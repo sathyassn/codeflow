@@ -140,8 +140,9 @@ pub fn set_status(
     let after = RecordView::parse(kind, &record.path, &proposed)
         .map_err(|problem| VerbError::Refused(vec![problem]))?;
     let baseline = Baseline::load(repo_root);
-    if let Some(error) = baseline.error() {
-        return Err(VerbError::Refused(vec![error]));
+    let refused = baseline.errors();
+    if !refused.is_empty() {
+        return Err(VerbError::Refused(refused));
     }
     let (base, paths) = working_context(repo_root);
     let verdict = judge_change(

@@ -1530,8 +1530,6 @@ fn a_base_older_than_the_baseline_judges_records_from_the_baseline() {
     );
     repo.write(SPC_1, &spec("SPC-001", "approved", ""));
     let baseline = repo.commit("records under the old rules");
-    let _origin = repo.origin();
-    repo.push("integration/EPC-001-line");
     repo.git(&["switch", "-q", "-c", "integration/release"]);
     repo.set_baseline(&baseline);
     repo.commit("record the baseline");
@@ -1598,8 +1596,6 @@ fn a_spec_approved_at_the_baseline_passes_in_a_code_range() {
     repo.commit("draft");
     repo.write(SPC_1, &spec("SPC-001", "approved", ""));
     let baseline = repo.commit("approved in a planning change");
-    let _origin = repo.origin();
-    repo.push("main");
     repo.git(&["switch", "-q", "-c", "feat/code"]);
     repo.set_baseline(&baseline);
     repo.write("src/lib.rs", "// code\n");
@@ -1639,10 +1635,7 @@ fn a_baseline_that_is_not_an_ancestor_is_refused() {
     repo.git(&["switch", "-q", "main"]);
     repo.set_baseline(&side);
     repo.commit("point the baseline elsewhere");
-    assert!(matches!(
-        Baseline::load(repo.root()),
-        Baseline::NotAncestor(_)
-    ));
+    assert!(matches!(Baseline::load(repo.root()), Baseline::Refused(_)));
     let needle = "is not an ancestor of the commit being judged";
     let range = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
     assert!(range.errors.iter().any(|e| e.contains(needle)), "{range:?}");
@@ -1677,8 +1670,6 @@ fn two_merged_lines_are_each_judged_from_their_own_baseline() {
     let repo = Repo::new();
     repo.write("src/lib.rs", "// old main\n");
     let base = repo.commit("old main");
-    let _origin = repo.origin();
-    repo.push("main");
 
     repo.git(&["switch", "-q", "-c", "integration/EPC-001-a"]);
     repo.write(EPIC_PATH, &epic("in_progress", "", "- [x] AC-1 legacy"));
@@ -1691,7 +1682,6 @@ fn two_merged_lines_are_each_judged_from_their_own_baseline() {
         &task("TSK-004", "todo", "- [ ] AC-1 checkbox", "Pending."),
     );
     let line_a = repo.commit("line a records");
-    repo.push("integration/EPC-001-a");
 
     repo.git(&["switch", "-q", "-c", "integration/EPC-002-b", &base]);
     repo.write(
@@ -1702,7 +1692,6 @@ fn two_merged_lines_are_each_judged_from_their_own_baseline() {
         ),
     );
     let line_b = repo.commit("line b records");
-    repo.push("integration/EPC-002-b");
 
     repo.git(&["switch", "-q", "-c", "integration/release", &base]);
     repo.git(&[
@@ -1752,7 +1741,7 @@ fn two_merged_lines_are_each_judged_from_their_own_baseline() {
         verdict
             .notices
             .iter()
-            .any(|n| n.contains("moves work_records_baseline")),
+            .any(|n| n.contains("introduces work_records_baseline")),
         "{verdict:?}"
     );
 
@@ -1766,22 +1755,20 @@ fn two_merged_lines_are_each_judged_from_their_own_baseline() {
     );
 }
 
-/// A baseline entry the range adds must be landed history; the range's own
-/// commit is refused even when its own branch is pushed as an integration
-/// branch, and the base itself counts.
+/// When the target already records a baseline, its list is the one that
+/// exempts records: a change cannot exempt its own commit, whatever
+/// branches that commit is pushed to, and the edit is only a notice until
+/// it lands (BL-1).
 #[test]
-fn an_added_baseline_that_is_the_changes_own_commit_is_refused() {
+fn a_change_cannot_exempt_its_own_commit_once_the_target_has_a_baseline() {
     let repo = Repo::new();
     repo.write(
         TASK_PATH,
-        &task(
-            "TSK-001",
-            "todo",
-            "- AC-1 When x, the system shall y.",
-            "Pending.",
-        ),
+        &task("TSK-001", "todo", "- [ ] legacy", "Pending."),
     );
-    let base = repo.commit("records");
+    let legacy = repo.commit("records");
+    repo.set_baseline(&legacy);
+    repo.commit("record the baseline");
     let _origin = repo.origin();
     repo.push("main");
     repo.git(&["switch", "-q", "-c", "integration/EPC-009-self"]);
@@ -1790,32 +1777,211 @@ fn an_added_baseline_that_is_the_changes_own_commit_is_refused() {
         &task("TSK-002", "complete", "- [x] first", "No block."),
     );
     let own = repo.commit("a record the change wants exempt");
-    repo.set_baseline(&own);
+    repo.set_baselines(&[&legacy, &own]);
     repo.commit("exempt it");
     repo.push("integration/EPC-009-self");
+    // The same history under a sibling integration name.
+    repo.git(&["push", "-q", "origin", "HEAD:integration/EPC-010-sibling"]);
+    repo.git(&["fetch", "-q", "origin"]);
 
-    let needle = "is not landed history";
-    let range = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
-    assert!(range.errors.iter().any(|e| e.contains(needle)), "{range:?}");
-    let ci = judge_pull_request(
-        repo.root(),
-        "main",
-        "HEAD",
-        Some("integration/EPC-009-self"),
-    )
-    .unwrap();
-    assert!(ci.errors.iter().any(|e| e.contains(needle)), "{ci:?}");
+    let refused = |verdict: &Verdict| {
+        verdict
+            .errors
+            .iter()
+            .any(|e| e.contains("TSK-002.md") && e.contains("needs an acceptance block"))
+    };
+    let ci = judge_pull_request(repo.root(), "main", "HEAD").unwrap();
+    assert!(refused(&ci), "{ci:?}");
     assert!(
-        ci.notices.iter().any(|n| n.contains(&own)),
-        "the change is reported: {ci:?}"
+        ci.notices
+            .iter()
+            .any(|n| n.contains(&format!("added {own}")) && n.contains("after it lands")),
+        "{ci:?}"
+    );
+    assert!(!ci.errors.iter().any(|e| e.contains("TSK-001")), "{ci:?}");
+    let since = judge_range(repo.root(), "main", None).unwrap();
+    assert!(refused(&since), "{since:?}");
+
+    // Once landed, the next change is judged by the new list.
+    repo.git(&["switch", "-q", "main"]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "land",
+        "integration/EPC-009-self",
+    ]);
+    repo.git(&["switch", "-q", "-c", "feat/after"]);
+    repo.write("notes.txt", "later\n");
+    repo.commit("later work");
+    let later = judge_pull_request(repo.root(), "main", "HEAD").unwrap();
+    assert!(later.is_clean() && later.notices.is_empty(), "{later:?}");
+}
+
+/// Entries are full commit ids read as object ids: a ref, tag, expression or
+/// abbreviation is refused by name, so a snapshot cannot move while the
+/// config stays the same (BL-2).
+#[test]
+fn baseline_entries_must_be_full_commit_ids() {
+    let repo = Repo::new();
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", "- [ ] legacy", "Pending."),
+    );
+    let base = repo.commit("records");
+    repo.git(&["tag", "v1"]);
+    let short = base[..9].to_string();
+    let upper = base.to_uppercase();
+    for entry in ["HEAD", "HEAD~1", "v1", short.as_str(), upper.as_str()] {
+        repo.set_baseline(entry);
+        let needle = format!("entry `{entry}` is not a full 40-character");
+        let tree = validate_lifecycle(repo.root());
+        assert!(
+            tree.errors.iter().any(|e| e.contains(&needle)),
+            "{entry}: {tree:?}"
+        );
+        assert!(
+            tree.errors.iter().any(|e| e.contains("without a checkbox")),
+            "a refused entry exempts nothing: {tree:?}"
+        );
+        let range = judge_range(repo.root(), &base, None).unwrap();
+        assert!(
+            range.errors.iter().any(|e| e.contains(&needle)),
+            "{entry}: {range:?}"
+        );
+    }
+
+    // A moved tag changes nothing: it was never accepted.
+    repo.write("notes.txt", "x\n");
+    repo.commit("move on");
+    repo.git(&["tag", "-f", "v1"]);
+    repo.set_baseline("v1");
+    assert!(matches!(Baseline::load(repo.root()), Baseline::Refused(_)));
+
+    // Control: the full id is accepted.
+    repo.set_baseline(&base);
+    assert!(validate_lifecycle(repo.root()).is_clean());
+}
+
+/// A ref whose name is another commit's id does not redirect an entry: the
+/// entry resolves to its own object (BL-2, short-sha shadow).
+#[test]
+fn a_ref_named_like_a_commit_id_does_not_shadow_the_entry() {
+    let repo = Repo::new();
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", "- [ ] legacy", "Pending."),
+    );
+    let legacy = repo.commit("records");
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", "- [ ] shadow", "Pending."),
+    );
+    let shadow = repo.commit("a different snapshot");
+    repo.git(&["tag", &legacy[..7], &shadow]);
+    repo.git(&["update-ref", &format!("refs/tags/{legacy}"), &shadow]);
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", "- [ ] legacy", "Pending."),
+    );
+    repo.set_baseline(&legacy);
+    let tree = validate_lifecycle(repo.root());
+    assert!(tree.is_clean(), "the entry is the legacy commit: {tree:?}");
+    repo.set_baseline(&legacy[..7]);
+    assert!(matches!(Baseline::load(repo.root()), Baseline::Refused(_)));
+}
+
+/// List order carries no meaning: of ancestor-related snapshots holding a
+/// record, only the latest counts, so reversing the list keeps a
+/// `cancelled -> todo` refusal (BL-3).
+#[test]
+fn baseline_order_does_not_change_the_verdict() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", "// old main\n");
+    let base = repo.commit("old main");
+    repo.git(&["switch", "-q", "-c", "integration/EPC-001-line"]);
+    repo.write(EPIC_PATH, &epic("in_progress", "", "- [x] AC-1 legacy"));
+    repo.write(TASK_PATH, &task("TSK-001", "todo", "- [ ] first", "Open."));
+    let older = repo.commit("todo snapshot");
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "cancelled", "- [ ] first", "Dropped."),
+    );
+    let newer = repo.commit("cancelled snapshot");
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", "- [ ] first", "Revived with new prose."),
+    );
+    let refused = "status cancelled -> todo is refused";
+    let mut trees = Vec::new();
+    for list in [[&older, &newer], [&newer, &older]] {
+        repo.set_baselines(&[list[0], list[1]]);
+        let range = judge_range(repo.root(), &base, None).unwrap();
+        assert!(
+            range.errors.iter().any(|e| e.contains(refused)),
+            "{list:?}: {range:?}"
+        );
+        trees.push(format!("{:?}", validate_lifecycle(repo.root())));
+    }
+    assert_eq!(trees[0], trees[1]);
+
+    // A record equal to any listed copy stays legacy.
+    repo.write(TASK_PATH, &task("TSK-001", "todo", "- [ ] first", "Open."));
+    for list in [[&older, &newer], [&newer, &older]] {
+        repo.set_baselines(&[list[0], list[1]]);
+        let range = judge_range(repo.root(), &base, None).unwrap();
+        assert!(range.is_clean(), "{list:?}: {range:?}");
+    }
+}
+
+/// A change whose target has no baseline introduces the migration: the
+/// head's list governs, and every entry is named for the human reviewer.
+#[test]
+fn a_change_that_introduces_the_baseline_is_judged_by_its_own_list() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", "// old main\n");
+    repo.commit("old main");
+    repo.git(&["switch", "-q", "-c", "integration/EPC-001-a"]);
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "complete", "- [x] first", "Done on line a."),
+    );
+    let line_a = repo.commit("line a records");
+    repo.git(&["switch", "-q", "-c", "integration/EPC-002-b", "main"]);
+    repo.write(EPIC_PATH, &epic("in_progress", "", "- [x] AC-1 legacy"));
+    let line_b = repo.commit("line b records");
+    repo.git(&["switch", "-q", "-c", "release", "main"]);
+    repo.git(&["merge", "-q", "--no-ff", "-m", "a", "integration/EPC-001-a"]);
+    repo.git(&["merge", "-q", "--no-ff", "-m", "b", "integration/EPC-002-b"]);
+    repo.set_baselines(&[&line_b, &line_a]);
+    repo.commit("introduce the baseline");
+
+    let ci = judge_pull_request(repo.root(), "main", "HEAD").unwrap();
+    assert!(ci.errors.is_empty(), "{ci:?}");
+    let notice = ci
+        .notices
+        .iter()
+        .find(|n| n.contains("introduces work_records_baseline"))
+        .unwrap_or_else(|| panic!("{ci:?}"));
+    assert!(
+        notice.contains(&line_a) && notice.contains(&line_b),
+        "{notice}"
     );
 
-    // Control: the range's base is landed history.
-    repo.set_baseline(&base);
-    let landed = judge_range(repo.root(), &base, None).unwrap();
+    // An entry outside the head's history is refused.
+    repo.git(&["switch", "-q", "-c", "stray", "main"]);
+    repo.write("elsewhere.txt", "x\n");
+    let stray = repo.commit("not in the release");
+    repo.git(&["switch", "-q", "release"]);
+    repo.set_baselines(&[&line_a, &line_b, &stray]);
+    repo.commit("add a stray entry");
+    let ci = judge_pull_request(repo.root(), "main", "HEAD").unwrap();
     assert!(
-        !landed.errors.iter().any(|e| e.contains(needle)),
-        "{landed:?}"
+        ci.errors
+            .iter()
+            .any(|e| e.contains(&stray) && e.contains("not an ancestor")),
+        "{ci:?}"
     );
 }
 
