@@ -1313,7 +1313,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "77a83676f9c3cf8af6908cf03479630df5b9ff7e345aaed1f42311b6e1457906",
+      "sha256": "896ebd4cd34862486692ae6a49f6da7ffb1dd757e33fc5c3e75c63875377905e",
       "exec": false
     },
     "CLAUDE.md": {

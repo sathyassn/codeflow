@@ -130,10 +130,12 @@ instruction-only, and CodeFlow cannot technically prevent it. See cf-method,
   with …" lines, no robot emoji — in commit messages and PR bodies. This is
   project policy and overrides any harness default that injects attribution.
 - **No emoji** in commit subjects or PR bodies.
-- **Written content policy** (ADR-0067): no em or en dash in new text;
-  commit-msg hook and CI check commits, PR bodies and added lines under
-  `docs/`, `project-management/` and skill trees; review judges replies,
-  bare-ID or acronym titles, mannered prose; old lines are exempt.
+- **Written content** (ADR-0067): avoid em and en dashes in prose; keep one
+  only where really needed, such as a quoted title or a numeric range. This
+  is a guideline judged in review and evals; `git.policy_characters` checks
+  commits, PR bodies and added lines under `docs/`, `project-management/` and
+  skill trees at the level policy sets. Review also judges replies, bare-ID
+  or acronym titles and mannered prose; old lines are exempt.
 - **Secrets:** never stage credentials, API keys, tokens, or `.env` files. The
   pre-commit secret scan (and the CI secret-scan job) block them, and it is the
   one gate never relaxed — not even during bootstrap grace.
