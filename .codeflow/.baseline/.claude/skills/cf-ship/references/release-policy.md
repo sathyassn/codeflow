@@ -73,7 +73,7 @@ custom release framework; prose alone is not enforcement.
 ## Keep pending metadata in the work PR
 
 For the same-PR starter, calculate the next pending version from the **verified
-last published version** and highest remaining reviewed pending impact—not the
+last published version** and highest remaining reviewed pending impact, not the
 previous source version or PR count. From published `1.4.0`, two pending fixes
 still target `1.4.1`; adding a compatible feature targets `1.5.0`; another fix
 keeps `1.5.0`. Once `1.5.0` is actually published, the next fix targets `1.5.1`.

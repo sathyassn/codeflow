@@ -3,7 +3,7 @@ name: cf-model-orchestrator
 description: Coordinate the default Claude+Codex pair for every non-trivial repository task from Claude Code, Codex, or Grok Build. Both families independently research, analyze, and plan; Claude owns design and integrated judgment; the host assigns capable production and author-relative cross-lineage review and reconciles versioned approval with native evidence. Use for material research, planning, design, implementation, review, security, documentation, or verification. Requires native interactive sessions and degrades legibly when a seat is unavailable; never uses headless model execution.
 ---
 
-# cf-model-orchestrator — host-neutral development duo
+# cf-model-orchestrator: host-neutral development duo
 
 Use the duo for every non-trivial repository task. Harness choice changes
 transport/coordinator, not duties or quality. One obvious local edit needs no
@@ -30,7 +30,7 @@ If `.codeflow/model-selection.json` contains project overrides, run
 role bindings it reports. An absent or empty file keeps the managed defaults;
 an invalid or drifted active selection blocks preflight without partial
 application or silent fallback. The project file may reference binding IDs
-only—it never owns raw selectors, worker routes, or commands.
+only; it never owns raw selectors, worker routes, or commands.
 Harness adapters are not alternate sources of truth.
 For a multi-task plan or a possible dependency/decision change, also read
 [resources/task-graph.md](resources/task-graph.md). When choosing or reviewing
@@ -71,7 +71,7 @@ implementation stage for an analysis-only request.
   fixtures; scoped-qualified routes run evidenced tuples without direction/
   fidelity authority. Use recorded same-Claude fallback after preflight.
   Another family designs only with an explicit task-specific operator override
-  recorded in Plan vN—Claude absence is not one. Codex challenges
+  recorded in Plan vN; Claude absence is not one. Codex challenges
   feasibility, operability, security, proportionality, and implementation.
 - **Host routes execution.** Once both approve the same versioned plan, the host
   records responsible primary, actual execution mode/route, and cross-lineage
@@ -113,10 +113,10 @@ implementation stage for an analysis-only request.
   cross half. A relay is transport, not author; same-lineage
   worker output remains same-lineage, and vendor self-simulation is
   fabrication. Every delegated exchange meets the `cf-delegate` five-obligation
-  evidence contract — launch, provenance, return, failure, recheck: verify the
+  evidence contract (launch, provenance, return, failure, recheck): verify the
   launch; on return verify native provenance plus the scoped diff and cited
   evidence (a relay's idle or completion signal is evidence of neither); keep
-  the evidence recheckable through the native surface — the resumable Codex
+  the evidence recheckable through the native surface: the resumable Codex
   thread ID forward, the durable lifecycle records reverse. Record model and
   effort as observed only when the transport exposes actual values, otherwise
   as requested, and grade inferred completion explicitly as inferred.
@@ -233,7 +233,7 @@ produces design.
    lint, test, coverage, dependency, and security tools; Playwright/browser for
    web UI; Computer Use or a surface driver for native/mobile/desktop UI; and
    any design, issue-tracker, database, cloud, or private-doc MCP the task needs.
-   Authenticated tools use their broker/OAuth/keychain/credential-mask path—raw
+   Authenticated tools use their broker/OAuth/keychain/credential-mask path; raw
    tokens never enter prompts, logs, repository files, or arbitrary commands.
 6. Record models, effort/escalation, permissions, tools, live canaries, and
    actual versions. Usage evidence carries source/time, harness/account/bucket
@@ -246,7 +246,7 @@ Preflight solo `/cf-develop` requires exhausted qualified `cf-delegate` routes,
 recorded missing seat/reduced assurance, and fresh-context independent review:
 `cf-reviewer` when available, else a separate read-only pass; self-review is not
 review. Auth failure stops; a mid-run failure gets bounded retry/diagnosis, then
-human escalation—never a silent downgrade.
+human escalation, never a silent downgrade.
 
 ## Workflow
 
@@ -313,7 +313,7 @@ Multi-task plans use the node/edge notation and mutation boundary in
 dependencies. A single obvious task uses the resource's explicit N/A path.
 The test plan applies `resources/verification-selection.md` and names the
 trigger evidence for any property/generative, mutation, or architecture
-fitness check—or records `none selected`.
+fitness check, or records `none selected`.
 
 Claude reviews design fidelity; Codex reviews executability. Both approve tasks
 and assignments. A responsible-primary/reviewer seat or lineage change creates
@@ -379,9 +379,9 @@ units; its qualified native fallback follows `cf-delegate`:
 Apply the same explicit selector and effort selection to every plugin task
 that starts a primary Codex reasoning turn. Every plugin exchange must yield a
 native Codex thread ID, recheckable through the plugin or the native Codex
-surface — a generic Claude subagent or an unverified relay never counts as
+surface; a generic Claude subagent or an unverified relay never counts as
 Codex. Record model and effort as observed only when the transport exposes the
-actual values; otherwise label them requested — a project-level high default is
+actual values; otherwise label them requested: a project-level high default is
 a fallback, not evidence that the requested turn used it, and requested is
 never silently upgraded to observed.
 
@@ -410,8 +410,8 @@ For research/analysis/plan modes, Claude instead final-reviews the settled
 artifact and its source/evidence coverage.
 
 From a Codex host, this test-running review uses a separate interactive Claude
-session in auto mode under the same fail-closed sandbox—not plan or bypass
-mode—so Bash/UI verification can proceed without an unattended permission
+session in auto mode under the same fail-closed sandbox (not plan or bypass
+mode) so Bash/UI verification can proceed without an unattended permission
 stall. Keep shell classification enabled, grant only the scoped test and
 inspection actions, explicitly prohibit source edits, and require the worktree
 diff to remain unchanged after review. This is verification authority, not an
@@ -448,8 +448,8 @@ Both seats approve the final diff and evidence ledger. The host reports:
 - exact test, coverage, security, and UI results;
 - any explicit N/A with reason;
 - residual risks or unresolved assumptions;
-- the deferral batch outcome—fix now, one durable home plus event trigger, drop,
-  or `none`—and both primary-seat dispositions or the recorded degradation;
+- the deferral batch outcome (fix now, one durable home plus event trigger, drop,
+  or `none`) and both primary-seat dispositions or the recorded degradation;
 - the interactive transport used and session/canary evidence.
 
 Only an implementation or repository-editing documentation run hands off to

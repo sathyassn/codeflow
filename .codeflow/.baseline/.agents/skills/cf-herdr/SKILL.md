@@ -3,7 +3,7 @@ name: cf-herdr
 description: Host CodeFlow consults and delegates in Herdr tabs without hijacking existing panes. Use when HERDR_ENV=1 and starting, resuming, or closing Claude, Codex, or another coding agent for a dual-lineage review, consult, or delegate TTY. Use for Herdr workspaces, tabs, panes, agent names, follow-up on the same tab, and cleanup of self-created tabs. Do not use from outside Herdr; do not treat Herdr idle/done as turn completion; do not split the caller pane by default.
 ---
 
-# cf-herdr — Herdr-primary TTY for CodeFlow seats
+# cf-herdr: Herdr-primary TTY for CodeFlow seats
 
 Herdr is the **visible terminal host** when this agent runs inside it. Official
 Herdr CLI syntax is the authority (`herdr --help`; group help without a

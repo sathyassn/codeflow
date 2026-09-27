@@ -67,7 +67,7 @@ Before authoring, state the question the richer surface must answer better than
 ordinary chat and choose one primary carrier for it. A successful first view
 lets the reader perceive the governing relationship before reading supporting
 paragraphs. A sequence of headings, prose, status pills, and text cards is still
-an illustrated document—not a visual explanation—when their geometry encodes
+an illustrated document, not a visual explanation, when their geometry encodes
 nothing. Use figures, trees, tables, diffs, media, or a justified bounded HTML
 composition only when their position, connection, scale, state, or actual image
 carries meaning. If removing the sentences leaves no useful relationship, the

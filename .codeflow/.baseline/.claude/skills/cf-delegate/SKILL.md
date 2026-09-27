@@ -3,7 +3,7 @@ name: cf-delegate
 description: Delegate to the other vendor's native coding harness under its own subscription auth, with qualified transport, lifecycle evidence and scoped edit access. Use for a specialty pass or genuinely parallel edit handoff. Use cf-consult for a read-only second opinion.
 ---
 
-# cf-delegate — cross-vendor consult and delegate
+# cf-delegate: cross-vendor consult and delegate
 
 Compose native harnesses at the process boundary, each under its own subscription
 auth. CodeFlow's gates judge the output, not the author. You own and verify
@@ -11,7 +11,7 @@ every returned result.
 
 The delegate is a vendor you are **not**: from Claude Code that is codex; from
 codex that is claude. Consulting or delegating to your own vendor is
-self-review with extra steps — never label it independent.
+self-review with extra steps; never label it independent.
 
 ## Consult, delegate, or neither
 
@@ -29,7 +29,7 @@ choose the authority this assignment needs:
 When uncertain about edit authority, consult first; never turn a read-only
 assignment into an implicit write grant.
 
-## Transport — preferred lanes, qualified native fallback
+## Transport: preferred lanes, qualified native fallback
 
 ```text
 Claude Code ──official plugin (preferred) or qualified native client──▶ codex
@@ -37,7 +37,7 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
 ```
 
 - **Claude Code → codex: prefer the official `codex-plugin-cc` plugin.** It
-  wraps the codex app-server — the same interactive engine as the TUI — so a
+  wraps the codex app-server (the same interactive engine as the TUI), so a
   delegated task gets codex's full MCP toolset (Playwright verified with 24
   browser tools on codex-cli 0.144.1, 2026-07-11), a resumable thread, and
   in-band approvals. When unavailable or incompatible, use a qualified official
@@ -52,14 +52,14 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
   must be verified with a scoped TTY canary; verify the full lifecycle round
   trip on install and whenever the Claude CLI or hook configuration changes.
 
-**Prohibited at all times** — no exceptions, including batch/pipeline stages:
+**Prohibited at all times**, no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /
 `--print`), and driving the codex app-server through hand-rolled JSON-RPC.
 CodeFlow requires verified native sessions with the task's tools and guards;
 it does not infer those capabilities from a process label or terminal host.
 Use vendor-supported clients instead of maintaining a competing broker.
-Status commands are not work sessions
-— `codex login status`, `codex --version`, `codex mcp list`, and the plugin
+Status commands are not work sessions:
+`codex login status`, `codex --version`, `codex mcp list`, and the plugin
 install/setup steps stay fine.
 
 For an incompatible or unavailable preferred lane, read
@@ -67,7 +67,7 @@ For an incompatible or unavailable preferred lane, read
 another client. It preserves all five evidence obligations and the effective
 safety boundary; it is not permission to route around a security denial.
 
-## Preflight — is the delegate even available
+## Preflight: is the delegate even available
 
 Check the preferred lane, then any qualified native fallback. Additional edit
 handoffs are optional; the orchestrator's required independent review is not.
@@ -76,7 +76,7 @@ handoffs are optional; the orchestrator's required independent review is not.
   respond; install once from a Claude Code session: `/plugin marketplace add
   openai/codex-plugin-cc` → `/plugin install codex@openai-codex` →
   `/reload-plugins` → `/codex:setup`) and codex is authenticated
-  (`codex login status` — exit 0 + "Logged in using ChatGPT"; the same signal
+  (`codex login status`: exit 0 + "Logged in using ChatGPT"; the same signal
   `codeflow doctor` reports as the `delegates` check).
 - **From codex:** `claude` on PATH, `claude mcp list` succeeds, and a short
   interactive TTY canary gets an authenticated response. When `HERDR_ENV=1`,
@@ -90,19 +90,19 @@ If no qualified native route remains, record the unavailable seat and reduced
 assurance; never silently substitute your own vendor or claim duo completion.
 A missing CLI alone does not rule out a qualified App route. If a route is present
 but unauthenticated (or 401s mid-run), stop and tell the user to run
-`codex login` (or log in to `claude`) — **never automate the auth**. One
+`codex login` (or log in to `claude`); **never automate the auth**. One
 vendor account per side, the user's own.
 
-## Lane 1 — from Claude Code, through the plugin
+## Lane 1: from Claude Code, through the plugin
 
 The plugin's commands cover both modes:
 
-- **Consult (read-only):** `/codex:review` and `/codex:adversarial-review` —
+- **Consult (read-only):** `/codex:review` and `/codex:adversarial-review`:
   the design/diff read and the cross-vendor security red-team.
-- **Delegate (write-enabled):** `/codex:rescue` — delegated execution and
+- **Delegate (write-enabled):** `/codex:rescue`: delegated execution and
   first-round testing; flags: `--background`/`--wait`, `--resume`/`--fresh`,
   `--model`, `--effort`.
-- **Multi-round:** `/codex:transfer` — a persistent codex thread for the
+- **Multi-round:** `/codex:transfer`: a persistent codex thread for the
   back-and-forth; follow-ups resume it instead of starting fresh.
 
 Collect peer in-turn via public foreground/qualified native fallback; no host
@@ -141,16 +141,16 @@ plugin exchange must yield the native thread ID, recheckable afterward
 through the plugin or the native Codex surface. A generic Claude subagent, an
 unverified relay, or any surface that cannot show that thread never counts as
 Codex. Record model and effort as *observed* only when the transport exposes
-the actual values; otherwise record them as *requested* — never silently
+the actual values; otherwise record them as *requested*; never silently
 upgrade requested to observed. When completion is inferred from thread state
 rather than an explicit result, grade it explicitly as inferred and verify it
 through the thread before relying on it.
 
 Ask every consult for a closing `VERDICT: approved|changes_requested` line so
-the reply is checkable, and branch on it — then re-derive the findings
+the reply is checkable, and branch on it, then re-derive the findings
 yourself (see Guardrails).
 
-## Lane 2 — from codex, the durable lifecycle over the interactive claude CLI
+## Lane 2: from codex, the durable lifecycle over the interactive claude CLI
 
 CodeFlow's schema-v2 lifecycle proves what a terminal signal alone cannot:
 the session started cleanly, the delivered prompt was accepted as the armed
@@ -191,12 +191,12 @@ completion signal.
   deliver that same file exactly
   (buffer paste, a bounded 300 ms input-settle, then one separate Enter);
   acceptance and terminal records bind
-  session and `prompt_id`. Waits are bounded with stable exit states —
+  session and `prompt_id`. Waits are bounded with stable exit states:
   `0` observed (a completed terminal prints the result JSON), `10` failed
   terminal, `11` poison/unsafe, `124` timeout, `130` interrupt. Restarts,
   mis-correlated events, and interrupted waits after acceptance poison the
   run; recovery is a new run id in a fresh state directory. Turns are
-  sequential — one outstanding armed turn per run; arm a new id in the same
+  sequential: one outstanding armed turn per run; arm a new id in the same
   session after each terminal result. Use the shipped
   [turn lifecycle adapter](resources/claude-turn-completion.md) for exact
   mechanics; never improvise a parser, scrape transcripts, or use pane
@@ -253,7 +253,7 @@ completion signal.
   questions are handled in the same dedicated session. They never authorize a
   write silently, and a visible dialog never substitutes for the terminal
   lifecycle result.
-- **Follow-ups:** the session keeps its context — arm the next turn and
+- **Follow-ups:** the session keeps its context; arm the next turn and
   deliver to the same pane.
 - **Cleanup:** after harvesting the bounded result and the evidence
   verification needs, kill the task session and remove the state directory
@@ -263,10 +263,10 @@ completion signal.
   release; the two hook modes are mutually exclusive and never fall back to
   one another. New work always uses the lifecycle.
 
-## Evidence contract — five obligations, both lanes
+## Evidence contract: five obligations, both lanes
 
-The two adapters stay distinct — the plugin lane is vendor-owned forward
-transport; the lifecycle lane is CodeFlow-owned reverse protocol — but every
+The two adapters stay distinct (the plugin lane is vendor-owned forward
+transport; the lifecycle lane is CodeFlow-owned reverse protocol), but every
 delegated exchange meets the same five obligations:
 
 1. **Launch.** Verify the delegated session actually started: `wait --until
@@ -277,29 +277,29 @@ delegated exchange meets the same five obligations:
    lane; the native Codex thread ID plus model/effort labeled by source
    (`observed` when exposed, otherwise `requested`) on the forward lane. A
    relay is transport, not author.
-3. **Return.** Verify the returned work itself — the bounded terminal message
+3. **Return.** Verify the returned work itself: the bounded terminal message
    or thread result, the scoped worktree diff, and the cited evidence,
    re-derived by you.
 4. **Failure.** Failure is legible and bounded: stable exit states, durable
    poison, or an explicit plugin/harness error, then one bounded retry with
-   diagnosis — never silent substitution, never completion inferred from
+   diagnosis; never silent substitution, never completion inferred from
    silence.
 5. **Recheck.** Evidence stays recheckable after the fact: durable state
    records until cleanup on the reverse lane; the resumable native thread on
    the forward lane. Record model/effort as observed only when the transport
-   exposes actual values, otherwise as requested — never silently upgrade —
+   exposes actual values, otherwise as requested (never silently upgrade),
    and grade inferred completion explicitly as inferred.
 
 ## Edit-access doctrine (delegate tier)
 
-A delegate that edits works **only** inside a worktree on a feature branch —
+A delegate that edits works **only** inside a worktree on a feature branch:
 the same worktree-per-session discipline that binds every agent here. From
 Claude Code, scope `/codex:rescue` to the worktree; from codex, start the
 lifecycle claude session in the worktree. Let it commit conventionally.
 
 Never grant edit access on the root checkout or a protected branch. The point
 of the doctrine: a delegate's commits pass through **CodeFlow's existing gates
-unchanged** — pre-commit secret scan, commit-msg format and no-AI-attribution,
+unchanged**: pre-commit secret scan, commit-msg format and no-AI-attribution,
 the test gate, and an independent review pass through the primary harness's
 normal review gate judge its work exactly as they judge yours. Enforcement is
 author-agnostic, so a delegate cannot lower the bar. The git-hook plane is
@@ -307,25 +307,25 @@ harness-agnostic by design: the protected-branch merge and ref guards
 (`pre-merge-commit`, `reference-transaction`) bind a delegate exactly as they
 bind any agent, so it cannot ff-merge, `reset --hard`, or delete a protected
 branch. Review the handoff before it ships; a delegate's output is a proposal,
-not a merge — a human lands it.
+not a merge; a human lands it.
 
-## agy — retired as a delegate tier (no interactive lane)
+## agy: retired as a delegate tier (no interactive lane)
 
 Google's Antigravity `agy` was a degraded, opt-in read-only tier. Its only
 documented drive shape is headless one-shot CLI invocation (non-TTY stdout
-drops the final response, so automation had to read a transcript file) — a
+drops the final response, so automation had to read a transcript file), a
 shape CodeFlow ADR-0023 prohibits outright. There is no verified interactive lane to
 it, so `agy` is **not** a delegate tier; if the user names it, say the
 transport rule rules it out. Like any tool that touches the repo, `agy`
 remains bound by the harness-agnostic git-hook plane and CI.
 
-**Experimental — binding the CodeFlow guards to `agy`** (for when `agy` is
+**Experimental: binding the CodeFlow guards to `agy`** (for when `agy` is
 someone's *harness*, not a delegate): its hook dialect differs (an
 `allow_tool` JSON contract, hooks that always exit 0), so the exit-2 block
 that stops a bad command under Claude/Codex is at best *advisory* there. To
 opt in for feedback anyway, create `~/.gemini/config/hooks.json` with
-`{"hooks":{"PreToolUse":[{"matcher":"^Bash$","hooks":[{"type":"command","command":"codeflow hook git-guard"},{"type":"command","command":"codeflow hook exec-guard"}]}]}}`
-— experimental and unverified on macOS; the authoritative protection stays the
+`{"hooks":{"PreToolUse":[{"matcher":"^Bash$","hooks":[{"type":"command","command":"codeflow hook git-guard"},{"type":"command","command":"codeflow hook exec-guard"}]}]}}`.
+It is experimental and unverified on macOS; the authoritative protection stays the
 git-hook plane, CI, and an independent review before anything lands.
 
 ## Guardrails
@@ -334,7 +334,7 @@ git-hook plane, CI, and an independent review before anything lands.
   side; degrade legibly on missing/401.
 - **Every delegate prompt narrows authority and data.** Name purpose, permitted
   actions/files/resources/data/processors/destinations/effects and step budget;
-  ambiguity blocks—never guess. Send only necessary minimized data to an
+  ambiguity blocks; never guess. Send only necessary minimized data to an
   approved processor; route qualification is not data authority. An
   already-authorized scoped handoff needs no new approval; the lead verifies
   effects and claims.
