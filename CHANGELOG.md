@@ -794,11 +794,12 @@ publication date._
 <!-- codeflow:release-impact patch -->
 - **Faster `init` and `update` on macOS.** Scaffold writes no longer flush
   the whole disk cache for every file. Each file is still written to a temp
-  copy, synced and renamed into place, so an interrupted run leaves every
-  file whole; the directories a run touched are synced once at the end, and
-  macOS gets one full disk flush per run instead of about four per file. A
-  standard init made about 1,000 such flushes, most of its wall time. The
-  installed files are unchanged.
+  copy, synced and renamed into place; on macOS the sync is a write barrier
+  that keeps the data ahead of the rename, so an interrupted run or a power
+  cut leaves every file whole. The directories a run touched are synced once
+  at the end, and macOS gets one full disk flush per run instead of about
+  four per file. A standard init made about 1,000 such flushes, most of its
+  wall time. The installed files are unchanged.
 
 <!-- codeflow:release-impact patch -->
 - **`git gc` works in a hooked clone.** The reference-transaction hook no

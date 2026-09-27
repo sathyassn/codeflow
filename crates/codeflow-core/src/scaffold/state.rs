@@ -308,11 +308,13 @@ impl Baseline {
 ///
 /// The bytes go to a temp file that is synced before it is renamed over
 /// `path`, so a crash leaves the old content or the new, never a torn or
-/// empty file. Outside a [`SyncBatch`] the content sync is a full flush and
-/// the parent directory is flushed at once, as for any single write. Inside a
-/// batch the content sync is a plain `fsync` (the ordering the rename needs)
-/// and the directory flush waits for [`SyncBatch::finish`], which flushes
-/// each touched directory once and the device cache once per run.
+/// empty file, including after a power cut. Outside a [`SyncBatch`] the
+/// content sync is a full flush and the parent directory is flushed at once,
+/// as for any single write. Inside a batch the content sync is the cheapest
+/// call that still puts the data ahead of the rename on the disk (see the
+/// `sync` module) and the directory flush waits for [`SyncBatch::finish`],
+/// which flushes each touched directory once and the device cache once per
+/// run.
 pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
     let parent = path.parent().ok_or_else(|| {
         ScaffoldError::io(
@@ -408,12 +410,14 @@ impl Drop for SyncBatch {
 pub struct SyncCounts {
     /// Managed files written and renamed into place.
     pub files_written: usize,
-    /// Plain `fsync` of a written file's content.
-    pub content_fsyncs: usize,
+    /// Ordered content syncs inside a batch: `F_BARRIERFSYNC` on macOS,
+    /// `fsync` elsewhere.
+    pub content_syncs: usize,
     /// Plain `fsync` of a directory after renames into it.
     pub directory_fsyncs: usize,
-    /// Device cache flushes: `F_FULLFSYNC` on macOS, or `sync_all` for a
-    /// single write outside a batch.
+    /// Device cache flushes: `sync_all` for a single write outside a batch,
+    /// and on macOS the run's final `F_FULLFSYNC` and any refused barrier's
+    /// fallback.
     pub full_flushes: usize,
 }
 
@@ -427,11 +431,22 @@ mod sync {
     //! The platform sync calls behind [`super::write_file`] and
     //! [`super::SyncBatch`], with per-thread counts.
     //!
-    //! On macOS `File::sync_all` is `fcntl(F_FULLFSYNC)`, which also flushes
-    //! the drive's cache and measured about 13 ms a call on an internal SSD,
-    //! while `fsync(2)` hands the data to the drive in under a millisecond.
-    //! On Linux `fsync(2)` already asks the device to flush its cache, so each
-    //! directory flush is a full one and no separate device flush is issued.
+    //! A renamed file must never be torn or empty, even after a power cut,
+    //! so its data has to reach the disk before the rename does.
+    //!
+    //! - macOS: `fsync(2)` only hands the data to the drive, which may write
+    //!   its cache in any order, so after a power cut the rename can land
+    //!   without the data. `File::sync_all` is `fcntl(F_FULLFSYNC)`, which
+    //!   empties the whole drive cache (about 13 ms a call on an internal
+    //!   SSD). `fcntl(F_BARRIERFSYNC)` writes the file's data and makes the
+    //!   drive finish it before any later write, the rename included (about
+    //!   5.5 ms), so each file in a run gets the barrier and the run ends with
+    //!   one `F_FULLFSYNC`. A file system that refuses the barrier gets
+    //!   `F_FULLFSYNC` instead, never a plain `fsync`.
+    //! - Linux: `fsync(2)` writes the file's data and flushes the device
+    //!   cache before it returns, so it already orders the data ahead of the
+    //!   rename; each directory sync is a full one and no separate device
+    //!   flush is issued.
 
     use std::cell::{Cell, RefCell};
     use std::collections::BTreeSet;
@@ -445,7 +460,7 @@ mod sync {
         static COUNTS: Cell<SyncCounts> = const {
             Cell::new(SyncCounts {
                 files_written: 0,
-                content_fsyncs: 0,
+                content_syncs: 0,
                 directory_fsyncs: 0,
                 full_flushes: 0,
             })
@@ -503,17 +518,37 @@ mod sync {
         });
     }
 
-    /// Makes a written file's content durable before its rename: a full
-    /// flush outside a batch, a plain `fsync` inside one.
+    /// Makes a written file's content durable, or at least ordered ahead of
+    /// its rename: a full flush outside a batch, an ordered sync inside one.
     pub(super) fn content(file: &File, full: bool) -> std::io::Result<()> {
         if full {
             file.sync_all()?;
             bump(|c| c.full_flushes += 1);
         } else {
-            fsync(file)?;
-            bump(|c| c.content_fsyncs += 1);
+            ordered(file)?;
+            bump(|c| c.content_syncs += 1);
         }
         Ok(())
+    }
+
+    /// `F_BARRIERFSYNC`, or `F_FULLFSYNC` where the file system refuses it;
+    /// the fallback counts as a full flush, so the tests see it.
+    #[cfg(target_vendor = "apple")]
+    fn ordered(file: &File) -> std::io::Result<()> {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: `fcntl` with `F_BARRIERFSYNC` takes no argument and only
+        // uses the descriptor, which `file` keeps open for the call.
+        if unsafe { libc::fcntl(file.as_raw_fd(), libc::F_BARRIERFSYNC) } == -1 {
+            file.sync_all()?;
+            bump(|c| c.full_flushes += 1);
+        }
+        Ok(())
+    }
+
+    /// `fsync` already flushes the device where the target is not Apple.
+    #[cfg(not(target_vendor = "apple"))]
+    fn ordered(file: &File) -> std::io::Result<()> {
+        fsync(file)
     }
 
     /// Syncs each directory once, then flushes the device cache once where
@@ -928,7 +963,7 @@ mod tests {
         let after = sync_counts();
         assert_eq!(after.files_written - before.files_written, 1);
         assert_eq!(
-            after.content_fsyncs, before.content_fsyncs,
+            after.content_syncs, before.content_syncs,
             "content is fully flushed"
         );
         assert_eq!(after.directory_fsyncs - before.directory_fsyncs, 1);
@@ -937,7 +972,7 @@ mod tests {
     }
 
     #[test]
-    fn a_batch_syncs_each_file_plainly_and_flushes_once_at_the_end() {
+    fn a_batch_syncs_each_file_in_order_and_flushes_once_at_the_end() {
         let dir = tempfile::tempdir().unwrap();
         let before = sync_counts();
         let batch = SyncBatch::begin();
@@ -950,9 +985,9 @@ mod tests {
         let mid = sync_counts();
         assert_eq!(mid.files_written - before.files_written, 6);
         assert_eq!(
-            mid.content_fsyncs - before.content_fsyncs,
+            mid.content_syncs - before.content_syncs,
             6,
-            "one plain sync per file"
+            "one ordered sync per file"
         );
         assert_eq!(
             mid.directory_fsyncs, before.directory_fsyncs,
@@ -1080,7 +1115,7 @@ mod tests {
             "a standard init writes the scaffold: {written}"
         );
         assert_eq!(
-            after.content_fsyncs - before.content_fsyncs,
+            after.content_syncs - before.content_syncs,
             written,
             "one per file"
         );
@@ -1104,7 +1139,7 @@ mod tests {
             written > 5,
             "the forced update rewrites the edited skills: {written}"
         );
-        assert_eq!(after.content_fsyncs - before.content_fsyncs, written);
+        assert_eq!(after.content_syncs - before.content_syncs, written);
         assert_eq!(after.full_flushes - before.full_flushes, device);
         println!(
             "update: {written} files, {} directories",
