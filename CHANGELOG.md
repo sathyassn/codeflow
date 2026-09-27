@@ -104,18 +104,21 @@ publication date._
 
 <!-- codeflow:release-impact minor -->
 - **A pre-push gate under a minute that blocks.** Public behaviour change:
-  `git.test_gate_on_push` now defaults to `block`, in fresh installs at every
-  tier and in the built-in default. The pre-push hook no longer runs the test
-  suite. It runs the push set: `codeflow validate --docs`, `codeflow ci` on
-  each pushed branch's range, and the `.codeflow/test-config.json` targets
-  that define a `quick` mode. It no longer falls back to `essential`, so a
-  config without `quick` modes runs only the two built-in checks, and the
-  suite stays in the full gate and CI. When the push set takes longer than
-  60 seconds, the hook names the slowest target and the `modes.quick` key that
-  moves it out. The Rust and Go test-config templates add a lint target in the
-  push set. `codeflow update` moves a `test_gate_on_push` still at the old
-  shipped `warn` to `block` and keeps any value you set yourself. To restore
-  the old advisory level, set `"test_gate_on_push": "warn"` in
+  the pre-push hook no longer runs the test suite. It runs the push set:
+  `codeflow ci` on each pushed branch's range, compared with the
+  destination's own history, plus `codeflow validate --docs` and the
+  `.codeflow/test-config.json` targets that define a `quick` mode. Those two
+  tree checks run only when the pushed commit is the checked-out one with no
+  tracked changes; for any other pushed branch the hook says they did not run
+  and CI runs them. Pre-push no longer falls back to `essential`, so the suite
+  stays in the full gate and CI. When the whole push set takes longer than 60
+  seconds, the hook names its slowest step, and for a test-config target the
+  `modes.quick` key that moves it out. The Rust and Go test-config templates
+  add a lint target in the push set. Fresh installs at every tier set
+  `git.test_gate_on_push` to `block`, and so does the built-in default, which
+  applies to a policy file that omits the key. `codeflow update` keeps the
+  value an existing install has and prints one line recommending `block`. To
+  keep the advisory push, set `"test_gate_on_push": "warn"` under `git` in
   `.codeflow/policy.json`.
 
 <!-- codeflow:release-impact patch -->
