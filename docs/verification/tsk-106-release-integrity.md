@@ -128,7 +128,7 @@ Each step was run the way its GitHub job runs it: the job's
 `scripts/release.py` and `.release/config.json` come from the pull request's
 merge commit (or the pushed commit), with live host state read through `gh`
 for `sathyassn/codeflow-archive`. Merge commits were built as unreferenced
-objects; nothing was pushed. Line tip `fe536d92d`, `main` `2c9c77f5c`. The
+objects; nothing was pushed. Line tip `e4ff8eb4e`, `main` `2c9c77f5c`. The
 script is `replay-tsk106.sh` in the session scratchpad.
 
 | Step | Checker | Result |
