@@ -1649,12 +1649,18 @@ impl SessionStore {
     }
 
     pub fn feedback_snapshot(&self, id: Uuid) -> Result<FeedbackSnapshot> {
-        let _lock = self.lock_session(id)?;
-        let session = self.load(id)?;
-        let revision = self.revision(id, session.current_revision)?;
-        let events = self.read_events_unlocked(id)?;
-        let retired = self.retired_diagram_ids(id, &events, &revision)?;
+        // Read under the lock; re-anchor after it, so a large revision never
+        // holds up the session's other operations (TSK-118 review T118-5).
+        let (session, revision, events, retired) = {
+            let _lock = self.lock_session(id)?;
+            let session = self.load(id)?;
+            let revision = self.revision(id, session.current_revision)?;
+            let events = self.read_events_unlocked(id)?;
+            let retired = self.retired_diagram_ids(id, &events, &revision)?;
+            (session, revision, events, retired)
+        };
         build_feedback_snapshot(
+            id,
             &events,
             &revision.content,
             session.current_revision,
@@ -2631,7 +2637,36 @@ fn find_block<'a>(
 
 type RetiredDiagramIds = std::collections::HashMap<u64, Vec<String>>;
 
+/// Re-anchored notes by session, feedback event, note and current revision.
+/// Each key names immutable inputs (a stored note and a stored revision), so
+/// an entry never goes stale; the map is cleared when it reaches its bound.
+type ReanchorKey = (Uuid, Uuid, Uuid, u64);
+static REANCHOR_CACHE: std::sync::OnceLock<
+    std::sync::Mutex<std::collections::HashMap<ReanchorKey, FeedbackAnchor>>,
+> = std::sync::OnceLock::new();
+const REANCHOR_CACHE_ENTRIES: usize = 8_192;
+
+fn cached_reanchor(key: ReanchorKey, compute: impl FnOnce() -> FeedbackAnchor) -> FeedbackAnchor {
+    let cache = REANCHOR_CACHE.get_or_init(Default::default);
+    if let Some(anchor) = cache
+        .lock()
+        .ok()
+        .and_then(|entries| entries.get(&key).cloned())
+    {
+        return anchor;
+    }
+    let anchor = compute();
+    if let Ok(mut entries) = cache.lock() {
+        if entries.len() >= REANCHOR_CACHE_ENTRIES {
+            entries.clear();
+        }
+        entries.insert(key, anchor.clone());
+    }
+    anchor
+}
+
 fn build_feedback_snapshot(
+    session_id: Uuid,
     events: &[FeedbackEvent],
     current: &RevisionContent,
     current_revision: u64,
@@ -2686,7 +2721,12 @@ fn build_feedback_snapshot(
                     .get(&envelope.revision)
                     .filter(|ids| ids.contains(&note.block_id))
                     .map_or_else(
-                        || reanchor_note(note, envelope.revision, current, current_revision),
+                        || {
+                            cached_reanchor(
+                                (session_id, envelope.event_id, note.id, current_revision),
+                                || reanchor_note(note, envelope.revision, current, current_revision),
+                            )
+                        },
                         |_| FeedbackAnchor::Orphaned {
                             reason: format!(
                                 "the diagram block {} was removed with Mermaid; convert it to reanchor this note",
@@ -2892,8 +2932,12 @@ fn fuzzy_anchor(
     block: &crate::document::Block,
     reason: &str,
 ) -> FeedbackAnchor {
-    match crate::fuzzy::best_match(quote, canonical) {
-        Some(found) => match (
+    match crate::fuzzy::search(quote, canonical) {
+        crate::fuzzy::Search::OverBudget => FeedbackAnchor::BlockFallback {
+            block_id: block.id().to_string(),
+            reason: "the block is too large to search for the quote in this revision".to_string(),
+        },
+        crate::fuzzy::Search::Match(found) => match (
             u32::try_from(found.start_utf16),
             u32::try_from(found.end_utf16),
         ) {
@@ -2907,7 +2951,7 @@ fn fuzzy_anchor(
                 reason: "the re-anchored quote exceeds the offset bound".to_string(),
             },
         },
-        None => FeedbackAnchor::BlockFallback {
+        crate::fuzzy::Search::NoMatch => FeedbackAnchor::BlockFallback {
             block_id: block.id().to_string(),
             reason: reason.to_string(),
         },

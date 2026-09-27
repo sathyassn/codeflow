@@ -800,3 +800,74 @@ fn an_entity_note_refuses_a_broken_or_oversized_png_crop() {
     }
     assert!(store.pending_feedback(session.id).unwrap().is_empty());
 }
+
+/// The worst case at the accepted fuzzy bounds reaches the block step with a
+/// notice at once, instead of a long search (T118-5), and a second snapshot
+/// of the same revision reuses the result.
+#[test]
+fn a_quote_search_past_its_budget_falls_to_the_block_with_a_notice() {
+    let narrative = |markdown: String| {
+        serde_json::json!({
+            "schema_version": 1,
+            "title": "Budget",
+            "blocks": [{"type": "narrative", "id": "long", "markdown": markdown}]
+        })
+    };
+    let parse = |value: Value| match parse_document(&serde_json::to_vec(&value).unwrap()).unwrap() {
+        ParsedDocument::Supported(document) => document,
+        ParsedDocument::Unsupported { .. } => panic!("unsupported"),
+    };
+    let quote = "a".repeat(crate::limits::MAX_FUZZY_QUOTE_UTF16);
+    let first = parse(narrative(format!("{quote} end")));
+    let (_temp, store) = store();
+    let session = store
+        .create(ParsedDocument::Supported(first.clone()))
+        .unwrap();
+    let mut long = note("long", &find(&first, "long").review_label());
+    long.selector = Some(TextSelector {
+        exact: quote.clone(),
+        prefix: String::new(),
+        suffix: " end".to_string(),
+        start_utf16: 0,
+        end_utf16: u32::try_from(quote.len()).unwrap(),
+    });
+    store
+        .append_feedback(FeedbackEnvelope {
+            event_id: Uuid::new_v4(),
+            session_id: session.id,
+            revision: 1,
+            actor: "operator".to_string(),
+            verdict: FeedbackVerdict::ApproveWithNotes,
+            instruction: None,
+            notes: vec![long],
+            created_at_unix: 0,
+        })
+        .unwrap();
+    let edited = "a ".repeat(crate::limits::MAX_FUZZY_TEXT_UTF16 / 2 - 4);
+    store
+        .update_document(
+            session.id,
+            ParsedDocument::Supported(parse(narrative(edited))),
+        )
+        .unwrap();
+    let started = std::time::Instant::now();
+    let anchor = store.feedback_snapshot(session.id).unwrap().items[0].notes[0]
+        .anchor
+        .clone();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(5),
+        "{:?}",
+        started.elapsed()
+    );
+    match &anchor {
+        FeedbackAnchor::BlockFallback { block_id, reason } => {
+            assert_eq!(block_id, "long");
+            assert!(reason.contains("too large to search"), "{reason}");
+        }
+        other => panic!("{other:?}"),
+    }
+    assert_eq!(
+        store.feedback_snapshot(session.id).unwrap().items[0].notes[0].anchor,
+        anchor
+    );
+}

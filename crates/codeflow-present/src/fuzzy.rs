@@ -24,9 +24,32 @@ pub struct Quote<'a> {
     pub start: Option<usize>,
 }
 
-/// The best window scoring at least the threshold, or `None`. Also `None`
-/// when the quote or the text is over the fuzzy bounds (B1 step 2 then goes
-/// to the block step).
+/// The outcome of a bounded search (SPC-014 B1 step 2).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum Search {
+    /// The best window, scoring at least the threshold.
+    Match(FuzzyMatch),
+    /// No window reaches the threshold, or a bound is exceeded.
+    NoMatch,
+    /// The search would pass its work budget; nothing was scored.
+    OverBudget,
+}
+
+/// The bounded search the service runs: the whole rule, or `OverBudget`
+/// before any scoring when the edit-distance cells the rule needs exceed
+/// `limits::FUZZY_WORK_BUDGET`, so re-anchoring never stalls a session.
+#[must_use]
+pub fn search(quote: &Quote<'_>, text: &str) -> Search {
+    match scan(quote, text, Some(limits::FUZZY_WORK_BUDGET)) {
+        Err(OverBudget) => Search::OverBudget,
+        Ok(Some(found)) if found.score >= limits::FUZZY_THRESHOLD => Search::Match(found),
+        Ok(_) => Search::NoMatch,
+    }
+}
+
+/// The best window scoring at least the threshold, or `None`, with no work
+/// budget: the rule as the fixtures pin it (tests only).
+#[cfg(test)]
 #[must_use]
 pub fn best_match(quote: &Quote<'_>, text: &str) -> Option<FuzzyMatch> {
     best_candidate(quote, text).filter(|found| found.score >= limits::FUZZY_THRESHOLD)
@@ -35,33 +58,60 @@ pub fn best_match(quote: &Quote<'_>, text: &str) -> Option<FuzzyMatch> {
 /// The highest scoring window whatever its score, ties to the lowest start
 /// and then the lowest end; `None` when no window exists or a bound is
 /// exceeded.
+#[cfg(test)]
 #[must_use]
 pub fn best_candidate(quote: &Quote<'_>, text: &str) -> Option<FuzzyMatch> {
+    scan(quote, text, None).ok().flatten()
+}
+
+struct OverBudget;
+
+/// The rule itself. The candidate ends of each start are found by binary
+/// search, and when a budget is given the cells of every start's distance
+/// table are counted first, so an over-budget search costs one pass over the
+/// starts and no scoring.
+fn scan(
+    quote: &Quote<'_>,
+    text: &str,
+    budget: Option<u64>,
+) -> Result<Option<FuzzyMatch>, OverBudget> {
     let exact: Vec<u16> = quote.exact.encode_utf16().collect();
     let text: Vec<u16> = text.encode_utf16().collect();
     if exact.is_empty()
         || exact.len() > limits::MAX_FUZZY_QUOTE_UTF16
         || text.len() > limits::MAX_FUZZY_TEXT_UTF16
     {
-        return None;
+        return Ok(None);
     }
     let prefix: Vec<u16> = quote.prefix.encode_utf16().collect();
     let suffix: Vec<u16> = quote.suffix.encode_utf16().collect();
     let length = exact.len();
     let shortest = (7 * length).div_ceil(10).max(1);
     let longest = 13 * length / 10;
-    let starts = window_starts(&text);
     let ends = window_ends(&text);
-    let mut best: Option<FuzzyMatch> = None;
-    for start in starts {
-        let candidates: Vec<usize> = ends
+    // Each start with its range of candidate ends in `ends`.
+    let plan: Vec<(usize, std::ops::Range<usize>)> = window_starts(&text)
+        .into_iter()
+        .filter_map(|start| {
+            let low = ends.partition_point(|end| *end < start + shortest);
+            let high = ends.partition_point(|end| *end <= start + longest);
+            (low < high).then_some((start, low..high))
+        })
+        .collect();
+    if let Some(budget) = budget {
+        let cells: u64 = plan
             .iter()
-            .copied()
-            .filter(|end| *end > start && (shortest..=longest).contains(&(end - start)))
-            .collect();
-        if candidates.is_empty() {
-            continue;
+            .map(|(start, range)| {
+                let span = ends[range.end - 1] - start;
+                u64::try_from(length * span).unwrap_or(u64::MAX)
+            })
+            .fold(0, u64::saturating_add);
+        if cells > budget {
+            return Err(OverBudget);
         }
+    }
+    let mut best: Option<FuzzyMatch> = None;
+    for (start, range) in plan {
         let prefix_score = if prefix.is_empty() {
             1.0
         } else {
@@ -70,9 +120,9 @@ pub fn best_candidate(quote: &Quote<'_>, text: &str) -> Option<FuzzyMatch> {
         let position = quote.start.map_or(0.0, |stored| {
             1.0 - count(stored.abs_diff(start)) / count(text.len().max(1))
         });
-        let window_end = candidates.iter().copied().max().unwrap_or(start);
+        let window_end = ends[range.end - 1];
         let distances = prefix_distances(&exact, &text[start..window_end]);
-        for end in candidates {
+        for &end in &ends[range] {
             let window = end - start;
             let quote_score = 1.0 - count(distances[window]) / count(length.max(window));
             let suffix_score = if suffix.is_empty() {
@@ -91,7 +141,7 @@ pub fn best_candidate(quote: &Quote<'_>, text: &str) -> Option<FuzzyMatch> {
             }
         }
     }
-    best
+    Ok(best)
 }
 
 /// `sim(a, b)`: 1 minus the Levenshtein distance over the longer length, 1
@@ -222,6 +272,52 @@ mod tests {
             start: None,
         };
         assert!(best_candidate(&quote, &long).is_none());
+    }
+
+    #[test]
+    fn a_search_over_its_budget_stops_before_scoring_and_quickly() {
+        // The worst case at the accepted bounds: a 512-unit quote against
+        // 65,536 units of text with a window start every two units.
+        let quote_text = "a".repeat(limits::MAX_FUZZY_QUOTE_UTF16);
+        let text = "a ".repeat(limits::MAX_FUZZY_TEXT_UTF16 / 2);
+        let quote = Quote {
+            exact: &quote_text,
+            prefix: "",
+            suffix: "",
+            start: Some(0),
+        };
+        let started = std::time::Instant::now();
+        assert_eq!(search(&quote, &text), Search::OverBudget);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    #[test]
+    fn a_search_within_its_budget_is_the_whole_rule() {
+        let quote = Quote {
+            exact: "The paths are in",
+            prefix: "",
+            suffix: " Figure 1 and the stage in Figur",
+            start: Some(0),
+        };
+        let text = "The two paths are in Figure 1 and the stage is in Figure 2.";
+        assert_eq!(
+            search(&quote, text),
+            Search::Match(best_match(&quote, text).unwrap())
+        );
+        let rewritten = Quote {
+            exact: "Answers stay on this machine",
+            prefix: "",
+            suffix: ".",
+            start: Some(0),
+        };
+        assert_eq!(
+            search(&rewritten, "Everything is stored privately."),
+            Search::NoMatch
+        );
     }
 
     #[test]

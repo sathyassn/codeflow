@@ -85,3 +85,7 @@ pub const MAX_FUZZY_QUOTE_UTF16: usize = 512;
 pub const MAX_FUZZY_TEXT_UTF16: usize = 65_536;
 /// The score a fuzzy candidate needs to re-anchor a note (SPC-014 B1).
 pub const FUZZY_THRESHOLD: f64 = 0.75;
+/// The edit-distance cells one fuzzy quote search may compute. A search that
+/// needs more stops before scoring and the note shows on its block with a
+/// notice (SPC-014 B1, TSK-118 review round 1).
+pub const FUZZY_WORK_BUDGET: u64 = 32_000_000;
