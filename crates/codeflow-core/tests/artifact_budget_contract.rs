@@ -1389,11 +1389,11 @@ fn autonomy_reference_keeps_its_owned_parts() {
             ("spend gate", "spend, including buying credits;"),
             (
                 "risk tolerance is operator-owned",
-                "risk tolerance the brief does not fix: how much residual risk to accept",
+                "risk tolerance inside the accepted outcome that the brief does not fix: how much residual risk to accept",
             ),
             (
                 "security boundary is operator-owned",
-                "a material security boundary: where a trust, data or access boundary sits or moves, even when nothing is weakened",
+                "a material security boundary the brief does not fix: where a trust, data or access boundary sits or moves, even when nothing is weakened",
             ),
             ("outbound gate", "anything sent outside the conversation"),
             (

@@ -60,11 +60,12 @@ Questions, rung 3:
 
 - intent or public behavior the brief does not fix;
 - taste the brief does not fix, such as a name, a skin or a voice;
-- risk tolerance the brief does not fix: how much residual risk to accept,
-  or a trade of risk against speed, cost or scope;
-- a material security boundary: where a trust, data or access boundary sits
-  or moves, even when nothing is weakened; a weakening action is a hard gate
-  below;
+- risk tolerance inside the accepted outcome that the brief does not fix:
+  how much residual risk to accept, or a trade of risk against speed, cost
+  or scope;
+- a material security boundary the brief does not fix: where a trust, data
+  or access boundary sits or moves, even when nothing is weakened; a
+  weakening action is a hard gate below;
 - authority or scope beyond the brief.
 
 Hard gates, rung 4:
@@ -132,7 +133,7 @@ to repair.
 | An owed check has no completed result anywhere | a missing gate: name it as the blocker, keep the pull request draft, continue other work | `quality-contract.md` redness classes |
 | An external dependency the agent cannot clear | 2: name it as the blocker with the input that clears it; ask (3) only when the operator is the one who can supply that input | `quality-contract.md` blocker navigation |
 | A material risk outside scope | 2: one tracked item; escalate only an imminent severe risk | `AGENTS.md` Find broadly; CodeFlow ADR-0034 |
-| Intent, public behavior, taste or risk tolerance the brief does not fix, or a material security boundary | 3: ask, every live question in one round | `AGENTS.md` Planning and tracking; `cf-plan` clarity gate |
+| Intent, public behavior, taste, risk tolerance or a material security boundary the brief does not fix | 3: ask, every live question in one round | `AGENTS.md` Planning and tracking; `cf-plan` clarity gate |
 | Scope, recipient, destination or effect changed | 3: ask for a fresh grant | `AGENTS.md` Act within legitimate intent |
 | Spending money, including buying credits | 4: wait for the operator; do not spend | this reference |
 | Sign-in or login is needed | 4: the operator signs in; never automate it | `cf-model-orchestrator` preflight |
