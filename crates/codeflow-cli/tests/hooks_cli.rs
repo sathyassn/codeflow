@@ -3562,3 +3562,59 @@ fn push_set_does_not_run_tree_checks_with_an_uninitialized_submodule() {
     );
     assert!(!err.contains("quick targets passed"), "{err}");
 }
+
+/// SPC-013 R-85: the shims probe the binary's hook capability first. An
+/// older binary gets a warning naming the upgrade order and still runs the
+/// checks it has; the current binary dispatches silently.
+#[cfg(unix)]
+#[test]
+fn hook_shims_warn_and_fall_back_when_the_binary_is_older() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let old_bin = dir.path().join("old-bin");
+    std::fs::create_dir_all(&old_bin).unwrap();
+    let fake = old_bin.join("codeflow");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\nif [ \"$1 $2\" = \"git-hook capabilities\" ]; then echo \"error: invalid value 'capabilities'\" >&2; exit 2; fi\necho \"dispatched $*\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let new_bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_codeflow"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let shims =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/git-hooks");
+    for stage in ["pre-commit", "commit-msg", "pre-push", "pre-merge-commit"] {
+        let run = |bin: &Path| {
+            Command::new("sh")
+                .arg(shims.join(stage))
+                .arg("ARG")
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env("CODEFLOW_HOME", isolated_home())
+                .current_dir(dir.path())
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap()
+        };
+        let old = run(&old_bin);
+        let stderr = String::from_utf8_lossy(&old.stderr);
+        assert!(
+            stderr.contains("older than these hooks"),
+            "{stage}: {stderr}"
+        );
+        assert!(stderr.contains("new binary first"), "{stage}: {stderr}");
+        assert_eq!(
+            String::from_utf8_lossy(&old.stdout).trim(),
+            format!("dispatched git-hook {stage} ARG"),
+            "{stage}: the older binary still runs its checks"
+        );
+        let new = run(&new_bin);
+        let stderr = String::from_utf8_lossy(&new.stderr);
+        assert!(
+            !stderr.contains("older than these hooks"),
+            "{stage}: {stderr}"
+        );
+    }
+}
