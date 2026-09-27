@@ -3,10 +3,13 @@
 //! writes, and what it writes is a branch.
 
 use clap::{Args, Subcommand};
+use codeflow_core::hooks::policy::Policy;
+use codeflow_core::hooks::PolicyLevel;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::readiness::{self, Backlog, Entry, State};
 use codeflow_core::workgraph::{
-    check_work_start, declared_work_target, resolve_work_target_checked,
+    check_work_start, declared_work_target, durable_work_tracking_enabled,
+    resolve_work_target_checked,
 };
 use serde_json::json;
 
@@ -160,22 +163,59 @@ fn claim(task_id: &str) -> i32 {
     }
 }
 
+/// `work start`: the planning checks, once per task, at the
+/// `git.work_planning` level (TSK-133). At `warn` a finding is reported and
+/// the command succeeds; CI reports the same finding at the same level. An
+/// unreadable tracking state always blocks.
 fn start(task_id: &str, target: Option<&str>) -> i32 {
     let root = super::repo_root();
-
-    let workgraph = validate_workgraph(&root);
-    if !workgraph.is_clean() {
-        for issue in workgraph.issues {
-            eprintln!("work start: error: {issue}");
-        }
-        eprintln!("work start: current workgraph is invalid; run `codeflow validate --docs`");
+    // An undeterminable tracking state blocks whatever the level says, as in
+    // CI's `work.tracking_state`.
+    if let Err(error) = durable_work_tracking_enabled(&root) {
+        eprintln!("work start: error: cannot determine durable-work tracking: {error}");
+        eprintln!(
+            "work start: repair CodeFlow state or task-home access; this blocks whatever git.work_planning says"
+        );
         return 1;
+    }
+    let (policy, _armed) = Policy::load_effective(&root);
+    let level = policy.git.work_planning_level();
+    let Err(findings) = plan_check(&root, task_id, target) else {
+        return 0;
+    };
+    let warn = level == PolicyLevel::Warn;
+    let label = if warn { "warning" } else { "error" };
+    for finding in &findings {
+        eprintln!("work start: {label}: {finding}");
+    }
+    if warn {
+        eprintln!(
+            "work start: continuing: git.work_planning is warn, so this finding does not stop the work; CI reports it too"
+        );
+        0
+    } else {
+        1
+    }
+}
+
+/// The planning checks behind `work start`: the anchor report printed on
+/// success, or every finding.
+fn plan_check(
+    root: &std::path::Path,
+    task_id: &str,
+    target: Option<&str>,
+) -> Result<(), Vec<String>> {
+    let workgraph = validate_workgraph(root);
+    if !workgraph.is_clean() {
+        let mut findings = workgraph.issues;
+        findings.push("current workgraph is invalid; run `codeflow validate --docs`".to_string());
+        return Err(findings);
     }
 
     let declared = target
         .map(str::to_string)
-        .or_else(|| declared_work_target(&root, task_id));
-    let target = match resolve_work_target_checked(&root, declared.as_deref()) {
+        .or_else(|| declared_work_target(root, task_id));
+    let target = match resolve_work_target_checked(root, declared.as_deref()) {
         Ok(resolved) => {
             let resolved =
                 resolved.unwrap_or_else(|| codeflow_core::workgraph::ResolvedWorkTarget {
@@ -187,40 +227,31 @@ fn start(task_id: &str, target: Option<&str>) -> i32 {
             }
             resolved.target
         }
-        Err(error) => {
-            eprintln!("work start: error: {error}");
-            return 1;
-        }
+        Err(error) => return Err(vec![error.to_string()]),
     };
-    match check_work_start(&root, task_id, &target) {
-        Ok(report) => {
-            println!(
-                "work start: {} anchored at {} for {} -> {}",
-                report.task_id, report.merge_base, report.branch, report.target
-            );
-            if let Some(epic) = report.epic_id {
-                println!("  epic: {epic}");
-            } else {
-                println!("  epic: standalone (reason verified)");
-            }
-            if !report.specs.is_empty() {
-                println!("  specs: {}", report.specs.join(", "));
-            }
-            if !report.dependencies.is_empty() {
-                println!("  dependencies met: {}", report.dependencies.join(", "));
-            }
-            let others = readiness::other_branches(&root, task_id, &report.branch);
-            if !others.is_empty() {
-                println!(
-                    "  conflict: other visible branches carry {task_id}: {} (reported, not refused)",
-                    others.join(", ")
-                );
-            }
-            0
-        }
-        Err(error) => {
-            eprintln!("work start: error: {error}");
-            1
-        }
+    let report =
+        check_work_start(root, task_id, &target).map_err(|error| vec![error.to_string()])?;
+    println!(
+        "work start: {} anchored at {} for {} -> {}",
+        report.task_id, report.merge_base, report.branch, report.target
+    );
+    if let Some(epic) = report.epic_id {
+        println!("  epic: {epic}");
+    } else {
+        println!("  epic: standalone (reason verified)");
     }
+    if !report.specs.is_empty() {
+        println!("  specs: {}", report.specs.join(", "));
+    }
+    if !report.dependencies.is_empty() {
+        println!("  dependencies met: {}", report.dependencies.join(", "));
+    }
+    let others = readiness::other_branches(root, task_id, &report.branch);
+    if !others.is_empty() {
+        println!(
+            "  conflict: other visible branches carry {task_id}: {} (reported, not refused)",
+            others.join(", ")
+        );
+    }
+    Ok(())
 }

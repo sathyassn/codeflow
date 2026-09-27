@@ -284,7 +284,9 @@ pub(super) fn dispatch(
                 .filter(|(status, _)| status == "A")
                 .map(|(_, path)| path.as_str())
                 .collect();
-            tracked(root, task_id, own_branch, branch, &files, &added, tagged);
+            let level = git.work_planning_level();
+            let anchor = Anchor { own_branch, level };
+            tracked(root, task_id, anchor, branch, &files, &added, tagged);
             journey(root, git, task_id, range.head, &files, tagged);
         }
         Class::Direct { reason } => {
@@ -354,10 +356,37 @@ fn push(tagged: &mut Vec<super::TaggedViolation>, rule: &str, message: String, h
 /// findings (R-64). When the branch carries the same task, `codeflow ci`'s
 /// own-branch preflight already reports an anchor failure (with the visible
 /// workgraph check), so it is not reported twice here.
+/// How a tracked task's anchor failure is reported: not at all on its own
+/// branch (the own-branch preflight reports it), else at the
+/// `git.work_planning` level (TSK-133).
+#[derive(Clone, Copy)]
+struct Anchor {
+    own_branch: bool,
+    level: PolicyLevel,
+}
+
+fn anchor_failure(
+    tagged: &mut Vec<super::TaggedViolation>,
+    level: PolicyLevel,
+    message: String,
+    hint: &str,
+) {
+    tagged.push(super::TaggedViolation {
+        sha: None,
+        violation: Violation::new(
+            "work.stable_planning_anchor",
+            level,
+            message,
+            hint.to_string(),
+        ),
+    });
+}
+
 fn tracked(
     root: &Path,
     task_id: &str,
-    own_branch: bool,
+    anchor: Anchor,
+
     branch: &str,
     files: &[String],
     added: &[&str],
@@ -376,11 +405,11 @@ fn tracked(
     // diverged target; this check reports it only for another task's claim.
     let target = match resolve_work_target_checked(root, declared.as_deref()) {
         Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
-        Err(_) if own_branch => return,
+        Err(_) if anchor.own_branch => return,
         Err(error) => {
-            push(
+            anchor_failure(
                 tagged,
-                "work.stable_planning_anchor",
+                anchor.level,
                 error.to_string(),
                 &format!("reconcile the target branch, then run `codeflow work start {task_id}`"),
             );
@@ -401,10 +430,10 @@ fn tracked(
                 }
             }
         }
-        Err(_) if own_branch => {}
-        Err(error) => push(
+        Err(_) if anchor.own_branch => {}
+        Err(error) => anchor_failure(
             tagged,
-            "work.stable_planning_anchor",
+            anchor.level,
             error.to_string(),
             &format!(
                 "merge the validated planning record into '{target}', then run `codeflow work start {task_id}`"

@@ -1673,6 +1673,36 @@ fn update_preserves_every_work_records_value_including_the_default() {
     }
 }
 
+/// TSK-133 AC-4: `codeflow update` adds `git.work_planning` at the shipped
+/// default when the project has none, and keeps a value the project set,
+/// the default included.
+#[test]
+fn update_adds_work_planning_and_keeps_an_explicit_level() {
+    isolate_git();
+    for (value, expected) in [
+        (None, "block"),
+        (Some("warn"), "warn"),
+        (Some("block"), "block"),
+    ] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        if let Some(value) = value {
+            set_policy_key(&root, "work_planning", value);
+        }
+        let (dir, _) = fixture_assets(true);
+        let path = dir.path().join("base/policy.json");
+        let mut shipped: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        shipped["git"]["work_planning"] = "block".into();
+        std::fs::write(&path, serde_json::to_string_pretty(&shipped).unwrap()).unwrap();
+        let assets = DirSource::new(dir.path());
+        scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(after["git"]["work_planning"], expected, "from {value:?}");
+    }
+}
+
 #[test]
 fn update_records_the_work_records_baseline_once_for_existing_records() {
     isolate_git();

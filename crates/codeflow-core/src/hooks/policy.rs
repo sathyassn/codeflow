@@ -292,6 +292,12 @@ pub struct GitPolicy {
     /// and are not governed by this key. Read it through
     /// [`GitPolicy::work_records_level`].
     pub work_records: PolicyLevel,
+    /// The level of the planning checks `work start` and `codeflow ci` run
+    /// once per task, on any work prefix (TSK-133): the visible workgraph is
+    /// valid, the branch's task has a record, and that record is anchored on
+    /// its target. Accepts `block` or `warn`; default `block`. Read it
+    /// through [`GitPolicy::work_planning_level`].
+    pub work_planning: PolicyLevel,
     /// Globs naming the project's product code (SPC-013 R-71, R-114). A
     /// range touching one is tracked work, never a direct change
     /// (`Task: none`). `codeflow init` writes the default for the detected
@@ -369,6 +375,7 @@ impl Default for GitPolicy {
             pr_required_sections: vec!["Summary".into(), "Changes".into()],
             pr_code_sections: vec!["Testing".into()],
             work_records: PolicyLevel::Block,
+            work_planning: PolicyLevel::Block,
             product_paths: None,
             direct_changes: "allow".to_string(),
             automation_profiles: Vec::new(),
@@ -407,6 +414,17 @@ impl GitPolicy {
     #[must_use]
     pub fn work_records_level(&self) -> PolicyLevel {
         if self.work_records == PolicyLevel::Warn {
+            PolicyLevel::Warn
+        } else {
+            PolicyLevel::Block
+        }
+    }
+
+    /// The effective `work_planning` level: `warn` when the policy says so,
+    /// `block` otherwise, so no value switches the planning checks off.
+    #[must_use]
+    pub fn work_planning_level(&self) -> PolicyLevel {
+        if self.work_planning == PolicyLevel::Warn {
             PolicyLevel::Warn
         } else {
             PolicyLevel::Block

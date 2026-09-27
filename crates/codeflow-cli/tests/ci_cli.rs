@@ -938,3 +938,290 @@ fn ci_shipped_skill_bytes_are_exempt_only_at_their_shipped_path() {
     assert!(all.contains("docs/consult.md:6 adds an em dash"), "{all}");
     assert!(!all.contains(".agents/skills/cf-consult"), "{all}");
 }
+
+/// A task record under `project-management/tasks/`, valid on its own, with
+/// the journey criterion a product-path range needs (TSK-105).
+fn planned_task(id: &str, depends_on: &str) -> String {
+    format!(
+        "---\nid: {id}\nepic_id: null\nstandalone_reason: bounded work\nintegration_target: main\ntitle: work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: [{depends_on}]\ncreated: 2026-07-29\n---\n\n## Description\nWork.\n\n## Acceptance Criteria\n- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the command shall succeed.\n"
+    )
+}
+
+/// TSK-133 AC-2: the planning checks run for every work prefix that
+/// carries a task id, at the `git.work_planning` level, never a hard-coded
+/// block. The target holds the policy and two planned tasks; TSK-001 waits
+/// on the open TSK-002, so its anchored preflight fails on `task/`, `fix/`
+/// and `feat/` alike.
+#[test]
+fn ci_runs_the_planning_checks_on_every_work_prefix_at_the_policy_level() {
+    for level in ["block", "warn"] {
+        for prefix in ["task", "fix", "feat"] {
+            let dir = tempfile::tempdir().unwrap();
+            git(dir.path(), &["init", "-b", "main"]);
+            git(dir.path(), &["config", "user.email", "t@example.com"]);
+            git(dir.path(), &["config", "user.name", "t"]);
+            std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+            std::fs::write(
+                dir.path().join(".codeflow/policy.json"),
+                format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+            )
+            .unwrap();
+            let tasks = dir.path().join("project-management/tasks");
+            std::fs::create_dir_all(&tasks).unwrap();
+            std::fs::write(tasks.join("TSK-001.md"), planned_task("TSK-001", "TSK-002")).unwrap();
+            std::fs::write(tasks.join("TSK-002.md"), planned_task("TSK-002", "")).unwrap();
+            git(dir.path(), &["add", "."]);
+            git(dir.path(), &["commit", "-m", "chore: plan two tasks"]);
+            let branch = format!("{prefix}/TSK-001-early");
+            git(dir.path(), &["switch", "-c", &branch]);
+            std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
+            git(dir.path(), &["add", "."]);
+            git(
+                dir.path(),
+                &["commit", "-m", "feat: start before the dependency"],
+            );
+            let output = run_in(
+                dir.path(),
+                &[
+                    "ci", "--base", "main", "--head", "HEAD", "--branch", &branch,
+                ],
+            );
+            let out = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let shown = format!("work.stable_planning_anchor ({level})");
+            assert!(out.contains(&shown), "{branch} at {level}: {out}");
+            assert!(out.contains("TSK-002"), "{branch} at {level}: {out}");
+            let expected = i32::from(level == "block");
+            assert_eq!(
+                output.status.code(),
+                Some(expected),
+                "{branch} at {level}: {out}"
+            );
+        }
+    }
+}
+
+/// TSK-133 AC-2: a pull request naming its task with `Task:` from a branch
+/// that carries no task id gets the same anchored preflight, at the same
+/// `git.work_planning` level; classification itself still blocks.
+#[test]
+fn ci_reports_a_named_task_anchor_at_the_policy_level() {
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        git(dir.path(), &["config", "user.email", "t@example.com"]);
+        git(dir.path(), &["config", "user.name", "t"]);
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+        )
+        .unwrap();
+        let tasks = dir.path().join("project-management/tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        std::fs::write(tasks.join("TSK-001.md"), planned_task("TSK-001", "TSK-002")).unwrap();
+        std::fs::write(tasks.join("TSK-002.md"), planned_task("TSK-002", "")).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "chore: plan two tasks"]);
+        git(dir.path(), &["switch", "-c", "feat/early-work"]);
+        std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(
+            dir.path(),
+            &["commit", "-m", "feat: start before the dependency"],
+        );
+        let body = format!("Task: TSK-001\n\n{FULL_BODY}");
+        let output = run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/early-work",
+                "--pr-body",
+                &body,
+            ],
+        );
+        let out = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            out.contains("pull request class: tracked TSK-001"),
+            "{level}: {out}"
+        );
+        let shown = format!("work.stable_planning_anchor ({level})");
+        assert!(out.contains(&shown), "{level}: {out}");
+        assert_eq!(
+            output.status.code(),
+            Some(i32::from(level == "block")),
+            "{level}: {out}"
+        );
+    }
+}
+
+/// A repository whose target holds the `work_planning` level, a planned
+/// TSK-001 (waiting on the open TSK-002 when `waits`), and, when `bad_graph`,
+/// an unrelated epic file whose id does not match its name; the branch
+/// `fix/TSK-001-work` adds code. Returns the branch head.
+fn planning_repo(dir: &Path, level: &str, waits: bool, bad_graph: bool) -> String {
+    git(dir, &["init", "-b", "main"]);
+    git(dir, &["config", "user.email", "t@example.com"]);
+    git(dir, &["config", "user.name", "t"]);
+    std::fs::create_dir_all(dir.join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.join(".codeflow/policy.json"),
+        format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+    )
+    .unwrap();
+    let tasks = dir.join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    let dep = if waits { "TSK-002" } else { "" };
+    std::fs::write(tasks.join("TSK-001.md"), planned_task("TSK-001", dep)).unwrap();
+    if waits {
+        std::fs::write(tasks.join("TSK-002.md"), planned_task("TSK-002", "")).unwrap();
+    }
+    if bad_graph {
+        let epics = dir.join("project-management/epics");
+        std::fs::create_dir_all(&epics).unwrap();
+        std::fs::write(
+            epics.join("EPC-999.md"),
+            "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
+        )
+        .unwrap();
+    }
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "chore: anchor planning"]);
+    git(dir, &["switch", "-c", "fix/TSK-001-work"]);
+    std::fs::create_dir_all(dir.join("src")).unwrap();
+    std::fs::write(dir.join("src/lib.rs"), "fn work() {}\n").unwrap();
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-m", "fix: implement work"]);
+    let out = Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn combined(output: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    )
+}
+
+/// TSK-133 review R1: tracked work gets the visible-workgraph check once,
+/// at the `git.work_planning` level, whether the task comes from the branch
+/// (`fix/TSK-001-work`) or only from the `Task:` line (`fix/work`), and from
+/// the target checkout as the shipped workflow runs it.
+#[test]
+fn ci_checks_the_visible_graph_once_for_any_tracked_context() {
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        let head = planning_repo(dir.path(), level, false, true);
+        let body = format!("Task: TSK-001\n\n{FULL_BODY}");
+        let run = |branch: &str, head: &str| {
+            run_in(
+                dir.path(),
+                &[
+                    "ci",
+                    "--base",
+                    "main",
+                    "--head",
+                    head,
+                    "--branch",
+                    branch,
+                    "--pr-body",
+                    &body,
+                ],
+            )
+        };
+        let shown = format!("work.valid_graph ({level})");
+        let mut cases = vec![
+            ("own", run("fix/TSK-001-work", "HEAD")),
+            ("named", run("fix/work", "HEAD")),
+        ];
+        git(dir.path(), &["checkout", "-q", "--detach", "main"]);
+        cases.push(("target checkout", run("fix/work", &head)));
+        for (case, output) in cases {
+            let out = combined(&output);
+            assert!(
+                out.contains("pull request class: tracked TSK-001"),
+                "{case} {level}: {out}"
+            );
+            assert_eq!(
+                out.matches("work.valid_graph (").count(),
+                1,
+                "{case} {level}: {out}"
+            );
+            assert!(
+                out.contains(&shown) && out.contains("EPC-999.md"),
+                "{case} {level}: {out}"
+            );
+            assert_eq!(
+                output.status.code(),
+                Some(i32::from(level == "block")),
+                "{case} {level}: {out}"
+            );
+        }
+    }
+}
+
+/// TSK-133 review R2: an unreadable tracking state blocks `work start` and
+/// CI alike, whatever `git.work_planning` says; with the state readable, a
+/// genuine planning finding still only warns at `warn`.
+#[test]
+fn an_unreadable_tracking_state_blocks_work_start_and_ci_at_any_level() {
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        planning_repo(dir.path(), level, true, false);
+        std::fs::write(dir.path().join(".codeflow/project.toml"), "not valid [").unwrap();
+        let start = run_in(dir.path(), &["work", "start", "TSK-001"]);
+        let out = combined(&start);
+        assert_eq!(start.status.code(), Some(1), "{level}: {out}");
+        assert!(
+            out.contains("cannot determine durable-work tracking"),
+            "{level}: {out}"
+        );
+        assert!(!out.contains("continuing"), "{level}: {out}");
+        assert!(!out.contains("not valid ["), "state is not echoed: {out}");
+        let ci = run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--branch",
+                "fix/TSK-001-work",
+            ],
+        );
+        let out = combined(&ci);
+        assert_eq!(ci.status.code(), Some(1), "{level}: {out}");
+        assert!(
+            out.contains("work.tracking_state (block)"),
+            "{level}: {out}"
+        );
+
+        std::fs::remove_file(dir.path().join(".codeflow/project.toml")).unwrap();
+        let start = run_in(dir.path(), &["work", "start", "TSK-001"]);
+        let out = combined(&start);
+        assert_eq!(
+            start.status.code(),
+            Some(i32::from(level == "block")),
+            "{level}: {out}"
+        );
+        assert!(out.contains("TSK-002"), "{level}: {out}");
+    }
+}
