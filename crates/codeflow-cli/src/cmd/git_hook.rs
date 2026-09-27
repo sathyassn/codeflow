@@ -100,6 +100,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
             if let Ok(report) = result.as_mut() {
                 let remote = args.args.first().map(String::as_str);
                 super::push_set::run(&root, &policy.git, &refs, remote, report);
+                sync_pending_ids(&root, remote, &refs, report);
             }
             ("pre-push", result)
         }
@@ -113,6 +114,59 @@ pub fn run(args: &GitHookArgs) -> i32 {
             eprintln!("codeflow {plane}: warning: {e} — check skipped");
             0
         }
+    }
+}
+
+/// `ids sync` in pre-push (SPC-013 R-15): publish pending reservations
+/// before code that may carry their records reaches the authority. It warns
+/// and continues when the authority is unreachable or is not the push
+/// target, blocks only on a number held by a different `uid`, and never runs
+/// for a push of the registry itself, so it cannot recurse (R-6).
+fn sync_pending_ids(
+    root: &Path,
+    remote: Option<&str>,
+    refs: &[git_hook::PushRef],
+    report: &mut git_hook::StageReport,
+) {
+    use codeflow_core::ids::{issue, IdsError, AUTHORITY, REGISTRY_BRANCH};
+    let pushes_code = refs.iter().any(|r| {
+        r.remote_branch()
+            .is_some_and(|branch| branch != REGISTRY_BRANCH)
+            && !r.is_delete()
+    });
+    if !pushes_code || !issue::has_pending(root) {
+        return;
+    }
+    if remote != Some(AUTHORITY) {
+        report.notes.push(format!(
+            "pending id reservations stay local: this push goes to {}, not the authority `{AUTHORITY}`",
+            remote.unwrap_or("an unnamed remote")
+        ));
+        return;
+    }
+    match issue::sync(root) {
+        Ok(synced) if !synced.published.is_empty() => report.notes.push(format!(
+            "published pending id reservations: {}",
+            synced
+                .published
+                .iter()
+                .map(ToString::to_string)
+                .collect::<Vec<_>>()
+                .join(", ")
+        )),
+        Ok(_) => {}
+        Err(IdsError::Clash(message)) => {
+            report.violations.push(codeflow_core::hooks::Violation::new(
+                "registry.sync",
+                codeflow_core::hooks::PolicyLevel::Block,
+                message,
+                "renumber the unmerged record with `codeflow ids retarget <id>`, then push again"
+                    .to_string(),
+            ));
+        }
+        Err(error) => report.notes.push(format!(
+            "ids sync skipped, reservations stay pending: {error}"
+        )),
     }
 }
 

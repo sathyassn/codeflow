@@ -7,6 +7,7 @@ pub mod doctor;
 pub mod estimate;
 pub mod git_hook;
 pub mod hook;
+pub mod ids;
 pub mod integrate;
 pub mod new;
 pub mod orient;
