@@ -58,6 +58,8 @@ TRANSCRIPT="$STUB_DIR/transcript"
 #   pane-text-directive    swapped into pane-text when the directive is typed
 #   pane-text-after-down   swapped into pane-text when the key is `down`
 #   pane-text-after-enter  swapped into pane-text on any other send-keys
+#   proc-cwd               the session's working directory, as `lsof` prints
+#                          it; proc-cwd-after-enter is swapped in on Enter
 {
   printf '#!/bin/sh\n'
   printf 'D=%s\n' "$STUB_DIR"
@@ -81,6 +83,7 @@ TRANSCRIPT="$STUB_DIR/transcript"
   printf '      exit 0 ;;\n'
   printf '    esac\n'
   printf '    [ -f "$D/exit-on-keys" ] && cp "$D/proc-shell" "$D/proc-out"\n'
+  printf '    [ -f "$D/proc-cwd-after-enter" ] && cp "$D/proc-cwd-after-enter" "$D/proc-cwd"\n'
   printf '    [ -f "$D/pane-text-after-enter" ] && cp "$D/pane-text-after-enter" "$D/pane-text"\n'
   printf '    n=$(($(cat "$D/enters") + 1)); printf "%%s" "$n" >"$D/enters"\n'
   printf '    [ "$n" -lt "$(cat "$D/accept-at")" ] || : >"$D/accepted"\n'
@@ -89,6 +92,16 @@ TRANSCRIPT="$STUB_DIR/transcript"
   printf 'exit 0\n'
 } >"$STUB_DIR/herdr"
 chmod 0755 "$STUB_DIR/herdr"
+
+# An lsof stub for the session's working directory, printed in the field
+# format lsof -Fn uses. The session's process id is beyond any pid_max, so
+# process_cwd never finds it under /proc and always asks this stub.
+{
+  printf '#!/bin/sh\n'
+  printf 'D=%s\n' "$STUB_DIR"
+  printf 'printf "p%%s\\nfcwd\\nn%%s\\n" 99999999 "$(cat "$D/proc-cwd")"\n'
+} >"$STUB_DIR/lsof"
+chmod 0755 "$STUB_DIR/lsof"
 
 # stub_herdr <pane text> - reset the stub: that pane text, a readable pane, an
 # agent start that refuses and an agent get that finds nothing.
@@ -105,14 +118,15 @@ stub_herdr() {
   printf '99' >"$STUB_DIR/accept-at"
   rm -f "$STUB_DIR/accepted" "$STUB_DIR/exit-on-keys" \
     "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter" \
-    "$STUB_DIR/pane-text-after-down"
+    "$STUB_DIR/pane-text-after-down" "$STUB_DIR/proc-cwd-after-enter"
+  printf '%s' /nonexistent >"$STUB_DIR/proc-cwd"
   printf '%s\n' "$PROC_AGENT" >"$STUB_DIR/proc-out"
   printf '%s\n' "$PROC_SHELL" >"$STUB_DIR/proc-shell"
 }
 
 # The `pane process-info` replies for a pane running an agent and for one back
 # at its shell: only the foreground process group differs.
-PROC_AGENT='{"result":{"process_info":{"foreground_process_group_id":200,"shell_pid":100},"type":"pane_process_info"}}'
+PROC_AGENT='{"result":{"process_info":{"foreground_process_group_id":99999999,"shell_pid":100},"type":"pane_process_info"}}'
 PROC_SHELL='{"result":{"process_info":{"foreground_process_group_id":100,"shell_pid":100},"type":"pane_process_info"}}'
 
 # agent_get_json <pane> <tab> - the reply shape `herdr agent get` prints.
@@ -301,14 +315,25 @@ ok resolve_trust_prompt.disabled "a zero budget neither asks the operator nor se
 #
 # The screens follow a live Claude Code 2.1.283 capture of the dialog: the
 # folder under "Accessing workspace:", wrapped at the pane width, the cursor on
-# "No, exit". Every folder below exists, so only identity decides.
+# "No, exit". Every folder below exists, so only identity decides. The sample
+# is named the way qualify.sh names one: lowercase words and a hex nonce.
 
-OWN="$STUB_DIR/sample"
-SIBLING="$STUB_DIR/sample-b"
-ELSEWHERE="$STUB_DIR/other-folder"
-mkdir -p "$OWN" "$SIBLING" "$ELSEWHERE"
-ln -s "$ELSEWHERE" "$STUB_DIR/link-elsewhere"
-ln -s "$OWN" "$STUB_DIR/link-own"
+STUB_REAL=$(CDPATH= cd -P -- "$STUB_DIR" && pwd -P)
+NONCE=0123456789abcdef
+OWN="$STUB_REAL/greenfield-rust-full-$NONCE"
+SIBLING="$STUB_REAL/greenfield-rust-full-0123456789abcdee"
+ELSEWHERE="$STUB_REAL/other-folder"
+NL='
+'
+TAB=$(printf '\t')
+# Codex's three foreign folders (TSK-083 review round 1): a trailing blank,
+# a newline and a tab in the name, each once read as the sample.
+TRAILING="$OWN "
+NEWLINE="$STUB_REAL/greenfield-rust-full-01234567${NL}89abcdef"
+TABBED="$OWN$TAB-other"
+mkdir -p "$OWN" "$SIBLING" "$ELSEWHERE" "$TRAILING" "$NEWLINE" "$TABBED"
+ln -s "$ELSEWHERE" "$STUB_REAL/link-elsewhere"
+ln -s "$OWN" "$STUB_REAL/link-own"
 
 # trust_screen <folder> <no|yes> [width] - the dialog as the pane shows it.
 trust_screen() {
@@ -341,15 +366,27 @@ trust_prompt_showing p1 && _r=0 || _r=$?
 ok trust_prompt_showing.wrapped "a question wrapped by a narrow pane is still showing" \
   "$([ "$_r" = "$TRUST_SHOWING" ] && echo 0 || echo 1)"
 
-# run_own <budget> <folder shown> <cursor after down> [width] - the dialog
-# names <folder shown>; this run's sample is always $OWN.
-run_own() {
-  stub_herdr "$(trust_screen "$2" no "${4:-}")"
-  trust_screen "$2" "$3" "${4:-}" >"$STUB_DIR/pane-text-after-down"
+# own_stub <folder shown> <cursor after down> [width] [session folder] [sample]
+# - set the stub up: the dialog names <folder shown>, the session runs in
+# <session folder> (the shown folder by default), this run's sample is
+# <sample> ($OWN by default).
+own_stub() {
+  stub_herdr "$(trust_screen "$1" no "${3:-}")"
+  trust_screen "$1" "$2" "${3:-}" >"$STUB_DIR/pane-text-after-down"
   printf '%s\n' "$TRUSTED_PANE" >"$STUB_DIR/pane-text-after-enter"
   printf '0' >"$STUB_DIR/start-rc"
-  resolve_trust_prompt p1 t1 "$OWN" "$1" cf-selfcheck-cl01 \
+  printf '%s' "${4:-$1}" >"$STUB_DIR/proc-cwd"
+  OWN_SAMPLE=${5:-$OWN}
+}
+
+# run_own <budget> <own_stub arguments> - drive the real trust branch.
+run_own() {
+  _ro_budget=$1
+  shift
+  own_stub "$@"
+  resolve_trust_prompt p1 t1 "$OWN_SAMPLE" "$_ro_budget" cf-selfcheck-cl01 \
     /tmp/state/settings.json >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+  unset _ro_budget
 }
 
 # keys_sent - the keys the harness pressed, in order, on one line.
@@ -370,23 +407,64 @@ run_own 0 "$OWN" yes 60
 ok trust_own.wrapped "a path wrapped at a 60-column pane is still read as the sample" \
   "$([ "$RESOLVE_RC" = 0 ] && [ "$(keys_sent)" = "down Enter " ] && echo 0 || echo 1)"
 
-run_own 0 "$STUB_DIR/link-own" yes
-ok trust_own.symlink "a symlink that resolves to the sample is the sample" \
-  "$([ "$RESOLVE_RC" = 0 ] && [ "$(keys_sent)" = "down Enter " ] && echo 0 || echo 1)"
-
 # Negative controls: each must leave the pane without a single key and hand
-# the prompt to the operator with a reason that says so.
-for _case in "sibling:$SIBLING" "parent:$STUB_DIR" "symlink-elsewhere:$STUB_DIR/link-elsewhere" \
-  "missing:$STUB_DIR/not-there" "prefix:$OWN-b"; do
-  run_own 3 "${_case#*:}" yes
-  ok "trust_other.${_case%%:*}" "a prompt for another folder gets no key and waits for the operator" \
+# the prompt to the operator with a reason that says so. The session runs in
+# the folder the dialog names, except where the case says otherwise.
+#   symlink-own    the dialog shows a link to the sample, not its real path
+#   trailing-blank a sibling whose name ends in a blank
+#   newline        a folder whose name holds a newline; wrapped, its screen
+#                  reads exactly as the sample, and only the session's
+#                  working directory tells them apart
+#   tab            a folder whose name holds a tab
+#   session-elsewhere  the screen names the sample, the session runs elsewhere
+#   no-nonce, short-nonce, upper-case  a sample path the harness would not
+#                  have named, answered by nobody but the operator
+mkdir -p "$STUB_REAL/greenfield-rust-full" "$STUB_REAL/greenfield-rust-full-0123abcd" \
+  "$STUB_REAL/Greenfield-rust-full-$NONCE"
+while IFS='|' read -r _name _shown _width _session _sample; do
+  run_own 3 "$_shown" yes "$_width" "$_session" "$_sample"
+  ok "trust_other.$_name" "a prompt that is not provably this run's own sample gets no key and waits for the operator" \
     "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "" ] &&
        [ "$TRUST_OUTCOME" = unanswered ] && [ "$TRUST_OWNER" = "$TRUST_OWNER_OPERATOR" ] &&
        [ -z "$TRUST_ANSWERED_BY" ] && grep -qF 'ACTION NEEDED' "$STUB_DIR/banner" &&
        printf '%s' "$TRUST_REASON" | grep -qF "did not name this run's own sample" &&
        echo 0 || echo 1)"
+done <<CASES
+sibling|$SIBLING||$SIBLING|
+parent|$STUB_REAL||$STUB_REAL|
+symlink-elsewhere|$STUB_REAL/link-elsewhere||$ELSEWHERE|
+symlink-own|$STUB_REAL/link-own||$OWN|
+missing|$STUB_REAL/not-there||$STUB_REAL/not-there|
+prefix|$OWN-b||$OWN-b|
+trailing-blank|$TRAILING||$TRAILING|
+tab|$TABBED||$TABBED|
+session-elsewhere|$OWN||$SIBLING|
+no-nonce|$STUB_REAL/greenfield-rust-full||$STUB_REAL/greenfield-rust-full|$STUB_REAL/greenfield-rust-full
+short-nonce|$STUB_REAL/greenfield-rust-full-0123abcd||$STUB_REAL/greenfield-rust-full-0123abcd|$STUB_REAL/greenfield-rust-full-0123abcd
+upper-case|$STUB_REAL/Greenfield-rust-full-$NONCE||$STUB_REAL/Greenfield-rust-full-$NONCE|$STUB_REAL/Greenfield-rust-full-$NONCE
+CASES
+unset _name _shown _width _session _sample
+
+# The newline folder needs its own case: its name cannot sit on one line of
+# the table above. Its screen is the sample's own, wrapped where the name
+# breaks, so the screen alone would pass.
+run_own 3 "$OWN" yes "" "$NEWLINE"
+ok trust_other.newline "a folder whose name holds a newline, shown exactly as the sample, gets no key" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "" ] &&
+     [ "$TRUST_OUTCOME" = unanswered ] && [ -z "$TRUST_ANSWERED_BY" ] && echo 0 || echo 1)"
+
+# The dialog parser: an exact path or nothing.
+own_stub "$OWN" yes
+trust_dialog "$STUB_DIR/pane-text-after-down" >"$STUB_DIR/dialog" && _r=0 || _r=1
+ok trust_dialog.exact "the parsed path is the sample's real path and the cursor is on yes" \
+  "$([ "$_r" = 0 ] && [ "$(sed -n 1p "$STUB_DIR/dialog")" = "$OWN" ] &&
+     [ "$(sed -n 2p "$STUB_DIR/dialog")" = yes ] && echo 0 || echo 1)"
+for _bad in "$TRAILING" "$TABBED" "$STUB_REAL/sample with space-$NONCE"; do
+  trust_screen "$_bad" yes >"$STUB_DIR/screen"
+  trust_dialog "$STUB_DIR/screen" >/dev/null && _r=1 || _r=0
+  ok trust_dialog.refused "a path line with a blank, tab or other character outside the set is refused" "$_r"
 done
-unset _case
+unset _bad
 
 # The cursor did not reach "Yes" after the move: no Enter is pressed.
 run_own 3 "$OWN" no
@@ -394,36 +472,58 @@ ok trust_own.no_enter "Enter is pressed only with the cursor on Yes" \
   "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "down " ] && echo 0 || echo 1)"
 
 # The screen after the move names another folder: no Enter either.
-stub_herdr "$(trust_screen "$OWN" no)"
+own_stub "$OWN" yes
 trust_screen "$SIBLING" yes >"$STUB_DIR/pane-text-after-down"
 resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
   >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
 ok trust_own.changed "a dialog that changes folder between reads gets no Enter" \
   "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "down " ] && echo 0 || echo 1)"
 
-# Answered, but the dialog never clears: not a session, and not the operator's.
-stub_herdr "$(trust_screen "$OWN" no)"
-trust_screen "$OWN" yes >"$STUB_DIR/pane-text-after-down"
+# The accepted read-to-key gap: the screen and the session change after the
+# final read, so Enter goes out. The after-answer check must then stop the run.
+own_stub "$OWN" yes
+printf '%s' "$SIBLING" >"$STUB_DIR/proc-cwd-after-enter"
+resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
+  >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+ok trust_own.race "a change after the final read is caught after the answer and stops the run" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "down Enter " ] &&
+     [ "$TRUST_OUTCOME" = stopped ] && [ "$TRUST_OWNER" = "$TRUST_OWNER_HARNESS" ] &&
+     printf '%s' "$TRUST_REASON" | grep -qF 'not running in that sample' &&
+     ! grep -qF 'agent start' "$STUB_DIR/calls" && echo 0 || echo 1)"
+
+# The session is gone after the answer (a No, or a crash): stop the run.
+own_stub "$OWN" yes
+: >"$STUB_DIR/exit-on-keys"
+resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
+  >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+ok trust_own.exited "a session gone after the answer stops the run" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = stopped ] &&
+     printf '%s' "$TRUST_REASON" | grep -qF 'no session in the foreground' && echo 0 || echo 1)"
+
+# Answered, but the dialog never clears: the run stops.
+own_stub "$OWN" yes
+rm -f "$STUB_DIR/pane-text-after-enter"
 _saved=$TRUST_SELF_ANSWER_SECONDS
 TRUST_SELF_ANSWER_SECONDS=2
 resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
   >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
 TRUST_SELF_ANSWER_SECONDS=$_saved
-ok trust_own.stuck "an answered prompt that stays on screen is unproven, owned by the environment" \
-  "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = unproven ] &&
-     [ "$TRUST_OWNER" = "$TRUST_OWNER_ENVIRONMENT" ] && echo 0 || echo 1)"
+ok trust_own.stuck "an answered prompt that stays on screen stops the run, owned by the harness" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = stopped ] &&
+     [ "$TRUST_OWNER" = "$TRUST_OWNER_HARNESS" ] && echo 0 || echo 1)"
 unset _saved
 
-# Mutation probe: with the identity check removed, the sibling prompt is
-# answered, so the negative controls above are what stop that bug.
+# Mutation probe: with the session check removed, the newline folder whose
+# screen reads as the sample is answered, so that check is what stops it.
 MUTANT_ID="$STUB_DIR/lib-identity.sh"
-sed 's#^same_folder() {$#same_folder() { return 0#' "$SCRIPT_DIR/lib.sh" >"$MUTANT_ID"
-run_own 3 "$SIBLING" yes
+sed 's#^    pane_session_in "\$1" "\$_tdn_real" >/dev/null; then$#    true; then#' \
+  "$SCRIPT_DIR/lib.sh" >"$MUTANT_ID"
+run_own 3 "$OWN" yes "" "$NEWLINE"
 _real_keys=$(keys_sent)
 _mutant_keys=$(sh -c '. "$1"; TRANSCRIPT=$2/transcript; resolve_trust_prompt p1 t1 "$3" 3 cf-selfcheck-cl01 /tmp/s.json >/dev/null 2>&1
   sed -n "s/^pane send-keys p1 //p" "$2/calls" | tr "\n" " "' sh "$MUTANT_ID" "$STUB_DIR" "$OWN" 2>/dev/null)
-ok mutation.identity "without the identity check a sibling's prompt would be answered" \
-  "$([ "$(grep -c '^same_folder() { return 0' "$MUTANT_ID")" = 1 ] &&
+ok mutation.identity "without the session check a folder that only looks like the sample would be answered" \
+  "$([ "$(grep -c '^    true; then$' "$MUTANT_ID")" = 1 ] &&
      [ "$_real_keys" = "" ] && [ -n "$_mutant_keys" ] && echo 0 || echo 1)"
 unset _real_keys _mutant_keys
 

@@ -301,11 +301,27 @@ trap 'exit 143' TERM
 
 WORK_PARENT=${WORK_PARENT_OPT:-${TMPDIR:-/tmp}}
 mkdir -p "$WORK_PARENT"
-WORK_PARENT=$(CDPATH= cd -- "$WORK_PARENT" && pwd)
+# The physical path, so a sample's folder is the same string the session's own
+# working directory resolves to (the trust prompt is matched on it exactly).
+WORK_PARENT=$(CDPATH= cd -P -- "$WORK_PARENT" && pwd -P)
 WORK="$WORK_PARENT/cfqual-$$-$(date -u '+%Y%m%dT%H%M%SZ')"
 mkdir "$WORK" || { printf 'could not create an owned work directory at %s\n' "$WORK" >&2; exit 1; }
 WORK_OWNED=1
 TEARDOWN_LOG="$WORK/teardown.log"
+
+# Every sample folder is named by the harness from lowercase letters, digits
+# and hyphens plus this run's random nonce, so a trust prompt can name only
+# this run's own sample by an exact path match (plain_sample_path in lib.sh).
+SAMPLE_NONCE=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+case $SAMPLE_NONCE in
+  ????????????*) ;;
+  *) printf 'could not read a sample nonce from /dev/urandom\n' >&2; exit 1 ;;
+esac
+
+# sample_dir <sample> <tier> - the folder of one sample in this run.
+sample_dir() {
+  printf '%s/%s-%s-%s\n' "$WORK" "$1" "$2" "$SAMPLE_NONCE"
+}
 
 RESULTS="$WORK/results.tsv"
 TRANSCRIPT="$WORK/transcript.log"
@@ -1414,6 +1430,20 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
     # `delegate wait --until ready` never runs on a session nobody has seen.
     if ! resolve_trust_prompt "$HERDR_PANE" "$HERDR_TAB" "$DIR" \
       "$TRUST_WAIT_SECONDS" "$_agent_name" "$_state/settings.json"; then
+      if [ "$TRUST_OUTCOME" = stopped ]; then
+        # The harness said yes and could not confirm the effect. Nothing more
+        # is sent to that session: the live lane ends here, the answer is a
+        # failed row, every later live row names the stop, and the ordinary
+        # teardown closes the tab after the remaining static rows.
+        printf '\nSTOPPED: %s\n' "$TRUST_REASON"
+        record "$SAMPLE" "$TIER" "trust prompt answered by the harness" \
+          "the answer reached this run's own sample and nothing else" \
+          "$RESULT_FAILED" "the dialog gone and the session in $DIR after the answer" \
+          "$TRUST_REASON"
+        canary_unavailable "the run stopped after the harness answered the trust prompt: $TRUST_REASON" \
+          "$TRUST_OWNER"
+        return
+      fi
       canary_unavailable "$_trust_why; $TRUST_REASON. $_trust_detail" "$TRUST_OWNER"
       return
     fi
@@ -1716,7 +1746,7 @@ qualify_boundary() {
 run_sample_tier() {
   SAMPLE=$1
   TIER=$2
-  DIR="$WORK/$SAMPLE-$TIER"
+  DIR=$(sample_dir "$SAMPLE" "$TIER")
   rm -rf "$DIR"
   mkdir -p "$DIR"
   printf '\n=== %s / %s ===\n' "$SAMPLE" "$TIER" >&2
@@ -1757,7 +1787,7 @@ done
 once_only_lane() {
   SAMPLE=$1
   TIER=$2
-  DIR="$WORK/$SAMPLE-$TIER"
+  DIR=$(sample_dir "$SAMPLE" "$TIER")
   if [ ! -d "$DIR" ]; then
     shift 2
     for _lane in "$@"; do

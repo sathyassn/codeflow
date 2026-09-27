@@ -309,8 +309,40 @@ TRUST_SELECTED=""
 # How long the prompt gets to clear after the harness answers it.
 TRUST_SELF_ANSWER_SECONDS=30
 
-# trust_dialog <screen-file> - print "<path>\t<selected>" when the screen is
-# the Claude Code 2.1.283 workspace-trust dialog, exit 1 for any other screen:
+# The harness answers a trust prompt only in a pane it created, for a sample
+# it named itself (sample_dir in qualify.sh). The threat is an accidental
+# mismatch, not a local actor racing the pane, so identity rests on three
+# exact checks rather than on a lossy reading of the screen:
+#
+#   1. the sample's real path is plain: ASCII letters, digits, `.`, `_`, `-`
+#      and `/` only, and its last component is lowercase letters, digits and
+#      `-` ending in a random nonce of at least 12 hex digits;
+#   2. the dialog's path lines, joined, equal that real path byte for byte:
+#      each line is one leading space and then only those characters, so a
+#      blank, tab or other character inside or after the path means no key;
+#   3. the pane's foreground process, the Claude session, has that real path
+#      as its working directory, before any key and again after the answer.
+#      A wrapped path and a folder name holding a newline look the same on
+#      screen, so this check, not the screen, decides which folder it is.
+#
+# The read-to-key gap is accepted under that threat model: between the last
+# read and the Enter nothing but the owned session draws in the pane, and the
+# after-answer check stops the run if the session is anywhere but the sample.
+
+# plain_sample_path <dir> - print the real path of <dir> when it passes rule 1.
+plain_sample_path() {
+  python3 -c 'import os, re, sys
+real = os.path.realpath(sys.argv[1])
+ok = (os.path.isdir(real)
+      and re.fullmatch(r"/[A-Za-z0-9._/-]+", real)
+      and re.fullmatch(r"[a-z0-9-]*-[0-9a-f]{12,}", os.path.basename(real)))
+print(real) if ok else sys.exit(1)' "$1" 2>/dev/null
+}
+
+# trust_dialog <screen-file> - print the dialog's path on line 1 and the
+# option under the cursor (no or yes) on line 2 when the screen is the Claude
+# Code 2.1.283 workspace-trust dialog with plain path lines; exit 1 for any
+# other screen:
 #
 #    Accessing workspace:
 #    /the/folder/path            one or more lines; a long path wraps
@@ -320,14 +352,13 @@ TRUST_SELF_ANSWER_SECONDS=30
 #      Yes, I trust this folder
 #    Enter to confirm · Esc to cancel
 #
-# The path is the lines between the two headings joined with nothing between
-# them, each with its surrounding blanks removed; blank lines add nothing. A
-# path with a blank at a wrap point therefore does not compare equal, and the
-# harness leaves that prompt to the operator.
+# Path lines are joined without trimming: each must be one space followed by
+# plain path characters and nothing else, trailing spaces included. Blank
+# lines between the two headings are skipped.
 trust_dialog() {
   LC_ALL=C awk '
     function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
-    { line[NR] = trim($0) }
+    { raw[NR] = $0; line[NR] = trim($0) }
     line[NR] == "Accessing workspace:" { heads++; head = NR }
     index(line[NR], "Quick safety check: Is this a project you created or one") == 1 { checks++; check = NR }
     line[NR] == "Enter to confirm · Esc to cancel" { confirms++ }
@@ -336,44 +367,82 @@ trust_dialog() {
     END {
       if (heads != 1 || checks != 1 || confirms != 1 || nos != 1 || yeses != 1) exit 1
       if (cursor != "no" && cursor != "yes") exit 1
-      for (i = head + 1; i < check; i++) path = path line[i]
+      for (i = head + 1; i < check; i++) {
+        if (raw[i] == "") continue
+        if (raw[i] !~ /^ [A-Za-z0-9._\/-]+$/) exit 1
+        path = path substr(raw[i], 2)
+      }
       if (index(path, "/") != 1) exit 1
-      printf "%s\t%s", path, cursor
+      printf "%s\n%s\n", path, cursor
     }
   ' "$1"
 }
 
-# same_folder <a> <b> - true when both name an existing directory with the
-# same real path. A sibling, a parent or a symlink to another folder differs.
-same_folder() {
+# process_cwd <pid> - print the working directory of <pid> and one newline.
+# The name is printed whole: a newline inside it stays in the output, so a
+# folder named "<sample>" plus a newline and more can never read as the sample.
+process_cwd() {
+  if [ -d "/proc/$1" ]; then
+    readlink "/proc/$1/cwd"
+  else
+    lsof -a -p "$1" -d cwd -Fn 2>/dev/null |
+      awk 'name { print; next } /^fcwd$/ { cwd = 1; next } cwd && /^n/ { print substr($0, 2); name = 1 }'
+  fi
+}
+
+# pane_session_in <pane> <real-path> - succeed when the pane's foreground
+# process, the session the harness launched there, has exactly <real-path> as
+# its real working directory. Prints what was observed, on one line.
+pane_session_in() {
+  _psi_pid=$(herdr pane process-info --pane "$1" 2>/dev/null | python3 -c 'import json,sys
+info = json.load(sys.stdin)["result"]["process_info"]
+if info["foreground_process_group_id"] == info["shell_pid"]:
+    sys.exit(1)
+print(int(info["foreground_process_group_id"]))' 2>/dev/null) || {
+    printf 'no session in the foreground of pane %s\n' "$1"
+    unset _psi_pid
+    return 1
+  }
+  # The trailing x keeps trailing newlines that are part of the name; only the
+  # one newline process_cwd ends with is removed.
+  _psi_cwd=$(process_cwd "$_psi_pid"; printf x)
+  _psi_cwd=${_psi_cwd%x}
+  _psi_cwd=${_psi_cwd%"
+"}
   python3 -c 'import os, sys
-a, b = sys.argv[1], sys.argv[2]
-sys.exit(0 if os.path.isdir(a) and os.path.isdir(b)
-         and os.path.realpath(a) == os.path.realpath(b) else 1)' "$1" "$2"
+cwd, want = sys.argv[1], sys.argv[2]
+real = os.path.realpath(cwd) if cwd else ""
+print(ascii(real) if real else "no working directory readable")
+sys.exit(0 if real and real == want else 1)' "$_psi_cwd" "$2"
+  _psi_rc=$?
+  unset _psi_pid _psi_cwd
+  return "$_psi_rc"
 }
 
 # trust_dialog_names <pane-id> <sample-dir> - one bounded read of the screen.
 #
-# Returns TRUST_NAMES_SAMPLE only when the screen is the trust dialog and the
-# folder it names is this run's own sample by real path, and sets
-# TRUST_SELECTED to the option under the cursor. Returns TRUST_NAMES_OTHER for
-# a dialog about any other folder or any screen that is not the dialog, and
+# Returns TRUST_NAMES_SAMPLE only when the sample path is plain (rule 1), the
+# screen is the trust dialog, its path equals the sample's real path exactly
+# (rule 2) and the pane's session runs in it (rule 3); sets TRUST_SELECTED to
+# the option under the cursor. Returns TRUST_NAMES_OTHER otherwise, and
 # TRUST_NAMES_UNREADABLE when the pane cannot be read.
 trust_dialog_names() {
   TRUST_SELECTED=""
+  _tdn_real=$(plain_sample_path "$2") || { unset _tdn_real; return "$TRUST_NAMES_OTHER"; }
   _tdn_file=${TMPDIR:-/tmp}/cf-trust-dialog.$$
   pane_read_visible "$1" "$_tdn_file" "$TRUST_READ_TIMEOUT" && _tdn_read=0 || _tdn_read=$?
   if [ "$_tdn_read" != 0 ] || [ ! -s "$_tdn_file" ]; then
     set -- "$TRUST_NAMES_UNREADABLE"
   elif _tdn_found=$(trust_dialog "$_tdn_file") &&
-    same_folder "${_tdn_found%%$(printf '\t')*}" "$2"; then
-    TRUST_SELECTED=${_tdn_found##*$(printf '\t')}
+    [ "$(printf '%s\n' "$_tdn_found" | sed -n 1p)" = "$_tdn_real" ] &&
+    pane_session_in "$1" "$_tdn_real" >/dev/null; then
+    TRUST_SELECTED=$(printf '%s\n' "$_tdn_found" | sed -n 2p)
     set -- "$TRUST_NAMES_SAMPLE"
   else
     set -- "$TRUST_NAMES_OTHER"
   fi
   rm -f "$_tdn_file"
-  unset _tdn_file _tdn_read _tdn_found
+  unset _tdn_file _tdn_read _tdn_found _tdn_real
   return "$1"
 }
 
@@ -402,6 +471,7 @@ TRUST_OWNER=""
 
 TRUST_OWNER_OPERATOR="the operator, because the trust prompt does not name the sample this run created"
 TRUST_OWNER_ENVIRONMENT="operator environment"
+TRUST_OWNER_HARNESS="this harness, which answered the trust prompt and could not confirm the effect"
 
 # resolve_trust_prompt <pane> <tab> <dir> <budget> <agent> <settings-file>
 #
@@ -419,6 +489,9 @@ TRUST_OWNER_ENVIRONMENT="operator environment"
 #   unanswered  the budget ended with the question still on screen
 #   unreadable  the budget ended without a readable pane
 #   unproven    the question cleared but no session could be proven
+#   stopped     the harness answered for its own sample, and a fresh read
+#               afterwards did not show the dialog gone with the session in
+#               that sample; the caller stops the run and reports it
 resolve_trust_prompt() {
   _rtp_pane=$1
   _rtp_tab=$2
@@ -432,17 +505,25 @@ resolve_trust_prompt() {
   TRUST_ANSWERED_BY=""
 
   # A prompt that names this run's own sample is the harness's to answer. It
-  # is recorded as such, and the session is then proven like any other answer.
+  # is recorded as such, and the answer's effect is then verified: the dialog
+  # gone and the pane's session still running in the sample. Anything else
+  # stops the run, because a yes may have reached a folder that is not ours.
   if answer_own_trust_prompt "$_rtp_pane" "$_rtp_dir"; then
     TRUST_ANSWERED_BY="the harness, because the prompt named this run's own sample $_rtp_dir"
     printf 'trust prompt answered by %s\n' "$TRUST_ANSWERED_BY" | tee -a "$TRANSCRIPT"
     wait_for_trust_answer "$_rtp_pane" "$TRUST_SELF_ANSWER_SECONDS" && _rtp_wait=0 || _rtp_wait=$?
-    if [ "$_rtp_wait" = "$TRUST_WAIT_ANSWERED" ]; then
-      resolve_trust_session "$_rtp_pane" "$_rtp_tab" "$_rtp_agent" "$_rtp_settings"
+    _rtp_real=$(plain_sample_path "$_rtp_dir") || _rtp_real=""
+    _rtp_cwd=$(pane_session_in "$_rtp_pane" "$_rtp_real") && _rtp_in=0 || _rtp_in=1
+    if [ "$_rtp_wait" != "$TRUST_WAIT_ANSWERED" ]; then
+      TRUST_OUTCOME=stopped
+      TRUST_OWNER=$TRUST_OWNER_HARNESS
+      TRUST_REASON="the harness answered the trust prompt for its own sample, but the prompt was still on screen or unreadable $TRUST_SELF_ANSWER_SECONDS seconds later, so the run stopped"
+    elif [ -z "$_rtp_real" ] || [ "$_rtp_in" != 0 ]; then
+      TRUST_OUTCOME=stopped
+      TRUST_OWNER=$TRUST_OWNER_HARNESS
+      TRUST_REASON="the harness answered the trust prompt for its own sample, but afterwards the pane's session was not running in that sample (observed: $_rtp_cwd), so the run stopped"
     else
-      TRUST_OUTCOME=unproven
-      TRUST_OWNER=$TRUST_OWNER_ENVIRONMENT
-      TRUST_REASON="the harness answered the trust prompt for its own sample, but the prompt was still on screen or unreadable $TRUST_SELF_ANSWER_SECONDS seconds later"
+      resolve_trust_session "$_rtp_pane" "$_rtp_tab" "$_rtp_agent" "$_rtp_settings"
     fi
   elif [ "$_rtp_budget" -eq 0 ]; then
     TRUST_OUTCOME=disabled
@@ -477,7 +558,7 @@ resolve_trust_prompt() {
     fi
   fi
 
-  unset _rtp_pane _rtp_tab _rtp_dir _rtp_budget _rtp_agent _rtp_settings _rtp_wait
+  unset _rtp_pane _rtp_tab _rtp_dir _rtp_budget _rtp_agent _rtp_settings _rtp_wait _rtp_cwd _rtp_real _rtp_in
   [ "$TRUST_OUTCOME" = ready ]
 }
 
