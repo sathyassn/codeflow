@@ -388,6 +388,10 @@ fn spawn_command(
     }
 
     let mut child = cmd.spawn().map_err(spawn_err)?;
+    // The target's process group (its pid, set above) outlives this process
+    // if the gate is killed; the full-gate lock stays held while it runs.
+    #[cfg(unix)]
+    crate::testing::gate_guard::target_group_started(child.id());
 
     let stdout_reader = child.stdout.take().map(spawn_reader);
     let stderr_reader = child.stderr.take().map(spawn_reader);
@@ -429,6 +433,8 @@ fn spawn_command(
 
     let stdout = join_reader(stdout_reader);
     let stderr = join_reader(stderr_reader);
+    #[cfg(unix)]
+    crate::testing::gate_guard::target_group_finished(child.id());
 
     Ok(CommandOutcome {
         exit_code: status.code().unwrap_or(-1),

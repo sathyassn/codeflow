@@ -17,15 +17,26 @@
 //! names the holder recorded in the file. A file that still names a holder
 //! while its lock is free was left by a process that died, and is reclaimed.
 //!
+//! **Targets outlive a killed gate.** Each target runs in its own process
+//! group, so killing the gate process frees its lock while the target keeps
+//! running. While a gate holds the lock, the runner records each running
+//! target's process group in the holder record ([`target_group_started`]).
+//! A free lock whose record names a process group with a live process is
+//! still held: the next gate refuses until that group exits.
+//!
 //! **Target directory.** `CARGO_TARGET_DIR` outside the worktree lets builds
 //! in parallel worktrees overwrite each other's binaries. A shared directory
 //! is also a legitimate way to save disk, and the gate lock already keeps two
 //! gates apart, so [`check_cargo_target_dir`] returns a warning, never a
 //! refusal.
 
+use std::collections::BTreeSet;
+use std::fmt::Write as _;
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::path::{Component, Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use fs2::FileExt;
@@ -37,13 +48,34 @@ pub const LOCK_FILE: &str = "full-gate.lock";
 /// the process exits); a clean drop also clears the holder record.
 #[derive(Debug)]
 pub struct GateLock {
+    id: u64,
     files: Vec<File>,
     /// Degradations and reclaimed stale locks, for the caller to print.
     pub notes: Vec<String>,
 }
 
+/// A lock held by this process, whose record the runner extends with the
+/// process groups of running targets.
+struct Held {
+    id: u64,
+    paths: Vec<PathBuf>,
+    record: String,
+    groups: BTreeSet<u32>,
+}
+
+static HELD: Mutex<Vec<Held>> = Mutex::new(Vec::new());
+static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+
+fn held() -> std::sync::MutexGuard<'static, Vec<Held>> {
+    HELD.lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl Drop for GateLock {
     fn drop(&mut self) {
+        // Deregister first, under the registry lock, so no target update can
+        // rewrite a record after it is cleared.
+        held().retain(|h| h.id != self.id);
         for file in &mut self.files {
             // Best effort: an uncleared record only reads as a stale lock,
             // which the next gate reclaims.
@@ -60,6 +92,9 @@ pub struct LockHeld {
     /// The holder record in that file (empty when the holder has not written
     /// it yet).
     pub holder: String,
+    /// Process groups of targets still running after their gate process
+    /// exited; empty when the gate process itself holds the lock.
+    pub running_groups: Vec<u32>,
 }
 
 impl std::fmt::Display for LockHeld {
@@ -69,6 +104,17 @@ impl std::fmt::Display for LockHeld {
         } else {
             describe_holder(&self.holder)
         };
+        if !self.running_groups.is_empty() {
+            let groups: Vec<String> = self.running_groups.iter().map(u32::to_string).collect();
+            return write!(
+                f,
+                "another full gate's targets are still running on this machine: process \
+                 group {} of {holder}, whose gate process has exited. Only one full gate \
+                 runs at a time; wait for those targets to finish or stop them (lock: {})",
+                groups.join(", "),
+                self.path.display()
+            );
+        }
         write!(
             f,
             "another full gate is running on this machine: {holder}. Only one full gate \
@@ -101,9 +147,12 @@ pub fn lock_dirs(project_dir: &Path, home: Option<&Path>) -> Vec<PathBuf> {
 /// already taken in this call are released before returning.
 pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<GateLock, LockHeld> {
     let mut lock = GateLock {
+        id: NEXT_ID.fetch_add(1, Ordering::Relaxed),
         files: Vec::new(),
         notes: Vec::new(),
     };
+    let record = holder_record(project_dir);
+    let mut paths = Vec::new();
     if dirs.is_empty() {
         lock.notes.push(
             "no gate lock location (no CodeFlow home and no git repository); \
@@ -129,6 +178,7 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
                 return Err(LockHeld {
                     holder: read_record(&mut file),
                     path,
+                    running_groups: Vec::new(),
                 });
             }
             Err(error) => {
@@ -140,6 +190,17 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
             }
         }
         let previous = read_record(&mut file);
+        let running_groups = live_groups(&previous);
+        if !running_groups.is_empty() {
+            // The gate that wrote this record is gone but its targets are
+            // not: the lock is still in use. Leave the record for the next
+            // check.
+            return Err(LockHeld {
+                holder: previous,
+                path,
+                running_groups,
+            });
+        }
         if !previous.trim().is_empty() {
             lock.notes.push(format!(
                 "reclaimed a stale gate lock at {} left by {}",
@@ -147,15 +208,93 @@ pub fn acquire_full_gate_lock(dirs: &[PathBuf], project_dir: &Path) -> Result<Ga
                 describe_holder(&previous)
             ));
         }
-        if let Err(error) = write_record(&mut file, project_dir) {
+        if let Err(error) = write_record(&mut file, &record) {
             lock.notes.push(format!(
                 "gate lock at {} is held but its holder record could not be written: {error}",
                 path.display()
             ));
         }
         lock.files.push(file);
+        paths.push(path);
+    }
+    if !paths.is_empty() {
+        held().push(Held {
+            id: lock.id,
+            paths,
+            record,
+            groups: BTreeSet::new(),
+        });
     }
     Ok(lock)
+}
+
+/// Record that a target started in process group `pgid`, in every full-gate
+/// lock this process holds. A no-op when it holds none (quick mode, or a
+/// runner used outside `codeflow test`).
+pub fn target_group_started(pgid: u32) {
+    update_groups(|groups| {
+        groups.insert(pgid);
+    });
+}
+
+/// Record that the target in process group `pgid` finished.
+pub fn target_group_finished(pgid: u32) {
+    update_groups(|groups| {
+        groups.remove(&pgid);
+    });
+}
+
+fn update_groups(change: impl Fn(&mut BTreeSet<u32>)) {
+    let mut held = held();
+    for lock in held.iter_mut() {
+        change(&mut lock.groups);
+        let mut text = lock.record.clone();
+        for group in &lock.groups {
+            // Writing to a String cannot fail.
+            let _ = writeln!(text, "group={group}");
+        }
+        for path in &lock.paths {
+            // Best effort, through a second descriptor: `flock` locks belong
+            // to the open file description, so this neither takes nor drops
+            // the lock. A missed write only weakens the killed-gate check.
+            let _ = std::fs::write(path, &text);
+        }
+    }
+}
+
+/// Process groups named in a holder record that still have a live process.
+fn live_groups(record: &str) -> Vec<u32> {
+    record
+        .lines()
+        .filter_map(|line| line.strip_prefix("group=")?.trim().parse::<u32>().ok())
+        .filter(|&pgid| group_alive(pgid))
+        .collect()
+}
+
+#[cfg(unix)]
+fn group_alive(pgid: u32) -> bool {
+    // 0 and 1 are not target groups, and as negative pids they address this
+    // process's own group or every process.
+    let Ok(pgid) = libc::pid_t::try_from(pgid) else {
+        return false;
+    };
+    if pgid <= 1 {
+        return false;
+    }
+    // SAFETY: signal 0 only checks that the group exists and is signalable;
+    // nothing is delivered.
+    if unsafe { libc::kill(-pgid, 0) } == 0 {
+        return true;
+    }
+    // EPERM: the group exists but belongs to another user.
+    std::io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+}
+
+#[cfg(not(unix))]
+fn group_alive(_pgid: u32) -> bool {
+    // Targets are not placed in their own process group here, so there is
+    // no group to outlive the gate.
+    false
 }
 
 fn open_lock_file(path: &Path) -> std::io::Result<File> {
@@ -178,15 +317,21 @@ fn read_record(file: &mut File) -> String {
     text
 }
 
-fn write_record(file: &mut File, project_dir: &Path) -> std::io::Result<()> {
+fn holder_record(project_dir: &Path) -> String {
     let started = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());
+    format!(
+        "pid={}\nstarted={started}\ndir={}\n",
+        std::process::id(),
+        project_dir.display()
+    )
+}
+
+fn write_record(file: &mut File, record: &str) -> std::io::Result<()> {
     file.set_len(0)?;
     file.seek(SeekFrom::Start(0))?;
-    writeln!(file, "pid={}", std::process::id())?;
-    writeln!(file, "started={started}")?;
-    writeln!(file, "dir={}", project_dir.display())?;
+    file.write_all(record.as_bytes())?;
     file.flush()
 }
 
@@ -357,6 +502,71 @@ mod tests {
         );
         let record = std::fs::read_to_string(dir.join(LOCK_FILE)).unwrap();
         assert!(record.contains(&format!("pid={}", std::process::id())));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_free_lock_is_held_while_its_target_group_runs() {
+        use std::os::unix::process::CommandExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("locks");
+        std::fs::create_dir_all(&dir).unwrap();
+        let mut target = std::process::Command::new("sleep")
+            .arg("30")
+            .process_group(0)
+            .spawn()
+            .unwrap();
+        let group = target.id();
+        // The record a killed gate leaves: its pid is gone, its target is not.
+        std::fs::write(
+            dir.join(LOCK_FILE),
+            format!("pid=999999\nstarted=1\ndir=/gone\ngroup={group}\n"),
+        )
+        .unwrap();
+        let held = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w"))
+            .expect_err("a live target group keeps the lock");
+        assert_eq!(held.running_groups, vec![group]);
+        let message = held.to_string();
+        assert!(
+            message.contains(&format!("process group {group}")),
+            "{message}"
+        );
+        assert!(message.contains("pid 999999 in /gone"), "{message}");
+        assert!(
+            std::fs::read_to_string(dir.join(LOCK_FILE))
+                .unwrap()
+                .contains(&format!("group={group}")),
+            "the refusal leaves the record for the next check"
+        );
+
+        target.kill().unwrap();
+        target.wait().unwrap();
+        let lock = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")).unwrap();
+        assert!(
+            lock.notes
+                .iter()
+                .any(|n| n.contains("reclaimed a stale gate lock")),
+            "{:?}",
+            lock.notes
+        );
+    }
+
+    #[test]
+    fn a_held_lock_records_running_target_groups() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().join("locks");
+        let lock = acquire_full_gate_lock(std::slice::from_ref(&dir), Path::new("/w")).unwrap();
+        // A group number no other test uses: records are shared by every
+        // lock this process holds.
+        target_group_started(4_000_001);
+        let record = std::fs::read_to_string(dir.join(LOCK_FILE)).unwrap();
+        assert!(record.contains("group=4000001"), "{record}");
+        assert!(record.contains(&format!("pid={}", std::process::id())));
+        target_group_finished(4_000_001);
+        let record = std::fs::read_to_string(dir.join(LOCK_FILE)).unwrap();
+        assert!(!record.contains("group=4000001"), "{record}");
+        drop(lock);
+        assert_eq!(std::fs::read_to_string(dir.join(LOCK_FILE)).unwrap(), "");
     }
 
     #[test]

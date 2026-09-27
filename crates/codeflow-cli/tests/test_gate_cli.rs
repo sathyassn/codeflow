@@ -244,6 +244,79 @@ fn a_second_full_gate_is_refused_naming_the_holder() {
     assert_eq!(after.status.code(), Some(0), "{}", stderr(&after));
 }
 
+#[cfg(unix)]
+#[test]
+fn a_killed_gate_keeps_its_lock_until_its_target_exits() {
+    let home = tempfile::tempdir().unwrap();
+    // The target records its process group (the shell's pid leads it), then
+    // outlives the gate that started it.
+    let first = repo(
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "survivor", "runner": "custom",
+   "modes": {"full": {"command": "echo $$ > group.txt; sleep 30"}}}
+]}"#,
+    );
+    let (mut gate, rx) = spawn(command(
+        first.path(),
+        home.path(),
+        &["test", "--mode", "full"],
+    ));
+    wait_for(&rx, "starting target 'survivor'");
+    let group_file = first.path().join("group.txt");
+    let group = (0..200)
+        .find_map(|_| {
+            let text = std::fs::read_to_string(&group_file).unwrap_or_default();
+            let parsed = text.trim().parse::<u32>().ok();
+            if parsed.is_none() {
+                std::thread::sleep(Duration::from_millis(50));
+            }
+            parsed
+        })
+        .expect("the target wrote its group");
+
+    gate.kill().unwrap();
+    gate.wait().unwrap();
+    let alive = |g: u32| {
+        Command::new("kill")
+            .args(["-0", "--", &format!("-{g}")])
+            .stderr(Stdio::null())
+            .status()
+            .unwrap()
+            .success()
+    };
+    assert!(alive(group), "the target outlived its gate");
+
+    // Its gate process is gone, so the OS released the lock, but its target
+    // still runs: a second full gate refuses, from any repository.
+    let other = repo(QUICK_PASS);
+    for dir in [other.path(), first.path()] {
+        let refused = run(dir, home.path(), &["test", "--mode", "full"]);
+        let err = stderr(&refused);
+        assert_eq!(refused.status.code(), Some(1), "{err}");
+        assert!(err.contains("targets are still running"), "{err}");
+        assert!(err.contains(&format!("process group {group}")), "{err}");
+        assert!(!err.contains("starting target"), "no target ran: {err}");
+    }
+
+    // Once the group exits, the lock is stale and is reclaimed.
+    Command::new("kill")
+        .args(["-KILL", "--", &format!("-{group}")])
+        .status()
+        .unwrap();
+    let gone = (0..100).any(|_| {
+        let alive_now = alive(group);
+        if alive_now {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        !alive_now
+    });
+    assert!(gone, "the target group exited");
+    let after = run(other.path(), home.path(), &["test", "--mode", "full"]);
+    let err = stderr(&after);
+    assert_eq!(after.status.code(), Some(0), "{err}");
+    assert!(err.contains("reclaimed a stale gate lock"), "{err}");
+}
+
 #[test]
 fn a_stale_lock_from_a_dead_gate_is_reclaimed() {
     let home = tempfile::tempdir().unwrap();
