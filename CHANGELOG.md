@@ -104,12 +104,16 @@ publication date._
   checksum fails the job, and no unverified binary is installed. The commit
   and PR-body standards move to a new `codeflow-policy` workflow on
   `pull_request_target`, so a pull request cannot edit the job that judges
-  it. Upgrade in this order: install the new binary, land a pull request
-  that raises only `scaffold_version`, then run `codeflow update` on a new
-  branch. Hook shims now warn when the `codeflow` on `PATH` is older than
-  they are, and a policy with keys the binary cannot read names this order,
-  including a pull request's own policy judged from the target branch. The
-  `codeflow-registry` workflow installs its binary the same way.
+  it. That job and the registry job check out the pull request's base
+  commit, because GitHub's default checkout for the event is the default
+  branch; a pull request into an integration branch is judged by that
+  branch's pin and policy. Upgrade in this order: install the new binary,
+  land a pull request that raises only `scaffold_version`, then run
+  `codeflow update` on a new branch. Hook shims now warn when the `codeflow`
+  on `PATH` is older than they are, and a policy with keys the binary cannot
+  read names this order, including a pull request's own policy judged from
+  the target branch. The `codeflow-registry` workflow installs its binary
+  the same way.
 
 <!-- codeflow:release-impact patch -->
 - **Commit subject separator.** The commit-msg hook and `codeflow ci` now

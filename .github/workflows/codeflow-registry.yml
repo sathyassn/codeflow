@@ -2,10 +2,14 @@
 # (CodeFlow SPC-013 R-14, R-20, R-109; ADR-0072). Written by `codeflow init`
 # and managed by `codeflow update`.
 #
-# Why pull_request_target: GitHub then runs this workflow as it is on the
-# TARGET branch, so a pull request cannot edit, skip or replace the check
-# that judges it (under `pull_request` a PR that rewrote this step went green
-# on a damaged registry). The job reads the PR head only as git data: it
+# Why pull_request_target: GitHub then runs this workflow from the
+# repository's default branch, never from the pull request, so a pull request
+# cannot edit, skip or replace the check that judges it (under `pull_request`
+# a PR that rewrote this step went green on a damaged registry). The default
+# checkout for this event is the default branch too, whatever the pull
+# request targets, so the job checks out the pull request's base commit
+# explicitly; push, schedule and dispatch runs keep their own event's commit.
+# The job reads the PR head only as git data: it
 # never checks it out, builds it or runs anything from it. The token is read
 # only and no secret is used. Build and test jobs stay in codeflow-ci.yml on
 # `pull_request`.
@@ -41,9 +45,12 @@ jobs:
     permissions:
       contents: read
     steps:
-      # The target branch (never the PR head): its policy and this workflow.
+      # The target (never the PR head): for a pull request its base commit,
+      # otherwise the event's own commit. The binary, the pin and the policy
+      # all come from this checkout.
       - uses: actions/checkout@v4
         with:
+          ref: ${{ github.event_name == 'pull_request_target' && github.event.pull_request.base.sha || '' }}
           fetch-depth: 0
 
       # This repository IS codeflow, so it builds the checked-out TARGET

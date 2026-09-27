@@ -294,9 +294,50 @@ fn job<'w>(workflow: &'w str, id: &str) -> &'w str {
     &rest[..offset]
 }
 
+/// The expression that selects the pull request's base commit.
+const BASE_SHA_REF: &str = "${{ github.event.pull_request.base.sha }}";
+
+/// The `with:` block of the first checkout step in `job_text`.
+fn checkout_block(job_text: &str) -> &str {
+    job_text
+        .split("- uses: actions/checkout@")
+        .nth(1)
+        .and_then(|rest| rest.split("\n\n").next())
+        .expect("a checkout step")
+}
+
+/// The checkout step's `ref:` value, when it sets one.
+fn checkout_ref(checkout: &str) -> Option<String> {
+    checkout
+        .lines()
+        .find_map(|l| l.trim().strip_prefix("ref: "))
+        .map(str::to_string)
+}
+
+/// What a workflow's checkout `ref:` resolves to for `event`: the commit a
+/// run checks out, or `None` for GitHub's default checkout. Only the forms
+/// the shipped workflows use are understood; anything else fails the test.
+fn resolve_ref(expr: Option<&str>, event: &str, base_sha: &str) -> Option<String> {
+    let conditional = format!(
+        "${{{{ github.event_name == 'pull_request_target' && {} || '' }}}}",
+        BASE_SHA_REF
+            .trim_start_matches("${{ ")
+            .trim_end_matches(" }}")
+    );
+    match expr {
+        None => None,
+        Some(e) if e == BASE_SHA_REF => Some(base_sha.to_string()),
+        Some(e) if e == conditional => {
+            (event == "pull_request_target").then(|| base_sha.to_string())
+        }
+        Some(other) => panic!("unrecognised checkout ref {other}"),
+    }
+}
+
 #[test]
 fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
-    // Only pull_request_target: GitHub runs this file from the target branch.
+    // Only pull_request_target: GitHub runs this file from the default
+    // branch, never from the pull request.
     let on = POLICY
         .split("\non:\n")
         .nth(1)
@@ -315,14 +356,17 @@ fn the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data() {
 
     let enforcing = job(POLICY, "commit-lint");
     assert!(enforcing.contains("name: commit standards"));
-    // The checkout is the target: no ref or repository points at the head.
-    let checkout = enforcing
-        .split("- uses: actions/checkout@")
-        .nth(1)
-        .and_then(|rest| rest.split("\n\n").next())
-        .unwrap();
+    // GitHub's default checkout for pull_request_target is the default
+    // branch, whatever the pull request targets, so the job names the pull
+    // request's base commit; nothing points the checkout at the head.
+    let checkout = checkout_block(enforcing);
+    assert_eq!(
+        checkout_ref(checkout).as_deref(),
+        Some(BASE_SHA_REF),
+        "{checkout}"
+    );
     assert!(
-        !checkout.contains("ref:") && !checkout.contains("repository:"),
+        !checkout.contains("head") && !checkout.contains("repository:"),
         "{checkout}"
     );
     // The pin is read from the target checkout.
@@ -446,4 +490,140 @@ fn a_pr_editing_the_workflow_changes_neither_the_pin_nor_the_verdict() {
         "{}",
         String::from_utf8_lossy(&forged_run.stderr)
     );
+}
+
+/// A repository whose default branch `main` pins 1.2.3 and allows a
+/// 50-character description, an `integration/check` target pinning 1.2.4
+/// with a 10-character limit, and `feat/longer` on it with a 24-character
+/// description. Returns the target's commit and the head's; `main` is left
+/// checked out.
+fn default_and_integration_targets(origin: &Path) -> (String, String) {
+    std::fs::create_dir_all(origin).unwrap();
+    repo(origin, "1.2.3");
+    let policy = include_str!("../../../assets/base/policy.json");
+    assert!(policy.contains("\"commit_desc_max_len\": 50,"));
+    std::fs::write(origin.join(".codeflow/policy.json"), policy).unwrap();
+    git(origin, &["add", "."]);
+    git(origin, &["commit", "-m", "chore: add the policy"]);
+
+    git(origin, &["checkout", "-q", "-b", "integration/check"]);
+    std::fs::write(
+        origin.join(".codeflow/policy.json"),
+        policy.replace(
+            "\"commit_desc_max_len\": 50,",
+            "\"commit_desc_max_len\": 10,",
+        ),
+    )
+    .unwrap();
+    std::fs::write(origin.join(".codeflow/project.toml"), project_toml("1.2.4")).unwrap();
+    git(origin, &["add", "."]);
+    git(origin, &["commit", "-m", "chore: tighten"]);
+    let base = git(origin, &["rev-parse", "HEAD"]);
+
+    git(origin, &["checkout", "-q", "-b", "feat/longer"]);
+    std::fs::write(origin.join("change.txt"), "fixture\n").unwrap();
+    git(origin, &["add", "."]);
+    git(origin, &["commit", "-m", "feat: add a longer description"]);
+    let head = git(origin, &["rev-parse", "HEAD"]);
+    git(origin, &["checkout", "-q", "main"]);
+    (base, head)
+}
+
+/// A pull request into a target that is not the default branch is judged by
+/// that target. GitHub runs the enforcing workflow from the default branch
+/// and its default checkout is the default branch too, so only the explicit
+/// base-commit checkout makes the pin and the policy the target's. The
+/// default branch allows a 50-character description, the integration target
+/// 10; the head's 24-character description must fail as the target says.
+#[test]
+fn a_pull_request_into_a_non_default_target_is_judged_by_that_target() {
+    let dir = tempfile::tempdir().unwrap();
+    let releases = dir.path().join("releases");
+    publish(&releases, "1.2.3");
+    publish(&releases, "1.2.4");
+    let origin = dir.path().join("origin");
+    let (base, head) = default_and_integration_targets(&origin);
+
+    // The run's working tree: GitHub's default checkout, the default branch.
+    let target = dir.path().join("target");
+    git(
+        dir.path(),
+        &[
+            "clone",
+            "-q",
+            origin.to_str().unwrap(),
+            target.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(git(&target, &["branch", "--show-current"]), "main");
+    git(
+        &target,
+        &["fetch", "-q", "origin", "feat/longer:refs/codeflow/pr-head"],
+    );
+    let verdict = |cwd: &Path| {
+        Command::new(env!("CARGO_BIN_EXE_codeflow"))
+            .args([
+                "ci",
+                "--base",
+                &base,
+                "--head",
+                &head,
+                "--branch",
+                "feat/longer",
+                "--actor",
+                "unknown",
+            ])
+            .current_dir(cwd)
+            .env("CODEFLOW_HOME", dir.path().join("home"))
+            .env("GIT_CONFIG_GLOBAL", "/dev/null")
+            .env("GIT_CONFIG_SYSTEM", "/dev/null")
+            .env_remove("CODEFLOW_PR_BODY")
+            .env_remove("GITHUB_ACTIONS")
+            .env_remove("GITHUB_EVENT_NAME")
+            .env_remove("GITHUB_EVENT_PATH")
+            .env_remove("GIT_DIR")
+            .output()
+            .unwrap()
+    };
+    // Control: without the explicit ref, the default branch's pin and its
+    // looser policy would judge the pull request, and it would pass.
+    let loose = verdict(&target);
+    assert_eq!(
+        loose.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&loose.stderr)
+    );
+    let default_pin = run_install(&install_script(POLICY), &target, "HEAD", &releases);
+    assert_eq!(
+        default_pin.installed_version().as_deref(),
+        Some("codeflow 1.2.3")
+    );
+
+    // Both enforcing workflows select the base commit for a pull request;
+    // the registry's push, schedule and dispatch runs keep their own commit.
+    for (name, workflow) in [("policy", POLICY), ("registry", REGISTRY)] {
+        let expr = checkout_ref(checkout_block(workflow));
+        let selected = resolve_ref(expr.as_deref(), "pull_request_target", &base);
+        assert_eq!(selected.as_deref(), Some(base.as_str()), "{name}");
+    }
+    let registry_ref = checkout_ref(checkout_block(REGISTRY));
+    for event in ["push", "schedule", "workflow_dispatch"] {
+        assert_eq!(resolve_ref(registry_ref.as_deref(), event, &base), None);
+    }
+
+    // The run as the workflows specify it: the base commit checked out.
+    git(&target, &["checkout", "-q", "--detach", &base]);
+    let install = run_install(&install_script(POLICY), &target, "HEAD", &releases);
+    assert!(install.out.status.success(), "{}", install.stderr());
+    assert_eq!(
+        install.installed_version().as_deref(),
+        Some("codeflow 1.2.4"),
+        "the target's pin"
+    );
+    let enforced = verdict(&target);
+    let text = String::from_utf8_lossy(&enforced.stderr);
+    assert_eq!(enforced.status.code(), Some(1), "{text}");
+    assert!(text.contains("git.commit_format"), "{text}");
+    assert!(text.contains("over the 10-char limit"), "{text}");
 }

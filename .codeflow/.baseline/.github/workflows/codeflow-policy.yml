@@ -1,14 +1,17 @@
 # codeflow policy: the enforcing CodeFlow check for pull requests. Written by
 # `codeflow init` and managed by `codeflow update`.
 #
-# It runs on `pull_request_target`, so GitHub runs this file as it is on the
-# target branch: a pull request that edits this workflow cannot change the job
-# that judges it. The job checks out the target, installs the codeflow version
-# the target pins in .codeflow/project.toml (`scaffold_version`), verified
-# against the release's published sha256.sum (SPC-013 R-113), fetches the
-# pull request head only as git data and never runs its code. The token is
-# read-only and no secret is used. Builds and tests of the head run in
-# codeflow-ci.yml on `pull_request`.
+# It runs on `pull_request_target`, so GitHub runs this file from the
+# repository's default branch, never from the pull request: a pull request
+# that edits this workflow cannot change the job that judges it. GitHub's
+# default checkout for this event is also the default branch, whatever the
+# pull request targets, so the job checks out the pull request's base commit
+# explicitly. From that target checkout it installs the codeflow version the
+# target pins in .codeflow/project.toml (`scaffold_version`), verified against
+# the release's published sha256.sum (SPC-013 R-113), and reads the target's
+# policy. It fetches the pull request head only as git data and never runs
+# its code. The token is read-only and no secret is used. Builds and tests of
+# the head run in codeflow-ci.yml on `pull_request`.
 #
 # `codeflow ci` runs the SAME commit-format, no-AI-attribution, no-emoji,
 # breaking-footer, branch-naming and PR-body checks as the git hooks and the
@@ -30,8 +33,11 @@ jobs:
     name: commit standards
     runs-on: ubuntu-24.04
     steps:
+      # The pull request's target, by the base commit the event names: the
+      # binary, the pin and the policy all come from this checkout.
       - uses: actions/checkout@v6
         with:
+          ref: ${{ github.event.pull_request.base.sha }}
           fetch-depth: 0
 
       - name: Install codeflow (target-pinned, checksum-verified)

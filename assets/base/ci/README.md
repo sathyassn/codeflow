@@ -88,7 +88,9 @@ the `codeflow` release named by `scaffold_version` in the target branch's
 `.codeflow/project.toml`, verified against the release's published
 `sha256.sum`. A missing checksum file, a missing entry or a mismatch fails the
 job; nothing unverified is installed. The enforcing jobs run on
-`pull_request_target` and read the pull request head only as git data. The
+`pull_request_target`, which takes the workflow from the default branch; they
+check out the pull request's base commit, so the target's pin and policy
+apply, and read the pull request head only as git data. The
 GitLab, Bitbucket and generic wrappers still carry a placeholder install step
 that fails red until you wire it.
 
