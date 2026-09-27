@@ -117,11 +117,15 @@ fn body(task_line: &str) -> String {
 }
 
 fn ci(root: &Path, branch: &str, pr_body: &str) -> (i32, String) {
+    ci_into(root, "main", branch, pr_body)
+}
+
+fn ci_into(root: &Path, base: &str, branch: &str, pr_body: &str) -> (i32, String) {
     let out = codeflow()
         .args([
             "ci",
             "--base",
-            "main",
+            base,
             "--head",
             "HEAD",
             "--branch",
@@ -186,15 +190,6 @@ fn each_class_passes_and_an_unclassified_pull_request_blocks() {
     let planning = ci(root, "plan/next", &body(""));
     assert_passes(&planning, "planning-only");
     assert!(planning.1.contains("class: planning-only"));
-
-    branch_with(
-        root,
-        "integration/EPC-001-outcome",
-        &[("src/lib.rs", "pub fn line() {}\n")],
-    );
-    let line = ci(root, "integration/EPC-001-outcome", &body(""));
-    assert_passes(&line, "epic line");
-    assert!(line.1.contains("class: epic integration line"));
 
     branch_with(
         root,
@@ -422,5 +417,196 @@ fn a_spike_lands_only_findings_and_its_record() {
         &ci(root, "spike/TSK-002-probe", &body("")),
         "spike with code",
         "spike TSK-002 changes src/cache.rs",
+    );
+
+    // `Task: none` cannot drop the spike the branch carries.
+    branch_with(root, "spike/TSK-002-probe", &[("README.md", "# Edited\n")]);
+    assert_blocks(
+        &ci(root, "spike/TSK-002-probe", &body("Task: none: small edit")),
+        "spike with a direct line",
+        "which carries TSK-002",
+    );
+}
+
+/// Merge `from` into the checked-out branch with a merge commit.
+fn merge(root: &Path, from: &str) {
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-q",
+            "-m",
+            &format!("Merge {from}"),
+            from,
+        ],
+    );
+}
+
+/// An epic line holding one planned and landed task: the whole line lands
+/// as one pull request, and only a verified line does.
+#[test]
+fn only_a_verified_epic_line_lands_as_one_pull_request() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    let line = "integration/EPC-001-outcome";
+    git(root, &["branch", line, "main"]);
+    let record = task("TSK-003", "feat", "todo").replace(
+        "integration_target: main",
+        &format!("integration_target: {line}"),
+    );
+    branch_with(
+        root,
+        "plan/line",
+        &[("project-management/tasks/TSK-003.md", &record)],
+    );
+    git(root, &["switch", "-q", line]);
+    merge(root, "plan/line");
+    git(root, &["switch", "-q", "-c", "task/TSK-003-work"]);
+    std::fs::write(root.join("src/lib.rs"), "pub fn line() {}\n").unwrap();
+    git(root, &["commit", "-qam", "feat: build on the line"]);
+    git(root, &["switch", "-q", line]);
+    merge(root, "task/TSK-003-work");
+
+    let landed = ci(root, line, &body(""));
+    assert_passes(&landed, "verified epic line");
+    assert!(
+        landed.1.contains("class: epic integration line of EPC-001"),
+        "{}",
+        landed.1
+    );
+
+    // The same commits under a name that is not the epic's line.
+    for (name, needle) in [
+        ("integration/not-an-epic", "names no epic"),
+        (
+            "integration/EPC-009-other",
+            "EPC-009, which has no epic record",
+        ),
+        (
+            "integration/EPC-001-elsewhere",
+            "no task of EPC-001 targets",
+        ),
+    ] {
+        git(root, &["branch", "-f", name, line]);
+        git(root, &["switch", "-q", name]);
+        assert_blocks(&ci(root, name, &body("")), name, needle);
+    }
+
+    // The line lands on the project's default target only.
+    git(root, &["branch", "release/next", "main"]);
+    git(root, &["switch", "-q", line]);
+    assert_blocks(
+        &ci_into(root, "release/next", line, &body("")),
+        "wrong target",
+        "lands on 'main', not 'release/next'",
+    );
+
+    // Work committed directly on the line is untracked.
+    std::fs::write(root.join("src/lib.rs"), "pub fn untracked() {}\n").unwrap();
+    git(root, &["commit", "-qam", "feat: slip one in"]);
+    assert_blocks(
+        &ci(root, line, &body("")),
+        "untracked addition",
+        "a commit made directly on the line",
+    );
+}
+
+/// The range is one tree diff from the merge-base: a product change made
+/// while resolving a merge counts, and paths are read without Git quoting.
+#[test]
+fn the_whole_range_is_classified_whatever_its_shape() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    branch_with(root, "side", &[("docs/plan/a.md", "# A\n")]);
+    git(root, &["switch", "-q", "-C", "plan/merged", "main"]);
+    git(root, &["merge", "--no-ff", "--no-commit", "side"]);
+    std::fs::write(root.join("src/lib.rs"), "pub fn in_the_merge() {}\n").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "Merge side"]);
+    assert_blocks(
+        &ci(root, "plan/merged", &body("")),
+        "merge resolution",
+        "planning-only pull request touches a product path: src/lib.rs",
+    );
+    assert_blocks(
+        &ci(root, "plan/merged", &body("Task: none: merge")),
+        "merge resolution, direct",
+        "src/lib.rs (product_paths)",
+    );
+
+    // A product change in an earlier commit of the range still counts.
+    branch_with(root, "fix/two", &[("src/lib.rs", "pub fn first() {}\n")]);
+    std::fs::write(root.join("README.md"), "# Later\n").unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "docs: a later commit"]);
+    assert_blocks(
+        &ci(root, "fix/two", &body("Task: none: two commits")),
+        "earlier commit",
+        "src/lib.rs (product_paths)",
+    );
+
+    for (path, member) in [
+        ("src/\u{3c0}.rs", "product_paths"),
+        (".claude/a\tb.md", "managed_instructions"),
+    ] {
+        branch_with(root, "fix/quoted", &[(path, "x\n")]);
+        assert_blocks(
+            &ci(root, "fix/quoted", &body("Task: none: quoted")),
+            path,
+            &format!("{path} ({member})"),
+        );
+    }
+}
+
+/// Tracking is read at the target: a pull request that deletes the records
+/// or the full-tier state is still classified.
+#[test]
+fn a_pull_request_cannot_switch_tracking_off_for_itself() {
+    let dir = tracked_repo(DEFAULT_POLICY);
+    let root = dir.path();
+    git(root, &["switch", "-q", "-c", "chore/untrack"]);
+    git(root, &["rm", "-rq", "project-management"]);
+    std::fs::write(root.join("src/lib.rs"), "pub fn after() {}\n").unwrap();
+    git(root, &["commit", "-qam", "chore: drop the records"]);
+    assert_blocks(
+        &ci(root, "chore/untrack", &body("")),
+        "records removed",
+        "unclassified pull request",
+    );
+
+    let full = tracked_repo(DEFAULT_POLICY);
+    let root = full.path();
+    git(root, &["rm", "-rq", "project-management"]);
+    std::fs::write(
+        root.join(".codeflow/project.toml"),
+        "schema_version = 1\ntier = \"full\"\nscaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\ngit_hooks = \"wired\"\npermission_preset = \"default\"\n",
+    )
+    .unwrap();
+    git(root, &["add", "-A"]);
+    git(root, &["commit", "-qm", "chore: full tier without records"]);
+    git(root, &["switch", "-q", "-c", "chore/downgrade"]);
+    std::fs::write(
+        root.join(".codeflow/project.toml"),
+        std::fs::read_to_string(root.join(".codeflow/project.toml"))
+            .unwrap()
+            .replace("tier = \"full\"", "tier = \"standard\""),
+    )
+    .unwrap();
+    std::fs::write(root.join("src/lib.rs"), "pub fn after() {}\n").unwrap();
+    git(root, &["commit", "-qam", "chore: downgrade"]);
+    assert_blocks(
+        &ci(root, "chore/downgrade", &body("")),
+        "tier downgraded",
+        "unclassified pull request",
+    );
+    git(root, &["switch", "-q", "-c", "chore/unstate", "main"]);
+    git(root, &["rm", "-q", ".codeflow/project.toml"]);
+    std::fs::write(root.join("src/lib.rs"), "pub fn after() {}\n").unwrap();
+    git(root, &["commit", "-qam", "chore: drop the state"]);
+    assert_blocks(
+        &ci(root, "chore/unstate", &body("")),
+        "state removed",
+        "unclassified pull request",
     );
 }

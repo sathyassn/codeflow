@@ -214,17 +214,20 @@ pub fn run(args: &CiArgs) -> i32 {
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
     if let Some(body) = &pr_body {
-        let base_sha = resolve_base(&root, &base_candidates);
-        let range_parts = match (base_sha.as_deref(), range.files.as_deref()) {
-            (Some(base), Some(files)) => Some((base, head.as_str(), files)),
-            _ => None,
-        };
+        let base = base_candidates
+            .iter()
+            .find_map(|name| rev_parse(&root, name).map(|sha| (name.as_str(), sha)));
+        let range_parts = base.as_ref().map(|(base_ref, base)| classification::Range {
+            base_ref,
+            base,
+            head: head.as_str(),
+        });
         classification::dispatch(
             &root,
             git,
             body,
             &branch,
-            range_parts,
+            range_parts.as_ref(),
             &mut tagged,
             &mut ran,
         );

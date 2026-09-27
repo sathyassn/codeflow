@@ -16,8 +16,9 @@ use codeflow_core::workgraph::classify::{
     is_planning_path, is_spike_path, path_sets, ProjectPaths,
 };
 use codeflow_core::workgraph::{
-    check_work_start_anchored, declared_work_target, durable_work_tracking_enabled,
-    resolve_work_target, task_id_from_branch,
+    check_epic_line, check_work_start_anchored, declared_work_target,
+    durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target,
+    task_id_from_branch,
 };
 
 /// The value of one `Task:` line in a pull request body.
@@ -78,7 +79,7 @@ pub(super) enum Class {
     PlanningOnly,
     /// An epic's integration line landing on its target; each task on it was
     /// classified when it landed on the line.
-    EpicLine,
+    EpicLine(String),
     /// A trusted automation profile (TSK-107 supplies the match).
     Automation { profile: String },
 }
@@ -93,6 +94,9 @@ pub(super) struct Input<'a> {
     pub branch_task: Option<String>,
     /// The automation profile the workflow's actor and branch matched, if any.
     pub automation: Option<&'a str>,
+    /// For an `integration/` head: the epic it lands, or why it is not a
+    /// verified epic line.
+    pub epic_line: Option<Result<String, String>>,
 }
 
 /// Resolve the class, or the reason the pull request has none.
@@ -119,7 +123,21 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                 derived: false,
             })
         }
-        Some(TaskLine::Direct(reason)) => Ok(Class::Direct { reason }),
+        Some(TaskLine::Direct(reason)) => {
+            if let Some(carried) = input.branch_task.as_deref() {
+                return Err(format!(
+                    "`Task: none` on branch '{}', which carries {carried}; the branch's task is the class",
+                    input.branch
+                ));
+            }
+            if input.branch.starts_with("spike/") {
+                return Err(format!(
+                    "`Task: none` on spike branch '{}'; a spike is tracked work, so name its task",
+                    input.branch
+                ));
+            }
+            Ok(Class::Direct { reason })
+        }
         Some(TaskLine::Malformed(value)) => Err(format!(
             "`Task: {value}` is neither `TSK-NNN` nor `none: <reason>`"
         )),
@@ -130,7 +148,11 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
                 });
             }
             if input.branch.starts_with("integration/") {
-                return Ok(Class::EpicLine);
+                return match &input.epic_line {
+                    Some(Ok(epic)) => Ok(Class::EpicLine(epic.clone())),
+                    Some(Err(reason)) => Err(reason.clone()),
+                    None => Err(format!("'{}' is not a verified epic line", input.branch)),
+                };
             }
             if let Some(task_id) = input.branch_task.clone() {
                 return Ok(Class::Tracked {
@@ -152,17 +174,34 @@ pub(super) fn classify(input: &Input<'_>) -> Result<Class, String> {
     }
 }
 
-/// Run the classification for `codeflow ci`.
+/// The range a pull request is judged on: the base as named and as a
+/// commit, and the head.
+pub(super) struct Range<'a> {
+    pub base_ref: &'a str,
+    pub base: &'a str,
+    pub head: &'a str,
+}
+
+/// Run the classification for `codeflow ci`. Classification judges the
+/// whole range against the target's own state: tracking is on when it is on
+/// at the target or at the head, and the paths are the range's diff from
+/// the merge-base, merge resolutions included.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
     body: &str,
     branch: &str,
-    range: Option<(&str, &str, &[String])>,
+    range: Option<&Range<'_>>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
-    match durable_work_tracking_enabled(root) {
+    let at_target = range.map(|range| durable_work_tracking_enabled_at(root, range.base));
+    let enabled = match (durable_work_tracking_enabled(root), at_target) {
+        (Err(error), _) => Err(error.to_string()),
+        (_, Some(Err(error))) => Err(error),
+        (Ok(head), target) => Ok(head || matches!(target, Some(Ok(true)))),
+    };
+    match enabled {
         Ok(true) => {}
         Ok(false) => return,
         Err(error) => {
@@ -177,7 +216,7 @@ pub(super) fn dispatch(
         }
     }
     ran.push("classification");
-    let Some((base, head, files)) = range else {
+    let Some(range) = range else {
         push(
             tagged,
             RULE,
@@ -186,12 +225,28 @@ pub(super) fn dispatch(
         );
         return;
     };
+    let changes = match range_changes(root, range.base, range.head) {
+        Ok(changes) => changes,
+        Err(error) => {
+            push(
+                tagged,
+                RULE,
+                format!("cannot list the paths the range changes: {error}"),
+                "pass --base and --head so CI can read the range",
+            );
+            return;
+        }
+    };
+    let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
     let input = Input {
         body,
         branch,
-        files,
+        files: &files,
         branch_task: task_id_from_branch(root, branch),
         automation: None,
+        epic_line: branch
+            .starts_with("integration/")
+            .then(|| check_epic_line(root, branch, range.base_ref, range.base, range.head)),
     };
     let class = match classify(&input) {
         Ok(class) => class,
@@ -216,21 +271,21 @@ pub(super) fn dispatch(
                 }
             );
             let own_branch = input.branch_task.as_deref() == Some(task_id.as_str());
-            tracked(
-                root,
-                task_id,
-                own_branch,
-                branch,
-                (base, head, files),
-                tagged,
-            );
+            let added: Vec<&str> = changes
+                .iter()
+                .filter(|(status, _)| status == "A")
+                .map(|(_, path)| path.as_str())
+                .collect();
+            tracked(root, task_id, own_branch, branch, &files, &added, tagged);
         }
         Class::Direct { reason } => {
             println!("codeflow ci: pull request class: direct change ({reason})");
-            direct(root, git, files, tagged);
+            direct(root, git, &files, tagged);
         }
         Class::PlanningOnly => println!("codeflow ci: pull request class: planning-only"),
-        Class::EpicLine => println!("codeflow ci: pull request class: epic integration line"),
+        Class::EpicLine(epic) => {
+            println!("codeflow ci: pull request class: epic integration line of {epic}");
+        }
         Class::Automation { profile } => {
             println!("codeflow ci: pull request class: automation profile {profile}");
         }
@@ -259,26 +314,17 @@ fn tracked(
     task_id: &str,
     own_branch: bool,
     branch: &str,
-    (base, head, files): (&str, &str, &[String]),
+    files: &[String],
+    added: &[&str],
     tagged: &mut Vec<super::TaggedViolation>,
 ) {
-    match added_files(root, base, head) {
-        Ok(added) => {
-            if let Some(record) = added.iter().find(|path| is_record_of(path, task_id)) {
-                push(
-                    tagged,
-                    RULE,
-                    format!("the pull request adds {record} and claims `Task: {task_id}`; a record cannot authorise itself"),
-                    "land the task record by its own planning pull request, then open the work pull request",
-                );
-            }
-        }
-        Err(error) => push(
+    if let Some(record) = added.iter().find(|path| is_record_of(path, task_id)) {
+        push(
             tagged,
             RULE,
-            format!("cannot list the files the range adds: {error}"),
-            "pass --base and --head so CI can read the range",
-        ),
+            format!("the pull request adds {record} and claims `Task: {task_id}`; a record cannot authorise itself"),
+            "land the task record by its own planning pull request, then open the work pull request",
+        );
     }
     let declared = declared_work_target(root, task_id);
     let target =
@@ -367,16 +413,23 @@ fn is_record_of(path: &str, task_id: &str) -> bool {
             .is_some_and(|file| file == format!("{task_id}.md"))
 }
 
-/// Paths the range adds, from the merge-base of `base` and `head`.
-fn added_files(root: &Path, base: &str, head: &str) -> Result<Vec<String>, String> {
+/// Every path the range changes, from the merge-base of `base` and `head`
+/// to `head`, with its status: one tree diff, so a change made while
+/// resolving a merge counts, a rename is both its sides, and paths are read
+/// NUL-delimited without display quoting. A failure is an error, never an
+/// empty range.
+fn range_changes(root: &Path, base: &str, head: &str) -> Result<Vec<(String, String)>, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(root)
         .args([
+            "-c",
+            "core.quotePath=false",
             "diff",
+            "-z",
             "--no-renames",
-            "--diff-filter=A",
-            "--name-only",
+            "--no-ext-diff",
+            "--name-status",
             &format!("{base}...{head}"),
         ])
         .output()
@@ -384,11 +437,22 @@ fn added_files(root: &Path, base: &str, head: &str) -> Result<Vec<String>, Strin
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    Ok(String::from_utf8_lossy(&out.stdout)
-        .lines()
-        .filter(|line| !line.is_empty())
-        .map(str::to_string)
-        .collect())
+    parse_name_status(&out.stdout)
+}
+
+fn parse_name_status(stdout: &[u8]) -> Result<Vec<(String, String)>, String> {
+    let mut fields = stdout
+        .split(|byte| *byte == 0)
+        .filter(|field| !field.is_empty());
+    let mut changes = Vec::new();
+    while let Some(status) = fields.next() {
+        let status = String::from_utf8_lossy(status).to_string();
+        let path = fields
+            .next()
+            .ok_or_else(|| format!("git diff output ends after status {status}"))?;
+        changes.push((status, String::from_utf8_lossy(path).to_string()));
+    }
+    Ok(changes)
 }
 
 #[cfg(test)]
@@ -402,6 +466,7 @@ mod tests {
             files,
             branch_task: None,
             automation: None,
+            epic_line: None,
         }
     }
 
@@ -448,10 +513,9 @@ mod tests {
             classify(&input("", "plan/next", &records)),
             Ok(Class::PlanningOnly)
         );
-        assert_eq!(
-            classify(&input("", "integration/EPC-001-x", &code)),
-            Ok(Class::EpicLine)
-        );
+        let mut line = input("", "integration/EPC-001-x", &code);
+        line.epic_line = Some(Ok("EPC-001".into()));
+        assert_eq!(classify(&line), Ok(Class::EpicLine("EPC-001".into())));
         let mut bot = input("", "chore/deps-bump", &code);
         bot.automation = Some("dependabot");
         assert_eq!(
@@ -492,5 +556,41 @@ mod tests {
         );
         let templates = paths(&["project-management/templates/task.md"]);
         assert!(classify(&input("", "plan/next", &templates)).is_err());
+    }
+
+    #[test]
+    fn a_prefix_or_a_direct_line_grants_no_lighter_class() {
+        let code = paths(&["src/lib.rs"]);
+        // An integration/ head is an epic line only when verified.
+        assert!(classify(&input("", "integration/not-an-epic", &code))
+            .unwrap_err()
+            .contains("not a verified epic line"));
+        let mut line = input("", "integration/EPC-009-x", &code);
+        line.epic_line = Some(Err("no task of EPC-009 targets it".into()));
+        assert!(classify(&line).unwrap_err().contains("no task of EPC-009"));
+        // `Task: none` cannot drop the task a branch carries, or a spike.
+        let mut carried = input("Task: none: small edit", "spike/TSK-002-probe", &code);
+        carried.branch_task = Some("TSK-002".into());
+        assert!(classify(&carried).unwrap_err().contains("carries TSK-002"));
+        assert!(
+            classify(&input("Task: none: small edit", "spike/probe", &code))
+                .unwrap_err()
+                .contains("spike is tracked work")
+        );
+    }
+
+    #[test]
+    fn range_paths_are_read_nul_delimited_without_quoting() {
+        let out = b"M\0src/\xcf\x80.rs\0A\0.claude/a\tb.md\0D\0src/old.rs\0A\0lib/new.rs\0";
+        assert_eq!(
+            parse_name_status(out).unwrap(),
+            [
+                ("M".to_string(), "src/\u{3c0}.rs".to_string()),
+                ("A".to_string(), ".claude/a\tb.md".to_string()),
+                ("D".to_string(), "src/old.rs".to_string()),
+                ("A".to_string(), "lib/new.rs".to_string()),
+            ]
+        );
+        assert!(parse_name_status(b"M\0").is_err());
     }
 }
