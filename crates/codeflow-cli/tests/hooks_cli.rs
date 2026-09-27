@@ -2050,3 +2050,159 @@ fn task_home_inventory_limit_blocks_both_hook_and_ci() {
     assert!(ci_error.contains("work.tracking_state"), "{ci_error}");
     assert!(ci_error.contains("inventory exceeds 16384"), "{ci_error}");
 }
+
+// ---------------------------------------------------------------------------
+// pre-push push set bound to the pushed commits (TSK-132 review round 1)
+// ---------------------------------------------------------------------------
+
+const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
+
+fn rev(dir: &Path, rev: &str) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", rev])
+        .current_dir(dir)
+        .output()
+        .expect("git rev-parse");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn push_hook(dir: &Path, remote: &str, refs: &[(&str, &str)]) -> (Option<i32>, String) {
+    let stdin = refs
+        .iter()
+        .map(|(branch, sha)| format!("refs/heads/{branch} {sha} refs/heads/{branch} {ZERO_SHA}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", remote, remote])
+            .current_dir(dir),
+        &stdin,
+    );
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+/// A repo on `main` whose quick target fails when `bad.txt` exists, with a
+/// sibling branch `feat/bad` that commits `bad.txt` and `feat/good` that
+/// does not.
+fn sibling_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.path().join(".codeflow/test-config.json"),
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "lint", "runner": "custom", "modes": {"quick": {"command": "test ! -f bad.txt"}}}]}"#,
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "chore: add a lint target"]);
+    git(dir.path(), &["checkout", "-b", "feat/bad"]);
+    std::fs::write(dir.path().join("bad.txt"), "bad\n").unwrap();
+    git(dir.path(), &["add", "bad.txt"]);
+    git(dir.path(), &["commit", "-m", "feat: add a bad file"]);
+    git(dir.path(), &["checkout", "main"]);
+    git(dir.path(), &["checkout", "-b", "feat/good"]);
+    std::fs::write(dir.path().join("good.txt"), "good\n").unwrap();
+    git(dir.path(), &["add", "good.txt"]);
+    git(dir.path(), &["commit", "-m", "feat: add a good file"]);
+    dir
+}
+
+#[cfg(unix)]
+#[test]
+fn push_set_tree_checks_never_pass_for_a_sibling_ref() {
+    let dir = sibling_repo();
+    let good = rev(dir.path(), "feat/good");
+    let bad = rev(dir.path(), "feat/bad");
+
+    // Multi-ref push from the clean `feat/good` checkout: the tree checks run
+    // for `feat/good` only, and say they did not run for `feat/bad`.
+    let (code, err) = push_hook(
+        dir.path(),
+        "upstream",
+        &[("feat/good", &good), ("feat/bad", &bad)],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(err.contains("quick targets passed (1 target(s))"), "{err}");
+    assert!(
+        err.contains(
+            "tree checks (`codeflow validate --docs`, quick targets) did not run for 'feat/bad'"
+        ),
+        "{err}"
+    );
+    assert!(err.contains("is not the checked-out commit"), "{err}");
+    assert!(!err.contains("did not run for 'feat/good'"), "{err}");
+
+    // The same bad commit checked out is blocked by its quick target.
+    git(dir.path(), &["checkout", "feat/bad"]);
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("push set failed for: lint"), "{err}");
+
+    // Uncommitted tracked changes cannot stand in for the pushed tree: a
+    // dirty checkout runs no tree checks and says so.
+    std::fs::write(dir.path().join("base.txt"), "edited\n").unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("did not run for 'feat/bad': tracked files differ"),
+        "{err}"
+    );
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+#[test]
+fn push_set_by_path_never_borrows_other_remotes_history() {
+    // T132-2: a first push to an empty bare repository named by its path,
+    // with an unrelated tracking ref already pointing at the pushed commit.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["checkout", "-b", "feat/x"]);
+    std::fs::write(dir.path().join("x.txt"), "x\n").unwrap();
+    git(dir.path(), &["add", "x.txt"]);
+    git(dir.path(), &["commit", "-m", "Not conventional."]);
+    let head = rev(dir.path(), "HEAD");
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/seen", &head],
+    );
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "--bare", "-q"]);
+
+    let path = bare.path().to_str().unwrap();
+    let (code, err) = push_hook(dir.path(), path, &[("feat/x", &head)]);
+    assert_eq!(code, Some(1), "the commit is checked against main: {err}");
+    assert!(err.contains("codeflow ci --base"), "{err}");
+}
+
+#[test]
+fn push_set_blocks_an_unrelated_base_and_notes_only_a_missing_one() {
+    // T132-3: a resolvable but unrelated base (an orphan branch beside a local
+    // `main`) is a failed check with its diagnostic, not a skipped one.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["checkout", "--orphan", "feat/orphan"]);
+    std::fs::write(dir.path().join("o.txt"), "o\n").unwrap();
+    git(dir.path(), &["add", "o.txt"]);
+    git(dir.path(), &["commit", "-m", "chore: start an orphan"]);
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "origin", &[("feat/orphan", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("push set check failed: `codeflow ci"), "{err}");
+    assert!(!err.contains("did not run for"), "{err}");
+
+    // No destination history and no protected branch at all: the only case
+    // that is a note.
+    let lone = tempfile::tempdir().unwrap();
+    init_repo(lone.path(), "feat/lone");
+    let head = rev(lone.path(), "HEAD");
+    let (code, err) = push_hook(lone.path(), "origin", &[("feat/lone", &head)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("`codeflow ci` did not run for 'feat/lone'"),
+        "{err}"
+    );
+}
