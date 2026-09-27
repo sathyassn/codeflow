@@ -256,6 +256,14 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
                 missing.push("(the minimal map must not say anything goes direct)");
             }
         } else {
+            let plan = if tier == Tier::Full {
+                "records only through the CLI"
+            } else {
+                "track work in the harness's task tools"
+            };
+            if !block.contains(plan) {
+                missing.push(plan);
+            }
             missing.extend(
                 method_tiers
                     .iter()

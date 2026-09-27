@@ -37,7 +37,7 @@ Homes used below:
 | Trivial edit needs no skill | Map route rule ("other edits and conversation go direct") | `rule_map_contract` pinned sentences |
 | `/cf-plan` and `/cf-develop` are supporting flows, used inside the duo or after a recorded solo degradation | CLAUDE workflows bullet; cf-develop and cf-plan descriptions | CF-MM-001, `orchestration_contract` |
 | Orchestrator row: independent planning, Claude leads design, capability routing, host lanes, five-obligation delegate contract, legible degradation | Orchestrator SKILL description and seat matrix; cf-delegate lanes | `artifact_budget_contract` (moved duties), `delegate_doctrine_contract` |
-| cf-plan row | Map plan moment; cf-plan SKILL | pointer test |
+| cf-plan row | Map plan moment, split by tier (standard: the harness's task tools; full: records only through the CLI); cf-plan SKILL | pointer test, `rule_map_contract` |
 | cf-estimate row (preview, adoption, decline) | Map estimate rule and moment; cf-estimate SKILL | `rule_map_contract` pinned sentences |
 | cf-design row (DESIGN_INTENT, collapse paths) | Map design moment; cf-design SKILL | pointer test |
 | cf-present row (when to use, keep simple answers in chat, not product UI) | Map present rule and moment; cf-present SKILL | CF-PRES-001 |

@@ -290,10 +290,17 @@ tiers = ["minimal"]
 
 [[moment]]
 key = "plan"
+when = "plan work"
+action = "acceptance criteria before building; track work in the harness's task tools"
+see = ["cf-plan", "cf-method/references/project-organization.md"]
+tiers = ["standard"]
+
+[[moment]]
+key = "plan"
 when = "plan work or create an epic, spec, task or ADR"
 action = "acceptance criteria before building; records only through the CLI"
 see = ["cf-plan", "cf-method/references/project-organization.md"]
-tiers = ["standard", "full"]
+tiers = ["full"]
 
 [[moment]]
 key = "plan"
