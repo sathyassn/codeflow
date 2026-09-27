@@ -653,3 +653,37 @@ fn fresh_scaffolds_install_the_rule_map_at_every_tier() {
         assert!(over.contains("over Codex"), "{flag}: {over}");
     }
 }
+
+/// TSK-127 review probe (Codex F1): a nested `AGENTS.md` whose chain passes
+/// Codex's 32 KiB limit warns through the real binary, whether doctor runs
+/// from the project root or from the nested directory.
+#[test]
+fn doctor_warns_for_an_oversized_nested_instruction_chain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let init = codeflow(&root, &["init", "--yes", "--minimal"]);
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("AGENTS.md"), "x".repeat(32 * 1024 + 1)).unwrap();
+
+    for cwd in [&root, &nested] {
+        let out = codeflow(cwd, &["doctor", "--check", "instructions"]);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            text.contains("nested/AGENTS.md with its parent instructions")
+                && text.contains("over Codex"),
+            "{}: {text}",
+            cwd.display()
+        );
+    }
+}
