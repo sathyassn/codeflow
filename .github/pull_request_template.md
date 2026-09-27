@@ -1,9 +1,13 @@
 <!-- Linted by `codeflow ci`: no AI attribution, no emoji, no em or en dash.
-     The five sections below are always present, in this order. Conditional
-     sections are listed at the end. Aim for about 65 rows wrapped at 100
-     columns for a task PR, about 80 with Whole-flow evidence, and about 90
-     for an epic; never drop evidence to fit. A figure here is a fenced
-     ASCII block, never Mermaid. -->
+     The sections a PR needs follow what its range touches. A range with
+     code, config, scripts, shipped templates or agent instructions needs
+     all five sections below, in this order. A range of only documentation
+     or planning records needs Summary and Changes; Testing and Reviews are
+     optional there, and a missing Release impact reads as no impact.
+     Conditional sections are listed at the end. Aim for about 65 rows
+     wrapped at 100 columns for a task PR, about 80 with Whole-flow
+     evidence, and about 90 for an epic; never drop evidence to fit. A
+     figure here is a fenced ASCII block, never Mermaid. -->
 
 <!-- With durable work tracking: the task this delivers, or why it is a direct change. -->
 Task: `TSK-NNN | none: <reason>`
@@ -32,9 +36,10 @@ Task: `TSK-NNN | none: <reason>`
      Coverage when the range is code: the measured TOTAL from the project's
      command; name revision, command, metric, and scope; CI PASS alone is
      insufficient; unmeasured is a stated gap. New tests: count and suites.
-     Missing required checks keep the PR draft. Docs only: say so and name
-     the doc checks run; scripts, hook settings, shipped templates and agent
-     instructions are not docs only. -->
+     Missing required checks keep the PR draft. Docs or planning only: the
+     section is optional; when kept, say so and name the doc checks run.
+     Scripts, hook settings, shipped templates and agent instructions are
+     not docs only. -->
 
 - Revision and command:
 
@@ -73,7 +78,8 @@ Task: `TSK-NNN | none: <reason>`
 - Unit: `codeflow`
 - Evidence:
 
-<!-- Read by `scripts/release.py` with the fields above. CodeFlow has one
+<!-- Read by `scripts/release.py` with the fields above, on every PR,
+     docs and planning included: keep this section here. CodeFlow has one
      release unit, and Breaking is yes if and only if Impact is major. The
      adjacent changelog annotations are the one version input: put a
      codeflow:release-impact patch|minor|major HTML marker directly before
