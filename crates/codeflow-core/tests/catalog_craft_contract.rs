@@ -237,9 +237,9 @@ fn reviewer_and_ship_state_the_acceptance_binding() {
         "assets/base/agents/skills/cf-ship/SKILL.md",
         &[
             "a task PR's last commit runs `codeflow task status <id>",
-            "a late completion names",
-            "the clean landing merge's second parent",
-            "`deferred`, never verified at build time",
+            "complete --acceptance <file>`; its block names the reviewed code commit",
+            "(late: the clean landing merge's second parent)",
+            "stay `deferred`, never verified at build time",
         ],
     );
     for path in [
