@@ -8,7 +8,6 @@
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
 use std::path::Path;
-use std::process::Command;
 
 use crate::capability::{parse_capabilities, CapabilityEntry};
 use crate::models::{Epic, EpicFilter, Task, TaskFilter, TaskStatus};
@@ -386,23 +385,7 @@ fn repository_dirty(path: &Path) -> Option<bool> {
 }
 
 fn patch_equivalent(repo_root: &Path, target: &str, branch: &str) -> bool {
-    if target.starts_with('-') || branch.starts_with('-') {
-        return false;
-    }
-    let output = Command::new("git")
-        .arg("-C")
-        .arg(repo_root)
-        .args(["cherry", target, branch])
-        .output();
-    let Ok(output) = output else {
-        return false;
-    };
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let mut lines = stdout.lines();
-    let Some(first) = lines.next() else {
-        return false;
-    };
-    output.status.success() && first.starts_with('-') && lines.all(|line| line.starts_with('-'))
+    readiness::cherry_landed(repo_root, target, branch)
 }
 
 fn list_worktrees(repo: &git2::Repository) -> Vec<WorktreeInfo> {
@@ -669,6 +652,22 @@ fn render_derived(out: &mut String, backlog: &Backlog) {
     }
     for entry in backlog.in_state(State::Ready) {
         let _ = writeln!(out, "  ready: {} {}", entry.task_id, entry.title);
+    }
+    // A Blocker or an invalid record outranks a claim; the branch stays shown.
+    for state in [State::Blocked, State::Invalid] {
+        for entry in backlog
+            .in_state(state)
+            .filter(|entry| !entry.branches.is_empty())
+        {
+            let _ = writeln!(
+                out,
+                "  {}: {} ({}; {})",
+                state.as_str(),
+                entry.task_id,
+                entry.reason,
+                entry.branches.join(", ")
+            );
+        }
     }
     for (task_id, branches) in &backlog.conflicts {
         let _ = writeln!(

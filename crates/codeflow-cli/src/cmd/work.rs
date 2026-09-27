@@ -105,6 +105,10 @@ fn entry_line(entry: &Entry) -> String {
         line.push_str("\n         ");
         line.push_str(&entry.reason);
     }
+    if !entry.branches.is_empty() {
+        line.push_str("\n         branch: ");
+        line.push_str(&entry.branches.join(", "));
+    }
     line
 }
 

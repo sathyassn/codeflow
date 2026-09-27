@@ -865,12 +865,15 @@ pub(crate) fn validate_anchored_task(
         }
         _ => {}
     }
-    if task.status == "blocked" {
+    let closed = matches!(task.status.as_str(), "complete" | "cancelled");
+    // A visible Blocker holds the task whatever its status says (R-40).
+    if !closed && (task.status == "blocked" || task.blocker_reason.is_some()) {
         return Err(WorkStartError::Blocked {
             task_id: task_id.to_string(),
             reason: task
                 .blocker_reason
                 .clone()
+                .filter(|reason| !reason.trim().is_empty())
                 .unwrap_or_else(|| "no Blocker reason recorded".to_string()),
         });
     }
@@ -1054,10 +1057,7 @@ fn pinned_dependency(
         pin: pin.to_string(),
         reason,
     };
-    let commit = repo
-        .revparse_single(pin)
-        .and_then(|object| object.peel_to_commit())
-        .map_err(|_| refuse("not a commit in this repository".to_string()))?;
+    let commit = commit_by_object_id(repo, pin).map_err(refuse)?;
     let line = records
         .get(&dependency.id)
         .and_then(|record| record.integration_target.clone())
@@ -1088,6 +1088,28 @@ fn pinned_dependency(
         Some(status) => Err(refuse(format!("the record there is '{status}'"))),
         None => Err(refuse("the record is not there".to_string())),
     }
+}
+
+/// Resolve a pin through the object database, never through refs: a tag or
+/// branch named like the pin cannot redirect it. An abbreviated id must be
+/// unambiguous and name a commit.
+fn commit_by_object_id<'repo>(
+    repo: &'repo Repository,
+    pin: &str,
+) -> Result<git2::Commit<'repo>, String> {
+    let prefix = git2::Oid::from_str(pin).map_err(|_| "not an object id".to_string())?;
+    let full = if pin.len() == 40 {
+        prefix
+    } else {
+        repo.odb()
+            .and_then(|odb| odb.exists_prefix(prefix, pin.len()))
+            .map_err(|error| match error.code() {
+                git2::ErrorCode::Ambiguous => "an ambiguous abbreviated object id".to_string(),
+                _ => "not an object in this repository".to_string(),
+            })?
+    };
+    repo.find_commit(full)
+        .map_err(|_| "not a commit in this repository".to_string())
 }
 
 pub(crate) fn record_kind_for_tree_path(path: &str) -> Option<RecordKind> {
@@ -1170,7 +1192,7 @@ pub(crate) fn records_from_tree(
     Ok(records)
 }
 
-fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
+pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
     let yaml = frontmatter(content).ok_or_else(|| "missing frontmatter".to_string())?;
     let data = serde_yaml::from_str::<serde_yaml::Mapping>(yaml)
         .map_err(|error| format!("invalid YAML: {error}"))?;
@@ -1317,14 +1339,14 @@ fn dependencies(data: &serde_yaml::Mapping) -> Result<Vec<Dependency>, String> {
 }
 
 /// The reason of a record's `## Blocker` section, if any.
+/// The reason of a visible `## Blocker` section; `Some("")` when the section
+/// is there without a reason, so an incomplete Blocker still holds the task.
 fn blocker_reason(content: &str) -> Option<String> {
     let body = content
         .strip_prefix("---")
         .and_then(|rest| rest.split_once("\n---").map(|(_, body)| body))
         .unwrap_or(content);
-    crate::workgraph::record_text::parse_blocker(body)
-        .map(|blocker| blocker.reason)
-        .filter(|reason| !reason.trim().is_empty())
+    crate::workgraph::record_text::parse_blocker(body).map(|blocker| blocker.reason)
 }
 
 #[cfg(test)]

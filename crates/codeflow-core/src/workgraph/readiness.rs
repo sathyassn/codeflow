@@ -15,8 +15,8 @@ use std::process::Command;
 use git2::{BranchType, Repository};
 
 use super::work_start::{
-    logical_target, records_from_tree, validate_anchored_task, work_prefixes, work_suffix,
-    NotReady, Record, RecordKind,
+    parse_record, records_from_tree, validate_anchored_task, work_prefixes, work_suffix, NotReady,
+    Record, RecordKind,
 };
 
 /// The derived state of one task in the new-claim context.
@@ -142,16 +142,40 @@ impl Backlog {
     }
 }
 
-/// Resolve a declared target to the ref the new-claim context reads: the
-/// fetched remote-tracking branch first, the local branch otherwise.
-fn claim_reference(repo: &Repository, target: &str) -> Option<(String, git2::Oid)> {
-    let logical = logical_target(target);
-    [
-        format!("refs/remotes/origin/{logical}"),
-        format!("refs/heads/{logical}"),
-    ]
-    .into_iter()
-    .find_map(|name| {
+/// The identity of a declared target: `main`, `refs/heads/main`,
+/// `origin/main` and `refs/remotes/origin/main` are one target; a target on
+/// another remote (`refs/remotes/upstream/main`) keeps its remote.
+fn canonical_target(declared: &str) -> String {
+    declared
+        .strip_prefix("refs/heads/")
+        .or_else(|| declared.strip_prefix("refs/remotes/origin/"))
+        .or_else(|| declared.strip_prefix("origin/"))
+        .unwrap_or(declared)
+        .to_string()
+}
+
+/// The remote a canonical target is read from, when it names one other than
+/// `origin` (`refs/remotes/<remote>/<branch>`).
+fn target_remote(canonical: &str) -> Option<&str> {
+    canonical
+        .strip_prefix("refs/remotes/")
+        .and_then(|rest| rest.split_once('/'))
+        .map(|(remote, _)| remote)
+}
+
+/// Resolve a canonical target to the ref the new-claim context reads. An
+/// explicit ref is read exactly, never through another remote; a plain name
+/// reads the fetched `origin` copy first and the local branch otherwise.
+fn claim_reference(repo: &Repository, canonical: &str) -> Option<(String, git2::Oid)> {
+    let candidates = if canonical.starts_with("refs/") {
+        vec![canonical.to_string()]
+    } else {
+        vec![
+            format!("refs/remotes/origin/{canonical}"),
+            format!("refs/heads/{canonical}"),
+        ]
+    };
+    candidates.into_iter().find_map(|name| {
         let oid = repo.find_reference(&name).ok()?.peel_to_commit().ok()?.id();
         Some((
             name.trim_start_matches("refs/remotes/")
@@ -210,39 +234,47 @@ fn visible_work_branches(
 /// (`git cherry`, for squash and rebase landings). A tip on the target's own
 /// first-parent line added nothing: that is a claim not yet started, not a
 /// landing. Work lands with a merge commit, so a landed tip is off that line.
+/// Anything unproven is not landed.
 fn landed(repo: &Repository, repo_root: &Path, tip: git2::Oid, target: git2::Oid) -> bool {
     if tip == target || repo.graph_descendant_of(target, tip).unwrap_or(false) {
-        return !on_first_parent_line(repo, target, tip);
+        return on_first_parent_line(repo, target, tip) == Some(false);
     }
-    git(
-        repo_root,
-        &["cherry", &target.to_string(), &tip.to_string()],
-    )
-    .is_ok_and(|out| !out.trim().is_empty() && out.lines().all(|line| line.starts_with("- ")))
+    cherry_landed(repo_root, &target.to_string(), &tip.to_string())
 }
 
-fn on_first_parent_line(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> bool {
-    let Ok(tip_time) = repo.find_commit(tip).map(|commit| commit.time().seconds()) else {
-        return false;
-    };
-    let Ok(mut walk) = repo.revwalk() else {
-        return false;
-    };
-    if walk.push(target).is_err() || walk.simplify_first_parent().is_err() {
+/// Whether every commit `tip` adds over `target` is patch-equivalent there.
+/// `git cherry` skips merge commits, so a range holding a merge (whose
+/// resolution may carry its own change) is never proven this way.
+pub(crate) fn cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
+    if target.starts_with('-') || tip.starts_with('-') {
         return false;
     }
-    for oid in walk.flatten() {
-        if oid == tip {
-            return true;
-        }
-        if repo
-            .find_commit(oid)
-            .map_or(true, |commit| commit.time().seconds() < tip_time)
-        {
-            return false;
-        }
+    let range = format!("{target}..{tip}");
+    let merges = git(
+        repo_root,
+        &["rev-list", "--merges", "--max-count=1", &range],
+    );
+    if !merges.is_ok_and(|out| out.trim().is_empty()) {
+        return false;
     }
-    false
+    git(repo_root, &["cherry", target, tip])
+        .is_ok_and(|out| !out.trim().is_empty() && out.lines().all(|line| line.starts_with("- ")))
+}
+
+/// Whether `tip` is on the first-parent line of `target`, by parent links
+/// alone (commit dates need not follow ancestry). `None` when the walk
+/// cannot be completed, which proves nothing.
+fn on_first_parent_line(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> Option<bool> {
+    let mut current = repo.find_commit(target).ok()?;
+    loop {
+        if current.id() == tip {
+            return Some(true);
+        }
+        if current.parent_count() == 0 {
+            return Some(false);
+        }
+        current = current.parent(0).ok()?;
+    }
 }
 
 /// Split the branches carrying one task into open claims and landed
@@ -284,10 +316,10 @@ fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
                 let stem = path.file_stem()?.to_str()?.to_string();
                 super::declared_work_target(repo_root, &stem)
             })
-            .map(|target| logical_target(&target).to_string())
+            .map(|target| canonical_target(&target))
             .collect();
     if let Some(default) = super::default_work_target(repo_root) {
-        targets.insert(logical_target(&default).to_string());
+        targets.insert(canonical_target(&default));
     }
     targets
 }
@@ -300,8 +332,7 @@ fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
 pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let prefixes = work_prefixes(repo_root);
-    let default =
-        super::default_work_target(repo_root).map(|target| logical_target(&target).to_string());
+    let default = super::default_work_target(repo_root).map(|target| canonical_target(&target));
     let mut out = Backlog {
         fetched_at: fetched_at(&repo),
         ..Backlog::default()
@@ -344,9 +375,9 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
             let declared = record
                 .integration_target
                 .as_deref()
-                .map(logical_target)
-                .or(default.as_deref());
-            if declared != Some(target.as_str()) || !judged.insert(record.id.clone()) {
+                .map(canonical_target)
+                .or_else(|| default.clone());
+            if declared.as_deref() != Some(target.as_str()) || !judged.insert(record.id.clone()) {
                 continue;
             }
             if let Some(epic) = &record.epic_id {
@@ -378,7 +409,10 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                     NotReady::Invalid => (State::Invalid, error.to_string()),
                 },
             };
-            let state = if state != State::Ready && state != State::Active && !names.is_empty() {
+            // A claim on a waiting task makes it active; a Blocker or an
+            // invalid record keeps precedence over any branch, which is still
+            // listed with the entry.
+            let state = if state == State::Waiting && !names.is_empty() {
                 State::Active
             } else {
                 state
@@ -435,15 +469,28 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
 pub fn claim(repo_root: &Path, task_id: &str) -> Result<Claim, String> {
     let declared = super::declared_work_target(repo_root, task_id)
         .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
-    let has_origin = git(repo_root, &["remote"])?
+    let target = canonical_target(&declared);
+    let remotes: Vec<String> = git(repo_root, &["remote"])?
         .lines()
-        .any(|remote| remote == "origin");
-    if has_origin {
-        git(repo_root, &["fetch", "--prune", "--quiet", "origin"])
-            .map_err(|error| format!("fetch origin failed: {error}"))?;
+        .map(str::to_string)
+        .collect();
+    let has_origin = remotes.iter().any(|remote| remote == "origin");
+    // Fetch the remote the target names (never substituting origin for it)
+    // and origin, where claims are published.
+    let mut fetch: Vec<&str> = target_remote(&target).into_iter().collect();
+    if has_origin && !fetch.contains(&"origin") {
+        fetch.push("origin");
+    }
+    for remote in fetch {
+        if !remotes.iter().any(|known| known == remote) {
+            return Err(format!(
+                "target '{target}' names remote '{remote}', which is not configured"
+            ));
+        }
+        git(repo_root, &["fetch", "--prune", "--quiet", remote])
+            .map_err(|error| format!("fetch {remote} failed: {error}"))?;
     }
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let target = logical_target(&declared).to_string();
     let (reference, tip) = claim_reference(&repo, &target)
         .ok_or_else(|| format!("target '{target}' does not resolve here"))?;
     let tree = repo
@@ -455,13 +502,13 @@ pub fn claim(repo_root: &Path, task_id: &str) -> Result<Claim, String> {
         .map_err(|error| format!("not ready on {reference}: {error}"))?;
     let ids = BTreeSet::from([task_id.to_string()]);
     let prefixes = work_prefixes(repo_root);
-    let carried = visible_work_branches(&repo, &prefixes, &ids);
-    let (open, _) = split_landed(
-        &repo,
-        repo_root,
-        carried.get(task_id).map(Vec::as_slice).unwrap_or_default(),
-        tip,
-    );
+    let mut carried = visible_work_branches(&repo, &prefixes, &ids)
+        .remove(task_id)
+        .unwrap_or_default();
+    if has_origin {
+        carried.extend(remote_claims(&repo, repo_root, &prefixes, task_id)?);
+    }
+    let (open, _) = split_landed(&repo, repo_root, &carried, tip);
     if !open.is_empty() {
         return Err(format!(
             "{task_id} is already claimed by a visible branch: {}",
@@ -474,14 +521,57 @@ pub fn claim(repo_root: &Path, task_id: &str) -> Result<Claim, String> {
     let branch = format!("task/{task_id}-{}", super::light_paths::slug(title));
     git(repo_root, &["branch", &branch, &tip.to_string()])?;
     if has_origin {
-        git(repo_root, &["push", "--quiet", "-u", "origin", &branch])
-            .map_err(|error| format!("created {branch} locally; push to origin failed: {error}"))?;
+        // Create only: an existing remote branch of that name is never moved.
+        let destination = format!("refs/heads/{branch}");
+        git(
+            repo_root,
+            &[
+                "push",
+                "--quiet",
+                "-u",
+                &format!("--force-with-lease={destination}:"),
+                "origin",
+                &format!("{branch}:{destination}"),
+            ],
+        )
+        .map_err(|error| format!("created {branch} locally; push to origin failed: {error}"))?;
     }
     Ok(Claim {
         branch,
         from: format!("{reference}@{}", &tip.to_string()[..9]),
         pushed: has_origin,
     })
+}
+
+/// Branches on `origin` carrying `task_id`, read from the remote itself so
+/// a narrow fetch refspec cannot hide a claim. A tip this clone does not
+/// have is kept as an open claim (its landing cannot be proven here).
+fn remote_claims(
+    repo: &Repository,
+    repo_root: &Path,
+    prefixes: &[String],
+    task_id: &str,
+) -> Result<Vec<(String, git2::Oid)>, String> {
+    let listed = git(repo_root, &["ls-remote", "--heads", "origin"])
+        .map_err(|error| format!("cannot list origin's branches: {error}"))?;
+    Ok(listed
+        .lines()
+        .filter_map(|line| {
+            let (sha, name) = line.split_once('\t')?;
+            let name = name.strip_prefix("refs/heads/")?;
+            let suffix = work_suffix(prefixes, name)?;
+            if !suffix.starts_with(&format!("{task_id}-")) {
+                return None;
+            }
+            let oid = git2::Oid::from_str(sha).ok()?;
+            let known = repo.find_commit(oid).is_ok();
+            // An unknown tip is never landed: keep it open with a null id.
+            Some((
+                name.to_string(),
+                if known { oid } else { git2::Oid::ZERO_SHA1 },
+            ))
+        })
+        .collect())
 }
 
 /// Other open (unlanded) visible branches carrying `task_id` than `own`: the
@@ -496,7 +586,7 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Vec<String>
         .remove(task_id)
         .unwrap_or_default();
     let target_tip = super::declared_work_target(repo_root, task_id)
-        .and_then(|target| claim_reference(&repo, logical_target(&target)))
+        .and_then(|target| claim_reference(&repo, &canonical_target(&target)))
         .map(|(_, oid)| oid);
     let open = match target_tip {
         Some(tip) => split_landed(&repo, repo_root, &carried, tip).0,
@@ -561,22 +651,19 @@ pub fn is_live_integration_line(repo_root: &Path, branch: &str) -> bool {
     }
     crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
         .into_iter()
-        .filter_map(|path| std::fs::read_to_string(path).ok())
-        .any(|content| {
-            let open =
-                !content.contains("\nstatus: complete") && !content.contains("\nstatus: cancelled");
-            open && content.lines().any(|line| {
-                line.strip_prefix("integration_target:")
-                    .is_some_and(|value| {
-                        let value = value
-                            .split('#')
-                            .next()
-                            .unwrap_or("")
-                            .trim()
-                            .trim_matches('"');
-                        logical_target(value) == branch
-                    })
-            })
+        .any(|path| {
+            // An unreadable record may be the one that keeps the line live.
+            let Ok(content) = std::fs::read_to_string(&path) else {
+                return true;
+            };
+            let Ok(record) = parse_record(&content, RecordKind::Task) else {
+                return true;
+            };
+            !matches!(record.status.as_str(), "complete" | "cancelled")
+                && record
+                    .integration_target
+                    .as_deref()
+                    .is_some_and(|target| canonical_target(target) == branch)
         })
 }
 
@@ -992,5 +1079,286 @@ mod tests {
         assert!(is_live_integration_line(root, "integration/EPC-001-a"));
         assert!(!is_live_integration_line(root, "integration/EPC-001-b"));
         assert!(!is_live_integration_line(root, "task/TSK-001-x"));
+    }
+
+    // Review round 1 (Codex, TSK-103): each probe pinned as a test.
+
+    fn entry<'b>(backlog: &'b Backlog, id: &str) -> &'b Entry {
+        backlog
+            .entries
+            .iter()
+            .find(|entry| entry.task_id == id)
+            .unwrap()
+    }
+
+    fn commit_dated(root: &Path, message: &str, date: &str) -> String {
+        run(root, &["add", "-A"]);
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["commit", "-q", "-m", message])
+            .env("GIT_AUTHOR_DATE", date)
+            .env("GIT_COMMITTER_DATE", date)
+            .output()
+            .unwrap();
+        assert!(out.status.success());
+        run(root, &["rev-parse", "HEAD"])
+    }
+
+    /// T103-1: a tag or branch named like a pin cannot redirect it.
+    #[test]
+    fn a_pin_is_an_object_id_never_a_ref_name() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        let open = commit(root, "plan");
+        task(root, "TSK-001", "complete", "[]", "");
+        let done = commit(root, "findings");
+        let pin = &open[..8];
+        task(
+            root,
+            "TSK-002",
+            "todo",
+            &format!("[{{id: TSK-001, kind: research, pin: {pin}}}]"),
+            "",
+        );
+        commit(root, "consumer");
+        run(root, &["tag", pin, &done]);
+        run(root, &["branch", pin, &done]);
+        let error = verdict(root, "TSK-002").unwrap_err();
+        assert!(error.to_string().contains("'todo'"), "{error}");
+        assert_eq!(
+            entry(&backlog(root).unwrap(), "TSK-002").state,
+            State::Waiting
+        );
+    }
+
+    /// T103-2: a target on another remote is read there, never from origin.
+    #[test]
+    fn a_declared_remote_target_is_never_read_from_origin() {
+        let dir = repo();
+        let root = dir.path();
+        let blocked =
+            "## Blocker\n\n- reason: awaiting operator\n- owner: operator\n- revisit: approved\n";
+        task_in(
+            root,
+            "TSK-001",
+            Some("EPC-001"),
+            "refs/remotes/upstream/main",
+            "blocked",
+            "[]",
+            "",
+        );
+        let path = root.join("project-management/tasks/TSK-001.md");
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(&path, format!("{text}\n{blocked}")).unwrap();
+        commit(root, "central");
+        let central = tempfile::tempdir().unwrap();
+        run(
+            Path::new("."),
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                root.to_str().unwrap(),
+                central.path().to_str().unwrap(),
+            ],
+        );
+        run(
+            root,
+            &[
+                "remote",
+                "add",
+                "upstream",
+                central.path().to_str().unwrap(),
+            ],
+        );
+        run(root, &["fetch", "-q", "upstream"]);
+        task_in(
+            root,
+            "TSK-001",
+            Some("EPC-001"),
+            "refs/remotes/upstream/main",
+            "todo",
+            "[]",
+            "",
+        );
+        commit(root, "fork");
+        let fork = with_origin(root);
+        run(root, &["fetch", "-q", "origin"]);
+        let backlog = backlog(root).unwrap();
+        assert_eq!(entry(&backlog, "TSK-001").state, State::Blocked);
+        assert!(
+            backlog.snapshot_line().contains("upstream/main@"),
+            "{}",
+            backlog.snapshot_line()
+        );
+        let refused = claim(root, "TSK-001").unwrap_err();
+        assert!(refused.contains("not ready on upstream/main"), "{refused}");
+        drop(fork);
+    }
+
+    /// T103-3: a visible Blocker holds a task whatever its status; one in a
+    /// comment does not.
+    #[test]
+    fn a_visible_blocker_holds_a_todo_task() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        task(root, "TSK-002", "todo", "[]", "");
+        task(root, "TSK-003", "todo", "[]", "");
+        for (id, section) in [
+            (
+                "TSK-001",
+                "## Blocker\n\n- reason: vendor reply\n- owner: ops\n- revisit: reply\n",
+            ),
+            ("TSK-002", "<!--\n## Blocker\n\n- reason: example\n-->\n"),
+            ("TSK-003", "## Blocker\n\n- owner: ops\n"),
+        ] {
+            let path = root.join(format!("project-management/tasks/{id}.md"));
+            let text = fs::read_to_string(&path).unwrap();
+            fs::write(&path, format!("{text}\n{section}")).unwrap();
+        }
+        commit(root, "plan");
+        let error = verdict(root, "TSK-001").unwrap_err();
+        assert!(error.to_string().contains("vendor reply"), "{error}");
+        assert!(
+            verdict(root, "TSK-002").is_ok(),
+            "a commented Blocker is not operative"
+        );
+        assert_eq!(
+            state(root, "TSK-003"),
+            Some(NotReady::Blocked),
+            "an incomplete Blocker still holds"
+        );
+    }
+
+    /// T103-4: a claim on origin that a narrow fetch refspec hides still
+    /// counts.
+    #[test]
+    fn a_remote_claim_hidden_by_the_refspec_still_counts() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        commit(root, "plan");
+        let origin = with_origin(root);
+        run(
+            root,
+            &["push", "-q", "origin", "main:refs/heads/task/TSK-001-other"],
+        );
+        run(
+            root,
+            &[
+                "config",
+                "remote.origin.fetch",
+                "+refs/heads/main:refs/remotes/origin/main",
+            ],
+        );
+        run(root, &["fetch", "-q", "--prune", "origin"]);
+        // Another clone pushed it: this clone never tracked it.
+        run(
+            root,
+            &["update-ref", "-d", "refs/remotes/origin/task/TSK-001-other"],
+        );
+        assert!(run(root, &["branch", "-r"])
+            .lines()
+            .all(|line| !line.contains("TSK-001")));
+        let refused = claim(root, "TSK-001").unwrap_err();
+        assert!(refused.contains("task/TSK-001-other"), "{refused}");
+        let remote = run(origin.path(), &["branch", "--list"]);
+        assert!(!remote.contains("task/TSK-001-work"), "{remote}");
+    }
+
+    /// T103-5: a merge commit's own change is never proven landed by
+    /// patch equivalence.
+    #[test]
+    fn an_unmatched_merge_is_never_proof_of_landing() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        commit(root, "plan");
+        run(root, &["switch", "-q", "-c", "side"]);
+        fs::write(root.join("side.txt"), "side\n").unwrap();
+        let side = commit(root, "side");
+        run(root, &["switch", "-q", "-c", "task/TSK-001-work", "main"]);
+        fs::write(root.join("work.txt"), "work\n").unwrap();
+        let work = commit(root, "work");
+        run(root, &["merge", "-q", "--no-ff", "--no-commit", "side"]);
+        fs::write(root.join("merge-only.txt"), "only in the merge\n").unwrap();
+        commit(root, "merge side");
+        run(root, &["switch", "-q", "main"]);
+        fs::write(root.join("other.txt"), "other\n").unwrap();
+        commit(root, "other");
+        // Every ordinary commit is patch-equivalent on main; the merge's own
+        // file is not there.
+        run(root, &["cherry-pick", &work]);
+        run(root, &["cherry-pick", &side]);
+        assert!(!root.join("merge-only.txt").exists());
+        let backlog = backlog(root).unwrap();
+        assert_eq!(entry(&backlog, "TSK-001").state, State::Active);
+        assert!(backlog.landed.is_empty(), "{:?}", backlog.landed);
+    }
+
+    /// T103-6: first-parent membership follows parent links, not dates.
+    #[test]
+    fn an_older_dated_child_does_not_land_a_claim() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        commit_dated(root, "plan", "2026-09-27T12:00:00Z");
+        run(root, &["branch", "task/TSK-001-claim"]);
+        fs::write(root.join("later.txt"), "later\n").unwrap();
+        commit_dated(root, "child dated earlier", "2026-09-26T12:00:00Z");
+        let backlog = backlog(root).unwrap();
+        assert_eq!(entry(&backlog, "TSK-001").state, State::Active);
+        assert!(backlog.landed.is_empty(), "{:?}", backlog.landed);
+    }
+
+    /// T103-7: the live line is read through the record parser.
+    #[test]
+    fn the_live_line_is_read_through_the_record_parser() {
+        let dir = repo();
+        let root = dir.path();
+        let line = "integration/EPC-001-live";
+        task_in(root, "TSK-001", Some("EPC-001"), line, "todo", "[]", "");
+        let path = root.join("project-management/tasks/TSK-001.md");
+        let text = fs::read_to_string(&path).unwrap().replace(
+            &format!("integration_target: {line}"),
+            &format!("integration_target: '{line}'"),
+        );
+        fs::write(&path, format!("{text}\nAn example:\nstatus: complete\n")).unwrap();
+        assert!(is_live_integration_line(root, line));
+        fs::write(
+            root.join("project-management/tasks/TSK-002.md"),
+            "not a record",
+        )
+        .unwrap();
+        assert!(
+            is_live_integration_line(root, "integration/EPC-001-other"),
+            "unreadable fails safe"
+        );
+    }
+
+    /// T103-8: a Blocker outranks a claim, and the branch stays listed.
+    #[test]
+    fn a_blocked_task_with_a_branch_stays_blocked() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "blocked", "[]", "");
+        let path = root.join("project-management/tasks/TSK-001.md");
+        let text = fs::read_to_string(&path).unwrap();
+        fs::write(
+            &path,
+            format!("{text}\n## Blocker\n\n- reason: vendor\n- owner: ops\n- revisit: reply\n"),
+        )
+        .unwrap();
+        commit(root, "plan");
+        run(root, &["branch", "task/TSK-001-work"]);
+        let backlog = backlog(root).unwrap();
+        let blocked = entry(&backlog, "TSK-001");
+        assert_eq!(blocked.state, State::Blocked);
+        assert_eq!(blocked.branches, ["task/TSK-001-work"]);
+        assert!(blocked.reason.contains("vendor"));
+        assert_eq!(backlog.in_state(State::Active).count(), 0);
     }
 }
