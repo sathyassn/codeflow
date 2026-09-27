@@ -291,6 +291,81 @@ fn git_guard_blocks_push_to_protected_with_exit_2() {
     assert!(stderr.contains("codeflow integrate"), "{stderr}");
 }
 
+/// Run `codeflow hook git-guard` on a Claude Code `PreToolUse` payload whose
+/// session cwd is `session`.
+fn guard_run(command: &str, session: &Path) -> Output {
+    run_with_stdin(
+        codeflow().args(["hook", "git-guard"]).current_dir(session),
+        &guard_payload(command, session),
+    )
+}
+
+// TSK-112 AC-4: the harness payload, the real binary and real repositories.
+// The session repository is on `main`; a scratch repository with its own
+// policy is on a feature branch; another has no policy and sits on `main`.
+#[test]
+fn git_guard_judges_the_repository_a_command_targets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session = tmp.path().join("session");
+    let scratch = tmp.path().join("scratch");
+    let bare = tmp.path().join("nopolicy");
+    for (dir, branch) in [(&session, "main"), (&scratch, "feat/x"), (&bare, "main")] {
+        std::fs::create_dir_all(dir).unwrap();
+        init_repo(dir, branch);
+    }
+    write_policy(
+        &session,
+        r#"{"git":{"protected_branches":["main","master"]}}"#,
+    );
+    write_policy(
+        &scratch,
+        r#"{"git":{"protected_branches":["main","master"]}}"#,
+    );
+    let s = scratch.to_string_lossy();
+    let b = bare.to_string_lossy();
+    let sg = session.join(".git");
+    let sg = sg.to_string_lossy();
+
+    for allowed in [
+        format!("git -C {s} commit -m 'feat: x'"),
+        format!("R={s}; git -C \"$R\" commit -m 'feat: x'"),
+        format!(
+            "cd {} && git -C scratch commit -m 'feat: x'",
+            tmp.path().display()
+        ),
+    ] {
+        let out = guard_run(&allowed, &session);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{allowed}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    for blocked in [
+        "git commit -m 'feat: x'".to_string(),
+        format!("git -C {b} commit -m 'feat: x'"),
+        format!("git -C {s} --git-dir={sg} commit -m 'feat: x'"),
+    ] {
+        let out = guard_run(&blocked, &session);
+        assert_eq!(out.status.code(), Some(2), "{blocked}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("git.commit_to_protected"),
+            "{blocked}: {stderr}"
+        );
+    }
+
+    let out = guard_run("git -C \"$UNSET_DIR\" commit -m 'feat: x'", &session);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("target unresolved: `$UNSET_DIR`")
+            && stderr.contains("does not prove the target safe"),
+        "{stderr}"
+    );
+}
+
 #[test]
 fn git_guard_allows_force_push_to_feature_branch() {
     let dir = tempfile::tempdir().unwrap();

@@ -30,6 +30,7 @@ pub mod delegate_turn;
 pub mod exec_guard;
 pub mod git_guard;
 pub mod git_hook;
+mod git_target;
 pub mod orient;
 pub mod policy;
 pub mod policy_schema;
