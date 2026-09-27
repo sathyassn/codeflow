@@ -160,7 +160,8 @@ turn, and the terminal event belongs to that turn. The sequence, compactly:
 # Read the managed defaults, then any doctor-validated project override.
 CLAUDE_MODEL="<claude-primary native selector>"
 CLAUDE_EFFORT="<default effort>"
-codeflow delegate init --run-id run-42 --state-dir "$STATE"  # prints generated settings.json
+codeflow delegate init --run-id run-42 --state-dir "$STATE" \
+  --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT"  # prints generated settings.json
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /path/to/worktree \
   "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
 # For consult/no-edit, use the same launch with --permission-mode auto.
@@ -276,8 +277,12 @@ delegated exchange meets the same five obligations:
 2. **Provenance.** Attribute output only with native runtime provenance: the
    schema-v2 records binding session, digest, and `prompt_id` on the reverse
    lane; the native Codex thread ID plus model/effort labeled by source
-   (`observed` when exposed, otherwise `requested`) on the forward lane. A
-   relay is transport, not author.
+   (`observed` when exposed, otherwise `requested`) on the forward lane. On
+   the reverse lane the terminal `wait` result already carries `provenance`:
+   the thread (the Claude session), and model and effort as `requested` at
+   `init` and `observed` at session start, each `unknown` when not given.
+   Cite that record; do not record these by hand. A relay is transport, not
+   author.
 3. **Return.** Verify the returned work itself — the bounded terminal message
    or thread result, the scoped worktree diff, and the cited evidence,
    re-derived by you.
@@ -287,9 +292,10 @@ delegated exchange meets the same five obligations:
    silence.
 5. **Recheck.** Evidence stays recheckable after the fact: durable state
    records until cleanup on the reverse lane; the resumable native thread on
-   the forward lane. Record model/effort as observed only when the transport
-   exposes actual values, otherwise as requested — never silently upgrade —
-   and grade inferred completion explicitly as inferred.
+   the forward lane. On the forward lane, record model/effort as observed
+   only when the transport exposes actual values, otherwise as requested
+   (never silently upgrade), and grade inferred completion explicitly as
+   inferred. On the reverse lane the lifecycle records them.
 
 ## Edit-access doctrine (delegate tier)
 

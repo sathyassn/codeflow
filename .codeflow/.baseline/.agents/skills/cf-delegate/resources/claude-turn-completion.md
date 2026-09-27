@@ -13,11 +13,13 @@ Code. It makes zero tmux calls; waiting is pure file polling.
 
 1. Choose a run id of 1–64 ASCII letters, digits, `.`, `_`, or `-`, and an
    absolute state-directory path **outside every Git worktree**.
-2. `codeflow delegate init --run-id RUN --state-dir DIR` creates the owner-only
-   (`0700`/`0600`) state directory and prints the generated
-   `DIR/settings.json`, which wires `SessionStart`, `UserPromptSubmit`,
-   `Stop`, and `StopFailure` to
-   `codeflow hook delegate-turn --run-id RUN --state-dir DIR`.
+2. `codeflow delegate init --run-id RUN --state-dir DIR --model SELECTOR
+   --effort LEVEL` creates the owner-only (`0700`/`0600`) state directory and
+   prints the generated `DIR/settings.json`, which wires `SessionStart`,
+   `UserPromptSubmit`, `Stop`, and `StopFailure` to
+   `codeflow hook delegate-turn --run-id RUN --state-dir DIR`. Pass the same
+   model selector and effort the `claude` launch uses: `init` records them as
+   the requested provenance (`unknown` when omitted).
 3. **The generated settings file is immutable.** Every later `arm`, `wait`,
    and hook invocation regenerates the expected content from exactly
    (run id, state-dir spelling) and rejects any difference as unsafe. Never
@@ -74,7 +76,8 @@ configuration, and an unknown or unverified sibling fails the preflight.
 # Read the managed defaults, then any doctor-validated project override.
 CLAUDE_MODEL="<claude-primary native selector>"
 CLAUDE_EFFORT="<default effort>"
-codeflow delegate init --run-id run-42 --state-dir "$STATE"
+codeflow delegate init --run-id run-42 --state-dir "$STATE" \
+  --model "$CLAUDE_MODEL" --effort "$CLAUDE_EFFORT"
 tmux new-session -d -s cf-run-42 -x 220 -y 50 -c /absolute/worktree \
   "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude --model $CLAUDE_MODEL --effort $CLAUDE_EFFORT --permission-mode bypassPermissions --settings $STATE/settings.json"
 # For consult/no-edit, use the same launch with --permission-mode auto.
@@ -170,7 +173,11 @@ timeout, and `130` for interruption. `init` and `arm` exit `0` or `1`. Branch
 on these codes — never on pane appearance. A completed result carries
 `schema_version` 2, the run and turn ids, `session_id`, `prompt_id` (absent
 only on the recorded pre-2.1.196 single-turn compatibility path), and the
-bounded `last_assistant_message`; require the message to carry the requested
+bounded `last_assistant_message`, and a `provenance` object: `thread_id` (the
+session), and `model` and `effort`, each with `requested` (from `init`) and
+`observed` (from the `SessionStart` payload), `unknown` where not given. Cite
+it as the exchange's provenance; never upgrade `requested` to `observed`.
+Require the message to carry the requested
 structured verdict or handoff fields, then independently verify cited
 evidence and the worktree diff.
 
