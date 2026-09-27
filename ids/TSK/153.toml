@@ -1,0 +1,11 @@
+id = "TSK-153"
+uid = "11b28a1d-f452-43bd-81c9-abd9b9f2b5a9"
+kind = "TSK"
+title = "scaffold writes flush the disk once per run"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T20:41:40Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
