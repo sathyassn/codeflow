@@ -813,3 +813,182 @@ fn a_fresh_full_tier_project_checks_planning_once_at_the_policy_level() {
         serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
     assert_eq!(after["git"]["work_planning"], "warn");
 }
+
+/// TSK-129 AC-5 (serves EPC-020 AC-13): the whole files that TSK-129 split,
+/// with the section directories that now hold their text.
+const TSK129_SPLIT_FILES: &[(&str, &str)] = &[
+    (
+        "skills/cf-model-orchestrator/resources/quality-contract.md",
+        "skills/cf-model-orchestrator/resources/quality",
+    ),
+    (
+        "skills/cf-model-orchestrator/resources/capability-routing.md",
+        "skills/cf-model-orchestrator/resources/routing",
+    ),
+    (
+        "skills/cf-delegate/SKILL.md",
+        "skills/cf-delegate/resources",
+    ),
+];
+
+/// Files the split added beside each whole file, in one skill tree.
+fn tsk129_added_files(root: &Path, tree: &str) -> Vec<String> {
+    let mut added = Vec::new();
+    for (_, dir) in TSK129_SPLIT_FILES {
+        let mut files = Vec::new();
+        walk_files(&root.join(tree).join(dir), &mut files);
+        for file in files {
+            let rel = file
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            let name = rel.rsplit('/').next().unwrap();
+            if !dir.ends_with("resources") || name.starts_with("lane-") || name == "edit-access.md"
+            {
+                added.push(rel);
+            }
+        }
+    }
+    added.sort();
+    added
+}
+
+fn skill_tree_snapshot(root: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files = Vec::new();
+    for tree in [".claude/skills", ".agents/skills"] {
+        walk_files(&root.join(tree), &mut files);
+    }
+    let mut snapshot: Vec<_> = files
+        .into_iter()
+        .map(|f| {
+            let rel = f
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            (rel, std::fs::read(&f).unwrap())
+        })
+        .collect();
+    snapshot.sort();
+    snapshot
+}
+
+/// Rewind a fresh scaffold to the pre-split install: each split file becomes
+/// one whole managed file (its index or core followed by every added file),
+/// recorded as installed in the manifest and baseline, and the added files
+/// are removed with their records.
+fn rewind_to_whole_files(root: &Path) {
+    let manifest_path = root.join(".codeflow/manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap();
+    let files = manifest["files"].as_object_mut().expect("manifest files");
+    for tree in [".claude", ".agents"] {
+        let added = tsk129_added_files(root, tree);
+        for (whole, dir) in TSK129_SPLIT_FILES {
+            let whole = format!("{tree}/{whole}");
+            let mut text = read(root, &whole);
+            for rel in added
+                .iter()
+                .filter(|rel| rel.starts_with(&format!("{tree}/{dir}/")))
+            {
+                text.push('\n');
+                text.push_str(&read(root, rel));
+            }
+            std::fs::write(root.join(&whole), &text).unwrap();
+            std::fs::write(root.join(".codeflow/.baseline").join(&whole), &text).unwrap();
+            files.get_mut(&whole).expect("whole file record")["sha256"] =
+                serde_json::json!(codeflow_core::scaffold::sha256_hex(text.as_bytes()));
+        }
+        for rel in &added {
+            std::fs::remove_file(root.join(rel)).unwrap();
+            let _ = std::fs::remove_file(root.join(".codeflow/.baseline").join(rel));
+            assert!(files.remove(rel).is_some(), "{rel} had no manifest record");
+        }
+    }
+    std::fs::write(
+        &manifest_path,
+        format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
+    )
+    .unwrap();
+}
+
+#[test]
+fn split_references_install_and_update_replaces_whole_files_at_standard_and_full() {
+    for tier in ["--standard", "--full"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir(&root).unwrap();
+        let init = codeflow(&root, &["init", "--yes", tier]);
+        assert!(
+            init.status.success(),
+            "{tier}: init failed: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+
+        // Installed: every split file and its added files, in both trees,
+        // byte-identical to the shipped assets.
+        let assets = repo_root().join("assets/base");
+        for tree in [".claude", ".agents"] {
+            let added = tsk129_added_files(&root, tree);
+            assert!(
+                added.len() >= 3 + 16 + 8,
+                "{tier} {tree}: split files missing: {added:?}"
+            );
+            for rel in added.iter().cloned().chain(
+                TSK129_SPLIT_FILES
+                    .iter()
+                    .map(|(w, _)| format!("{tree}/{w}")),
+            ) {
+                let skill_rel = rel.split_once("/skills/").unwrap().1;
+                let src = ["agents/skills", "claude/skills"]
+                    .iter()
+                    .map(|s| assets.join(s).join(skill_rel))
+                    .find(|p| p.is_file())
+                    .unwrap_or_else(|| panic!("{rel} has no shipped source"));
+                assert_eq!(
+                    normalize_crlf(&read(&root, &rel)),
+                    normalize_crlf(&std::fs::read_to_string(src).unwrap()),
+                    "{tier}: {rel} differs from its asset"
+                );
+            }
+        }
+        let fresh = skill_tree_snapshot(&root);
+
+        rewind_to_whole_files(&root);
+        let out = codeflow(&root, &["update"]);
+        let report = String::from_utf8_lossy(&out.stdout).to_string();
+        assert!(
+            out.status.success(),
+            "{tier}: update failed: {report}\n{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            !report.contains("CONFLICT"),
+            "{tier}: update conflicted:\n{report}"
+        );
+        // No stale copies: the skill trees match a fresh scaffold exactly, and
+        // no conflict or backup file is left anywhere.
+        assert_eq!(
+            skill_tree_snapshot(&root),
+            fresh,
+            "{tier}: update left the skill trees different from a fresh scaffold"
+        );
+        let mut all = Vec::new();
+        walk_files(&root, &mut all);
+        let stale: Vec<_> = all
+            .iter()
+            .filter(|p| {
+                let name = p.file_name().unwrap().to_string_lossy();
+                name.ends_with(".new") || name.ends_with(".orig") || name.ends_with(".bak")
+            })
+            .collect();
+        assert!(stale.is_empty(), "{tier}: stale copies left: {stale:?}");
+        let again = codeflow(&root, &["update"]);
+        let again_report = String::from_utf8_lossy(&again.stdout).to_string();
+        assert!(
+            again.status.success() && !again_report.contains("CONFLICT"),
+            "{tier}: second update was not clean: {again_report}"
+        );
+    }
+}
