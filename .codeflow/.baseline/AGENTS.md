@@ -16,10 +16,10 @@ re-read this block before acting.
 
 - **Work to the outcome.** Know what done means before acting, work in small verified steps, and iterate until the outcome is proven or a real blocker is surfaced with options and a recommendation. See `.codeflow/rules/workflow-discipline.md`.
 - **Evidence, never assumption.** Every claim carries file:line, command output or a reproducible check, and you say what was not verified; an unverifiable or fabricated claim is a defect. See `.codeflow/rules/workflow-discipline.md`.
-- **Find broadly; act by materiality.** Rank findings by severity, confidence and reach, never by effort; nits stay non-blocking and batched. See `.codeflow/rules/workflow-discipline.md`.
+- **Find broadly; act by materiality.** Do not let easy cosmetics displace consequential work; a material issue outside scope gets one tracked item, never silent scope growth. See `.codeflow/rules/workflow-discipline.md`.
 - **Challenge independently.** Evidence and honest analysis outrank agreement, the operator's included; say so when you see a better path, and the operator makes the final call. See `.codeflow/rules/workflow-discipline.md`.
 - **Prove it where it runs.** Verify at the surface the change affects and what it touches upstream and downstream, disclose a mocked boundary, and get `codeflow test` green before calling it done. See `.codeflow/rules/workflow-discipline.md`.
-- **Route by touched paths.** Orchestration entry is decided by touched paths: a change to an adopter-facing path (product code, managed instructions, hooks, policy, CI, shipped templates, watched contracts), and any plan, design, security or irreversible work, starts with `/cf-model-orchestrator`; other edits and conversation go direct; when unsure, route. See `/cf-model-orchestrator`.
+- **Route by touched paths.** Orchestration entry is decided by touched paths: a change to an adopter-facing path (product code, managed instructions, hooks, policy, CI, shipped templates, watched contracts), research or analysis that will drive one, and plan, design, security or irreversible work start with `/cf-model-orchestrator`; other edits and conversation go direct; when unsure, route. See `/cf-model-orchestrator`.
 - **Durations come from cf-estimate.** Agent-delivered durations come from `/cf-estimate` as agentic scenarios with stated bases, never human weeks, sprints or person-days, and never an AI speed multiplier. See `/cf-estimate`.
 - **Outcomes first, in words.** Replies, status and summaries lead with outcomes in plain words, with IDs and file names after; titles name the subject in words; no em or en dash in new text. See `.codeflow/rules/writing.md`.
 - **Show complex things.** A multi-part explanation, comparison or decision goes through `/cf-present` where the harness can show it; otherwise use a figure fit to the surface (inline HTML where rendered, ASCII in a terminal, never Mermaid). See `/cf-present`, `.codeflow/rules/writing.md`.
@@ -37,11 +37,13 @@ re-read this block before acting.
 | plan work or create an epic, spec, task or ADR | acceptance criteria before building; records only through the CLI | `/cf-plan`, `cf-method/references/project-organization.md` |
 | set product, UX, UI or visual direction | settle direction with evidence before building | `/cf-design` |
 | build an accepted change | the smallest durable change, tests in the same change, stages per the lifecycle map | `/cf-develop`, `cf-method/references/workflow-lifecycle.md` |
+| review a change or give a verdict | read-only; rank findings by severity, confidence and reach, never effort; nits non-blocking and batched | `cf-reviewer`, `cf-model-orchestrator/resources/quality-contract.md`, `cf-model-orchestrator/resources/verification-selection.md` |
+| hit a failure, a red check or a blocker | classify it; one bounded probe on a new hypothesis, never the same retry; an unfinished CI job is missing evidence; escalate only operator-owned choices | `.codeflow/rules/workflow-discipline.md` |
 | branch, open a worktree, commit, rebase or clean up | work-start check first (identity, intent-match, currency); one worktree per session; cleanup needs merge proof | `.codeflow/rules/worktrees.md`, `.codeflow/rules/git-rules.md` |
 | push, open a PR or release | a `Task:` line and real test evidence; truth synced in the same PR; releases follow the project's policy | `/cf-ship`, `cf-ship/references/release-policy.md` |
 | ask another model or harness | same family: a native subagent of this session; another family: a native interactive seat with provenance recorded; never headless | `/cf-consult`, `/cf-delegate` |
 | change this file, a rule, a skill, a model or a harness | project rules go below the managed block; qualify the change | `/cf-evaluate-model`, `.codeflow/rules/workflow-discipline.md` |
-| resume after compaction or a break | re-read this block and run `codeflow orient`; state lives in records, not chat | `.codeflow/rules/workflow-discipline.md` |
+| start a session, or resume after compaction or a break | run `codeflow orient` (the session hook does it where wired), then re-read this block; state lives in records, not chat | `.codeflow/rules/workflow-discipline.md` |
 
 **Other skills:** `/cf-stack` sets up the stack and test config,
 `/cf-customize` tailors a scaffolded project, `/cf-docs-portal` runs the

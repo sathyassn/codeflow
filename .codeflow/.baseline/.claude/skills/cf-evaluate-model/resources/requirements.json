@@ -918,7 +918,7 @@
     {
       "id": "CF-MM-001",
       "level": "hard",
-      "statement": "Every non-trivial repository task starts with the Claude+Codex orchestrator when both seats are available.",
+      "statement": "Routed work, decided by touched paths (a change to an adopter-facing path, research or analysis that will drive one, or plan, design, security or irreversible work; when unsure, route), starts with the Claude+Codex orchestrator when both seats are available.",
       "sources": [
         {
           "path": "AGENTS.md",
@@ -936,7 +936,7 @@
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
           "markers": [
-            "Use the duo for every non-trivial repository task."
+            "Use the duo for routed work, decided by touched paths as AGENTS.md states; when unsure, route."
           ]
         }
       ]

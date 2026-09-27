@@ -70,4 +70,6 @@ commit messages, PR bodies and added lines under `docs/`,
 block); old lines are exempt. Write plainly: no slogans, no "not X but Y"
 turns, no rhetorical triplets or dramatic fragments, no walls of text. No
 emoji or AI attribution in commits and PR bodies. No hook sees a chat reply,
-so these rules hold there by discipline, and evaluation judges them.
+so these rules hold there by discipline. At the standard and full tiers,
+`cf-editorial-review` judges substantial prose and the `cf-evaluate-model`
+evaluations check replies.

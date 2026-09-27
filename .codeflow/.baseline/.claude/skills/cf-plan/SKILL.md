@@ -1,13 +1,13 @@
 ---
 name: cf-plan
-description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground both seats already settled; still ask live operator-owned questions. Direct non-trivial use routes through cf-model-orchestrator first.
+description: Turn a brief into a clear, evidence-grounded plan and materialize the agreed epic, spec, task, or ADR records. Use when clarifying, planning, or allocating epics, specs, tasks, or ADRs after independent Claude+Codex discovery. Use when the operator asks to plan work, write a spec, or break work into tasks. Do not use to implement, merge, or re-interview ground both seats already settled; still ask live operator-owned questions. Routed work (decided by touched paths; when unsure, route) goes through cf-model-orchestrator first.
 ---
 
 # cf-plan — plan work, do not build it
 
 You are clarifying and materializing planned work, not building it.
 
-1. Confirm routing. If this non-trivial task did not arrive from an active
+1. Confirm routing. If this routed task did not arrive from an active
    `cf-model-orchestrator` run and has no recorded solo degradation, invoke the
    orchestrator first. Do not recurse when the orchestrator already supplied
    the immutable brief and plan version. Then load `cf-method` for artifact
@@ -90,7 +90,7 @@ You are clarifying and materializing planned work, not building it.
    nevertheless requires distinct anchored repository-execution tasks; an
    external artifact cannot satisfy or waive those gates.
 7. Record the execution contract — `/cf-model-orchestrator` is the default for
-   every non-trivial repository task: both seats plan independently, Claude leads
+   routed work (decided by touched paths): both seats plan independently, Claude leads
    design, and each implementation task uses the canonical assignment record in
    `cf-model-orchestrator/resources/capability-routing.md` to separate its
    responsible primary from actual execution and cross-lineage review. A

@@ -1,11 +1,11 @@
 ---
 name: cf-develop
-description: Implements a planned feature or change through a build → review → verify loop. Use when acceptance criteria are settled and implementation is authorized, either inside cf-model-orchestrator or as its recorded solo fallback after a required interactive seat is unavailable. Do not use as an alternate entry point for non-trivial work.
+description: Implements a planned feature or change through a build → review → verify loop. Use when acceptance criteria are settled and implementation is authorized, either inside cf-model-orchestrator or as its recorded solo fallback after a required interactive seat is unavailable. Do not use as an alternate entry point for routed work.
 ---
 
 # cf-develop — build, review, verify
 
-Drive the planned implementation stage to done. For non-trivial work this skill
+Drive the planned implementation stage to done. For routed work this skill
 supports `cf-model-orchestrator`; it runs alone only after orchestrator preflight
 records the required interactive seat unavailable and the reduced assurance.
 

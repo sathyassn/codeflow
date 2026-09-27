@@ -10,7 +10,7 @@ The scarce resources are clear inputs and verified outputs, not supervised
 middles. Instructions tell, workflows do, gates verify — and a gate exists only
 where a mistake is irreversible or invisible.
 
-For every non-trivial task, read
+For routed work (by touched paths), read
 [references/workflow-lifecycle.md](references/workflow-lifecycle.md) after the
 orchestrator selects the outcome mode. It is the required transition map for
 composing research, planning, design, implementation, review, documentation,
@@ -20,7 +20,7 @@ repair, and ship stages without turning them into one fixed ceremony.
 
 Match machinery to the work; escalate only when the lighter rung fails. The
 orchestrator selects stages and weight separately. The host-neutral duo remains
-the default for non-trivial work: independent Claude and Codex planning, Claude
+the default for routed work: independent Claude and Codex planning, Claude
 design and integrated judgment, capability-based production, and
 author-relative cross-lineage review. Solo is only a recorded degradation after
 an interactive seat is unavailable. Research- or planning-only work stops after
@@ -36,7 +36,7 @@ boundary, or irreversible tradeoff; ordinary reversible detail inside an
 approved node remains execution evidence.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
-- **Interactive `/cf-model-orchestrator` loop** for non-trivial work — parallel
+- **Interactive `/cf-model-orchestrator` loop** for routed work — parallel
   discovery, versioned joint settlement, then only the stages the outcome needs.
 - **Inline `/cf-develop` loop** supports an orchestrated implementation; used
   alone, it is the recorded solo fallback: build → independent review → verify.
