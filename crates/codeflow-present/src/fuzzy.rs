@@ -99,16 +99,25 @@ fn scan(
         })
         .collect();
     if let Some(budget) = budget {
-        let cells: u64 = plan
-            .iter()
-            .map(|(start, range)| {
-                let span = ends[range.end - 1] - start;
-                u64::try_from(length * span).unwrap_or(u64::MAX)
-            })
-            .fold(0, u64::saturating_add);
-        if cells > budget {
-            return Err(OverBudget);
+        // Every edit-distance table the loop below builds: the quote against
+        // each start's longest window, the prefix once per start and the
+        // suffix once per candidate end (round 2: context tables included).
+        let cells = |left: usize, right: usize| u64::try_from(left * right).unwrap_or(u64::MAX);
+        let mut total: u64 = 0;
+        for (start, range) in &plan {
+            total = total
+                .saturating_add(cells(length, ends[range.end - 1] - start))
+                .saturating_add(cells(prefix.len(), prefix.len().min(*start)));
+            for &end in &ends[range.clone()] {
+                total =
+                    total.saturating_add(cells(suffix.len(), suffix.len().min(text.len() - end)));
+            }
+            if total > budget {
+                return Err(OverBudget);
+            }
         }
+        #[cfg(test)]
+        tests::PLANNED.with(|planned| planned.set(total));
     }
     let mut best: Option<FuzzyMatch> = None;
     for (start, range) in plan {
@@ -165,6 +174,10 @@ fn count(units: usize) -> f64 {
 /// The Levenshtein distance from `quote` to every prefix of `text`: entry
 /// `m` is the distance to `text[..m]`.
 fn prefix_distances(quote: &[u16], text: &[u16]) -> Vec<usize> {
+    #[cfg(test)]
+    tests::COMPUTED.with(|computed| {
+        computed.set(computed.get() + u64::try_from(quote.len() * text.len()).unwrap());
+    });
     // Rows run over the quote, columns over the text, so the last row holds
     // the distance to each text prefix at once.
     let mut previous: Vec<usize> = (0..=text.len()).collect();
@@ -293,6 +306,38 @@ mod tests {
             "{:?}",
             started.elapsed()
         );
+    }
+
+    thread_local! {
+        pub(super) static PLANNED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+        pub(super) static COMPUTED: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+    }
+
+    /// Round 2: the finder's input, a short quote with 32 units of context
+    /// on each side against the longest text, computes about 330 million
+    /// cells, so it must stop over budget; and for an admitted search with
+    /// context, the cells charged are exactly the cells computed.
+    #[test]
+    fn the_budget_charges_the_context_tables_too() {
+        let exact = "a".repeat(26);
+        let context = "b".repeat(32);
+        let quote = Quote {
+            exact: &exact,
+            prefix: &context,
+            suffix: &context,
+            start: Some(32),
+        };
+        let text = "a ".repeat(limits::MAX_FUZZY_TEXT_UTF16 / 2);
+        assert_eq!(search(&quote, &text), Search::OverBudget);
+
+        let admitted = "a ".repeat(1_000);
+        PLANNED.with(|planned| planned.set(0));
+        COMPUTED.with(|computed| computed.set(0));
+        assert_ne!(search(&quote, &admitted), Search::OverBudget);
+        let planned = PLANNED.with(std::cell::Cell::get);
+        let computed = COMPUTED.with(std::cell::Cell::get);
+        assert!(planned > 0 && planned <= limits::FUZZY_WORK_BUDGET);
+        assert_eq!(planned, computed);
     }
 
     #[test]
