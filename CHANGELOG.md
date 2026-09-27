@@ -111,7 +111,8 @@ publication date._
   accepts a narrow composition that draws the wide mark set again only when
   its declaration sets `marks: "same"` and gives a `reason`; without one it
   still fails as a reflow, and the height ceiling still applies. Narrow
-  coverage cells are drawn at the wide size again.
+  coverage cells are drawn at the wide size again, and a partial cell has a
+  light fill, so it reads apart from an empty one in dark mode.
 
 <!-- codeflow:release-impact patch -->
 - **Narrow figure labels clear their marks in every engine.** A narrow extent
