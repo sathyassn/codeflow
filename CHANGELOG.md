@@ -589,6 +589,15 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **`git gc` works in a hooked clone.** The reference-transaction hook no
+  longer refuses `git pack-refs`, which `git gc` and auto gc run: moving a
+  protected branch such as `main` from a loose ref into packed-refs, and
+  pruning the loose copy, leave it on the same commit. A transaction line
+  passes only when the ref keeps its current value; a prune passes only
+  while packed-refs holds that value and is not being rewritten. A real
+  move or deletion of a protected branch still blocks.
+
+<!-- codeflow:release-impact patch -->
 - **git-guard judges the repository a command targets.** A git command that
   reaches another repository through `cd`, `git -C`, `--git-dir`, a
   `GIT_DIR=` prefix or a path held in a variable set earlier on the same line

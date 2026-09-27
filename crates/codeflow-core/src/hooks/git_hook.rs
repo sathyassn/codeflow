@@ -646,7 +646,7 @@ pub fn reference_transaction(
     let sanctioned = integrate_token || human_override;
 
     for line in stdin.lines() {
-        let Some((_old_oid, new_oid, refname)) = parse_ref_line(line) else {
+        let Some((old_oid, new_oid, refname)) = parse_ref_line(line) else {
             continue;
         };
         let Some(branch) = refname.strip_prefix("refs/heads/") else {
@@ -654,6 +654,11 @@ pub fn reference_transaction(
         };
         if !policy.branch_is_protected(branch) {
             continue; // feature branches stay fully free (rebase, force, etc.)
+        }
+        // Storage housekeeping (`git pack-refs`, run by `git gc`) rewrites
+        // where a ref is kept, not what it points to: not an update.
+        if keeps_value(&repo, refname, old_oid, new_oid) {
+            continue;
         }
 
         // Deletion (new-oid all zeros): governed by delete_protected, which
@@ -692,6 +697,38 @@ pub fn reference_transaction(
         ));
     }
     Ok(report)
+}
+
+/// `true` when a transaction line leaves `refname` resolving to the commit it
+/// resolves to now, so it moves nothing. Two such lines come from
+/// `git pack-refs` (and so `git gc`) in the files backend:
+/// - the write into packed-refs, `<zero or old> <X>`, where X is the ref's
+///   current value;
+/// - the prune of the loose copy, `<X> <zero>`, while packed-refs holds the
+///   same X and is not locked for rewriting. A real deletion always locks
+///   packed-refs to drop the entry there too, and its packed transaction
+///   reports `<zero> <zero>`, so it still reaches the deletion rule.
+fn keeps_value(repo: &Repository, refname: &str, old_oid: &str, new_oid: &str) -> bool {
+    let current = repo.refname_to_id(refname).ok();
+    if !is_zero_sha(new_oid) {
+        return git2::Oid::from_str(new_oid).is_ok_and(|new| current == Some(new));
+    }
+    let Ok(old) = git2::Oid::from_str(old_oid) else {
+        return false;
+    };
+    let common = repo.commondir();
+    if is_zero_sha(old_oid) || current != Some(old) || common.join("packed-refs.lock").exists() {
+        return false;
+    }
+    let loose = std::fs::read_to_string(common.join(refname)).ok();
+    let packed = std::fs::read_to_string(common.join("packed-refs")).ok();
+    loose.is_some_and(|loose| loose.trim() == old_oid)
+        && packed.is_some_and(|packed| {
+            packed.lines().any(|line| {
+                line.split_once(' ')
+                    .is_some_and(|(sha, name)| sha == old_oid && name.trim() == refname)
+            })
+        })
 }
 
 /// Parse one `<old-oid> <new-oid> <ref-name>` reference-transaction line.
@@ -1963,6 +2000,18 @@ mod tests {
         );
     }
 
+    /// A commit one ahead of `main`, made on a side branch so `main` itself
+    /// stays where it is, as it does when the hook sees the move prepared.
+    fn commit_ahead_of_main(dir: &Path) -> String {
+        git(dir, &["checkout", "-q", "-b", "side"]);
+        std::fs::write(dir.join("f.txt"), "x\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-m", "feat: local"]);
+        let ahead = rev_parse(dir, "HEAD");
+        git(dir, &["checkout", "-q", "main"]);
+        ahead
+    }
+
     const ZERO40: &str = "0000000000000000000000000000000000000000";
     const FAKE40: &str = "1111111111111111111111111111111111111111";
 
@@ -1973,10 +2022,7 @@ mod tests {
         init_repo(dir.path(), "main");
         let base = rev_parse(dir.path(), "HEAD");
         set_origin_ref(dir.path(), "main", &base);
-        std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
-        git(dir.path(), &["add", "."]);
-        git(dir.path(), &["commit", "-m", "feat: local"]);
-        let ahead = rev_parse(dir.path(), "HEAD");
+        let ahead = commit_ahead_of_main(dir.path());
         let stdin = format!("{base} {ahead} refs/heads/main\n");
         let report =
             reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
@@ -2060,10 +2106,7 @@ mod tests {
         init_repo(dir.path(), "main");
         let base = rev_parse(dir.path(), "HEAD");
         set_origin_ref(dir.path(), "main", &base); // "poisoned"/stale at base
-        std::fs::write(dir.path().join("f.txt"), "x\n").unwrap();
-        git(dir.path(), &["add", "."]);
-        git(dir.path(), &["commit", "-m", "feat: local"]);
-        let ahead = rev_parse(dir.path(), "HEAD");
+        let ahead = commit_ahead_of_main(dir.path());
         let stdin = format!("{base} {ahead} refs/heads/main\n");
         let report =
             reference_transaction(dir.path(), &GitPolicy::default(), &stdin, false, false).unwrap();
