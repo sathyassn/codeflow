@@ -85,7 +85,6 @@
     ],
     "work_records": "block"
   },
-  "human_authorization": "none",
   "security": {
     "dangerous_commands": "block",
     "privilege_escalation": "warn"

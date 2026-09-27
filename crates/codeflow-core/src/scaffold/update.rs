@@ -52,6 +52,7 @@ use super::state::{
     InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
 };
 use super::{hash, should_skip_initial_stack_adr, ScaffoldError};
+use crate::hooks::policy_schema::DEPRECATED_KEYS;
 
 /// Options for [`update`].
 #[derive(Debug, Clone)]
@@ -524,6 +525,11 @@ fn sync_user_owned_json(
         recommended = recommend_defaults(&user, old, &new_default);
     }
 
+    // Keys the new shipped default dropped and the schema deprecates are
+    // deleted (TSK-137): they are inert, and the loader warns while they stay.
+    let removed = remove_deprecated_keys(&mut user, &new_default);
+    added.extend(removed.iter().map(|k| format!("-{k}")));
+
     let migrated = migrate_policy_values(&entry.dest, &mut user);
 
     // Refresh the shipped-default baseline and record either way.
@@ -545,7 +551,13 @@ fn sync_user_owned_json(
 
     // schema_version awareness: carry the new default's schema_version when
     // keys were added and the user has not customized it past the default.
-    let mut notes: Vec<String> = added.iter().map(|k| format!("added key {k}")).collect();
+    let mut notes: Vec<String> = added
+        .iter()
+        .map(|k| match k.strip_prefix('-') {
+            Some(gone) => format!("removed deprecated key {gone}"),
+            None => format!("added key {k}"),
+        })
+        .collect();
     notes.extend(migrated);
     notes.extend(recommended);
     if let (Some(user_sv), Some(new_sv)) = (
@@ -602,6 +614,23 @@ fn recommend_defaults(
         }
     }
     notes
+}
+
+/// Delete each top-level [`DEPRECATED_KEYS`] entry the user file carries and
+/// the new shipped default does not. Returns the removed keys.
+fn remove_deprecated_keys(
+    user: &mut serde_json::Value,
+    new_default: &serde_json::Value,
+) -> Vec<String> {
+    let Some(obj) = user.as_object_mut() else {
+        return Vec::new();
+    };
+    DEPRECATED_KEYS
+        .iter()
+        .map(|(key, _)| *key)
+        .filter(|key| new_default.get(key).is_none() && obj.remove(*key).is_some())
+        .map(str::to_string)
+        .collect()
 }
 
 /// Recursively adds keys present in `new_default` but absent from both

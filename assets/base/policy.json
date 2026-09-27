@@ -44,6 +44,5 @@
   "security": {
     "dangerous_commands": "block",
     "privilege_escalation": "warn"
-  },
-  "human_authorization": "none"
+  }
 }

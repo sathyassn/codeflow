@@ -119,19 +119,31 @@ struct AddedLine {
     blob: Option<String>,
 }
 
-pub fn run(args: &CiArgs) -> i32 {
-    let root = super::repo_root();
-    // An invalid policy cannot verify the consumer's intent — fail loudly,
-    // naming each offending key, rather than silently verify against the
-    // built-in defaults, which could pass a range the real (mistyped) policy
-    // meant to block. Exit 2, the existing could-not-verify-in-full code.
-    if let Err(errors) = policy_schema::validate_policy(&root) {
+/// Validate the policy before verifying anything: `false` (after naming each
+/// offending key) when it is invalid; deprecated keys are warned about.
+fn policy_verifiable(root: &Path) -> bool {
+    if let Err(errors) = policy_schema::validate_policy(root) {
         for e in &errors {
             eprintln!("codeflow ci: policy error: {e}");
         }
         eprintln!(
             "codeflow ci: error: .codeflow/policy.json is invalid — nothing was verified (see `codeflow policy explain`)"
         );
+        return false;
+    }
+    for warning in policy_schema::deprecation_warnings(root) {
+        eprintln!("codeflow ci: warning: {warning}");
+    }
+    true
+}
+
+pub fn run(args: &CiArgs) -> i32 {
+    let root = super::repo_root();
+    // An invalid policy cannot verify the consumer's intent — fail loudly,
+    // naming each offending key, rather than silently verify against the
+    // built-in defaults, which could pass a range the real (mistyped) policy
+    // meant to block. Exit 2, the existing could-not-verify-in-full code.
+    if !policy_verifiable(&root) {
         return 2;
     }
     // Reuse the exact loader the hooks use (charter D7). Bootstrap grace is

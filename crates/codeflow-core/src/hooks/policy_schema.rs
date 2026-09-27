@@ -83,7 +83,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, then `security`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 45] = [
+pub const SCHEMA: [KeySpec; 44] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -92,14 +92,6 @@ pub const SCHEMA: [KeySpec; 45] = [
         purpose: "Version of the policy.json schema.",
         notes: "The scaffold writes 1; the loader does not read or migrate on \
                 it today (inert).",
-    },
-    KeySpec {
-        path: "human_authorization",
-        kind: KeyKind::Enum(&["none"]),
-        valid: "none",
-        purpose: "Out-of-band human-authorization mode for irreversible actions (ADR-0009).",
-        notes: "Only `none` exists today — an inert seam for future \
-                totp/push/webauthn adapters.",
     },
     // ---- git: protected branches -----------------------------------------
     KeySpec {
@@ -551,6 +543,44 @@ fn show_value(v: &Value) -> String {
     }
 }
 
+/// Keys removed from the policy schema that an older file may still carry:
+/// `(key, why)`. Validation accepts them, [`deprecation_warnings`] names
+/// them, and `codeflow update` deletes them.
+pub const DEPRECATED_KEYS: &[(&str, &str)] = &[(
+    "human_authorization",
+    "it accepted only \"none\" and changed nothing (removed in TSK-137, ADR-0009 \
+     amendment)",
+)];
+
+fn deprecated_key(key: &str) -> Option<&'static str> {
+    DEPRECATED_KEYS
+        .iter()
+        .find(|(k, _)| *k == key)
+        .map(|(_, why)| *why)
+}
+
+/// One warning per deprecated key present in `<root>/.codeflow/policy.json`.
+/// An absent or unreadable file gives none; [`validate_policy`] reports that.
+#[must_use]
+pub fn deprecation_warnings(root: &Path) -> Vec<String> {
+    let Ok(data) = std::fs::read_to_string(root.join(".codeflow").join("policy.json")) else {
+        return Vec::new();
+    };
+    let Ok(Value::Object(obj)) = serde_json::from_str::<Value>(&data) else {
+        return Vec::new();
+    };
+    obj.keys()
+        .filter_map(|key| {
+            deprecated_key(key).map(|why| {
+                format!(
+                    "policy key {key} is deprecated and ignored: {why}; `codeflow update` \
+                     removes it, or delete it from .codeflow/policy.json"
+                )
+            })
+        })
+        .collect()
+}
+
 /// Strictly validate `<root>/.codeflow/policy.json`. See [`validate_policy_file`].
 ///
 /// # Errors
@@ -603,6 +633,9 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
 
     let mut errors = Vec::new();
     for (key, value) in obj {
+        if deprecated_key(key).is_some() {
+            continue;
+        }
         match key.as_str() {
             // The two object sections: walk their leaves with the prefix.
             section @ ("git" | "security") => match value.as_object() {
@@ -767,7 +800,6 @@ mod tests {
         assert_eq!(get("git.commit_desc_max_len"), "50");
         assert_eq!(get("git.commit_ticket_pattern"), "\"\"");
         assert_eq!(get("git.protected_branches"), r#"["main","master"]"#);
-        assert_eq!(get("human_authorization"), "none");
     }
 
     #[test]
@@ -830,12 +862,6 @@ mod tests {
         assert!(errs[0].message.contains("array of strings"));
         let errs = validate_policy_str(r#"{"git":[]}"#).unwrap_err();
         assert!(errs[0].message.contains("expected a JSON object"));
-        let errs = validate_policy_str(r#"{"human_authorization":"totp"}"#).unwrap_err();
-        assert!(
-            errs[0].message.contains("expected one of: none"),
-            "{}",
-            errs[0]
-        );
         let errs =
             validate_policy_str(r#"{"security":{"dangerous_commands":"nope"}}"#).unwrap_err();
         assert_eq!(errs[0].key, "security.dangerous_commands");
@@ -859,6 +885,24 @@ mod tests {
         assert_eq!(git.work_records_level(), super::super::PolicyLevel::Block);
         git.work_records = super::super::PolicyLevel::Warn;
         assert_eq!(git.work_records_level(), super::super::PolicyLevel::Warn);
+    }
+
+    #[test]
+    fn test_deprecated_human_authorization_validates_and_warns_once() {
+        assert!(validate_policy_str(r#"{"human_authorization":"none"}"#).is_ok());
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            r#"{"human_authorization":"none","git":{}}"#,
+        )
+        .unwrap();
+        assert!(validate_policy(dir.path()).is_ok());
+        let warnings = deprecation_warnings(dir.path());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("human_authorization is deprecated"));
+        std::fs::write(dir.path().join(".codeflow/policy.json"), r#"{"git":{}}"#).unwrap();
+        assert!(deprecation_warnings(dir.path()).is_empty());
     }
 
     #[test]
@@ -892,7 +936,7 @@ mod tests {
     fn test_validate_valid_opt_in_config_ok() {
         let json = r#"{"schema_version":1,"git":{"commit_footer_tokens":["Signed-off-by"],
             "commit_ticket_keys":["Refs"],"commit_ticket_required":"block",
-            "commit_ticket_pattern":"^PROJ-\\d+$"},"human_authorization":"none"}"#;
+            "commit_ticket_pattern":"^PROJ-\\d+$"}}"#;
         assert!(validate_policy_str(json).is_ok());
     }
 }

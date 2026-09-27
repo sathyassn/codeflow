@@ -1409,6 +1409,44 @@ fn update_keeps_test_gate_on_push_and_recommends_block() {
 }
 
 #[test]
+fn update_removes_the_deprecated_human_authorization_key() {
+    // TSK-137: an adopter file from before the removal carries the inert key;
+    // update deletes it and says so, and keeps every other value.
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    policy["human_authorization"] = "none".into();
+    policy["git"]["commit_format"] = "warn".into();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&policy).unwrap(),
+    )
+    .unwrap();
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    let after: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert!(after.get("human_authorization").is_none(), "{after}");
+    assert_eq!(after["git"]["commit_format"], "warn", "other values kept");
+    let notes = &report
+        .files
+        .iter()
+        .find(|f| f.dest == ".codeflow/policy.json")
+        .unwrap()
+        .notes;
+    assert!(
+        notes
+            .iter()
+            .any(|n| n == "removed deprecated key human_authorization"),
+        "{notes:?}"
+    );
+}
+
+#[test]
 fn update_reinstalls_missing_managed_file() {
     isolate_git();
     let (_p, root) = project_dir();
