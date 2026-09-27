@@ -202,7 +202,7 @@
           "x": 8,
           "y": 10,
           "w": 344,
-          "h": 96,
+          "h": 92,
           "rx": 8,
           "cap": "end",
           "id": "r"
@@ -236,14 +236,14 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M60 110V140",
+          "d": "M60 106V140",
           "head": "end",
           "id": "e"
         },
         {
           "text": "frontmatter",
           "x": 76,
-          "y": 131,
+          "y": 128,
           "style": "mute",
           "for": [
             "e"

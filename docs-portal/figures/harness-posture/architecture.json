@@ -109,7 +109,7 @@
         {
           "text": ".codex/config.toml",
           "x": 32,
-          "y": 146,
+          "y": 145,
           "style": "mono",
           "for": [
             "cx"
@@ -189,7 +189,7 @@
         {
           "text": "git-guard, exec-guard",
           "x": 488,
-          "y": 148,
+          "y": 147,
           "for": [
             "g"
           ]
@@ -268,7 +268,7 @@
         {
           "text": ".codex/config.toml",
           "x": 22,
-          "y": 136,
+          "y": 135,
           "style": "mono",
           "for": [
             "cx"

@@ -84,7 +84,7 @@
         {
           "text": "Claude Code",
           "x": 16,
-          "y": 60,
+          "y": 59,
           "style": "strong",
           "for": [
             "p0"
@@ -122,7 +122,7 @@
         {
           "text": "Codex",
           "x": 16,
-          "y": 112,
+          "y": 111,
           "style": "strong",
           "for": [
             "p1"
@@ -160,7 +160,7 @@
         {
           "text": "Grok Build",
           "x": 16,
-          "y": 164,
+          "y": 163,
           "style": "strong",
           "for": [
             "p2"
@@ -207,7 +207,7 @@
         {
           "text": "floor",
           "x": 628,
-          "y": 110,
+          "y": 106,
           "style": "strong",
           "for": [
             "f"
@@ -216,7 +216,7 @@
         {
           "text": "catastrophic",
           "x": 628,
-          "y": 130,
+          "y": 127,
           "style": "mute",
           "for": [
             "f"

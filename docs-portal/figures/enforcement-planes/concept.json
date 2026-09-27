@@ -229,7 +229,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 304,
+      "height": 310,
       "draw": [
         {
           "state": "source",
@@ -255,13 +255,13 @@
         {
           "text": "local, editable",
           "x": 44,
-          "y": 75,
+          "y": 78,
           "style": "head"
         },
         {
           "state": "reads",
           "shape": "path",
-          "d": "M22 54V108H42",
+          "d": "M22 54V112H42",
           "head": "end",
           "id": "e1"
         },
@@ -269,7 +269,7 @@
           "state": "plane",
           "shape": "rect",
           "x": 44,
-          "y": 90,
+          "y": 94,
           "w": 308,
           "h": 36,
           "rx": 6,
@@ -278,7 +278,7 @@
         {
           "text": "git client hooks",
           "x": 60,
-          "y": 113,
+          "y": 117,
           "for": [
             "g"
           ]
@@ -286,7 +286,7 @@
         {
           "state": "reads",
           "shape": "path",
-          "d": "M22 54V154H42",
+          "d": "M22 54V158H42",
           "head": "end",
           "id": "e2"
         },
@@ -294,7 +294,7 @@
           "state": "plane",
           "shape": "rect",
           "x": 44,
-          "y": 136,
+          "y": 140,
           "w": 308,
           "h": 36,
           "rx": 6,
@@ -303,7 +303,7 @@
         {
           "text": "in-session guards",
           "x": 60,
-          "y": 159,
+          "y": 163,
           "for": [
             "s"
           ]
@@ -311,13 +311,13 @@
         {
           "text": "the perimeter",
           "x": 44,
-          "y": 197,
+          "y": 202,
           "style": "head"
         },
         {
           "state": "reads",
           "shape": "path",
-          "d": "M22 54V230H42",
+          "d": "M22 54V236H42",
           "head": "end",
           "id": "e3"
         },
@@ -325,7 +325,7 @@
           "state": "perimeter",
           "shape": "rect",
           "x": 44,
-          "y": 212,
+          "y": 218,
           "w": 308,
           "h": 36,
           "rx": 6,
@@ -334,7 +334,7 @@
         {
           "text": "CI",
           "x": 60,
-          "y": 235,
+          "y": 241,
           "for": [
             "c"
           ]
@@ -342,7 +342,7 @@
         {
           "state": "reads",
           "shape": "path",
-          "d": "M22 54V276H42",
+          "d": "M22 54V282H42",
           "head": "end",
           "id": "e4"
         },
@@ -350,7 +350,7 @@
           "state": "perimeter",
           "shape": "rect",
           "x": 44,
-          "y": 258,
+          "y": 264,
           "w": 308,
           "h": 36,
           "rx": 6,
@@ -359,7 +359,7 @@
         {
           "text": "remote protection",
           "x": 60,
-          "y": 281,
+          "y": 287,
           "for": [
             "r"
           ]

@@ -38,7 +38,7 @@
         "value": true
       },
       {
-        "claim": "Fast-forward, reset, delete on protected",
+        "claim": "Fast-forward, reset, delete protected",
         "source": "docs/architecture/enforcement-planes.md#technical",
         "derive": "the matrix row for fast-forward, reset, delete on protected",
         "check": {
@@ -137,7 +137,7 @@
           ]
         },
         {
-          "label": "Fast-forward, reset, delete on protected",
+          "label": "Fast-forward, reset, delete protected",
           "cells": [
             "cov",
             "cov",
@@ -232,7 +232,7 @@
           "catches"
         ],
         [
-          "Fast-forward, reset, delete on protected",
+          "Fast-forward, reset, delete protected",
           "catches",
           "catches",
           "no",
