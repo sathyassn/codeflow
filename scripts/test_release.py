@@ -8,6 +8,7 @@ import importlib.util
 import io
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -1332,6 +1333,14 @@ class PublicationTests(unittest.TestCase):
         headings = [line for line in notes.splitlines() if line.startswith("### ")]
         self.assertTrue(headings)
         self.assertEqual(len(headings), len(set(headings)), headings)
+        # The legacy group opens with entries under no heading of its own; they
+        # stay under the Changed heading placed before the group.
+        kind = next(
+            block.split("\n", 1)[0]
+            for block in re.split(r"(?m)^(?=### )", notes)
+            if "**Optional agentic operating and estimation method" in block
+        )
+        self.assertEqual(kind, "### Changed")
 
     def test_published_assets_require_exact_same_run_bytes(self) -> None:
         source = "c" * 40
