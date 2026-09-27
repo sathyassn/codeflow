@@ -75,7 +75,9 @@ const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     ("agents/skills/cf-model-orchestrator/SKILL.md", 29 * KIB),
     ("agents/skills/cf-plan/SKILL.md", 9 * KIB), // optional estimation offer/consent route
     ("agents/skills/cf-present/SKILL.md", 8 * KIB),
-    ("agents/skills/cf-ship/SKILL.md", 6 * KIB + 512),
+    // Raised from 6.5 KiB by TSK-105: the ship precondition binds the
+    // acceptance block to the head and keeps after-release criteria deferred.
+    ("agents/skills/cf-ship/SKILL.md", 6 * KIB + 768),
     ("agents/skills/cf-stack/SKILL.md", 4 * KIB),
     // TSK-022 adds candidate execution with primary acceptance and authorship
     // provenance while retaining the transport's fail-closed lifecycle.

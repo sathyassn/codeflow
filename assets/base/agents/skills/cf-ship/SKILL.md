@@ -7,6 +7,9 @@ description: Land finished work — docs and capability updates, then a PR throu
 
 1. Preconditions: the applicable independent review verdict is `approved` and
    every mandatory project, CodeFlow, CI, and adopted-policy gate is green.
+   A task's acceptance block names this head as `reviewed`; a criterion
+   observable only after release stays `deferred` with owner, window and
+   follow-up, never verified at build time.
    `codeflow test` and `codeflow validate --docs` remain required wherever the
    installed/project ship gate requires them, including for docs-only changes;
    report such a run as repository-gate evidence, not invented code coverage or

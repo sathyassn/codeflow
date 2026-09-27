@@ -5,7 +5,7 @@
     ".agents/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",
       "ownership": "managed",
-      "sha256": "8e198afbcbcbd015a79fbdfd83824be8c330c00bb13e2bde87287da9232da151",
+      "sha256": "b4a1e387add83cdb9e9303ab36f3eabb2eeac4f44fe968efb6ea7bfe801b2e04",
       "exec": false
     },
     ".agents/skills/cf-customize/SKILL.md": {
@@ -443,7 +443,7 @@
     ".agents/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "89ff72659c0112570a75d4b82636f004084c9f3a235cb5d250e6eba83ff52bab",
+      "sha256": "e4a9ce05eae82215f4d2e123135b51c39162c0e02f44029921c5f737688c7ed8",
       "exec": false
     },
     ".agents/skills/cf-ship/references/pr-evidence.md": {
@@ -467,7 +467,7 @@
     ".claude/agents/cf-reviewer.md": {
       "src": "claude/agents/cf-reviewer.md",
       "ownership": "managed",
-      "sha256": "99e2c8eb3a730255503768642a3b97847aeaba068eda47bca02e0a1adf42dde0",
+      "sha256": "407f76a7c2e99a4d92363e031b29576cf9d87af84513c9b35f66baab1b4c62ec",
       "exec": false
     },
     ".claude/agents/cf-security-reviewer.md": {
@@ -485,7 +485,7 @@
     ".claude/skills/cf-consult/SKILL.md": {
       "src": "agents/skills/cf-consult/SKILL.md",
       "ownership": "managed",
-      "sha256": "8e198afbcbcbd015a79fbdfd83824be8c330c00bb13e2bde87287da9232da151",
+      "sha256": "b4a1e387add83cdb9e9303ab36f3eabb2eeac4f44fe968efb6ea7bfe801b2e04",
       "exec": false
     },
     ".claude/skills/cf-customize/SKILL.md": {
@@ -923,7 +923,7 @@
     ".claude/skills/cf-ship/SKILL.md": {
       "src": "agents/skills/cf-ship/SKILL.md",
       "ownership": "managed",
-      "sha256": "89ff72659c0112570a75d4b82636f004084c9f3a235cb5d250e6eba83ff52bab",
+      "sha256": "e4a9ce05eae82215f4d2e123135b51c39162c0e02f44029921c5f737688c7ed8",
       "exec": false
     },
     ".claude/skills/cf-ship/references/pr-evidence.md": {
