@@ -277,7 +277,7 @@ id: CAP-007
 name: orient-session-summary
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+verified_by: ["cargo test hooks::orient", "cargo test hooks::guidance", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "codeflow-cli tests/init_e2e.rs", "codeflow-core tests/rule_reinjection_update.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-001, EPC-004]
 adrs: [ADR-0013, ADR-0044]
 ```
@@ -294,6 +294,24 @@ both harnesses — plain-text stdout each injects as session context — so ther
 no per-harness duplication. Headless `codex exec` does not fire project hooks
 (ADR-0008), so this is an interactive-session aid; the `codex_hooks` test pins the
 JSON wiring, while live firing rests on Codex's documented hooks contract.
+
+Rules come back where they were lost or where they apply (TSK-128). One
+advisory command, `session-orient`, is wired on `SessionStart` and
+`UserPromptSubmit` and reads the event from the payload. After a
+compaction, a resume or a Claude fork (source `compact`, `resume` or
+`fork`) it adds a guidance block after the digest: the always rules by
+title, the "when you are about to" moments with their first pointer, and
+every skill and agent the tier installs, from the rule-map kernel and the
+scaffold manifest. On a prompt that asks for a duration, a status or a
+complex explanation it adds one rule line, and nothing otherwise. Sizes
+are guidelines (about 1.5 KB and 300 bytes). It is advisory:
+`guidance.prompt_reminders` defaults to `warn`, `off` or `allow` silences
+it, and every path exits 0. An older binary receiving the prompt event
+prints its digest and exits 0, so a machine that has not upgraded loses
+the reminder, not the prompt. Claude and Codex carry the text to the
+model. Grok Build 1.0.41 has the events but ignores their output (events
+present, context injection unavailable), so the Grok hook file wires only
+the guards.
 
 `codeflow status` also emits a read-only cleanup inventory for linked
 worktrees and unattached local branches. Against the locally known target it

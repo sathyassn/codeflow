@@ -4,7 +4,8 @@
 //! |---|---|---|
 //! | `git-guard` | `PreToolUse` (Bash/PowerShell) | [`git_guard`] |
 //! | `exec-guard` | `PreToolUse` (Bash/PowerShell) | [`exec_guard`] |
-//! | `session-orient` | `SessionStart` | [`orient`] |
+//! | `session-orient` | `SessionStart` | [`orient`], [`guidance`] after compaction or resume |
+//! | `prompt-reminder` | `UserPromptSubmit` | [`guidance`] |
 //! | `session-summary` | `SessionEnd` | [`session_summary`] |
 //! | `delegate-turn` | `Stop` / `StopFailure` | [`delegate_turn`] |
 //! | git-hook shims | pre-commit / commit-msg / pre-merge-commit / reference-transaction / pre-push | [`git_hook`] |
@@ -32,6 +33,7 @@ pub mod exec_guard;
 pub mod git_guard;
 pub mod git_hook;
 mod git_target;
+pub mod guidance;
 pub mod orient;
 pub mod policy;
 pub mod policy_schema;
@@ -40,7 +42,7 @@ pub mod scan;
 pub mod session_summary;
 pub mod standards;
 
-pub use policy::{GitPolicy, Policy, PolicyLevel, SecuritySection};
+pub use policy::{GitPolicy, GuidanceSection, Policy, PolicyLevel, SecuritySection};
 pub use repo::RepoInfo;
 
 /// Environment variable carrying the `codeflow integrate` gate-context token

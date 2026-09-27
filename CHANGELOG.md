@@ -248,6 +248,33 @@ publication date._
   adopted tools and independent version domains, and adds four scoped release
   diagnostics without turning CodeFlow metadata into product version authority.
 
+<!-- codeflow:release-impact minor -->
+- **Rules come back after compaction and when a prompt needs them.** When
+  a Claude or Codex session resumes, forks or restarts after a compaction,
+  the session hook adds a guidance block after the digest: the always rules
+  by title, the "when you are about to" moments with their first pointer,
+  and every skill and agent the tier installs, generated from the rule-map
+  kernel and the scaffold manifest (about 1.4 to 1.5 KB). On
+  `UserPromptSubmit` the same command, `codeflow hook session-orient`, adds
+  one rule line when a prompt asks for a duration, a status or a complex
+  explanation, and nothing otherwise; the command reads the event from the
+  hook payload. It is advisory and never blocks: the new
+  `guidance.prompt_reminders` key defaults to `warn`, and `off` silences
+  it. The key is not written into `policy.json`, so older binaries still
+  read the file; setting it needs this `codeflow` or later. The Claude
+  `SessionStart` matcher now names its sources,
+  `startup|resume|clear|compact|fork`; Codex keeps its documented four.
+  Grok Build's events exist but it ignores their output, so `codeflow
+  update` removes CodeFlow's `session-orient` registrations from the Grok
+  hook file and keeps its guards; after a Grok compaction, run `codeflow
+  orient` yourself. `update` adds the wiring, moves CodeFlow's own
+  `SessionStart` hook under the named sources without a duplicate, and
+  keeps the project's own hooks. On a machine still running an older
+  `codeflow`, the prompt hook prints that binary's session digest on every
+  prompt instead of a reminder, and the prompt goes through; upgrading
+  replaces the digest with the reminder. `codeflow hook prompt-reminder`
+  prints the line alone for manual use and is never wired.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->

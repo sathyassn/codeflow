@@ -528,6 +528,27 @@ impl Default for SecuritySection {
     }
 }
 
+/// The `guidance` section of `.codeflow/policy.json`: advisory rule
+/// reminders the session hooks add to the agent's context (TSK-128). They
+/// never block: an active level adds text, an inactive one adds nothing.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[serde(default)]
+pub struct GuidanceSection {
+    /// The one-line rule reminder the prompt-submit hook adds when a prompt
+    /// asks for a duration, a status or a complex explanation. Default
+    /// `warn`; `off` or `allow` turns it off. `block` is refused by
+    /// validation and acts as `warn`: a reminder never stops a prompt.
+    pub prompt_reminders: PolicyLevel,
+}
+
+impl Default for GuidanceSection {
+    fn default() -> Self {
+        Self {
+            prompt_reminders: PolicyLevel::Warn,
+        }
+    }
+}
+
 /// Full `.codeflow/policy.json` shape (only the parts the hook plane reads).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -535,6 +556,7 @@ pub struct Policy {
     pub schema_version: u32,
     pub git: GitPolicy,
     pub security: SecuritySection,
+    pub guidance: GuidanceSection,
 }
 
 /// Where [`Policy::load`] sources the effective policy from — for callers that

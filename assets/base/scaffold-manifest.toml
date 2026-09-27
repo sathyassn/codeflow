@@ -263,8 +263,9 @@ ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
 # Grok Build reads `.grok/hooks/*.json` (and may also scan Claude settings).
-# Same PreToolUse git-guard/exec-guard binaries as Codex. SessionStart is
-# once-per-session on Grok; compaction uses PreCompact/PostCompact.
+# Same PreToolUse git-guard/exec-guard binaries as Codex. Grok's session,
+# compaction and prompt events exist but their output never reaches the
+# model, so no advisory hook is wired here (TSK-128).
 # Project hooks need `/hooks-trust` or `--trust` once.
 [[entry]]
 src = "grok/hooks.json"

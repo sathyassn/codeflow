@@ -1,4 +1,4 @@
-//! `codeflow hook <git-guard|exec-guard|session-orient|session-summary|delegate-turn>` — the
+//! `codeflow hook <git-guard|exec-guard|session-orient|prompt-reminder|session-summary|delegate-turn>` — the
 //! Claude layer hooks, wired by the settings presets (charter §3.3).
 //!
 //! Exit-code contract:
@@ -7,18 +7,25 @@
 //! - `exec-guard`: 0 allow (or warn), 2 block — same `PreToolUse` shell
 //!   contract, enforcing the `security` policy section (ADR-0008). Payload is
 //!   parsed leniently so the same subcommand serves the Codex hooks engine.
-//! - `session-orient`: digest on stdout, always 0.
+//! - `session-orient`: the stable advisory entry, always 0, dispatched on the
+//!   payload's `hook_event_name` (TSK-128). `SessionStart` (or no event
+//!   named): the digest, plus the rule guidance block after a compaction, a
+//!   resume or a fork. `UserPromptSubmit`: at most one rule line. Any other
+//!   event: nothing. Harnesses wire both events to this one command, so an
+//!   older binary that knows only this name still exits 0 on a prompt.
+//! - `prompt-reminder`: the prompt line alone, always 0; a convenience for
+//!   manual use, never wired into a harness.
 //! - `session-summary`: always 0 — a failed summary must never fail the
 //!   session (warn on stderr instead).
 //! - `delegate-turn`: schema-v2 state mode handles the full lifecycle without
 //!   tmux; legacy result mode preserves its existing terminal signal contract.
 
-use std::io::Read;
+use std::io::{Read, Write as _};
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Args};
 use codeflow_core::hooks::{
-    delegate_turn, exec_guard, git_guard, orient, policy::Policy, session_summary,
+    delegate_turn, exec_guard, git_guard, guidance, orient, policy::Policy, session_summary,
 };
 
 // Large enough for the maximum decoded terminal message even when every byte
@@ -33,8 +40,12 @@ pub enum HookName {
     /// `PreToolUse` (Bash/PowerShell): enforce policy.json `security` rules (dangerous
     /// commands, privilege escalation). Harness-agnostic — also serves Codex.
     ExecGuard,
-    /// `SessionStart`: emit the orient digest to stdout.
+    /// `SessionStart` and `UserPromptSubmit`: the advisory entry, dispatched
+    /// on the payload's event (the digest and guidance, or one rule line).
     SessionOrient,
+    /// The one advisory rule line for a prompt payload; not wired into any
+    /// harness (the wired entry is `session-orient`).
+    PromptReminder,
     /// `SessionEnd`: append the session record to the ledger.
     SessionSummary,
     /// `SessionStart`, `UserPromptSubmit`, `Stop` and `StopFailure`: with
@@ -90,13 +101,50 @@ pub fn run(args: &HookArgs) -> i32 {
     match args.name {
         HookName::GitGuard => git_guard(&stdin),
         HookName::ExecGuard => exec_guard(&stdin),
-        HookName::SessionOrient => {
-            let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-            print!("{}", orient::generate(&super::project_root(&cwd)));
+        HookName::SessionOrient => session_orient(&stdin),
+        HookName::PromptReminder => {
+            prompt_reminder(&stdin);
             0
         }
         HookName::SessionSummary => session_summary(&stdin),
         HookName::DelegateTurn => delegate_turn(args, &stdin),
+    }
+}
+
+/// The advisory entry: dispatch on the payload's event. Every path exits 0,
+/// and output is written without panicking, so a closed stdout cannot turn
+/// advice into a failed session or a refused prompt. The guards never pass
+/// through here.
+fn session_orient(stdin: &str) -> i32 {
+    match guidance::payload_event(stdin) {
+        guidance::HookEvent::SessionStart => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
+            let root = super::project_root(&cwd);
+            let digest = orient::generate(&root);
+            let mut out = std::io::stdout();
+            let _ = write!(out, "{digest}");
+            // The digest's own off-switch also silences the guidance block.
+            if !digest.is_empty() {
+                let source = guidance::payload_source(stdin).unwrap_or_default();
+                if let Some(block) = guidance::session_guidance(&root, &source) {
+                    let _ = write!(out, "\n{block}");
+                }
+            }
+            let _ = out.flush();
+        }
+        guidance::HookEvent::PromptSubmit => prompt_reminder(stdin),
+        guidance::HookEvent::Other(_) => {}
+    }
+    0
+}
+
+/// Write the prompt's one rule line, if any; a write error is dropped.
+fn prompt_reminder(stdin: &str) {
+    let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
+    if let Some(line) = guidance::prompt_reminder(&super::project_root(&cwd), stdin) {
+        let mut out = std::io::stdout();
+        let _ = writeln!(out, "{line}");
+        let _ = out.flush();
     }
 }
 

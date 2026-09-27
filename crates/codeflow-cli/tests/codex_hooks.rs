@@ -167,8 +167,13 @@ fn dogfood_codex_hooks_matches_shipped_scaffold() {
     );
 }
 
+/// TSK-128: Grok Build's session, compaction and prompt events exist, but it
+/// ignores their stdout and discards an allowing prompt hook's output
+/// (Grok Build 1.0.41 hook reference): events present, context injection
+/// unavailable. So the Grok file wires only the guards, the same payload as
+/// Codex, and no advisory `session-orient` whose output no model receives.
 #[test]
-fn dogfood_grok_hooks_share_pretooluse_and_add_compact_events() {
+fn dogfood_grok_hooks_share_pretooluse_and_wire_no_advisory_hook() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
     let shipped = std::fs::read_to_string(root.join("assets/base/grok/hooks.json"))
         .expect("read shipped grok hooks.json");
@@ -187,8 +192,30 @@ fn dogfood_grok_hooks_share_pretooluse_and_add_compact_events() {
         grok["hooks"]["PreToolUse"], codex["hooks"]["PreToolUse"],
         "Grok PreToolUse must stay the same git-guard/exec-guard payload as Codex"
     );
+    let events: Vec<&String> = grok["hooks"].as_object().unwrap().keys().collect();
+    assert_eq!(events, vec!["PreToolUse"], "Grok wires only the guards");
+    let mut commands = Vec::new();
+    collect_hook_commands(&grok["hooks"], &mut commands);
     assert!(
-        grok["hooks"]["PreCompact"].is_array() && grok["hooks"]["PostCompact"].is_array(),
-        "Grok must wire session-orient on PreCompact/PostCompact"
+        !commands
+            .iter()
+            .any(|c| c.contains("session-orient") || c.contains("prompt-reminder")),
+        "an advisory hook on Grok would claim context that never reaches the model"
     );
+}
+
+/// TSK-128 AC-5: Codex wires `UserPromptSubmit` to the stable advisory
+/// entry, where plain stdout becomes developer context, with no matcher
+/// (Codex ignores one on this event) and never the manual command.
+#[test]
+fn user_prompt_submit_wires_the_stable_advisory_entry() {
+    let v = hooks_json();
+    let prompt = v["hooks"]["UserPromptSubmit"].clone();
+    let mut commands = Vec::new();
+    collect_hook_commands(&prompt, &mut commands);
+    assert_eq!(commands, vec!["codeflow hook session-orient".to_string()]);
+    assert!(prompt[0].get("matcher").is_none());
+    let mut all = Vec::new();
+    collect_hook_commands(&v["hooks"], &mut all);
+    assert!(!all.iter().any(|c| c.contains("prompt-reminder")));
 }

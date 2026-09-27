@@ -84,7 +84,7 @@ ordinary task execution and adds no model-running CLI command.
 | `portal setup --path <dir>` | Adopt or reconcile the offline documentation-portal starter (same utility craft as present; durable docs; no Comment) |
 | `portal transfer --confirm` | Take responsibility for the adopted runtime while preserving edits and intentional deletions |
 | `present` | Open, revise, review, export, close, and clear a this-session catalog review (runtime owns chrome and Comment; not a docs portal) |
-| `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`) |
+| `hook` | Claude-layer hooks (`git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`; `prompt-reminder` for manual use) |
 | `git-hook` | Git client hook target the `.codeflow/git-hooks` shims exec (wired via `core.hooksPath`) |
 | `orient` | Print the session-start digest (pointers, not content) |
 | `test` | Run the test gate; `test setup` safely detects root stacks, lists/applies embedded templates, or appends explicit targets |
