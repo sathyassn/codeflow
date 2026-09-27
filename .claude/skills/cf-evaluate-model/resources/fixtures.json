@@ -356,6 +356,18 @@
       }
     },
     {
+      "id": "same-family-native-subagent",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/same-family-native-subagent",
+        "peer": "available"
+      },
+      "files": {
+        "WORK_BRIEF.md": "# Unit\nRead docs/guide.md and list every Markdown heading with its line number. Read only; do not edit files. The standing pair has settled the plan; this bounded evidence unit goes to a same-family Claude worker owned by the Claude primary, and the primary inspects the return.\n",
+        "docs/guide.md": "# Guide\n\nIntro text.\n\n## Install\n\nSteps.\n\n## Configure\n\nOptions.\n\n### Advanced\n\nMore options.\n"
+      }
+    },
+    {
       "id": "pr-evidence-covers-whole-branch",
       "tier": "standard",
       "state": {

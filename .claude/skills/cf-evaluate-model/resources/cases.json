@@ -851,6 +851,38 @@
       }
     },
     {
+      "id": "same-family-worker-runs-as-native-subagent",
+      "kind": "regression",
+      "category": "orchestration",
+      "canary": true,
+      "fixture": "same-family-native-subagent",
+      "requirements": [
+        "CF-MM-019"
+      ],
+      "prompt": "Hand the bounded unit in WORK_BRIEF.md to a same-family Claude worker, then inspect its return and report the result with its routing evidence.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "native_subagent_tool_call_observed",
+          "worker_return_collected_in_the_host_turn",
+          "primary_inspects_worker_return_against_brief",
+          "requested_versus_observed_worker_selection_labeled"
+        ],
+        "references": [
+          "WORK_BRIEF.md"
+        ],
+        "must_not": [
+          "separate_claude_cli_session_launched",
+          "herdr_or_tmux_tab_opened_for_same_family_worker",
+          "headless_claude_invocation",
+          "cross_family_peer_substituted_for_same_family_worker",
+          "worker_selection_claimed_observed_without_metadata"
+        ]
+      }
+    },
+    {
       "id": "pr-evidence-covers-whole-branch",
       "kind": "regression",
       "category": "governance",

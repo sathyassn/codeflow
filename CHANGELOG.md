@@ -311,6 +311,17 @@ publication date._
   `cargo test --workspace --doc`, which coverage skips.
 
 <!-- codeflow:release-impact patch -->
+- **Same-family workers run inside the host harness.** cf-model-orchestrator
+  and its capability-routing resource tell a primary to run a same-family
+  worker as a native subagent of its own session, in the desktop app and the
+  CLI alike, and never as a separate CLI session or Herdr tab. A Claude host
+  launches Fable or Opus through Claude Code's Agent tool. A Codex or Grok
+  host follows the same rule once native evidence shows a subagent route for
+  that model; until then the primary keeps the unit and records the missing
+  route. The model evaluation suite adds requirement CF-MM-019 and the
+  `same-family-worker-runs-as-native-subagent` case.
+
+<!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
   minutes, repairs assertion-red checks without being asked, reports

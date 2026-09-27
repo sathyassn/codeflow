@@ -880,6 +880,30 @@
       ]
     },
     {
+      "id": "CF-MM-019",
+      "level": "hard",
+      "statement": "A host runs same-family workers inside its own harness as native subagents of the dispatching primary's session, in the desktop app and the CLI alike, never as a separate CLI session or Herdr tab. Claude Code is the recorded native route; a Codex or Grok host uses one only with native evidence. Without a native route for that model the recorded fallback is primary-retained execution with the missing route recorded as a limitation. Cross-family seats are unchanged.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
+          "markers": [
+            "as a native subagent of its own session",
+            "separate CLI session or Herdr tab"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "markers": [
+            "Same-family workers run inside the host harness",
+            "never as a separate CLI session or Herdr tab",
+            "in the desktop app or the CLI alike",
+            "none is recorded yet",
+            "the recorded fallback is `primary-retained`"
+          ]
+        }
+      ]
+    },
+    {
       "id": "CF-MM-001",
       "level": "hard",
       "statement": "Every non-trivial repository task starts with the Claude+Codex orchestrator when both seats are available.",
@@ -1125,7 +1149,7 @@
     {
       "id": "CF-MM-011",
       "level": "hard",
-      "statement": "Exactly one host owns top-level orchestration; cross-family entry invokes the receiving qualified primary at default effort as peer. Only that primary dispatches same-family workers through native children or separate native sessions. Assignments stay bounded, forbid nested orchestration or delegation back to the host lineage, and cannot be satisfied by a generic same-lineage subagent.",
+      "statement": "Exactly one host owns top-level orchestration; cross-family entry invokes the receiving qualified primary at default effort as peer. Only that primary dispatches same-family workers, as native subagents of its own session. Assignments stay bounded, forbid nested orchestration or delegation back to the host lineage, and cannot be satisfied by a generic same-lineage subagent.",
       "sources": [
         {
           "path": ".agents/skills/cf-model-orchestrator/SKILL.md",
