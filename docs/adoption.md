@@ -210,6 +210,82 @@ When you add the standard/full method, run `/cf-customize` before treating the
 generated product, architecture, commands, or tool posture as project truth;
 `codeflow doctor` keeps a reminder visible while scaffold sentinels remain.
 
+### Bots, kept PR templates and release tools
+
+`init` reports what it finds that CodeFlow's checks would otherwise break.
+None of it changes a policy level.
+
+**Dependency and release bots.** Dependabot, Renovate and release actions
+open pull requests whose branch names and commit messages fail CodeFlow's
+rules. Add a trusted profile per bot to `git.automation_profiles` in
+`.codeflow/policy.json`:
+
+```json
+"automation_profiles": [
+  {
+    "name": "dependabot",
+    "actors": ["dependabot[bot]"],
+    "branch_pattern": "dependabot/**",
+    "sections": {
+      "Summary": "Automated dependency update opened by Dependabot.",
+      "Changes": "- the dependency bump named in the title",
+      "Testing": "The full CI suite runs on this pull request.",
+      "Reviews": "None: automated update, reviewed at merge.",
+      "Release impact": "- Impact: patch\n- Breaking: no\n- Rationale: dependency update.\n- Migration: none"
+    }
+  }
+]
+```
+
+A profile applies in `codeflow ci` only when the actor the workflow passes
+(`--actor`) and the branch both match, and only as the target branch's policy
+states it, so a pull request cannot add a profile for itself. It skips branch
+naming and the commit message shape rules. Tests, the secret scan, AI
+attribution, emoji, the dash rule and the release declaration still run, and
+PR sections are still checked at their configured level: `sections` only
+supplies the headings the bot body leaves out. On a fork pull request and in
+a local run the actor is `unknown` and no profile applies.
+
+**A PR template you already have.** `init` keeps it and installs no second
+template; `update` never merges into it or writes a `.new` beside it. When its
+headings differ from `git.pr_required_sections`, the run records
+`git.pr_section_mapping` as `diagnosed` with a proposed mapping (for example
+`Summary -> Description`) and asks you to decide:
+
+| Decision | What happens |
+|---|---|
+| accepted | the check reads your template's headings in place of the mapped ones |
+| refused | the missing required headings are appended to your template |
+| custom | you set `git.pr_required_sections` and `git.pr_code_sections` yourself in a reviewed change |
+
+A run without a terminal (`--yes`, CI) leaves the state `diagnosed`, and
+`codeflow doctor` repeats it. While it is diagnosed the PR-section check runs
+at `warn` only on a fresh install whose policy file `init` created; a
+`pr_sections` value already in your policy file stays in force, even when it
+equals the default. `codeflow ci` prints each check's effective level and
+where it comes from (`configured`, `shipped default` or `diagnosed`).
+
+**Release tools.** `release.backend` in `.codeflow/project.toml` names who owns
+the version of each release unit:
+
+| Value | Meaning |
+|---|---|
+| `none` (default at every tier) | CodeFlow checks only the PR's Release impact declaration (`git.pr_release_impact`, warn by default); it calculates no version |
+| `external` | another tool owns versions (release-please, Changesets, semantic-release, cargo-release, GoReleaser); CodeFlow checks the declaration and `breaking_watch_paths` only |
+| `codeflow` | you adopted CodeFlow's release calculator explicitly |
+
+Keep one version authority per release unit: `init`, `codeflow ci` and
+`doctor` say so when a release tool's configuration sits beside `none` or
+`codeflow`. Keeping the PR template is not consent to a calculator. The
+calculator CodeFlow ships, `scripts/release.py`, serves CodeFlow's own
+repository: one Rust workspace versioned from `Cargo.toml`, with its
+`CHANGELOG.md` in Keep a Changelog form. Other projects use `none` or
+`external`.
+
+**Minimal tier.** The minimal tier installs no release process. Declare each
+PR's Release impact in its body; if you publish releases, let your own tool
+own the version and set `backend = "external"`.
+
 ## Ownership model — who owns what on update
 
 | Class | Examples | What `update` does |
@@ -256,6 +332,24 @@ Keep the order: upgrade the `codeflow` on `PATH` before `codeflow update`. The
 hooks run that binary, and one older than a new key rejects the policy file,
 which blocks every commit until the binary is upgraded (for example
 `git.policy_characters`, ADR-0067).
+
+CI pins its binary too. The scaffolded workflows install the release named by
+`scaffold_version` in the target branch's `.codeflow/project.toml` and verify it
+against that release's `sha256.sum`; a missing or wrong checksum fails the job
+and nothing unverified is installed. The commit and PR-body standards run in
+`codeflow-policy.yml` on `pull_request_target`, from the target branch, so a
+pull request cannot edit the job that judges it. An upgrade therefore takes two
+pull requests, in order:
+
+1. Install the new binary locally, then land a pull request that raises only
+   `scaffold_version`. The target's current binary judges it, and the
+   `candidate codeflow` job tests the new one.
+2. On a new branch, run `codeflow update` and land its new keys and files; the
+   new binary judges them.
+
+A pull request that adds policy keys before step 1 has landed fails with a
+message naming this order. The git hook shims check the binary first and warn
+when it is older than they are, then run the checks it has.
 
 Work records follow the same order. `codeflow update` adds
 `git.work_records` (`block` or `warn`; an `off` from an unreleased build is
