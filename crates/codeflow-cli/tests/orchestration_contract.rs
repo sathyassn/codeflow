@@ -508,17 +508,17 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
         "the orchestrator skill must expose independent planning in its description"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("eighteen health checks"),
-        "CAP-008 must count the grok doctor check"
+        normalize_whitespace(&capabilities).contains("nineteen health checks"),
+        "CAP-008 must count the grok and reading doctor checks"
     );
     let readme = normalize_whitespace(&read("README.md"));
     let architecture = normalize_whitespace(&read("docs/architecture.md"));
     assert!(
-        readme.contains("Health checks (18): hooks, claude, codex, grok, config"),
+        readme.contains("Health checks (19): hooks, claude, codex, grok, config"),
         "README must list the grok doctor check"
     );
     assert!(
-        architecture.contains("18 checks: hooks, claude, codex, grok, config"),
+        architecture.contains("19 checks: hooks, claude, codex, grok, config"),
         "architecture must list the grok doctor check"
     );
     assert!(
