@@ -78,13 +78,13 @@ pub fn is_criterion_id(value: &str) -> bool {
 }
 
 /// How one line of a record reads once Markdown context is applied: a line
-/// inside an HTML comment or a fenced block is never a heading, criterion,
-/// blocker field, cancellation line or acceptance fence.
+/// inside raw HTML or a code block is never a heading, criterion, blocker
+/// field, cancellation line or acceptance fence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum LineKind {
-    /// Visible text outside any fence, with inline comments removed.
+    /// Visible text outside any code block, with inline HTML removed.
     Text,
-    /// Inside an HTML comment.
+    /// Inside a raw HTML block, such as a comment.
     Hidden,
     /// Opens a fenced block.
     FenceOpen,
@@ -98,8 +98,8 @@ pub(crate) enum LineKind {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct ScannedLine {
     pub kind: LineKind,
-    /// The visible text: comment-free for `Text`, the raw line inside a fence,
-    /// empty for `Hidden`.
+    /// The visible text: free of inline HTML for `Text`, the raw line inside a
+    /// code block, empty for `Hidden`.
     pub visible: String,
     /// The fence character (`` ` `` or `~`) of a `FenceOpen` line.
     pub marker: u8,
@@ -134,79 +134,115 @@ fn fence_marker(line: &str) -> Option<(u8, usize, &str)> {
     (length >= 3 && !(marker == b'`' && info.contains('`'))).then_some((marker, length, info))
 }
 
-/// Remove inline HTML comments from one line; `in_comment` carries an
-/// unclosed comment to the following lines.
-fn strip_comments(line: &str, in_comment: &mut bool) -> String {
-    let mut out = String::new();
-    let mut rest = line;
-    loop {
-        if *in_comment {
-            match rest.find("-->") {
-                Some(end) => {
-                    rest = &rest[end + 3..];
-                    *in_comment = false;
-                }
-                None => return out,
+/// Scan lines in Markdown context, as `CommonMark` reads them (the
+/// `pulldown-cmark` parser, with source offsets). A line inside a raw HTML
+/// block (a comment, `<pre>`, `<script>` and the like) is hidden; a line of
+/// an indented code block or of a fence nested in a list or quote is fence
+/// content; only a fence at the top level opens a fenced block; inline HTML
+/// (an inline comment, a tag) is removed from visible text, and a code span
+/// stays text, whatever it contains.
+pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
+    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+
+    let lines: Vec<&str> = lines
+        .iter()
+        .map(|line| line.trim_end_matches('\r'))
+        .collect();
+    if lines.is_empty() {
+        return Vec::new();
+    }
+    let text = lines.join("\n");
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut offset = 0;
+    for line in &lines {
+        starts.push(offset);
+        offset += line.len() + 1;
+    }
+    let line_of = |position: usize| starts.partition_point(|start| *start <= position) - 1;
+    let last_line = |range: &std::ops::Range<usize>| line_of(range.end.max(range.start + 1) - 1);
+
+    let mut kinds = vec![LineKind::Text; lines.len()];
+    let mut opens: Vec<(usize, u8, String)> = Vec::new();
+    let mut hidden_bytes = vec![false; text.len()];
+    let mut containers = 0usize;
+    for (event, range) in Parser::new_ext(&text, Options::empty()).into_offset_iter() {
+        match event {
+            Event::Start(Tag::List(_) | Tag::Item | Tag::BlockQuote(_)) => containers += 1,
+            Event::End(TagEnd::List(_) | TagEnd::Item | TagEnd::BlockQuote(_)) => {
+                containers = containers.saturating_sub(1);
             }
-        } else if let Some(start) = rest.find("<!--") {
-            out.push_str(&rest[..start]);
-            rest = &rest[start + 4..];
-            *in_comment = true;
-        } else {
-            out.push_str(rest);
-            return out;
+            Event::Start(Tag::HtmlBlock) => {
+                for kind in &mut kinds[line_of(range.start)..=last_line(&range)] {
+                    *kind = LineKind::Hidden;
+                }
+            }
+            Event::Start(Tag::CodeBlock(kind)) => {
+                let (first, last) = (line_of(range.start), last_line(&range));
+                for line in &mut kinds[first..=last] {
+                    *line = LineKind::FenceContent;
+                }
+                let top_level = containers == 0 && matches!(kind, CodeBlockKind::Fenced(_));
+                if let Some((marker, length, info)) =
+                    fence_marker(lines[first]).filter(|_| top_level)
+                {
+                    kinds[first] = LineKind::FenceOpen;
+                    opens.push((first, marker, info.to_string()));
+                    let closes = last > first
+                        && fence_marker(lines[last]).is_some_and(|(found, count, info)| {
+                            found == marker && count >= length && info.is_empty()
+                        });
+                    if closes {
+                        kinds[last] = LineKind::FenceClose;
+                    }
+                }
+            }
+            Event::InlineHtml(_) => {
+                for byte in &mut hidden_bytes[range.start..range.end.min(text.len())] {
+                    *byte = true;
+                }
+            }
+            _ => {}
         }
     }
+    lines
+        .iter()
+        .enumerate()
+        .map(|(index, line)| {
+            let kind = kinds[index];
+            let visible = match kind {
+                LineKind::Hidden => String::new(),
+                LineKind::Text => line
+                    .char_indices()
+                    .filter(|(at, _)| !hidden_bytes[starts[index] + at])
+                    .map(|(_, character)| character)
+                    .collect(),
+                _ => (*line).to_string(),
+            };
+            let mut scanned = ScannedLine::new(kind, &visible);
+            if let Some((_, marker, info)) = opens.iter().find(|(at, _, _)| *at == index) {
+                scanned.marker = *marker;
+                scanned.info.clone_from(info);
+            }
+            scanned
+        })
+        .collect()
 }
 
-/// Scan lines in Markdown context: fences (matched by character and length)
-/// and HTML comments. A comment that starts a line hides every line up to and
-/// including the one that closes it, as a `CommonMark` HTML block does.
-pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
-    let mut out = Vec::with_capacity(lines.len());
-    let mut fence: Option<(u8, usize)> = None;
-    let mut in_comment = false;
-    for raw in lines {
-        let line = raw.trim_end_matches('\r');
-        if let Some((marker, length)) = fence {
-            let closes = fence_marker(line).is_some_and(|(found, count, info)| {
-                found == marker && count >= length && info.is_empty()
-            });
-            if closes {
-                fence = None;
-                out.push(ScannedLine::new(LineKind::FenceClose, line));
-            } else {
-                out.push(ScannedLine::new(LineKind::FenceContent, line));
-            }
-            continue;
-        }
-        if in_comment {
-            in_comment = !line.contains("-->");
-            out.push(ScannedLine::new(LineKind::Hidden, ""));
-            continue;
-        }
-        let indent = line.len() - line.trim_start_matches(' ').len();
-        if indent <= 3 && line[indent..].starts_with("<!--") {
-            in_comment = !line[indent + 4..].contains("-->");
-            out.push(ScannedLine::new(LineKind::Hidden, ""));
-            continue;
-        }
-        let visible = strip_comments(line, &mut in_comment);
-        if visible == line {
-            if let Some((marker, length, info)) = fence_marker(line) {
-                fence = Some((marker, length));
-                out.push(ScannedLine {
-                    kind: LineKind::FenceOpen,
-                    visible,
-                    marker,
-                    info: info.to_string(),
-                });
-                continue;
-            }
-        }
-        out.push(ScannedLine::new(LineKind::Text, &visible));
-    }
-    out
+/// [`scan`] for a whole record: the frontmatter is hidden and never parsed
+/// as Markdown.
+pub(crate) fn scan_record(lines: &[&str]) -> Vec<ScannedLine> {
+    let close = (lines.first().map(|line| line.trim_end()) == Some("---"))
+        .then(|| {
+            lines
+                .iter()
+                .skip(1)
+                .position(|line| line.trim_end() == "---")
+        })
+        .flatten()
+        .map_or(0, |index| index + 2);
+    let mut scanned = vec![ScannedLine::new(LineKind::Hidden, ""); close];
+    scanned.extend(scan(&lines[close..]));
+    scanned
 }
 
 /// Line index range `[start, end)` of the level-two section `heading`,
@@ -1071,6 +1107,16 @@ mod tests {
                 LineKind::FenceClose,
                 LineKind::Text
             ]
+        );
+        // Raw HTML hides a fence; a code span holding `<!--` hides nothing.
+        let pre = format!("## Closeout\n\n<pre>\n{visible}\n</pre>\n");
+        assert!(acceptance_blocks(&pre).is_empty());
+        let span = format!("## Closeout\n\nSee `<!--` here.\n\n{visible}\n");
+        assert_eq!(acceptance_blocks(&span).len(), 1);
+        let listed = format!("## Closeout\n\n- item\n\n  {visible}\n");
+        assert!(
+            acceptance_blocks(&listed).is_empty(),
+            "a nested fence is no block"
         );
         // A commented heading opens no section; an inline comment keeps one.
         assert!(!has_section("<!--\n## Blocker\n-->\n", "## Blocker"));

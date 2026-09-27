@@ -15,7 +15,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 
 use super::lifecycle::{judge_change, working_context, Baseline, ChangeContext, Graph, RecordView};
-use super::record_text::{scan, section_span, LineKind};
+use super::record_text::{scan_record, section_span, LineKind};
 use super::work_start::RecordKind;
 
 /// What a status verb was asked to do.
@@ -310,7 +310,7 @@ pub fn set_frontmatter_value(content: &str, key: &str, value: &str) -> Result<St
 /// Line index range `[start, end)` of a level-two section, heading included,
 /// read in Markdown context exactly as the judge reads it.
 fn section_range(lines: &[&str], heading: &str) -> Option<(usize, usize)> {
-    section_span(&scan(lines), heading)
+    section_span(&scan_record(lines), heading)
 }
 
 fn remove_section(content: &str, heading: &str) -> String {
@@ -373,7 +373,7 @@ fn append_to_section(content: &str, heading: &str, text: &str) -> String {
 /// block (a record completed before the migration).
 fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
     let lines: Vec<&str> = content.split('\n').collect();
-    let scanned = scan(&lines);
+    let scanned = scan_record(&lines);
     let (start, end) = section_span(&scanned, "## Closeout")?;
     let mut index = start;
     while index < end {

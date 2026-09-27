@@ -1034,8 +1034,9 @@ fn epic_close_refuses_a_spec_whose_other_consumer_is_terminal_and_incomplete() {
 // Review round 1 regressions (R1 to R7), each built from the reviewer's probe
 // ---------------------------------------------------------------------------
 
-/// R1: a block inside an HTML comment or inside an enclosing example fence
-/// never completes a task; the same block, visible, does.
+/// R1 and round 2: a block inside an HTML comment, an enclosing example
+/// fence or a raw HTML block (`<pre>`, `<script>`) never completes a task;
+/// the same block, visible, does, even after a code span holding `<!--`.
 #[test]
 fn hidden_or_example_acceptance_does_not_complete_a_task() {
     let visible = fenced(&block(&["AC-1", "AC-2"], "none | no journey criterion"));
@@ -1043,7 +1044,16 @@ fn hidden_or_example_acceptance_does_not_complete_a_task() {
         (format!("<!--\n{visible}\n-->"), true),
         (format!("````text\n{visible}\n````"), true),
         (format!("~~~\n{visible}\n~~~"), true),
+        (format!("<pre>\n{visible}\n</pre>"), true),
+        (
+            format!("<script type=\"text/plain\">\n{visible}\n</script>"),
+            true,
+        ),
         (format!("Text <!-- note --> kept.\n\n{visible}"), false),
+        (
+            format!("The scanner handles `<!--` markers.\n\n{visible}"),
+            false,
+        ),
         (visible.clone(), false),
     ] {
         let (repo, base) = project();
