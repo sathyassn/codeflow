@@ -40,7 +40,7 @@ fn checkout_allocator(
     move |_| Ok((next(), crate::ids::new_uid()))
 }
 
-fn planning_target(pm_root: &Path) -> String {
+pub(crate) fn planning_target(pm_root: &Path) -> String {
     crate::workgraph::default_work_target(repository_root(pm_root)).map_or_else(
         || "none".to_string(),
         |target| {

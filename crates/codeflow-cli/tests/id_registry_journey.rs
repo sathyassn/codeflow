@@ -443,6 +443,46 @@ fn task_new_resume_writes_an_interrupted_reservation_once() {
     assert!(!again.status.success(), "{}", text(&again));
 }
 
+/// `adr new` issues the next ADR number through the registry and writes
+/// the bound `uid` into the proposed record (TSK-104 AC-4).
+#[test]
+fn adr_new_takes_its_number_from_the_registry() {
+    let (dir, root, bare) = project_with_remote();
+    // Another clone takes ADR-0002 first; this checkout cannot see it.
+    let other = dir.path().join("other");
+    git(
+        dir.path(),
+        &["clone", "-q", "-b", LINE, bare.to_str().unwrap(), "other"],
+    );
+    let first = ok(
+        &codeflow(&other, &["adr", "new", "Keep one registry"]),
+        "adr new in another clone",
+    );
+    assert!(first.contains("ADR-0002"), "{first}");
+    let adr = ok(
+        &codeflow(&root, &["adr", "new", "Adopt a cache: keep it small"]),
+        "adr new",
+    );
+    assert!(
+        adr.contains("ADR-0003") && adr.contains("reserved on the authority"),
+        "{adr}"
+    );
+    let path = root.join(adr.split_whitespace().nth(1).unwrap());
+    let text = std::fs::read_to_string(&path).unwrap();
+    assert!(text.contains("\nstatus: proposed "), "{text}");
+    let uid_line = text.lines().find(|line| line.starts_with("uid: ")).unwrap();
+    let uid = &uid_line[5..];
+    let bound = git(&bare, &["show", "codeflow/registry:ids/ADR/0003.toml"]);
+    assert!(
+        bound.contains(&format!("uid = \"{uid}\"")),
+        "{bound}\n{text}"
+    );
+    ok(
+        &codeflow(&root, &["validate", "--docs"]),
+        "validate --docs after adr new",
+    );
+}
+
 /// A follow-up is a task: where durable work is tracked its number comes
 /// from the registry, bound to its `uid`, and an interrupted follow-up
 /// resumes as a follow-up of the same source.

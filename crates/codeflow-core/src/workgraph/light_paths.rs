@@ -228,7 +228,8 @@ pub fn next_adr_id(repo_root: &Path) -> String {
     format!("ADR-{:04}", highest + 1)
 }
 
-/// Write the next ADR from `template` with `status: proposed` (R-36).
+/// Write the next ADR from `template` with `status: proposed` (R-36),
+/// numbered from what the checkout shows.
 ///
 /// # Errors
 ///
@@ -236,13 +237,34 @@ pub fn next_adr_id(repo_root: &Path) -> String {
 /// I/O error when the file cannot be created (an existing file is never
 /// overwritten).
 pub fn create_adr(repo_root: &Path, template: &str, title: &str) -> Result<NewRecord, StoreError> {
+    create_adr_with(repo_root, template, title, &mut |_| {
+        Ok((next_adr_id(repo_root), crate::ids::new_uid()))
+    })
+}
+
+/// [`create_adr`] with the id and `uid` chosen by `allocate`, as the shared
+/// registry issues them where durable work is tracked (SPC-013 R-12). The
+/// `uid` is written after the `id:` line, as on every registry record.
+///
+/// # Errors
+///
+/// As [`create_adr`], plus the allocator's error and an invalid-record
+/// error for a template without an `id:` frontmatter line.
+pub fn create_adr_with(
+    repo_root: &Path,
+    template: &str,
+    title: &str,
+    allocate: &mut Allocator<'_>,
+) -> Result<NewRecord, StoreError> {
     let title = title.trim();
     if title.is_empty() || title.contains(['\r', '\n']) {
         return Err(StoreError::Invalid(
             "ADR title must be one non-empty line".to_string(),
         ));
     }
-    let id = next_adr_id(repo_root);
+    let (id, uid) = allocate(&crate::workgraph::allocate::planning_target(
+        &repo_root.join("project-management"),
+    ))?;
     let date = crate::workgraph::now_rfc3339()[..10].to_string();
     // The frontmatter title is a YAML scalar; the heading keeps the text.
     let encoded =
@@ -264,6 +286,9 @@ pub fn create_adr(repo_root: &Path, template: &str, title: &str) -> Result<NewRe
             "\nstatus: proposed          # proposed | accepted | superseded",
         );
     }
+    content = with_uid(&content, &uid).ok_or_else(|| {
+        StoreError::Invalid("the ADR template has no `id:` frontmatter line".to_string())
+    })?;
     check_adr(&content, &id, title)?;
     let dir = repo_root.join("docs/decisions");
     fs::create_dir_all(&dir)?;
@@ -273,16 +298,25 @@ pub fn create_adr(repo_root: &Path, template: &str, title: &str) -> Result<NewRe
         .create_new(true)
         .open(&path)?;
     std::io::Write::write_all(&mut file, content.as_bytes())?;
-    // ADRs are not registry records and carry no hidden uid (SPC-013 R-12).
-    Ok(NewRecord {
-        id,
-        uid: String::new(),
-        path,
-    })
+    Ok(NewRecord { id, uid, path })
 }
 
 /// The generated ADR must parse and carry what was asked for, before it is
 /// written and reported.
+/// Insert `uid: <uid>` after the frontmatter `id:` line, unless the
+/// template already carries a `uid:` line.
+fn with_uid(content: &str, uid: &str) -> Option<String> {
+    let front = content.strip_prefix("---\n")?.split_once("\n---\n")?.0;
+    if front.lines().any(|line| line.starts_with("uid:")) {
+        return Some(content.replace("{{UID}}", uid));
+    }
+    let at = front.lines().position(|line| line.starts_with("id:"))?;
+    let mut lines: Vec<&str> = content.split('\n').collect();
+    let line = format!("uid: {uid}");
+    lines.insert(at + 2, &line);
+    Some(lines.join("\n"))
+}
+
 fn check_adr(content: &str, id: &str, title: &str) -> Result<(), StoreError> {
     let invalid =
         |why: &str| StoreError::Invalid(format!("generated {id} is not a valid ADR: {why}"));
@@ -303,12 +337,30 @@ fn check_adr(content: &str, id: &str, title: &str) -> Result<(), StoreError> {
     if field("status") != Some("proposed") {
         return Err(invalid("the status is not proposed"));
     }
+    if !field("uid").is_some_and(crate::ids::is_uid) {
+        return Err(invalid("the uid is missing or malformed"));
+    }
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn adr_uid_goes_after_the_id_line_or_fills_the_placeholder() {
+        let uid = "0f8c6e2a-1b3d-4c5e-8f90-a1b2c3d4e5f6";
+        assert_eq!(
+            with_uid("---\nid: ADR-0002\ntitle: x\n---\nid: body\n", uid).unwrap(),
+            format!("---\nid: ADR-0002\nuid: {uid}\ntitle: x\n---\nid: body\n")
+        );
+        assert_eq!(
+            with_uid("---\nid: ADR-0002\nuid: {{UID}}\n---\n", uid).unwrap(),
+            format!("---\nid: ADR-0002\nuid: {uid}\n---\n")
+        );
+        assert!(with_uid("---\ntitle: x\n---\n", uid).is_none());
+        assert!(with_uid("no frontmatter\nid: x\n", uid).is_none());
+    }
 
     #[test]
     fn slug_is_kebab_case_bounded_and_never_empty() {
@@ -354,8 +406,11 @@ mod tests {
             check_adr(&text, &record.id, title).unwrap();
             assert!(text.contains(&format!(": {title}\n")), "{text}");
         }
-        let generated =
-            |title: &str| format!("---\nid: ADR-0001\ntitle: {title}\nstatus: proposed\n---\n");
+        let generated = |title: &str| {
+            format!(
+                "---\nid: ADR-0001\nuid: 0f8c6e2a-1b3d-4c5e-8f90-a1b2c3d4e5f6\ntitle: {title}\nstatus: proposed\n---\n"
+            )
+        };
         assert!(
             check_adr(&generated("a: b"), "ADR-0001", "a: b").is_err(),
             "unparseable"
@@ -365,5 +420,7 @@ mod tests {
             "wrong title"
         );
         assert!(check_adr(&generated("asked"), "ADR-0001", "asked").is_ok());
+        let no_uid = "---\nid: ADR-0001\ntitle: asked\nstatus: proposed\n---\n";
+        assert!(check_adr(no_uid, "ADR-0001", "asked").is_err(), "no uid");
     }
 }

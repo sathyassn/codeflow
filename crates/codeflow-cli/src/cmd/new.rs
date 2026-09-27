@@ -470,7 +470,8 @@ pub enum AdrCommand {
 }
 
 /// Run `codeflow adr`. The project's `docs/decisions/template.md` is used
-/// when present, the shipped template otherwise.
+/// when present, the shipped template otherwise; where durable work is
+/// tracked the number is issued from the registry (TSK-104 AC-4).
 pub fn run_adr(args: &AdrArgs) -> i32 {
     let AdrCommand::New { title } = &args.command;
     let root = super::repo_root();
@@ -481,13 +482,18 @@ pub fn run_adr(args: &AdrArgs) -> i32 {
         eprintln!("error: ADR template unavailable");
         return 1;
     };
-    match light_paths::create_adr(&root, &template, title) {
-        Ok(rec) => report(&rec),
-        Err(error) => {
-            eprintln!("error: {error}");
-            1
-        }
-    }
+    let request = serde_json::json!({ "kind": "adr", "title": title });
+    let Some(mut issuer) = Issuer::new(&root, Kind::Adr, title, request) else {
+        return 1;
+    };
+    let result = if issuer.registry {
+        light_paths::create_adr_with(&root, &template, title, &mut |target| {
+            issuer.allocate(target)
+        })
+    } else {
+        light_paths::create_adr(&root, &template, title)
+    };
+    issuer.finish(result)
 }
 
 /// How a new record gets its id: from the shared registry where durable
