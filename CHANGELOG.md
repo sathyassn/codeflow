@@ -104,6 +104,26 @@ publication date._
   branch of the same name, such as a fork's `origin/main`, never replaces
   it. Without a local branch, `origin/<name>` is used as before.
 
+<!-- codeflow:release-impact minor -->
+- **`human_authorization` is deprecated.** The top-level policy key accepted
+  only `none` and changed nothing, so fresh installs no longer write it. A
+  policy file that still has it loads, and validation, `codeflow ci` and the
+  commit-msg hook print one line: `policy key human_authorization is
+  deprecated and ignored`. `codeflow update` removes it and notes `removed
+  deprecated key human_authorization`; no other value changes. The unwired
+  v1 scanner modules behind no guard are removed too (ADR-0008 and ADR-0009
+  amendments); nothing an adopter configures changes.
+
+<!-- codeflow:release-impact patch -->
+- **Quieter and narrower guards in a sandbox.** Hook entry points, `codeflow
+  ci` and the read-only commands (`orient`, `status`, `validate`, `work`,
+  `estimate`) no longer record the repository in `~/.codeflow/registry.json`,
+  and a registry this process may not write, as in a sandbox, is skipped
+  without the `registry touch failed` warning. exec-guard allows recursive
+  removal strictly below a temp root (`$TMPDIR`, `/tmp`, `/var/tmp` and the
+  macOS per-user `/var/folders/<xx>/<id>/T`, each also under `/private`);
+  the roots themselves and every system directory stay blocked.
+
 <!-- codeflow:release-impact major -->
 - **Effort default on upgrade.** Version 2.1.0 set no reasoning effort, so
   Claude Code and Codex used their own defaults. After `codeflow update`,
