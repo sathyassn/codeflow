@@ -267,8 +267,8 @@ copying their status or dependency graph. Its narrow native allocation checker
 has a separate read-only data boundary; it neither runs the method nor schedules
 work. Minimal receives no method files or automatic planning upgrade.
 
-`cf-model-orchestrator` is the stage-aware harness-neutral default for every
-non-trivial repository task in standard/full scaffolds. Claude Code reaches
+`cf-model-orchestrator` is the stage-aware harness-neutral entry for routed
+work in standard/full scaffolds, decided by touched paths as the root map states. Claude Code reaches
 Codex through the official plugin/app-server; Grok reaches Codex through the
 official `codex` CLI and local app-server daemon (Herdr, tmux degraded); Codex
 reaches Claude through Herdr (tmux degraded) plus schema-v2. Primaries default

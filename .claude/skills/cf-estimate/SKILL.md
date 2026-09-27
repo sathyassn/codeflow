@@ -10,8 +10,8 @@ an AI speed multiplier. This method is a starting point a project may adopt,
 adapt or decline. It does not replace its task authority, engineering standards,
 independent review, security controls or acceptance criteria.
 
-Use inside the active `cf-model-orchestrator` flow; direct non-trivial use first
-enters that flow. Both primary seats independently assess material scope,
+Use inside the active `cf-model-orchestrator` flow; direct use for routed work
+first enters that flow. Both primary seats independently assess material scope,
 drivers, duration assumptions and feasibility, then reconcile from evidence.
 Do not restart an already settled interview or choose model effort from a grade.
 An unavailable peer follows the existing evidenced-degradation contract.

@@ -14,7 +14,7 @@ subject into catalog blocks; the runtime owns chrome, themes, and Comment. Do
 not clone the design-exploration board, rebuild Comment UI, or invent a second
 visual language.
 
-A supporting flow inside `cf-model-orchestrator` for non-trivial repository
+A supporting flow inside `cf-model-orchestrator` for routed repository
 work: it changes how a result is reviewed, never the accepted plan, model
 seats, producer/reviewer duties, or evidence requirements. Invoke it at the
 material task checkpoint where an interactive surface helps; batch or

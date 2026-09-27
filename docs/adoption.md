@@ -845,7 +845,7 @@ both sides; the release checklist
 
 ## Delegation quickstart
 
-Standard/full projects use the duo for non-trivial work; standalone consults
+Standard/full projects use the duo for routed work; standalone consults
 are available when an outside opinion is useful. Minimal does not install the
 method. Transport remains interactive-only, with preferred lanes and qualified
 native fallback (ADR-0059). One-time setup: authenticate Codex manually, enable

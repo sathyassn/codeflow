@@ -27,7 +27,7 @@ Run two jobs in order: **Part A** verifies required flow tools and offers fixes;
 ## Part A — flow-aware tool preflight
 
 First decide **which flows this project uses**, then verify each flow's tools.
-Standard/full installs default every non-trivial repository task to the duo;
+Standard/full installs route adopter-facing work to the duo by touched paths;
 solo is a preflight-proven degradation, not an equivalent preference:
 
 - **Solo** (`/cf-develop`) — always in play.
