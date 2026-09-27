@@ -2216,6 +2216,12 @@ fn push_set_by_path_reports_an_unresolved_range_without_borrowing_history() {
     );
 }
 
+/// The destination `bare` fetches `refspec` from `from`, as if it had been
+/// pushed there, without running any client hook.
+fn receive(bare: &Path, from: &Path, refspec: &str) {
+    git(bare, &["fetch", "-q", from.to_str().unwrap(), refspec]);
+}
+
 /// A bare destination whose only branch is `stable`, holding `commits` made
 /// in a scratch clone, and a local repository with it configured as `dest`.
 fn stable_destination(legacy_subject: &str) -> (tempfile::TempDir, tempfile::TempDir) {
@@ -2225,10 +2231,8 @@ fn stable_destination(legacy_subject: &str) -> (tempfile::TempDir, tempfile::Tem
     init_repo(local.path(), "main");
     commit_file(local.path(), "legacy.txt", "legacy\n", legacy_subject);
     let url = bare.path().to_str().unwrap();
-    git(
-        local.path(),
-        &["push", "-q", "--no-verify", url, "main:stable"],
-    );
+    // The destination takes the commits by fetching them: no client hook.
+    receive(bare.path(), local.path(), "main:stable");
     git(local.path(), &["remote", "add", "dest", url]);
     git(local.path(), &["fetch", "-q", "dest"]);
     // Newer git creates the remote HEAD on fetch; older git needs this.
@@ -2282,8 +2286,7 @@ fn push_set_checks_only_the_rebased_commits_of_a_rewrite() {
     let (bare, local) = stable_destination("Legacy subject.");
     git(local.path(), &["checkout", "-q", "-b", "feat/r", "main~1"]);
     let old = commit_file(local.path(), "r.txt", "r\n", "feat: add r");
-    let url = bare.path().to_str().unwrap();
-    git(local.path(), &["push", "-q", "--no-verify", url, "feat/r"]);
+    receive(bare.path(), local.path(), "feat/r:feat/r");
     git(local.path(), &["fetch", "-q", "dest"]);
     git(local.path(), &["rebase", "-q", "dest/stable"]);
     let rebased = rev(local.path(), "HEAD");
@@ -2305,22 +2308,17 @@ fn push_set_checks_a_commit_only_a_stale_tracking_ref_holds() {
     // B, so B is checked: the pushed branch's own tracking ref never
     // excludes history.
     let (bare, local) = stable_destination("chore: legacy base");
-    let url = bare.path().to_str().unwrap();
     git(local.path(), &["checkout", "-q", "-b", "feat/x", "main~1"]);
     let bad = commit_file(local.path(), "b.txt", "b\n", "Not conventional.");
-    git(
-        local.path(),
-        &["push", "-q", "--no-verify", "dest", "feat/x"],
-    );
+    receive(bare.path(), local.path(), "feat/x:feat/x");
+    git(local.path(), &["fetch", "-q", "dest"]);
     assert_eq!(rev(local.path(), "dest/feat/x"), bad);
 
     git(local.path(), &["checkout", "-q", "-b", "other", "main~1"]);
     let replaced = commit_file(local.path(), "o.txt", "o\n", "feat: replace previous work");
-    // By path, so the dest tracking ref is not updated.
-    git(
-        local.path(),
-        &["push", "-q", "--no-verify", "--force", url, "other:feat/x"],
-    );
+    // Rewritten on the destination without a fetch here, so the dest
+    // tracking ref is not updated.
+    receive(bare.path(), local.path(), "+other:feat/x");
     assert_eq!(
         rev(local.path(), "dest/feat/x"),
         bad,

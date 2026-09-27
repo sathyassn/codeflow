@@ -500,13 +500,16 @@ fn push_set_blocks_a_bad_push_at_every_tier() {
         let head = git(&root, &["branch", "--show-current"]);
         let start = String::from_utf8_lossy(&head.stdout).trim().to_string();
         // The destination's landed history: the scaffold commit on its
-        // default branch, seeded directly (the hook would refuse a push to a
-        // protected branch). Only landed history bounds a new branch's range.
+        // default branch, fetched into the destination (a push to a
+        // protected branch is refused). Only landed history bounds a new
+        // branch's range.
+        let refspec = format!("{start}:{start}");
         git_ok(
-            &root,
-            &["push", "-q", "--no-verify", "origin", &start],
+            &remote,
+            &["fetch", "-q", root.to_str().unwrap(), &refspec],
             "seed the destination",
         );
+        git_ok(&root, &["fetch", "-q", "origin"], "fetch the destination");
 
         // `init` already committed the scaffold; add one reviewed change.
         let good = ["-m", "chore: add a base file"];
