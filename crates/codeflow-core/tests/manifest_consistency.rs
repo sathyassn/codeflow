@@ -954,7 +954,26 @@ fn portal_bundle_is_single_complete_and_bounded() {
 fn portal_dogfood_runtime_matches_the_shipped_starter() {
     let root = repo_root();
     let starter_files = git_inventory(&root, "assets/docs-portal/starter");
-    let dogfood_files = git_inventory(&root, "docs-portal");
+    // The figure declarations the portal configuration binds are the
+    // project's own content, like the configuration itself; the starter
+    // ships none.
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("docs-portal/portal.config.json"))
+            .expect("the dogfood portal config is readable"),
+    )
+    .expect("the dogfood portal config is valid JSON");
+    let declarations: BTreeSet<String> = config["figures"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .filter_map(|binding| binding["declaration"].as_str())
+        .filter_map(|path| path.strip_prefix("docs-portal/"))
+        .map(str::to_owned)
+        .collect();
+    let dogfood_files: Vec<String> = git_inventory(&root, "docs-portal")
+        .into_iter()
+        .filter(|relative| !declarations.contains(relative))
+        .collect();
     assert!(!starter_files.is_empty(), "the starter lists no files");
     assert!(!dogfood_files.is_empty(), "docs-portal lists no files");
     let problems = portal_mirror_drift(
