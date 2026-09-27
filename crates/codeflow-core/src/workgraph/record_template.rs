@@ -39,38 +39,85 @@ fn required_placeholders(kind: RecordKind) -> &'static [&'static str] {
     }
 }
 
-/// Check that `text` is a usable template for `kind`.
+/// One synthetic allocation a template is rendered with. Two different
+/// allocations per kind catch a template that hard-codes a value next to
+/// its placeholder (`id: TSK-999 # {{NNN}}`).
+struct Trial {
+    nnn: &'static str,
+    epic: Option<&'static str>,
+    reason: Option<&'static str>,
+    target: &'static str,
+    title: &'static str,
+}
+
+const TRIALS: [Trial; 2] = [
+    Trial {
+        nnn: "986",
+        epic: Some("EPC-986"),
+        reason: None,
+        target: "integration/EPC-986-template-check",
+        title: "template check one",
+    },
+    Trial {
+        nnn: "987",
+        epic: None,
+        reason: Some("template check reason"),
+        target: "integration/EPC-987-template-check",
+        title: "template check two",
+    },
+];
+
+/// Check that `text` is a usable template for `kind`: it carries every
+/// placeholder, and a record rendered from it passes the record validator
+/// and carries the allocated id, uid, title, parent and target in the fields
+/// that own them (TSK-107 review F4).
 ///
 /// # Errors
-/// The first reason it is not: a missing placeholder, or the validator's
-/// findings on a record rendered from it.
+/// The first reason it is not: a missing placeholder, a field that does not
+/// carry its allocated value, or the validator's findings.
 pub fn check(kind: RecordKind, text: &str) -> Result<(), String> {
-    static CHECKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     if let Some(missing) = required_placeholders(kind)
         .iter()
         .find(|p| !text.contains(**p))
     {
         return Err(format!("missing placeholder {missing}"));
     }
+    for trial in &TRIALS {
+        check_trial(kind, text, trial)?;
+    }
+    Ok(())
+}
+
+fn check_trial(kind: RecordKind, text: &str, trial: &Trial) -> Result<(), String> {
+    static CHECKS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
     let (prefix, dir) = match kind {
         RecordKind::Epic => ("EPC", "epics"),
         RecordKind::Spec => ("SPC", "specs"),
         RecordKind::Task => ("TSK", "tasks"),
     };
+    let id = format!("{prefix}-{}", trial.nnn);
+    let uid = crate::ids::new_uid();
+    let yaml = |value: &str| serde_json::to_string(value).unwrap_or_default();
     let mut ctx = TemplateContext::new();
-    ctx.set("UID", crate::ids::new_uid().as_str());
+    let (title_yaml, reason_yaml, target_yaml) = (
+        yaml(trial.title),
+        trial.reason.map_or_else(|| "null".to_string(), yaml),
+        yaml(trial.target),
+    );
     for (key, value) in [
-        ("NNN", "999"),
-        ("TITLE", "template check"),
-        ("TITLE_YAML", "\"template check\""),
+        ("NNN", trial.nnn),
+        ("UID", uid.as_str()),
+        ("TITLE", trial.title),
+        ("TITLE_YAML", title_yaml.as_str()),
         ("DATE", "2026-01-01"),
-        ("EPIC_ID", "EPC-999"),
-        ("STANDALONE_REASON", "null"),
-        ("TARGET_BRANCH", "\"main\""),
+        ("EPIC_ID", trial.epic.unwrap_or("null")),
+        ("STANDALONE_REASON", reason_yaml.as_str()),
+        ("TARGET_BRANCH", target_yaml.as_str()),
     ] {
         ctx.set(key, value);
     }
     let rendered = ctx.substitute(text);
+    check_fields(kind, &rendered, &id, &uid, trial)?;
     // The validator reads a record from its canonical path, so the trial
     // record is written to a private scratch folder and removed after.
     let nanos = std::time::SystemTime::now()
@@ -82,7 +129,7 @@ pub fn check(kind: RecordKind, text: &str) -> Result<(), String> {
         std::process::id()
     ));
     let folder = scratch.join(dir);
-    let path = folder.join(format!("{prefix}-999.md"));
+    let path = folder.join(format!("{id}.md"));
     let written = std::fs::create_dir_all(&folder).and_then(|()| std::fs::write(&path, rendered));
     let result = written
         .map_err(|e| format!("cannot check the template: {e}"))
@@ -104,6 +151,47 @@ pub fn check(kind: RecordKind, text: &str) -> Result<(), String> {
             .join("; ")),
         Err(e) => Err(e.to_string()),
     }
+}
+
+/// The rendered frontmatter carries each allocated value in its own field.
+fn check_fields(
+    kind: RecordKind,
+    rendered: &str,
+    id: &str,
+    uid: &str,
+    trial: &Trial,
+) -> Result<(), String> {
+    let yaml = rendered
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map(|(yaml, _)| yaml)
+        .ok_or("no frontmatter")?;
+    let data: serde_yaml::Mapping =
+        serde_yaml::from_str(yaml).map_err(|_| "the frontmatter does not parse".to_string())?;
+    let field = |name: &str| match data.get(name) {
+        Some(serde_yaml::Value::String(value)) => Some(value.clone()),
+        _ => None,
+    };
+    let mut expected: Vec<(&str, Option<String>)> = vec![
+        ("id", Some(id.to_string())),
+        ("uid", Some(uid.to_string())),
+        ("title", Some(trial.title.to_string())),
+    ];
+    if kind == RecordKind::Task {
+        expected.extend([
+            ("epic_id", trial.epic.map(str::to_string)),
+            ("standalone_reason", trial.reason.map(str::to_string)),
+            ("integration_target", Some(trial.target.to_string())),
+        ]);
+    }
+    for (name, want) in expected {
+        if field(name) != want {
+            return Err(format!(
+                "`{name}` does not carry the value `new` allocates (its placeholder is not in the field's value)"
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// Which template `new` used.
@@ -174,6 +262,62 @@ mod tests {
         assert!(check(RecordKind::Task, &no_criteria).is_err());
         let no_frontmatter = TASK.replacen("---\n", "", 1);
         assert!(check(RecordKind::Task, &no_frontmatter).is_err());
+    }
+
+    /// Codex review F4: a placeholder moved into a comment beside a fixed
+    /// value is present but not used; the template falls back.
+    #[test]
+    fn placeholders_only_in_comments_are_refused() {
+        let cases = [
+            (
+                RecordKind::Task,
+                TASK.replace(
+                    "integration_target: {{TARGET_BRANCH}}",
+                    "integration_target: main # {{TARGET_BRANCH}}",
+                ),
+                "integration_target",
+            ),
+            (
+                RecordKind::Task,
+                TASK.replace("id: TSK-{{NNN}}", "id: TSK-999 # {{NNN}}"),
+                "`id`",
+            ),
+            (
+                RecordKind::Task,
+                TASK.replace(
+                    "uid: {{UID}}",
+                    "uid: 0f8c6e2a-1b3d-4c5e-8f90-a1b2c3d4e5f6 # {{UID}}",
+                ),
+                "`uid`",
+            ),
+            (
+                RecordKind::Task,
+                TASK.replace("epic_id: {{EPIC_ID}}", "epic_id: EPC-001 # {{EPIC_ID}}"),
+                "`epic_id`",
+            ),
+            (
+                RecordKind::Task,
+                TASK.replace(
+                    "standalone_reason: {{STANDALONE_REASON}}",
+                    "standalone_reason: null # {{STANDALONE_REASON}}",
+                ),
+                "`standalone_reason`",
+            ),
+            (
+                RecordKind::Epic,
+                EPIC.replace("id: EPC-{{NNN}}", "id: EPC-001 # {{NNN}}"),
+                "`id`",
+            ),
+            (
+                RecordKind::Spec,
+                SPEC.replace("title: {{TITLE_YAML}}", "title: Fixed # {{TITLE_YAML}}"),
+                "`title`",
+            ),
+        ];
+        for (kind, template, field) in cases {
+            let error = check(kind, &template).unwrap_err();
+            assert!(error.contains(field), "{field}: {error}");
+        }
     }
 
     #[test]

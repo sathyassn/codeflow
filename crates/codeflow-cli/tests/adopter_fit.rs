@@ -1081,4 +1081,41 @@ fn project_templates_are_used_when_valid_and_fall_back_when_not() {
     assert!(record.contains("## Acceptance Criteria"), "{record}");
     let out = codeflow(dir.path(), &["validate", "--docs"]);
     assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+
+    // Codex review F4: placeholders kept only in comments beside fixed
+    // values would write the wrong target or id; the template falls back.
+    git(dir.path(), &["branch", "integration/EPC-001-custom"]);
+    for broken in [
+        shipped.replace(
+            "integration_target: {{TARGET_BRANCH}}",
+            "integration_target: main # {{TARGET_BRANCH}}",
+        ),
+        shipped.replace("id: TSK-{{NNN}}", "id: TSK-999 # {{NNN}}"),
+    ] {
+        std::fs::write(templates.join("task.md"), &broken).unwrap();
+        let out = codeflow(
+            dir.path(),
+            &[
+                "task",
+                "new",
+                "--standalone-reason",
+                "bounded review fixture",
+                "--into",
+                "integration/EPC-001-custom",
+                "custom target",
+            ],
+        );
+        let all = text(&out);
+        assert!(all.contains("not a usable task template"), "{all}");
+        let path = created(&out);
+        let record = std::fs::read_to_string(&path).unwrap();
+        assert!(
+            record.contains("integration_target: \"integration/EPC-001-custom\""),
+            "{record}"
+        );
+        let stem = path.file_stem().unwrap().to_string_lossy().to_string();
+        assert!(record.contains(&format!("id: {stem}\n")), "{record}");
+        let out = codeflow(dir.path(), &["validate", "--docs"]);
+        assert_eq!(out.status.code(), Some(0), "{}", text(&out));
+    }
 }
