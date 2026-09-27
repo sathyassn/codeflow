@@ -724,12 +724,6 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
-src = "agents/skills/cf-present/assets/review-document.example.json"
-dest = ".claude/skills/cf-present/assets/review-document.example.json"
-ownership = "managed"
-tiers = ["standard", "full"]
-
-[[entry]]
 src = "agents/skills/cf-present/assets/config.example.toml"
 dest = ".claude/skills/cf-present/assets/config.example.toml"
 ownership = "managed"
@@ -1353,12 +1347,6 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-present/resources/present-document.example.json"
 dest = ".agents/skills/cf-present/resources/present-document.example.json"
-ownership = "managed"
-tiers = ["standard", "full"]
-
-[[entry]]
-src = "agents/skills/cf-present/assets/review-document.example.json"
-dest = ".agents/skills/cf-present/assets/review-document.example.json"
 ownership = "managed"
 tiers = ["standard", "full"]
 

@@ -40,7 +40,8 @@ prove savings, or silently replace another criterion.
 
 Propagate current observed unavailability into every later worker choice in the
 same task: when a native error or canary proves an exact selector/route
-unavailable, record that exclusion for the primary that dispatches workers.
+unavailable, record that exclusion and give it to the primary that dispatches
+workers, so it does not choose the known-unavailable route again.
 Scope it to its evidenced harness, account/bucket, selector/route, and
 freshness; do not infer that sibling models or another account are unavailable.
 A materially fresh native signal may clear or replace the exclusion.

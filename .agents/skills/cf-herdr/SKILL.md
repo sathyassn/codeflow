@@ -68,6 +68,10 @@ cf-<repo>-<work>-<k><nn>
 | kind / k | `claude`/`cl`, `codex`/`cx`, `grok`/`gk` |
 | nn | next free `01`–`99` among **live** agents with the same `cf-<repo>-<work>-<k>` prefix |
 
+Examples: `cf-codeflow-skills-rev-cl01`, a parallel Claude on the same work
+`cf-codeflow-skills-rev-cl02`, and Codex on the same work
+`cf-codeflow-skills-rev-cx01`.
+
 Repo slug truncation collides across worktrees of the same project. The
 **intended worktree `cwd`** is the disambiguator, not the label. Put full cwd,
 repo basename, and work identity in the optional cache.
@@ -110,17 +114,17 @@ pane after its lifecycle ends.
 Default production launch is ADR-conformant: Claude `bypassPermissions`; Codex
 never + `danger-full-access`; Grok `--always-approve`. Consult / no-edit review:
 Claude `--permission-mode auto` (never bypass); Codex `--ask-for-approval
-on-request --sandbox workspace-write`. Never
-`--dangerously-skip-permissions` unless named. Consults still verify an empty
-worktree diff. No third-party Grok Codex plugins.
+on-request --sandbox workspace-write`. Herdr is not an external sandbox.
+Never `--dangerously-skip-permissions` unless the operator named it. Consults
+still verify an empty worktree diff. No third-party Grok Codex plugins.
 
 Prompt rules: consults edit nothing; no force-push or rebase of a shared
 branch; no merge of protected main; no `herdr server stop`; no keys to the
 caller pane; no closing tabs this run did not create.
 
 Wait until the agent is ready. Split a pane only for a same-tab log/server
-sibling. From a Grok host, `herdr agent start --kind claude|codex` is the
-interactive seat. From Claude Code, Codex still uses the official plugin. From
+sibling. From a Grok or another qualified non-Claude, non-Codex host,
+`herdr agent start --kind claude|codex` is the interactive seat. From Claude Code, Codex still uses the official plugin. From
 Codex, Claude still uses schema-v2; when `HERDR_ENV=1`, **start that Claude
 process in the Herdr pane**. Lifecycle records remain the completion signal.
 

@@ -1,7 +1,9 @@
 # Other hosts
 
 Read this when the active host is Grok Build or another harness, or when a
-Grok seat is used.
+Grok seat is used. Before a Grok preflight or launch, also read
+[the Grok host detail](../resources/grok-host.md): its guards, launch,
+sandbox profiles and peer lanes.
 
 | Active host | Peer lane | Coordinator | Execution binding |
 |---|---|---|---|

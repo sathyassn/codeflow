@@ -18,7 +18,10 @@ when Grok hosts Claude.
 
 ## Launch
 
-Take selector and effort from the current ensemble record. Production host:
+Before a Grok seat takes work, `grok --version` succeeds and a short
+**interactive** Grok canary authenticates; an authentication failure stops
+for operator action. Take selector and effort from the current ensemble
+record. Production host:
 
 ```text
 grok --model <selector> --reasoning-effort <effort> --always-approve
