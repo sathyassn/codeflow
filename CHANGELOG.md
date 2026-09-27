@@ -106,9 +106,11 @@ publication date._
 - **A pre-push gate under a minute that blocks.** Public behaviour change:
   the pre-push hook no longer runs the test suite. It runs the push set and
   blocks on what it can see, leaving the rest to CI. `codeflow ci` runs on
-  each pushed branch's range when the destination's current commit or its
-  own tracking refs give a base; otherwise the hook reports the range
-  unresolved and never compares with a local branch. `codeflow validate
+  each pushed branch's range, leaving out only history known to be on the
+  destination: its current commit and the tracking refs of its default,
+  protected and `integration/*` branches, never the pushed branch's own
+  tracking ref, which may be stale. When none of them gives a base, the hook
+  reports the range unresolved and never compares with a local branch. `codeflow validate
   --docs` and the `.codeflow/test-config.json` targets that define a `quick`
   mode run only when the pushed commit is the checked-out one, with no
   tracked changes, no sparse checkout and every submodule initialized at its

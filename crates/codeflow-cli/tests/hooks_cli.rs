@@ -2231,6 +2231,8 @@ fn stable_destination(legacy_subject: &str) -> (tempfile::TempDir, tempfile::Tem
     );
     git(local.path(), &["remote", "add", "dest", url]);
     git(local.path(), &["fetch", "-q", "dest"]);
+    // Newer git creates the remote HEAD on fetch; older git needs this.
+    git(local.path(), &["remote", "set-head", "dest", "stable"]);
     (bare, local)
 }
 
@@ -2294,6 +2296,42 @@ fn push_set_checks_only_the_rebased_commits_of_a_rewrite() {
     let (code, err) = push_hook_onto(local.path(), "dest", "feat/r", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("push set check failed: `codeflow ci"), "{err}");
+}
+
+#[test]
+fn push_set_checks_a_commit_only_a_stale_tracking_ref_holds() {
+    // R4-1: the destination rewrote feat/x to O, dropping the bad commit B,
+    // but the cached dest/feat/x still holds B. A push of C (on B) restores
+    // B, so B is checked: the pushed branch's own tracking ref never
+    // excludes history.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let url = bare.path().to_str().unwrap();
+    git(local.path(), &["checkout", "-q", "-b", "feat/x", "main~1"]);
+    let bad = commit_file(local.path(), "b.txt", "b\n", "Not conventional.");
+    git(
+        local.path(),
+        &["push", "-q", "--no-verify", "dest", "feat/x"],
+    );
+    assert_eq!(rev(local.path(), "dest/feat/x"), bad);
+
+    git(local.path(), &["checkout", "-q", "-b", "other", "main~1"]);
+    let replaced = commit_file(local.path(), "o.txt", "o\n", "feat: replace previous work");
+    // By path, so the dest tracking ref is not updated.
+    git(
+        local.path(),
+        &["push", "-q", "--no-verify", "--force", url, "other:feat/x"],
+    );
+    assert_eq!(
+        rev(local.path(), "dest/feat/x"),
+        bad,
+        "the tracking ref is stale"
+    );
+
+    git(local.path(), &["checkout", "-q", "feat/x"]);
+    let head = commit_file(local.path(), "c.txt", "c\n", "feat: add new work");
+    let (code, err) = push_hook_onto(local.path(), "dest", "feat/x", &head, &replaced);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
 }
 
 #[test]

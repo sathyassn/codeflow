@@ -10,10 +10,11 @@
 //!   did not run and CI runs them; they are never reported as passed for a
 //!   tree they did not see. Untracked files are part of the working checkout
 //!   and can influence a quick target, which the pass line says.
-//! - The hook blocks on what it can see and never claims more: when neither
-//!   the destination's current sha nor its own tracking refs give a base,
-//!   the range is reported unresolved and left to CI, never compared with a
-//!   local branch.
+//! - The hook blocks on what it can see and never claims more: the range
+//!   leaves out only history known to be on the destination (its current sha
+//!   and the tracking refs of its default, protected and integration
+//!   branches). When nothing gives a base, the range is reported unresolved
+//!   and left to CI, never compared with a local branch.
 //! - The whole set is timed; over [`git_hook::PUSH_SET_BUDGET`] the hook names
 //!   the slowest step.
 //!
@@ -63,7 +64,7 @@ pub(super) fn run(
 
     for r in &pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        match range_base(root, r, namespace.as_deref()) {
+        match range_base(root, r, namespace.as_deref(), &policy.protected_branches) {
             Some(base) => {
                 let args = [
                     "ci",
@@ -194,19 +195,29 @@ fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
     })
 }
 
-/// The exclusive base of a pushed branch's range, from the destination's
-/// own history only:
-/// 1. the destination's current sha, when it names a known commit that the
-///    pushed sha extends, or one with no shared history (`codeflow ci` then
-///    reports the unrelated base);
-/// 2. else, including a rewrite such as a rebase, the newest commit the
-///    pushed sha shares with the destination's own tracking refs (the pushed
-///    sha itself when nothing is new). From the old sha, a rebased branch's
-///    range would hold every upstream commit the rebase brought in;
+/// The exclusive base of a pushed branch's range. Only history known to be
+/// on the destination is left out of the range:
+/// 1. the destination's current sha, when the pushed sha extends it, or when
+///    they share no history (`codeflow ci` then reports the unrelated base);
+/// 2. otherwise, as for a new branch or a rewrite such as a rebase, a
+///    boundary of the commits not reachable from the destination's current
+///    sha nor from landed history: the destination's tracking refs of its
+///    default branch (`HEAD`), the protected branches and `integration/*`.
+///    The pushed branch's own tracking ref, like any other tracking ref, may
+///    be stale (the destination may since have dropped a commit this push
+///    restores), so it never excludes anything. Any such boundary is safe:
+///    what it reaches is on the destination, and what it does not reach is
+///    checked. The pushed sha itself when nothing is new;
 /// 3. else `None`: the range is unresolved and CI checks it. A local branch
 ///    is never substituted: it may be stale or not the destination's base.
-fn range_base(root: &Path, r: &PushRef, namespace: Option<&str>) -> Option<String> {
+fn range_base(
+    root: &Path,
+    r: &PushRef,
+    namespace: Option<&str>,
+    protected: &[String],
+) -> Option<String> {
     let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
+    let mut known: Vec<String> = Vec::new();
     if !zero && is_commit(root, &r.remote_sha) {
         let extends = git(
             root,
@@ -217,13 +228,36 @@ fn range_base(root: &Path, r: &PushRef, namespace: Option<&str>) -> Option<Strin
         if extends || !related {
             return Some(r.remote_sha.clone());
         }
+        known.push(r.remote_sha.clone());
     }
-    let ns = namespace?;
-    let glob = format!("--glob={ns}*");
-    let listed = git(
-        root,
-        &["rev-list", "--boundary", &r.local_sha, "--not", &glob],
-    )?;
+    if let Some(ns) = namespace {
+        known.extend(
+            std::iter::once("HEAD")
+                .chain(protected.iter().map(String::as_str))
+                .map(|branch| format!("{ns}{branch}"))
+                .filter(|reference| is_commit(root, reference)),
+        );
+        let integration = format!("{ns}integration/*");
+        let any_integration = git(
+            root,
+            &[
+                "for-each-ref",
+                "--count=1",
+                "--format=%(refname)",
+                &integration,
+            ],
+        )
+        .is_some_and(|out| !out.trim().is_empty());
+        if any_integration {
+            known.push(format!("--glob={integration}"));
+        }
+    }
+    if known.is_empty() {
+        return None;
+    }
+    let mut args = vec!["rev-list", "--boundary", r.local_sha.as_str(), "--not"];
+    args.extend(known.iter().map(String::as_str));
+    let listed = git(root, &args)?;
     if listed.trim().is_empty() {
         return Some(r.local_sha.clone());
     }
