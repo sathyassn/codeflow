@@ -701,3 +701,20 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--cf-focus); outl
 @media (max-width: 599.98px) { .cf-main { padding-inline: 16px; } .cf-footer-nav { gap: 8px; } }
 
 .portal-provenance[data-stale="true"]::before { border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); background: var(--cf-warning); }
+
+/* The record pointer table: at phone width each folder's row stacks, so the
+   purpose reads as a line of prose instead of one word per line. The header
+   stays in the document for assistive technology. */
+@media (max-width: 639.98px) {
+  .sl-markdown-content .portal-record-folders table,
+  .sl-markdown-content .portal-record-folders tbody,
+  .sl-markdown-content .portal-record-folders tr,
+  .sl-markdown-content .portal-record-folders td { display: block; width: auto; overflow: visible; }
+  .sl-markdown-content .portal-record-folders thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .sl-markdown-content .portal-record-folders tr { padding-block: 12px; border-block-end: 1px solid var(--cf-border); }
+  .sl-markdown-content .portal-record-folders td { margin: 0; padding: 2px 0; border: 0; }
+  .sl-markdown-content .portal-record-folders td:nth-child(3)::before,
+  .sl-markdown-content .portal-record-folders td:nth-child(4)::before { margin-inline-end: 8px; font-family: var(--cf-font-mono); font-size: var(--cf-fs-micro); letter-spacing: 0.06em; text-transform: uppercase; color: var(--cf-text-muted); }
+  .sl-markdown-content .portal-record-folders td:nth-child(3)::before { content: "Count"; }
+  .sl-markdown-content .portal-record-folders td:nth-child(4)::before { content: "Repository"; }
+}
