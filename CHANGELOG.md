@@ -570,7 +570,11 @@ publication date._
   with a substitution after its subcommand, as in `git show "$(…)"`, since
   its arguments cannot turn it into a mutation. An unclassifiable command is
   still judged by every other rule, such as the protected-commit check, and
-  the strictest verdict wins. This also blocks a commit written inside a
+  the strictest verdict wins. A git alias is judged by what it expands to,
+  read with `git config` in the target repository (including `-c` and
+  `include.path`); a `!` shell alias or one the guard cannot read blocks.
+  `git rebase <upstream> <branch>` is judged by `<branch>`, which it
+  rewrites. This also blocks a commit written inside a
   subshell such as `(cd <repo> && git commit)`.
 
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
