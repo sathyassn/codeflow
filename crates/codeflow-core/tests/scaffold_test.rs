@@ -1669,3 +1669,86 @@ fn update_records_the_work_records_baseline_once_for_existing_records() {
         "a recorded baseline is never moved"
     );
 }
+
+// --- product paths (SPC-013 R-71, R-114; TSK-104) ---------------------------
+
+fn product_paths(root: &Path) -> serde_json::Value {
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/policy.json")).unwrap();
+    policy["git"]["product_paths"].clone()
+}
+
+/// Remove `git.product_paths` from the policy and its shipped baseline, as a
+/// project installed before the key existed has it.
+fn drop_product_paths(root: &Path) {
+    for path in [
+        root.join(".codeflow/policy.json"),
+        root.join(".codeflow/.baseline/.codeflow/policy.json"),
+    ] {
+        let mut policy: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        policy["git"]
+            .as_object_mut()
+            .unwrap()
+            .remove("product_paths");
+        std::fs::write(&path, serde_json::to_string_pretty(&policy).unwrap()).unwrap();
+    }
+}
+
+#[test]
+fn init_writes_the_product_paths_of_the_detected_stack() {
+    isolate_git();
+    for (marker, stack) in [
+        (Some("Cargo.toml"), "rust"),
+        (Some("package.json"), "node"),
+        (Some("pyproject.toml"), "python"),
+        (None, "unset"),
+    ] {
+        let (_p, root) = project_dir();
+        if let Some(file) = marker {
+            std::fs::write(root.join(file), "").unwrap();
+        }
+        let (_a, assets) = fixture_assets(false);
+        scaffold::init(&assets, &root, &opts(None, "2.0.0")).unwrap();
+        let expected: Vec<&str> =
+            codeflow_core::workgraph::classify::stack_product_paths(stack).to_vec();
+        assert_eq!(product_paths(&root), serde_json::json!(expected), "{stack}");
+    }
+}
+
+#[test]
+fn update_adds_product_paths_once_and_keeps_a_project_value() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    std::fs::write(root.join("Cargo.toml"), "").unwrap();
+    let _v1 = init_v1(&root);
+    drop_product_paths(&root);
+
+    let (_a2, assets) = fixture_assets(true);
+    let report = scaffold::update(&assets, &root, &update_opts("2.1.0")).unwrap();
+    assert_eq!(
+        product_paths(&root),
+        serde_json::json!(["src/**", "crates/**", "build.rs"])
+    );
+    let notes = &report
+        .files
+        .iter()
+        .find(|f| f.dest == ".codeflow/policy.json")
+        .unwrap()
+        .notes;
+    assert!(
+        notes.iter().any(|n| n.contains("git.product_paths")),
+        "{notes:?}"
+    );
+
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    policy["git"]["product_paths"] = serde_json::json!(["engine/**"]);
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&policy).unwrap(),
+    )
+    .unwrap();
+    scaffold::update(&assets, &root, &update_opts("2.2.0")).unwrap();
+    assert_eq!(product_paths(&root), serde_json::json!(["engine/**"]));
+}

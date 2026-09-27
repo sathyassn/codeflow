@@ -8,6 +8,7 @@
 //! `validate` for frontmatter checks.
 
 pub mod allocate;
+pub mod classify;
 mod format_id;
 pub(crate) mod layout;
 pub mod lifecycle;
