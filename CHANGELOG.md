@@ -53,6 +53,25 @@ publication date._
   adopted tools and independent version domains, and adds four scoped release
   diagnostics without turning CodeFlow metadata into product version authority.
 
+<!-- codeflow:release-impact minor -->
+- **Comments on one part of a figure, and framed figures (SPC-014).** A
+  `cf-present` reviewer can comment on one node, arrow, label or legend
+  entry: hover, click, touch and the keyboard resolve to the named part,
+  thin strokes take a 6 px hit margin, and "select enclosing" climbs to the
+  part around it and then the block. The service checks each part note
+  against the revision and stores its own label, a PNG crop, and
+  `crop_check: "unverified"` where it cannot measure the part. Earlier notes
+  re-anchor by part, then quote, then block, and say when they moved. A
+  `schema_version: 2` document frames every figure, stage and table as
+  "Figure N · title" or "Table N · title" with a caption, legend and one
+  Details disclosure, resolves `[fig:<id>]` references, and names stage parts
+  with `data-cf-target`, `data-cf-group`, `data-cf-label` and `data-cf-for`.
+  Version 1 documents render as before, except that an `html` title now
+  shows, and the v1 `feedback` stream is unchanged. Drawn figures in present
+  and the portal show their title line and one Details disclosure in place
+  of the kicker and "Table twin"; the portal gate fails a figure whose title
+  is not visible.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->
