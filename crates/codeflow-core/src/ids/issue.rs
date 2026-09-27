@@ -440,7 +440,7 @@ pub(super) fn push(git: &Git, remote: &str, commit: &str) -> Result<Pushed, IdsE
 /// the diagnostics of a lost compare-and-swap count as a moved tip; a hook
 /// refusal is reported; anything else is unclear and read back.
 fn classify_push(text: &str) -> Pushed {
-    let lower = text.to_lowercase();
+    let lower = diagnostics(text);
     let reason = text
         .lines()
         .map(str::trim)
@@ -454,13 +454,13 @@ fn classify_push(text: &str) -> Pushed {
     if has(&[
         "permission",
         "denied",
-        "403",
         "gh013",
         "protected branch",
         "not allowed",
         "authentication failed",
         "read-only",
-    ]) {
+    ]) || has_word(&lower, "403")
+    {
         return Pushed::Failed(IdsError::Permission(reason));
     }
     if has(&["not supported", "unsupported", "does not support"]) {
@@ -481,6 +481,37 @@ fn classify_push(text: &str) -> Pushed {
         return Pushed::Failed(IdsError::Refused(reason));
     }
     Pushed::Unclear(reason)
+}
+
+/// The lower-cased diagnostic text of a push, without what names the
+/// objects involved: the `To <url>` line, the closing `failed to push some
+/// refs to '<url>'` line and the `<src>:<dst>` field of a porcelain status
+/// line. A sha, a path or a URL can contain `403` or
+/// `denied` by chance and must never decide the outcome.
+fn diagnostics(text: &str) -> String {
+    text.lines()
+        .filter(|line| {
+            !line.starts_with("To ") && !line.starts_with("error: failed to push some refs to ")
+        })
+        .map(|line| {
+            let fields: Vec<&str> = line.split('\t').collect();
+            match fields.as_slice() {
+                [flag, _refs, summary] if flag.trim().len() <= 1 => (*summary).to_string(),
+                _ => line.to_string(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .to_lowercase()
+}
+
+/// Whether `word` occurs in `text` with no letter or digit on either side.
+fn has_word(text: &str, word: &str) -> bool {
+    text.match_indices(word).any(|(at, _)| {
+        let before = text[..at].chars().next_back();
+        let after = text[at + word.len()..].chars().next();
+        !before.is_some_and(char::is_alphanumeric) && !after.is_some_and(char::is_alphanumeric)
+    })
 }
 
 /// The diagnostics of a lost compare-and-swap: the client saw a newer tip
@@ -1026,5 +1057,18 @@ mod tests {
             ),
             "a bare update failure is read back, not retried"
         );
+        // Object names never decide: a sha or path holding "403" or
+        // "denied" is not a permission error.
+        let named = [
+            "To /tmp/permission-denied/remote.git\n!\tc7ccd4df81bce53a100957c13116e4d2bf794038:refs/heads/codeflow/registry\t[remote rejected] (incorrect old value provided)\nerror: failed to push some refs to '/tmp/permission-denied/remote.git'",
+            "To /srv/403/remote.git\n!\tabc4030:refs/heads/codeflow/registry\t[rejected] (fetch first)",
+        ];
+        for text in named {
+            assert!(matches!(classify_push(text), Pushed::Moved(_)), "{text}");
+        }
+        assert!(matches!(
+            classify_push("remote: HTTP 403 Forbidden"),
+            Pushed::Failed(IdsError::Permission(_))
+        ));
     }
 }
