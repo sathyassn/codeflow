@@ -168,17 +168,19 @@ fn each_light_path_takes_one_command_and_one_pull_request() {
         ),
         "task new",
     );
-    for file in [
+    edit(
+        &root,
         "project-management/epics/EPC-001.md",
+        "- AC-1\n",
+        "- AC-1 When run, the system shall work.\n",
+    );
+    // The leaf changes product code, so it names its journey (TSK-105).
+    edit(
+        &root,
         "project-management/tasks/TSK-001.md",
-    ] {
-        edit(
-            &root,
-            file,
-            "- AC-1\n",
-            "- AC-1 When run, the system shall work.\n",
-        );
-    }
+        "- AC-1\n",
+        "- AC-1 (journey) When run, the system shall work.\n",
+    );
     commit(&root, "chore: plan the outcome");
     let (code, out) = pull_request(&root, "plan/outcome", line, "");
     assert_eq!(code, 0, "{out}");
