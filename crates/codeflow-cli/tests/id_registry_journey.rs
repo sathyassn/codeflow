@@ -637,3 +637,69 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
     assert!(raw.contains("refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"));
     assert!(raw.contains("codeflow ids check --base \"$BASE_SHA\" --head refs/remotes/pr/head"));
 }
+
+/// Review round 1, SL-3, through the CLI: a registered record is deleted
+/// and a different record takes its number. The old add is still an
+/// ancestor, but it belongs to the record the deletion ended, so CI and the
+/// range check refuse the reuse.
+#[test]
+fn ci_refuses_a_different_record_that_reuses_a_registered_number() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("reuse");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    std::fs::write(root.join("readme"), "seed\n").unwrap();
+    commit(&root, "chore: root");
+    let task = root.join("project-management/tasks/TSK-001.md");
+    std::fs::create_dir_all(task.parent().unwrap()).unwrap();
+    std::fs::write(
+        &task,
+        "---\nid: TSK-001\ntitle: \"original\"\nstatus: todo\n---\n\n# original\n",
+    )
+    .unwrap();
+    commit(&root, "docs: original");
+    ok(&codeflow(&root, &["ids", "seed"]), "ids seed");
+    std::fs::remove_file(&task).unwrap();
+    commit(&root, "docs: delete");
+    let deleted = git(&root, &["rev-parse", "HEAD"]);
+    std::fs::write(
+        &task,
+        "---\nid: TSK-001\ntitle: \"different work\"\nstatus: todo\nepic_id: null\n\
+         standalone_reason: \"fixture work\"\nintegration_target: main\nspecs: []\n\
+         depends_on: []\nwork_type: feat\ncreated: 2026-09-27\n---\n\n# Different work\n\n\
+         ## Description\n\nDifferent work.\n\n## Acceptance Criteria\n\n\
+         - AC-1 Shall do different work.\n",
+    )
+    .unwrap();
+    commit(&root, "docs: reuse number");
+    let reused = git(&root, &["rev-parse", "HEAD"]);
+
+    let ci = codeflow(
+        &root,
+        &[
+            "ci",
+            "--base",
+            &deleted,
+            "--head",
+            &reused,
+            "--branch",
+            "fix/probe",
+        ],
+    );
+    assert!(!ci.status.success(), "ci passed the reuse:\n{}", text(&ci));
+    assert!(
+        text(&ci).contains("TSK-001") && text(&ci).contains("provenance does not match"),
+        "{}",
+        text(&ci)
+    );
+    let range = codeflow(
+        &root,
+        &["ids", "check", "--base", &deleted, "--head", &reused],
+    );
+    assert!(!range.status.success(), "{}", text(&range));
+    assert!(
+        !text(&range).contains("bound by provenance: TSK-001"),
+        "{}",
+        text(&range)
+    );
+}

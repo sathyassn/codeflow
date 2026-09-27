@@ -2,7 +2,7 @@
 //! each local and remote-tracking branch holds, with their `uid`s and the
 //! commits that introduced them.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use super::entry::{frontmatter_value, record_id_from_path, Kind, RegId, RECORD_ROOTS};
@@ -183,78 +183,14 @@ fn max_seq_in<'a>(paths: impl Iterator<Item = &'a str>, kind: Kind) -> u64 {
         .unwrap_or(0)
 }
 
-/// For each id in `rev`'s history, the first commit that added a record
-/// file for it (R-111 `introduced`). When the id was also removed in that
-/// history (deleted, or renamed to another id), an add that a later removal
-/// descends from is a record that ended; the first add no removal descends
-/// from is the one `rev`'s copy came from. A move of the record to another
-/// path under the same id is not a removal.
-///
-/// # Errors
-///
-/// Returns an error when git fails.
-pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, IdsError> {
+/// Each id added in `rev`'s history: its adding commits, oldest first, and
+/// the record paths it was added at.
+type AddLog = BTreeMap<RegId, (Vec<String>, BTreeSet<String>)>;
+
+fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
     let mut args = vec![
         "log",
         "--reverse",
-        "--no-renames",
-        "--diff-filter=AD",
-        "--name-status",
-        "-z",
-        "--format=%x1e%H",
-        rev,
-        "--",
-    ];
-    args.extend_from_slice(&RECORD_ROOTS);
-    let log = git.run(&args)?;
-    let mut adds: BTreeMap<RegId, Vec<String>> = BTreeMap::new();
-    let mut removals: BTreeMap<RegId, Vec<String>> = BTreeMap::new();
-    for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
-        let mut fields = z_fields(record);
-        let sha = fields.next().unwrap_or_default().trim().to_string();
-        let mut added = Vec::new();
-        let mut deleted = Vec::new();
-        while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
-            let Some(id) = record_id_from_path(path) else {
-                continue;
-            };
-            if status == "A" {
-                added.push(id);
-            } else {
-                deleted.push(id);
-            }
-        }
-        for id in deleted.into_iter().filter(|id| !added.contains(id)) {
-            removals.entry(id).or_default().push(sha.clone());
-        }
-        for id in added {
-            let shas = adds.entry(id).or_default();
-            if !shas.contains(&sha) {
-                shas.push(sha.clone());
-            }
-        }
-    }
-    let mut out = BTreeMap::new();
-    for (id, shas) in adds {
-        let ended = removals.get(&id).map_or(&[][..], Vec::as_slice);
-        let live = shas.iter().find(|add| {
-            !ended
-                .iter()
-                .any(|removal| removal != *add && git.is_ancestor(add, removal))
-        });
-        out.insert(id, live.unwrap_or(&shas[0]).clone());
-    }
-    Ok(out)
-}
-
-/// Every commit in `rev`'s history that added a record file for `id`.
-///
-/// # Errors
-///
-/// Returns an error when git fails.
-pub fn adding_commits(git: &Git, rev: &str, id: &RegId) -> Result<Vec<String>, IdsError> {
-    let mut args = vec![
-        "log",
         "--no-renames",
         "--diff-filter=A",
         "--name-only",
@@ -265,15 +201,183 @@ pub fn adding_commits(git: &Git, rev: &str, id: &RegId) -> Result<Vec<String>, I
     ];
     args.extend_from_slice(&RECORD_ROOTS);
     let log = git.run(&args)?;
-    let mut out = Vec::new();
+    let mut out: AddLog = BTreeMap::new();
     for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
         let mut fields = z_fields(record);
         let sha = fields.next().unwrap_or_default().trim().to_string();
-        if fields.any(|path| record_id_from_path(path).as_ref() == Some(id)) {
-            out.push(sha);
+        for path in fields {
+            if let Some(id) = record_id_from_path(path) {
+                let (shas, paths) = out.entry(id).or_default();
+                if !shas.contains(&sha) {
+                    shas.push(sha.clone());
+                }
+                paths.insert(path.to_string());
+            }
         }
     }
     Ok(out)
+}
+
+/// For each id in `rev`'s history, the commit that introduced it (R-111
+/// `introduced`): for the copy `rev` holds, the start of that copy's
+/// lifetime (see `lifetime_start`); for an id `rev` no longer holds, its
+/// first add.
+///
+/// # Errors
+///
+/// Returns an error when git fails.
+pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, IdsError> {
+    let mut held = None;
+    let mut out = BTreeMap::new();
+    for (id, (shas, paths)) in add_log(git, rev)? {
+        let intro = resolve(git, rev, &id, &shas, &paths, &mut held)?;
+        out.insert(id, intro);
+    }
+    Ok(out)
+}
+
+/// The introduction of `id` in `rev`'s history, as [`introductions`]
+/// gives it, or `None` when `rev`'s history never added it.
+///
+/// # Errors
+///
+/// Returns an error when git fails.
+pub fn introduction(git: &Git, rev: &str, id: &RegId) -> Result<Option<String>, IdsError> {
+    let Some((shas, paths)) = add_log(git, rev)?.remove(id) else {
+        return Ok(None);
+    };
+    resolve(git, rev, id, &shas, &paths, &mut None).map(Some)
+}
+
+fn resolve(
+    git: &Git,
+    rev: &str,
+    id: &RegId,
+    shas: &[String],
+    paths: &BTreeSet<String>,
+    held: &mut Option<BTreeSet<RegId>>,
+) -> Result<String, IdsError> {
+    let first = shas[0].clone();
+    if shas.len() == 1 {
+        return Ok(first);
+    }
+    if held.is_none() {
+        let ids = git
+            .tree(rev, &RECORD_ROOTS)?
+            .into_iter()
+            .filter_map(|(_, _, path)| record_id_from_path(&path))
+            .collect();
+        *held = Some(ids);
+    }
+    if !held.as_ref().is_some_and(|ids| ids.contains(id)) {
+        return Ok(first);
+    }
+    Ok(lifetime_start(git, rev, id, paths, shas)?.unwrap_or(first))
+}
+
+/// The blobs `commit` holds for `id` at any of `paths`, cached.
+fn held_blobs(
+    git: &Git,
+    commit: &str,
+    id: &RegId,
+    paths: &[&str],
+    cache: &mut HashMap<String, BTreeSet<String>>,
+) -> Result<BTreeSet<String>, IdsError> {
+    if let Some(blobs) = cache.get(commit) {
+        return Ok(blobs.clone());
+    }
+    let blobs: BTreeSet<String> = git
+        .tree(commit, paths)?
+        .into_iter()
+        .filter(|(_, _, path)| record_id_from_path(path).as_ref() == Some(id))
+        .map(|(_, blob, _)| blob)
+        .collect();
+    cache.insert(commit.to_string(), blobs.clone());
+    Ok(blobs)
+}
+
+/// The first commit of the lifetime of the copy of `id` that `rev` holds.
+///
+/// It walks git's simplified history of the id's record paths, so a merge
+/// follows the parent its result came from and a merge that removes the
+/// record counts as a removal. The lifetime runs back while some record
+/// path holds the id, so a move under the same id continues it. Across a
+/// stretch where no record path holds the id, it continues only when the
+/// content that returns is identical to the content before (a revert, or a
+/// round trip through a path that is not a record path); otherwise the
+/// commit after the stretch starts a new record. With several starts, as
+/// when two lines added the id and a merge kept both histories, the oldest
+/// add wins.
+fn lifetime_start(
+    git: &Git,
+    rev: &str,
+    id: &RegId,
+    paths: &BTreeSet<String>,
+    adds: &[String],
+) -> Result<Option<String>, IdsError> {
+    let path_list: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let mut args = vec!["rev-list", "--parents", rev, "--"];
+    args.extend_from_slice(&path_list);
+    let listing = git.run(&args)?;
+    let mut parents: HashMap<String, Vec<String>> = HashMap::new();
+    let mut order = Vec::new();
+    for line in listing.lines() {
+        let mut shas = line.split_whitespace().map(str::to_string);
+        let Some(commit) = shas.next() else {
+            continue;
+        };
+        parents.insert(commit.clone(), shas.collect());
+        order.push(commit);
+    }
+    let referenced: HashSet<&String> = parents.values().flatten().collect();
+    let mut cache = HashMap::new();
+    let mut stack = Vec::new();
+    for head in order.iter().filter(|commit| !referenced.contains(commit)) {
+        if !held_blobs(git, head, id, &path_list, &mut cache)?.is_empty() {
+            stack.push(head.clone());
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut starts = HashSet::new();
+    while let Some(commit) = stack.pop() {
+        if !seen.insert(commit.clone()) {
+            continue;
+        }
+        let here = held_blobs(git, &commit, id, &path_list, &mut cache)?;
+        let mut continues = false;
+        for parent in parents.get(&commit).into_iter().flatten() {
+            if !held_blobs(git, parent, id, &path_list, &mut cache)?.is_empty() {
+                continues = true;
+                stack.push(parent.clone());
+                continue;
+            }
+            // A stretch without the id: find where it was last held.
+            let mut gap = vec![parent.clone()];
+            let mut crossed = HashSet::new();
+            while let Some(absent) = gap.pop() {
+                if !crossed.insert(absent.clone()) {
+                    continue;
+                }
+                for before in parents.get(&absent).into_iter().flatten() {
+                    let blobs = held_blobs(git, before, id, &path_list, &mut cache)?;
+                    if blobs.is_empty() {
+                        gap.push(before.clone());
+                    } else if !blobs.is_disjoint(&here) {
+                        continues = true;
+                        stack.push(before.clone());
+                    }
+                }
+            }
+        }
+        if !continues {
+            starts.insert(commit);
+        }
+    }
+    Ok(adds
+        .iter()
+        .find(|add| starts.contains(*add))
+        .or_else(|| order.iter().rev().find(|commit| starts.contains(*commit)))
+        .cloned())
 }
 
 /// The blob a commit added for `id`'s record file.
@@ -316,20 +420,21 @@ pub fn landed_for(git: &Git, id: &RegId, intro: &str) -> Result<Option<String>, 
         return Ok(None);
     };
     for (_, sha) in &landing {
-        if let Some(theirs) = introductions(git, sha)?.get(id) {
-            if added_blob(git, theirs, id).as_deref() == Some(blob.as_str()) {
-                return Ok(Some(theirs.clone()));
+        if let Some(theirs) = introduction(git, sha, id)? {
+            if added_blob(git, &theirs, id).as_deref() == Some(blob.as_str()) {
+                return Ok(Some(theirs));
             }
         }
     }
     Ok(None)
 }
 
-/// Whether the copy of `id` in `rev`'s history is the record `entry`
-/// registers, judged from the registry entry alone (R-111): an introducing
-/// commit equal to `introduced` or to an entry of `mapped`, or a nonempty
-/// landing equal to a nonempty `landed`. A matching number alone never
-/// counts.
+/// Whether the copy of `id` that `rev` holds is the record `entry`
+/// registers, judged from the registry entry alone (R-111): its
+/// introduction ([`introduction`]) equal to `introduced` or to an entry of
+/// `mapped`, or its nonempty landing equal to a nonempty `landed`. An older
+/// add of the id that another record's lifetime owns never counts, and a
+/// matching number alone never counts.
 ///
 /// # Errors
 ///
@@ -340,24 +445,17 @@ pub fn is_replica(
     rev: &str,
     id: &RegId,
 ) -> Result<bool, IdsError> {
-    let intros = adding_commits(git, rev, id)?;
-    let known: Vec<&str> = entry
-        .introduced_sha()
-        .into_iter()
-        .chain(entry.mapped.iter().map(String::as_str))
-        .collect();
-    if intros.iter().any(|intro| known.contains(&intro.as_str())) {
+    let Some(intro) = introduction(git, rev, id)? else {
+        return Ok(false);
+    };
+    let known = entry.introduced_sha() == Some(intro.as_str()) || entry.mapped.contains(&intro);
+    if known {
         return Ok(true);
     }
     let Some(landed) = entry.landed_sha() else {
         return Ok(false);
     };
-    for intro in &intros {
-        if intro == landed || landed_for(git, id, intro)?.as_deref() == Some(landed) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(intro == landed || landed_for(git, id, &intro)?.as_deref() == Some(landed))
 }
 
 /// One entry of NUL-delimited raw diff output (`diff-tree -z`).
