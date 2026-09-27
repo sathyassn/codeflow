@@ -6,7 +6,7 @@ import { fileURLToPath } from "node:url";
 import axe from "axe-core";
 import { chromium, firefox, webkit } from "playwright-core";
 import { checkResolverRules, checkSelectionOccurrences } from "./selection-browser-check.mjs";
-import { checkDocumentExcerpts, checkEntityCrops } from "./excerpt-browser-check.mjs";
+import { checkDocumentExcerpts, checkEntityCrops, checkCropBudget } from "./excerpt-browser-check.mjs";
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
@@ -117,6 +117,7 @@ try {
   await checkResolverRules(browser);
   await checkDocumentExcerpts(browser);
   await checkEntityCrops(browser);
+  await checkCropBudget(browser);
   await checkProseLazyPath(browser, origin);
   await checkSelectionLifecycle(browser, origin);
   await checkIframeComments(browser, origin);
@@ -234,6 +235,11 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await page.addInitScript({ content: axe.source });
   await page.goto(`${origin}/app`, { waitUntil: "networkidle" });
   await assertBundledFonts(page);
+  // At phone width arming Comment leaves the notes sheet closed (QA defect 7);
+  // the second press opens it.
+  await page.getByRole("button", { name: /Comment/ }).click();
+  await page.locator(".cf-hint.on").waitFor();
+  assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-open"), "false", "the sheet opened on arming at phone width");
   await page.getByRole("button", { name: /Comment/ }).click();
   await page.getByTestId("feedback-history").waitFor();
   await page.getByTestId("feedback-history").locator("summary").click();
@@ -303,49 +309,69 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Pass10 Comment SM: arm → pin → float → composer → rail → speech markers
   await page.getByRole("button", { name: /Comment/ }).click();
   await page.locator(".cf-hint.on").waitFor();
-  assert.equal(await page.locator(".cf-hint.on").innerText(), "Comment: select words, click a figure part, or drag a box. Esc leaves.");
-  await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
+  assert.equal(await page.locator(".cf-hint.on [role=status]").innerText(), "Comment: select words, click a figure part, or drag a box. Esc leaves.");
+  await openSheet();
   await page.getByText("Nothing noted yet").waitFor();
 
   // Drag starting on the prose wrapper (padding around the paragraph) must stay
   // Text. Missing that hit-test is how region marquees steal text selection.
-  for (const steps of [1, 10]) {
+  const glyphs = (from, to) => page.locator("#gesture-target").evaluate((el, [from, to]) => {
+    const range = document.createRange();
+    range.setStart(el.firstChild, from);
+    range.setEnd(el.firstChild, to);
+    const rect = range.getBoundingClientRect();
+    return { left: rect.left, right: rect.right, y: rect.top + rect.height / 2 };
+  }, [from, to]);
+  // Each pin reopens the notes panel, which covers the prose at this width.
+  async function proseDrag(label, { from, to, steps = 10, quote }) {
+    await revealDocumentForGestures();
+    const end = await glyphs(0, to);
+    const target = { x: end.right, y: end.y };
+    const hits = await page.evaluate(({ from, target }) => ({
+      start: document.elementFromPoint(from.x, from.y)?.id,
+      end: document.elementFromPoint(target.x, target.y)?.id,
+      startElement: document.elementFromPoint(from.x, from.y)?.outerHTML.slice(0, 200),
+      endElement: document.elementFromPoint(target.x, target.y)?.outerHTML.slice(0, 200),
+    }), { from, target });
+    if (hits.start !== "gesture-root" || hits.end !== "gesture-target") {
+      throw new Error(`${label} is obscured or off-screen: ${JSON.stringify({ from, target, hits })}`);
+    }
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(target.x, target.y, { steps });
+    const marquee = await page.locator(".cf-region-draft").count();
+    await page.mouse.up();
+    const selected = await page.evaluate(() => String(getSelection()));
+    if (selected !== quote) throw new Error(`${label} selected ${JSON.stringify(selected)}, expected ${quote}`);
+    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    await page.waitForFunction(
+      (quote) => document.querySelector("[data-testid=float-chip] .q")?.textContent === quote,
+      quote,
+      { timeout: 5000 },
+    ).catch(() => {});
+    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
+    if (marquee !== 0) throw new Error(`${label} drew a region marquee`);
+    if (kind !== "Text") throw new Error(`${label} opened ${kind}, expected Text`);
+    const pinned = await page.getByTestId("float-chip").locator(".q").innerText();
+    if (pinned !== quote) throw new Error(`${label} pinned ${JSON.stringify(pinned)}, expected ${quote}`);
+  }
+  async function prepareProse() {
     await revealDocumentForGestures();
     const prose = page.locator("#gesture-root");
     await prose.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
     const box = await prose.boundingBox();
     if (!box) throw new Error("Prose review-text-root has no box");
-    const endpoint = await page.locator("#gesture-target").evaluate((el) => {
-      const range = document.createRange();
-      range.setStart(el.firstChild, 0);
-      range.setEnd(el.firstChild, 6);
-      const rect = range.getBoundingClientRect();
-      return { x: rect.right, y: rect.top + rect.height / 2 };
-    });
-    const start = { x: box.x + 4, y: endpoint.y };
-    const hits = await page.evaluate(({ start, endpoint }) => ({
-      start: document.elementFromPoint(start.x, start.y)?.id,
-      end: document.elementFromPoint(endpoint.x, endpoint.y)?.id,
-      startElement: document.elementFromPoint(start.x, start.y)?.outerHTML.slice(0, 200),
-      endElement: document.elementFromPoint(endpoint.x, endpoint.y)?.outerHTML.slice(0, 200),
-    }), { start, endpoint });
-    if (hits.start !== "gesture-root" || hits.end !== "gesture-target") {
-      throw new Error(`Prose drag is obscured or off-screen: ${JSON.stringify({ box, hits })}`);
-    }
-    await page.mouse.move(start.x, start.y);
-    await page.mouse.down();
-    await page.mouse.move(endpoint.x, endpoint.y, { steps });
-    const marquee = await page.locator(".cf-region-draft").count();
-    await page.mouse.up();
-    const quote = await page.evaluate(() => String(getSelection()));
-    if (quote !== "Review") throw new Error(`Prose drag (${steps} steps) selected ${JSON.stringify(quote)}, expected Review`);
-    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
-    const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
-    if (marquee !== 0) throw new Error("Prose drag drew a region marquee");
-    if (kind !== "Text") throw new Error(`Prose drag opened ${kind}, expected Text`);
-    if ((await page.getByTestId("float-chip").locator(".q").innerText()) !== "Review") throw new Error("Prose drag pinned a stale quote");
+    const review = await glyphs(0, 6);
+    return { padding: { x: box.x + 4, y: review.y } };
+  }
+  async function dismissChip() {
     await page.keyboard.press("Escape");
     await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
+  }
+  for (const steps of [1, 10]) {
+    const { padding } = await prepareProse();
+    await proseDrag(`Prose drag (${steps} steps)`, { from: padding, steps, to: 6, quote: "Review" });
+    await dismissChip();
   }
 
   // Words on an authored SVG stage must pin as Text (same as HTML prose).
@@ -367,6 +393,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   }
 
   async function clickTool(testId) {
+    await openSheet();
     await page.evaluate(() => {
       const tools = document.querySelector("details.cf-tools");
       if (tools) {
@@ -446,7 +473,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
   await page.keyboard.press("Escape");
   await page.locator("#cf-present-document:not([data-cf-capture-mode])").waitFor();
-  if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) !== "true") {
+  if ((await page.locator(".cf-hint.on").count()) !== 1) {
     throw new Error("Esc should exit capture without leaving Comment mode");
   }
   await removeAllNotes();
@@ -463,6 +490,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Harness excerpts: intercept the actual review POST, not the rail labels.
   async function submitCapturedReview() {
     capturedReviews.length = 0;
+    await openSheet();
     await page.mouse.move(0, 0);
     await assertPrimary(page.getByTestId("submit-all"));
     await page.getByTestId("submit-all").click();
@@ -529,6 +557,12 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     && !document.querySelector('[data-testid="composer"]')
     && !document.getElementById("cf-present-document")?.hasAttribute("data-cf-capture-mode")
   );
+  // At phone width the notes sheet opens on request: Comment, when armed.
+  async function openSheet() {
+    if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true") return;
+    await page.locator("#cf-comment-toggle").click();
+    await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
+  }
   async function revealDocumentForGestures() {
     if ((await page.locator("#cf-feedback-panel").getAttribute("data-open")) === "true") {
       await page.locator(".cf-feedback-close").click({ force: true });

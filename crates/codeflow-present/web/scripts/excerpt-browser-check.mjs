@@ -182,3 +182,89 @@ export async function checkEntityCrops(browser) {
     await context.close();
   }
 }
+
+/**
+ * Crops fitted to the review body limit (QA defect 3): 100 notes, each with
+ * a noisy crop at the capture bound, are fitted under 256 KiB by the page's
+ * own re-encoder. Every note and its body survive; crops are made smaller or
+ * left out, and the counts say which.
+ */
+export async function checkCropBudget(browser) {
+  const compiled = await build({
+    entryPoints: [fileURLToPath(new URL("../src/budget.ts", import.meta.url))],
+    bundle: true, write: false, format: "iife", globalName: "budgetHarness", platform: "browser",
+  });
+  const context = await browser.newContext();
+  try {
+    const page = await context.newPage();
+    await page.setContent("<main></main>");
+    await page.addScriptTag({ content: compiled.outputFiles[0].text });
+    const result = await page.evaluate(async () => {
+      const cap = 262_144;
+      const canvas = document.createElement("canvas");
+      const draw = context => {
+        const pixels = context.createImageData(canvas.width, canvas.height);
+        // Blocky noise: 4 px cells of random colour, hard on JPEG and PNG alike.
+        for (let y = 0; y < canvas.height; y += 4) {
+          for (let x = 0; x < canvas.width; x += 4) {
+            context.fillStyle = `rgb(${Math.random() * 256 | 0},${Math.random() * 256 | 0},${Math.random() * 256 | 0})`;
+            context.fillRect(x, y, 4, 4);
+          }
+        }
+        void pixels;
+      };
+      const crop = (index) => {
+        // Noise is the worst case for JPEG; the capture keeps a crop under 32 KiB of base64.
+        for (const [width, height] of [[480, 360], [320, 240], [200, 150], [120, 90], [80, 60]]) {
+          canvas.width = width;
+          canvas.height = height;
+          draw(canvas.getContext("2d"));
+          const type = index % 10 === 0 ? "image/png" : "image/jpeg";
+          const data = canvas.toDataURL(type, 0.82).split(",", 2)[1];
+          if (data.length <= 32_768) return { media_type: type, data_base64: data };
+        }
+        throw new Error("no crop under the capture bound");
+      };
+      const notes = Array.from({ length: 100 }, (_, index) => ({
+        client_id: `note-${index}`,
+        block_id: "block",
+        block_label: "Block",
+        kind: "comment",
+        body: `Note ${index} keeps its words.`,
+        region_selector: { scope: "block", anchor_id: "block", block_digest: "d".repeat(64), x_ppm: 0, y_ppm: 0, width_ppm: 1, height_ppm: 1, capture_width_px: 1, capture_height_px: 1 },
+        excerpt: { text: `quote ${index}`, image: crop(index) },
+      }));
+      const size = (list) => new TextEncoder().encode(JSON.stringify({ event_id: "019f9b53-a341-7fa7-84c2-5f198ceea001", session_id: "019f9b53-a341-7fa7-84c2-5f198ceea002", revision: 1, verdict: "approve_with_notes", notes: list })).byteLength;
+      const before = size(notes);
+      const fitted = await budgetHarness.fitCrops(notes, cap, size);
+      const decodable = await Promise.all(fitted.notes.filter((note) => note.excerpt?.image).map(async (note) => {
+        const image = new Image();
+        image.src = `data:${note.excerpt.image.media_type};base64,${note.excerpt.image.data_base64}`;
+        await image.decode();
+        return Math.max(image.width, image.height);
+      }));
+      return {
+        before,
+        after: size(fitted.notes),
+        cap,
+        count: fitted.notes.length,
+        bodies: fitted.notes.every((note, index) => note.body === notes[index].body && note.region_selector && note.excerpt?.text === `quote ${index}`),
+        kept: decodable.length,
+        smallest: Math.min(...decodable),
+        reduced: fitted.reduced,
+        dropped: fitted.dropped,
+        small: await budgetHarness.fitCrops(notes.slice(0, 2), cap, size).then((small) => small.reduced + small.dropped),
+      };
+    });
+    assert.ok(result.before > result.cap, `the fixture fits already: ${JSON.stringify(result)}`);
+    assert.ok(result.after <= result.cap, `the fitted review is over the cap: ${JSON.stringify(result)}`);
+    assert.equal(result.count, 100);
+    assert.equal(result.bodies, true, "a note lost its body, selector or quote");
+    assert.ok(result.reduced > 0 && result.reduced + result.dropped === 100, JSON.stringify(result));
+    assert.ok(result.kept > 0, JSON.stringify(result));
+    assert.equal(result.small, 0, "a review under the cap was changed");
+    process.stdout.write(`crop budget passed: 100 image notes from ${result.before} to ${result.after} bytes under ${result.cap}; ${result.reduced} crops made smaller, ${result.dropped} left out, every note kept\n`);
+  } finally {
+    await context.close();
+  }
+}

@@ -634,22 +634,16 @@ fn close_and_clear(fixture: &TestProject, session_id: &str) {
         &fixture.home,
         &["present", "close", session_id],
     ));
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let cleared = codeflow(
-            &fixture.project,
-            &fixture.home,
-            &["present", "clear", session_id, "--older-than", "0h"],
-        );
-        if cleared.status.success() {
-            return;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "clear did not converge: {cleared:?}"
-        );
-        thread::sleep(Duration::from_millis(100));
-    }
+    // close returns once the service has exited, so clear needs no retry.
+    let cleared = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", session_id, "--older-than", "0h"],
+    ));
+    assert!(
+        cleared.contains(&format!("removed {session_id}")),
+        "{cleared}"
+    );
 }
 
 fn session_dir(fixture: &TestProject, session_id: &str) -> PathBuf {
@@ -1156,5 +1150,115 @@ fn a_v2_session_opens_renders_framing_and_prints_history_v2() {
         schema_registry().errors("urn:codeflow:schema:present:session-history:2", &history),
         Vec::<String>::new()
     );
+    close_and_clear(&fixture, &session_id);
+}
+
+/// The annotation matrix in the authoring reference names every block type
+/// of the closed enum, with a text, element and area cell, each "yes" or
+/// "no: <reason>" (TSK-071). A new block type fails to compile here until
+/// the matrix gains its row.
+#[test]
+fn the_annotation_matrix_names_every_block_type() {
+    use codeflow_present::document::Block;
+
+    fn name(block: &Block) -> &'static str {
+        match block {
+            Block::Narrative { .. } => "narrative",
+            Block::Bullets { .. } => "bullets",
+            Block::Callout { .. } => "callout",
+            Block::Comparison { .. } => "comparison",
+            Block::Decision { .. } => "decision",
+            Block::Table { .. } => "table",
+            Block::Status { .. } => "status",
+            Block::Code { .. } => "code",
+            Block::Diff { .. } => "diff",
+            Block::Tree { .. } => "tree",
+            Block::Figure { .. } => "figure",
+            Block::Media { .. } => "media",
+            Block::Disclosure { .. } => "disclosure",
+            Block::Tabs { .. } => "tabs",
+            Block::FeedbackPrompt { .. } => "feedback_prompt",
+            Block::Html { .. } => "html",
+        }
+    }
+    let fixture: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../codeflow-present/tests/fixtures/annotation/every-block.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let blocks: Vec<Block> = serde_json::from_value(fixture["blocks"].clone()).unwrap();
+    let mut types: Vec<&str> = blocks.iter().map(name).collect();
+    types.sort_unstable();
+    types.dedup();
+    assert_eq!(
+        types.len(),
+        16,
+        "the fixture carries one block of every type"
+    );
+
+    let text = skill_file("references/document-authoring.md");
+    let section = between(
+        &text,
+        "\n### What a reviewer can mark on each block\n",
+        "\n## ",
+    );
+    let mut rows: Vec<&str> = Vec::new();
+    for line in section.lines().filter(|line| line.starts_with("| `")) {
+        let cells: Vec<&str> = line.trim_matches('|').split(" | ").map(str::trim).collect();
+        assert_eq!(cells.len(), 4, "{line}");
+        for cell in &cells[1..] {
+            assert!(
+                cell.starts_with("yes") || cell.starts_with("no: "),
+                "{line}: a cell is yes or no with a reason"
+            );
+        }
+        rows.push(cells[0].trim_matches('`'));
+    }
+    rows.sort_unstable();
+    assert_eq!(rows, types);
+}
+
+/// QA defect 10: a command's own bad input is named as a bad request, not a
+/// bad document, and a dry run with nothing eligible says so.
+#[test]
+fn cli_input_errors_and_empty_clears_are_named() {
+    let fixture = setup_project();
+    let document = fixture.project.join("review.json");
+    fs::write(&document, contract_fixture("documents/v2-framed.json")).unwrap();
+    let (session_id, _) = open_no_launch(&fixture, &document);
+    let resolve = failure(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "resolve",
+            &session_id,
+            "019f9b53-a341-7fa7-84c2-5f198ceea099",
+            "--event-version",
+            "1",
+            "--status",
+            "addressed",
+        ],
+    ));
+    assert!(
+        resolve.contains("invalid request: feedback event"),
+        "{resolve}"
+    );
+    assert!(!resolve.contains("presentation document"), "{resolve}");
+    let duration = failure(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", "--older-than", "3m"],
+    ));
+    assert!(duration.contains("invalid request: duration"), "{duration}");
+    let empty = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "clear", "--dry-run"],
+    ));
+    assert!(empty.contains("nothing to clear"), "{empty}");
     close_and_clear(&fixture, &session_id);
 }

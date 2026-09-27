@@ -1,0 +1,683 @@
+{
+  "schema_version": 2,
+  "title": "Every block, annotated",
+  "summary": "One block of each type, for the annotation matrix (TSK-071)",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "prose",
+      "markdown": "## Why this page exists\n\nEvery block type the runtime draws takes a note by text, by element and by area. The figure is [fig:flow] and the limits are in [table:limits]."
+    },
+    {
+      "type": "bullets",
+      "id": "points",
+      "ordered": false,
+      "items": [
+        "Select words to quote them.",
+        "Click a part to name it.",
+        "Drag a box to mark an area."
+      ]
+    },
+    {
+      "type": "callout",
+      "id": "caution",
+      "tone": "warning",
+      "title": "Held work",
+      "markdown": "Nothing here is released; the notes stay on this machine."
+    },
+    {
+      "type": "comparison",
+      "id": "options",
+      "columns": [
+        {
+          "title": "Keep JPEG crops",
+          "markdown": "- v1 agents keep their images\n- smaller reviews"
+        },
+        {
+          "title": "Switch to PNG",
+          "markdown": "- exact colours\n- larger reviews"
+        }
+      ]
+    },
+    {
+      "type": "decision",
+      "id": "choice",
+      "title": "Which crop format ships?",
+      "status": "open",
+      "markdown": "Choose the format element and area crops use."
+    },
+    {
+      "type": "table",
+      "id": "limits",
+      "title": "Review limits",
+      "caption": "Bounds the service enforces on one review.",
+      "columns": [
+        "Bound",
+        "Value"
+      ],
+      "rows": [
+        [
+          "Notes per review",
+          "100"
+        ],
+        [
+          "Review body",
+          "256 KiB"
+        ],
+        [
+          "Quote length",
+          "512 units"
+        ]
+      ]
+    },
+    {
+      "type": "status",
+      "id": "checks",
+      "items": [
+        {
+          "label": "Unit tests",
+          "state": "pass",
+          "detail": "144 passed"
+        },
+        {
+          "label": "Linux Chrome run",
+          "state": "not_run",
+          "detail": "no Linux host"
+        },
+        {
+          "label": "Crop sizes",
+          "state": "fail",
+          "detail": "one crop was a sliver"
+        }
+      ]
+    },
+    {
+      "type": "code",
+      "id": "snippet",
+      "language": "rust",
+      "caption": "The limit the service checks.",
+      "code": "fn within_limit(bytes: usize) -> bool {\n    let limit = 256 * 1024;\n    bytes <= limit\n}\n"
+    },
+    {
+      "type": "diff",
+      "id": "change",
+      "caption": "The change under review.",
+      "diff": "--- a/limits.rs\n+++ b/limits.rs\n@@ -1,3 +1,3 @@\n fn within_limit(bytes: usize) -> bool {\n-    let limit = 128 * 1024;\n+    let limit = 256 * 1024;\n     bytes <= limit\n"
+    },
+    {
+      "type": "tree",
+      "id": "files",
+      "label": "Files touched",
+      "nodes": [
+        {
+          "label": "crates",
+          "children": [
+            {
+              "label": "present",
+              "children": [
+                {
+                  "label": "state.rs"
+                },
+                {
+                  "label": "limits.rs"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          "label": "web",
+          "children": [
+            {
+              "label": "chrome.tsx"
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "figure",
+      "id": "flow",
+      "declaration": {
+        "schema_version": 1,
+        "figure": {
+          "id": "landing-paths",
+          "family": "flow",
+          "binding": "authored",
+          "question": "How does a change reach main, and what stops it?",
+          "idea": "Both landing paths end at a human merge behind green checks.",
+          "title": "Two landing paths from a task branch to main",
+          "kicker": "Two landing paths",
+          "description": "Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, an agent merge point, to the integration branch, then along travel not yet made to the same human merge. A gate that stops travel crosses both paths in the gate column.",
+          "caption": "One task lands as a pull request and a body of work lands task by task on an integration branch, and both end at a human merge behind green checks.",
+          "states": [
+            {
+              "name": "done",
+              "mark": "done",
+              "means": "Travel completed"
+            },
+            {
+              "name": "todo",
+              "mark": "todo",
+              "means": "Travel not yet made"
+            },
+            {
+              "name": "agent",
+              "mark": "agent",
+              "means": "Agent step"
+            },
+            {
+              "name": "merge",
+              "mark": "merge",
+              "means": "Agent merge point"
+            },
+            {
+              "name": "human",
+              "mark": "human",
+              "means": "Human decision"
+            },
+            {
+              "name": "stop",
+              "mark": "stop",
+              "means": "Gate that stops travel"
+            }
+          ],
+          "facts": [
+            {
+              "claim": "two landing paths, PR and codeflow integrate",
+              "source": "AGENTS.md#git-rules",
+              "derive": "the two paths named under 'Work lands by exactly two paths'",
+              "check": {
+                "kind": "contains",
+                "text": "Work lands by exactly two"
+              },
+              "value": true
+            }
+          ],
+          "wide": {
+            "width": 720,
+            "height": 212,
+            "draw": [
+              {
+                "text": "Branch",
+                "x": 90,
+                "y": 22,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "text": "Review",
+                "x": 270,
+                "y": 22,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "text": "Gate",
+                "x": 450,
+                "y": 22,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "text": "Land",
+                "x": 630,
+                "y": 22,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "deco": "rule",
+                "shape": "line",
+                "x1": 24,
+                "y1": 40,
+                "x2": 696,
+                "y2": 40
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M99 100H261",
+                "id": "m1"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M279 100H441",
+                "id": "m2"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M459 100H620",
+                "id": "m3"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M99 180H258",
+                "id": "m4"
+              },
+              {
+                "state": "done",
+                "shape": "path",
+                "d": "M282 180H441",
+                "id": "m5"
+              },
+              {
+                "state": "todo",
+                "shape": "path",
+                "d": "M459 180H540C590 180 630 150 630 111",
+                "id": "m6"
+              },
+              {
+                "state": "stop",
+                "shape": "line",
+                "x1": 516,
+                "y1": 89,
+                "x2": 516,
+                "y2": 111,
+                "id": "m7"
+              },
+              {
+                "state": "stop",
+                "shape": "line",
+                "x1": 516,
+                "y1": 169,
+                "x2": 516,
+                "y2": 191,
+                "id": "m8"
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 90,
+                "cy": 100,
+                "r": 8,
+                "id": "m9"
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 270,
+                "cy": 100,
+                "r": 8,
+                "id": "m10"
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 450,
+                "cy": 100,
+                "r": 8,
+                "id": "m11"
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 90,
+                "cy": 180,
+                "r": 8,
+                "id": "m12"
+              },
+              {
+                "state": "agent",
+                "shape": "circle",
+                "cx": 450,
+                "cy": 180,
+                "r": 8,
+                "id": "m13"
+              },
+              {
+                "state": "merge",
+                "shape": "path",
+                "d": "M270 169L281 180L270 191L259 180Z",
+                "id": "m14"
+              },
+              {
+                "state": "human",
+                "shape": "circle",
+                "cx": 630,
+                "cy": 100,
+                "r": 9,
+                "id": "m15"
+              },
+              {
+                "text": "Task branch",
+                "x": 90,
+                "y": 76,
+                "anchor": "middle"
+              },
+              {
+                "text": "Pull request",
+                "x": 270,
+                "y": 76,
+                "anchor": "middle"
+              },
+              {
+                "text": "Required checks",
+                "x": 450,
+                "y": 76,
+                "anchor": "middle"
+              },
+              {
+                "text": "Human merge",
+                "x": 630,
+                "y": 76,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "m15"
+                ]
+              },
+              {
+                "text": "Task in an epic",
+                "x": 90,
+                "y": 156,
+                "anchor": "middle"
+              },
+              {
+                "text": "codeflow integrate",
+                "x": 270,
+                "y": 156,
+                "anchor": "middle",
+                "style": "mono",
+                "for": [
+                  "m14"
+                ]
+              },
+              {
+                "text": "Integration branch",
+                "x": 450,
+                "y": 156,
+                "anchor": "middle",
+                "for": [
+                  "m8"
+                ]
+              }
+            ]
+          },
+          "narrow": {
+            "recompose": "rotate",
+            "drops": [],
+            "marks": "same",
+            "width": 360,
+            "height": 306,
+            "draw": [
+              {
+                "text": "One task",
+                "x": 40,
+                "y": 18,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "text": "Body of work",
+                "x": 190,
+                "y": 18,
+                "anchor": "middle",
+                "style": "head"
+              },
+              {
+                "state": "done",
+                "id": "a1",
+                "shape": "path",
+                "d": "M40 59V111"
+              },
+              {
+                "state": "done",
+                "id": "a2",
+                "shape": "path",
+                "d": "M40 129V181"
+              },
+              {
+                "state": "done",
+                "id": "a3",
+                "shape": "path",
+                "d": "M40 199V228C40 248 80 262 104 262"
+              },
+              {
+                "state": "done",
+                "id": "b1",
+                "shape": "path",
+                "d": "M190 59V108"
+              },
+              {
+                "state": "done",
+                "id": "b2",
+                "shape": "path",
+                "d": "M190 132V181"
+              },
+              {
+                "state": "todo",
+                "id": "b3",
+                "shape": "path",
+                "d": "M190 199V228C190 248 150 262 126 262"
+              },
+              {
+                "state": "stop",
+                "id": "s1",
+                "shape": "line",
+                "x1": 29,
+                "y1": 218,
+                "x2": 51,
+                "y2": 218
+              },
+              {
+                "state": "stop",
+                "id": "s2",
+                "shape": "line",
+                "x1": 179,
+                "y1": 218,
+                "x2": 201,
+                "y2": 218
+              },
+              {
+                "state": "agent",
+                "id": "n1",
+                "shape": "circle",
+                "cx": 40,
+                "cy": 50,
+                "r": 8
+              },
+              {
+                "state": "agent",
+                "id": "n2",
+                "shape": "circle",
+                "cx": 40,
+                "cy": 120,
+                "r": 8
+              },
+              {
+                "state": "agent",
+                "id": "n3",
+                "shape": "circle",
+                "cx": 40,
+                "cy": 190,
+                "r": 8
+              },
+              {
+                "state": "agent",
+                "id": "n4",
+                "shape": "circle",
+                "cx": 190,
+                "cy": 50,
+                "r": 8
+              },
+              {
+                "state": "merge",
+                "id": "n5",
+                "shape": "diamond",
+                "cx": 190,
+                "cy": 120,
+                "r": 11
+              },
+              {
+                "state": "agent",
+                "id": "n6",
+                "shape": "circle",
+                "cx": 190,
+                "cy": 190,
+                "r": 8
+              },
+              {
+                "state": "human",
+                "id": "n7",
+                "shape": "circle",
+                "cx": 115,
+                "cy": 262,
+                "r": 9
+              },
+              {
+                "text": "Task branch",
+                "x": 58,
+                "y": 55,
+                "for": [
+                  "n1"
+                ]
+              },
+              {
+                "text": "Pull request",
+                "x": 58,
+                "y": 125,
+                "for": [
+                  "n2"
+                ]
+              },
+              {
+                "text": "Required checks",
+                "x": 58,
+                "y": 195,
+                "for": [
+                  "n3"
+                ]
+              },
+              {
+                "text": "Task in an epic",
+                "x": 208,
+                "y": 55,
+                "for": [
+                  "n4"
+                ]
+              },
+              {
+                "text": "codeflow integrate",
+                "x": 208,
+                "y": 125,
+                "style": "mono",
+                "for": [
+                  "n5"
+                ]
+              },
+              {
+                "text": "Integration branch",
+                "x": 208,
+                "y": 195,
+                "for": [
+                  "n6"
+                ]
+              },
+              {
+                "text": "Human merge",
+                "x": 115,
+                "y": 296,
+                "anchor": "middle",
+                "style": "strong",
+                "for": [
+                  "n7"
+                ]
+              }
+            ]
+          },
+          "twin": {
+            "columns": [
+              "Path",
+              "Who opens",
+              "Who merges",
+              "What stops it"
+            ],
+            "rows": [
+              [
+                "A: one task",
+                "an agent opens the pull request",
+                "a person, on green checks",
+                "a red required check"
+              ],
+              [
+                "B: body of work",
+                "agents land each task with `codeflow integrate`",
+                "a person merges the finished body",
+                "a red required check on the integration pull request"
+              ]
+            ]
+          }
+        }
+      }
+    },
+    {
+      "type": "media",
+      "id": "screenshot",
+      "mime_type": "image/png",
+      "data_base64": "iVBORw0KGgoAAAANSUhEUgAAAUAAAAC0CAIAAABqhmJGAAAEUElEQVR4nO3TMQ0CAQDF0NMBKytYwsmpQgEWMIAKZlQ0P2maPAntcXm+Iva93iJ2zAsLal5YUA0sNy8sqAaWmxcWVAPLzQsLqoHl5oUF1cBy88KCamC5eWFBNbDcvLCgGlhuXlhQDSw3LyyoBpabFxZUA8vNCwuqgeXmhQXVwHLzwoJqYLl5YUE1sNy8sKAaWG5eWFANLDcvLKgGlpsXFlQDy80LC6qB5eaFBdXAcvPCgmpguXlhQTWw3LywoBpYbl5YUA0sNy8sqAaWmxcWVAPLzQsLqoHl5oUF1cBy88KCamC5eWFBNbDcvLCgGlhuXlhQDSw3LyyoBpabFxZUA8vNCwuqgeXmhQXVwHLzwoJqYLl5YUE1sNy8sKAaWG5eWFANLDcvLKgGlpsXFlQDy80LC6qB5eaFBdXAcvPCgmpguXlhQTWw3LywoBpYbl5YUA0sNy8sqAaWmxcWVAPLzQsLqoHl5oUF1cBy88KCamC5eWFBNbDcvLCgGlhuXlhQDSw3LyyoBpabFxZUA8vNCwuqgeXmhQXVwHLzwoJqYLl5YUE1sNy8sKAaWG5eWFANLDcvLKgGlpsXFlQDy80LC6qB5eaFBdXAcvPCgmpguXlhQTWw3LywoBpYbl5YUA0sNy8sqAaWmxcWVAPLzQsLqoHl5oUF1cBy88KCamC5eWFBNbDcvLCgGlhuXlhQDSw3LyyoBpabFxZUA8vNCwuqgeXmhQXVwHLzwoJqYLl5YUE1sNy8sKAaWG5eWFDH431G7Pe5R6yB5eaFBdXAcvPCgmpguXlhQTWw3LywoBpYbl5YUA0sNy8sqAaWmxcWVAPLzQsLqoHl5oUF1cBy88KCamC5eWFBNbDcvLCgGlhuXlhQDSw3LyyoBpabFxZUA8vNCwuqgeXmhQXVwHLzwoJqYLl5YUE1sNy8sKAaWG5eWFANLDcvLKgGlpsXFlQDy80LC6qB5eaFBdXAcvPCgmpguXlhQTWw3LywoBpYbl5YUA0sNy8sqAaWmxcWVAPLzQsLqoHl5oUF1cBy88KCamC5eWFBNbDcvLCgGlhuXlhQDSw3LyyoBpabFxZUA8vNCwuqgeXmhQXVwHLzwoJqYLl5YUE1sNy8sKAaWG5eWFANLDcvLKgGlpsXFlQDy80LC6qB5eaFBdXAcvPCgmpguXlhQTWw3LywoBpYbl5YUA0sNy8sqAaWmxcWVAPLzQsLqoHl5oUF1cBy88KCamC5eWFBNbDcvLCgGlhuXlhQDSw3LyyoBpabFxZUA8vNCwuqgeXmhQXVwHLzwoJqYLl5YUE1sNy8sKAaWG5eWFANLDcvLKgGlpsXFlQDy80LC6qB5eaFBdXAcvPCgmpguXlhQTWw3LywoBpYbl5YUA0sNy8sqAaWmxcWVAPLzQsLqoHl5oUF1cBy88KCamC5eWFBNbDcvLCgGlhuXlhQDSw3LyyoBpabFxZUA8vNCwuqgeXmhQX1BxMv/rLfkqWKAAAAAElFTkSuQmCC",
+      "alt": "Four coloured quadrants",
+      "caption": "A screenshot stands in for the page."
+    },
+    {
+      "type": "disclosure",
+      "id": "more",
+      "summary": "More detail",
+      "blocks": [
+        {
+          "type": "narrative",
+          "id": "more-text",
+          "markdown": "Hidden until the reader opens it."
+        }
+      ]
+    },
+    {
+      "type": "tabs",
+      "id": "views",
+      "tabs": [
+        {
+          "label": "Plan",
+          "blocks": [
+            {
+              "type": "narrative",
+              "id": "plan-text",
+              "markdown": "The plan tab holds the steps."
+            }
+          ]
+        },
+        {
+          "label": "Risks",
+          "blocks": [
+            {
+              "type": "narrative",
+              "id": "risk-text",
+              "markdown": "The risks tab holds the risks."
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "html",
+      "id": "stage",
+      "title": "How an answer reaches the agent",
+      "caption": "An answer goes from the page to the service and is appended to the ledger before the agent reads it.",
+      "legend": [
+        {
+          "label": "Solid line",
+          "means": "a request"
+        }
+      ],
+      "description": "Three boxes left to right: the browser page, the service and the ledger; a line labelled submit joins the page to the service.",
+      "html": "<svg viewBox='0 0 400 120' aria-label='Answer flow'><g data-cf-group='browser' data-cf-label='Browser page'><rect x='10' y='30' width='100' height='50'/><text x='60' y='60'>Page</text></g><line data-cf-target='submit-edge' x1='110' y1='55' x2='190' y2='55'/><text data-cf-for='submit-edge' x='150' y='45'>submit</text><g data-cf-target='service'><rect x='190' y='30' width='100' height='50'/><text x='240' y='60'>Service</text></g><g data-cf-target='ledger' transform='translate(300 0)'><rect x='0' y='30' width='90' height='50'/><text x='45' y='60'>Ledger</text></g><g data-cf-target='none'><rect x='0' y='0' width='400' height='10'/></g></svg>"
+    },
+    {
+      "type": "feedback_prompt",
+      "id": "ask",
+      "prompt": "Mark anything that is wrong, then submit the review."
+    }
+  ]
+}
