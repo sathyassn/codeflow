@@ -248,6 +248,29 @@ publication date._
   adopted tools and independent version domains, and adds four scoped release
   diagnostics without turning CodeFlow metadata into product version authority.
 
+<!-- codeflow:release-impact minor -->
+- **Rules come back after compaction and when a prompt needs them.** When
+  a Claude or Codex session resumes or restarts after a compaction, the
+  `session-orient` hook adds a guidance block of at most 1,536 bytes after
+  the digest: the always rules by title, the "when you are about to"
+  moments with their first pointer, and the tier's skill names, generated
+  from the rule-map kernel. A new `codeflow hook prompt-reminder` on
+  `UserPromptSubmit` adds one rule line of at most 300 bytes when a prompt
+  asks for a duration, a status or a complex explanation, and nothing
+  otherwise. It is advisory and never blocks: the new
+  `guidance.prompt_reminders` key defaults to `warn`, and `off` silences
+  it. The key is not written into `policy.json`, so older binaries still
+  read the file; setting it needs this `codeflow` or later. The Claude `SessionStart` matcher is now explicit,
+  `startup|resume|clear|compact`, as in Codex, so a forked Claude session
+  keeps its parent's context without a second digest. Grok Build discards
+  the output of these events, so the reminder is not wired for Grok.
+  `codeflow update` adds the wiring, moves CodeFlow's own `SessionStart`
+  hook under the explicit matcher without a duplicate, and keeps the
+  project's own hooks. Upgrade the `codeflow` on `PATH` before running
+  `codeflow update`, and on every machine that works in the project: an
+  older binary exits 2 on `codeflow hook prompt-reminder`, and Claude Code
+  and Codex treat exit 2 on `UserPromptSubmit` as a refused prompt.
+
 ### Changed
 
 <!-- codeflow:release-impact minor -->

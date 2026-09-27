@@ -277,7 +277,7 @@ id: CAP-007
 name: orient-session-summary
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::orient", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+verified_by: ["cargo test hooks::orient", "cargo test hooks::guidance", "cargo test hooks::session_summary", "cargo test status::", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/codex_hooks.rs", "codeflow-cli tests/init_e2e.rs", "codeflow-core tests/rule_reinjection_update.rs", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-001, EPC-004]
 adrs: [ADR-0013, ADR-0044]
 ```
@@ -294,6 +294,22 @@ both harnesses — plain-text stdout each injects as session context — so ther
 no per-harness duplication. Headless `codex exec` does not fire project hooks
 (ADR-0008), so this is an interactive-session aid; the `codex_hooks` test pins the
 JSON wiring, while live firing rests on Codex's documented hooks contract.
+
+Rules come back where they were lost or where they apply (TSK-128). When a
+session resumes or restarts after a compaction (source `resume` or
+`compact`), `session-orient` adds a guidance block of at most 1,536 bytes
+after the digest: the always rules by title, the "when you are about to"
+moments with their first pointer, and the tier's skill names, all generated
+from the rule-map kernel. The new `prompt-reminder` hook on
+`UserPromptSubmit` adds one rule line of at most 300 bytes when a prompt asks
+for a duration, a status or a complex explanation, and nothing otherwise. It
+is advisory: `guidance.prompt_reminders` defaults to `warn`, `off` or `allow`
+silences it, and it exits 0 whatever it reads. Claude and Codex wire both
+(the Claude `SessionStart` matcher is now explicit,
+`startup|resume|clear|compact`, as in Codex). Grok Build 1.0.41 ignores the
+stdout of `SessionStart` and its compaction events and discards an allowing
+`UserPromptSubmit` hook's output, so neither text reaches a Grok model; the
+prompt reminder is not wired there.
 
 `codeflow status` also emits a read-only cleanup inventory for linked
 worktrees and unattached local branches. Against the locally known target it
