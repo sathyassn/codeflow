@@ -323,7 +323,7 @@ fn a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project() {
             ],
         ),
         "a waiver naming a branch commit",
-        "names the pull request head; a waiver is a planning amendment on the target",
+        "which is not on the target",
     );
     let record = std::fs::read_to_string(root.join(TASK)).unwrap();
     assert!(!record.contains("\nstatus: complete"), "{record}");

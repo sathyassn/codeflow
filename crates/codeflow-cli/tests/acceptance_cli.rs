@@ -1169,7 +1169,8 @@ fn a_waiver_amended_on_the_line_binds_into_main() {
 
 /// A waiver amendment fails when it never landed on the task's line (it is
 /// only on a side branch the task merged), when the completion does not
-/// contain it, or when it names the head the verb completes on.
+/// contain it, or when it names the task branch's own head, which is not on
+/// the line.
 #[test]
 fn a_waiver_amendment_must_have_landed_on_the_task_line() {
     for (what, needle) in [
@@ -1178,7 +1179,7 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
             "landed after the task branched",
             "which the completion does not contain",
         ),
-        ("the head", "names the pull request head"),
+        ("the task branch's head", "which is not on the target"),
     ] {
         let dir = line_repo(&["TSK-001"]);
         let root = dir.path();
@@ -1219,7 +1220,7 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
         let verb = status_complete(root, "TSK-001");
         assert_ne!(verb.0, 0, "{what}: the verb: {}", verb.1);
         assert!(verb.1.contains(needle), "{what}: the verb: {}", verb.1);
-        if what == "the head" {
+        if what == "the task branch's head" {
             continue;
         }
         write(
@@ -1234,4 +1235,34 @@ fn a_waiver_amendment_must_have_landed_on_the_task_line() {
             &["AC-1 waiver", needle],
         );
     }
+}
+
+/// A late completion cut exactly at the amendment merge completes: the
+/// verb's `HEAD` is the completion's parent, so naming it as the waiver's
+/// amendment is not naming the head.
+#[test]
+fn a_completion_cut_at_the_amendment_merge_binds() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    amend(root, "plan/narrow");
+    let amendment = land(root, "plan/narrow");
+    git(root, &["switch", "-C", "plan/complete-tsk001", LINE]);
+    assert_eq!(head(root), amendment, "cut at the amendment merge");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended_task(
+            "TSK-001",
+            "in_progress",
+            &waived_block(&reviewed, &amendment),
+        ),
+    );
+    let verb = status_complete(root, "TSK-001");
+    assert_eq!(verb.0, 0, "the verb: {}", verb.1);
+    commit(root, "docs(records): complete TSK-001");
+    let result = ci_on(root, LINE, "plan/complete-tsk001", "");
+    assert_passes(&result, "the completion pull request");
+    assert!(binding_lines(&result).is_empty(), "{}", result.1);
 }

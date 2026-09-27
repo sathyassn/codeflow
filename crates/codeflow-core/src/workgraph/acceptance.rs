@@ -173,7 +173,7 @@ pub fn bind_completion(
                 task,
                 id,
                 &result.evidence,
-                landing.commit(),
+                landing,
                 task_target(repo, task, default_target),
             ) {
                 bind(format!("{}: {id} waiver {problem}", task.id));
@@ -425,7 +425,7 @@ fn waiver_problem(
     task: &RecordView,
     id: &str,
     evidence: &str,
-    completion: Oid,
+    landing: Landing<'_>,
     target_tip: Option<Oid>,
 ) -> Option<String> {
     let Some(amendment) = commit_of(repo, evidence.trim()) else {
@@ -434,7 +434,9 @@ fn waiver_problem(
             evidence.trim()
         ));
     };
-    if amendment == completion {
+    // Only a real completion commit can be named as the head; the verb's
+    // `HEAD` is the completion's parent and may itself be the amendment.
+    if matches!(landing, Landing::Commit(completion) if completion == amendment) {
         return Some(
             "names the pull request head; a waiver is a planning amendment on the target".into(),
         );
@@ -448,7 +450,7 @@ fn waiver_problem(
             evidence.trim()
         ));
     }
-    if !is_ancestor_or_same(repo, amendment, completion) {
+    if !is_ancestor_or_same(repo, amendment, landing.commit()) {
         return Some(format!(
             "names {}, which the completion does not contain; rebase onto the amendment",
             evidence.trim()
