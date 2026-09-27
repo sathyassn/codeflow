@@ -70,11 +70,72 @@ pub enum BlockOutcome {
     Appended,
 }
 
+/// One line of a document: the byte offset where it starts, where its text
+/// ends (before `\n` or `\r\n`), and where the next line starts.
+#[derive(Debug, Clone, Copy)]
+struct LineSpan {
+    start: usize,
+    text_end: usize,
+    end: usize,
+}
+
+/// Line spans with the same line breaks as [`str::lines`], keeping offsets
+/// so a replacement can copy everything around it byte for byte.
+fn line_spans(text: &str) -> Vec<LineSpan> {
+    let mut spans = Vec::new();
+    let mut start = 0;
+    for piece in text.split_inclusive('\n') {
+        let end = start + piece.len();
+        let body = piece.strip_suffix('\n').unwrap_or(piece);
+        let body = if piece.ends_with('\n') {
+            body.strip_suffix('\r').unwrap_or(body)
+        } else {
+            body
+        };
+        spans.push(LineSpan {
+            start,
+            text_end: start + body.len(),
+            end,
+        });
+        start = end;
+    }
+    spans
+}
+
+/// `block` with each line break written as `eol`, the document's own
+/// convention.
+fn with_eol(block: &str, eol: &str) -> String {
+    block.lines().collect::<Vec<_>>().join(eol)
+}
+
+/// Replace lines `first..=last` of `existing` with `block`. Bytes before the
+/// first line and after the last line's break are copied unchanged; the
+/// block takes the line break the replaced span used, so a CRLF document
+/// stays CRLF and a missing final newline stays missing.
+fn splice(existing: &str, spans: &[LineSpan], first: usize, last: usize, block: &str) -> String {
+    let from = spans[first].start;
+    let to = spans[last].end;
+    let eol = &existing[spans[first].text_end..spans[first].end];
+    let eol = if eol.is_empty() { "\n" } else { eol };
+    let trailing = &existing[spans[last].text_end..to];
+    let mut text = String::with_capacity(existing.len() + block.len());
+    text.push_str(&existing[..from]);
+    text.push_str(&with_eol(block, eol));
+    text.push_str(trailing);
+    text.push_str(&existing[to..]);
+    text
+}
+
 /// Inserts or replaces the marked block in `existing`, touching nothing
-/// outside the markers. Returns the new content and what happened.
+/// outside the markers: the bytes around the block, line breaks included,
+/// are kept exactly. Returns the new content and what happened.
 #[must_use]
 pub fn upsert_block(existing: &str, block: &str, format: RegionFormat) -> (String, BlockOutcome) {
-    let lines: Vec<&str> = existing.lines().collect();
+    let spans = line_spans(existing);
+    let lines: Vec<&str> = spans
+        .iter()
+        .map(|span| &existing[span.start..span.text_end])
+        .collect();
     let begin = lines.iter().position(|l| is_begin(l, format));
     let end = begin.and_then(|b| {
         lines[b..]
@@ -88,15 +149,10 @@ pub fn upsert_block(existing: &str, block: &str, format: RegionFormat) -> (Strin
         if current == block {
             return (existing.to_string(), BlockOutcome::Unchanged);
         }
-        let mut out: Vec<&str> = Vec::with_capacity(lines.len());
-        out.extend_from_slice(&lines[..b]);
-        out.extend(block.lines());
-        out.extend_from_slice(&lines[e + 1..]);
-        let mut text = out.join("\n");
-        if existing.ends_with('\n') || !text.ends_with('\n') {
-            text.push('\n');
-        }
-        return (text, BlockOutcome::Replaced);
+        return (
+            splice(existing, &spans, b, e, block),
+            BlockOutcome::Replaced,
+        );
     }
 
     // No markers in the dest. If the dest already contains the block's
@@ -106,24 +162,24 @@ pub fn upsert_block(existing: &str, block: &str, format: RegionFormat) -> (Strin
     // block instead of appending. Appending would duplicate the whole region.
     // Idempotent: the next run finds the markers and takes the branch above.
     if let Some((start, len)) = interior_line_span(&lines, block, format) {
-        let mut out: Vec<&str> = Vec::with_capacity(lines.len());
-        out.extend_from_slice(&lines[..start]);
-        out.extend(block.lines());
-        out.extend_from_slice(&lines[start + len..]);
-        let mut text = out.join("\n");
-        if existing.ends_with('\n') || !text.ends_with('\n') {
-            text.push('\n');
-        }
+        let text = splice(existing, &spans, start, start + len - 1, block);
         return (text, BlockOutcome::Replaced);
     }
 
-    // No markers and no matching content: append, never touch existing content.
-    let mut text = existing.trim_end_matches('\n').to_string();
+    // No markers and no matching content: append after one blank line in the
+    // document's own line-break convention, never touching existing content.
+    let eol = if existing.contains("\r\n") {
+        "\r\n"
+    } else {
+        "\n"
+    };
+    let mut text = existing.trim_end_matches(['\n', '\r']).to_string();
     if !text.is_empty() {
-        text.push_str("\n\n");
+        text.push_str(eol);
+        text.push_str(eol);
     }
-    text.push_str(block);
-    text.push('\n');
+    text.push_str(&with_eol(block, eol));
+    text.push_str(eol);
     (text, BlockOutcome::Appended)
 }
 
@@ -189,6 +245,47 @@ mod tests {
     fn recognizes_short_marker_form() {
         let doc = "<!-- codeflow:begin -->\nx\n<!-- codeflow:end -->\n";
         assert!(extract_block(doc, RegionFormat::Markdown).is_some());
+    }
+
+    #[test]
+    fn replace_keeps_crlf_bytes_outside_the_block() {
+        let doc = format!(
+            "# Mine\r\nintro\r\n\r\n{}\r\n\r\ntail\r\n",
+            BLOCK_V1.replace('\n', "\r\n")
+        );
+        let (out, outcome) = upsert_block(&doc, BLOCK_V2, RegionFormat::Markdown);
+        assert_eq!(outcome, BlockOutcome::Replaced);
+        assert_eq!(
+            out,
+            format!(
+                "# Mine\r\nintro\r\n\r\n{}\r\n\r\ntail\r\n",
+                BLOCK_V2.replace('\n', "\r\n")
+            )
+        );
+        let (again, outcome) = upsert_block(&out, BLOCK_V2, RegionFormat::Markdown);
+        assert_eq!(
+            (again.as_str(), outcome),
+            (out.as_str(), BlockOutcome::Unchanged)
+        );
+    }
+
+    #[test]
+    fn replace_keeps_a_missing_final_newline() {
+        let doc = format!("{BLOCK_V1}\n\ntail");
+        let (out, _) = upsert_block(&doc, BLOCK_V2, RegionFormat::Markdown);
+        assert_eq!(out, format!("{BLOCK_V2}\n\ntail"));
+        let (out, _) = upsert_block(BLOCK_V1, BLOCK_V2, RegionFormat::Markdown);
+        assert_eq!(out, BLOCK_V2);
+    }
+
+    #[test]
+    fn append_follows_a_crlf_document() {
+        let (out, outcome) = upsert_block("mine\r\n", BLOCK_V2, RegionFormat::Markdown);
+        assert_eq!(outcome, BlockOutcome::Appended);
+        assert_eq!(
+            out,
+            format!("mine\r\n\r\n{}\r\n", BLOCK_V2.replace('\n', "\r\n"))
+        );
     }
 
     #[test]
