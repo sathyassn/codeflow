@@ -36,23 +36,15 @@ description: Land finished work — docs and capability updates, then a PR throu
    or starter behavior, also run the adopted portal's locked check/build and
    `codeflow validate --portal <adopted-root>`; add rendered/browser checks
    matched to UX impact. Non-adopters receive no portal gate.
-4. Assess release impact using the project's adopted policy and
-   [references/release-policy.md](references/release-policy.md). Sweep API,
-   CLI flags, config, formats, defaults and managed instructions for actual
-   compatibility changes. A touched contract is not automatically breaking;
-   a misleading commit type is not proof of compatibility. Mark an actual
-   break with `type!:` and a `BREAKING CHANGE:` migration footer, and reconcile
-   the project's authoritative release input and PR explanation. Use its one
-   version calculator; `breaking_watch_paths` only warns. Where the project
-   adopts same-PR preparation, include the warranted notes and coupled version
-   updates now, reconciled with the current target and published baseline.
+4. Assess release impact under the project's adopted policy and the Release
+   impact rules in `references/pr-evidence.md`, which say when to read the
+   release policy. Judge compatibility as the git rules' breaking-change rule
+   says; a misleading commit type is not proof of compatibility. Reconcile
+   the project's authoritative release input and PR explanation. Where the
+   project adopts same-PR preparation, include the warranted notes and coupled
+   version updates now, reconciled with the current target and published
+   baseline.
    A reviewed merge is not permission to publish or deploy.
-   For a multi-platform binary or installer release, keep native Windows and
-   WSL2/Linux evidence separate: the native Windows installer must select its
-   Windows binary, while WSL2 uses the Linux installer and binary. Cross-build
-   success proves compilation and linking only; it never replaces native
-   macOS/Linux/Windows tests or installer canaries. Missing platform evidence
-   blocks publication rather than becoming an inferred pass.
 5. Apply `cf-editorial-review` to substantial changed docs, release notes, and
    the PR narrative. It refines the writing but cannot weaken the template,
    evidence, policy, or no-emoji requirements below.

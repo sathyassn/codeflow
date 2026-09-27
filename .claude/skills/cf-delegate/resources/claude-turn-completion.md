@@ -1,10 +1,11 @@
 # Claude turn lifecycle adapter (schema v2)
 
-Use this adapter for the codex-hosted, interactive Claude CLI lane. CodeFlow
-owns the durable lifecycle records; the host launches the harness and delivers
-the bytes. The protocol proves three things a terminal signal alone cannot:
-the session started cleanly, the delivered prompt was accepted as the armed
-turn, and the terminal event belongs to that turn. It reads the session
+Use this adapter for the codex-hosted, interactive Claude CLI lane. A Claude
+host does not load it: an in-session Agent launch follows capability-routing.
+CodeFlow owns the durable lifecycle records; the host launches the harness and
+delivers the bytes. The protocol proves three things a terminal signal alone
+cannot: the session started cleanly, the delivered prompt was accepted as the
+armed turn, and the terminal event belongs to that turn. It reads the session
 transcript only for a task notice (see the task-notice rule below): to find the
 tool call that launched the task, and to prove the notice came from Claude
 Code. It makes zero tmux calls; waiting is pure file polling.

@@ -14,6 +14,56 @@ fn read(rel: &str) -> String {
     std::fs::read_to_string(repo_root().join(rel)).unwrap_or_else(|e| panic!("read {rel}: {e}"))
 }
 
+/// TSK-129: the quality contract loads by section from an index, so a pin on
+/// "the quality contract" reads the index and every section file together.
+fn read_quality_contract() -> String {
+    let resources = "assets/base/agents/skills/cf-model-orchestrator/resources";
+    let mut sections: Vec<_> = std::fs::read_dir(repo_root().join(resources).join("quality"))
+        .expect("quality sections")
+        .map(|entry| entry.expect("section entry").path())
+        .collect();
+    sections.sort();
+    let mut contract = read(&format!("{resources}/quality-contract.md"));
+    for section in sections {
+        contract.push('\n');
+        contract.push_str(&std::fs::read_to_string(&section).expect("read section"));
+    }
+    contract
+}
+
+/// TSK-129: the orchestrator skill keeps what every task needs and moves
+/// trigger-only text to `references/`; a pin on the skill reads both.
+fn read_orchestrator_skill() -> String {
+    let skill = "assets/base/agents/skills/cf-model-orchestrator";
+    let mut references: Vec<_> = std::fs::read_dir(repo_root().join(skill).join("references"))
+        .expect("orchestrator references")
+        .map(|entry| entry.expect("reference entry").path())
+        .collect();
+    references.sort();
+    let mut text = read(&format!("{skill}/SKILL.md"));
+    for reference in references {
+        text.push('\n');
+        text.push_str(&std::fs::read_to_string(&reference).expect("read reference"));
+    }
+    text
+}
+
+/// TSK-129: capability-routing also loads by section from an index.
+fn read_routing_contract() -> String {
+    let resources = "assets/base/agents/skills/cf-model-orchestrator/resources";
+    let mut sections: Vec<_> = std::fs::read_dir(repo_root().join(resources).join("routing"))
+        .expect("routing sections")
+        .map(|entry| entry.expect("section entry").path())
+        .collect();
+    sections.sort();
+    let mut contract = read(&format!("{resources}/capability-routing.md"));
+    for section in sections {
+        contract.push('\n');
+        contract.push_str(&std::fs::read_to_string(&section).expect("read section"));
+    }
+    contract
+}
+
 fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -151,12 +201,8 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
 
 #[test]
 fn orchestrator_is_host_neutral_with_capability_routed_execution() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
-    let capability_routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
+    let capability_routing = normalize_whitespace(&read_routing_contract());
 
     for required in [
         "Detect capabilities, not model identity.",
@@ -167,7 +213,7 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
         "never a silent third vote",
         "Name extra families on trigger if available",
         "strongest capable permitted reasoning route",
-        "[detail](resources/grok-host.md)",
+        "[detail](../resources/grok-host.md)",
         "**Both think independently.**",
         "**Claude leads design.**",
         "**Host routes execution.**",
@@ -229,9 +275,7 @@ fn grok_hosted_duo_canary_record_exists_and_stays_unqualified() {
 
 #[test]
 fn cross_family_entry_preserves_receiving_primary_ownership() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let routing = normalize_whitespace(&read_routing_contract());
     for required in [
         "The first line of every cross-family task declares `ROLE: peer`",
         "qualified primary at its default effort",
@@ -248,9 +292,7 @@ fn cross_family_entry_preserves_receiving_primary_ownership() {
 
 #[test]
 fn current_ensemble_and_routing_pin_grok_catalog() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let routing = normalize_whitespace(&read_routing_contract());
     let ensemble = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
     ));
@@ -340,9 +382,7 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
 
 #[test]
 fn orchestrator_skill_avoids_superseded_roles_and_model_pins() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
     for superseded in ["**Codex implements.**", "Fixed role binding"] {
         assert!(
             !skill.contains(superseded),
@@ -359,12 +399,8 @@ fn orchestrator_skill_avoids_superseded_roles_and_model_pins() {
 
 #[test]
 fn accountable_execution_preserves_design_and_evidence_boundaries() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
-    let quality = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
-    ));
+    let routing = normalize_whitespace(&read_routing_contract());
+    let quality = normalize_whitespace(&read_quality_contract());
     let design = normalize_whitespace(&read("assets/base/agents/skills/cf-design/SKILL.md"));
     let cases = read("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
     let packs = read("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
@@ -381,6 +417,9 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
         "Full primary-binding promotion still requires the existing complete suite",
         "Savings or economical-default recommendations separately require measured all-attempt",
         "review lineage is opposite the session that authored the work",
+        // TSK-129: the unknown-usage duty's one home is capability-routing.
+        "Unknown usage is advisory while task fit, capability and quality still decide the route",
+        "It blocks only when the brief declares an explicit hard limit",
     ] {
         assert!(
             routing.contains(required),
@@ -391,7 +430,6 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
     for required in [
         "Primary responsibility and actual execution are separate",
         "does not become its author",
-        "unknown and advisory unless an explicit hard limit depends on it",
     ] {
         assert!(
             quality.contains(required),
@@ -433,7 +471,7 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
 
 #[test]
 fn independent_planning_cannot_degrade_to_plan_then_critique() {
-    let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
+    let skill = read_orchestrator_skill();
     let capabilities = read("docs/capabilities.md");
     let normalized = normalize_whitespace(&skill);
 
@@ -537,11 +575,10 @@ fn readme_distinguishes_installed_and_effective_discipline() {
 
 #[test]
 fn design_review_and_security_roles_cannot_silently_drift() {
-    let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
+    let skill = read_orchestrator_skill();
     let reviewer = read("assets/base/claude/agents/cf-reviewer.md");
     let security = read("assets/base/claude/agents/cf-security-reviewer.md");
-    let quality =
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md");
+    let quality = read_quality_contract();
     let normalized = normalize_whitespace(&skill);
 
     for required in [
@@ -550,7 +587,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
         "a lineage different from the actual author's reviews it independently. Self-review is never independent.",
         "The Claude judgment primary owns integrated Claude judgment.",
         "they do not replace the required other-lineage review or primary judgment.",
-        "separate interactive Claude session in auto mode under the same fail-closed sandbox—not plan or bypass mode",
+        "separate interactive Claude session in auto mode under the same fail-closed sandbox (not plan or bypass mode)",
     ] {
         assert!(
             normalized.contains(required),
@@ -607,9 +644,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
 
 #[test]
 fn responsible_autonomy_has_detailed_quality_and_security_owners() {
-    let quality = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md",
-    ));
+    let quality = normalize_whitespace(&read_quality_contract());
     let security = normalize_whitespace(&read("assets/base/claude/agents/cf-security-reviewer.md"));
 
     for required in [
@@ -694,18 +729,14 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
 
 #[test]
 fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
     let agents = read("assets/base/AGENTS.md.tmpl");
     // Git may materialize text assets with CRLF on Windows. This contract
     // pins the authored line break, not the checkout's newline convention.
     let claude = read("assets/base/CLAUDE.md.tmpl").replace("\r\n", "\n");
     let ensemble =
         read("assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
-    let capability_routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let capability_routing = normalize_whitespace(&read_routing_contract());
     let herdr = normalize_whitespace(&read("assets/base/agents/skills/cf-herdr/SKILL.md"));
     let claude_completion = normalize_whitespace(&read(
         "assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md",
@@ -802,9 +833,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
 
 #[test]
 fn solo_fallback_requires_fresh_context_independent_review() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
     let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
 
     for (owner, contract, alternate) in [
@@ -828,8 +857,8 @@ fn solo_fallback_requires_fresh_context_independent_review() {
 fn quality_contract_pins_evidence_coverage_and_ui() {
     let contract = normalize_whitespace(&format!(
         "{}\n{}",
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/quality-contract.md"),
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md")
+        read_quality_contract(),
+        read_routing_contract()
     ));
 
     for required in [
@@ -880,9 +909,7 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
 
 #[test]
 fn task_graph_and_verification_strength_are_proportionate_contracts() {
-    let skill = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
-    ));
+    let skill = normalize_whitespace(&read_orchestrator_skill());
     let plan = normalize_whitespace(&read("assets/base/agents/skills/cf-plan/SKILL.md"));
     let develop = normalize_whitespace(&read("assets/base/agents/skills/cf-develop/SKILL.md"));
     let graph = normalize_whitespace(&read(
@@ -1069,7 +1096,13 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
 
 #[test]
 fn reverse_lane_uses_hook_completion_not_pane_stability() {
-    let delegate = normalize_whitespace(&read("assets/base/claude/skills/cf-delegate/SKILL.md"));
+    // TSK-129: the reverse lane lives in the lifecycle lane file; the core is
+    // read too so the legacy-protocol negatives still cover the whole skill.
+    let delegate = normalize_whitespace(&format!(
+        "{}\n{}",
+        read("assets/base/claude/skills/cf-delegate/SKILL.md"),
+        read("assets/base/claude/skills/cf-delegate/resources/lane-lifecycle.md")
+    ));
     let adapter = read("assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md");
 
     assert!(delegate.contains("codeflow delegate init"));

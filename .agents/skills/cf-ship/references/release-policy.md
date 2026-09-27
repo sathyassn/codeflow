@@ -174,6 +174,12 @@ together. A moving branch, tag-shaped string, green syntax check, old review or
 ordinary merged PR is not release authorization. Revalidate the exact source
 that will be published using the project's supported merge strategy. Keep
 untrusted PR code/text away from publication credentials and shell interpolation.
+For a multi-platform binary or installer release, keep native Windows and
+WSL2/Linux evidence separate: the native Windows installer must select its
+Windows binary, while WSL2 uses the Linux installer and binary. Cross-build
+success proves compilation and linking only; it never replaces native
+macOS/Linux/Windows tests or installer canaries. Missing platform evidence
+blocks publication rather than becoming an inferred pass.
 
 Stage assets before declaring success. Retry only the same candidate; compare
 existing tag targets and asset hashes, and reject conflicts rather than

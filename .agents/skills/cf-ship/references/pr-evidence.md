@@ -3,9 +3,8 @@
 Read when preparing or updating a PR, including an integration-to-main PR,
 and when following a PR after it opens.
 
-Open the PR. Commits stay conventional (`type(scope): description`,
-≤ 50-char description, ≤ 72-char subject, at most 3 `-` body bullets each
-≤ 72 chars, optional `BREAKING CHANGE:` footer); one logical change each.
+Open the PR. Commits follow the git rules' commit format, one logical change
+each.
 **Title** names the whole-branch outcome, not only the last commit.
 
 ## Body format
@@ -20,7 +19,7 @@ and the rest appear only when their condition holds.
 | Changes | always | one bullet per logical change, most important first; numbered only for a sequence; one line per task for an epic |
 | Testing | always; evidence required when the range is code | tested revision and command, fenced gate summary lines, `Coverage:` when the range is code, `New tests:`, `Not tested:` |
 | Reviews | always | one row per current review: reviewer, scope, verdict; `None: reason` when unreviewed |
-| Release impact | always | `Impact`, `Breaking`, `Rationale`, `Migration`, then the project's own fields ([release-policy.md](release-policy.md)) |
+| Release impact | always | `Impact`, `Breaking`, `Rationale`, `Migration`, then the project's own fields (rules below) |
 | Screenshots | after Changes, when a rendered surface changed | the changed surface |
 | Tests | after Testing, when an added or renamed test's name does not state what it pins | test and what it pins, about six rows; otherwise one `New tests:` line |
 | Whole-flow evidence | after Testing, when a CLI command's behavior, flags or output; install, update or scaffold; a hook or guard; an automation handoff; or a rendered UI changed | one bullet per journey: what ran, what was observed, what was not exercised |
@@ -61,12 +60,27 @@ words a reader with no context understands.
 
 ## Release impact and evidence
 
-Assess the complete change under the project's adopted release policy; load
-[release-policy.md](release-policy.md) for impact, authority and publication
-boundaries. Carry its required release-impact explanation or justified `none`,
-with evidence and migration when needed. Reconcile the authoritative commits
-or change entries that will land, not only the PR title; do not add a competing
-version calculator or release ledger.
+Assess the complete change under the project's adopted release policy. Every
+PR's Release impact states:
+
+- `Impact`: the level a consumer sees. In stable SemVer, major is an
+  incompatible change to an accepted contract, minor is compatible added
+  behavior, patch is a compatible fix or clarification, and `none` is no
+  shipped impact under the project's policy, with a reason. Other schemes
+  follow the project's rules.
+- `Breaking`: `yes` or `no`; in stable SemVer yes exactly when Impact is
+  major. Never prefill it on a watched contract path.
+- `Rationale`: the consumer-visible effect and the evidence for the level.
+- `Migration`: always present; `none` when nonbreaking, otherwise steps or a
+  pointer to Breaking change.
+
+Declare what this PR's own entries add, not the cumulative pending version.
+Read [release-policy.md](release-policy.md) when the impact may be minor or
+major or is disputed, when the PR carries version or release-note updates,
+when the project has no adopted release process, and before publication.
+Reconcile the authoritative commits or change entries that will land, not
+only the PR title; do not add a competing version calculator or release
+ledger.
 Write Summary and Changes from `git log --oneline <base>..<head>` and
 `git diff --stat <base>...<head>` on source-of-truth paths — every logical
 change on the branch, not the last conversation, last review, or last

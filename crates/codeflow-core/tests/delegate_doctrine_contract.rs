@@ -14,6 +14,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 const DELEGATE_SKILL: &str = "assets/base/claude/skills/cf-delegate/SKILL.md";
+// TSK-129 split cf-delegate into a common core plus one file per lane; each
+// lane pin reads the lane file that now holds the duty.
+const DELEGATE_PLUGIN_LANE: &str = "assets/base/claude/skills/cf-delegate/resources/lane-plugin.md";
+const DELEGATE_LIFECYCLE_LANE: &str =
+    "assets/base/claude/skills/cf-delegate/resources/lane-lifecycle.md";
 const ADAPTER: &str = "assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md";
 const CONSULT: &str = "assets/base/agents/skills/cf-consult/SKILL.md";
 const CUSTOMIZE: &str = "assets/base/agents/skills/cf-customize/SKILL.md";
@@ -32,8 +37,30 @@ fn root() -> PathBuf {
 }
 
 fn read(relative: &str) -> String {
-    std::fs::read_to_string(root().join(relative))
-        .unwrap_or_else(|error| panic!("read {relative}: {error}"))
+    let text = std::fs::read_to_string(root().join(relative))
+        .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+    // TSK-129: capability-routing loads by section from an index, so a pin on
+    // it reads the index together with every section file.
+    if relative == ROUTING {
+        return with_sections(
+            text,
+            "assets/base/agents/skills/cf-model-orchestrator/resources/routing",
+        );
+    }
+    text
+}
+
+fn with_sections(mut text: String, dir: &str) -> String {
+    let mut sections: Vec<_> = std::fs::read_dir(root().join(dir))
+        .unwrap_or_else(|error| panic!("read {dir}: {error}"))
+        .map(|entry| entry.expect("section entry").path())
+        .collect();
+    sections.sort();
+    for section in sections {
+        text.push('\n');
+        text.push_str(&std::fs::read_to_string(&section).expect("read section"));
+    }
+    text
 }
 
 fn normalized(value: &str) -> String {
@@ -68,7 +95,7 @@ const LIFECYCLE_ARROW: &str =
 
 #[test]
 fn lifecycle_sequence_is_ordered_across_delegate_assets() {
-    for asset in [DELEGATE_SKILL, ADAPTER] {
+    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
         assert_ordered(
             asset,
             &[
@@ -95,7 +122,13 @@ fn lifecycle_sequence_is_ordered_across_delegate_assets() {
     );
     // The lifecycle replaced the legacy signal protocol: no shipped skill may
     // reintroduce `tmux wait-for` as the work protocol.
-    for asset in [DELEGATE_SKILL, ADAPTER, CONSULT, ORCHESTRATOR] {
+    for asset in [
+        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
+        ADAPTER,
+        CONSULT,
+        ORCHESTRATOR,
+    ] {
         assert!(
             !read(asset).contains("tmux wait-for"),
             "{asset} reintroduced the legacy tmux wait-for protocol"
@@ -120,7 +153,7 @@ fn lifecycle_documents_stable_exits_immutability_turns_and_pane_discipline() {
         ],
     );
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "settings file is **immutable**",
             "one outstanding armed turn per run",
@@ -132,7 +165,7 @@ fn lifecycle_documents_stable_exits_immutability_turns_and_pane_discipline() {
 
 #[test]
 fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
-    for asset in [DELEGATE_SKILL, ADAPTER] {
+    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
         assert_contains(
             asset,
             &[
@@ -149,7 +182,7 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
             ],
         );
     }
-    for asset in [DELEGATE_SKILL, ADAPTER, CONSULT] {
+    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER, CONSULT] {
         assert_contains(asset, &["user scope"]);
         assert!(
             !read(asset).contains("user or CLI scope"),
@@ -167,10 +200,10 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
 
 #[test]
 fn every_cross_harness_dispatch_declares_a_bounded_role() {
-    for asset in [DELEGATE_SKILL, ORCHESTRATOR, CONSULT, ROUTING] {
+    for asset in [DELEGATE_PLUGIN_LANE, ORCHESTRATOR, CONSULT, ROUTING] {
         assert_contains(asset, &["ROLE: peer", "top-level", "host lineage"]);
     }
-    for asset in [DELEGATE_SKILL, ORCHESTRATOR, ROUTING] {
+    for asset in [DELEGATE_PLUGIN_LANE, ORCHESTRATOR, ROUTING] {
         assert_contains(asset, &["generic", "subagent"]);
     }
 }
@@ -178,7 +211,7 @@ fn every_cross_harness_dispatch_declares_a_bounded_role() {
 #[test]
 fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_PLUGIN_LANE,
         &[
             "native Codex thread behind it",
             "native thread ID, recheckable",
@@ -186,19 +219,16 @@ fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
             "grade it explicitly as inferred",
         ],
     );
-    assert_contains(
-        ORCHESTRATOR,
-        &[
-            "native Codex thread ID, recheckable",
-            "otherwise label them requested",
-            "never silently upgraded to observed",
-            "grade inferred completion explicitly as inferred",
-        ],
-    );
+    // TSK-129: the plugin-exchange detail moved to the plugin lane (pinned
+    // above); the orchestrator's provenance invariant points at the routing
+    // evidence section, which owns the recheck and labelling rules.
+    assert_contains(ORCHESTRATOR, &["routing/evidence.md"]);
     assert_contains(
         ROUTING,
         &[
             "native Codex thread ID",
+            "the resumable Codex thread forward",
+            "otherwise label them requested",
             "never silently upgrade requested to observed",
             "Grade inferred completion explicitly as inferred.",
         ],
@@ -208,17 +238,20 @@ fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
 #[test]
 fn generic_claude_relay_never_counts_as_codex() {
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_PLUGIN_LANE,
         &["any surface that cannot show that thread never counts as Codex"],
     );
+    // TSK-129: the plugin-lane sentence lives in the plugin lane (pinned
+    // above); the relay rule lives in the routing evidence section (pinned
+    // below), and the orchestrator keeps its generic-subagent rule.
     assert_contains(
         ORCHESTRATOR,
-        &["a generic Claude subagent or an unverified relay never counts as Codex"],
+        &["generic same-lineage subagent never satisfies"],
     );
     assert_contains(
         ROUTING,
         &[
-            "A relay — plugin, adapter, relay subagent, or transport session — is transport, not author.",
+            "A relay (plugin, adapter, relay subagent, or transport session) is transport, not author.",
             "a relay answering in the other vendor's name is evidence fabrication",
         ],
     );
@@ -227,7 +260,7 @@ fn generic_claude_relay_never_counts_as_codex() {
 #[test]
 fn sibling_preflight_rejects_unknown_stop_hooks() {
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "Reject any sibling Stop hook whose nonblocking behavior you do not deterministically know.",
             "unverified sibling fails the preflight",
@@ -247,7 +280,7 @@ fn sibling_preflight_rejects_unknown_stop_hooks() {
 
 #[test]
 fn sibling_preflight_permits_only_the_exact_known_safe_nonblocking_hook() {
-    for asset in [DELEGATE_SKILL, ADAPTER] {
+    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
         assert_contains(
             asset,
             &[
@@ -260,7 +293,7 @@ fn sibling_preflight_permits_only_the_exact_known_safe_nonblocking_hook() {
     // The check is the operator's, against the plugin's own configuration —
     // CodeFlow ships no code that reads or infers plugin-private state.
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &["CodeFlow never reads or infers plugin-private state"],
     );
     assert_contains(
@@ -311,7 +344,7 @@ fn legacy_result_mode_is_compatibility_only_and_mutually_exclusive() {
         ],
     );
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "byte-compatible compatibility for existing callers until a later major release",
             "mutually exclusive and never fall back",
@@ -325,15 +358,22 @@ fn legacy_result_mode_is_compatibility_only_and_mutually_exclusive() {
 
 #[test]
 fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
+    // TSK-129: the five obligations have one home in capability-routing; the
+    // cf-delegate core points there and each lane states its specifics.
     assert_contains(
         DELEGATE_SKILL,
         &[
-            "five obligations, both lanes",
-            "**Launch.**",
-            "**Provenance.**",
-            "**Return.**",
-            "**Failure.**",
-            "**Recheck.**",
+            "Evidence contract, both lanes",
+            "one five-obligation evidence contract",
+            "routing/evidence.md",
+        ],
+    );
+    assert_contains(DELEGATE_PLUGIN_LANE, &["## Evidence on this lane"]);
+    assert_contains(
+        DELEGATE_LIFECYCLE_LANE,
+        &[
+            "## Evidence on this lane",
+            "the terminal `wait` result already carries `provenance`",
         ],
     );
     assert_contains(
@@ -349,20 +389,21 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     );
     assert_contains(
         ORCHESTRATOR,
-        &["five-obligation evidence contract — launch, provenance, return, failure, recheck"],
+        &["five-obligation evidence contract: launch, provenance, return, failure, recheck"],
     );
     assert_contains(
         CONSULT,
         &["five-obligation evidence contract (launch/provenance/return/failure/recheck)"],
     );
     // The entry-point cell's host routes live in the owning skills.
+    // TSK-129: that route's text moved into the cf-delegate lifecycle lane.
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &["the durable lifecycle over the interactive claude CLI"],
     );
     assert_contains(
         ORCHESTRATOR,
-        &["evidence contract — launch, provenance, return, failure, recheck"],
+        &["evidence contract: launch, provenance, return, failure, recheck"],
     );
     // Every tier installs the one tier-neutral provenance sentence.
     let provenance = "Work attributed to another model or harness counts only with native, \
@@ -391,8 +432,9 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
         &[
             "Propagate current observed unavailability into every later worker choice",
             "do not infer that sibling models or another account are unavailable",
-            "Before launching any Claude worker, **read and follow**",
+            "On a Codex host, before launching a Claude worker through the delegated lifecycle, **read and follow**",
             "claude-turn-completion.md",
+            "A Claude host does not load it.",
             "collect the worker result before the primary returns",
             "It does not govern an in-session Agent launch.",
             "the verified return is the task notification from this session's own launch",
@@ -416,7 +458,7 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
 #[test]
 fn tracked_claude_launch_uses_scoped_synchronous_task_mode() {
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude",
             "For consult/no-edit, use the same launch with --permission-mode auto",
