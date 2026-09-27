@@ -201,7 +201,7 @@
         {
           "text": "planned",
           "x": 78,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "for": [
             "pl"
@@ -210,7 +210,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M78 48V74",
+          "d": "M78 49V73",
           "head": "end",
           "id": "t1"
         },
@@ -236,7 +236,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M78 114V140",
+          "d": "M78 115V139",
           "head": "end",
           "id": "t2"
         },
@@ -262,7 +262,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M78 180V206",
+          "d": "M78 181V205",
           "head": "end",
           "id": "t3"
         },
@@ -298,7 +298,7 @@
         },
         {
           "text": "delete the entry",
-          "x": 160,
+          "x": 161,
           "y": 254,
           "style": "mute",
           "for": [

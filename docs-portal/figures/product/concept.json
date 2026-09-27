@@ -78,7 +78,7 @@
         {
           "text": "your repository",
           "x": 32,
-          "y": 58,
+          "y": 57,
           "style": "head"
         },
         {
@@ -187,7 +187,7 @@
         {
           "text": "every commit",
           "x": 380,
-          "y": 114,
+          "y": 113,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -312,7 +312,7 @@
         {
           "text": "CodeFlow, one binary",
           "x": 34,
-          "y": 92,
+          "y": 91,
           "style": "strong",
           "for": [
             "c"
@@ -321,7 +321,7 @@
         {
           "text": "scaffold: init, update",
           "x": 34,
-          "y": 114,
+          "y": 112,
           "for": [
             "c"
           ]
@@ -329,7 +329,7 @@
         {
           "text": "enforce: hooks, guards, CI",
           "x": 34,
-          "y": 134,
+          "y": 133,
           "for": [
             "c"
           ]

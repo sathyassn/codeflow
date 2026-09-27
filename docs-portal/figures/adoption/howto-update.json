@@ -311,7 +311,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 450,
+      "height": 470,
       "elongation_max": 1.45,
       "reason": "Each file case keeps its own before and after row at phone width.",
       "draw": [
@@ -336,7 +336,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 44V54",
+          "d": "M40 46V58",
           "head": "end",
           "id": "e0"
         },
@@ -344,7 +344,7 @@
           "state": "state",
           "shape": "rect",
           "x": 40,
-          "y": 56,
+          "y": 60,
           "w": 312,
           "h": 26,
           "rx": 8,
@@ -352,8 +352,8 @@
         },
         {
           "text": "replaced",
-          "x": 52,
-          "y": 74,
+          "x": 60,
+          "y": 76,
           "for": [
             "b0"
           ]
@@ -362,7 +362,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 88,
+          "y": 92,
           "w": 344,
           "h": 30,
           "rx": 8,
@@ -371,7 +371,7 @@
         {
           "text": "managed, you edited it",
           "x": 20,
-          "y": 108,
+          "y": 112,
           "for": [
             "a1"
           ]
@@ -379,7 +379,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 122V132",
+          "d": "M40 128V140",
           "head": "end",
           "id": "e1"
         },
@@ -387,7 +387,7 @@
           "state": "state",
           "shape": "rect",
           "x": 40,
-          "y": 134,
+          "y": 142,
           "w": 312,
           "h": 26,
           "rx": 8,
@@ -395,8 +395,8 @@
         },
         {
           "text": "3-way merged",
-          "x": 52,
-          "y": 152,
+          "x": 60,
+          "y": 158,
           "for": [
             "b1"
           ]
@@ -405,7 +405,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 166,
+          "y": 174,
           "w": 344,
           "h": 30,
           "rx": 8,
@@ -414,7 +414,7 @@
         {
           "text": "merge conflict",
           "x": 20,
-          "y": 186,
+          "y": 194,
           "for": [
             "a2"
           ]
@@ -422,7 +422,7 @@
         {
           "state": "return",
           "shape": "path",
-          "d": "M40 200V210",
+          "d": "M40 210V222",
           "open": "end",
           "id": "e2"
         },
@@ -430,7 +430,7 @@
           "state": "state",
           "shape": "rect",
           "x": 40,
-          "y": 212,
+          "y": 224,
           "w": 312,
           "h": 26,
           "rx": 8,
@@ -438,8 +438,8 @@
         },
         {
           "text": "<name>.new beside it",
-          "x": 52,
-          "y": 230,
+          "x": 60,
+          "y": 240,
           "style": "mono",
           "for": [
             "b2"
@@ -449,7 +449,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 244,
+          "y": 256,
           "w": 344,
           "h": 30,
           "rx": 8,
@@ -458,7 +458,7 @@
         {
           "text": "no longer shipped, untouched",
           "x": 20,
-          "y": 264,
+          "y": 276,
           "for": [
             "a3"
           ]
@@ -466,7 +466,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 278V288",
+          "d": "M40 292V304",
           "head": "end",
           "id": "e3"
         },
@@ -474,7 +474,7 @@
           "state": "state",
           "shape": "rect",
           "x": 40,
-          "y": 290,
+          "y": 306,
           "w": 312,
           "h": 26,
           "rx": 8,
@@ -482,8 +482,8 @@
         },
         {
           "text": "removed",
-          "x": 52,
-          "y": 308,
+          "x": 60,
+          "y": 322,
           "for": [
             "b3"
           ]
@@ -492,7 +492,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 322,
+          "y": 338,
           "w": 344,
           "h": 30,
           "rx": 8,
@@ -501,7 +501,7 @@
         {
           "text": "no longer shipped, may hold yours",
           "x": 20,
-          "y": 342,
+          "y": 358,
           "for": [
             "a4"
           ]
@@ -509,7 +509,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 356V366",
+          "d": "M40 374V386",
           "head": "end",
           "id": "e4"
         },
@@ -517,7 +517,7 @@
           "state": "state",
           "shape": "rect",
           "x": 40,
-          "y": 368,
+          "y": 388,
           "w": 312,
           "h": 26,
           "rx": 8,
@@ -525,8 +525,8 @@
         },
         {
           "text": "kept, unmanaged",
-          "x": 52,
-          "y": 386,
+          "x": 60,
+          "y": 404,
           "for": [
             "b4"
           ]
@@ -534,10 +534,10 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M24 412H300",
+          "d": "M24 432H300",
           "cross": {
             "cx": 162,
-            "cy": 412,
+            "cy": 432,
             "size": 12
           },
           "id": "f1"
@@ -545,7 +545,7 @@
         {
           "text": "your edit overwritten",
           "x": 162,
-          "y": 440,
+          "y": 460,
           "anchor": "middle",
           "style": "mute",
           "for": [

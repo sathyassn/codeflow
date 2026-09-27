@@ -120,7 +120,7 @@
         {
           "text": "exit 0",
           "x": 316,
-          "y": 40,
+          "y": 39,
           "style": "strong",
           "for": [
             "x0"
@@ -148,7 +148,7 @@
         {
           "text": "exit 1, usually",
           "x": 316,
-          "y": 120,
+          "y": 119,
           "style": "strong",
           "for": [
             "x1"
@@ -176,7 +176,7 @@
         {
           "text": "exit 2",
           "x": 316,
-          "y": 200,
+          "y": 199,
           "style": "strong",
           "for": [
             "x2"
@@ -280,7 +280,7 @@
         {
           "text": "exit 0",
           "x": 54,
-          "y": 82,
+          "y": 81,
           "style": "strong",
           "for": [
             "x0"
@@ -308,7 +308,7 @@
         {
           "text": "exit 1, usually",
           "x": 54,
-          "y": 154,
+          "y": 153,
           "style": "strong",
           "for": [
             "x1"
@@ -336,7 +336,7 @@
         {
           "text": "exit 2",
           "x": 54,
-          "y": 226,
+          "y": 225,
           "style": "strong",
           "for": [
             "x2"

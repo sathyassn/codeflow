@@ -78,7 +78,7 @@
         {
           "text": "Herdr workspace",
           "x": 32,
-          "y": 48,
+          "y": 47,
           "style": "head"
         },
         {
@@ -94,7 +94,7 @@
         {
           "text": "your pane",
           "x": 46,
-          "y": 84,
+          "y": 81,
           "style": "strong",
           "for": [
             "y"
@@ -103,7 +103,7 @@
         {
           "text": "keeps focus",
           "x": 46,
-          "y": 104,
+          "y": 102,
           "style": "mute",
           "for": [
             "y"
@@ -122,7 +122,7 @@
         {
           "text": "peer tab",
           "x": 266,
-          "y": 84,
+          "y": 80,
           "style": "strong",
           "for": [
             "tb"
@@ -131,7 +131,7 @@
         {
           "text": "one per peer",
           "x": 266,
-          "y": 104,
+          "y": 101,
           "style": "mute",
           "for": [
             "tb"
@@ -179,7 +179,7 @@
         {
           "text": "lifecycle records",
           "x": 544,
-          "y": 84,
+          "y": 81,
           "style": "strong",
           "for": [
             "r"
@@ -188,7 +188,7 @@
         {
           "text": "owner-only state",
           "x": 544,
-          "y": 104,
+          "y": 102,
           "style": "mute",
           "for": [
             "r"
@@ -248,7 +248,7 @@
         {
           "text": "Herdr workspace",
           "x": 20,
-          "y": 32,
+          "y": 30,
           "style": "head"
         },
         {

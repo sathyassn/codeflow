@@ -417,7 +417,7 @@
         {
           "text": "traceability spine",
           "x": 700,
-          "y": 318,
+          "y": 320,
           "anchor": "end",
           "style": "mute",
           "for": [
@@ -450,7 +450,7 @@
         {
           "text": "WHY",
           "x": 8,
-          "y": 44,
+          "y": 43,
           "style": "strong",
           "for": [
             "b0"
@@ -486,7 +486,7 @@
         {
           "text": "RULES",
           "x": 8,
-          "y": 94,
+          "y": 93,
           "style": "strong",
           "for": [
             "b1"
@@ -522,7 +522,7 @@
         {
           "text": "WHAT",
           "x": 8,
-          "y": 144,
+          "y": 143,
           "style": "strong",
           "for": [
             "b2"
@@ -558,7 +558,7 @@
         {
           "text": "WORK",
           "x": 8,
-          "y": 194,
+          "y": 193,
           "style": "strong",
           "for": [
             "b3"
@@ -594,7 +594,7 @@
         {
           "text": "HOW",
           "x": 8,
-          "y": 244,
+          "y": 243,
           "style": "strong",
           "for": [
             "b4"
@@ -630,7 +630,7 @@
         {
           "text": "TRACE",
           "x": 8,
-          "y": 294,
+          "y": 293,
           "style": "strong",
           "for": [
             "b5"

@@ -106,7 +106,7 @@
         {
           "text": "your machine, your user only",
           "x": 206,
-          "y": 48,
+          "y": 46,
           "style": "head"
         },
         {
@@ -123,7 +123,7 @@
         {
           "text": "loopback service",
           "x": 222,
-          "y": 88,
+          "y": 83,
           "style": "strong",
           "for": [
             "s"
@@ -132,7 +132,7 @@
         {
           "text": "127.0.0.1 only",
           "x": 222,
-          "y": 110,
+          "y": 105,
           "style": "mono",
           "for": [
             "s"
@@ -141,7 +141,7 @@
         {
           "text": "one per session",
           "x": 222,
-          "y": 128,
+          "y": 126,
           "style": "mute",
           "for": [
             "s"
@@ -160,7 +160,7 @@
         {
           "text": "isolated browser",
           "x": 498,
-          "y": 88,
+          "y": 85,
           "style": "strong",
           "for": [
             "b"
@@ -169,7 +169,7 @@
         {
           "text": "its own profile",
           "x": 498,
-          "y": 110,
+          "y": 107,
           "for": [
             "b"
           ]
@@ -206,7 +206,7 @@
         {
           "text": "append-only",
           "x": 222,
-          "y": 200,
+          "y": 202,
           "style": "mute",
           "for": [
             "l"
@@ -254,7 +254,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 358,
+      "height": 357,
       "draw": [
         {
           "state": "agentpart",
@@ -304,19 +304,19 @@
           "x": 8,
           "y": 98,
           "w": 344,
-          "h": 250
+          "h": 249
         },
         {
           "text": "your machine, your user only",
           "x": 20,
-          "y": 120,
+          "y": 123,
           "style": "head"
         },
         {
           "state": "service",
           "shape": "rect",
           "x": 20,
-          "y": 134,
+          "y": 139,
           "w": 320,
           "h": 56,
           "rx": 8,
@@ -326,7 +326,7 @@
         {
           "text": "loopback service",
           "x": 34,
-          "y": 158,
+          "y": 161,
           "style": "strong",
           "for": [
             "s"
@@ -335,7 +335,7 @@
         {
           "text": "127.0.0.1 only",
           "x": 34,
-          "y": 180,
+          "y": 183,
           "style": "mono",
           "for": [
             "s"
@@ -344,14 +344,14 @@
         {
           "state": "talks",
           "shape": "path",
-          "d": "M60 194V218",
+          "d": "M60 199V223",
           "head": "end",
           "id": "e3"
         },
         {
           "state": "talks",
           "shape": "path",
-          "d": "M100 218V194",
+          "d": "M100 223V199",
           "head": "end",
           "id": "e4"
         },
@@ -359,7 +359,7 @@
           "state": "browser",
           "shape": "rect",
           "x": 20,
-          "y": 220,
+          "y": 225,
           "w": 150,
           "h": 56,
           "rx": 8,
@@ -368,7 +368,7 @@
         {
           "text": "isolated",
           "x": 34,
-          "y": 244,
+          "y": 249,
           "style": "strong",
           "for": [
             "b"
@@ -377,7 +377,7 @@
         {
           "text": "browser",
           "x": 34,
-          "y": 266,
+          "y": 271,
           "style": "strong",
           "for": [
             "b"
@@ -386,7 +386,7 @@
         {
           "state": "talks",
           "shape": "path",
-          "d": "M280 194V218",
+          "d": "M280 199V223",
           "head": "end",
           "id": "e5"
         },
@@ -394,7 +394,7 @@
           "state": "service",
           "shape": "rect",
           "x": 190,
-          "y": 220,
+          "y": 225,
           "w": 150,
           "h": 56,
           "rx": 8,
@@ -404,7 +404,7 @@
         {
           "text": "feedback",
           "x": 204,
-          "y": 244,
+          "y": 249,
           "style": "strong",
           "for": [
             "l"
@@ -413,7 +413,7 @@
         {
           "text": "ledger",
           "x": 204,
-          "y": 266,
+          "y": 271,
           "style": "strong",
           "for": [
             "l"
@@ -422,7 +422,7 @@
         {
           "text": "nothing is committed",
           "x": 20,
-          "y": 318,
+          "y": 317,
           "style": "mute"
         }
       ]

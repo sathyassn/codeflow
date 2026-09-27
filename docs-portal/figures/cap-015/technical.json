@@ -62,14 +62,14 @@
           "shape": "rect",
           "x": 16,
           "y": 90,
-          "w": 120,
+          "w": 110,
           "h": 36,
           "rx": 8,
           "id": "na"
         },
         {
           "text": "not adopted",
-          "x": 76,
+          "x": 71,
           "y": 113,
           "anchor": "middle",
           "for": [
@@ -79,13 +79,13 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M138 108H198",
+          "d": "M128 108H198",
           "head": "end",
           "id": "t1"
         },
         {
           "text": "setup",
-          "x": 168,
+          "x": 163,
           "y": 96,
           "anchor": "middle",
           "style": "mono",
@@ -106,7 +106,7 @@
         {
           "text": "managed",
           "x": 261,
-          "y": 113,
+          "y": 112,
           "anchor": "middle",
           "for": [
             "m"
@@ -178,7 +178,7 @@
         {
           "text": "locally edited",
           "x": 275,
-          "y": 211,
+          "y": 212,
           "anchor": "middle",
           "for": [
             "ed"
@@ -187,7 +187,7 @@
         {
           "text": "update stops",
           "x": 275,
-          "y": 232,
+          "y": 233,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -253,7 +253,7 @@
         {
           "text": "not adopted",
           "x": 83,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "for": [
             "na"
@@ -288,7 +288,7 @@
         {
           "text": "managed",
           "x": 83,
-          "y": 113,
+          "y": 112,
           "anchor": "middle",
           "for": [
             "m"
@@ -304,7 +304,7 @@
         {
           "text": "transfer --confirm",
           "x": 200,
-          "y": 76,
+          "y": 74,
           "style": "mono",
           "for": [
             "t2"
@@ -323,7 +323,7 @@
         {
           "text": "transferred",
           "x": 276,
-          "y": 113,
+          "y": 112,
           "anchor": "middle",
           "for": [
             "tr"
@@ -338,7 +338,7 @@
         },
         {
           "text": "local edit",
-          "x": 52,
+          "x": 45,
           "y": 166,
           "style": "mute",
           "for": [
@@ -358,7 +358,7 @@
         {
           "text": "locally edited",
           "x": 83,
-          "y": 221,
+          "y": 222,
           "anchor": "middle",
           "for": [
             "ed"
@@ -367,7 +367,7 @@
         {
           "text": "update stops",
           "x": 83,
-          "y": 242,
+          "y": 243,
           "anchor": "middle",
           "style": "mute",
           "for": [

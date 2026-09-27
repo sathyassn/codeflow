@@ -133,7 +133,7 @@
         {
           "text": "agents stop",
           "x": 298,
-          "y": 114,
+          "y": 115,
           "anchor": "end",
           "style": "mute",
           "for": [
@@ -176,7 +176,7 @@
         {
           "text": "human dispatches",
           "x": 394,
-          "y": 114,
+          "y": 115,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -261,7 +261,7 @@
         {
           "text": "work PR",
           "x": 93,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -271,7 +271,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M93 48V66",
+          "d": "M93 48V65",
           "head": "end",
           "id": "f1"
         },
@@ -298,7 +298,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M93 106V150",
+          "d": "M93 107V150",
           "head": "end",
           "id": "f2"
         },
@@ -364,7 +364,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M93 222V240",
+          "d": "M93 222V239",
           "head": "end",
           "id": "f4"
         },
@@ -391,7 +391,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M93 280V298",
+          "d": "M93 281V297",
           "head": "end",
           "id": "f5"
         },

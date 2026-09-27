@@ -185,7 +185,7 @@
         {
           "text": "proposed",
           "x": 83,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "for": [
             "pr"
@@ -194,7 +194,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 48V74",
+          "d": "M83 49V73",
           "head": "end",
           "id": "t1"
         },
@@ -220,7 +220,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 114V160",
+          "d": "M83 115V159",
           "head": "end",
           "id": "t2"
         },

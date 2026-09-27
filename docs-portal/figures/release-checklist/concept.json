@@ -77,14 +77,14 @@
           "shape": "rect",
           "x": 16,
           "y": 50,
-          "w": 96,
+          "w": 108,
           "h": 40,
           "rx": 8,
           "id": "s0"
         },
         {
           "text": "1. scope",
-          "x": 64,
+          "x": 70,
           "y": 75,
           "anchor": "middle",
           "style": "strong",
@@ -95,23 +95,23 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M114 70H130",
+          "d": "M126 70H142",
           "head": "end",
           "id": "f0"
         },
         {
           "state": "section",
           "shape": "rect",
-          "x": 132,
+          "x": 144,
           "y": 50,
-          "w": 96,
+          "w": 108,
           "h": 40,
           "rx": 8,
           "id": "s1"
         },
         {
           "text": "2. gates",
-          "x": 180,
+          "x": 198,
           "y": 75,
           "anchor": "middle",
           "style": "strong",
@@ -122,23 +122,23 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M230 70H246",
+          "d": "M254 70H270",
           "head": "end",
           "id": "f1"
         },
         {
           "state": "section",
           "shape": "rect",
-          "x": 248,
+          "x": 272,
           "y": 50,
-          "w": 96,
+          "w": 108,
           "h": 40,
           "rx": 8,
           "id": "s2"
         },
         {
           "text": "3. platforms",
-          "x": 296,
+          "x": 326,
           "y": 75,
           "anchor": "middle",
           "style": "strong",
@@ -149,23 +149,23 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M346 70H362",
+          "d": "M382 70H398",
           "head": "end",
           "id": "f2"
         },
         {
           "state": "section",
           "shape": "rect",
-          "x": 364,
+          "x": 400,
           "y": 50,
-          "w": 96,
+          "w": 108,
           "h": 40,
           "rx": 8,
           "id": "s3"
         },
         {
           "text": "4. models",
-          "x": 412,
+          "x": 454,
           "y": 75,
           "anchor": "middle",
           "style": "strong",
@@ -176,23 +176,23 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M462 70H478",
+          "d": "M510 70H526",
           "head": "end",
           "id": "f3"
         },
         {
           "state": "section",
           "shape": "rect",
-          "x": 480,
+          "x": 528,
           "y": 50,
-          "w": 96,
+          "w": 108,
           "h": 40,
           "rx": 8,
           "id": "s4"
         },
         {
           "text": "5. publish",
-          "x": 528,
+          "x": 582,
           "y": 75,
           "anchor": "middle",
           "style": "strong",
@@ -203,14 +203,14 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M598 70H650",
+          "d": "M638 70H680",
           "head": "end",
           "id": "f4"
         },
         {
           "state": "human",
           "shape": "circle",
-          "cx": 664,
+          "cx": 694,
           "cy": 70,
           "r": 10,
           "id": "h"
@@ -218,7 +218,7 @@
         {
           "text": "release decision",
           "x": 704,
-          "y": 108,
+          "y": 115,
           "anchor": "end",
           "style": "strong",
           "for": [
@@ -228,7 +228,7 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M160 92V130H330",
+          "d": "M172 92V130H330",
           "id": "x"
         },
         {
@@ -243,7 +243,7 @@
         {
           "text": "a box without evidence stops the run",
           "x": 342,
-          "y": 135,
+          "y": 142,
           "style": "mute",
           "for": [
             "st",
@@ -257,7 +257,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 310,
+      "height": 326,
       "elongation_max": 2.2,
       "reason": "The five sections run top to bottom at phone width instead of across.",
       "draw": [
@@ -284,7 +284,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M93 48V60",
+          "d": "M93 49V63",
           "head": "end",
           "id": "f0"
         },
@@ -292,7 +292,7 @@
           "state": "section",
           "shape": "rect",
           "x": 8,
-          "y": 62,
+          "y": 66,
           "w": 170,
           "h": 36,
           "rx": 8,
@@ -301,7 +301,7 @@
         {
           "text": "2. gates",
           "x": 93,
-          "y": 85,
+          "y": 89,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -311,7 +311,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M93 100V112",
+          "d": "M93 105V119",
           "head": "end",
           "id": "f1"
         },
@@ -319,7 +319,7 @@
           "state": "section",
           "shape": "rect",
           "x": 8,
-          "y": 114,
+          "y": 122,
           "w": 170,
           "h": 36,
           "rx": 8,
@@ -328,7 +328,7 @@
         {
           "text": "3. platforms",
           "x": 93,
-          "y": 137,
+          "y": 145,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -338,7 +338,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M93 152V164",
+          "d": "M93 161V175",
           "head": "end",
           "id": "f2"
         },
@@ -346,7 +346,7 @@
           "state": "section",
           "shape": "rect",
           "x": 8,
-          "y": 166,
+          "y": 178,
           "w": 170,
           "h": 36,
           "rx": 8,
@@ -355,7 +355,7 @@
         {
           "text": "4. models",
           "x": 93,
-          "y": 189,
+          "y": 201,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -365,7 +365,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M93 204V216",
+          "d": "M93 217V231",
           "head": "end",
           "id": "f3"
         },
@@ -373,7 +373,7 @@
           "state": "section",
           "shape": "rect",
           "x": 8,
-          "y": 218,
+          "y": 234,
           "w": 170,
           "h": 36,
           "rx": 8,
@@ -382,7 +382,7 @@
         {
           "text": "5. publish",
           "x": 93,
-          "y": 241,
+          "y": 257,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -392,7 +392,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M93 256V276",
+          "d": "M93 273V292",
           "head": "end",
           "id": "f4"
         },
@@ -400,14 +400,14 @@
           "state": "human",
           "shape": "circle",
           "cx": 93,
-          "cy": 290,
+          "cy": 306,
           "r": 10,
           "id": "h"
         },
         {
           "text": "release decision",
           "x": 114,
-          "y": 295,
+          "y": 311,
           "style": "strong",
           "for": [
             "h"
@@ -416,22 +416,22 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M180 80H270",
+          "d": "M180 84H270",
           "id": "x"
         },
         {
           "state": "stop",
           "shape": "line",
           "x1": 270,
-          "y1": 68,
+          "y1": 72,
           "x2": 270,
-          "y2": 92,
+          "y2": 96,
           "id": "st"
         },
         {
           "text": "no evidence: stop",
           "x": 352,
-          "y": 116,
+          "y": 120,
           "anchor": "end",
           "style": "mute",
           "for": [

@@ -340,7 +340,7 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M288 110V128H100V144",
+          "d": "M288 112V128H100V143",
           "head": "end",
           "id": "d3"
         },
@@ -415,7 +415,7 @@
         {
           "state": "compares",
           "shape": "path",
-          "d": "M60 184V206",
+          "d": "M60 185V206",
           "square": "end",
           "id": "c"
         },

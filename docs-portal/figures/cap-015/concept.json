@@ -161,7 +161,7 @@
         {
           "text": "search and llms.txt",
           "x": 346,
-          "y": 118,
+          "y": 116,
           "for": [
             "g"
           ]
@@ -169,7 +169,7 @@
         {
           "text": "disposable, rebuilt from a commit",
           "x": 346,
-          "y": 140,
+          "y": 138,
           "style": "mute",
           "for": [
             "g"
@@ -247,7 +247,7 @@
           "x": 8,
           "y": 10,
           "w": 344,
-          "h": 94,
+          "h": 88,
           "rx": 8,
           "cap": "end",
           "id": "s"
@@ -291,14 +291,14 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M60 108V136",
+          "d": "M60 102V136",
           "head": "end",
           "id": "e1"
         },
         {
           "text": "derives",
           "x": 76,
-          "y": 127,
+          "y": 124,
           "style": "mute",
           "for": [
             "e1"
@@ -334,14 +334,14 @@
         {
           "state": "points",
           "shape": "path",
-          "d": "M60 208V236",
+          "d": "M60 208V242",
           "open": "end",
           "id": "e2"
         },
         {
           "text": "points to",
           "x": 76,
-          "y": 227,
+          "y": 230,
           "style": "mute",
           "for": [
             "e2"
@@ -351,7 +351,7 @@
           "state": "records",
           "shape": "rect",
           "x": 8,
-          "y": 240,
+          "y": 246,
           "w": 344,
           "h": 44,
           "rx": 6,
@@ -360,7 +360,7 @@
         {
           "text": "decision and task folders",
           "x": 22,
-          "y": 267,
+          "y": 273,
           "for": [
             "r"
           ]

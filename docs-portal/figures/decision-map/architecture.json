@@ -273,7 +273,7 @@
         {
           "text": "0006",
           "x": 630,
-          "y": 133,
+          "y": 130,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -309,7 +309,7 @@
         {
           "text": "0046",
           "x": 630,
-          "y": 193,
+          "y": 190,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -345,7 +345,7 @@
         {
           "text": "0058",
           "x": 630,
-          "y": 253,
+          "y": 250,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -579,7 +579,7 @@
         {
           "text": "0006",
           "x": 300,
-          "y": 111,
+          "y": 108,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -615,7 +615,7 @@
         {
           "text": "0046",
           "x": 300,
-          "y": 171,
+          "y": 168,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -651,7 +651,7 @@
         {
           "text": "0058",
           "x": 300,
-          "y": 231,
+          "y": 228,
           "anchor": "middle",
           "style": "mono",
           "for": [

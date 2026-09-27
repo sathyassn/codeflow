@@ -86,7 +86,7 @@
         {
           "text": "yaml fence",
           "x": 30,
-          "y": 118,
+          "y": 115,
           "style": "strong",
           "for": [
             "f"
@@ -248,7 +248,7 @@
         {
           "text": "epics and ADRs",
           "x": 594,
-          "y": 208,
+          "y": 207,
           "style": "strong",
           "for": [
             "k"

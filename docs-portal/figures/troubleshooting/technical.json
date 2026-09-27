@@ -110,7 +110,7 @@
         {
           "text": "ok",
           "x": 316,
-          "y": 42,
+          "y": 41,
           "style": "mono",
           "for": [
             "ok"
@@ -138,7 +138,7 @@
         {
           "text": "warn",
           "x": 316,
-          "y": 120,
+          "y": 119,
           "style": "mono",
           "for": [
             "wn"
@@ -166,7 +166,7 @@
         {
           "text": "FAIL",
           "x": 316,
-          "y": 198,
+          "y": 197,
           "style": "mono",
           "for": [
             "fl"
@@ -191,7 +191,7 @@
         {
           "text": "fix,",
           "x": 672,
-          "y": 118,
+          "y": 117,
           "style": "mute",
           "for": [
             "fx"
@@ -274,7 +274,7 @@
         {
           "text": "ok",
           "x": 54,
-          "y": 82,
+          "y": 81,
           "style": "mono",
           "for": [
             "ok"
@@ -302,7 +302,7 @@
         {
           "text": "warn",
           "x": 54,
-          "y": 154,
+          "y": 153,
           "style": "mono",
           "for": [
             "wn"
@@ -330,7 +330,7 @@
         {
           "text": "FAIL",
           "x": 54,
-          "y": 226,
+          "y": 225,
           "style": "mono",
           "for": [
             "fl"
@@ -355,7 +355,7 @@
         {
           "text": "fix, rerun",
           "x": 352,
-          "y": 280,
+          "y": 281,
           "anchor": "end",
           "style": "mute",
           "for": [

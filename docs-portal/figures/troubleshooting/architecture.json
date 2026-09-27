@@ -11,11 +11,6 @@
     "caption": "A FAIL comes only from hooks, config, permissions, model bindings, the delegate round trip or repository integrity.",
     "states": [
       {
-        "name": "group",
-        "mark": "layer",
-        "means": "What the checks read"
-      },
-      {
         "name": "canfail",
         "mark": "agent",
         "means": "Can fail"
@@ -59,390 +54,337 @@
     ],
     "wide": {
       "width": 720,
-      "height": 332,
+      "height": 298,
       "draw": [
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 16,
-          "y": 16,
-          "w": 224,
-          "h": 150,
-          "rx": 8,
-          "id": "g0"
-        },
-        {
           "text": "Git hooks and CI",
-          "x": 30,
-          "y": 40,
-          "style": "strong",
-          "for": [
-            "g0"
-          ]
+          "x": 16,
+          "y": 24,
+          "style": "strong"
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 40,
-          "cy": 64,
-          "r": 6,
+          "cx": 239,
+          "cy": 19,
+          "r": 7,
           "id": "g0c0"
         },
         {
           "text": "hooks",
-          "x": 56,
-          "y": 69,
+          "x": 255,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c0",
-            "g0"
+            "g0c0"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 40,
-          "cy": 88,
-          "r": 6,
+          "cx": 332,
+          "cy": 19,
+          "r": 7,
           "id": "g0c1"
         },
         {
           "text": "ci-perimeter",
-          "x": 56,
-          "y": 93,
+          "x": 348,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c1",
-            "g0"
+            "g0c1"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 248,
-          "y": 16,
-          "w": 224,
-          "h": 150,
-          "rx": 8,
-          "id": "g1"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 42,
+          "x2": 704,
+          "y2": 42
         },
         {
           "text": "Harness wiring",
-          "x": 262,
-          "y": 40,
-          "style": "strong",
-          "for": [
-            "g1"
-          ]
+          "x": 16,
+          "y": 70,
+          "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 272,
-          "cy": 64,
-          "r": 6,
+          "cx": 239,
+          "cy": 65,
+          "r": 7,
           "id": "g1c0"
         },
         {
           "text": "claude",
-          "x": 288,
-          "y": 69,
+          "x": 255,
+          "y": 70,
           "style": "mono",
           "for": [
-            "g1c0",
-            "g1"
+            "g1c0"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 272,
-          "cy": 88,
-          "r": 6,
+          "cx": 340,
+          "cy": 65,
+          "r": 7,
           "id": "g1c1"
         },
         {
           "text": "codex",
-          "x": 288,
-          "y": 93,
+          "x": 356,
+          "y": 70,
           "style": "mono",
           "for": [
-            "g1c1",
-            "g1"
+            "g1c1"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 272,
-          "cy": 112,
-          "r": 6,
+          "cx": 433,
+          "cy": 65,
+          "r": 7,
           "id": "g1c2"
         },
         {
           "text": "grok",
-          "x": 288,
-          "y": 117,
+          "x": 449,
+          "y": 70,
           "style": "mono",
           "for": [
-            "g1c2",
-            "g1"
+            "g1c2"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 480,
-          "y": 16,
-          "w": 224,
-          "h": 150,
-          "rx": 8,
-          "id": "g2"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 88,
+          "x2": 704,
+          "y2": 88
         },
         {
           "text": "Policy and config",
-          "x": 494,
-          "y": 40,
-          "style": "strong",
-          "for": [
-            "g2"
-          ]
+          "x": 16,
+          "y": 116,
+          "style": "strong"
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 504,
-          "cy": 64,
-          "r": 6,
+          "cx": 239,
+          "cy": 111,
+          "r": 7,
           "id": "g2c0"
         },
         {
           "text": "config",
-          "x": 520,
-          "y": 69,
+          "x": 255,
+          "y": 116,
           "style": "mono",
           "for": [
-            "g2c0",
-            "g2"
+            "g2c0"
           ]
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 504,
-          "cy": 88,
-          "r": 6,
+          "cx": 340,
+          "cy": 111,
+          "r": 7,
           "id": "g2c1"
         },
         {
           "text": "permissions",
-          "x": 520,
-          "y": 93,
+          "x": 356,
+          "y": 116,
           "style": "mono",
           "for": [
-            "g2c1",
-            "g2"
+            "g2c1"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 16,
-          "y": 176,
-          "w": 224,
-          "h": 150,
-          "rx": 8,
-          "id": "g3"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 134,
+          "x2": 704,
+          "y2": 134
         },
         {
           "text": "Delegates, models, network",
-          "x": 30,
-          "y": 200,
-          "style": "strong",
-          "for": [
-            "g3"
-          ]
+          "x": 16,
+          "y": 162,
+          "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 40,
-          "cy": 224,
-          "r": 6,
+          "cx": 239,
+          "cy": 157,
+          "r": 7,
           "id": "g3c0"
         },
         {
           "text": "delegates",
-          "x": 56,
-          "y": 229,
+          "x": 255,
+          "y": 162,
           "style": "mono",
           "for": [
-            "g3c0",
-            "g3"
+            "g3c0"
           ]
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 40,
-          "cy": 248,
-          "r": 6,
+          "cx": 365,
+          "cy": 157,
+          "r": 7,
           "id": "g3c1"
         },
         {
           "text": "model-bindings",
-          "x": 56,
-          "y": 253,
+          "x": 381,
+          "y": 162,
           "style": "mono",
           "for": [
-            "g3c1",
-            "g3"
+            "g3c1"
           ]
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 40,
-          "cy": 272,
-          "r": 6,
+          "cx": 239,
+          "cy": 185,
+          "r": 7,
           "id": "g3c2"
         },
         {
           "text": "delegate-roundtrip",
-          "x": 56,
-          "y": 277,
+          "x": 255,
+          "y": 190,
           "style": "mono",
           "for": [
-            "g3c2",
-            "g3"
+            "g3c2"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 40,
-          "cy": 296,
-          "r": 6,
+          "cx": 441,
+          "cy": 185,
+          "r": 7,
           "id": "g3c3"
         },
         {
           "text": "network",
-          "x": 56,
-          "y": 301,
+          "x": 457,
+          "y": 190,
           "style": "mono",
           "for": [
-            "g3c3",
-            "g3"
+            "g3c3"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 248,
-          "y": 176,
-          "w": 224,
-          "h": 150,
-          "rx": 8,
-          "id": "g4"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 208,
+          "x2": 704,
+          "y2": 208
         },
         {
           "text": "Repository, managed files",
-          "x": 262,
-          "y": 200,
-          "style": "strong",
-          "for": [
-            "g4"
-          ]
+          "x": 16,
+          "y": 236,
+          "style": "strong"
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 272,
-          "cy": 224,
-          "r": 6,
+          "cx": 239,
+          "cy": 231,
+          "r": 7,
           "id": "g4c0"
         },
         {
           "text": "repo-integrity",
-          "x": 288,
-          "y": 229,
+          "x": 255,
+          "y": 236,
           "style": "mono",
           "for": [
-            "g4c0",
-            "g4"
+            "g4c0"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 272,
-          "cy": 248,
-          "r": 6,
+          "cx": 408,
+          "cy": 231,
+          "r": 7,
           "id": "g4c1"
         },
         {
           "text": "managed-drift",
-          "x": 288,
-          "y": 253,
+          "x": 424,
+          "y": 236,
           "style": "mono",
           "for": [
-            "g4c1",
-            "g4"
+            "g4c1"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 480,
-          "y": 176,
-          "w": 224,
-          "h": 150,
-          "rx": 8,
-          "id": "g5"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 254,
+          "x2": 704,
+          "y2": 254
         },
         {
           "text": "Customization, tests",
-          "x": 494,
-          "y": 200,
-          "style": "strong",
-          "for": [
-            "g5"
-          ]
+          "x": 16,
+          "y": 282,
+          "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 504,
-          "cy": 224,
-          "r": 6,
+          "cx": 239,
+          "cy": 277,
+          "r": 7,
           "id": "g5c0"
         },
         {
           "text": "customization",
-          "x": 520,
-          "y": 229,
+          "x": 255,
+          "y": 282,
           "style": "mono",
           "for": [
-            "g5c0",
-            "g5"
+            "g5c0"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 504,
-          "cy": 248,
-          "r": 6,
+          "cx": 399,
+          "cy": 277,
+          "r": 7,
           "id": "g5c1"
         },
         {
           "text": "test-config",
-          "x": 520,
-          "y": 253,
+          "x": 415,
+          "y": 282,
           "style": "mono",
           "for": [
-            "g5c1",
-            "g5"
+            "g5c1"
           ]
         }
       ]
@@ -452,390 +394,337 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 402,
+      "height": 426,
       "draw": [
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 8,
-          "y": 10,
-          "w": 168,
-          "h": 90,
-          "rx": 8,
-          "id": "g0"
-        },
-        {
           "text": "Git hooks and CI",
-          "x": 20,
-          "y": 34,
-          "style": "strong",
-          "for": [
-            "g0"
-          ]
+          "x": 8,
+          "y": 24,
+          "style": "strong"
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 28,
-          "cy": 56,
+          "cx": 26,
+          "cy": 47,
           "r": 6,
           "id": "g0c0"
         },
         {
           "text": "hooks",
-          "x": 42,
-          "y": 61,
+          "x": 40,
+          "y": 52,
           "style": "mono",
           "for": [
-            "g0c0",
-            "g0"
+            "g0c0"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 28,
-          "cy": 80,
+          "cx": 109,
+          "cy": 47,
           "r": 6,
           "id": "g0c1"
         },
         {
           "text": "ci-perimeter",
-          "x": 42,
-          "y": 85,
+          "x": 123,
+          "y": 52,
           "style": "mono",
           "for": [
-            "g0c1",
-            "g0"
+            "g0c1"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 184,
-          "y": 10,
-          "w": 168,
-          "h": 114,
-          "rx": 8,
-          "id": "g1"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 66,
+          "x2": 352,
+          "y2": 66
         },
         {
           "text": "Harness wiring",
-          "x": 196,
-          "y": 34,
-          "style": "strong",
-          "for": [
-            "g1"
-          ]
+          "x": 8,
+          "y": 90,
+          "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 204,
-          "cy": 56,
+          "cx": 26,
+          "cy": 113,
           "r": 6,
           "id": "g1c0"
         },
         {
           "text": "claude",
-          "x": 218,
-          "y": 61,
+          "x": 40,
+          "y": 118,
           "style": "mono",
           "for": [
-            "g1c0",
-            "g1"
+            "g1c0"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 204,
-          "cy": 80,
+          "cx": 117,
+          "cy": 113,
           "r": 6,
           "id": "g1c1"
         },
         {
           "text": "codex",
-          "x": 218,
-          "y": 85,
+          "x": 131,
+          "y": 118,
           "style": "mono",
           "for": [
-            "g1c1",
-            "g1"
+            "g1c1"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 204,
-          "cy": 104,
+          "cx": 200,
+          "cy": 113,
           "r": 6,
           "id": "g1c2"
         },
         {
           "text": "grok",
-          "x": 218,
-          "y": 109,
+          "x": 214,
+          "y": 118,
           "style": "mono",
           "for": [
-            "g1c2",
-            "g1"
+            "g1c2"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 8,
-          "y": 110,
-          "w": 168,
-          "h": 90,
-          "rx": 8,
-          "id": "g2"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 132,
+          "x2": 352,
+          "y2": 132
         },
         {
           "text": "Policy and config",
-          "x": 20,
-          "y": 134,
-          "style": "strong",
-          "for": [
-            "g2"
-          ]
+          "x": 8,
+          "y": 156,
+          "style": "strong"
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 28,
-          "cy": 156,
+          "cx": 26,
+          "cy": 179,
           "r": 6,
           "id": "g2c0"
         },
         {
           "text": "config",
-          "x": 42,
-          "y": 161,
+          "x": 40,
+          "y": 184,
           "style": "mono",
           "for": [
-            "g2c0",
-            "g2"
+            "g2c0"
           ]
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 28,
-          "cy": 180,
+          "cx": 117,
+          "cy": 179,
           "r": 6,
           "id": "g2c1"
         },
         {
           "text": "permissions",
-          "x": 42,
-          "y": 185,
+          "x": 131,
+          "y": 184,
           "style": "mono",
           "for": [
-            "g2c1",
-            "g2"
+            "g2c1"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 8,
-          "y": 210,
-          "w": 168,
-          "h": 90,
-          "rx": 8,
-          "id": "g4"
-        },
-        {
-          "text": "Repository",
-          "x": 20,
-          "y": 234,
-          "style": "strong",
-          "for": [
-            "g4"
-          ]
-        },
-        {
-          "state": "canfail",
-          "shape": "circle",
-          "cx": 28,
-          "cy": 256,
-          "r": 6,
-          "id": "g4c0"
-        },
-        {
-          "text": "repo-integrity",
-          "x": 42,
-          "y": 261,
-          "style": "mono",
-          "for": [
-            "g4c0",
-            "g4"
-          ]
-        },
-        {
-          "state": "warnonly",
-          "shape": "circle",
-          "cx": 28,
-          "cy": 280,
-          "r": 6,
-          "id": "g4c1"
-        },
-        {
-          "text": "managed-drift",
-          "x": 42,
-          "y": 285,
-          "style": "mono",
-          "for": [
-            "g4c1",
-            "g4"
-          ]
-        },
-        {
-          "state": "group",
-          "shape": "rect",
-          "x": 184,
-          "y": 134,
-          "w": 168,
-          "h": 90,
-          "rx": 8,
-          "id": "g5"
-        },
-        {
-          "text": "Customization",
-          "x": 196,
-          "y": 158,
-          "style": "strong",
-          "for": [
-            "g5"
-          ]
-        },
-        {
-          "state": "warnonly",
-          "shape": "circle",
-          "cx": 204,
-          "cy": 180,
-          "r": 6,
-          "id": "g5c0"
-        },
-        {
-          "text": "customization",
-          "x": 218,
-          "y": 185,
-          "style": "mono",
-          "for": [
-            "g5c0",
-            "g5"
-          ]
-        },
-        {
-          "state": "warnonly",
-          "shape": "circle",
-          "cx": 204,
-          "cy": 204,
-          "r": 6,
-          "id": "g5c1"
-        },
-        {
-          "text": "test-config",
-          "x": 218,
-          "y": 209,
-          "style": "mono",
-          "for": [
-            "g5c1",
-            "g5"
-          ]
-        },
-        {
-          "state": "group",
-          "shape": "rect",
-          "x": 8,
-          "y": 310,
-          "w": 344,
-          "h": 90,
-          "rx": 8,
-          "id": "g3"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 198,
+          "x2": 352,
+          "y2": 198
         },
         {
           "text": "Delegates, models, network",
-          "x": 20,
-          "y": 334,
-          "style": "strong",
-          "for": [
-            "g3"
-          ]
+          "x": 8,
+          "y": 222,
+          "style": "strong"
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 20,
-          "cy": 356,
+          "cx": 26,
+          "cy": 245,
           "r": 6,
           "id": "g3c0"
         },
         {
           "text": "delegates",
-          "x": 34,
-          "y": 361,
+          "x": 40,
+          "y": 250,
           "style": "mono",
           "for": [
-            "g3c0",
-            "g3"
+            "g3c0"
           ]
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 212,
-          "cy": 356,
+          "cx": 142,
+          "cy": 245,
           "r": 6,
           "id": "g3c1"
         },
         {
           "text": "model-bindings",
-          "x": 226,
-          "y": 361,
+          "x": 156,
+          "y": 250,
           "style": "mono",
           "for": [
-            "g3c1",
-            "g3"
+            "g3c1"
           ]
         },
         {
           "state": "canfail",
           "shape": "circle",
-          "cx": 20,
-          "cy": 380,
+          "cx": 26,
+          "cy": 273,
           "r": 6,
           "id": "g3c2"
         },
         {
           "text": "delegate-roundtrip",
-          "x": 34,
-          "y": 385,
+          "x": 40,
+          "y": 278,
           "style": "mono",
           "for": [
-            "g3c2",
-            "g3"
+            "g3c2"
           ]
         },
         {
           "state": "warnonly",
           "shape": "circle",
-          "cx": 212,
-          "cy": 380,
+          "cx": 218,
+          "cy": 273,
           "r": 6,
           "id": "g3c3"
         },
         {
           "text": "network",
-          "x": 226,
-          "y": 385,
+          "x": 232,
+          "y": 278,
           "style": "mono",
           "for": [
-            "g3c3",
-            "g3"
+            "g3c3"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 292,
+          "x2": 352,
+          "y2": 292
+        },
+        {
+          "text": "Repository, managed files",
+          "x": 8,
+          "y": 316,
+          "style": "strong"
+        },
+        {
+          "state": "canfail",
+          "shape": "circle",
+          "cx": 26,
+          "cy": 339,
+          "r": 6,
+          "id": "g4c0"
+        },
+        {
+          "text": "repo-integrity",
+          "x": 40,
+          "y": 344,
+          "style": "mono",
+          "for": [
+            "g4c0"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 185,
+          "cy": 339,
+          "r": 6,
+          "id": "g4c1"
+        },
+        {
+          "text": "managed-drift",
+          "x": 199,
+          "y": 344,
+          "style": "mono",
+          "for": [
+            "g4c1"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 358,
+          "x2": 352,
+          "y2": 358
+        },
+        {
+          "text": "Customization, tests",
+          "x": 8,
+          "y": 382,
+          "style": "strong"
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 26,
+          "cy": 405,
+          "r": 6,
+          "id": "g5c0"
+        },
+        {
+          "text": "customization",
+          "x": 40,
+          "y": 410,
+          "style": "mono",
+          "for": [
+            "g5c0"
+          ]
+        },
+        {
+          "state": "warnonly",
+          "shape": "circle",
+          "cx": 176,
+          "cy": 405,
+          "r": 6,
+          "id": "g5c1"
+        },
+        {
+          "text": "test-config",
+          "x": 190,
+          "y": 410,
+          "style": "mono",
+          "for": [
+            "g5c1"
           ]
         }
       ]

@@ -140,7 +140,7 @@
         {
           "text": "grade, compare",
           "x": 290,
-          "y": 144,
+          "y": 146,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -358,7 +358,7 @@
         {
           "text": "promoted binding",
           "x": 20,
-          "y": 175,
+          "y": 174,
           "for": [
             "o1"
           ]
@@ -366,7 +366,7 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M60 190V210",
+          "d": "M60 191V209",
           "head": "end",
           "id": "d4"
         },
@@ -391,7 +391,7 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M60 250V270",
+          "d": "M60 251V269",
           "head": "end",
           "id": "d5"
         },
@@ -417,7 +417,7 @@
         {
           "state": "compares",
           "shape": "path",
-          "d": "M60 310V326",
+          "d": "M60 311V326",
           "square": "end",
           "id": "c1"
         },

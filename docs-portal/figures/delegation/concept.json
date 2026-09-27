@@ -93,7 +93,7 @@
         {
           "text": "your agent",
           "x": 64,
-          "y": 84,
+          "y": 83,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -199,7 +199,7 @@
         {
           "text": "commits",
           "x": 395,
-          "y": 132,
+          "y": 130,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -276,7 +276,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 314,
+      "height": 318,
       "draw": [
         {
           "state": "host",
@@ -289,7 +289,7 @@
         {
           "text": "your agent",
           "x": 198,
-          "y": 18,
+          "y": 16,
           "style": "strong",
           "for": [
             "h"
@@ -315,7 +315,7 @@
         {
           "text": "consult, read-only",
           "x": 22,
-          "y": 95,
+          "y": 96,
           "style": "strong",
           "for": [
             "c"
@@ -331,7 +331,7 @@
         {
           "text": "verdict",
           "x": 46,
-          "y": 46,
+          "y": 44,
           "style": "mute",
           "for": [
             "b"
@@ -340,7 +340,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M190 30C210 50 262 50 262 70",
+          "d": "M190 30C210 50 262 50 262 69",
           "head": "end",
           "id": "f2"
         },
@@ -366,14 +366,14 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M270 110V144",
+          "d": "M270 111V147",
           "head": "end",
           "id": "f3"
         },
         {
           "text": "commits",
           "x": 258,
-          "y": 131,
+          "y": 134,
           "anchor": "end",
           "style": "mute",
           "for": [
@@ -384,7 +384,7 @@
           "state": "gates",
           "shape": "rect",
           "x": 188,
-          "y": 146,
+          "y": 150,
           "w": 164,
           "h": 36,
           "rx": 8,
@@ -393,7 +393,7 @@
         {
           "text": "the same gates",
           "x": 202,
-          "y": 169,
+          "y": 173,
           "style": "strong",
           "for": [
             "g"
@@ -402,7 +402,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M270 184V210",
+          "d": "M270 189V214",
           "head": "end",
           "id": "f4"
         },
@@ -410,14 +410,14 @@
           "state": "human",
           "shape": "circle",
           "cx": 270,
-          "cy": 222,
+          "cy": 226,
           "r": 10,
           "id": "hu"
         },
         {
           "text": "a human lands it",
           "x": 270,
-          "y": 256,
+          "y": 260,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -427,10 +427,10 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M180 30V278H60",
+          "d": "M180 30V282H60",
           "cross": {
             "cx": 120,
-            "cy": 278,
+            "cy": 282,
             "size": 11
           },
           "id": "x"
@@ -438,7 +438,7 @@
         {
           "text": "a headless peer run",
           "x": 8,
-          "y": 304,
+          "y": 308,
           "for": [
             "x"
           ]

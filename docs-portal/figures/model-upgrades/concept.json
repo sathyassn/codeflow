@@ -118,7 +118,7 @@
         {
           "text": "until a full native run",
           "x": 60,
-          "y": 102,
+          "y": 105,
           "style": "mute",
           "for": [
             "s"
@@ -161,7 +161,7 @@
         {
           "text": "approval",
           "x": 398,
-          "y": 26,
+          "y": 25,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -359,7 +359,7 @@
         },
         {
           "text": "qualified binding",
-          "x": 20,
+          "x": 28,
           "y": 145,
           "style": "strong",
           "for": [
@@ -409,7 +409,7 @@
         },
         {
           "text": "ensemble",
-          "x": 20,
+          "x": 28,
           "y": 247,
           "style": "strong",
           "for": [

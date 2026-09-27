@@ -204,7 +204,7 @@
         {
           "text": "no move after",
           "x": 614,
-          "y": 76,
+          "y": 75,
           "style": "mute",
           "for": [
             "f2"
@@ -241,7 +241,7 @@
         {
           "text": "received",
           "x": 68,
-          "y": 35,
+          "y": 34,
           "anchor": "middle",
           "for": [
             "r"
@@ -250,7 +250,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M68 50V90",
+          "d": "M68 50V89",
           "head": "end",
           "id": "t1"
         },
@@ -285,14 +285,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 130V180",
+          "d": "M40 131V180",
           "head": "end",
           "id": "t2"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M110 130L222 180",
+          "d": "M110 131L222 180",
           "head": "end",
           "id": "t3"
         },
@@ -357,7 +357,7 @@
         {
           "text": "resolve before",
           "x": 318,
-          "y": 98,
+          "y": 97,
           "anchor": "end",
           "style": "mute",
           "for": [

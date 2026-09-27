@@ -85,7 +85,7 @@
         {
           "text": "versioned document",
           "x": 32,
-          "y": 90,
+          "y": 89,
           "for": [
             "d"
           ]
@@ -264,7 +264,7 @@
         {
           "text": "durable authority",
           "x": 22,
-          "y": 34,
+          "y": 32,
           "style": "strong",
           "for": [
             "d"
@@ -273,7 +273,7 @@
         {
           "text": "versioned document",
           "x": 22,
-          "y": 56,
+          "y": 54,
           "for": [
             "d"
           ]
@@ -365,7 +365,7 @@
         {
           "text": "browser profile",
           "x": 22,
-          "y": 294,
+          "y": 295,
           "style": "strong",
           "for": [
             "b"
@@ -374,7 +374,7 @@
         {
           "text": "cache only, never authority",
           "x": 22,
-          "y": 314,
+          "y": 316,
           "for": [
             "b"
           ]
@@ -382,7 +382,7 @@
         {
           "text": "lock order: project, session, runtime",
           "x": 8,
-          "y": 348,
+          "y": 349,
           "style": "mute"
         }
       ]
