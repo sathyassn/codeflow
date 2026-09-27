@@ -396,8 +396,9 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
         &["five-obligation evidence contract (launch/provenance/return/failure/recheck)"],
     );
     // The entry-point cell's host routes live in the owning skills.
+    // TSK-129: that route's text moved into the cf-delegate lifecycle lane.
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &["the durable lifecycle over the interactive claude CLI"],
     );
     assert_contains(
