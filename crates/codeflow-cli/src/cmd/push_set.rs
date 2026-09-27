@@ -19,6 +19,11 @@
 //!   protected branches' tracking refs when those refs describe the same
 //!   location. When nothing gives a base, the range is reported unresolved
 //!   and left to CI, never compared with a local branch.
+//! - For a push to an existing branch, the work-record check reads the
+//!   governing `work_records_baseline` from the destination's current tip of
+//!   that branch, the push's target, not from the range's base, which can be
+//!   another line's tip. A new branch keeps the base. CI judging the pull
+//!   request stays the authority.
 //! - The whole set is timed; over [`git_hook::PUSH_SET_BUDGET`] the hook names
 //!   the slowest step.
 //!
@@ -94,7 +99,7 @@ pub(super) fn run(
         let branch = r.remote_branch().unwrap_or_default();
         if let Some(RangeBase { base, note }) = range_base(root, r, &destination) {
             report.notes.extend(note);
-            let args = [
+            let mut args = vec![
                 "ci",
                 "--base",
                 &base,
@@ -103,6 +108,12 @@ pub(super) fn run(
                 "--branch",
                 branch,
             ];
+            // The push's target is the branch itself: its current tip's
+            // baseline list governs the record check, not the boundary's,
+            // which can be another line's tip. A new branch keeps the base.
+            if let Some(tip) = existing_tip(root, r) {
+                args.extend(["--baseline-from", tip]);
+            }
             run_check(&exe, root, &args, policy, report, &mut steps);
         } else {
             let why = destination
@@ -188,12 +199,16 @@ fn run_check(
     });
     match output {
         Ok(out) if out.status.success() => {
-            // A passing check can still have degraded; keep that legible.
+            // A passing check can still have degraded, or name what a human
+            // reviews (a baseline list it introduces); keep that legible.
             let stderr = String::from_utf8_lossy(&out.stderr);
             report.notes.extend(
                 stderr
                     .lines()
-                    .filter(|line| line.contains("warning:") && !line.contains("registry"))
+                    .filter(|line| {
+                        (line.contains("warning:") && !line.contains("registry"))
+                            || line.contains("notice:")
+                    })
                     .map(|line| format!("`{shown}`: {}", line.trim())),
             );
         }
@@ -460,8 +475,7 @@ struct RangeBase {
 /// 5. else `None`: the range is unresolved and CI checks it. A local branch
 ///    is never substituted: it may be stale or not the destination's base.
 fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option<RangeBase> {
-    let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
-    if !zero && is_commit(root, &r.remote_sha) {
+    if existing_tip(root, r).is_some() {
         return Some(existing_base(root, r, destination));
     }
     let note = match destination.advertised(root) {
@@ -505,6 +519,13 @@ fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option
     args.extend(known.iter().map(String::as_str));
     let listed = git(root, &args)?;
     boundary(&listed, &r.local_sha, note)
+}
+
+/// The destination's advertised sha for a branch it already has, when that
+/// commit is here: the push updates an existing branch.
+fn existing_tip<'a>(root: &Path, r: &'a PushRef) -> Option<&'a str> {
+    let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
+    (!zero && is_commit(root, &r.remote_sha)).then_some(r.remote_sha.as_str())
 }
 
 /// The base of an existing destination branch's range (cases 1 and 2 of

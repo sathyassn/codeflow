@@ -7,14 +7,16 @@ use std::path::Path;
 
 use codeflow_core::hooks::{PolicyLevel, Violation};
 use codeflow_core::workgraph::durable_work_tracking_enabled;
-use codeflow_core::workgraph::lifecycle::judge_pull_request;
+use codeflow_core::workgraph::lifecycle::judge_pull_request_under;
 
 /// Run the check for `codeflow ci`, record its findings and whether it ran,
-/// and print its notices.
+/// and print its notices. `authority` is the commit whose baseline list
+/// governs; `None` means the resolved base.
 pub(super) fn dispatch(
     root: &Path,
     base_candidates: &[String],
     head: &str,
+    authority: Option<&str>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
@@ -22,6 +24,7 @@ pub(super) fn dispatch(
         root,
         super::resolve_base(root, base_candidates).as_deref(),
         head,
+        authority,
     );
     if outcome.ran {
         ran.push("work-records");
@@ -50,7 +53,12 @@ pub(super) struct Outcome {
 
 /// Judge the records changed between the merge-base of `base` and `head`,
 /// and `head`. `base` is `None` when the range could not be resolved.
-pub(super) fn check(root: &Path, base: Option<&str>, head: &str) -> Outcome {
+pub(super) fn check(
+    root: &Path,
+    base: Option<&str>,
+    head: &str,
+    authority: Option<&str>,
+) -> Outcome {
     match durable_work_tracking_enabled(root) {
         Ok(true) => {}
         Ok(false) => {
@@ -77,7 +85,7 @@ pub(super) fn check(root: &Path, base: Option<&str>, head: &str) -> Outcome {
             ran: false,
         };
     };
-    match judge_pull_request(root, base, head) {
+    match judge_pull_request_under(root, base, head, authority.unwrap_or(base)) {
         Ok(verdict) => {
             let mut violations: Vec<Violation> = verdict.errors.into_iter().map(block).collect();
             violations.extend(verdict.warnings.into_iter().map(|warning| {

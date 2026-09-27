@@ -71,6 +71,12 @@ pub struct CiArgs {
     /// fork is `unknown` whatever is given.
     #[arg(long, value_name = "ACTOR", default_value = "unknown")]
     pub actor: String,
+
+    /// The commit whose `work_records_baseline` governs the work-record
+    /// check (default: the base). The pre-push hook passes the destination
+    /// branch's current tip, since its base bounds every destination tip.
+    #[arg(long, value_name = "REF", hide = true)]
+    pub baseline_from: Option<String>,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -236,7 +242,14 @@ pub fn run(args: &CiArgs) -> i32 {
     }
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
-    record_checks(&root, &base_candidates, &head, &mut tagged, &mut ran);
+    record_checks(
+        &root,
+        &base_candidates,
+        &head,
+        args.baseline_from.as_deref(),
+        &mut tagged,
+        &mut ran,
+    );
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {
@@ -302,10 +315,11 @@ fn record_checks(
     root: &Path,
     base_candidates: &[String],
     head: &str,
+    authority: Option<&str>,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
-    work_records::dispatch(root, base_candidates, head, tagged, ran);
+    work_records::dispatch(root, base_candidates, head, authority, tagged, ran);
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
 }
 

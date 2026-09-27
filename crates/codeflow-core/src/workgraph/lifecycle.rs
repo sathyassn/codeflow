@@ -1434,6 +1434,23 @@ pub fn working_context(repo_root: &Path) -> (Option<Graph>, Option<Vec<String>>)
 ///
 /// Returns a message when a revision or the merge-base cannot be resolved.
 pub fn judge_pull_request(repo_root: &Path, base: &str, head: &str) -> Result<Verdict, String> {
+    judge_pull_request_under(repo_root, base, head, base)
+}
+
+/// [`judge_pull_request`] with the governing baseline list read from
+/// `authority` instead of `base`. The pre-push hook passes the destination
+/// branch's current tip here, because its `base` is a boundary of every
+/// destination tip, which can belong to another line with another list.
+///
+/// # Errors
+///
+/// Returns a message when a revision or the merge-base cannot be resolved.
+pub fn judge_pull_request_under(
+    repo_root: &Path,
+    base: &str,
+    head: &str,
+    authority: &str,
+) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let commit = |revision: &str| {
         repo.revparse_single(revision)
@@ -1441,9 +1458,9 @@ pub fn judge_pull_request(repo_root: &Path, base: &str, head: &str) -> Result<Ve
             .map(|commit| commit.id())
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
-    let target = commit(base)?;
+    let target = commit(authority)?;
     let anchor = repo
-        .merge_base(target, commit(head)?)
+        .merge_base(commit(base)?, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
     judge_range_against(
         repo_root,
