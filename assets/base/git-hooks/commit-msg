@@ -1,6 +1,12 @@
 #!/bin/sh
-# codeflow git-hook shim — managed by `codeflow update`.
+# codeflow git-hook shim, managed by `codeflow update`.
 # No-ops gracefully when the codeflow binary is not on PATH; all policy lives
 # in .codeflow/policy.json and is evaluated by the binary, never here.
 command -v codeflow >/dev/null 2>&1 || exit 0
+# Upgrade order (SPC-013 R-85): new binary first, then `codeflow update`. A
+# binary older than these shims lacks their capability: warn, then run the
+# checks it has.
+if ! codeflow git-hook capabilities </dev/null 2>/dev/null | grep -qx 'hooks 2'; then
+  echo "codeflow: the codeflow on PATH is older than these hooks; install the new binary first, then run \`codeflow update\` (running the checks this binary has)" >&2
+fi
 exec codeflow git-hook commit-msg "$@"

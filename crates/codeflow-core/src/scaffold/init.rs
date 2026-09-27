@@ -25,7 +25,7 @@ use super::state::{
     ProjectState, GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
 };
 use super::template::TemplateContext;
-use super::{gitutil, hash, should_skip_initial_stack_adr, ScaffoldError};
+use super::{gitutil, hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 
 /// Answers to init's at-most-three questions (charter §4.1: product
 /// one-liner, areas, permission preset). `None` = use the default / the
@@ -159,6 +159,9 @@ pub fn init(
 
     // Phase 2: install manifest entries for this tier + preset.
     let mut installed = InstalledManifest::load_or_default(root, &opts.binary_version)?;
+    let policy_created = !root.join(".codeflow/policy.json").exists();
+    let kept_template = read_text(source, "base/ci/pull_request_template.md")
+        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
     let mut written: Vec<String> = vec![PROJECT_TOML.to_string()];
     for entry in &manifest.entries {
         if !entry.applies(tier, &preset) {
@@ -172,6 +175,20 @@ pub fn init(
                     "brownfield repository already has ADRs; starter stack decision not added"
                         .to_string(),
                 ],
+            );
+            continue;
+        }
+        if let Some(kept) = kept_template
+            .as_ref()
+            .filter(|k| entry.dest == pr_template::MANAGED_TEMPLATE && k.path != entry.dest)
+        {
+            report.file_with_notes(
+                &entry.dest,
+                Action::Skipped,
+                vec![format!(
+                    "the project's PR template {} is kept; no second template installed",
+                    kept.path
+                )],
             );
             continue;
         }
@@ -191,6 +208,20 @@ pub fn init(
     installed.scaffold_version.clone_from(&opts.binary_version);
     installed.store(root)?;
     state.store(root)?;
+    if let Some(kept) = &kept_template {
+        let diagnosis = pr_template::diagnose(root, kept, policy_created)?;
+        if let Some(line) = pr_template::describe(kept, &diagnosis, policy_created) {
+            report.notes.push(line);
+        }
+        if matches!(
+            diagnosis,
+            pr_template::Diagnosis::Diagnosed { .. }
+                | pr_template::Diagnosis::Recorded(crate::hooks::policy::MappingState::Diagnosed)
+        ) {
+            report.pending_pr_template = Some(kept.clone());
+        }
+    }
+    report.notes.extend(pr_template::automation_notes(root));
     written.push(super::state::INSTALLED_MANIFEST.to_string());
     written.push(super::state::BASELINE_DIR.to_string());
 
@@ -608,7 +639,7 @@ fn install_entry(
 }
 
 /// Today as `YYYY-MM-DD` (UTC), no chrono dependency.
-fn today_utc() -> String {
+pub(crate) fn today_utc() -> String {
     let secs = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map_or(0, |d| d.as_secs());

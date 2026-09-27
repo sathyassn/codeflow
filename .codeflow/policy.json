@@ -83,7 +83,8 @@
     "pr_code_sections": [
       "Testing"
     ],
-    "work_records": "block"
+    "work_records": "block",
+    "automation_profiles": []
   },
   "security": {
     "dangerous_commands": "block",

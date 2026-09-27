@@ -23,8 +23,10 @@
 pub mod assets;
 pub mod detect;
 pub mod init;
+pub mod json_edit;
 pub mod manifest;
 pub mod portal;
+pub mod pr_template;
 pub mod region;
 pub mod report;
 pub mod settings_merge;

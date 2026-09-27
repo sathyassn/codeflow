@@ -549,11 +549,15 @@ fn ci_downloads_verify_pinned_checksums() {
 /// and the body keeps reaching `codeflow ci` through `env:`, never inline.
 #[test]
 fn shipped_ci_rechecks_an_edited_pr_body_through_env() {
-    let workflow = std::fs::read_to_string(repo_root().join("assets/base/ci/codeflow-ci.yml"))
-        .expect("shipped CI workflow is readable");
+    // The PR-body check runs in the enforcing workflow on
+    // `pull_request_target` (TSK-107, SPC-013 R-113).
+    let workflow = std::fs::read_to_string(repo_root().join("assets/base/ci/codeflow-policy.yml"))
+        .expect("shipped policy workflow is readable");
     assert!(
-        workflow.contains("  pull_request:\n    types: [opened, synchronize, reopened, edited]\n"),
-        "shipped CI must subscribe pull_request to edited"
+        workflow.contains(
+            "  pull_request_target:\n    types: [opened, synchronize, reopened, edited]\n"
+        ),
+        "the enforcing workflow must subscribe pull_request_target to edited"
     );
     assert!(workflow.contains("CODEFLOW_PR_BODY: ${{ github.event.pull_request.body }}"));
     let body_uses = workflow.matches("github.event.pull_request.body").count();
@@ -1265,4 +1269,27 @@ fn portal_utility_tokens_match_present_skins() {
          (crates/codeflow-present/web/src/styles.css):\n  {}",
         drift.join("\n  ")
     );
+}
+
+/// TSK-107 AC-4 (SPC-013 R-37): every shipped record template and the PR
+/// template are free of em and en dashes, so a record or PR body an adopter
+/// starts from never trips the policy-character rule.
+#[test]
+fn shipped_record_and_pr_templates_carry_no_dash() {
+    let root = repo_root();
+    let mut found = Vec::new();
+    for rel in [
+        "assets/base/pm/epic.md.tmpl",
+        "assets/base/pm/spec.md.tmpl",
+        "assets/base/pm/task.md.tmpl",
+        "assets/base/ci/pull_request_template.md",
+    ] {
+        let text = std::fs::read_to_string(root.join(rel)).expect("template is readable");
+        for (i, line) in text.lines().enumerate() {
+            if line.contains('\u{2014}') || line.contains('\u{2013}') {
+                found.push(format!("{rel}:{}", i + 1));
+            }
+        }
+    }
+    assert!(found.is_empty(), "dashes in shipped templates: {found:?}");
 }

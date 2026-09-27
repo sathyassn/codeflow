@@ -75,6 +75,57 @@ publication date._
   session, is not cited, and `observed_unknown_reason` says why.
 
 <!-- codeflow:release-impact minor -->
+- **Adopter fit for bots, kept PR templates and release tools.** Trusted
+  automation profiles (`git.automation_profiles`) let a named bot's pull
+  requests skip branch naming and the commit message shape rules, and supply
+  the PR sections its body omits; `codeflow ci --actor` passes the actor, the
+  profile is read from the target branch, and the actor is trusted only in a
+  same-repository GitHub Actions pull request event, so a local run, another
+  CI or a fork pull request is `unknown` and nothing applies. A kept PR
+  template is never
+  shadowed: `init` and `update` record `git.pr_section_mapping` as
+  `diagnosed` with a proposed heading mapping, an interactive run asks for
+  accepted, refused or custom, and the check runs at `warn` only while a
+  policy file this `init` created awaits that decision. `codeflow ci` prints
+  the effective level and origin of every check it runs, and `doctor` gains
+  an `adopter-fit` check. `release.backend` in `.codeflow/project.toml`
+  (`none` by default, `external`, `codeflow`) names who owns versions, and
+  release-please, Changesets, semantic-release, cargo-release and GoReleaser
+  are recognised. Policy edits and the keys `update` adds are spliced into
+  the adopter's bytes. `epic new`, `spec new` and `task new` use a project
+  template from `project-management/templates/` when a record rendered from
+  it carries the allocated id, uid, title, parent and target, and the
+  shipped record and PR templates carry no em or en dash.
+
+<!-- codeflow:release-impact minor -->
+- **Pinned, checksum-verified CI binary.** The scaffolded workflows install
+  the `codeflow` release the target branch pins in `.codeflow/project.toml`
+  and verify it against the release's `sha256.sum`; a missing or wrong
+  checksum fails the job, and no unverified binary is installed. The commit
+  and PR-body standards move to a new `codeflow-policy` workflow on
+  `pull_request_target`, so a pull request cannot edit the job that judges
+  it. That job and the registry job check out the pull request's base
+  commit, because GitHub's default checkout for the event is the default
+  branch; a pull request into an integration branch is judged by that
+  branch's pin and policy. Upgrade in this order: install the new binary,
+  land a pull request that raises only `scaffold_version`, then run
+  `codeflow update` on a new branch. Hook shims now warn when the `codeflow`
+  on `PATH` is older than they are, and a policy with keys the binary cannot
+  read names this order, including a pull request's own policy judged from
+  the target branch. The `codeflow-registry` workflow installs its binary
+  the same way.
+
+<!-- codeflow:release-impact patch -->
+- **Commit subject separator.** The commit-msg hook and `codeflow ci` now
+  require a blank line after the subject, since git reads a following line
+  as part of the subject. Reword such commits before pushing them.
+
+<!-- codeflow:release-impact patch -->
+- **Update proposals keep your changes.** When `codeflow update` cannot merge
+  a managed file, the `.new` proposal is the three-way merge with conflict
+  markers, so a job you added to a workflow is kept instead of dropped.
+
+<!-- codeflow:release-impact minor -->
 - **Work record lifecycle.** `codeflow task status`, `epic status` and
   `spec status` change a record's status only by a legal transition and write
   only what it needs: a Blocker for blocked, a cancellation reason and scope,

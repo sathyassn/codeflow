@@ -6,8 +6,10 @@
 //!   the new shipped version; record and baseline refreshed.
 //! - **managed, user-modified**: 3-way merge with base = `.codeflow/.baseline/`
 //!   copy, ours = the user's file, theirs = the new shipped version. Clean
-//!   merge is applied and reported; a conflict writes `<path>.new` and the
-//!   report — the user's file is NEVER clobbered and NEVER silently skipped.
+//!   merge is applied and reported; a conflict writes `<path>.new` holding
+//!   the merge with conflict markers (the user's non-overlapping changes
+//!   kept) and the report; the user's file is NEVER clobbered and NEVER
+//!   silently skipped.
 //! - **managed-region**: only the marked block (markdown/hash) or the
 //!   codeflow-owned keys (settings JSON) are regenerated.
 //! - **user-owned**: never mutated; schema-versioned JSON (policy.json) gains
@@ -51,7 +53,7 @@ use super::state::{
     guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file, Baseline,
     InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
 };
-use super::{hash, should_skip_initial_stack_adr, ScaffoldError};
+use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 use crate::hooks::policy_schema::DEPRECATED_KEYS;
 
 /// Options for [`update`].
@@ -75,6 +77,7 @@ pub struct UpdateOptions {
 /// [`ScaffoldError::NotInitialized`] when the project has no
 /// `.codeflow/project.toml`; otherwise IO, JSON, or manifest failures.
 /// Per-file merge conflicts are NOT errors — they are reported.
+#[allow(clippy::too_many_lines)] // linear phase orchestration, as in `init`
 pub fn update(
     source: &dyn super::AssetSource,
     root: &Path,
@@ -109,6 +112,8 @@ pub fn update(
         state.scaffold_version, opts.binary_version, state.tier
     ));
     let mut diffs = String::new();
+    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")
+        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
 
     for entry in &manifest.entries {
         if !entry.applies(state.tier, &state.permission_preset) {
@@ -137,6 +142,23 @@ pub fn update(
             );
             continue;
         }
+        if let Some(kept) = kept_template
+            .as_ref()
+            .filter(|_| entry.dest == pr_template::MANAGED_TEMPLATE)
+        {
+            // A kept brownfield template is the project's (SPC-013 R-84):
+            // never merged into, never shadowed by a sidecar or a second
+            // template.
+            report.file_with_notes(
+                &entry.dest,
+                Action::Skipped,
+                vec![format!(
+                    "the project's PR template {} is kept; see git.pr_section_mapping",
+                    kept.path
+                )],
+            );
+            continue;
+        }
         update_entry(
             source,
             root,
@@ -151,6 +173,23 @@ pub fn update(
     }
 
     prune_orphans(root, &manifest, &ignore, &mut installed, &mut report)?;
+    if let Some(kept) = &kept_template {
+        if root.join(".codeflow/policy.json").exists() {
+            let diagnosis = pr_template::diagnose(root, kept, false)?;
+            if let Some(line) = pr_template::describe(kept, &diagnosis, false) {
+                report.notes.push(line);
+            }
+            if matches!(
+                diagnosis,
+                pr_template::Diagnosis::Diagnosed { .. }
+                    | pr_template::Diagnosis::Recorded(
+                        crate::hooks::policy::MappingState::Diagnosed
+                    )
+            ) {
+                report.pending_pr_template = Some(kept.clone());
+            }
+        }
+    }
 
     installed.scaffold_version.clone_from(&opts.binary_version);
     installed.store(root)?;
@@ -361,7 +400,8 @@ fn update_entry(
                 );
                 return Ok(());
             }
-            if let Ok(merged) = diffy::merge(&base, &current, &rendered) {
+            let merge = diffy::merge(&base, &current, &rendered);
+            if let Ok(merged) = merge {
                 write_dest(root, entry, &merged)?;
                 // Record the pristine shipped hash (not the merged file's), so the
                 // manifest invariant `recorded == hash(baseline)` holds: the merged
@@ -377,17 +417,27 @@ fn update_entry(
                     Action::Merged,
                     vec!["3-way merge applied cleanly (base = shipped baseline)".to_string()],
                 );
-            } else {
+            } else if let Err(conflicted) = merge {
+                // The proposal is the 3-way merge with conflict markers, not
+                // the bare shipped file: every change of yours that does not
+                // overlap an upstream change (a job you added to a workflow,
+                // a section you appended) is kept in it, and only the
+                // overlapping hunks wait for you.
                 let new_path = format!("{}.new", entry.dest);
-                write_beneath_root(root, &new_path, rendered.as_bytes())?;
-                report.file_with_notes(
-                    &entry.dest,
-                    Action::Conflicted,
-                    vec![format!(
-                        "your modifications conflict with the new shipped version; \
-                         file untouched, new version written to {new_path}"
-                    )],
-                );
+                write_beneath_root(root, &new_path, conflicted.as_bytes())?;
+                let mut notes = vec![format!(
+                    "your modifications conflict with the new shipped version; file untouched. \
+                     {new_path} holds the 3-way merge: your changes are kept and each \
+                     overlapping hunk carries conflict markers to resolve before you replace the file"
+                )];
+                if entry.src == "ci/codeflow-ci.yml" {
+                    notes.push(
+                        "the commit standards job moved to .github/workflows/codeflow-policy.yml on \
+                         pull_request_target; drop the commit-lint job from this file when you resolve"
+                            .to_string(),
+                    );
+                }
+                report.file_with_notes(&entry.dest, Action::Conflicted, notes);
             }
         }
         Ownership::ManagedRegion => match entry.region.unwrap_or(RegionFormat::Markdown) {
@@ -558,8 +608,10 @@ fn sync_user_owned_json(
             None => format!("added key {k}"),
         })
         .collect();
+    let migrated_any = !migrated.is_empty();
     notes.extend(migrated);
     notes.extend(recommended);
+    let mut schema_advanced = false;
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
             .and_then(serde_json::Value::as_u64),
@@ -570,15 +622,63 @@ fn sync_user_owned_json(
         if new_sv > user_sv {
             user["schema_version"] = serde_json::Value::from(new_sv);
             notes.push(format!("schema_version advanced {user_sv} -> {new_sv}"));
+            schema_advanced = true;
         }
     }
 
-    let mut next = serde_json::to_string_pretty(&user)?;
-    next.push('\n');
+    // Splice only the added keys into the adopter's bytes; a migrated value
+    // or a layout the splice cannot reproduce falls back to a rewrite.
+    let preserved = if migrated_any {
+        None
+    } else {
+        preserving_edit(&current_text, &user, &added, schema_advanced)
+    };
+    let next = if let Some(text) = preserved {
+        text
+    } else {
+        let mut text = serde_json::to_string_pretty(&user)?;
+        text.push('\n');
+        text
+    };
     write_file(&dest_path, next.as_bytes())?;
     push_diff(diffs, &entry.dest, &current_text, &next);
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
+}
+
+/// The adopter's file with only the `added` keys (and removed deprecated
+/// ones), and an advanced `schema_version`, spliced in, when that reproduces
+/// `user` exactly: every
+/// byte the adopter wrote stays as written (TSK-107 review F6).
+fn preserving_edit(
+    current: &str,
+    user: &serde_json::Value,
+    added: &[String],
+    schema_advanced: bool,
+) -> Option<String> {
+    let mut text = current.to_string();
+    for path in added {
+        // A `-` marks a deprecated key the sync removed.
+        if let Some(gone) = path.strip_prefix('-') {
+            let parts: Vec<&str> = gone.split('.').collect();
+            text = super::json_edit::remove_member_line(&text, &parts)?;
+            continue;
+        }
+        let parts: Vec<&str> = path.split('.').collect();
+        let (key, parent) = parts.split_last()?;
+        let value = user.pointer(&format!("/{}", parts.join("/")))?;
+        text = super::json_edit::insert_member(
+            &text,
+            parent,
+            key,
+            &serde_json::to_string(value).ok()?,
+        )?;
+    }
+    if schema_advanced {
+        let version = user.get("schema_version")?.to_string();
+        text = super::json_edit::replace_value(&text, &["schema_version"], &version)?;
+    }
+    super::json_edit::verified(text, user)
 }
 
 /// Changed shipped defaults that `codeflow update` recommends to an existing
@@ -786,6 +886,22 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 
 #[cfg(test)]
 mod tests {
+    /// `CodeFlow`'s own workflow carries a release-impact job the shipped file
+    /// does not. The update proposal must keep it (TSK-107).
+    #[test]
+    fn dogfood_ci_proposal_keeps_the_release_impact_job() {
+        let base =
+            include_str!("../../../../.codeflow/.baseline/.github/workflows/codeflow-ci.yml");
+        let ours = include_str!("../../../../.github/workflows/codeflow-ci.yml");
+        let theirs = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
+        assert!(ours.contains("\n  release-impact:\n"));
+        let proposal = match diffy::merge(base, ours, theirs) {
+            Ok(merged) | Err(merged) => merged,
+        };
+        assert!(proposal.contains("\n  release-impact:\n"), "{proposal}");
+        assert!(proposal.contains("scripts/release.py check-pr"));
+    }
+
     #[test]
     fn test_unsafe_dest_rejected() {
         // codex pre-flip review: a tampered manifest must not escape the repo.

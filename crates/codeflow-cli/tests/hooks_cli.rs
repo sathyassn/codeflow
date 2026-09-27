@@ -1466,6 +1466,38 @@ fn commit_msg_blocks_attribution_and_malformed_subject() {
 }
 
 #[test]
+fn commit_msg_requires_a_blank_line_after_the_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let msg = dir.path().join("MSG");
+    let run = |text: &str| {
+        std::fs::write(&msg, text).unwrap();
+        run_with_stdin(
+            codeflow()
+                .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+                .current_dir(dir.path()),
+            "",
+        )
+    };
+
+    let out = run("feat(cli): wire the hook plane\n- keep the shim\n");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("git.commit_format"), "{stderr}");
+    assert!(stderr.contains("must be blank"), "{stderr}");
+
+    let out = run("feat(cli): wire the hook plane\n\n- keep the shim\n");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run("feat(cli): wire the hook plane\n");
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
 fn commit_msg_blocks_on_invalid_policy_value() {
     // Strict validation: a typo'd policy value must fail loudly at the hook,
     // naming the key and its valid options — never silently revert the whole
@@ -3634,4 +3666,60 @@ fn push_set_does_not_run_tree_checks_with_an_uninitialized_submodule() {
         "{err}"
     );
     assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+/// SPC-013 R-85: the shims probe the binary's hook capability first. An
+/// older binary gets a warning naming the upgrade order and still runs the
+/// checks it has; the current binary dispatches silently.
+#[cfg(unix)]
+#[test]
+fn hook_shims_warn_and_fall_back_when_the_binary_is_older() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = tempfile::tempdir().unwrap();
+    let old_bin = dir.path().join("old-bin");
+    std::fs::create_dir_all(&old_bin).unwrap();
+    let fake = old_bin.join("codeflow");
+    std::fs::write(
+        &fake,
+        "#!/bin/sh\nif [ \"$1 $2\" = \"git-hook capabilities\" ]; then echo \"error: invalid value 'capabilities'\" >&2; exit 2; fi\necho \"dispatched $*\"\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&fake, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let new_bin = std::path::PathBuf::from(env!("CARGO_BIN_EXE_codeflow"))
+        .parent()
+        .unwrap()
+        .to_path_buf();
+    let shims =
+        std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/git-hooks");
+    for stage in ["pre-commit", "commit-msg", "pre-push", "pre-merge-commit"] {
+        let run = |bin: &Path| {
+            Command::new("sh")
+                .arg(shims.join(stage))
+                .arg("ARG")
+                .env("PATH", format!("{}:/usr/bin:/bin", bin.display()))
+                .env("CODEFLOW_HOME", isolated_home())
+                .current_dir(dir.path())
+                .stdin(std::process::Stdio::null())
+                .output()
+                .unwrap()
+        };
+        let old = run(&old_bin);
+        let stderr = String::from_utf8_lossy(&old.stderr);
+        assert!(
+            stderr.contains("older than these hooks"),
+            "{stage}: {stderr}"
+        );
+        assert!(stderr.contains("new binary first"), "{stage}: {stderr}");
+        assert_eq!(
+            String::from_utf8_lossy(&old.stdout).trim(),
+            format!("dispatched git-hook {stage} ARG"),
+            "{stage}: the older binary still runs its checks"
+        );
+        let new = run(&new_bin);
+        let stderr = String::from_utf8_lossy(&new.stderr);
+        assert!(
+            !stderr.contains("older than these hooks"),
+            "{stage}: {stderr}"
+        );
+    }
 }

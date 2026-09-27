@@ -473,7 +473,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "a6566723680a73fb2ba8bf7bc46f4c48bc7aefb6f82107ff6ec240a1b2532736",
+      "sha256": "0731dc9541d27921e3c4579e73f5c394870b0a89d2d78fe270bc3d76a0b8d372",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -941,31 +941,31 @@
     ".codeflow/git-hooks/commit-msg": {
       "src": "git-hooks/commit-msg",
       "ownership": "managed",
-      "sha256": "3c6e04f85e7d921ed2d6222b98d2e60893d3beacce011eb90e6e60ae8d1e4dee",
+      "sha256": "ae9c2afdb749983c96a835b5747f1eac07a0f6c7905326d46b30d2db576fb737",
       "exec": true
     },
     ".codeflow/git-hooks/pre-commit": {
       "src": "git-hooks/pre-commit",
       "ownership": "managed",
-      "sha256": "6df8b4180f04ea5791ae5c32a37993c7ae5f0c86fbf243f60268ff2dcc683c03",
+      "sha256": "5c3fe97c39d658820ad46bb771080ac2c2a058bc89fcc6ee6201f30739169f44",
       "exec": true
     },
     ".codeflow/git-hooks/pre-merge-commit": {
       "src": "git-hooks/pre-merge-commit",
       "ownership": "managed",
-      "sha256": "e8b0cdabc38fd4689dc85ee542a1e0484aef4423ee9b405bbde8adca809b6bbf",
+      "sha256": "aa9c35a07219d00ff034a8d19bfdd9cfa64af5abd58d86384c3a46e8f8f7a773",
       "exec": true
     },
     ".codeflow/git-hooks/pre-push": {
       "src": "git-hooks/pre-push",
       "ownership": "managed",
-      "sha256": "0193e7907a48f8ad7ed81a64e80c17fa1e7464218f8c71fe1ba8465934c92295",
+      "sha256": "c7a980c93ab22184645afe95e2eec2317bac1bc1666d39242e47ca24c49bc29d",
       "exec": true
     },
     ".codeflow/git-hooks/reference-transaction": {
       "src": "git-hooks/reference-transaction",
       "ownership": "managed",
-      "sha256": "a014d53cba6760bbe612239a322313d5cb103d176169520e3de219bfad4700ee",
+      "sha256": "5ec12ea5079b861885596fa49dba8c6b88b9d3e890cc9b91166c4f3a249b0b04",
       "exec": true
     },
     ".codeflow/model-selection.json": {
@@ -977,7 +977,7 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "430d8eef92760fb791c3e4c610c935fb69827c914deda91642f17cb66c48abe6",
+      "sha256": "55213ea9e3c606819752554e257044279102e02af48fc0250bbd743b90f05847",
       "exec": false
     },
     ".codeflow/schemas/present/document-v1.schema.json": {
@@ -1019,7 +1019,19 @@
     ".github/workflows/codeflow-ci.yml": {
       "src": "ci/codeflow-ci.yml",
       "ownership": "managed",
-      "sha256": "33ddb38382ededb364f34b5db8dbac65f54541768632c9f1ea0b8f7a40956b9f",
+      "sha256": "3d3ba4270edaef35ff7a57255a5caed819ed78548b633a9375b6f9e1a6cbcd45",
+      "exec": false
+    },
+    ".github/workflows/codeflow-policy.yml": {
+      "src": "ci/codeflow-policy.yml",
+      "ownership": "managed",
+      "sha256": "3e095e94c356a123cb94f3a3e27327f1ebf72d6029452c55d8378fb346d40d01",
+      "exec": false
+    },
+    ".github/workflows/codeflow-registry.yml": {
+      "src": "ci/codeflow-registry.yml",
+      "ownership": "managed",
+      "sha256": "967582b431241c44e2f9890115ba01bca0133c5ef0df5923cb2ebd7ddc9bb36a",
       "exec": false
     },
     ".gitignore": {
@@ -1079,19 +1091,19 @@
     "project-management/templates/epic.md": {
       "src": "pm/epic.md.tmpl",
       "ownership": "managed",
-      "sha256": "a4d6b6efe1a98c0de1ec6163034b0f1757e1307816db62bb323f0e5604a5d25f",
+      "sha256": "ae5064cdfbb249879f1ca5f8216461dd50fd8779a979debdb9bf921a614ca7f1",
       "exec": false
     },
     "project-management/templates/spec.md": {
       "src": "pm/spec.md.tmpl",
       "ownership": "managed",
-      "sha256": "382dfeec945e4dcd7bc3becd6c1fec489eef803beb1930b879b209271ad7af70",
+      "sha256": "a660f91e867ba43d020a028b59ef4bf35db34e7bda5b96a927c12a79261b010e",
       "exec": false
     },
     "project-management/templates/task.md": {
       "src": "pm/task.md.tmpl",
       "ownership": "managed",
-      "sha256": "622540afa75c56c7457dc08b76c16826ad438945e7f91f73ae74d8a0077d953b",
+      "sha256": "2631e2e48a4941c738c59bbec48cf76668fd708068188c4be34bb55af1104473",
       "exec": false
     }
   }

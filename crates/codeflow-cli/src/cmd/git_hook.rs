@@ -19,7 +19,13 @@ pub enum StageName {
     PreMergeCommit,
     ReferenceTransaction,
     PrePush,
+    /// Print this binary's hook capability for the shims (SPC-013 R-85).
+    Capabilities,
 }
+
+/// The capability the current hook shims need. A shim whose probe does not
+/// print exactly this line warns that the binary is older than the shims.
+pub const HOOK_CAPABILITY: &str = "hooks 2";
 
 #[derive(Debug, Args)]
 pub struct GitHookArgs {
@@ -35,6 +41,10 @@ pub struct GitHookArgs {
 /// Run the stage; returns the process exit code.
 #[must_use]
 pub fn run(args: &GitHookArgs) -> i32 {
+    if let StageName::Capabilities = args.stage {
+        println!("{HOOK_CAPABILITY}");
+        return 0;
+    }
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     let root = super::project_root(&cwd);
 
@@ -79,7 +89,9 @@ pub fn run(args: &GitHookArgs) -> i32 {
             "pre-merge-commit",
             git_hook::pre_merge_commit(&root, &policy.git, token, super::human_override_present()),
         ),
-        StageName::ReferenceTransaction => unreachable!("handled above"),
+        StageName::ReferenceTransaction | StageName::Capabilities => {
+            unreachable!("handled above")
+        }
         StageName::PrePush => {
             let stdin = match read_hook_input(std::io::stdin()) {
                 Ok(stdin) => stdin,

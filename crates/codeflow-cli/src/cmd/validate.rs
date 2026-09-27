@@ -146,6 +146,11 @@ fn validate_policy(root: &Path) -> bool {
             eprintln!(
                 "validate: .codeflow/policy.json is invalid — see `codeflow policy explain` for every key's valid values"
             );
+            if let Some(hint) =
+                policy_schema::upgrade_order_hint(&errors, env!("CARGO_PKG_VERSION"))
+            {
+                eprintln!("validate: {hint}");
+            }
             false
         }
     }

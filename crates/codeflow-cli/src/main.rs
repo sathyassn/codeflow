@@ -114,6 +114,25 @@ fn touches_registry(command: &Command) -> bool {
     )
 }
 
+/// Ask and record the decision for a kept PR template (SPC-013 R-84)
+/// before the report says setup is done. End of input leaves it diagnosed.
+fn decide_pr_template(root: &std::path::Path, report: &mut scaffold::Report) -> anyhow::Result<()> {
+    let Some(kept) = report.pending_pr_template.clone() else {
+        return Ok(());
+    };
+    if let Some(decision) = prompts::decide_pr_template(&mut std::io::stdin().lock(), &kept.path)? {
+        let line = scaffold::pr_template::record_decision(
+            root,
+            &kept,
+            decision,
+            &scaffold::pr_template::today(),
+        )?;
+        report.notes.push(line);
+        report.pending_pr_template = None;
+    }
+    Ok(())
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
@@ -162,7 +181,10 @@ fn main() -> anyhow::Result<()> {
                 binary_version: BINARY_VERSION.to_string(),
                 answers,
             };
-            let report = scaffold::init(&assets, &cwd, &options)?;
+            let mut report = scaffold::init(&assets, &cwd, &options)?;
+            if !yes {
+                decide_pr_template(&cwd, &mut report)?;
+            }
             print!("{report}");
             cmd::present::provision_state_root_or_warn();
         }
@@ -172,7 +194,10 @@ fn main() -> anyhow::Result<()> {
                 binary_version: BINARY_VERSION.to_string(),
                 diff_out: diff,
             };
-            let report = scaffold::update(&assets, &cwd, &options)?;
+            let mut report = scaffold::update(&assets, &cwd, &options)?;
+            if std::io::IsTerminal::is_terminal(&std::io::stdin()) {
+                decide_pr_template(&cwd, &mut report)?;
+            }
             print!("{report}");
             cmd::present::provision_state_root_or_warn();
             let portal_report = scaffold::portal::update_adopted_portal(&assets, &cwd)?;

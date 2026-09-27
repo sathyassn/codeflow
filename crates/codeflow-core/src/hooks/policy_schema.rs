@@ -46,6 +46,10 @@ pub enum KeyKind {
     String,
     /// A closed enum accepting exactly the listed values.
     Enum(&'static [&'static str]),
+    /// A list of automation profile objects (SPC-013 R-82).
+    Profiles,
+    /// The PR-section mapping object (SPC-013 R-84).
+    SectionMapping,
 }
 
 impl KeyKind {
@@ -58,6 +62,8 @@ impl KeyKind {
             Self::StringList => "string list",
             Self::String => "string",
             Self::Enum(_) => "enum",
+            Self::Profiles => "profile list",
+            Self::SectionMapping => "object",
         }
     }
 }
@@ -83,7 +89,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, then `security`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 45] = [
+pub const SCHEMA: [KeySpec; 47] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -365,6 +371,32 @@ pub const SCHEMA: [KeySpec; 45] = [
                 blocked, a Closeout for cancelled, an acceptance block for \
                 complete) always block whatever this says. `codeflow update` \
                 rewrites a stale `off` to `warn` and keeps every other value.",
+    },
+    // ---- git: adopter fit ----------------------------------------------------
+    KeySpec {
+        path: "git.automation_profiles",
+        kind: KeyKind::Profiles,
+        valid: "an array of {name, actors: [actor or app id], branch_pattern, sections: {heading: content}}",
+        purpose: "Trusted bots whose pull requests skip branch naming and the commit message shape rules (SPC-013 R-82).",
+        notes: "Applies in `codeflow ci` only when the actor the workflow passes \
+                and the head branch both match, read from the target side of \
+                the range. Locally and on fork pull requests the actor is \
+                `unknown` and nothing applies. Tests, the secret scan, AI \
+                attribution, emoji, policy characters, PR sections and the \
+                release declaration still run at their configured level; \
+                `sections` only supplies content for headings the bot body omits.",
+    },
+    KeySpec {
+        path: "git.pr_section_mapping",
+        kind: KeyKind::SectionMapping,
+        valid: "{state: diagnosed | accepted | refused | custom, headings: {required heading: template heading}, decided: YYYY-MM-DD or none}",
+        purpose: "The decision about a kept PR template whose headings differ from pr_required_sections (SPC-013 R-84).",
+        notes: "Absent by default. `init` and `update` write `diagnosed` with a \
+                proposed mapping; `accepted` checks the mapped headings, \
+                `refused` and `custom` check pr_required_sections. While \
+                diagnosed the check runs at warn only when init created the \
+                policy file without a pr_sections key; a pr_sections key in \
+                the file always wins (R-115).",
     },
     KeySpec {
         path: "git.product_paths",
@@ -743,6 +775,8 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
             }
             None => errors.push(PolicyError::invalid_value(path, value, "a string")),
         },
+        KeyKind::Profiles => validate_profiles(path, value, errors),
+        KeyKind::SectionMapping => validate_mapping(path, value, errors),
         KeyKind::Enum(values) => {
             if !value.as_str().is_some_and(|s| values.contains(&s)) {
                 errors.push(PolicyError::invalid_value(
@@ -751,6 +785,182 @@ fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
                     &format!("one of: {}", values.join(", ")),
                 ));
             }
+        }
+    }
+}
+
+/// The two-step upgrade message (R-113) when the policy names keys this
+/// binary does not know: the head added keys the target's pinned binary
+/// cannot read. `None` when no error is an unknown key.
+#[must_use]
+pub fn upgrade_order_hint(errors: &[PolicyError], binary_version: &str) -> Option<String> {
+    errors
+        .iter()
+        .any(|e| e.message.starts_with("unknown key"))
+        .then(|| {
+            format!(
+                "this policy names keys codeflow {binary_version} cannot read. Upgrades take two pull requests, in order: first raise only `scaffold_version` in .codeflow/project.toml (the pinned CI binary) and land it; then run `codeflow update` on a new branch, so the new binary judges the new keys"
+            )
+        })
+}
+
+/// Push one finding for a nested policy value.
+fn nested_error(errors: &mut Vec<PolicyError>, path: &str, message: &str) {
+    errors.push(PolicyError {
+        key: path.to_string(),
+        message: format!("invalid {path}: {message}"),
+    });
+}
+
+/// `true` for an object whose values are all strings.
+fn string_map(value: &Value) -> bool {
+    value
+        .as_object()
+        .is_some_and(|m| m.values().all(Value::is_string))
+}
+
+/// Validate `git.automation_profiles`: every entry an object with a
+/// non-empty `name`, a non-empty `actors` list of non-empty strings, a valid
+/// non-empty `branch_pattern` glob, an optional `sections` map of heading to
+/// content, and no other field. A malformed profile would otherwise be
+/// dropped by the loader and its bot would fail, or worse, a typo would read
+/// as a wider pattern.
+fn validate_profiles(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let Some(list) = value.as_array() else {
+        errors.push(PolicyError::invalid_value(
+            path,
+            value,
+            "an array of profile objects",
+        ));
+        return;
+    };
+    for (i, profile) in list.iter().enumerate() {
+        let at = format!("{path}[{i}]");
+        let Some(obj) = profile.as_object() else {
+            nested_error(errors, &at, "expected an object");
+            continue;
+        };
+        for key in obj.keys() {
+            if !matches!(
+                key.as_str(),
+                "name" | "actors" | "branch_pattern" | "sections"
+            ) {
+                nested_error(
+                    errors,
+                    &at,
+                    &format!(
+                        "unknown field `{key}`; expected name, actors, branch_pattern, sections"
+                    ),
+                );
+            }
+        }
+        if obj
+            .get("name")
+            .and_then(Value::as_str)
+            .is_none_or(|n| n.trim().is_empty())
+        {
+            nested_error(errors, &at, "`name` must be a non-empty string");
+        }
+        let actors_ok = obj
+            .get("actors")
+            .and_then(Value::as_array)
+            .is_some_and(|a| {
+                !a.is_empty()
+                    && a.iter().all(|x| {
+                        x.as_str().is_some_and(|s| {
+                            !s.trim().is_empty() && s != super::policy::UNKNOWN_ACTOR
+                        })
+                    })
+            });
+        if !actors_ok {
+            nested_error(
+                errors,
+                &at,
+                "`actors` must be a non-empty array of actor names or app ids (not `unknown`)",
+            );
+        }
+        match obj.get("branch_pattern").and_then(Value::as_str) {
+            Some(p) if !p.trim().is_empty() && p.trim() != "*" && p.trim() != "**" => {
+                if let Err(e) = glob::Pattern::new(p) {
+                    nested_error(
+                        errors,
+                        &at,
+                        &format!("`branch_pattern` is not a valid glob ({e})"),
+                    );
+                }
+            }
+            _ => nested_error(
+                errors,
+                &at,
+                "`branch_pattern` must be a glob narrower than `*`, such as `dependabot/*`",
+            ),
+        }
+        if let Some(sections) = obj.get("sections") {
+            if !string_map(sections) {
+                nested_error(
+                    errors,
+                    &at,
+                    "`sections` must map each heading to its content as strings",
+                );
+            }
+        }
+    }
+}
+
+/// Validate `git.pr_section_mapping`: an object with a known `state`, an
+/// optional `headings` map of strings, and `decided` as `none` or a date.
+fn validate_mapping(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    let Some(obj) = value.as_object() else {
+        errors.push(PolicyError::invalid_value(path, value, "an object"));
+        return;
+    };
+    for key in obj.keys() {
+        if !matches!(key.as_str(), "state" | "headings" | "decided") {
+            nested_error(
+                errors,
+                path,
+                &format!("unknown field `{key}`; expected state, headings, decided"),
+            );
+        }
+    }
+    if !obj
+        .get("state")
+        .and_then(Value::as_str)
+        .is_some_and(|s| matches!(s, "diagnosed" | "accepted" | "refused" | "custom"))
+    {
+        nested_error(
+            errors,
+            path,
+            "`state` must be one of: diagnosed, accepted, refused, custom",
+        );
+    }
+    if let Some(headings) = obj.get("headings") {
+        if !string_map(headings) {
+            nested_error(
+                errors,
+                path,
+                "`headings` must map each required heading to the template heading",
+            );
+        }
+    }
+    if let Some(decided) = obj.get("decided") {
+        let ok = decided.as_str().is_some_and(|d| {
+            d == "none"
+                || (d.len() == 10
+                    && d.bytes().enumerate().all(|(i, b)| {
+                        if i == 4 || i == 7 {
+                            b == b'-'
+                        } else {
+                            b.is_ascii_digit()
+                        }
+                    }))
+        });
+        if !ok {
+            nested_error(
+                errors,
+                path,
+                "`decided` must be `none` or a YYYY-MM-DD date",
+            );
         }
     }
 }
@@ -778,6 +988,9 @@ mod tests {
 
     #[test]
     fn test_schema_covers_every_policy_leaf_both_ways() {
+        // Keys that are absent by default serialize nothing; they are still
+        // schema keys the file may carry.
+        const OPTIONAL: [&str; 1] = ["git.pr_section_mapping"];
         // The drift guard: every leaf the default Policy serializes must be in
         // the schema, and every schema path must be a real serde leaf — a new
         // field (or a renamed one) fails this test until the registry follows.
@@ -792,11 +1005,15 @@ mod tests {
         }
         for p in &schema_paths {
             assert!(
-                struct_paths.iter().any(|s| s == p),
+                OPTIONAL.contains(p) || struct_paths.iter().any(|s| s == p),
                 "schema registry lists {p}, which is not a policy field"
             );
         }
-        assert_eq!(struct_paths.len(), SCHEMA.len(), "one spec per leaf");
+        assert_eq!(
+            struct_paths.len() + OPTIONAL.len(),
+            SCHEMA.len(),
+            "one spec per leaf"
+        );
     }
 
     #[test]
@@ -911,6 +1128,48 @@ mod tests {
         assert!(warnings[0].contains("human_authorization is deprecated"));
         std::fs::write(dir.path().join(".codeflow/policy.json"), r#"{"git":{}}"#).unwrap();
         assert!(deprecation_warnings(dir.path()).is_empty());
+    }
+
+    #[test]
+    fn upgrade_hint_names_the_two_step_order_for_unknown_keys_only() {
+        let errs = validate_policy_str(r#"{"git":{"future_key":"block"}}"#).unwrap_err();
+        let hint = upgrade_order_hint(&errs, "3.0.0").unwrap();
+        assert!(hint.contains("two pull requests"));
+        assert!(hint.contains("scaffold_version"));
+        let errs = validate_policy_str(r#"{"git":{"commit_format":"worn"}}"#).unwrap_err();
+        assert!(upgrade_order_hint(&errs, "3.0.0").is_none());
+    }
+
+    #[test]
+    fn test_automation_profiles_and_mapping_validate() {
+        let ok = r#"{"git":{"automation_profiles":[{"name":"dependabot","actors":["dependabot[bot]"],"branch_pattern":"dependabot/*","sections":{"Testing":"CI runs the full suite."}}],"pr_section_mapping":{"state":"accepted","headings":{"Summary":"What"},"decided":"2026-09-26"}}}"#;
+        assert!(
+            validate_policy_str(ok).is_ok(),
+            "{:?}",
+            validate_policy_str(ok)
+        );
+        let policy: Policy = serde_json::from_str(ok).unwrap();
+        assert_eq!(policy.git.automation_profiles.len(), 1);
+        assert!(policy.git.pr_section_mapping.is_some());
+
+        for bad in [
+            r#"{"git":{"automation_profiles":{}}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":[],"branch_pattern":"bot/*"}]}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":["unknown"],"branch_pattern":"bot/*"}]}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":["b"],"branch_pattern":"*"}]}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":["b"],"branch_pattern":"bot/*","level":"off"}]}}"#,
+            r#"{"git":{"automation_profiles":[{"name":"x","actors":["b"],"branch_pattern":"bot/*","sections":{"Testing":1}}]}}"#,
+            r#"{"git":{"pr_section_mapping":{"state":"maybe"}}}"#,
+            r#"{"git":{"pr_section_mapping":{"state":"accepted","decided":"yesterday"}}}"#,
+            r#"{"git":{"pr_section_mapping":{"state":"accepted","extra":true}}}"#,
+        ] {
+            let errs = validate_policy_str(bad).expect_err(bad);
+            assert!(
+                errs[0].key.starts_with("git.automation_profiles")
+                    || errs[0].key.starts_with("git.pr_section_mapping"),
+                "{bad}: {errs:?}"
+            );
+        }
     }
 
     #[test]

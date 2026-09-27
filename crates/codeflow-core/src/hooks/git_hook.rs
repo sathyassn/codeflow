@@ -195,6 +195,14 @@ fn push_format_violations(
             ),
         ));
     }
+    if let Some(reason) = standards::check_subject_separator(cleaned) {
+        report.violations.push(Violation::new(
+            "git.commit_format",
+            policy.commit_format,
+            reason,
+            "put one blank line between the subject and the body".to_string(),
+        ));
+    }
     if let Some(reason) = standards::check_breaking_footer(subject, cleaned) {
         report.violations.push(Violation::new(
             "git.commit_format",

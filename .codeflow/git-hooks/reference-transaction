@@ -1,6 +1,8 @@
 #!/bin/sh
-# codeflow git-hook shim — managed by `codeflow update`.
+# codeflow git-hook shim, managed by `codeflow update`.
 # No-ops gracefully when the codeflow binary is not on PATH; all policy lives
 # in .codeflow/policy.json and is evaluated by the binary, never here.
+# This hook fires on every ref update, so it carries no capability probe: the
+# commit, merge and push shims warn when the binary is older (SPC-013 R-85).
 command -v codeflow >/dev/null 2>&1 || exit 0
 exec codeflow git-hook reference-transaction "$@"

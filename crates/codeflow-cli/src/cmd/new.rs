@@ -11,6 +11,7 @@ use codeflow_core::ids::issue::{self, Request};
 use codeflow_core::ids::{Kind, RegId, Standing};
 use codeflow_core::scaffold::AssetSource;
 use codeflow_core::workgraph::light_paths;
+use codeflow_core::workgraph::record_template::{self, TemplateSource};
 use codeflow_core::workgraph::status_verb::{set_status, StatusChange};
 use codeflow_core::workgraph::{
     allocate, durable_work_tracking_enabled, is_valid_epic_format_id, NewRecord, RecordKind,
@@ -679,9 +680,28 @@ fn report(rec: &NewRecord) -> i32 {
     0
 }
 
-/// Read an embedded pm template as UTF-8.
+/// The record template for `kind` (SPC-013 R-37): the project's
+/// `project-management/templates/<kind>.md` when it is usable, otherwise the
+/// embedded one, with a warning that names why the project's was not used.
+/// Any other embedded template is returned as shipped.
 fn load_template(asset: &str) -> Option<String> {
-    EmbeddedAssets
+    let embedded = EmbeddedAssets
         .read(asset)
-        .and_then(|bytes| String::from_utf8(bytes).ok())
+        .and_then(|bytes| String::from_utf8(bytes).ok())?;
+    if !asset.starts_with("base/pm/") {
+        // Not a work record (the ADR template): no project record template.
+        return Some(embedded);
+    }
+    let kind = if asset.ends_with("epic.md.tmpl") {
+        RecordKind::Epic
+    } else if asset.ends_with("spec.md.tmpl") {
+        RecordKind::Spec
+    } else {
+        RecordKind::Task
+    };
+    let (text, source) = record_template::load(&super::repo_root(), kind, &embedded);
+    if let TemplateSource::Fallback(reason) = source {
+        eprintln!("warning: {reason}");
+    }
+    Some(text)
 }
