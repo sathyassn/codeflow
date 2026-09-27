@@ -44,12 +44,13 @@ fn group_of(spec: &KeySpec) -> &'static str {
     match spec.path.split_once('.') {
         Some(("git", _)) => "git",
         Some(("security", _)) => "security",
+        Some(("guidance", _)) => "guidance",
         _ => "top-level",
     }
 }
 
 /// `codeflow policy explain` — render the whole schema, grouped
-/// top-level / git / security, defaults taken live from `Policy::default()`.
+/// top-level / git / security / guidance, defaults taken live from `Policy::default()`.
 fn explain() -> i32 {
     println!(".codeflow/policy.json — every key the policy file accepts.");
     println!("A missing file or key means the built-in default applies;");
@@ -185,10 +186,11 @@ mod tests {
     }
 
     #[test]
-    fn groups_cover_the_three_sections() {
+    fn groups_cover_every_section() {
         let groups: Vec<&str> = schema().iter().map(group_of).collect();
         assert!(groups.contains(&"top-level"));
         assert!(groups.contains(&"git"));
         assert!(groups.contains(&"security"));
+        assert!(groups.contains(&"guidance"));
     }
 }

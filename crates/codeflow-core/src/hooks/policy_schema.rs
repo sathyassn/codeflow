@@ -87,9 +87,9 @@ pub struct KeySpec {
 const LEVEL_VALID: &str = "off | warn | allow | block";
 
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
-/// in file order (top-level, then `git`, then `security`). A drift-guard test
+/// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 48] = [
+pub const SCHEMA: [KeySpec; 49] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -500,6 +500,15 @@ pub const SCHEMA: [KeySpec; 48] = [
         notes: "Default warn: scripting outside a delegation stays possible; \
                 block refuses the run.",
     },
+    // ---- guidance ----------------------------------------------------------
+    KeySpec {
+        path: "guidance.prompt_reminders",
+        kind: KeyKind::Enum(&["off", "allow", "warn"]),
+        valid: "off | allow | warn",
+        purpose: "The one-line rule reminder the prompt hook adds when a prompt asks for a duration, a status or a complex explanation.",
+        notes: "Advisory only: warn adds the line, off and allow add nothing; \
+                block is refused because a reminder never stops a prompt.",
+    },
 ];
 
 /// The full schema, for callers that render or validate it.
@@ -689,7 +698,7 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
         }
         match key.as_str() {
             // The two object sections: walk their leaves with the prefix.
-            section @ ("git" | "security") => match value.as_object() {
+            section @ ("git" | "security" | "guidance") => match value.as_object() {
                 Some(section_obj) => {
                     for (leaf, leaf_value) in section_obj {
                         validate_leaf(&format!("{section}.{leaf}"), leaf_value, &mut errors);

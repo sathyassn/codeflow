@@ -1,4 +1,4 @@
-//! `codeflow hook <git-guard|exec-guard|session-orient|session-summary|delegate-turn>` — the
+//! `codeflow hook <git-guard|exec-guard|session-orient|prompt-reminder|session-summary|delegate-turn>` — the
 //! Claude layer hooks, wired by the settings presets (charter §3.3).
 //!
 //! Exit-code contract:
@@ -7,18 +7,22 @@
 //! - `exec-guard`: 0 allow (or warn), 2 block — same `PreToolUse` shell
 //!   contract, enforcing the `security` policy section (ADR-0008). Payload is
 //!   parsed leniently so the same subcommand serves the Codex hooks engine.
-//! - `session-orient`: digest on stdout, always 0.
+//! - `session-orient`: digest on stdout, always 0; after a compaction or a
+//!   resume (payload `source` `compact` or `resume`) the rule guidance block
+//!   follows the digest (TSK-128).
+//! - `prompt-reminder`: at most one advisory rule line on stdout, always 0;
+//!   it never blocks or fails a prompt (TSK-128).
 //! - `session-summary`: always 0 — a failed summary must never fail the
 //!   session (warn on stderr instead).
 //! - `delegate-turn`: schema-v2 state mode handles the full lifecycle without
 //!   tmux; legacy result mode preserves its existing terminal signal contract.
 
-use std::io::Read;
+use std::io::{Read, Write as _};
 use std::path::PathBuf;
 
 use clap::{ArgGroup, Args};
 use codeflow_core::hooks::{
-    delegate_turn, exec_guard, git_guard, orient, policy::Policy, session_summary,
+    delegate_turn, exec_guard, git_guard, guidance, orient, policy::Policy, session_summary,
 };
 
 // Large enough for the maximum decoded terminal message even when every byte
@@ -33,8 +37,12 @@ pub enum HookName {
     /// `PreToolUse` (Bash/PowerShell): enforce policy.json `security` rules (dangerous
     /// commands, privilege escalation). Harness-agnostic — also serves Codex.
     ExecGuard,
-    /// `SessionStart`: emit the orient digest to stdout.
+    /// `SessionStart`: emit the orient digest to stdout, plus the rule
+    /// guidance block when the session resumes or follows a compaction.
     SessionOrient,
+    /// `UserPromptSubmit`: emit one advisory rule line when the prompt asks
+    /// for a duration, a status or a complex explanation.
+    PromptReminder,
     /// `SessionEnd`: append the session record to the ledger.
     SessionSummary,
     /// `SessionStart`, `UserPromptSubmit`, `Stop` and `StopFailure`: with
@@ -92,7 +100,25 @@ pub fn run(args: &HookArgs) -> i32 {
         HookName::ExecGuard => exec_guard(&stdin),
         HookName::SessionOrient => {
             let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
-            print!("{}", orient::generate(&super::project_root(&cwd)));
+            let root = super::project_root(&cwd);
+            let digest = orient::generate(&root);
+            print!("{digest}");
+            // The digest's own off-switch also silences the guidance block.
+            if !digest.is_empty() {
+                let source = guidance::payload_source(&stdin).unwrap_or_default();
+                if let Some(block) = guidance::session_guidance(&root, &source) {
+                    print!("\n{block}");
+                }
+            }
+            0
+        }
+        HookName::PromptReminder => {
+            let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
+            if let Some(line) = guidance::prompt_reminder(&super::project_root(&cwd), &stdin) {
+                // A closed stdout must not turn the advisory line into a
+                // failed prompt, so the write error is dropped.
+                let _ = writeln!(std::io::stdout(), "{line}");
+            }
             0
         }
         HookName::SessionSummary => session_summary(&stdin),
