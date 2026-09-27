@@ -238,30 +238,7 @@ pub(super) fn dispatch(
         }
     };
     let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
-    let touches_records = files
-        .iter()
-        .any(|file| file.starts_with("project-management/") && file.ends_with(".md"));
-    if touches_records && !branch.starts_with("plan/") {
-        match codeflow_core::workgraph::readiness::selections_in_range(root, range.base, range.head)
-        {
-            Ok(selected) => {
-                for task_id in selected {
-                    push(
-                        tagged,
-                        "work.selection",
-                        format!("{task_id}'s awaiting_selection is removed on '{branch}'"),
-                        "a selection lands only by a planning pull request from a plan/ branch (SPC-013 R-43)",
-                    );
-                }
-            }
-            Err(error) => push(
-                tagged,
-                "work.selection",
-                format!("cannot read the records of the range: {error}"),
-                "pass --base and --head so CI can read the range",
-            ),
-        }
-    }
+    selection_check(root, branch, range, &files, tagged);
     let input = Input {
         body,
         branch,
@@ -312,6 +289,41 @@ pub(super) fn dispatch(
         }
         Class::Automation { profile } => {
             println!("codeflow ci: pull request class: automation profile {profile}");
+        }
+    }
+}
+
+/// A selection lands only by a planning pull request (SPC-013 R-43): a range
+/// that removes a task's `awaiting_selection` off a `plan/` branch blocks.
+fn selection_check(
+    root: &Path,
+    branch: &str,
+    range: &Range<'_>,
+    files: &[String],
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    let touches_records = files
+        .iter()
+        .any(|file| file.starts_with("project-management/"));
+    if touches_records && !branch.starts_with("plan/") {
+        match codeflow_core::workgraph::readiness::selections_in_range(root, range.base, range.head)
+        {
+            Ok(selected) => {
+                for task_id in selected {
+                    push(
+                        tagged,
+                        "work.selection",
+                        format!("{task_id}'s awaiting_selection is removed on '{branch}'"),
+                        "a selection lands only by a planning pull request from a plan/ branch (SPC-013 R-43)",
+                    );
+                }
+            }
+            Err(error) => push(
+                tagged,
+                "work.selection",
+                format!("cannot read the records of the range: {error}"),
+                "pass --base and --head so CI can read the range",
+            ),
         }
     }
 }
