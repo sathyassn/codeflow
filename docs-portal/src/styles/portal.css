@@ -617,15 +617,32 @@ html[data-cfp-tabs="on"] .sl-markdown-content .portal-altitude > :is(.sl-heading
   }
 }
 /* The home reading path is the stage figure with one linked step per
-   configured layer, so it inherits the stage wrapping and stacking. */
-.portal-reading-path { margin-block: 2.5rem 1rem; }
+   configured layer. It reads top to bottom at every width, so every
+   configured step is in view, each step is one row with its name beside
+   its summary, and the rows share one width. */
+.cf-main .hero { grid-template-columns: 100%; padding-block: 2rem 0.5rem; }
+.sl-markdown-content .portal-reading-path { margin-block: 1.25rem 1rem; }
+.portal-reading-path .portal-stage-flow { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; row-gap: 0; }
+.portal-reading-path .portal-stage-group { flex: 0 0 auto; min-inline-size: 0; }
+.portal-reading-path .portal-stage-arrow { flex: 0 0 1.25rem; width: 2px; height: auto; margin-inline-start: 1.5rem; }
+.portal-reading-path .portal-stage-arrow::after { position: absolute; inset-inline-end: auto; inset-inline-start: -4px; inset-block-start: auto; inset-block-end: -1px; border-block: 7px solid var(--cf-diagram-line); border-block-end: 0; border-inline: 5px solid transparent; }
 .portal-reading-path .portal-stage-node { padding: 0; }
 .portal-reading-path .portal-stage-node > a {
-  display: block;
+  display: grid;
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  column-gap: 1rem;
+  align-items: baseline;
   padding: 0.75rem 0.875rem;
   text-decoration: none;
   color: inherit;
 }
+.portal-reading-path .portal-stage-node .s { margin-top: 0; }
+@media (max-width: 30rem) {
+  .portal-reading-path .portal-stage-node > a { grid-template-columns: minmax(0, 1fr); row-gap: 2px; }
+}
+/* A lone code token that opens a table row is an identifier, such as a
+   skill or a path: it wraps as a whole, never at its own hyphen. */
+.sl-markdown-content td:first-child > code:only-child { white-space: nowrap; }
 .portal-reading-path .portal-stage-node > a:hover .k { color: var(--cf-accent-strong); }
 
 /* A layer landing shows the order to read it in: one numbered line per
