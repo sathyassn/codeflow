@@ -201,9 +201,9 @@ qualified routes before recorded solo fallback.
      unobserved user default is not selection evidence.
    - Use `cf-delegate` for the preferred/fallback native lanes, lifecycle,
      sibling Stop-hook preflight, exact-byte delivery, and bounded cleanup. Use
-     `cf-herdr` when `HERDR_ENV=1` and its degraded TTY route otherwise. Before
-     every Claude worker or same-session reviewer launch, load capability-routing's
-     `claude-turn-completion.md` foreground-return contract.
+     `cf-herdr` when `HERDR_ENV=1` and its degraded TTY route otherwise. On a
+     Codex host, before every Claude worker or same-session reviewer launch,
+     load the `claude-turn-completion.md` foreground-return contract.
    - Use only the ensemble's recorded same-family fallback after native
      preflight. Keep primary effort at its default and worker escalation with
      the primary; label requested versus observed selection and never report

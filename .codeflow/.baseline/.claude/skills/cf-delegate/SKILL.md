@@ -106,7 +106,7 @@ The plugin's commands cover both modes:
   back-and-forth; follow-ups resume it instead of starting fresh.
 
 Collect peer in-turn via public foreground/qualified native fallback; no host
-`run_in_background` watcher. See `resources/claude-turn-completion.md`.
+`run_in_background` watcher. The Codex-host turn adapter does not apply here.
 
 Start every delegated plugin prompt with an explicit bounded role, for example
 `ROLE: peer. Complete only this bounded assignment. Do not start the top-level
@@ -199,7 +199,7 @@ signal.
   mis-correlated events, and interrupted waits after acceptance poison the
   run; recovery is a new run id in a fresh state directory. Turns are
   sequential — one outstanding armed turn per run; arm a new id in the same
-  session after each terminal result. Use the shipped
+  session after each terminal result. On this Codex host lane, use the shipped
   [turn lifecycle adapter](resources/claude-turn-completion.md) for exact
   mechanics; never improvise a parser, scrape transcripts, or use pane
   stability as completion.

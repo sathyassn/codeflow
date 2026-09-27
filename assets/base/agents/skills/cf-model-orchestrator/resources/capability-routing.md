@@ -170,13 +170,14 @@ owning Claude primary invokes that named `subagent_type`. In an existing
 session, verify a supported definition is loaded before invoking it. Never
 invent a missing Agent argument or install a permanent fleet of worker roles.
 
-Before launching any Claude worker, **read and follow**
+On a Codex host, before launching a Claude worker through the delegated
+lifecycle, **read and follow**
 `.claude/skills/cf-delegate/resources/claude-turn-completion.md`. Its
-"Sequential turns" section governs the delegated Claude lifecycle (`wait
---until terminal`, continuation records): there, collect the worker result
-before the primary returns. It does not govern an in-session Agent launch.
-Claude Code runs Agent-tool subagents in the background; for a same-family
-worker launched that way, the verified return is the task notification from
+"Sequential turns" section governs that lifecycle (`wait --until terminal`,
+continuation records): there, collect the worker result before the primary
+returns. It does not govern an in-session Agent launch. A Claude host does
+not load it. Claude Code runs Agent-tool subagents in the background; for a
+same-family worker launched that way, the verified return is the task notification from
 this session's own launch of that worker. Do not report the unit complete
 before it arrives, then check the result in it against the brief.
 Notifications from any other launch and background Bash watchers are not

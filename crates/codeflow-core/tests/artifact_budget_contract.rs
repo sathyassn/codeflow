@@ -839,3 +839,99 @@ fn typed_contracts_are_proportionate_and_runtime_aware() {
         ],
     );
 }
+
+// TSK-129 AC-2: the Claude turn lifecycle adapter serves only the Codex-hosted
+// delegated Claude lane. A Claude host collects an in-session Agent worker by
+// its own-launch task notification (capability-routing), so no shipped text on
+// a Claude-host path may name the adapter as mandatory.
+const TURN_ADAPTER: &str = "claude-turn-completion.md";
+
+/// Shipped files scoped as a whole to the Codex host, which may name the
+/// adapter without restating that scope: the adapter itself and the manifest
+/// that installs it.
+const CODEX_HOST_ONLY_SOURCES: &[&str] = &[
+    "claude/skills/cf-delegate/resources/claude-turn-completion.md",
+    "scaffold-manifest.toml",
+];
+
+fn shipped_text_files(dir: &Path, out: &mut Vec<PathBuf>) {
+    let entries =
+        std::fs::read_dir(dir).unwrap_or_else(|error| panic!("read {}: {error}", dir.display()));
+    for entry in entries {
+        let path = entry.expect("directory entry").path();
+        if path.is_dir() {
+            shipped_text_files(&path, out);
+        } else if std::fs::read_to_string(&path).is_ok() {
+            out.push(path);
+        }
+    }
+}
+
+/// Sentences of `text` that name the adapter, split on blank lines and on
+/// sentence ends after whitespace normalization.
+fn adapter_sentences(text: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for paragraph in text.split("\n\n") {
+        let paragraph = normalized(paragraph);
+        for sentence in paragraph.split_inclusive(". ") {
+            if sentence.contains(TURN_ADAPTER) {
+                found.push(sentence.to_string());
+            }
+        }
+    }
+    found
+}
+
+#[test]
+fn no_claude_host_path_makes_the_turn_adapter_mandatory() {
+    let base = repo_root().join("assets/base");
+    let mut files = Vec::new();
+    shipped_text_files(&base, &mut files);
+    let mut scoped = BTreeSet::new();
+    for path in files {
+        let relative = path
+            .strip_prefix(&base)
+            .expect("under assets/base")
+            .to_string_lossy()
+            .replace('\\', "/");
+        if CODEX_HOST_ONLY_SOURCES.contains(&relative.as_str()) {
+            continue;
+        }
+        for sentence in adapter_sentences(&read_text(&path)) {
+            let lower = sentence.to_lowercase();
+            assert!(
+                lower.contains("codex host") || lower.contains("codex-host"),
+                "{relative} names the turn adapter outside a Codex-host scope: {sentence}"
+            );
+            scoped.insert(relative.clone());
+        }
+    }
+    // The scoped pointers stay where a Codex host reaches them, so the check
+    // cannot pass by deleting them.
+    for owner in [
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+        "claude/skills/cf-delegate/SKILL.md",
+    ] {
+        assert!(
+            scoped.contains(owner),
+            "{owner} lost its Codex-host pointer to the turn adapter"
+        );
+    }
+    let adapter = normalized(&read_text(
+        &base.join("claude/skills/cf-delegate/resources/claude-turn-completion.md"),
+    ));
+    assert!(
+        adapter.contains("A Claude host does not load it"),
+        "the adapter must state that a Claude host does not load it"
+    );
+    let routing = normalized(&read_text(
+        &base.join("agents/skills/cf-model-orchestrator/resources/capability-routing.md"),
+    ));
+    assert!(
+        routing.contains(
+            "the verified return is the task notification from this session's own launch"
+        ),
+        "the Claude-host return rule must stay in capability-routing"
+    );
+}

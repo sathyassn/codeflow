@@ -391,8 +391,9 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
         &[
             "Propagate current observed unavailability into every later worker choice",
             "do not infer that sibling models or another account are unavailable",
-            "Before launching any Claude worker, **read and follow**",
+            "On a Codex host, before launching a Claude worker through the delegated lifecycle, **read and follow**",
             "claude-turn-completion.md",
+            "A Claude host does not load it.",
             "collect the worker result before the primary returns",
             "It does not govern an in-session Agent launch.",
             "the verified return is the task notification from this session's own launch",
