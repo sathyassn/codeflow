@@ -327,7 +327,7 @@
         },
         {
           "text": "unmodified managed",
-          "x": 20,
+          "x": 36,
           "y": 30,
           "for": [
             "a0"
@@ -336,7 +336,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 46V58",
+          "d": "M24 42V73H38",
           "head": "end",
           "id": "e0"
         },
@@ -370,7 +370,7 @@
         },
         {
           "text": "managed, you edited it",
-          "x": 20,
+          "x": 36,
           "y": 112,
           "for": [
             "a1"
@@ -379,7 +379,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 128V140",
+          "d": "M24 124V155H38",
           "head": "end",
           "id": "e1"
         },
@@ -413,7 +413,7 @@
         },
         {
           "text": "merge conflict",
-          "x": 20,
+          "x": 36,
           "y": 194,
           "for": [
             "a2"
@@ -422,7 +422,7 @@
         {
           "state": "return",
           "shape": "path",
-          "d": "M40 210V222",
+          "d": "M24 206V237H38",
           "open": "end",
           "id": "e2"
         },
@@ -457,7 +457,7 @@
         },
         {
           "text": "no longer shipped, untouched",
-          "x": 20,
+          "x": 36,
           "y": 276,
           "for": [
             "a3"
@@ -466,7 +466,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 292V304",
+          "d": "M24 288V319H38",
           "head": "end",
           "id": "e3"
         },
@@ -500,7 +500,7 @@
         },
         {
           "text": "no longer shipped, may hold yours",
-          "x": 20,
+          "x": 36,
           "y": 358,
           "for": [
             "a4"
@@ -509,7 +509,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 374V386",
+          "d": "M24 370V401H38",
           "head": "end",
           "id": "e4"
         },

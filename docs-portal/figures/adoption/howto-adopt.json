@@ -222,7 +222,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 256,
+      "height": 294,
       "draw": [
         {
           "state": "state",
@@ -265,14 +265,23 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M88 48V90C88 104 120 104 140 118",
+          "d": "M40 48V100C40 116 100 112 118 128",
           "head": "end",
           "id": "t1"
         },
         {
-          "text": "init",
-          "x": 26,
-          "y": 84,
+          "text": "init, commits",
+          "x": 52,
+          "y": 72,
+          "style": "mute",
+          "for": [
+            "t1"
+          ]
+        },
+        {
+          "text": "for you",
+          "x": 52,
+          "y": 93,
           "style": "mute",
           "for": [
             "t1"
@@ -281,14 +290,24 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M272 48V90C272 104 240 104 220 118",
+          "d": "M320 48V100C320 116 230 112 212 128",
           "head": "end",
           "id": "t2"
         },
         {
-          "text": "init on a branch",
-          "x": 262,
-          "y": 84,
+          "text": "on a branch,",
+          "x": 308,
+          "y": 72,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "t2"
+          ]
+        },
+        {
+          "text": "you commit",
+          "x": 308,
+          "y": 93,
           "anchor": "end",
           "style": "mute",
           "for": [
@@ -298,19 +317,29 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M344 48V138H262",
+          "d": "M344 48V148H232",
           "cross": {
-            "cx": 344,
-            "cy": 94,
-            "size": 11
+            "cx": 290,
+            "cy": 148,
+            "size": 12
           },
           "id": "f1"
         },
         {
-          "text": "--force past a collision",
-          "x": 352,
-          "y": 184,
-          "anchor": "end",
+          "text": "--force past",
+          "x": 294,
+          "y": 169,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "text": "a collision",
+          "x": 290,
+          "y": 190,
+          "anchor": "middle",
           "style": "mono",
           "for": [
             "f1"
@@ -319,17 +348,17 @@
         {
           "state": "state",
           "shape": "rect",
-          "x": 100,
-          "y": 120,
-          "w": 160,
+          "x": 90,
+          "y": 130,
+          "w": 140,
           "h": 36,
           "rx": 8,
           "id": "in"
         },
         {
           "text": "initialized",
-          "x": 180,
-          "y": 143,
+          "x": 160,
+          "y": 152,
           "anchor": "middle",
           "for": [
             "in"
@@ -338,14 +367,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M130 158V206",
+          "d": "M130 168V246",
           "head": "end",
           "id": "t3"
         },
         {
           "text": "/cf-customize",
           "x": 8,
-          "y": 186,
+          "y": 212,
           "style": "mono",
           "for": [
             "t3"
@@ -354,20 +383,45 @@
         {
           "state": "state",
           "shape": "rect",
-          "x": 60,
-          "y": 208,
-          "w": 160,
+          "x": 90,
+          "y": 248,
+          "w": 140,
           "h": 36,
           "rx": 8,
           "id": "cu"
         },
         {
           "text": "customized",
-          "x": 140,
-          "y": 231,
+          "x": 160,
+          "y": 271,
           "anchor": "middle",
           "for": [
             "cu"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M200 246V170",
+          "head": "end",
+          "id": "t4"
+        },
+        {
+          "text": "re-run init at",
+          "x": 212,
+          "y": 211,
+          "style": "mute",
+          "for": [
+            "t4"
+          ]
+        },
+        {
+          "text": "a higher tier",
+          "x": 212,
+          "y": 232,
+          "style": "mute",
+          "for": [
+            "t4"
           ]
         }
       ]

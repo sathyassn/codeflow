@@ -246,6 +246,12 @@
           "d": "M316 142V156",
           "head": "end",
           "id": "e5"
+        },
+        {
+          "text": "nothing is committed",
+          "x": 498,
+          "y": 190,
+          "style": "mute"
         }
       ]
     },
@@ -254,22 +260,22 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 357,
+      "height": 342,
       "draw": [
         {
           "state": "agentpart",
           "shape": "rect",
           "x": 8,
-          "y": 10,
+          "y": 8,
           "w": 344,
-          "h": 44,
+          "h": 40,
           "rx": 8,
           "id": "a"
         },
         {
           "text": "agent session",
           "x": 22,
-          "y": 37,
+          "y": 33,
           "style": "strong",
           "for": [
             "a"
@@ -278,7 +284,7 @@
         {
           "text": "writes, then reads",
           "x": 160,
-          "y": 37,
+          "y": 33,
           "style": "mute",
           "for": [
             "a"
@@ -287,14 +293,14 @@
         {
           "state": "talks",
           "shape": "path",
-          "d": "M60 56V96",
+          "d": "M60 50V86",
           "head": "end",
           "id": "e1"
         },
         {
           "state": "talks",
           "shape": "path",
-          "d": "M100 96V56",
+          "d": "M100 86V50",
           "head": "end",
           "id": "e2"
         },
@@ -302,23 +308,23 @@
           "deco": "rule",
           "shape": "rect",
           "x": 8,
-          "y": 98,
+          "y": 88,
           "w": 344,
-          "h": 249
+          "h": 246
         },
         {
           "text": "your machine, your user only",
-          "x": 20,
-          "y": 123,
+          "x": 120,
+          "y": 106,
           "style": "head"
         },
         {
           "state": "service",
           "shape": "rect",
           "x": 20,
-          "y": 139,
+          "y": 122,
           "w": 320,
-          "h": 56,
+          "h": 72,
           "rx": 8,
           "cap": "end",
           "id": "s"
@@ -326,7 +332,7 @@
         {
           "text": "loopback service",
           "x": 34,
-          "y": 161,
+          "y": 138,
           "style": "strong",
           "for": [
             "s"
@@ -335,8 +341,17 @@
         {
           "text": "127.0.0.1 only",
           "x": 34,
-          "y": 183,
+          "y": 159,
           "style": "mono",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "one per session",
+          "x": 34,
+          "y": 180,
+          "style": "mute",
           "for": [
             "s"
           ]
@@ -344,14 +359,14 @@
         {
           "state": "talks",
           "shape": "path",
-          "d": "M60 199V223",
+          "d": "M60 196V218",
           "head": "end",
           "id": "e3"
         },
         {
           "state": "talks",
           "shape": "path",
-          "d": "M100 223V199",
+          "d": "M100 218V196",
           "head": "end",
           "id": "e4"
         },
@@ -359,26 +374,34 @@
           "state": "browser",
           "shape": "rect",
           "x": 20,
-          "y": 225,
+          "y": 220,
           "w": 150,
-          "h": 56,
+          "h": 74,
           "rx": 8,
           "id": "b"
         },
         {
-          "text": "isolated",
-          "x": 34,
-          "y": 249,
+          "text": "isolated browser",
+          "x": 32,
+          "y": 243,
           "style": "strong",
           "for": [
             "b"
           ]
         },
         {
-          "text": "browser",
-          "x": 34,
-          "y": 271,
-          "style": "strong",
+          "text": "own profile, never",
+          "x": 32,
+          "y": 264,
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "your everyday one",
+          "x": 32,
+          "y": 285,
+          "style": "mute",
           "for": [
             "b"
           ]
@@ -386,7 +409,7 @@
         {
           "state": "talks",
           "shape": "path",
-          "d": "M280 199V223",
+          "d": "M280 196V218",
           "head": "end",
           "id": "e5"
         },
@@ -394,27 +417,27 @@
           "state": "service",
           "shape": "rect",
           "x": 190,
-          "y": 225,
+          "y": 220,
           "w": 150,
-          "h": 56,
+          "h": 54,
           "rx": 8,
           "cap": "end",
           "id": "l"
         },
         {
-          "text": "feedback",
-          "x": 204,
-          "y": 249,
+          "text": "feedback ledger",
+          "x": 202,
+          "y": 243,
           "style": "strong",
           "for": [
             "l"
           ]
         },
         {
-          "text": "ledger",
-          "x": 204,
-          "y": 271,
-          "style": "strong",
+          "text": "append-only",
+          "x": 202,
+          "y": 264,
+          "style": "mute",
           "for": [
             "l"
           ]
@@ -422,7 +445,7 @@
         {
           "text": "nothing is committed",
           "x": 20,
-          "y": 317,
+          "y": 320,
           "style": "mute"
         }
       ]

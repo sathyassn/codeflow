@@ -16,6 +16,11 @@
         "means": "Session state"
       },
       {
+        "name": "copy",
+        "mark": "optional",
+        "means": "Read-only HTML copy, a file and not a state"
+      },
+      {
         "name": "trans",
         "mark": "trans",
         "means": "Command"
@@ -88,18 +93,18 @@
           ]
         },
         {
-          "state": "state",
+          "state": "copy",
           "shape": "rect",
           "x": 202,
           "y": 16,
-          "w": 150,
+          "w": 176,
           "h": 36,
           "rx": 8,
           "id": "ex"
         },
         {
-          "text": "HTML copy made",
-          "x": 277,
+          "text": "read-only HTML copy",
+          "x": 290,
           "y": 39,
           "anchor": "middle",
           "for": [
@@ -145,14 +150,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M382 78H502",
+          "d": "M382 78H538",
           "head": "end",
           "id": "t3"
         },
         {
           "text": "clear, 30 days",
-          "x": 442,
-          "y": 121,
+          "x": 460,
+          "y": 68,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -162,7 +167,7 @@
         {
           "state": "state",
           "shape": "rect",
-          "x": 504,
+          "x": 540,
           "y": 60,
           "w": 120,
           "h": 36,
@@ -171,7 +176,7 @@
         },
         {
           "text": "removed",
-          "x": 564,
+          "x": 600,
           "y": 83,
           "anchor": "middle",
           "for": [
@@ -181,9 +186,9 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M76 98V140H564V98",
+          "d": "M76 98V140H600V98",
           "cross": {
-            "cx": 320,
+            "cx": 338,
             "cy": 140,
             "size": 12
           },
@@ -191,7 +196,7 @@
         },
         {
           "text": "clear an active session",
-          "x": 320,
+          "x": 338,
           "y": 166,
           "anchor": "middle",
           "style": "mute",
@@ -206,21 +211,21 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 258,
+      "height": 238,
       "draw": [
         {
           "state": "state",
           "shape": "rect",
           "x": 8,
           "y": 10,
-          "w": 150,
+          "w": 140,
           "h": 36,
           "rx": 8,
           "id": "ac"
         },
         {
           "text": "active",
-          "x": 83,
+          "x": 78,
           "y": 32,
           "anchor": "middle",
           "for": [
@@ -230,14 +235,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M160 28H198",
+          "d": "M150 34H234",
           "head": "end",
           "id": "t1"
         },
         {
           "text": "export",
-          "x": 180,
-          "y": 71,
+          "x": 192,
+          "y": 22,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -245,18 +250,18 @@
           ]
         },
         {
-          "state": "state",
+          "state": "copy",
           "shape": "rect",
-          "x": 200,
+          "x": 236,
           "y": 10,
-          "w": 152,
+          "w": 116,
           "h": 36,
           "rx": 8,
           "id": "ex"
         },
         {
           "text": "HTML copy",
-          "x": 276,
+          "x": 294,
           "y": 33,
           "anchor": "middle",
           "for": [
@@ -266,14 +271,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 48V97",
+          "d": "M78 48V97",
           "head": "end",
           "id": "t2"
         },
         {
           "text": "close",
-          "x": 96,
-          "y": 78,
+          "x": 91,
+          "y": 82,
           "style": "mono",
           "for": [
             "t2"
@@ -284,14 +289,14 @@
           "shape": "rect",
           "x": 8,
           "y": 100,
-          "w": 150,
+          "w": 140,
           "h": 36,
           "rx": 8,
           "id": "cl"
         },
         {
           "text": "closed",
-          "x": 83,
+          "x": 78,
           "y": 123,
           "anchor": "middle",
           "for": [
@@ -301,13 +306,13 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 139V187",
+          "d": "M78 139V187",
           "head": "end",
           "id": "t3"
         },
         {
           "text": "clear, 30 days",
-          "x": 96,
+          "x": 91,
           "y": 168,
           "style": "mono",
           "for": [
@@ -319,14 +324,14 @@
           "shape": "rect",
           "x": 8,
           "y": 190,
-          "w": 150,
+          "w": 140,
           "h": 36,
           "rx": 8,
           "id": "gone"
         },
         {
           "text": "removed",
-          "x": 83,
+          "x": 78,
           "y": 213,
           "anchor": "middle",
           "for": [
@@ -336,19 +341,27 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M160 208H290V64",
+          "d": "M136 48V56H236V208H150",
           "cross": {
-            "cx": 290,
-            "cy": 140,
+            "cx": 236,
+            "cy": 124,
             "size": 12
           },
           "id": "f1"
         },
         {
-          "text": "not while active",
-          "x": 352,
-          "y": 250,
-          "anchor": "end",
+          "text": "clear an",
+          "x": 250,
+          "y": 117,
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "text": "active session",
+          "x": 250,
+          "y": 138,
           "style": "mute",
           "for": [
             "f1"

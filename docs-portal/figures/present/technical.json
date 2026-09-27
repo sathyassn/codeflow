@@ -50,13 +50,13 @@
     ],
     "wide": {
       "width": 720,
-      "height": 210,
+      "height": 228,
       "draw": [
         {
           "state": "state",
           "shape": "rect",
           "x": 20,
-          "y": 60,
+          "y": 80,
           "w": 110,
           "h": 36,
           "rx": 8,
@@ -65,7 +65,7 @@
         {
           "text": "received",
           "x": 75,
-          "y": 83,
+          "y": 103,
           "anchor": "middle",
           "for": [
             "r"
@@ -75,7 +75,7 @@
           "state": "state",
           "shape": "rect",
           "x": 200,
-          "y": 60,
+          "y": 80,
           "w": 110,
           "h": 36,
           "rx": 8,
@@ -84,7 +84,7 @@
         {
           "text": "delivered",
           "x": 255,
-          "y": 83,
+          "y": 103,
           "anchor": "middle",
           "for": [
             "d"
@@ -94,26 +94,7 @@
           "state": "state",
           "shape": "rect",
           "x": 400,
-          "y": 20,
-          "w": 120,
-          "h": 36,
-          "rx": 8,
-          "id": "a"
-        },
-        {
-          "text": "addressed",
-          "x": 460,
-          "y": 43,
-          "anchor": "middle",
-          "for": [
-            "a"
-          ]
-        },
-        {
-          "state": "state",
-          "shape": "rect",
-          "x": 400,
-          "y": 104,
+          "y": 40,
           "w": 120,
           "h": 36,
           "rx": 8,
@@ -122,37 +103,56 @@
         {
           "text": "dismissed",
           "x": 460,
-          "y": 127,
+          "y": 63,
           "anchor": "middle",
           "for": [
             "x"
           ]
         },
         {
+          "state": "state",
+          "shape": "rect",
+          "x": 400,
+          "y": 124,
+          "w": 120,
+          "h": 36,
+          "rx": 8,
+          "id": "a"
+        },
+        {
+          "text": "addressed",
+          "x": 460,
+          "y": 147,
+          "anchor": "middle",
+          "for": [
+            "a"
+          ]
+        },
+        {
           "state": "trans",
           "shape": "path",
-          "d": "M132 78H198",
+          "d": "M132 98H198",
           "head": "end",
           "id": "t1"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M312 70C350 70 360 38 398 38",
+          "d": "M312 106C350 106 360 142 398 142",
           "head": "end",
           "id": "t2"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M312 86C350 86 360 122 398 122",
+          "d": "M312 90C350 90 360 58 398 58",
           "head": "end",
           "id": "t3"
         },
         {
           "text": "agent reads it",
           "x": 165,
-          "y": 42,
+          "y": 62,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -161,21 +161,23 @@
         },
         {
           "text": "resolve",
-          "x": 356,
-          "y": 30,
+          "x": 372,
+          "y": 103,
           "anchor": "middle",
           "style": "mute",
           "for": [
-            "t2"
+            "t2",
+            "t3"
           ]
         },
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M75 98C75 190 460 190 460 142",
+          "d": "M75 118C75 210 460 210 460 162",
+          "open": "end",
           "cross": {
             "cx": 268,
-            "cy": 170,
+            "cy": 193,
             "size": 12
           },
           "id": "f1"
@@ -183,7 +185,7 @@
         {
           "text": "resolve before delivery",
           "x": 268,
-          "y": 196,
+          "y": 220,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -193,27 +195,20 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M522 38H600V122H522",
+          "d": "M522 58H600M522 142H600V24H255V78",
+          "open": "end",
           "cross": {
-            "cx": 600,
-            "cy": 80,
+            "cx": 430,
+            "cy": 24,
             "size": 12
           },
           "id": "f2"
         },
         {
-          "text": "no move after",
-          "x": 614,
-          "y": 75,
-          "style": "mute",
-          "for": [
-            "f2"
-          ]
-        },
-        {
-          "text": "a terminal state",
-          "x": 614,
-          "y": 96,
+          "text": "no move out of a final state",
+          "x": 430,
+          "y": 14,
+          "anchor": "middle",
           "style": "mute",
           "for": [
             "f2"
@@ -226,12 +221,12 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 300,
+      "height": 276,
       "draw": [
         {
           "state": "state",
           "shape": "rect",
-          "x": 8,
+          "x": 28,
           "y": 12,
           "w": 120,
           "h": 36,
@@ -240,7 +235,7 @@
         },
         {
           "text": "received",
-          "x": 68,
+          "x": 88,
           "y": 34,
           "anchor": "middle",
           "for": [
@@ -250,13 +245,13 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M68 50V89",
+          "d": "M88 50V89",
           "head": "end",
           "id": "t1"
         },
         {
           "text": "agent reads it",
-          "x": 84,
+          "x": 104,
           "y": 76,
           "style": "mute",
           "for": [
@@ -266,7 +261,7 @@
         {
           "state": "state",
           "shape": "rect",
-          "x": 8,
+          "x": 28,
           "y": 92,
           "w": 120,
           "h": 36,
@@ -275,7 +270,7 @@
         },
         {
           "text": "delivered",
-          "x": 68,
+          "x": 88,
           "y": 115,
           "anchor": "middle",
           "for": [
@@ -285,43 +280,45 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M40 131V180",
+          "d": "M128 131L222 180",
           "head": "end",
           "id": "t2"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M110 131L222 180",
+          "d": "M60 131V180",
           "head": "end",
           "id": "t3"
         },
         {
           "text": "resolve",
-          "x": 50,
-          "y": 160,
+          "x": 108,
+          "y": 158,
+          "anchor": "middle",
           "style": "mute",
           "for": [
-            "t2"
+            "t2",
+            "t3"
           ]
         },
         {
           "state": "state",
           "shape": "rect",
-          "x": 8,
+          "x": 28,
           "y": 182,
           "w": 120,
           "h": 36,
           "rx": 8,
-          "id": "a"
+          "id": "x"
         },
         {
-          "text": "addressed",
-          "x": 68,
+          "text": "dismissed",
+          "x": 88,
           "y": 205,
           "anchor": "middle",
           "for": [
-            "a"
+            "x"
           ]
         },
         {
@@ -332,24 +329,25 @@
           "w": 120,
           "h": 36,
           "rx": 8,
-          "id": "x"
+          "id": "a"
         },
         {
-          "text": "dismissed",
+          "text": "addressed",
           "x": 232,
           "y": 205,
           "anchor": "middle",
           "for": [
-            "x"
+            "a"
           ]
         },
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M130 30H330V178",
+          "d": "M150 30H330V200H294",
+          "open": "end",
           "cross": {
             "cx": 330,
-            "cy": 104,
+            "cy": 52,
             "size": 12
           },
           "id": "f1"
@@ -357,7 +355,7 @@
         {
           "text": "resolve before",
           "x": 318,
-          "y": 97,
+          "y": 45,
           "anchor": "end",
           "style": "mute",
           "for": [
@@ -367,7 +365,7 @@
         {
           "text": "delivery",
           "x": 318,
-          "y": 118,
+          "y": 66,
           "anchor": "end",
           "style": "mute",
           "for": [
@@ -377,19 +375,19 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M68 222V260H232V222",
+          "d": "M138 220V244M232 220V244H12V110H26",
+          "open": "end",
           "cross": {
-            "cx": 150,
-            "cy": 260,
+            "cx": 48,
+            "cy": 244,
             "size": 12
           },
           "id": "f2"
         },
         {
-          "text": "no move after a terminal state",
-          "x": 180,
-          "y": 288,
-          "anchor": "middle",
+          "text": "no move out of a final state",
+          "x": 8,
+          "y": 268,
           "style": "mute",
           "for": [
             "f2"

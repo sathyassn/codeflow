@@ -286,7 +286,27 @@
         {
           "text": "agent reads it",
           "x": 290,
-          "y": 150,
+          "y": 149,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "and marks it",
+          "x": 290,
+          "y": 170,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "handled",
+          "x": 290,
+          "y": 191,
           "anchor": "end",
           "style": "mute",
           "for": [

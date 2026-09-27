@@ -265,7 +265,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 274,
+      "height": 264,
       "draw": [
         {
           "state": "source",
@@ -330,7 +330,7 @@
         {
           "text": "bump once",
           "x": 288,
-          "y": 96,
+          "y": 18,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -340,7 +340,7 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M288 112V128H100V143",
+          "d": "M288 75V118H150V136",
           "head": "end",
           "id": "d3"
         },
@@ -348,7 +348,7 @@
           "state": "output",
           "shape": "rect",
           "x": 8,
-          "y": 146,
+          "y": 138,
           "w": 184,
           "h": 36,
           "rx": 4,
@@ -357,7 +357,7 @@
         {
           "text": "target version",
           "x": 20,
-          "y": 169,
+          "y": 160,
           "for": [
             "o1"
           ]
@@ -365,7 +365,7 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M194 164H214",
+          "d": "M186 156H214",
           "head": "end",
           "id": "d4"
         },
@@ -373,7 +373,7 @@
           "state": "output",
           "shape": "rect",
           "x": 216,
-          "y": 146,
+          "y": 138,
           "w": 136,
           "h": 36,
           "rx": 4,
@@ -382,7 +382,7 @@
         {
           "text": "stamps",
           "x": 228,
-          "y": 169,
+          "y": 161,
           "for": [
             "o2"
           ]
@@ -390,7 +390,7 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M284 184V200",
+          "d": "M164 176V212H214",
           "head": "end",
           "id": "d5"
         },
@@ -398,7 +398,7 @@
           "state": "output",
           "shape": "rect",
           "x": 216,
-          "y": 202,
+          "y": 194,
           "w": 136,
           "h": 36,
           "rx": 4,
@@ -407,7 +407,7 @@
         {
           "text": "tag, by cargo",
           "x": 228,
-          "y": 225,
+          "y": 217,
           "for": [
             "o3"
           ]
@@ -415,7 +415,7 @@
         {
           "state": "compares",
           "shape": "path",
-          "d": "M60 185V206",
+          "d": "M60 176V196",
           "square": "end",
           "id": "c"
         },
@@ -423,7 +423,7 @@
           "state": "check",
           "shape": "circle",
           "cx": 60,
-          "cy": 220,
+          "cy": 210,
           "r": 12,
           "tick": true,
           "id": "k"
@@ -431,16 +431,25 @@
         {
           "text": "check-pr",
           "x": 80,
-          "y": 225,
+          "y": 215,
           "style": "mono",
           "for": [
             "k"
           ]
         },
         {
-          "text": "rechecked on every main push",
-          "x": 8,
-          "y": 264,
+          "text": "rechecked on",
+          "x": 80,
+          "y": 237,
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "every main push",
+          "x": 80,
+          "y": 258,
           "style": "mute",
           "for": [
             "k"
