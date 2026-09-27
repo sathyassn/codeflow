@@ -302,6 +302,7 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
         let top_level = match roles.as_ref().map(|r| r[idx]) {
             Some(Some(join)) => {
                 shell.begin(join);
+                branches.begin(join);
                 true
             }
             _ => false,
@@ -1449,35 +1450,144 @@ pub(super) fn capture_backtick(chars: &[char], start: usize) -> (String, usize) 
     (s, i)
 }
 
-/// The branch each git op in a chain runs on. A chained `checkout`/`switch`
-/// moves it for the ops after it: the session's own checkout, and separately
-/// each retargeted directory (`cd <dir> && git switch -c feat/x && git commit`).
+/// The branches git ops could find checked out at one point of the line.
+#[derive(Clone)]
+struct Checkouts {
+    /// The session repository's candidates.
+    session: Vec<String>,
+    /// `(normalized dir, candidates)` for retargeted repositories; `None` is
+    /// the branch the repository had when the line started.
+    dirs: Vec<(String, Vec<Option<String>>)>,
+    /// Branches a checkout the guard could not place may have left checked
+    /// out in any repository.
+    anywhere: Vec<String>,
+}
+
+fn add_unique<T: PartialEq>(into: &mut Vec<T>, items: impl IntoIterator<Item = T>) {
+    for item in items {
+        if !into.contains(&item) {
+            into.push(item);
+        }
+    }
+}
+
+impl Checkouts {
+    fn in_dir(&self, dir: &str) -> Vec<Option<String>> {
+        self.dirs
+            .iter()
+            .find(|(d, _)| d == dir)
+            .map_or_else(|| vec![None], |(_, branches)| branches.clone())
+    }
+
+    fn set_dir(&mut self, dir: &str, branches: Vec<Option<String>>) {
+        self.dirs.retain(|(d, _)| d != dir);
+        self.dirs.push((dir.to_string(), branches));
+    }
+
+    /// Every branch either state allows.
+    fn union(&self, other: &Self) -> Self {
+        let mut out = self.clone();
+        add_unique(&mut out.session, other.session.iter().cloned());
+        add_unique(&mut out.anywhere, other.anywhere.iter().cloned());
+        let mut dirs: Vec<&str> = self.dirs.iter().map(|(d, _)| d.as_str()).collect();
+        add_unique(&mut dirs, other.dirs.iter().map(|(d, _)| d.as_str()));
+        for dir in dirs {
+            let mut branches = self.in_dir(dir);
+            add_unique(&mut branches, other.in_dir(dir));
+            out.set_dir(dir, branches);
+        }
+        out
+    }
+
+    /// `target` checked out at `place`; `narrows` replaces what was there,
+    /// otherwise it joins it.
+    fn check_out(&mut self, place: Option<&str>, target: &str, narrows: bool) {
+        match place {
+            None if narrows => self.session = vec![target.to_string()],
+            None => add_unique(&mut self.session, [target.to_string()]),
+            Some(dir) => {
+                let mut branches = if narrows {
+                    Vec::new()
+                } else {
+                    self.in_dir(dir)
+                };
+                add_unique(&mut branches, [Some(target.to_string())]);
+                self.set_dir(dir, branches);
+            }
+        }
+    }
+}
+
+/// The branches each git op in a line could run on (TSK-112). A chained
+/// `checkout`, `switch` or rebase of a named branch moves them for the ops
+/// after it, in the session repository and separately in each retargeted
+/// directory. A move can fail, so it replaces the earlier branch only for the
+/// commands of its own `&&` list; after `;`, a newline, or anywhere the guard
+/// does not model the line, the earlier branch stays a candidate, as a `cd`
+/// does for the directory.
 struct BranchTracker {
-    session: String,
-    /// `(normalized dir, branch)` for checkouts made earlier in the chain.
-    retargeted: Vec<(String, String)>,
+    /// Where the current command could find things.
+    now: Checkouts,
+    /// Everywhere the current and-list could leave things, at whichever
+    /// member it stops.
+    list: Checkouts,
+    /// A command earlier in the line wrote git configuration or moved a
+    /// branch (which `includeIf "onbranch:…"` reads), so an alias read from
+    /// disk now may not be what git runs.
+    config_changed: bool,
 }
 
 impl BranchTracker {
     fn new(session: &str) -> Self {
+        let start = Checkouts {
+            session: vec![session.to_string()],
+            dirs: Vec::new(),
+            anywhere: Vec::new(),
+        };
         Self {
-            session: session.to_string(),
-            retargeted: Vec::new(),
+            now: start.clone(),
+            list: start,
+            config_changed: false,
         }
     }
 
-    fn switch_in(&mut self, dir: &str, branch: String) {
-        let dir = normalize_path(dir);
-        self.retargeted.retain(|(d, _)| *d != dir);
-        self.retargeted.push((dir, branch));
+    /// Enter a top-level command joined by `join`.
+    fn begin(&mut self, join: Join) {
+        if join == Join::Seq {
+            self.now = self.list.union(&self.now);
+            self.list = self.now.clone();
+        }
     }
 
-    fn switched_in(&self, dir: &str) -> Option<String> {
-        let dir = normalize_path(dir);
-        self.retargeted
-            .iter()
-            .find(|(d, _)| *d == dir)
-            .map(|(_, branch)| branch.clone())
+    /// Record a branch move at `places` (`None` is the session repository).
+    /// Only a move at one known place on a modeled top-level command
+    /// narrows; a move at one of several places joins each of them.
+    fn check_out(&mut self, places: &[Option<String>], target: &str, narrows: bool) {
+        let narrows = narrows && places.len() == 1;
+        for place in places {
+            let dir = place.as_deref().map(normalize_path);
+            self.now.check_out(dir.as_deref(), target, narrows);
+            self.list.check_out(dir.as_deref(), target, false);
+        }
+    }
+
+    /// A move the guard could not place: the branch may now be checked out
+    /// anywhere.
+    fn check_out_anywhere(&mut self, target: &str) {
+        add_unique(&mut self.now.anywhere, [target.to_string()]);
+        add_unique(&mut self.list.anywhere, [target.to_string()]);
+    }
+
+    fn session(&self) -> &[String] {
+        &self.now.session
+    }
+
+    fn in_dir(&self, dir: &str) -> Vec<Option<String>> {
+        self.now.in_dir(&normalize_path(dir))
+    }
+
+    fn anywhere(&self) -> &[String] {
+        &self.now.anywhere
     }
 }
 
@@ -1493,13 +1603,19 @@ struct LineFacts {
     mentions: Mentions,
 }
 
-/// Variables a line mentions that change what git reads.
+/// What a line may change about where git reads its repository and its
+/// configuration.
 struct Mentions {
     /// A git location variable (`GIT_DIR`, …).
     location_var: bool,
     /// Where git reads its configuration from (`GIT_CONFIG_*`, `HOME`,
-    /// `XDG_CONFIG_HOME`), which the alias reader cannot see.
+    /// `XDG_CONFIG_HOME`) or a config file path, which the alias reader
+    /// cannot see.
     config_env: bool,
+    /// A `git config` write whose order the guard does not model: anywhere
+    /// on a line that is not flat, or nested in a substitution. Top-level
+    /// writes on a flat line are followed in order.
+    config_write: bool,
 }
 
 impl LineFacts {
@@ -1510,6 +1626,7 @@ impl LineFacts {
             mentions: Mentions {
                 location_var: GIT_LOCATION_VARS.iter().any(|v| command.contains(v)),
                 config_env: mentions_config_env(command),
+                config_write: false,
             },
         };
         for (idx, segment) in segments.iter().enumerate() {
@@ -1526,6 +1643,13 @@ impl LineFacts {
             let mover = cd_target(&tokens).is_some()
                 || program.is_some_and(|p| git_target::moves_directory(p) || has_substitution(p));
             let nested = roles.is_some_and(|r| r[idx].is_none());
+            let unordered = roles.is_none() || nested;
+            facts.mentions.config_write |= unordered
+                && strip_launchers(&words).is_some_and(|(program, args)| {
+                    matches!(program_kind(program), ProgramKind::Git)
+                        && git_subcommand(args)
+                            .is_some_and(|(sub, rest)| sub == "config" && !config_only_reads(rest))
+                });
             facts.any_mover |= mover;
             let sets_var = program.is_none_or(|p| p == "export")
                 && tokens.iter().any(|t| assignment(t).is_some());
@@ -1560,7 +1684,8 @@ impl LineFacts {
             // A location variable the line sets outside the op's own launcher
             // environment is only modeled at top level of a flat line.
             location_unknown: self.mentions.location_var && !tracked,
-            config_unknown: self.mentions.config_env,
+            config_unknown: self.mentions.config_env || self.mentions.config_write,
+            narrows: tracked,
             tokens,
         }
     }
@@ -1576,6 +1701,9 @@ struct Moves<'r> {
     location_unknown: bool,
     /// The line may change where git reads its configuration from.
     config_unknown: bool,
+    /// The op is a modeled top-level command, so a branch move it makes
+    /// holds for the rest of its `&&` list.
+    narrows: bool,
     /// The op's full token list (its leading assignments and launchers).
     tokens: &'r [String],
 }
@@ -1618,7 +1746,7 @@ fn check_git(
     // expands to, as if written literally. One the guard cannot read is
     // unclassifiable.
     if unclassified.is_none() && !GIT_BUILTINS.contains(&sub) {
-        match expand_alias(args, sub, moved, ctx, depth) {
+        match expand_alias(args, sub, moved, ctx, depth, branches.config_changed) {
             Ok(expansions) => {
                 for expanded in expansions {
                     check_git(&expanded, branches, moved, ctx, out, notes, depth + 1);
@@ -1657,7 +1785,17 @@ fn check_git(
             out.extend(strictest);
         }
     }
-    track_branch_move(sub, rest, &judged.track, branches, ctx.policy);
+    track_branch_move(
+        sub,
+        rest,
+        &judged.track,
+        branches,
+        ctx.policy,
+        moved.narrows,
+    );
+    if sub == "config" && !config_only_reads(rest) {
+        branches.config_changed = true;
+    }
     if matches!(sub, "checkout" | "switch") {
         return;
     }
@@ -1699,14 +1837,15 @@ fn check_git(
 /// Follow a branch change the op makes for the rest of the line: a checkout
 /// or switch, or a rebase given a `<branch>`, which checks it out first. A
 /// move in a retargeted dir moves that dir's branch, not the session's; one
-/// the guard cannot place moves nothing it tracks; a substituted checkout
-/// target is assumed to be protected.
+/// the guard cannot place may have moved any repository's; a substituted
+/// checkout target is assumed to be protected.
 fn track_branch_move(
     sub: &str,
     rest: &[String],
     track: &Track,
     branches: &mut BranchTracker,
     policy: &GitPolicy,
+    narrows: bool,
 ) {
     let target = match sub {
         "checkout" | "switch" => checkout_target(rest).map(|target| {
@@ -1722,10 +1861,11 @@ fn track_branch_move(
     let Some(target) = target else {
         return;
     };
+    // A conditional include can depend on the branch.
+    branches.config_changed = true;
     match track {
-        Track::Session => branches.session = target,
-        Track::Dir(dir) => branches.switch_in(dir, target),
-        Track::Nothing => {}
+        Track::Places(places) => branches.check_out(places, &target, narrows),
+        Track::Unplaced => branches.check_out_anywhere(&target),
     }
 }
 
@@ -2070,11 +2210,15 @@ const GIT_BUILTINS: &[&str] = &[
 /// How deep an alias may expand into further aliases before the guard stops.
 const MAX_ALIAS_DEPTH: usize = 8;
 
-/// Does the line touch where git reads its configuration from? Any mention
-/// of a `GIT_CONFIG*` variable or `XDG_CONFIG_HOME`, or `HOME` as a word not
-/// read as `$HOME`, counts.
+/// Does the line touch where git reads its configuration from, or name a git
+/// config file it could write? Any mention of a `GIT_CONFIG*` variable,
+/// `XDG_CONFIG_HOME`, a `git/config` or `gitconfig` path, or `HOME` as a word
+/// not read as `$HOME`, counts.
 fn mentions_config_env(command: &str) -> bool {
-    if command.contains("GIT_CONFIG") || command.contains("XDG_CONFIG_HOME") {
+    if ["GIT_CONFIG", "XDG_CONFIG_HOME", "git/config", "gitconfig"]
+        .iter()
+        .any(|marker| command.contains(marker))
+    {
         return true;
     }
     let bytes = command.as_bytes();
@@ -2099,6 +2243,7 @@ fn expand_alias(
     moved: &Moves<'_>,
     ctx: &GuardContext<'_>,
     depth: usize,
+    config_changed: bool,
 ) -> Result<Vec<Vec<String>>, String> {
     if depth >= MAX_ALIAS_DEPTH {
         return Err("an alias chain deeper than the guard follows".to_string());
@@ -2108,6 +2253,11 @@ fn expand_alias(
         .ok_or_else(|| "no alias reader".to_string())?;
     if moved.config_unknown {
         return Err("the line changes where git reads its configuration".to_string());
+    }
+    if config_changed {
+        return Err(
+            "an earlier command in the line writes git configuration or moves a branch".to_string(),
+        );
     }
     let at = git_subcommand(args).map_or(args.len(), |(_, rest)| args.len() - rest.len() - 1);
     let mut config = Vec::new();
@@ -2208,11 +2358,12 @@ fn split_alias(value: &str) -> Option<Vec<String>> {
     Some(words)
 }
 
-/// Which branch a checkout in the judged op moves.
+/// Where a branch move in the judged op happens.
 enum Track {
-    Session,
-    Dir(String),
-    Nothing,
+    /// At each of these places (`None` is the session repository).
+    Places(Vec<Option<String>>),
+    /// Somewhere the guard could not resolve.
+    Unplaced,
 }
 
 /// The branch and policy pairs a git op is judged against.
@@ -2239,22 +2390,37 @@ fn judge_target<'p>(
     ctx: &GuardContext<'p>,
 ) -> Judged<'p> {
     let resolved = compose_targets(args, moved).and_then(|specs| {
-        let mut cases = Vec::new();
+        let mut cases: Vec<(String, Cow<'p, GitPolicy>)> = Vec::new();
         for spec in &specs {
             match spec {
-                None => cases.push((branches.session.clone(), Cow::Borrowed(ctx.policy))),
-                Some(spec) => cases.push(
+                None => cases.extend(
+                    branches
+                        .session()
+                        .iter()
+                        .map(|b| (b.clone(), Cow::Borrowed(ctx.policy))),
+                ),
+                Some(spec) => cases.extend(
                     resolve_target(spec, branches, ctx)
                         .ok_or_else(|| format!("no readable repository at `{}`", spec.path))?,
                 ),
             }
         }
-        let track = match specs.as_slice() {
-            [None] => Track::Session,
-            [Some(spec)] => Track::Dir(spec.path.clone()),
-            _ => Track::Nothing,
-        };
-        Ok((track, cases))
+        // A branch an unplaced checkout moved may be checked out here too.
+        let moved: Vec<_> = cases
+            .iter()
+            .flat_map(|(_, rules)| {
+                branches
+                    .anywhere()
+                    .iter()
+                    .map(move |b| (b.clone(), rules.clone()))
+            })
+            .collect();
+        cases.extend(moved);
+        let places = specs
+            .iter()
+            .map(|spec| spec.as_ref().map(|s| s.path.clone()))
+            .collect();
+        Ok((Track::Places(places), cases))
     });
     match resolved {
         Ok((track, cases)) => Judged {
@@ -2263,10 +2429,11 @@ fn judge_target<'p>(
             unresolved: None,
         },
         Err(why) => {
-            let branch =
-                assumed_protected_branch(ctx.policy).unwrap_or_else(|| branches.session.clone());
+            let branch = assumed_protected_branch(ctx.policy)
+                .or_else(|| branches.session().first().cloned())
+                .unwrap_or_default();
             Judged {
-                track: Track::Nothing,
+                track: Track::Unplaced,
                 cases: vec![(branch, Cow::Borrowed(ctx.policy))],
                 unresolved: Some(why),
             }
@@ -2391,15 +2558,16 @@ fn lookup(spec: &Retarget<'_>, ctx: &GuardContext<'_>) -> Option<TargetRepo> {
     ctx.dir_target_lookup.and_then(|resolver| resolver(spec))
 }
 
-/// The branch and policy a resolved target is judged by: a branch an earlier
-/// checkout in the line moved it to, else the one the resolver read, under
-/// the target's own policy (the session's when it is the session
-/// repository). `None` when the resolver cannot read it.
+/// The branch and policy pairs a resolved target is judged by: each branch
+/// an earlier move in the line may have left there, where the branch the
+/// resolver read stands for no move, under the target's own policy (the
+/// session's when it is the session repository). `None` when the resolver
+/// cannot read it.
 fn resolve_target<'p>(
     spec: &TargetSpec,
     branches: &BranchTracker,
     ctx: &GuardContext<'p>,
-) -> Option<(String, Cow<'p, GitPolicy>)> {
+) -> Option<Vec<(String, Cow<'p, GitPolicy>)>> {
     let repo = lookup(
         &Retarget {
             path: &spec.path,
@@ -2407,9 +2575,14 @@ fn resolve_target<'p>(
         },
         ctx,
     )?;
-    let branch = branches.switched_in(&spec.path).unwrap_or(repo.branch);
     let rules = repo.policy.map_or(Cow::Borrowed(ctx.policy), Cow::Owned);
-    Some((branch, rules))
+    Some(
+        branches
+            .in_dir(&spec.path)
+            .into_iter()
+            .map(|b| (b.unwrap_or_else(|| repo.branch.clone()), rules.clone()))
+            .collect(),
+    )
 }
 
 /// Judge one git subcommand on `branch` under `ctx.policy`.
@@ -2623,6 +2796,50 @@ fn config_writes_hooks_path(rest: &[String]) -> bool {
     ]) || matches!(subcommand, Some("set" | "unset"))
         || (!read_mode && operands.len() >= 2);
     key_write && names_hooks_path
+}
+
+/// Does this `git config` invocation only read? A get, list or single-name
+/// query does; anything that sets, unsets, edits or renames, and any form
+/// the guard does not recognize, counts as a write.
+fn config_only_reads(rest: &[String]) -> bool {
+    let parsed = parse_options(rest, &GIT_CONFIG_OPTIONS);
+    let any_long = |names: &[&str]| names.iter().any(|name| parsed.has_long(name));
+    let subcommand = parsed.operands.first().copied().filter(|word| {
+        matches!(
+            *word,
+            "get" | "set" | "unset" | "list" | "edit" | "rename-section" | "remove-section"
+        )
+    });
+    let writes = parsed.has_short(&['e'])
+        || any_long(&[
+            "--edit",
+            "--rename-section",
+            "--remove-section",
+            "--add",
+            "--append",
+            "--replace-all",
+            "--unset",
+            "--unset-all",
+        ])
+        || matches!(
+            subcommand,
+            Some("set" | "unset" | "edit" | "rename-section" | "remove-section")
+        );
+    if writes {
+        return false;
+    }
+    let read_mode = parsed.has_short(&['l'])
+        || any_long(&[
+            "--get",
+            "--get-all",
+            "--get-regexp",
+            "--get-urlmatch",
+            "--get-color",
+            "--get-colorbool",
+            "--list",
+        ])
+        || matches!(subcommand, Some("get" | "list"));
+    read_mode || (subcommand.is_none() && parsed.operands.len() <= 1)
 }
 
 /// Guard `git update-ref` (ADR-0009). Two vectors: (1) a direct write to a
@@ -6185,6 +6402,108 @@ mod tests {
         let c = ctx_with_dir_branch(&p, "main", &fixture_resolver);
         let r = evaluate_report("git rebase main feat/x && git commit -m x", &c);
         assert!(r.violations.is_empty(), "{:?}", r.violations);
+    }
+
+    // R5-1: a branch move can fail, so it narrows the branch only for the
+    // rest of its `&&` list; after `;` or a newline the earlier branch stays
+    // a candidate. The same holds in retargeted repositories and for a rebase
+    // that comes from an alias.
+    #[test]
+    fn test_tsk112_branch_moves_narrow_only_across_and() {
+        for cmd in [
+            "git rebase does-not-exist feat/x; git commit --allow-empty -m x",
+            "git rebase does-not-exist feat/x\ngit commit --allow-empty -m x",
+            "git checkout does-not-exist; git commit -m x",
+            "git checkout feat/y\ngit commit -m x",
+            "git switch feat/y && git commit -m x; git commit -m y",
+            "git -c alias.rb=rebase rb does-not-exist feat/x; git commit -m x",
+            "(git checkout feat/y) && git commit -m x",
+            "echo \"$(git checkout feat/y)\" && git commit -m x",
+        ] {
+            let r = report(cmd, "main");
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.rule == "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        for cmd in [
+            "git -C /scratch-main rebase nope feat/x; git -C /scratch-main commit -m x",
+            "git -C /scratch-main checkout feat/q\ngit -C /scratch-main commit -m x",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+        }
+        // Proven by `&&`: the op runs only after the move succeeded.
+        for (cmd, session) in [
+            (
+                "git rebase does-not-exist feat/x && git commit --allow-empty -m x",
+                "main",
+            ),
+            (
+                "git rebase main feat/x && git commit --allow-empty -m x",
+                "main",
+            ),
+            ("git checkout feat/y && git commit -m x", "main"),
+            (
+                "git -c alias.rb=rebase rb main feat/x && git commit -m x",
+                "main",
+            ),
+            (
+                "git -C /scratch-main checkout feat/q && git -C /scratch-main commit -m x",
+                "feat/s",
+            ),
+        ] {
+            let r = report(cmd, session);
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+        // A checkout the guard cannot place may have moved any repository.
+        let r = report(
+            "git -C \"$UNSET\" checkout main && git -C /scratch commit -m x",
+            "feat/s",
+        );
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+    }
+
+    // R5-2: an alias is read from disk before the line runs, so after an
+    // earlier config write (or a branch move, which conditional includes
+    // read) a subcommand that is not a builtin is unclassifiable.
+    #[test]
+    fn test_tsk112_config_changes_earlier_in_the_line() {
+        for cmd in [
+            "git config alias.x commit; git x --allow-empty -m y",
+            "git config include.path /aliases.ini; git x -m y",
+            "git config set alias.x commit && git x -m y",
+            "git config --add alias.x commit; git x -m y",
+            "git -c alias.c=config c alias.x commit; git x -m y",
+            "echo \"$(git config alias.x commit)\"; git x -m y",
+            "(git config alias.x commit); git x -m y",
+            "printf '[alias] x = commit' >> .git/config; git x -m y",
+            "git checkout feat/y && git st",
+        ] {
+            let r = report(cmd, "main");
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.message.contains("an alias the guard cannot resolve")),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // Reads and queries change nothing; builtins need no alias.
+        for cmd in [
+            "git config --get alias.x; git st",
+            "git config alias.x; git st",
+            "git config --list; git st",
+            "git config get user.name && git st",
+            "git config alias.x commit; git status",
+            "git st; git config alias.x commit",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
     }
 
     // R4-1: classification uncertainty never ends the judgment early. With

@@ -597,6 +597,165 @@ fn git_guard_resolves_aliases_and_rebase_branches() {
     }
 }
 
+// TSK-112 round 5: every row of Codex's boundary script
+// (`tsk112-r5-boundaries.py`), on real repositories, plus failed moves
+// after `;` and a newline and config reads. Each row gets a fresh repository
+// on `main` with a `feat/x` branch, checked out on the branch given.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn git_guard_round_5_boundaries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut n = 0;
+    let mut fixture = |on: &str| {
+        n += 1;
+        let dir = tmp.path().join(format!("r{n}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        init_repo(&dir, "main");
+        git(&dir, &["branch", "feat/x"]);
+        if on != "main" {
+            git(&dir, &["checkout", "-q", on]);
+        }
+        write_policy(&dir, r#"{"git":{"protected_branches":["main","master"]}}"#);
+        dir
+    };
+    let commit = "commit --allow-empty -m \"fix: probe\"";
+    let mut rows: Vec<(String, &str, i32)> = vec![
+        // Codex rows, in script order.
+        (
+            "git -c alias.x=commit x --allow-empty -m \"fix: probe\"".to_string(),
+            "main",
+            2,
+        ),
+        // Git rejects an attached `-c`, so nothing runs.
+        (
+            "git -calias.x=commit x --allow-empty -m \"fix: probe\"".to_string(),
+            "main",
+            0,
+        ),
+        (
+            "git checkout main && git x --allow-empty -m \"fix: probe\"".to_string(),
+            "feat/x",
+            2,
+        ),
+        (
+            "git config alias.x commit; git x --allow-empty -m \"fix: probe\"".to_string(),
+            "main",
+            2,
+        ),
+        (
+            "git config include.path ROOT/alias.ini; git x --allow-empty -m x".to_string(),
+            "main",
+            2,
+        ),
+        (
+            format!("git rebase does-not-exist feat/x ; git {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git rebase does-not-exist feat/x \n git {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git rebase does-not-exist feat/x && git {commit}"),
+            "main",
+            0,
+        ),
+        ("git rebase main main".to_string(), "feat/x", 2),
+        (
+            "git rebase --onto feat/x main main".to_string(),
+            "feat/x",
+            2,
+        ),
+        ("git rebase --root main".to_string(), "feat/x", 2),
+        (
+            "git rebase --strategy recursive main main".to_string(),
+            "feat/x",
+            2,
+        ),
+        ("git rebase --exec true main main".to_string(), "feat/x", 2),
+        (format!("git rebase main feat/x && git {commit}"), "main", 0),
+        (
+            "git rebase main \"$(printf main)\"".to_string(),
+            "feat/x",
+            2,
+        ),
+        ("git -c alias.x=status x --short".to_string(), "main", 0),
+        (
+            "git -c alias.x=y -c alias.y=commit x --allow-empty -m x".to_string(),
+            "main",
+            2,
+        ),
+        ("git -c alias.x='!git commit' x -m x".to_string(), "main", 2),
+    ];
+    rows.extend([
+        // A failed checkout, and a rebase from an alias, after `;`.
+        (
+            format!("git checkout does-not-exist; git {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git checkout does-not-exist\ngit {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git -c alias.rb=rebase rb does-not-exist feat/x; git {commit}"),
+            "main",
+            2,
+        ),
+        // The same in a repository reached with `-C`.
+        (
+            format!("git -C ROOT rebase does-not-exist feat/x; git -C ROOT {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git -C ROOT rebase main feat/x && git -C ROOT {commit}"),
+            "main",
+            0,
+        ),
+        // Config reads change nothing.
+        (
+            "git config --get user.name; git -c alias.x=status x".to_string(),
+            "main",
+            0,
+        ),
+        (
+            "git config user.name && git -c alias.x=status x".to_string(),
+            "main",
+            0,
+        ),
+    ]);
+    for (command, on, expected) in rows {
+        let dir = fixture(on);
+        std::fs::write(dir.join("alias.ini"), "[alias]\n x = commit\n").unwrap();
+        // Codex's conditional row: an alias included only on `main`.
+        if command.starts_with("git checkout main && git x") {
+            let inc = dir.join("conditional.ini");
+            std::fs::write(&inc, "[alias]\n x = commit\n").unwrap();
+            git(
+                &dir,
+                &[
+                    "config",
+                    "includeIf.onbranch:main.path",
+                    &inc.to_string_lossy(),
+                ],
+            );
+        }
+        let command = command.replace("ROOT", &dir.to_string_lossy());
+        let out = guard_run(&command, &dir);
+        assert_eq!(
+            out.status.code(),
+            Some(expected),
+            "{command} (on {on}): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 #[test]
 fn git_guard_allows_force_push_to_feature_branch() {
     let dir = tempfile::tempdir().unwrap();
