@@ -3053,11 +3053,10 @@ fn push_set_ignores_a_stale_local_main() {
 }
 
 #[test]
-fn push_set_checks_a_rewrite_from_the_destination_sha_and_says_so() {
+fn push_set_checks_a_rewrite_for_its_own_commits_and_says_so() {
     // A branch the destination holds is rebased onto a destination commit it
-    // did not have. The range starts at the destination's advertised sha, so
-    // the commit the rebase brought in is checked again, and the hook says
-    // why: no cached tracking ref can prove it is still on the destination.
+    // did not have. The destination advertises that commit now, so only the
+    // rebased commit is checked, and the hook says how many.
     let (bare, local) = stable_destination("chore: legacy base");
     git(local.path(), &["checkout", "-q", "-b", "feat/r", "main~1"]);
     let old = commit_file(local.path(), "r.txt", "r\n", "feat: add r");
@@ -3069,7 +3068,7 @@ fn push_set_checks_a_rewrite_from_the_destination_sha_and_says_so() {
     assert_eq!(code, Some(0), "{err}");
     assert!(
         err.contains("'feat/r' rewrites the destination's")
-            && err.contains("checks all 2 commit(s) not on it"),
+            && err.contains("checks 1 commit(s), leaving out history"),
         "{err}"
     );
 
@@ -3078,6 +3077,112 @@ fn push_set_checks_a_rewrite_from_the_destination_sha_and_says_so() {
     let (code, err) = push_hook_onto(local.path(), "dest", "feat/r", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("push set check failed: `codeflow ci"), "{err}");
+}
+
+/// A task branch `task/t` on the destination, cut from `integration/line`
+/// with `own` commits; then the line moves on the destination by a legacy
+/// non-conventional commit, fetched here. Returns the task branch's old tip.
+fn task_on_moved_line(bare: &Path, local: &Path, own: &[(&str, &str)]) -> String {
+    integration_line(bare, local);
+    git(local, &["checkout", "-q", "-b", "task/t", "line"]);
+    for (file, message) in own {
+        commit_file(local, file, "t\n", message);
+    }
+    let old = rev(local, "HEAD");
+    receive(bare, local, "task/t:task/t");
+    git(local, &["checkout", "-q", "line"]);
+    commit_file(local, "line2.txt", "line2\n", "Legacy line subject two.");
+    receive(bare, local, "line:integration/line");
+    git(local, &["fetch", "-q", "dest"]);
+    git(local, &["checkout", "-q", "task/t"]);
+    old
+}
+
+#[test]
+fn push_set_checks_only_the_own_commits_of_a_branch_rebased_onto_a_moved_line() {
+    // TSK-115: a task branch rebased onto its moved integration line and
+    // force-pushed. The line's new commit is on the destination through the
+    // line's own ref, so only the task's commit is checked.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
+    git(local.path(), &["rebase", "-q", "dest/integration/line"]);
+    let rebased = rev(local.path(), "HEAD");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &rebased, &old);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("'task/t' rewrites the destination's")
+            && err.contains("checks 1 commit(s), leaving out history"),
+        "{err}"
+    );
+    assert!(!err.contains("Legacy line subject two."), "{err}");
+
+    // A bad own commit in the rebased branch still blocks.
+    let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject two."), "{err}");
+}
+
+#[test]
+fn push_set_blocks_a_rewrite_that_drops_a_commit_and_adds_a_bad_one() {
+    // The rewrite drops the branch's second commit, adds a bad one and moves
+    // onto the line's new tip. The dropped commit's history does not hide
+    // the bad one, and the line's commit is not checked again.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let old = task_on_moved_line(
+        bare.path(),
+        local.path(),
+        &[("a.txt", "feat: add a"), ("b.txt", "feat: add b")],
+    );
+    git(
+        local.path(),
+        &[
+            "rebase",
+            "-q",
+            "--onto",
+            "dest/integration/line",
+            "line~1",
+            "HEAD~1",
+        ],
+    );
+    let bad = commit_file(local.path(), "c.txt", "c\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &bad, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Not conventional."), "{err}");
+    assert!(!err.contains("Legacy line subject two."), "{err}");
+    assert!(
+        err.contains("checks 2 commit(s), leaving out history"),
+        "{err}"
+    );
+}
+
+#[test]
+fn push_set_falls_back_to_the_old_sha_when_ls_remote_fails_for_a_rewrite() {
+    // The destination cannot be asked: a rewrite of an existing branch is
+    // bounded by its advertised sha alone, the line's new commit is checked
+    // again, and the hook says so.
+    let (bare, local) = stable_destination("chore: legacy base");
+    let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
+    git(local.path(), &["rebase", "-q", "dest/integration/line"]);
+    let rebased = rev(local.path(), "HEAD");
+    let gone = local.path().join("no-such-destination");
+    git(
+        local.path(),
+        &["remote", "set-url", "dest", gone.to_str().unwrap()],
+    );
+    let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &rebased, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("Legacy line subject two."), "{err}");
+    assert!(
+        err.contains("asking the destination for its branches failed")
+            && err.contains(&format!(
+                "the range of 'task/t' is bounded by its advertised {} alone",
+                &old[..9]
+            ))
+            && err.contains("checks all 2 commit(s) not on it"),
+        "{err}"
+    );
 }
 
 /// The R4-1 history: the destination held B ("Not conventional.") on the

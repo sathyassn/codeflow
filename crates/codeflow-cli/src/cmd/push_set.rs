@@ -11,14 +11,14 @@
 //!   tree they did not see. Untracked files are part of the working checkout
 //!   and can influence a quick target, which the pass line says.
 //! - The hook blocks on what it can see and never claims more: the range
-//!   leaves out only history known to be on the destination: the sha it
-//!   advertised for the branch, or for a new branch the branch and tag tips
-//!   the push location advertises now (`git ls-remote`, never interactive,
-//!   bounded in time and size, fetching nothing), falling back to its
-//!   protected branches' tracking refs when it cannot be asked and those
-//!   refs describe the same location. When nothing gives a base, the range
-//!   is reported unresolved and left to CI, never compared with a local
-//!   branch.
+//!   leaves out only history known to be on the destination: the branch and
+//!   tag tips the push location advertises now (`git ls-remote`, never
+//!   interactive, bounded in time and size, fetching nothing), plus the sha
+//!   it advertised for an existing branch. When it cannot be asked, an
+//!   existing branch falls back to that sha alone, and a new branch to its
+//!   protected branches' tracking refs when those refs describe the same
+//!   location. When nothing gives a base, the range is reported unresolved
+//!   and left to CI, never compared with a local branch.
 //! - The whole set is timed; over [`git_hook::PUSH_SET_BUDGET`] the hook names
 //!   the slowest step.
 //!
@@ -80,7 +80,7 @@ pub(super) fn run(
     let namespace = remote
         .filter(|name| url.is_some_and(|url| fetches_from(root, name, url)))
         .and_then(|name| tracking_namespace(root, name));
-    // Asked once, and only when a pushed branch is new to the destination.
+    // Asked once, on first use.
     let advertised: OnceCell<Advertised> = OnceCell::new();
     let destination = Destination {
         url,
@@ -437,63 +437,37 @@ struct RangeBase {
 /// The base of a pushed branch's range. Only history known to be on the
 /// destination is left out, and a cached tracking ref proves that only for a
 /// branch the destination may not rewrite:
-/// 1. an existing destination branch: its current sha, which the destination
-///    advertised for this push. For a fast-forward the range is exactly the
-///    push. For a rewrite (a rebase or amend) it also holds any commits the
-///    rewrite brought in from other branches; they are checked again, and the
-///    note says so, because a cached tracking ref cannot prove they are still
-///    on the destination (a feature or integration branch may have been
-///    rewritten since the last fetch). With no shared history, `codeflow ci`
-///    reports the unrelated base;
-/// 2. a new branch: a boundary of the commits not reachable from the branch
-///    and tag tips the destination advertises now (`git ls-remote`). Those
-///    are exactly the commits it has, so a stale local tracking ref neither
-///    hides nor adds anything, and a branch cut from any integration line is
-///    checked for its own commits only. The pushed sha itself when nothing
-///    is new;
-/// 3. a new branch when the destination cannot be asked, or none of its
+/// 1. an existing destination branch: a boundary of the commits not
+///    reachable from the branch and tag tips the destination advertises now
+///    (`git ls-remote`) or from the branch's own advertised sha. A
+///    fast-forward is checked for the push itself, and a rebase onto an
+///    integration line for the branch's own commits: the line's commits the
+///    destination holds through other refs are not checked again. A rewrite
+///    notes how many commits are checked. With no shared history, the
+///    advertised sha is the base and `codeflow ci` reports it unrelated;
+/// 2. an existing branch when the destination cannot be asked: its
+///    advertised sha alone, noted. A rewrite then also checks the commits it
+///    brought in from other branches;
+/// 3. a new branch: the same boundary against the advertised tips alone.
+///    Those are exactly the commits the destination has, so a stale local
+///    tracking ref neither hides nor adds anything. The pushed sha itself
+///    when nothing is new;
+/// 4. a new branch when the destination cannot be asked, or none of its
 ///    tips is here: the same boundary against its protected branches'
 ///    tracking refs, when the remote fetches from the location pushed to.
 ///    Policy forbids rewriting a protected branch, so even an old cached tip
 ///    is history the destination keeps. A failed ask is noted;
-/// 4. else `None`: the range is unresolved and CI checks it. A local branch
+/// 5. else `None`: the range is unresolved and CI checks it. A local branch
 ///    is never substituted: it may be stale or not the destination's base.
 fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option<RangeBase> {
     let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
     if !zero && is_commit(root, &r.remote_sha) {
-        let extends = git(
-            root,
-            &["merge-base", "--is-ancestor", &r.remote_sha, &r.local_sha],
-        )
-        .is_some();
-        let related = git(root, &["merge-base", &r.remote_sha, &r.local_sha]).is_some();
-        let note = (!extends && related).then(|| {
-            let range = format!("{}..{}", r.remote_sha, r.local_sha);
-            let count = git(root, &["rev-list", "--count", &range])
-                .map_or_else(|| "?".to_string(), |n| n.trim().to_string());
-            format!(
-                "'{}' rewrites the destination's {}: `codeflow ci` checks all {count} \
-                 commit(s) not on it, including any the rewrite brought in from other \
-                 branches",
-                r.remote_branch().unwrap_or_default(),
-                short(&r.remote_sha)
-            )
-        });
-        return Some(RangeBase {
-            base: r.remote_sha.clone(),
-            note,
-        });
+        return Some(existing_base(root, r, destination));
     }
     let note = match destination.advertised(root) {
         Advertised::Tips(tips) if !tips.is_empty() => {
-            let mut input = format!("{}\n", r.local_sha);
-            for tip in tips {
-                input.push('^');
-                input.push_str(tip);
-                input.push('\n');
-            }
-            let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
-            return boundary(&listed, &r.local_sha, None);
+            return bounded_by(root, &r.local_sha, tips.iter())
+                .map(|base| RangeBase { base, note: None });
         }
         Advertised::Tips(_) => None,
         Advertised::Failed(why) => Some(format!(
@@ -531,6 +505,69 @@ fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option
     args.extend(known.iter().map(String::as_str));
     let listed = git(root, &args)?;
     boundary(&listed, &r.local_sha, note)
+}
+
+/// The base of an existing destination branch's range (cases 1 and 2 of
+/// [`range_base`]).
+fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> RangeBase {
+    let branch = r.remote_branch().unwrap_or_default();
+    let old = &r.remote_sha;
+    let (base, failed) = match destination.advertised(root) {
+        Advertised::Tips(tips) => (
+            bounded_by(root, &r.local_sha, std::iter::once(old).chain(tips))
+                .unwrap_or_else(|| old.clone()),
+            None,
+        ),
+        Advertised::Failed(why) => (old.clone(), Some(why)),
+    };
+    let extends = git(root, &["merge-base", "--is-ancestor", old, &r.local_sha]).is_some();
+    let related = git(root, &["merge-base", old, &r.local_sha]).is_some();
+    let count = (!extends && related).then(|| {
+        let range = format!("{base}..{}", r.local_sha);
+        git(root, &["rev-list", "--count", &range])
+            .map_or_else(|| "?".to_string(), |n| n.trim().to_string())
+    });
+    let rewrite = format!("'{branch}' rewrites the destination's {}", short(old));
+    let note = match (failed, count) {
+        (None, None) => None,
+        (None, Some(count)) => Some(format!(
+            "{rewrite}: `codeflow ci` checks {count} commit(s), leaving out history the \
+             destination's branches and tags hold"
+        )),
+        (Some(why), count) => {
+            let fallback = format!(
+                "asking the destination for its branches failed ({why}): the range of \
+                 '{branch}' is bounded by its advertised {} alone",
+                short(old)
+            );
+            Some(match count {
+                Some(count) => format!(
+                    "{fallback}; {rewrite}: `codeflow ci` checks all {count} commit(s) not \
+                     on it, including any the rewrite brought in from other branches"
+                ),
+                None => fallback,
+            })
+        }
+    };
+    RangeBase { base, note }
+}
+
+/// The base of the commits in `local_sha` not reachable from `known`: see
+/// [`boundary`]. `None` when git fails or no boundary exists (no shared
+/// history).
+fn bounded_by<'a>(
+    root: &Path,
+    local_sha: &str,
+    known: impl Iterator<Item = &'a String>,
+) -> Option<String> {
+    let mut input = format!("{local_sha}\n");
+    for sha in known {
+        input.push('^');
+        input.push_str(sha);
+        input.push('\n');
+    }
+    let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
+    boundary(&listed, local_sha, None).map(|found| found.base)
 }
 
 /// The base from `rev-list --boundary` output: its first boundary commit, or
