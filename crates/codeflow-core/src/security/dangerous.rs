@@ -50,7 +50,7 @@ const ROOT_COLLECTION_DIRS: &[&str] = &["Users", "home", "Volumes", "mnt", "medi
 /// as escapes. This is intentionally a small classifier, not a shell parser:
 /// it preserves quoted paths such as `C:\Program Files` and is conservative
 /// around malformed quotes.
-fn command_tokens(command: &str) -> Vec<String> {
+pub(crate) fn command_tokens(command: &str) -> Vec<String> {
     let mut tokens = Vec::new();
     let mut current = String::new();
     let mut quote = None;
@@ -72,7 +72,7 @@ fn command_tokens(command: &str) -> Vec<String> {
     tokens
 }
 
-fn program_name(token: &str) -> String {
+pub(crate) fn program_name(token: &str) -> String {
     token
         .rsplit(['/', '\\'])
         .next()
@@ -86,7 +86,7 @@ fn program_name(token: &str) -> String {
 /// stop at `sudo`, Windows `runas`/`gsudo`, a shell `-c`, or `PowerShell`'s
 /// `Start-Process`. This deliberately handles only structured, well-known
 /// launch forms; it is not intended to emulate a shell.
-fn effective_invocation(tokens: &[String]) -> Vec<String> {
+pub(crate) fn effective_invocation(tokens: &[String]) -> Vec<String> {
     let mut current = tokens.to_vec();
     for _ in 0..4 {
         let Some(program) = current.first().map(|token| program_name(token)) else {

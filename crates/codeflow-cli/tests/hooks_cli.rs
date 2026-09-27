@@ -1191,6 +1191,67 @@ fn reference_transaction_lets_ref_packing_through_and_blocks_a_move() {
 }
 
 #[test]
+fn exec_guard_flags_headless_peer_runs_per_level() {
+    // TSK-136 AC-1: each headless form warns by default with the rule and the
+    // interactive path, is refused at block, and nothing else is touched.
+    let runs = [
+        "claude -p 'review this'",
+        "codex exec 'fix it'",
+        "grok -p 'x'",
+    ];
+    let others = [
+        "codex --version",
+        "claude",
+        "claude --model opus --effort high",
+        "grok --version",
+        "git commit -m 'no claude -p here'",
+    ];
+    for level in ["default", "warn", "block", "off"] {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        if level != "default" {
+            write_policy(
+                dir.path(),
+                &format!(r#"{{"security": {{"headless_peer_runs": "{level}"}}}}"#),
+            );
+        }
+        let guard = |command: &str| {
+            run_with_stdin(
+                codeflow()
+                    .args(["hook", "exec-guard"])
+                    .current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            )
+        };
+        for command in runs {
+            let out = guard(command);
+            let err = String::from_utf8_lossy(&out.stderr).to_string();
+            match level {
+                "block" => {
+                    assert_eq!(out.status.code(), Some(2), "{level}: {command}: {err}");
+                    assert!(err.contains("security.headless_peer_runs"), "{err}");
+                }
+                "off" => {
+                    assert_eq!(out.status.code(), Some(0), "{level}: {command}");
+                    assert!(!err.contains("headless"), "{err}");
+                }
+                _ => {
+                    assert_eq!(out.status.code(), Some(0), "{level}: {command}: {err}");
+                    assert!(err.contains("security.headless_peer_runs"), "{err}");
+                    assert!(err.contains("codeflow delegate"), "{err}");
+                }
+            }
+        }
+        for command in others {
+            let out = guard(command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{level}: {command}: {err}");
+            assert!(!err.contains("headless"), "{level}: {command}: {err}");
+        }
+    }
+}
+
+#[test]
 fn git_guard_blocks_pr_body_attribution() {
     // AC #13: attribution in a PR body blocked at gh pr create.
     let dir = tempfile::tempdir().unwrap();

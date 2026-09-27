@@ -43,6 +43,7 @@
   },
   "security": {
     "dangerous_commands": "block",
-    "privilege_escalation": "warn"
+    "privilege_escalation": "warn",
+    "headless_peer_runs": "warn"
   }
 }

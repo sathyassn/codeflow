@@ -83,7 +83,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, then `security`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 44] = [
+pub const SCHEMA: [KeySpec; 45] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -448,6 +448,14 @@ pub const SCHEMA: [KeySpec; 44] = [
         purpose: "Privilege escalation the exec-guard catches (Unix sudo/su/doas/pkexec, Windows gsudo/runas/elevated PowerShell, LD_PRELOAD/PATH injection).",
         notes: "Default warn, not block — the harness's ask tier owns sudo \
                 prompting; the guard only surfaces in-session feedback.",
+    },
+    KeySpec {
+        path: "security.headless_peer_runs",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "Headless peer runs the exec-guard catches (claude -p, codex exec, grok -p); peer seats run interactively (cf-delegate).",
+        notes: "Default warn: scripting outside a delegation stays possible; \
+                block refuses the run.",
     },
 ];
 
