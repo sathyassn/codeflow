@@ -707,6 +707,9 @@ fn privilege_escalation_variants_reach_the_ask_tier() {
         ("Bash", "/usr/bin/sudo id"),
         ("Bash", "/usr/bin/pkexec id"),
         ("Bash", "/bin/su root"),
+        ("Bash", "/bin/su"),
+        ("Bash", "/usr/bin/sudo"),
+        ("Bash", "pwsh -c 'Start-Process pwsh -VERB RUNAS'"),
         ("Bash", "gsudo whoami"),
         ("Bash", "runas.exe /user:Administrator cmd"),
         (
@@ -733,6 +736,7 @@ fn privilege_escalation_variants_reach_the_ask_tier() {
         ("Bash", "cat /etc/sudoers"),
         ("Bash", "grep -rn runas docs"),
         ("Bash", "ls tools/gsudo"),
+        ("Bash", "ls /usr/bin/sudoedit"),
         ("PowerShell", "Get-ChildItem"),
         ("PowerShell", "Write-Output runas"),
     ];

@@ -80,10 +80,12 @@ publication date._
   settings presets now ask before `pkexec`, `gsudo`, `runas` and
   `Start-Process -Verb RunAs`, as well as `sudo`, `su` and `doas`, for both
   the Bash and the PowerShell tool, including path-qualified launchers,
-  Windows `.exe` spellings and PowerShell elevation started from Bash. The
-  rules match command text, so a command that merely contains `-Verb RunAs`
-  also asks, and a renamed or indirect launcher is not caught. Deny rules
-  and the fail-closed sandbox are unchanged. `codeflow update` refreshes the managed region of
+  Windows `.exe` spellings and PowerShell elevation started from Bash. These
+  ask rules are a textual checkpoint, not a security boundary: they match
+  command text, so a command that merely contains `-Verb RunAs` also asks,
+  while other casings in Bash and renamed or indirect launchers are not
+  caught. The fail-closed sandbox remains the boundary, and exec-guard still
+  reports privilege escalation it detects. Deny rules are unchanged. `codeflow update` refreshes the managed region of
   `.claude/settings.json` and keeps project-owned keys.
 
 <!-- codeflow:release-impact patch -->
