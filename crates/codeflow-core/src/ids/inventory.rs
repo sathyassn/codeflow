@@ -6,7 +6,7 @@ use std::collections::{BTreeMap, HashMap};
 use std::path::Path;
 
 use super::entry::{frontmatter_value, record_id_from_path, Kind, RegId, RECORD_ROOTS};
-use super::git::Git;
+use super::git::{z_fields, Git};
 use super::{IdsError, REGISTRY_BRANCH};
 
 /// One copy of a record in one tree.
@@ -127,6 +127,7 @@ pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
             let mut args = vec![
                 "ls-tree",
                 "-r",
+                "-z",
                 "--name-only",
                 "--full-tree",
                 sha.as_str(),
@@ -135,7 +136,7 @@ pub fn max_seq_on_refs(git: &Git, kind: Kind) -> Result<u64, IdsError> {
             args.extend_from_slice(&RECORD_ROOTS);
             git.run(&args)?
         };
-        max = max.max(max_seq_in(listing.lines(), kind));
+        max = max.max(max_seq_in(z_fields(&listing), kind));
     }
     Ok(max)
 }
@@ -195,6 +196,7 @@ pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, Id
         "--no-renames",
         "--diff-filter=A",
         "--name-only",
+        "-z",
         "--format=%x1e%H",
         rev,
         "--",
@@ -203,10 +205,10 @@ pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, Id
     let log = git.run(&args)?;
     let mut out = BTreeMap::new();
     for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
-        let mut lines = record.lines();
-        let sha = lines.next().unwrap_or_default().trim().to_string();
-        for path in lines.filter(|line| !line.trim().is_empty()) {
-            if let Some(id) = record_id_from_path(path.trim()) {
+        let mut fields = z_fields(record);
+        let sha = fields.next().unwrap_or_default().trim().to_string();
+        for path in fields {
+            if let Some(id) = record_id_from_path(path) {
                 out.entry(id).or_insert_with(|| sha.clone());
             }
         }
@@ -225,6 +227,7 @@ pub fn adding_commits(git: &Git, rev: &str, id: &RegId) -> Result<Vec<String>, I
         "--no-renames",
         "--diff-filter=A",
         "--name-only",
+        "-z",
         "--format=%x1e%H",
         rev,
         "--",
@@ -233,9 +236,9 @@ pub fn adding_commits(git: &Git, rev: &str, id: &RegId) -> Result<Vec<String>, I
     let log = git.run(&args)?;
     let mut out = Vec::new();
     for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
-        let mut lines = record.lines();
-        let sha = lines.next().unwrap_or_default().trim().to_string();
-        if lines.any(|path| record_id_from_path(path.trim()).as_ref() == Some(id)) {
+        let mut fields = z_fields(record);
+        let sha = fields.next().unwrap_or_default().trim().to_string();
+        if fields.any(|path| record_id_from_path(path).as_ref() == Some(id)) {
             out.push(sha);
         }
     }
@@ -252,15 +255,14 @@ fn added_blob(git: &Git, commit: &str, id: &RegId) -> Option<String> {
             "--no-renames",
             "--no-commit-id",
             "--diff-filter=A",
+            "-z",
             commit,
         ])
         .ok()?;
-    changes.lines().find_map(|line| {
-        let (meta, path) = line.split_once('\t')?;
-        (record_id_from_path(path).as_ref() == Some(id))
-            .then(|| meta.split_whitespace().nth(3).map(str::to_string))
-            .flatten()
-    })
+    raw_changes(&changes)
+        .into_iter()
+        .find(|change| record_id_from_path(&change.path).as_ref() == Some(id))
+        .map(|change| change.blob)
 }
 
 /// The landing of a copy introduced by `intro` (R-27, R-111): the commit
@@ -327,6 +329,35 @@ pub fn is_replica(
     Ok(false)
 }
 
+/// One entry of NUL-delimited raw diff output (`diff-tree -z`).
+pub(crate) struct RawChange {
+    pub blob: String,
+    pub status: char,
+    pub path: String,
+}
+
+/// Parse `diff-tree --raw -z` output: a `:meta` field, then its path.
+pub(crate) fn raw_changes(output: &str) -> Vec<RawChange> {
+    let mut changes = Vec::new();
+    let mut fields = z_fields(output);
+    while let Some(meta) = fields.next() {
+        let Some(meta) = meta.strip_prefix(':') else {
+            continue;
+        };
+        let Some(path) = fields.next() else {
+            break;
+        };
+        let parts: Vec<&str> = meta.split_whitespace().collect();
+        if let [_, _, _, blob, status] = parts.as_slice() {
+            changes.push(RawChange {
+                blob: (*blob).to_string(),
+                status: status.chars().next().unwrap_or('?'),
+                path: path.to_string(),
+            });
+        }
+    }
+    changes
+}
 #[cfg(test)]
 mod tests {
     use super::*;

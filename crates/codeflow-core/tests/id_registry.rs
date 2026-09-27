@@ -588,6 +588,50 @@ fn a_rebinding_restore_is_refused_by_the_ledger_rule() {
     );
 }
 
+#[test]
+fn quoted_record_paths_are_still_judged() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "creates the registry").unwrap();
+    git(&a, &["checkout", "-q", "-b", "task/names", "main"]);
+    let names = [
+        ("ADR-0040", "ADR-0040-caf\u{e9}.md"),
+        ("ADR-0041", "ADR-0041-a\"quote.md"),
+        ("ADR-0042", "ADR-0042-a\ttab.md"),
+    ];
+    std::fs::create_dir_all(a.join("docs/decisions")).unwrap();
+    for (id, file) in names {
+        std::fs::write(
+            a.join("docs/decisions").join(file),
+            record_text(id, Some(&new_uid())),
+        )
+        .unwrap();
+    }
+    commit_all(&a, "decisions with quoted names");
+    let git_a = Git::new(&a);
+    let report = check::merge_rule(&git_a, "main", "HEAD").unwrap();
+    for (id, _) in names {
+        assert!(
+            report
+                .blocks
+                .iter()
+                .any(|b| b.starts_with(&format!("{id}: not reserved"))),
+            "{id}: {:?}",
+            report.blocks
+        );
+    }
+    assert_eq!(
+        codeflow_core::ids::inventory::max_seq_on_refs(&git_a, Kind::Adr).unwrap(),
+        42
+    );
+    let introduced = codeflow_core::ids::inventory::introductions(&git_a, "HEAD").unwrap();
+    assert!(names
+        .iter()
+        .all(|(id, _)| introduced.contains_key(&RegId::parse(id).unwrap())));
+    let next = issue::reserve(&a, &Request::issue(Kind::Adr, "next decision", "main")).unwrap();
+    assert_eq!(next.id.to_string(), "ADR-0043");
+}
+
 // --- AC-8: rewrite detection on a host without rules ------------------------
 
 #[test]

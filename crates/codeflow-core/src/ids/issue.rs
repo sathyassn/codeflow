@@ -5,7 +5,7 @@
 use std::path::Path;
 
 use super::entry::{Entry, Kind, RegId};
-use super::git::Git;
+use super::git::{z_fields, Git};
 use super::inventory::{self, branch_name, is_landing_branch};
 use super::ledger::{short, Ledger};
 use super::state::{self, Unwritten};
@@ -275,17 +275,14 @@ fn fresh_repository(git: &Git) -> Result<(), IdsError> {
         let mut args = vec![
             "ls-tree",
             "-r",
+            "-z",
             "--name-only",
             "--full-tree",
             sha.as_str(),
             "--",
         ];
         args.extend_from_slice(&super::entry::RECORD_ROOTS);
-        if git
-            .run(&args)?
-            .lines()
-            .any(|path| super::record_id_from_path(path).is_some())
-        {
+        if z_fields(&git.run(&args)?).any(|path| super::record_id_from_path(path).is_some()) {
             return Err(IdsError::NotSeeded);
         }
     }
@@ -556,16 +553,14 @@ fn pending_entries(git: &Git, local: &str, tracking: Option<&str>) -> Result<Vec
             "--root",
             "--no-renames",
             "--no-commit-id",
+            "-z",
             commit,
         ])?;
-        for line in changes.lines() {
-            let Some((meta, path)) = line.split_once('\t') else {
-                continue;
-            };
-            if !meta.ends_with(" A") {
+        for change in inventory::raw_changes(&changes) {
+            if change.status != 'A' {
                 continue;
             }
-            if let Some(id) = RegId::from_registry_path(path) {
+            if let Some(id) = RegId::from_registry_path(&change.path) {
                 if let Some(entry) = ledger.entry(&id) {
                     entries.push(entry.clone());
                 }

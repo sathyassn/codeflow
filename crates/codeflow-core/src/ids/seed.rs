@@ -9,7 +9,7 @@ use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 
 use super::entry::{frontmatter_value, new_uid, record_id_from_path, Entry, RegId, RECORD_ROOTS};
-use super::git::Git;
+use super::git::{z_fields, Git};
 use super::inventory::{self, branch_name, is_landing_branch};
 use super::issue::{self, Request};
 use super::ledger::{short, Ledger};
@@ -362,12 +362,11 @@ fn title_of(git: &Git, commit: &str, id: &RegId) -> Option<String> {
             "--no-renames",
             "--no-commit-id",
             "--name-only",
+            "-z",
             commit,
         ])
         .ok()?;
-    let path = changes
-        .lines()
-        .find(|path| record_id_from_path(path).as_ref() == Some(id))?;
+    let path = z_fields(&changes).find(|path| record_id_from_path(path).as_ref() == Some(id))?;
     let text = git.run(&["show", &format!("{commit}:{path}")]).ok()?;
     frontmatter_value(&text, "title")
 }
@@ -623,10 +622,10 @@ fn replace_id(text: &str, from: &RegId, to: &RegId) -> Option<String> {
 
 /// Rewrite links to `from` in tracked text under the record roots and docs.
 fn rewrite_links(git: &Git, from: &RegId, to: &RegId) -> Result<Vec<PathBuf>, IdsError> {
-    let mut args = vec!["ls-files", "--"];
+    let mut args = vec!["ls-files", "-z", "--"];
     args.extend_from_slice(&RECORD_ROOTS);
     args.push("docs");
-    let files: BTreeSet<String> = git.run(&args)?.lines().map(str::to_string).collect();
+    let files: BTreeSet<String> = z_fields(&git.run(&args)?).map(str::to_string).collect();
     let mut changed = Vec::new();
     for file in files {
         let path = git.root().join(&file);

@@ -250,11 +250,10 @@ impl Git {
         rev: &str,
         paths: &[&str],
     ) -> Result<Vec<(String, String, String)>, IdsError> {
-        let mut args = vec!["ls-tree", "-r", "--full-tree", rev, "--"];
+        let mut args = vec!["ls-tree", "-r", "-z", "--full-tree", rev, "--"];
         args.extend_from_slice(paths);
         let listing = self.run(&args)?;
-        Ok(listing
-            .lines()
+        Ok(z_fields(&listing)
             .filter_map(|line| {
                 let (meta, path) = line.split_once('\t')?;
                 let mut parts = meta.split_whitespace();
@@ -367,4 +366,14 @@ fn checked(args: &[&str], output: &Output) -> Result<String, IdsError> {
             String::from_utf8_lossy(&output.stderr).trim()
         )))
     }
+}
+
+/// The fields of NUL-delimited (`-z`) git output. Paths arrive verbatim, so
+/// a name git would quote (non-ASCII, a quote, a tab) is never altered.
+/// Leading newlines that `log -z` puts between a header and its first path
+/// are dropped, and so is the empty tail.
+pub fn z_fields(text: &str) -> impl Iterator<Item = &str> {
+    text.split('\0')
+        .map(|field| field.trim_start_matches('\n'))
+        .filter(|field| !field.is_empty())
 }

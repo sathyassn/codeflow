@@ -6,7 +6,7 @@
 use std::collections::{BTreeMap, HashMap};
 
 use super::entry::{frontmatter_value, record_id_from_path, Kind, RegId, RECORD_ROOTS};
-use super::git::Git;
+use super::git::{z_fields, Git};
 use super::inventory::{self, branch_name, is_landing_branch};
 use super::ledger::{short, Ledger};
 use super::{tracking_ref, IdsError, AUTHORITY, REGISTRY_REF};
@@ -195,6 +195,7 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
     let mut args = vec![
         "diff",
         "--name-status",
+        "-z",
         "--no-renames",
         merge_base.as_str(),
         head,
@@ -205,10 +206,8 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
     let mut added_paths: Vec<(RegId, String)> = Vec::new();
     let mut removed: HashMap<RegId, String> = HashMap::new();
     let mut modified: Vec<(RegId, String)> = Vec::new();
-    for line in diff.lines() {
-        let Some((status, path)) = line.split_once('\t') else {
-            continue;
-        };
+    let mut fields = z_fields(&diff);
+    while let (Some(status), Some(path)) = (fields.next(), fields.next()) {
         let Some(id) = record_id_from_path(path) else {
             continue;
         };
