@@ -7,6 +7,7 @@
 //! [`is_valid_task_format_id`]) is the single source of truth reused by
 //! `validate` for frontmatter checks.
 
+pub mod acceptance;
 pub mod allocate;
 pub mod classify;
 pub mod deps;

@@ -50,6 +50,12 @@ impl Repo {
         fs::write(path, content).unwrap();
     }
 
+    /// `block` reviewed at the current head, as a completion must be
+    /// (TSK-105).
+    fn reviewed(&self, block: &str) -> String {
+        block.replace(&"a".repeat(40), &self.git(&["rev-parse", "HEAD"]))
+    }
+
     fn read(&self, relative: &str) -> String {
         fs::read_to_string(self.root().join(relative)).unwrap()
     }
@@ -228,7 +234,9 @@ fn every_task_verb_matches_the_same_hand_edit() {
 
     let completed = verb_and_hand_agree(&repo, TASK_PATH, || {
         let finish = StatusChange {
-            acceptance: Some(block(&["AC-1", "AC-2"], "none | no journey criterion")),
+            acceptance: Some(
+                repo.reviewed(&block(&["AC-1", "AC-2"], "none | no journey criterion")),
+            ),
             ..change("complete")
         };
         set_status(&root, RecordKind::Task, "TSK-001", &finish).map(drop)
@@ -470,7 +478,7 @@ fn partial_and_stacked_slices_leave_the_task_open_until_the_last() {
     assert!(stacked.is_clean());
 
     let finish = StatusChange {
-        acceptance: Some(block(&["AC-1", "AC-2"], "none | no journey criterion")),
+        acceptance: Some(repo.reviewed(&block(&["AC-1", "AC-2"], "none | no journey criterion"))),
         ..change("complete")
     };
     set_status(repo.root(), RecordKind::Task, "TSK-001", &finish).unwrap();
@@ -993,7 +1001,7 @@ fn a_second_reopen_must_supersede_the_new_block_too() {
     };
     set_status(repo.root(), RecordKind::Task, "TSK-001", &reopen).unwrap();
     let finish = StatusChange {
-        acceptance: Some(block(&["AC-1", "AC-2"], "none | no journey criterion")),
+        acceptance: Some(repo.reviewed(&block(&["AC-1", "AC-2"], "none | no journey criterion"))),
         ..change("complete")
     };
     set_status(repo.root(), RecordKind::Task, "TSK-001", &finish).unwrap();

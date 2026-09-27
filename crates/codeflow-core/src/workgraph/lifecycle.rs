@@ -108,7 +108,7 @@ impl RecordView {
         acceptance_blocks(&self.body)
     }
 
-    fn active_blocks(&self) -> Vec<FencedAcceptance> {
+    pub(crate) fn active_blocks(&self) -> Vec<FencedAcceptance> {
         self.blocks()
             .into_iter()
             .filter(|block| !block.is_superseded())

@@ -20,10 +20,24 @@ pub struct Criterion {
 }
 
 impl Criterion {
-    /// A journey criterion ends with `(journey)` (R-50).
+    /// A journey criterion ends with `(journey)` (R-50); a record may also
+    /// open the criterion with it (`AC-7 (journey) On a fresh ...`).
     #[must_use]
     pub fn is_journey(&self) -> bool {
-        self.text.trim_end().ends_with("(journey)")
+        self.has_tag("(journey)")
+    }
+
+    /// A criterion observable only after release carries `(after release)`
+    /// (R-62). It is not mandatory at build time: its result is `deferred`
+    /// with an owner, a measurement window and a follow-up task.
+    #[must_use]
+    pub fn is_after_release(&self) -> bool {
+        self.has_tag("(after release)")
+    }
+
+    fn has_tag(&self, tag: &str) -> bool {
+        let text = self.text.trim();
+        text.starts_with(tag) || text.ends_with(tag)
     }
 
     /// The epic criterion this one serves, from `(serves EPC-NNN AC-m)`.
@@ -863,6 +877,13 @@ pub fn check_block(
     for criterion in criteria {
         match block.criteria.iter().find(|(id, _)| *id == criterion.id) {
             None => problems.push(format!("acceptance block omits {}", criterion.id)),
+            Some((_, result)) if criterion.is_after_release() => {
+                problems.extend(after_release_problems(
+                    &criterion.id,
+                    result,
+                    &block.follow_ups,
+                ));
+            }
             Some((_, result)) => match result.outcome.as_str() {
                 "verified" => {}
                 "waived" => {
@@ -911,6 +932,48 @@ pub fn check_block(
             "acceptance verdict is `{}`, not approved",
             block.verdict
         ));
+    }
+    problems
+}
+
+/// A criterion observable only after release (R-62) is `deferred` with an
+/// owner, a measurement window and a follow-up task listed in `follow_ups`;
+/// it is never verified at build time.
+fn after_release_problems(id: &str, result: &CriterionResult, follow_ups: &str) -> Vec<String> {
+    let shape = "`deferred | owner: <who>; window: <when>; follow-up: TSK-NNN`";
+    if result.outcome != "deferred" {
+        return vec![format!(
+            "{id} is observable only after release and is never `{}` at build time; record {shape}",
+            result.outcome
+        )];
+    }
+    let field = |name: &str| {
+        result
+            .evidence
+            .split(';')
+            .filter_map(|part| part.trim().strip_prefix(name))
+            .map(|value| value.trim_start_matches(':').trim())
+            .find(|value| !value.is_empty())
+    };
+    let mut problems = Vec::new();
+    for name in ["owner", "window"] {
+        if field(name).is_none() {
+            problems.push(format!(
+                "{id} is deferred without its {name}; record {shape}"
+            ));
+        }
+    }
+    match field("follow-up") {
+        Some(task) if crate::workgraph::is_valid_task_format_id(task) => {
+            if !follow_ups.split(',').any(|listed| listed.trim() == task) {
+                problems.push(format!(
+                    "{id}'s follow-up {task} is not listed in `follow_ups`"
+                ));
+            }
+        }
+        _ => problems.push(format!(
+            "{id} is deferred without a follow-up task; record {shape}"
+        )),
     }
     problems
 }
