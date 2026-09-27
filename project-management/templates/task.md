@@ -49,8 +49,8 @@ created: {{DATE}}
      actual executor (if different), independent cross-lineage reviewer,
      integration target, and task-specific risk/recovery requirement. The
      primary remains accountable for acceptance when execution is delegated.
-     Shared engineering/security/testing doctrine stays in AGENTS.md and the
-     skills; do not paste it here.
+     Shared engineering/security/testing doctrine stays in AGENTS.md, its
+     .codeflow/rules/ references and the skills; do not paste it here.
      Delete this section for a trivial direct task. -->
 
 ## Closeout
