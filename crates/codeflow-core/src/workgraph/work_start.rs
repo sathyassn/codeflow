@@ -12,6 +12,7 @@ use std::path::{Path, PathBuf};
 use git2::{Repository, TreeWalkMode, TreeWalkResult};
 use thiserror::Error;
 
+use crate::workgraph::deps::{parse_dependencies, Dependency, DependencyKind};
 use crate::workgraph::{
     is_canonical_task_format_id, is_valid_epic_format_id, is_valid_spec_format_id,
     is_valid_task_format_id,
@@ -77,6 +78,41 @@ pub enum WorkStartError {
         spec_id: String,
         status: String,
     },
+    #[error("task {task_id} is blocked: {reason}")]
+    Blocked { task_id: String, reason: String },
+    #[error("task {task_id} is awaiting selection ({path}); a planning PR lands the selection")]
+    AwaitingSelection { task_id: String, path: String },
+    #[error("task {task_id} belongs to epic {epic_id}, which is {status}")]
+    EpicClosed {
+        task_id: String,
+        epic_id: String,
+        status: String,
+    },
+    #[error("task {task_id} depends on {dependency}, complete on '{line}' but not in this base; merge it or land a reviewed port")]
+    DependencyOnOtherLine {
+        task_id: String,
+        dependency: String,
+        line: String,
+    },
+    #[error("task {task_id} depends on {dependency} on '{line}', which is not fetched here: unknown, not satisfied")]
+    DependencyLineUnknown {
+        task_id: String,
+        dependency: String,
+        line: String,
+    },
+    #[error("task {task_id} has a {kind} dependency on {dependency} with no pin; the planner writes the pin")]
+    DependencyUnpinned {
+        task_id: String,
+        dependency: String,
+        kind: String,
+    },
+    #[error("task {task_id} pins {dependency} at {pin}: {reason}")]
+    DependencyPin {
+        task_id: String,
+        dependency: String,
+        pin: String,
+        reason: String,
+    },
     #[error("task {task_id} cannot start from status '{status}'; expected todo or in_progress")]
     TaskNotStartable { task_id: String, status: String },
     #[error("task {0} has no integration_target")]
@@ -113,6 +149,43 @@ pub struct ResolvedWorkTarget {
     pub note: Option<String>,
 }
 
+/// How a refusal of the readiness core reads in a derived view (R-27).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotReady {
+    /// Complete or cancelled: no context starts it.
+    Closed,
+    /// A recorded Blocker, an awaiting selection or a closed epic.
+    Blocked,
+    /// `todo` with an unmet dependency or a spec not yet approved.
+    Waiting,
+    /// The records do not hold together at the base.
+    Invalid,
+}
+
+impl WorkStartError {
+    /// The derived state this refusal puts a task in.
+    #[must_use]
+    pub fn not_ready(&self) -> NotReady {
+        match self {
+            Self::TaskNotStartable { status, .. }
+                if matches!(status.as_str(), "complete" | "cancelled") =>
+            {
+                NotReady::Closed
+            }
+            Self::Blocked { .. } | Self::AwaitingSelection { .. } | Self::EpicClosed { .. } => {
+                NotReady::Blocked
+            }
+            Self::DependencyIncomplete { .. }
+            | Self::DependencyOnOtherLine { .. }
+            | Self::DependencyLineUnknown { .. }
+            | Self::DependencyUnpinned { .. }
+            | Self::DependencyPin { .. }
+            | Self::SpecNotReady { .. } => NotReady::Waiting,
+            _ => NotReady::Invalid,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WorkStartReport {
     pub task_id: String,
@@ -127,16 +200,19 @@ pub struct WorkStartReport {
 }
 
 #[derive(Debug, Clone)]
-struct Record {
-    id: String,
-    kind: RecordKind,
-    status: String,
-    epic_id: Option<String>,
+pub(crate) struct Record {
+    pub(crate) id: String,
+    pub(crate) kind: RecordKind,
+    pub(crate) title: String,
+    pub(crate) status: String,
+    pub(crate) epic_id: Option<String>,
     standalone_reason: Option<String>,
-    integration_target: Option<String>,
+    pub(crate) integration_target: Option<String>,
     specs: Vec<String>,
-    depends_on: Vec<String>,
+    pub(crate) depends_on: Vec<Dependency>,
     work_type: Option<String>,
+    pub(crate) awaiting_selection: Option<String>,
+    blocker_reason: Option<String>,
 }
 
 /// The three durable record kinds.
@@ -147,7 +223,8 @@ pub enum RecordKind {
     Task,
 }
 
-struct AnchoredTask {
+#[derive(Debug)]
+pub(crate) struct AnchoredTask {
     epic_id: Option<String>,
     specs: Vec<String>,
     dependencies: Vec<String>,
@@ -575,12 +652,25 @@ const NON_WORK_PREFIXES: [&str; 2] = ["plan/", "integration/"];
 /// The part of `branch` after a sanctioned work prefix: any policy branch
 /// prefix except `plan/` and `integration/` (SPC-013 R-110).
 fn work_branch_suffix<'b>(repo_root: &Path, branch: &'b str) -> Option<&'b str> {
+    work_suffix(&work_prefixes(repo_root), branch)
+}
+
+/// The sanctioned work prefixes of the project's policy: every
+/// `git.branch_prefixes` entry except `plan/` and `integration/`.
+pub(crate) fn work_prefixes(repo_root: &Path) -> Vec<String> {
     let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
     policy
         .git
         .branch_prefixes
-        .iter()
+        .into_iter()
         .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
+        .collect()
+}
+
+/// The part of `branch` after one of `prefixes`.
+pub(crate) fn work_suffix<'b>(prefixes: &[String], branch: &'b str) -> Option<&'b str> {
+    prefixes
+        .iter()
         .find_map(|prefix| branch.strip_prefix(prefix.as_str()))
 }
 
@@ -699,7 +789,9 @@ pub fn check_work_start_anchored(
         return Err(WorkStartError::UnstableTarget(target.to_string()));
     }
     let (merge_base, records) = anchored_records(repo_root, target)?;
-    let anchored = validate_anchored_task(&records, task_id, target)?;
+    let repo = Repository::discover(repo_root)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    let anchored = validate_anchored_task(&repo, &records, task_id, target)?;
 
     Ok(WorkStartReport {
         task_id: task_id.to_string(),
@@ -741,7 +833,11 @@ fn anchored_records(
     Ok((merge_base.to_string(), records))
 }
 
-fn validate_anchored_task(
+/// The one readiness core of SPC-013 R-40, over the records of one base
+/// commit: `work start`, CI, `work next`, `work claim` and
+/// `status` all call it and differ only in which base they read (R-110).
+pub(crate) fn validate_anchored_task(
+    repo: &Repository,
     records: &BTreeMap<String, Record>,
     task_id: &str,
     target: &str,
@@ -769,23 +865,47 @@ fn validate_anchored_task(
         }
         _ => {}
     }
+    let closed = matches!(task.status.as_str(), "complete" | "cancelled");
+    // A visible Blocker holds the task whatever its status says (R-40).
+    if !closed && (task.status == "blocked" || task.blocker_reason.is_some()) {
+        return Err(WorkStartError::Blocked {
+            task_id: task_id.to_string(),
+            reason: task
+                .blocker_reason
+                .clone()
+                .filter(|reason| !reason.trim().is_empty())
+                .unwrap_or_else(|| "no Blocker reason recorded".to_string()),
+        });
+    }
     if !matches!(task.status.as_str(), "todo" | "in_progress") {
         return Err(WorkStartError::TaskNotStartable {
             task_id: task_id.to_string(),
             status: task.status.clone(),
         });
     }
+    if let Some(path) = &task.awaiting_selection {
+        return Err(WorkStartError::AwaitingSelection {
+            task_id: task_id.to_string(),
+            path: path.clone(),
+        });
+    }
 
     let epic = if let Some(epic_id) = task.epic_id.as_deref() {
-        Some(
-            records
-                .get(epic_id)
-                .filter(|record| record.kind == RecordKind::Epic)
-                .ok_or_else(|| WorkStartError::MissingEpic {
-                    task_id: task_id.to_string(),
-                    epic_id: epic_id.to_string(),
-                })?,
-        )
+        let epic = records
+            .get(epic_id)
+            .filter(|record| record.kind == RecordKind::Epic)
+            .ok_or_else(|| WorkStartError::MissingEpic {
+                task_id: task_id.to_string(),
+                epic_id: epic_id.to_string(),
+            })?;
+        if matches!(epic.status.as_str(), "complete" | "cancelled" | "archived") {
+            return Err(WorkStartError::EpicClosed {
+                task_id: task_id.to_string(),
+                epic_id: epic_id.to_string(),
+                status: epic.status.clone(),
+            });
+        }
+        Some(epic)
     } else {
         if task
             .standalone_reason
@@ -804,11 +924,11 @@ fn validate_anchored_task(
         }
     }
     validate_specs(records, task_id, &specs)?;
-    validate_dependencies(records, task_id, &task.depends_on)?;
+    validate_dependencies(repo, records, task_id, target, &task.depends_on)?;
     Ok(AnchoredTask {
         epic_id: task.epic_id.clone(),
         specs,
-        dependencies: task.depends_on.clone(),
+        dependencies: task.depends_on.iter().map(|dep| dep.id.clone()).collect(),
         work_type: task.work_type.clone(),
     })
 }
@@ -838,27 +958,158 @@ fn validate_specs(
 }
 
 fn validate_dependencies(
+    repo: &Repository,
     records: &BTreeMap<String, Record>,
     task_id: &str,
-    dependencies: &[String],
+    target: &str,
+    dependencies: &[Dependency],
 ) -> Result<(), WorkStartError> {
     for dependency in dependencies {
-        let predecessor = records
-            .get(dependency)
-            .filter(|record| record.kind == RecordKind::Task)
-            .ok_or_else(|| WorkStartError::MissingDependency {
-                task_id: task_id.to_string(),
-                dependency: dependency.clone(),
-            })?;
-        if predecessor.status != "complete" {
-            return Err(WorkStartError::DependencyIncomplete {
-                task_id: task_id.to_string(),
-                dependency: dependency.clone(),
-                status: predecessor.status.clone(),
-            });
+        match dependency.kind {
+            DependencyKind::Code => {
+                code_dependency(repo, records, task_id, target, &dependency.id)?;
+            }
+            DependencyKind::Research | DependencyKind::Decision => {
+                pinned_dependency(repo, records, task_id, target, dependency)?;
+            }
         }
     }
     Ok(())
+}
+
+/// A code dependency is met only when the predecessor is complete in this
+/// base (R-42): complete on another line is reported as such, and a line
+/// that is not fetched is unknown, never satisfied.
+fn code_dependency(
+    repo: &Repository,
+    records: &BTreeMap<String, Record>,
+    task_id: &str,
+    target: &str,
+    dependency: &str,
+) -> Result<(), WorkStartError> {
+    let predecessor = records
+        .get(dependency)
+        .filter(|record| record.kind == RecordKind::Task)
+        .ok_or_else(|| WorkStartError::MissingDependency {
+            task_id: task_id.to_string(),
+            dependency: dependency.to_string(),
+        })?;
+    if predecessor.status == "complete" {
+        return Ok(());
+    }
+    let incomplete = || WorkStartError::DependencyIncomplete {
+        task_id: task_id.to_string(),
+        dependency: dependency.to_string(),
+        status: predecessor.status.clone(),
+    };
+    let Some(line) = predecessor
+        .integration_target
+        .as_deref()
+        .filter(|line| logical_target(line) != logical_target(target))
+    else {
+        return Err(incomplete());
+    };
+    let Some(tip) = target_reference(repo, line) else {
+        return Err(WorkStartError::DependencyLineUnknown {
+            task_id: task_id.to_string(),
+            dependency: dependency.to_string(),
+            line: line.to_string(),
+        });
+    };
+    let there = tip
+        .tree()
+        .map_err(|error| WorkStartError::Repository(error.to_string()))
+        .and_then(|tree| records_from_tree(repo, &tree))?;
+    if there
+        .get(dependency)
+        .is_some_and(|record| record.status == "complete")
+    {
+        Err(WorkStartError::DependencyOnOtherLine {
+            task_id: task_id.to_string(),
+            dependency: dependency.to_string(),
+            line: line.to_string(),
+        })
+    } else {
+        Err(incomplete())
+    }
+}
+
+/// A research or decision dependency is met when its pin is a commit on the
+/// predecessor's target that holds the predecessor's record as complete
+/// (R-112). The predecessor need not be in this base.
+fn pinned_dependency(
+    repo: &Repository,
+    records: &BTreeMap<String, Record>,
+    task_id: &str,
+    target: &str,
+    dependency: &Dependency,
+) -> Result<(), WorkStartError> {
+    let Some(pin) = dependency.pin.as_deref() else {
+        return Err(WorkStartError::DependencyUnpinned {
+            task_id: task_id.to_string(),
+            dependency: dependency.id.clone(),
+            kind: dependency.kind.as_str().to_string(),
+        });
+    };
+    let refuse = |reason: String| WorkStartError::DependencyPin {
+        task_id: task_id.to_string(),
+        dependency: dependency.id.clone(),
+        pin: pin.to_string(),
+        reason,
+    };
+    let commit = commit_by_object_id(repo, pin).map_err(refuse)?;
+    let line = records
+        .get(&dependency.id)
+        .and_then(|record| record.integration_target.clone())
+        .unwrap_or_else(|| target.to_string());
+    let Some(tip) = target_reference(repo, &line) else {
+        return Err(WorkStartError::DependencyLineUnknown {
+            task_id: task_id.to_string(),
+            dependency: dependency.id.clone(),
+            line,
+        });
+    };
+    if tip.id() != commit.id()
+        && !repo
+            .graph_descendant_of(tip.id(), commit.id())
+            .unwrap_or(false)
+    {
+        return Err(refuse(format!("not on '{line}'")));
+    }
+    let at_pin = commit
+        .tree()
+        .map_err(|error| WorkStartError::Repository(error.to_string()))
+        .and_then(|tree| records_from_tree(repo, &tree))?;
+    match at_pin
+        .get(&dependency.id)
+        .map(|record| record.status.as_str())
+    {
+        Some("complete") => Ok(()),
+        Some(status) => Err(refuse(format!("the record there is '{status}'"))),
+        None => Err(refuse("the record is not there".to_string())),
+    }
+}
+
+/// Resolve a pin through the object database, never through refs: a tag or
+/// branch named like the pin cannot redirect it. An abbreviated id must be
+/// unambiguous and name a commit.
+fn commit_by_object_id<'repo>(
+    repo: &'repo Repository,
+    pin: &str,
+) -> Result<git2::Commit<'repo>, String> {
+    let prefix = git2::Oid::from_str(pin).map_err(|_| "not an object id".to_string())?;
+    let full = if pin.len() == 40 {
+        prefix
+    } else {
+        repo.odb()
+            .and_then(|odb| odb.exists_prefix(prefix, pin.len()))
+            .map_err(|error| match error.code() {
+                git2::ErrorCode::Ambiguous => "an ambiguous abbreviated object id".to_string(),
+                _ => "not an object in this repository".to_string(),
+            })?
+    };
+    repo.find_commit(full)
+        .map_err(|_| "not a commit in this repository".to_string())
 }
 
 pub(crate) fn record_kind_for_tree_path(path: &str) -> Option<RecordKind> {
@@ -894,7 +1145,7 @@ fn markdown_stem(file: &str) -> Option<&str> {
     extension.eq_ignore_ascii_case("md").then_some(stem)
 }
 
-fn records_from_tree(
+pub(crate) fn records_from_tree(
     repo: &Repository,
     tree: &git2::Tree<'_>,
 ) -> Result<BTreeMap<String, Record>, WorkStartError> {
@@ -941,7 +1192,7 @@ fn records_from_tree(
     Ok(records)
 }
 
-fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
+pub(crate) fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
     let yaml = frontmatter(content).ok_or_else(|| "missing frontmatter".to_string())?;
     let data = serde_yaml::from_str::<serde_yaml::Mapping>(yaml)
         .map_err(|error| format!("invalid YAML: {error}"))?;
@@ -974,14 +1225,21 @@ fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
         status: string(&data, "status").unwrap_or_default(),
         epic_id: string(&data, "epic_id"),
         standalone_reason: string(&data, "standalone_reason"),
+        title: string(&data, "title").unwrap_or_default(),
         integration_target: string(&data, "integration_target"),
         specs: strings(&data, "specs")?,
-        depends_on: strings_alias(&data, "depends_on", "dependencies")?,
+        depends_on: dependencies(&data)?,
         work_type: string(&data, "work_type"),
+        awaiting_selection: string(&data, "awaiting_selection")
+            .filter(|path| !path.trim().is_empty()),
+        blocker_reason: blocker_reason(content),
     })
 }
 
-fn target_reference<'repo>(repo: &'repo Repository, target: &str) -> Option<git2::Commit<'repo>> {
+pub(crate) fn target_reference<'repo>(
+    repo: &'repo Repository,
+    target: &str,
+) -> Option<git2::Commit<'repo>> {
     target_reference_names(target)?
         .into_iter()
         .find_map(|name| repo.find_reference(&name).ok()?.peel_to_commit().ok())
@@ -1017,7 +1275,7 @@ fn reference_display_name(reference: &str) -> String {
         .to_string()
 }
 
-fn logical_target(target: &str) -> &str {
+pub(crate) fn logical_target(target: &str) -> &str {
     target
         .strip_prefix("refs/heads/")
         .or_else(|| {
@@ -1071,19 +1329,24 @@ fn strings(data: &serde_yaml::Mapping, name: &str) -> Result<Vec<String>, String
         .collect()
 }
 
-fn strings_alias(
-    data: &serde_yaml::Mapping,
-    canonical: &str,
-    legacy: &str,
-) -> Result<Vec<String>, String> {
-    if data.contains_key(key(canonical)) && data.contains_key(key(legacy)) {
-        return Err(format!("defines both {canonical} and {legacy}"));
+fn dependencies(data: &serde_yaml::Mapping) -> Result<Vec<Dependency>, String> {
+    let canonical = data.get(key("depends_on"));
+    let legacy = data.get(key("dependencies"));
+    if canonical.is_some() && legacy.is_some() {
+        return Err("defines both depends_on and dependencies".to_string());
     }
-    if data.contains_key(key(canonical)) {
-        strings(data, canonical)
-    } else {
-        strings(data, legacy)
-    }
+    parse_dependencies(canonical.or(legacy))
+}
+
+/// The reason of a record's `## Blocker` section, if any.
+/// The reason of a visible `## Blocker` section; `Some("")` when the section
+/// is there without a reason, so an incomplete Blocker still holds the task.
+fn blocker_reason(content: &str) -> Option<String> {
+    let body = content
+        .strip_prefix("---")
+        .and_then(|rest| rest.split_once("\n---").map(|(_, body)| body))
+        .unwrap_or(content);
+    crate::workgraph::record_text::parse_blocker(body).map(|blocker| blocker.reason)
 }
 
 #[cfg(test)]
@@ -1863,7 +2126,7 @@ permission_preset = "strict"
         );
         assert!(matches!(
             check_work_start(blocked.path(), "TSK-002", "main"),
-            Err(WorkStartError::TaskNotStartable { .. })
+            Err(WorkStartError::Blocked { .. })
         ));
     }
 

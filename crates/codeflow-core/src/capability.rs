@@ -249,6 +249,18 @@ Generated status views.
         assert!(entries[1].line > entries[0].line);
     }
 
+    /// TSK-103 AC-8: a capability may list a standalone task, which has no
+    /// epic to reach it through.
+    #[test]
+    fn a_capability_may_list_a_standalone_task() {
+        let content = "```yaml\nid: CAP-101\nname: fix\narea: test\nstatus: planned\nrelated: [TSK-004]\ndepends_on: [TSK-005]\n```\n";
+        let (entries, issues) = parse_capabilities(content);
+        assert!(issues.is_empty(), "{issues:?}");
+        assert_eq!(entries[0].related, ["TSK-004"]);
+        assert_eq!(entries[0].depends_on, ["TSK-005"]);
+        assert!(entries[0].epics.is_empty());
+    }
+
     #[test]
     fn ignores_non_capability_yaml_blocks() {
         let content = "```yaml\nfoo: bar\n```\n";

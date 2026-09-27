@@ -608,7 +608,104 @@ pub fn validate_task(
         });
     }
 
+    let repo_root = record_repo_root(path);
+    errs.extend(awaiting_selection_errors(
+        &data,
+        &body_text,
+        repo_root.as_deref(),
+    ));
+    if epic_id.is_empty() && get_string_field(&data, "status") == "complete" {
+        if let Some(root) = repo_root.as_deref() {
+            let pulls = landed_pull_requests(root, &id);
+            if pulls > 1 {
+                warns.push(ValidationWarning {
+                    field: "standalone_reason".into(),
+                    message: format!(
+                        "standalone task {id} was completed by {pulls} pull requests; a standalone task is one reviewable pull request (SPC-013 R-66)"
+                    ),
+                });
+            }
+        }
+    }
+
     Ok((errs, warns))
+}
+
+/// The repository root of a record under `project-management/`.
+fn record_repo_root(record: &Path) -> Option<std::path::PathBuf> {
+    record
+        .ancestors()
+        .find(|dir| {
+            dir.file_name()
+                .is_some_and(|name| name == "project-management")
+        })
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+}
+
+/// A join awaiting selection (SPC-013 R-43) is a valid record that no
+/// context starts: it is `blocked` with the reason "awaiting selection" and
+/// the referenced plan or decision path as its revisit event, and that path
+/// exists.
+fn awaiting_selection_errors(
+    data: &std::collections::HashMap<String, serde_yaml::Value>,
+    body: &str,
+    repo_root: Option<&Path>,
+) -> Vec<ValidationError> {
+    let path = get_string_field(data, "awaiting_selection");
+    if path.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut errs = Vec::new();
+    let mut fail = |message: String| {
+        errs.push(ValidationError {
+            field: "awaiting_selection".into(),
+            message,
+        });
+    };
+    if get_string_field(data, "status") != "blocked" {
+        fail("a join awaiting selection is `blocked`".into());
+    }
+    let blocker = crate::workgraph::record_text::parse_blocker(body).unwrap_or_default();
+    if blocker.reason != "awaiting selection" {
+        fail("its `## Blocker` reason is `awaiting selection`".into());
+    }
+    if blocker.revisit.trim_matches('`') != path {
+        fail(format!("its `## Blocker` revisit event is `{path}`"));
+    }
+    if let Some(root) = repo_root {
+        let relative = Path::new(&path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+            || !root.join(relative).exists()
+        {
+            fail(format!(
+                "`{path}` must be a path that exists in the repository"
+            ));
+        }
+    }
+    errs
+}
+
+/// How many merged pull requests landed a branch carrying `task_id`, counted
+/// from merge commit subjects (`Merge pull request #N from <prefix>/TSK-NNN-...`
+/// or `Merge branch '<prefix>/TSK-NNN-...'`). Zero when git is unavailable.
+fn landed_pull_requests(repo_root: &Path, task_id: &str) -> usize {
+    let Ok(out) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["log", "--merges", "--format=%s", "HEAD"])
+        .output()
+    else {
+        return 0;
+    };
+    let needle = format!("/{task_id}-");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|subject| subject.starts_with("Merge") && subject.contains(&needle))
+        .count()
 }
 
 // ---------------------------------------------------------------------------
@@ -895,6 +992,46 @@ Criteria
         let (errs, warns) = validate_task(&path, &opts).unwrap();
         assert!(errs.is_empty(), "Expected no errors, got: {errs:?}");
         assert!(warns.is_empty(), "Expected no warnings, got: {warns:?}");
+    }
+
+    /// TSK-103 AC-5: a join awaiting selection is a valid blocked record
+    /// whose Blocker names the selection; anything less is an error.
+    #[test]
+    fn a_join_awaiting_selection_validates_only_when_held_by_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        std::fs::create_dir_all(root.join("docs/plan")).unwrap();
+        std::fs::write(root.join("docs/plan/choice.md"), "# Choice\n").unwrap();
+        let path = root.join("project-management/tasks/TSK-004.md");
+        let record = |status: &str, reason: &str, revisit: &str, path: &str| {
+            format!(
+                "---\nid: TSK-004\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: main\ntitle: join\nstatus: {status}\nwork_type: feat\ndepends_on: []\nawaiting_selection: {path}\ncreated: 2026-09-27\n---\n\n# TSK-004\n\n## Blocker\n\n- reason: {reason}\n- owner: primary\n- revisit: {revisit}\n"
+            )
+        };
+        let errors = |content: String| {
+            std::fs::write(&path, content).unwrap();
+            validate_task(&path, &ValidateOptions::default())
+                .unwrap()
+                .0
+                .into_iter()
+                .filter(|error| error.field == "awaiting_selection")
+                .map(|error| error.message)
+                .collect::<Vec<_>>()
+        };
+        let good = "docs/plan/choice.md";
+        assert!(errors(record("blocked", "awaiting selection", good, good)).is_empty());
+        assert!(errors(record("todo", "awaiting selection", good, good))[0].contains("`blocked`"));
+        assert!(errors(record("blocked", "wait", good, good))[0].contains("awaiting selection"));
+        assert!(
+            errors(record("blocked", "awaiting selection", "later", good))[0].contains("revisit")
+        );
+        let missing = "docs/plan/missing.md";
+        assert!(
+            errors(record("blocked", "awaiting selection", missing, missing))
+                .iter()
+                .any(|message| message.contains("exists"))
+        );
     }
 
     #[test]

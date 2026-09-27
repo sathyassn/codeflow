@@ -533,25 +533,13 @@ fn parse_task_graph_record(
         .and_then(|field| find_line(&content, &format!("{field}:")))
         .unwrap_or(1);
     let field_name = field.unwrap_or("depends_on");
-    let depends_on = match value {
-        None => Vec::new(),
-        Some(serde_yaml::Value::Sequence(values)) => values
-            .iter()
-            .map(|value| value.as_str().map(str::to_owned))
-            .collect::<Option<Vec<_>>>()
-            .or_else(|| {
-                report.issues.push(DocsLintIssue {
-                    file: rel.clone(),
-                    line: dependency_line,
-                    message: format!("task {id} {field_name} must contain only task-id strings"),
-                });
-                None
-            })?,
-        Some(_) => {
+    let depends_on = match crate::workgraph::deps::parse_dependencies(value) {
+        Ok(deps) => deps.into_iter().map(|dep| dep.id).collect(),
+        Err(error) => {
             report.issues.push(DocsLintIssue {
                 file: rel.clone(),
                 line: dependency_line,
-                message: format!("task {id} {field_name} must be a YAML list"),
+                message: format!("task {id} {field_name}: {error}"),
             });
             return None;
         }
@@ -1351,6 +1339,44 @@ mod tests {
 
         let report = lint_docs(dir.path());
         assert!(report.is_clean(), "issues: {:?}", report.issues);
+    }
+
+    /// TSK-103 AC-10: a dependency is a bare id or `{id, kind, pin}`; the
+    /// object form resolves and joins the cycle check like a bare id, and a
+    /// malformed entry is reported.
+    #[test]
+    fn dependency_kinds_are_linted_like_bare_ids() {
+        let dir = clean_repo();
+        task_file(dir.path(), "TSK-001-001", "[]");
+        task_file(dir.path(), "TSK-001-002", "[TSK-001-001]");
+        task_file(
+            dir.path(),
+            "TSK-001-003",
+            "[{id: TSK-001-001, kind: research, pin: 0123abcd}, {id: TSK-001-002, kind: decision}]",
+        );
+        let report = lint_docs(dir.path());
+        assert!(report.is_clean(), "issues: {:?}", report.issues);
+
+        task_file(
+            dir.path(),
+            "TSK-001-004",
+            "[{id: TSK-001-404, kind: research, pin: 0123abcd}]",
+        );
+        task_file(dir.path(), "TSK-001-005", "[{id: TSK-001-001, kind: code}]");
+        let report = lint_docs(dir.path());
+        let messages: Vec<&str> = report
+            .issues
+            .iter()
+            .map(|issue| issue.message.as_str())
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains("TSK-001-404")),
+            "{messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("bare id")),
+            "{messages:?}"
+        );
     }
 
     #[test]

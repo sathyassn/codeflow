@@ -9,10 +9,12 @@
 
 pub mod allocate;
 pub mod classify;
+pub mod deps;
 mod format_id;
 pub(crate) mod layout;
 pub mod lifecycle;
 pub mod light_paths;
+pub mod readiness;
 pub mod record_text;
 pub mod status_verb;
 pub mod store;
@@ -36,7 +38,12 @@ pub use work_start::{
 
 /// Generate an RFC 3339 UTC timestamp string.
 pub(crate) fn now_rfc3339() -> String {
-    let duration = std::time::SystemTime::now()
+    rfc3339_at(std::time::SystemTime::now())
+}
+
+/// An RFC 3339 UTC timestamp for `time`.
+pub(crate) fn rfc3339_at(time: std::time::SystemTime) -> String {
+    let duration = time
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     let secs = duration.as_secs();

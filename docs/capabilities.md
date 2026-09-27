@@ -504,8 +504,20 @@ shipped templates) plus the project's own `git.product_paths` and
 `git.product_paths`, `update` adds it once, and `git.direct_changes: forbid`
 refuses direct changes entirely. `task new --follow-up-of`, `epic new
 --integration` and `adr new` (numbered, written `proposed`) are one command
-each. Material graph or cross-task
-contract changes force Plan vN+1; in-node implementation detail does not.
+each. One readiness core judges a task for `work next`, `work claim`,
+`work start`, `status`, `orient` and CI: status `todo`, no Blocker, no
+`awaiting_selection`, specs approved, epic open or standalone, code
+dependencies complete in the execution base, and research or decision
+dependencies (`{id, kind, pin}`) complete at their pinned commit. `work
+next` lists ready, then waiting and blocked tasks with reasons from the
+refs as last fetched; `work claim` fetches, refuses a task a visible branch
+already carries, and pushes `task/TSK-NNN-<slug>` as an advisory claim.
+`status` shows derived active, ready, landed and conflicting branches and
+epic progress, and never calls a live integration line removable. A
+selection that removes `awaiting_selection` lands only from `plan/`, and
+`spec new --for` links every consumer in one change. Material graph or
+cross-task contract changes force Plan vN+1; in-node implementation detail
+does not.
 Record status moves only by legal transitions (SPC-013 R-30 to R-35).
 `codeflow task status`, `epic status` and `spec status` write the status and
 only the sections the transition needs: a `## Blocker` with reason, owner and

@@ -34,6 +34,24 @@ publication date._
   push by branch name.
 
 <!-- codeflow:release-impact minor -->
+- **One readiness rule with `work next` and `work claim`.** `codeflow work
+  next [--epic] [--json]` lists the ready tasks first, then waiting and
+  blocked ones with their reasons, from the refs as last fetched, and names
+  that snapshot. `codeflow work claim TSK-NNN` fetches, checks the task on
+  its target tip as `work start` resolves it, refuses one a branch on any
+  remote already carries, and pushes `task/TSK-NNN-<slug>`; the branch is
+  an advisory claim. `work start`, CI,
+  `status` and `orient` read the same rule: `status` shows active, ready,
+  landed and conflicting branches with epic progress and keeps a live
+  integration line, and `orient` prints a task summary. A `depends_on` entry
+  may be `{id, kind: research | decision, pin: <commit>}`, met at its pin; a
+  code dependency complete only on another line waits until its change is
+  in this base. A join can carry `awaiting_selection`, which only a `plan/`
+  pull request removes, and `spec new --for` accepts several consumers.
+  `work start` now names a blocked task's reason instead of its status, and
+  refuses a task whose epic is complete, cancelled or archived.
+
+<!-- codeflow:release-impact minor -->
 - **Work record lifecycle.** `codeflow task status`, `epic status` and
   `spec status` change a record's status only by a legal transition and write
   only what it needs: a Blocker for blocked, a cancellation reason and scope,
