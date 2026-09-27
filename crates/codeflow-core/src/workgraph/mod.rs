@@ -15,6 +15,7 @@ pub(crate) mod layout;
 pub mod lifecycle;
 pub mod light_paths;
 pub mod readiness;
+pub mod record_template;
 pub mod record_text;
 pub mod status_verb;
 pub mod store;

@@ -13,7 +13,7 @@ external_refs: []        # opaque links/ids only; never mirror external status
 created: {{DATE}}
 ---
 
-# TSK-{{NNN}} — {{TITLE}}
+# TSK-{{NNN}}: {{TITLE}}
 
 ## Description
 
@@ -29,7 +29,7 @@ created: {{DATE}}
 
 ## Acceptance Criteria
 
-<!-- The single home for this task's acceptance — testable statements,
+<!-- The single home for this task's acceptance: testable statements,
      preferably in EARS ("When <trigger>, the system shall <response>") or
      Given/When/Then form; a subset scoped from the epic's when there is one.
      Each criterion names concrete, claim-matched evidence: automate where

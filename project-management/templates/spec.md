@@ -6,7 +6,7 @@ status: draft            # draft | approved | superseded; change it with `codefl
 created: {{DATE}}
 ---
 
-# SPC-{{NNN}} — {{TITLE}}
+# SPC-{{NNN}}: {{TITLE}}
 
 <!-- Specs are optional frozen work inputs, not living requirements. `codeflow spec new --for
      EPC-NNN|TSK-NNN` allocates this file and links it from the consuming work
@@ -32,11 +32,11 @@ created: {{DATE}}
      spec level. Drop any heading that does not apply; skip the whole section
      for greenfield work. -->
 
-<!-- ADDED — new behavior or surface this introduces. -->
+<!-- ADDED: new behavior or surface this introduces. -->
 
-<!-- MODIFIED — existing behavior whose meaning changes (old -> new). -->
+<!-- MODIFIED: existing behavior whose meaning changes (old -> new). -->
 
-<!-- REMOVED — behavior or surface this retires. -->
+<!-- REMOVED: behavior or surface this retires. -->
 
 ## Behavior
 
@@ -44,7 +44,7 @@ created: {{DATE}}
 
 ## Interfaces and formats
 
-<!-- Signatures, schemas, file formats, CLI surfaces — only what the builder
+<!-- Signatures, schemas, file formats, CLI surfaces: only what the builder
      needs pinned down. -->
 
 ## Edge cases

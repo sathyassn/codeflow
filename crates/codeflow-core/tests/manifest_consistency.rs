@@ -1270,3 +1270,26 @@ fn portal_utility_tokens_match_present_skins() {
         drift.join("\n  ")
     );
 }
+
+/// TSK-107 AC-4 (SPC-013 R-37): every shipped record template and the PR
+/// template are free of em and en dashes, so a record or PR body an adopter
+/// starts from never trips the policy-character rule.
+#[test]
+fn shipped_record_and_pr_templates_carry_no_dash() {
+    let root = repo_root();
+    let mut found = Vec::new();
+    for rel in [
+        "assets/base/pm/epic.md.tmpl",
+        "assets/base/pm/spec.md.tmpl",
+        "assets/base/pm/task.md.tmpl",
+        "assets/base/ci/pull_request_template.md",
+    ] {
+        let text = std::fs::read_to_string(root.join(rel)).expect("template is readable");
+        for (i, line) in text.lines().enumerate() {
+            if line.contains('\u{2014}') || line.contains('\u{2013}') {
+                found.push(format!("{rel}:{}", i + 1));
+            }
+        }
+    }
+    assert!(found.is_empty(), "dashes in shipped templates: {found:?}");
+}

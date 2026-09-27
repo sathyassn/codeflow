@@ -11,7 +11,7 @@ external_refs: []        # opaque links/ids only; never mirror external status
 created: {{DATE}}
 ---
 
-# EPC-{{NNN}} — {{TITLE}}
+# EPC-{{NNN}}: {{TITLE}}
 
 ## Summary
 
