@@ -68,6 +68,9 @@ struct Found {
     refname: String,
     intro: String,
     landing: bool,
+    /// Whether the ref's tip still holds the id; `false` when the record
+    /// was renamed or deleted on that line and survives only in history.
+    at_tip: bool,
     uid: Option<String>,
 }
 
@@ -84,7 +87,8 @@ pub struct SeedReport {
 /// # Errors
 ///
 /// Returns [`IdsError::Clash`] naming every id whose copies provenance
-/// cannot decide, without writing anything; or a push failure.
+/// cannot decide, and [`IdsError::Shallow`] on a shallow clone, without
+/// writing anything; or a push failure.
 pub fn seed(root: &Path, map: Option<&SeedMap>) -> Result<SeedReport, IdsError> {
     let git = Git::new(root);
     let _lock = state::lock(&git)?;
@@ -93,6 +97,11 @@ pub fn seed(root: &Path, map: Option<&SeedMap>) -> Result<SeedReport, IdsError> 
 
 /// [`seed`] under a lock the caller holds.
 pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport, IdsError> {
+    // A seed is permanent, so it never reads introductions from a shallow
+    // clone, whose boundary commits look like adds (R-111).
+    if git.is_shallow()? {
+        return Err(IdsError::Shallow);
+    }
     let online = git.has_remote(AUTHORITY);
     let tracking = tracking_ref(AUTHORITY);
     let mut reason = String::new();
@@ -171,7 +180,7 @@ fn plan(git: &Git, ledger: &Ledger, map: Option<&SeedMap>) -> Result<Vec<Entry>,
         if ledger.holds(&id) {
             continue;
         }
-        match decide(git, &id, &copies, map, &mapped_by)? {
+        match decide(git, &id, &live(copies), map, &mapped_by)? {
             Ok(entry) => entries.push(entry),
             Err(reason) => undecided.push(reason),
         }
@@ -183,6 +192,17 @@ fn plan(git: &Git, ledger: &Ledger, map: Option<&SeedMap>) -> Result<Vec<Entry>,
         )));
     }
     Ok(entries)
+}
+
+/// The copies that decide an id: a copy no tip holds any more (its record
+/// was renamed or deleted on that line) is history, not a live copy, while
+/// some tip holds the id. With no tip holding it, every copy counts.
+fn live(copies: Vec<Found>) -> Vec<Found> {
+    if copies.iter().any(|copy| copy.at_tip) {
+        copies.into_iter().filter(|copy| copy.at_tip).collect()
+    } else {
+        copies
+    }
 }
 
 /// Every copy of every id on every code ref, with its introduction.
@@ -201,15 +221,13 @@ fn copies_on_refs(git: &Git) -> Result<BTreeMap<RegId, Vec<Found>>, IdsError> {
         }
         let landing = is_landing_branch(branch_name(refname));
         for (id, intro) in &intro_cache[sha] {
-            let uid = uid_cache[sha]
-                .iter()
-                .find(|copy| &copy.id == id)
-                .and_then(|copy| copy.uid.clone());
+            let copy = uid_cache[sha].iter().find(|copy| &copy.id == id);
             found.entry(id.clone()).or_default().push(Found {
                 refname: branch_name(refname).to_string(),
                 intro: intro.clone(),
                 landing,
-                uid,
+                at_tip: copy.is_some(),
+                uid: copy.and_then(|copy| copy.uid.clone()),
             });
         }
     }
@@ -319,20 +337,11 @@ fn decide(
 }
 
 fn title_of(git: &Git, commit: &str, id: &RegId) -> Option<String> {
-    let changes = git
-        .run(&[
-            "diff-tree",
-            "-r",
-            "--root",
-            "--no-renames",
-            "--no-commit-id",
-            "--name-only",
-            "-z",
-            commit,
-        ])
-        .ok()?;
-    let path = z_fields(&changes).find(|path| record_id_from_path(path).as_ref() == Some(id))?;
-    let text = git.run(&["show", &format!("{commit}:{path}")]).ok()?;
+    let (_, blob) = inventory::added_records(git, commit)
+        .ok()?
+        .into_iter()
+        .find(|(path, _)| record_id_from_path(path).as_ref() == Some(id))?;
+    let text = git.run(&["cat-file", "blob", &blob]).ok()?;
     frontmatter_value(&text, "title")
 }
 

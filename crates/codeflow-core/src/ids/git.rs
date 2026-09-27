@@ -135,6 +135,15 @@ impl Git {
             .filter(|sha| !sha.is_empty())
     }
 
+    /// Whether this clone's history is shallow (fetched with `--depth`).
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when git fails.
+    pub fn is_shallow(&self) -> Result<bool, IdsError> {
+        Ok(self.run(&["rev-parse", "--is-shallow-repository"])?.trim() == "true")
+    }
+
     /// Whether `ancestor` is an ancestor of (or equal to) `descendant`.
     #[must_use]
     pub fn is_ancestor(&self, ancestor: &str, descendant: &str) -> bool {

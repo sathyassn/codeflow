@@ -86,6 +86,8 @@ pub enum IdsError {
     Offline(String),
     #[error("{0}")]
     Clash(String),
+    #[error("this clone's code history is shallow, so the commits that introduced records are missing and no introduction is read from it; run `git fetch --unshallow`, then retry")]
+    Shallow,
     #[error("{0}")]
     Invalid(String),
 }

@@ -1300,6 +1300,570 @@ fn seed_creates_an_orphan_root_that_adds_only_ids_files() {
     assert!(ledger.violations.is_empty() && !ledger.is_damaged());
 }
 
+// --- Live copies: a record renamed or deleted on its line is history --------
+
+fn write_titled(root: &Path, id: &str, title: &str) {
+    let path = root
+        .join("project-management/tasks")
+        .join(format!("{id}.md"));
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(
+        path,
+        format!("---\nid: {id}\ntitle: \"{title}\"\nstatus: todo\n---\n\n# {id}\n"),
+    )
+    .unwrap();
+}
+
+/// Renumber a task record by hand, as a plan revision did before the
+/// registry existed: the old id's file is gone and the new one is added.
+fn renumber(root: &Path, from: &str, to: &str) {
+    let dir = root.join("project-management/tasks");
+    let text = std::fs::read_to_string(dir.join(format!("{from}.md"))).unwrap();
+    std::fs::remove_file(dir.join(format!("{from}.md"))).unwrap();
+    std::fs::write(dir.join(format!("{to}.md")), text.replace(from, to)).unwrap();
+}
+
+/// Commit everything with a fixed author and committer date, so which add
+/// is older does not depend on how fast the test runs.
+fn commit_at(root: &Path, message: &str, date: &str) -> String {
+    git(root, &["add", "-A"]);
+    let out = Command::new("git")
+        .args(["commit", "-q", "-m", message])
+        .env("GIT_AUTHOR_DATE", date)
+        .env("GIT_COMMITTER_DATE", date)
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    git(root, &["rev-parse", "HEAD"])
+}
+
+fn entry(world: &World, id: &str) -> codeflow_core::ids::Entry {
+    world
+        .remote_ledger()
+        .entry(&RegId::parse(id).unwrap())
+        .cloned()
+        .unwrap_or_else(|| panic!("{id} is registered"))
+}
+
+#[test]
+fn seed_registers_the_tip_copy_when_a_renamed_records_add_survives_only_in_history() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    // Line a planned TSK-001, then renumbered it to TSK-002; its TSK-001
+    // add stays in the line's history although no tip holds it.
+    git(&m, &["checkout", "-q", "-b", "integration/a"]);
+    write_titled(&m, "TSK-001", "doctrine");
+    commit_all(&m, "plan the doctrine task");
+    renumber(&m, "TSK-001", "TSK-002");
+    let renumbered = commit_all(&m, "renumber the doctrine task");
+    // Line b holds a different TSK-001 at its tip.
+    git(&m, &["checkout", "-q", "-b", "integration/b", "main"]);
+    write_titled(&m, "TSK-001", "catalog");
+    let catalog = commit_all(&m, "plan the catalog task");
+    git(&m, &["checkout", "-q", "main"]);
+    git(&m, &["push", "-q", "origin", "--all"]);
+
+    let seeded = seed::seed(&m, None).unwrap();
+    assert_eq!(seeded.registered.len(), 2, "{:?}", seeded.registered);
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(tsk1.introduced.starts_with(&catalog), "{}", tsk1.introduced);
+    assert_eq!(tsk1.title, "catalog");
+    assert!(tsk1.mapped.is_empty(), "decided by provenance, not a map");
+    let tsk2 = entry(&world, "TSK-002");
+    assert!(
+        tsk2.introduced.starts_with(&renumbered),
+        "{}",
+        tsk2.introduced
+    );
+    assert_eq!(tsk2.title, "doctrine");
+}
+
+#[test]
+fn seed_still_refuses_when_no_tip_holds_the_id() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    git(&m, &["checkout", "-q", "-b", "integration/a"]);
+    write_titled(&m, "TSK-001", "doctrine");
+    commit_all(&m, "plan the doctrine task");
+    renumber(&m, "TSK-001", "TSK-002");
+    commit_all(&m, "renumber the doctrine task");
+    git(&m, &["checkout", "-q", "-b", "integration/b", "main"]);
+    write_titled(&m, "TSK-001", "catalog");
+    commit_all(&m, "plan the catalog task");
+    renumber(&m, "TSK-001", "TSK-003");
+    commit_all(&m, "renumber the catalog task");
+    git(&m, &["checkout", "-q", "main"]);
+    git(&m, &["push", "-q", "origin", "--all"]);
+
+    let stop = seed::seed(&m, None).unwrap_err().to_string();
+    assert!(
+        stop.contains("TSK-001: 2 copies that provenance cannot decide"),
+        "{stop}"
+    );
+    assert!(world.remote_ledger().tip.is_none(), "nothing was written");
+}
+
+#[test]
+fn seed_still_refuses_two_tips_that_hold_different_records() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    git(&m, &["checkout", "-q", "-b", "integration/a"]);
+    write_titled(&m, "TSK-001", "doctrine");
+    commit_all(&m, "plan the doctrine task");
+    git(&m, &["checkout", "-q", "-b", "integration/b", "main"]);
+    write_titled(&m, "TSK-001", "catalog");
+    commit_all(&m, "plan the catalog task");
+    git(&m, &["checkout", "-q", "main"]);
+    git(&m, &["push", "-q", "origin", "--all"]);
+
+    let stop = seed::seed(&m, None).unwrap_err().to_string();
+    assert!(
+        stop.contains("TSK-001: 2 copies that provenance cannot decide"),
+        "{stop}"
+    );
+    assert!(world.remote_ledger().tip.is_none(), "nothing was written");
+}
+
+// A copy's introduction is the start of that copy's lifetime, not the
+// first add of its id: when a line ended one record and a different record
+// later took the same id, the older add belongs to the ended record.
+
+#[test]
+fn seed_credits_the_add_the_tips_copy_came_from_not_the_oldest_add() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    // The doctrine add is the oldest, and its line renumbers it away; the
+    // catalog add is newer and is the copy main holds after both merge.
+    git(&m, &["checkout", "-q", "-b", "plan/a"]);
+    write_titled(&m, "TSK-001", "doctrine");
+    let doctrine = commit_at(&m, "plan the doctrine task", "2026-09-23T14:00:00Z");
+    renumber(&m, "TSK-001", "TSK-002");
+    commit_at(&m, "renumber the doctrine task", "2026-09-23T14:02:00Z");
+    git(&m, &["checkout", "-q", "-b", "plan/b", "main"]);
+    write_titled(&m, "TSK-001", "catalog");
+    let catalog = commit_at(&m, "plan the catalog task", "2026-09-23T14:01:00Z");
+    git(&m, &["checkout", "-q", "main"]);
+    for line in ["plan/a", "plan/b"] {
+        git(&m, &["merge", "-q", "--no-ff", "-m", "land", line]);
+    }
+    git(&m, &["branch", "-q", "-D", "plan/a", "plan/b"]);
+    git(&m, &["push", "-q", "origin", "main"]);
+
+    seed::seed(&m, None).unwrap();
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(
+        tsk1.introduced.starts_with(&catalog) && !tsk1.introduced.starts_with(&doctrine),
+        "{}",
+        tsk1.introduced
+    );
+    assert_eq!(tsk1.title, "catalog");
+    assert_eq!(tsk1.landed, catalog);
+}
+
+/// Review round 1, SL-1: a merge result deletes the record, and a later
+/// commit adds `replacement` under the same id. Returns the original and
+/// the replacement adds.
+fn merge_deletes_then_adds(
+    world: &World,
+    m: &Path,
+    seed_first: bool,
+    replacement: &str,
+) -> (String, String) {
+    let task = m.join("project-management/tasks/TSK-001.md");
+    write_titled(m, "TSK-001", "original");
+    let original = commit_all(m, "original");
+    git(m, &["push", "-q", "origin", "main"]);
+    if seed_first {
+        seed::seed(m, None).unwrap();
+        assert_eq!(entry(world, "TSK-001").title, "original");
+    }
+    git(m, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(m.join("side.txt"), "side\n").unwrap();
+    commit_all(m, "side work");
+    git(m, &["checkout", "-q", "main"]);
+    std::fs::write(m.join("main.txt"), "main\n").unwrap();
+    commit_all(m, "main work");
+    git(m, &["merge", "-q", "--no-ff", "--no-commit", "side"]);
+    std::fs::remove_file(&task).unwrap();
+    commit_all(m, "remove the record during the merge");
+    git(m, &["branch", "-q", "-D", "side"]);
+    write_titled(m, "TSK-001", replacement);
+    let added = commit_all(m, "add a record under the same id");
+    git(m, &["push", "-q", "origin", "main"]);
+    (original, added)
+}
+
+#[test]
+fn seed_credits_a_record_added_after_a_merge_deleted_the_old_one() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    let (original, hijack) = merge_deletes_then_adds(&world, &m, false, "hijack");
+    seed::seed(&m, None).unwrap();
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(tsk1.introduced.starts_with(&hijack), "{}", tsk1.introduced);
+    assert!(!tsk1.introduced.starts_with(&original));
+    assert_eq!(tsk1.title, "hijack");
+}
+
+#[test]
+fn check_blocks_a_different_record_after_a_merge_deleted_the_registered_one() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    merge_deletes_then_adds(&world, &m, true, "hijack");
+    let report = check::check(&Git::new(&m), None).unwrap();
+    assert!(
+        report
+            .blocks
+            .iter()
+            .any(|b| b.contains("collision: TSK-001 on main")),
+        "{:?}",
+        report.blocks
+    );
+}
+
+#[test]
+fn a_record_deleted_by_a_merge_and_restored_unchanged_stays_registered() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    merge_deletes_then_adds(&world, &m, true, "original");
+    let report = check::check(&Git::new(&m), None).unwrap();
+    assert!(report.passed(), "{:?}", report.blocks);
+    assert!(
+        !report.warns.iter().any(|w| w.contains("TSK-001")),
+        "{:?}",
+        report.warns
+    );
+}
+
+#[test]
+fn the_merge_rule_refuses_a_different_record_reusing_a_registered_id() {
+    // Review round 1, SL-3: seed, delete, then add a different record.
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    write_titled(&m, "TSK-001", "original");
+    commit_all(&m, "original");
+    git(&m, &["push", "-q", "origin", "main"]);
+    seed::seed(&m, None).unwrap();
+    std::fs::remove_file(m.join("project-management/tasks/TSK-001.md")).unwrap();
+    let deleted = commit_all(&m, "delete the record");
+    write_titled(&m, "TSK-001", "different work");
+    let reused = commit_all(&m, "reuse the number");
+    let git_m = Git::new(&m);
+    // The old registered add is still an ancestor, but it belongs to the
+    // record the deletion ended; both readers refuse the reuse.
+    let range = check::merge_rule(&git_m, &deleted, &reused).unwrap();
+    assert!(
+        range
+            .blocks
+            .iter()
+            .any(|b| b.contains("TSK-001") && b.contains("provenance does not match")),
+        "{:?}",
+        range.blocks
+    );
+    assert!(!check::check(&git_m, None).unwrap().passed());
+}
+
+/// Review round 1, SL-2: a record seeded, moved away from its id and then
+/// restored unchanged is still the registered record.
+fn assert_restore_is_clean(away: &str) {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    let task = "project-management/tasks/TSK-001.md";
+    write_titled(&m, "TSK-001", "original");
+    commit_all(&m, "original");
+    git(&m, &["push", "-q", "origin", "main"]);
+    seed::seed(&m, None).unwrap();
+    if let Some(parent) = Path::new(away).parent() {
+        std::fs::create_dir_all(m.join(parent)).unwrap();
+    }
+    // Two steps, so a case-only rename works on a case-insensitive disk.
+    git(&m, &["mv", task, "moving.tmp"]);
+    git(&m, &["mv", "moving.tmp", away]);
+    commit_all(&m, "move the record away");
+    git(&m, &["mv", away, "moving.tmp"]);
+    git(&m, &["mv", "moving.tmp", task]);
+    commit_all(&m, "restore the record");
+    let report = check::check(&Git::new(&m), None).unwrap();
+    assert!(report.passed(), "{away}: {:?}", report.blocks);
+    assert!(
+        !report.warns.iter().any(|w| w.contains("TSK-001")),
+        "{away}: {:?}",
+        report.warns
+    );
+}
+
+#[test]
+fn a_record_renamed_to_another_id_and_restored_stays_registered() {
+    assert_restore_is_clean("project-management/tasks/TSK-002.md");
+}
+
+#[test]
+fn a_record_archived_and_returned_stays_registered() {
+    assert_restore_is_clean("project-management/archive/TSK-001.md");
+}
+
+#[test]
+fn a_record_whose_extension_case_round_trips_stays_registered() {
+    assert_restore_is_clean("project-management/tasks/TSK-001.MD");
+}
+
+#[test]
+fn a_record_restored_by_git_revert_stays_registered() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    write_titled(&m, "TSK-001", "original");
+    commit_all(&m, "original");
+    git(&m, &["push", "-q", "origin", "main"]);
+    seed::seed(&m, None).unwrap();
+    git(
+        &m,
+        &[
+            "mv",
+            "project-management/tasks/TSK-001.md",
+            "project-management/tasks/TSK-002.md",
+        ],
+    );
+    let rename = commit_all(&m, "rename the record");
+    git(&m, &["revert", "--no-edit", &rename]);
+    let report = check::check(&Git::new(&m), None).unwrap();
+    assert!(report.passed(), "{:?}", report.blocks);
+}
+
+#[test]
+fn a_record_moved_under_the_same_id_keeps_its_first_introduction() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    let nested = m.join("project-management/epics/EPC-001/EPC-001.md");
+    std::fs::create_dir_all(nested.parent().unwrap()).unwrap();
+    std::fs::write(&nested, "---\nid: EPC-001\ntitle: \"bootstrap\"\n---\n").unwrap();
+    let first = commit_all(&m, "record the epic");
+    let flat = m.join("project-management/epics/EPC-001.md");
+    std::fs::rename(&nested, &flat).unwrap();
+    commit_all(&m, "flatten the epic");
+    git(&m, &["push", "-q", "origin", "main"]);
+
+    seed::seed(&m, None).unwrap();
+    let epic = entry(&world, "EPC-001");
+    assert!(epic.introduced.starts_with(&first), "{}", epic.introduced);
+}
+
+/// Split `main` into a side line and a main line with unrelated work, then
+/// start their merge without committing it.
+fn start_merge(m: &Path) {
+    git(m, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(m.join("side.txt"), "side\n").unwrap();
+    commit_all(m, "side work");
+    git(m, &["checkout", "-q", "main"]);
+    std::fs::write(m.join("main.txt"), "main\n").unwrap();
+    commit_all(m, "main work");
+    git(m, &["merge", "-q", "--no-ff", "--no-commit", "side"]);
+}
+
+/// Review round 2, SL-4: the record is deleted, and the merge result
+/// itself adds a record titled `replacement` under the same id at
+/// `path`. Returns the original add and the merge.
+fn merge_adds_after_delete(
+    world: &World,
+    m: &Path,
+    seed_first: bool,
+    path: &str,
+) -> (String, String) {
+    write_titled(m, "TSK-001", "original");
+    let original = commit_all(m, "original");
+    git(m, &["push", "-q", "origin", "main"]);
+    if seed_first {
+        seed::seed(m, None).unwrap();
+        assert_eq!(entry(world, "TSK-001").title, "original");
+    }
+    std::fs::remove_file(m.join("project-management/tasks/TSK-001.md")).unwrap();
+    commit_all(m, "delete the record");
+    start_merge(m);
+    let file = m.join(path);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        "---\nid: TSK-001\ntitle: \"replacement\"\nstatus: todo\n---\n",
+    )
+    .unwrap();
+    let merge = commit_all(m, "add a record under the same id in the merge");
+    git(m, &["branch", "-q", "-D", "side"]);
+    git(m, &["push", "-q", "origin", "main"]);
+    (original, merge)
+}
+
+/// Where a merge adds the replacement: the original's path, and a record
+/// path no ordinary commit ever used for the id.
+const MERGE_ADD_PATHS: [&str; 2] = [
+    "project-management/tasks/TSK-001.md",
+    "project-management/epics/EPC-001/tasks/TSK-001.md",
+];
+
+#[test]
+fn seed_credits_a_record_the_merge_result_itself_adds() {
+    for path in MERGE_ADD_PATHS {
+        let world = World::new();
+        let m = world.clone_as("maintainer", "maintainer@example.test");
+        let (original, merge) = merge_adds_after_delete(&world, &m, false, path);
+        seed::seed(&m, None).unwrap();
+        let tsk1 = entry(&world, "TSK-001");
+        assert!(
+            tsk1.introduced.starts_with(&merge),
+            "{path}: {}",
+            tsk1.introduced
+        );
+        assert!(!tsk1.introduced.starts_with(&original), "{path}");
+        assert_eq!(tsk1.title, "replacement", "{path}");
+        assert_eq!(tsk1.landed, merge, "{path}");
+    }
+}
+
+#[test]
+fn check_blocks_a_different_record_the_merge_result_adds() {
+    for path in MERGE_ADD_PATHS {
+        let world = World::new();
+        let m = world.clone_as("maintainer", "maintainer@example.test");
+        merge_adds_after_delete(&world, &m, true, path);
+        let report = check::check(&Git::new(&m), None).unwrap();
+        assert!(
+            report
+                .blocks
+                .iter()
+                .any(|b| b.contains("collision: TSK-001 on main")),
+            "{path}: {:?}",
+            report.blocks
+        );
+    }
+}
+
+/// Review round 2, SL-4: the record is renamed to another id, then the
+/// merge result renames it back, with its content unchanged or one byte
+/// longer. Returns the original add and the merge.
+fn rename_back_in_merge(
+    world: &World,
+    m: &Path,
+    seed_first: bool,
+    changed: bool,
+) -> (String, String) {
+    let task = "project-management/tasks/TSK-001.md";
+    write_titled(m, "TSK-001", "original");
+    let original = commit_all(m, "original");
+    git(m, &["push", "-q", "origin", "main"]);
+    if seed_first {
+        seed::seed(m, None).unwrap();
+        assert_eq!(entry(world, "TSK-001").title, "original");
+    }
+    git(m, &["mv", task, "project-management/tasks/TSK-002.md"]);
+    commit_all(m, "rename the record away");
+    start_merge(m);
+    git(m, &["mv", "project-management/tasks/TSK-002.md", task]);
+    if changed {
+        let path = m.join(task);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, format!("{text} ")).unwrap();
+    }
+    let merge = commit_all(m, "rename the record back in the merge");
+    git(m, &["branch", "-q", "-D", "side"]);
+    git(m, &["push", "-q", "origin", "main"]);
+    (original, merge)
+}
+
+#[test]
+fn a_record_renamed_back_unchanged_in_a_merge_keeps_its_introduction() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    let (original, _) = rename_back_in_merge(&world, &m, false, false);
+    seed::seed(&m, None).unwrap();
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(
+        tsk1.introduced.starts_with(&original),
+        "{}",
+        tsk1.introduced
+    );
+    assert_eq!(tsk1.title, "original");
+
+    let seeded = World::new();
+    let s = seeded.clone_as("maintainer", "maintainer@example.test");
+    rename_back_in_merge(&seeded, &s, true, false);
+    let report = check::check(&Git::new(&s), None).unwrap();
+    assert!(report.passed(), "{:?}", report.blocks);
+}
+
+#[test]
+fn a_record_renamed_back_changed_in_a_merge_is_a_new_record() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    let (original, merge) = rename_back_in_merge(&world, &m, false, true);
+    seed::seed(&m, None).unwrap();
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(tsk1.introduced.starts_with(&merge), "{}", tsk1.introduced);
+    assert!(!tsk1.introduced.starts_with(&original));
+
+    let seeded = World::new();
+    let s = seeded.clone_as("maintainer", "maintainer@example.test");
+    rename_back_in_merge(&seeded, &s, true, true);
+    let report = check::check(&Git::new(&s), None).unwrap();
+    assert!(
+        report
+            .blocks
+            .iter()
+            .any(|b| b.contains("collision: TSK-001 on main")),
+        "{:?}",
+        report.blocks
+    );
+}
+
+#[test]
+fn a_shallow_clone_neither_seeds_nor_checks_until_it_is_unshallowed() {
+    // Review round 2, SL-5: a depth-one clone whose boundary commit only
+    // edits a record would read that edit as the record's introduction.
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    write_titled(&m, "TSK-001", "original");
+    let original = commit_all(&m, "original");
+    write_titled(&m, "TSK-001", "edited original");
+    commit_all(&m, "edit the record");
+    git(&m, &["push", "-q", "origin", "main"]);
+    let url = format!("file://{}", world.bare().display());
+    git(
+        world.dir.path(),
+        &["clone", "-q", "--depth", "1", &url, "shallow"],
+    );
+    let shallow = world.dir.path().join("shallow");
+    git(&shallow, &["config", "user.email", "shallow@example.test"]);
+    git(&shallow, &["config", "user.name", "shallow"]);
+
+    let refused = seed::seed(&shallow, None).unwrap_err();
+    assert!(matches!(refused, IdsError::Shallow), "{refused}");
+    assert!(refused.to_string().contains("git fetch --unshallow"));
+    assert!(world.remote_ledger().tip.is_none(), "nothing was written");
+    assert!(Git::new(&shallow).rev(REGISTRY_REF).is_none());
+    let report = check::check(&Git::new(&shallow), None).unwrap();
+    assert!(
+        report
+            .blocks
+            .iter()
+            .any(|b| b.contains("git fetch --unshallow")),
+        "{:?}",
+        report.blocks
+    );
+
+    // With the full history the seed credits the real introduction.
+    git(&shallow, &["fetch", "-q", "--unshallow"]);
+    seed::seed(&shallow, None).unwrap();
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(
+        tsk1.introduced.starts_with(&original),
+        "{}",
+        tsk1.introduced
+    );
+    assert!(check::check(&Git::new(&shallow), None).unwrap().passed());
+}
+
 // --- AC-11 (library part): a no-remote repository ---------------------------
 
 #[test]

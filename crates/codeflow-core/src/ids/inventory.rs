@@ -2,7 +2,7 @@
 //! each local and remote-tracking branch holds, with their `uid`s and the
 //! commits that introduced them.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::Path;
 
 use super::entry::{frontmatter_value, record_id_from_path, Kind, RegId, RECORD_ROOTS};
@@ -183,19 +183,19 @@ fn max_seq_in<'a>(paths: impl Iterator<Item = &'a str>, kind: Kind) -> u64 {
         .unwrap_or(0)
 }
 
-/// For each id in `rev`'s history, the first commit that added a record
-/// file for it (R-111 `introduced`).
-///
-/// # Errors
-///
-/// Returns an error when git fails.
-pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, IdsError> {
+/// Each id added in `rev`'s history: its adding commits, oldest first, and
+/// the record paths it was added at. A merge result counts as an add where
+/// it holds a record path that none of its parents holds.
+type AddLog = BTreeMap<RegId, (Vec<String>, BTreeSet<String>)>;
+
+fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
     let mut args = vec![
         "log",
         "--reverse",
         "--no-renames",
+        "--cc",
         "--diff-filter=A",
-        "--name-only",
+        "--raw",
         "-z",
         "--format=%x1e%H",
         rev,
@@ -203,66 +203,228 @@ pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, Id
     ];
     args.extend_from_slice(&RECORD_ROOTS);
     let log = git.run(&args)?;
-    let mut out = BTreeMap::new();
+    let mut out: AddLog = BTreeMap::new();
     for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
         let mut fields = z_fields(record);
         let sha = fields.next().unwrap_or_default().trim().to_string();
-        for path in fields {
-            if let Some(id) = record_id_from_path(path) {
-                out.entry(id).or_insert_with(|| sha.clone());
+        for change in raw_fields(fields) {
+            if change.status != 'A' {
+                continue;
+            }
+            if let Some(id) = record_id_from_path(&change.path) {
+                let (shas, paths) = out.entry(id).or_default();
+                if !shas.contains(&sha) {
+                    shas.push(sha.clone());
+                }
+                paths.insert(change.path);
             }
         }
     }
     Ok(out)
 }
 
-/// Every commit in `rev`'s history that added a record file for `id`.
+/// For each id in `rev`'s history, the commit that introduced it (R-111
+/// `introduced`): for the copy `rev` holds, the start of that copy's
+/// lifetime (see `lifetime_start`); for an id `rev` no longer holds, its
+/// first add.
 ///
 /// # Errors
 ///
-/// Returns an error when git fails.
-pub fn adding_commits(git: &Git, rev: &str, id: &RegId) -> Result<Vec<String>, IdsError> {
-    let mut args = vec![
-        "log",
-        "--no-renames",
-        "--diff-filter=A",
-        "--name-only",
-        "-z",
-        "--format=%x1e%H",
-        rev,
-        "--",
-    ];
-    args.extend_from_slice(&RECORD_ROOTS);
-    let log = git.run(&args)?;
-    let mut out = Vec::new();
-    for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
-        let mut fields = z_fields(record);
-        let sha = fields.next().unwrap_or_default().trim().to_string();
-        if fields.any(|path| record_id_from_path(path).as_ref() == Some(id)) {
-            out.push(sha);
-        }
+/// Returns [`IdsError::Shallow`] on a shallow clone, and an error when git
+/// fails.
+pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, IdsError> {
+    complete_history(git)?;
+    let mut held = None;
+    let mut out = BTreeMap::new();
+    for (id, (shas, paths)) in add_log(git, rev)? {
+        let intro = resolve(git, rev, &id, &shas, &paths, &mut held)?;
+        out.insert(id, intro);
     }
     Ok(out)
 }
 
+/// The introduction of `id` in `rev`'s history, as [`introductions`]
+/// gives it, or `None` when `rev`'s history never added it.
+///
+/// # Errors
+///
+/// Returns [`IdsError::Shallow`] on a shallow clone, and an error when git
+/// fails.
+pub fn introduction(git: &Git, rev: &str, id: &RegId) -> Result<Option<String>, IdsError> {
+    complete_history(git)?;
+    let Some((shas, paths)) = add_log(git, rev)?.remove(id) else {
+        return Ok(None);
+    };
+    resolve(git, rev, id, &shas, &paths, &mut None).map(Some)
+}
+
+fn resolve(
+    git: &Git,
+    rev: &str,
+    id: &RegId,
+    shas: &[String],
+    paths: &BTreeSet<String>,
+    held: &mut Option<BTreeSet<RegId>>,
+) -> Result<String, IdsError> {
+    let first = shas[0].clone();
+    // One add is the introduction. This is sound only because the add log
+    // holds merge additions too (`--cc` in `add_log`): every lifetime
+    // starts with a commit that added the id against all its parents, so a
+    // path added once was never re-added and the walk has nothing to pick.
+    if shas.len() == 1 {
+        return Ok(first);
+    }
+    if held.is_none() {
+        let ids = git
+            .tree(rev, &RECORD_ROOTS)?
+            .into_iter()
+            .filter_map(|(_, _, path)| record_id_from_path(&path))
+            .collect();
+        *held = Some(ids);
+    }
+    if !held.as_ref().is_some_and(|ids| ids.contains(id)) {
+        return Ok(first);
+    }
+    Ok(lifetime_start(git, rev, id, paths, shas)?.unwrap_or(first))
+}
+
+/// The blobs `commit` holds for `id` at any of `paths`, cached.
+fn held_blobs(
+    git: &Git,
+    commit: &str,
+    id: &RegId,
+    paths: &[&str],
+    cache: &mut HashMap<String, BTreeSet<String>>,
+) -> Result<BTreeSet<String>, IdsError> {
+    if let Some(blobs) = cache.get(commit) {
+        return Ok(blobs.clone());
+    }
+    let blobs: BTreeSet<String> = git
+        .tree(commit, paths)?
+        .into_iter()
+        .filter(|(_, _, path)| record_id_from_path(path).as_ref() == Some(id))
+        .map(|(_, blob, _)| blob)
+        .collect();
+    cache.insert(commit.to_string(), blobs.clone());
+    Ok(blobs)
+}
+
+/// The first commit of the lifetime of the copy of `id` that `rev` holds.
+///
+/// It walks git's simplified history of the id's record paths, so a merge
+/// follows the parent its result came from and a merge that removes the
+/// record counts as a removal. The lifetime runs back while some record
+/// path holds the id, so a move under the same id continues it. Across a
+/// stretch where no record path holds the id, it continues only when the
+/// content that returns is identical to the content before (a revert, or a
+/// round trip through a path that is not a record path); otherwise the
+/// commit after the stretch starts a new record. With several starts, as
+/// when two lines added the id and a merge kept both histories, the oldest
+/// add wins.
+fn lifetime_start(
+    git: &Git,
+    rev: &str,
+    id: &RegId,
+    paths: &BTreeSet<String>,
+    adds: &[String],
+) -> Result<Option<String>, IdsError> {
+    let path_list: Vec<&str> = paths.iter().map(String::as_str).collect();
+    let mut args = vec!["rev-list", "--parents", rev, "--"];
+    args.extend_from_slice(&path_list);
+    let listing = git.run(&args)?;
+    let mut parents: HashMap<String, Vec<String>> = HashMap::new();
+    let mut order = Vec::new();
+    for line in listing.lines() {
+        let mut shas = line.split_whitespace().map(str::to_string);
+        let Some(commit) = shas.next() else {
+            continue;
+        };
+        parents.insert(commit.clone(), shas.collect());
+        order.push(commit);
+    }
+    let referenced: HashSet<&String> = parents.values().flatten().collect();
+    let mut cache = HashMap::new();
+    let mut stack = Vec::new();
+    for head in order.iter().filter(|commit| !referenced.contains(commit)) {
+        if !held_blobs(git, head, id, &path_list, &mut cache)?.is_empty() {
+            stack.push(head.clone());
+        }
+    }
+    let mut seen = HashSet::new();
+    let mut starts = HashSet::new();
+    while let Some(commit) = stack.pop() {
+        if !seen.insert(commit.clone()) {
+            continue;
+        }
+        let here = held_blobs(git, &commit, id, &path_list, &mut cache)?;
+        let mut continues = false;
+        for parent in parents.get(&commit).into_iter().flatten() {
+            if !held_blobs(git, parent, id, &path_list, &mut cache)?.is_empty() {
+                continues = true;
+                stack.push(parent.clone());
+                continue;
+            }
+            // A stretch without the id: find where it was last held.
+            let mut gap = vec![parent.clone()];
+            let mut crossed = HashSet::new();
+            while let Some(absent) = gap.pop() {
+                if !crossed.insert(absent.clone()) {
+                    continue;
+                }
+                for before in parents.get(&absent).into_iter().flatten() {
+                    let blobs = held_blobs(git, before, id, &path_list, &mut cache)?;
+                    if blobs.is_empty() {
+                        gap.push(before.clone());
+                    } else if !blobs.is_disjoint(&here) {
+                        continues = true;
+                        stack.push(before.clone());
+                    }
+                }
+            }
+        }
+        if !continues {
+            starts.insert(commit);
+        }
+    }
+    Ok(adds
+        .iter()
+        .find(|add| starts.contains(*add))
+        .or_else(|| order.iter().rev().find(|commit| starts.contains(*commit)))
+        .cloned())
+}
+
+/// The record files `commit` added, as `(path, blob)`: for a merge, the
+/// record paths its result holds that none of its parents holds.
+///
+/// # Errors
+///
+/// Returns an error when git fails.
+pub(crate) fn added_records(git: &Git, commit: &str) -> Result<Vec<(String, String)>, IdsError> {
+    let changes = git.run(&[
+        "diff-tree",
+        "-r",
+        "--root",
+        "--no-renames",
+        "--no-commit-id",
+        "--cc",
+        "--raw",
+        "-z",
+        commit,
+    ])?;
+    Ok(raw_changes(&changes)
+        .into_iter()
+        .filter(|change| change.status == 'A' && record_id_from_path(&change.path).is_some())
+        .map(|change| (change.path, change.blob))
+        .collect())
+}
+
 /// The blob a commit added for `id`'s record file.
 fn added_blob(git: &Git, commit: &str, id: &RegId) -> Option<String> {
-    let changes = git
-        .run(&[
-            "diff-tree",
-            "-r",
-            "--root",
-            "--no-renames",
-            "--no-commit-id",
-            "--diff-filter=A",
-            "-z",
-            commit,
-        ])
-        .ok()?;
-    raw_changes(&changes)
+    added_records(git, commit)
+        .ok()?
         .into_iter()
-        .find(|change| record_id_from_path(&change.path).as_ref() == Some(id))
-        .map(|change| change.blob)
+        .find(|(path, _)| record_id_from_path(path).as_ref() == Some(id))
+        .map(|(_, blob)| blob)
 }
 
 /// The landing of a copy introduced by `intro` (R-27, R-111): the commit
@@ -285,20 +447,21 @@ pub fn landed_for(git: &Git, id: &RegId, intro: &str) -> Result<Option<String>, 
         return Ok(None);
     };
     for (_, sha) in &landing {
-        if let Some(theirs) = introductions(git, sha)?.get(id) {
-            if added_blob(git, theirs, id).as_deref() == Some(blob.as_str()) {
-                return Ok(Some(theirs.clone()));
+        if let Some(theirs) = introduction(git, sha, id)? {
+            if added_blob(git, &theirs, id).as_deref() == Some(blob.as_str()) {
+                return Ok(Some(theirs));
             }
         }
     }
     Ok(None)
 }
 
-/// Whether the copy of `id` in `rev`'s history is the record `entry`
-/// registers, judged from the registry entry alone (R-111): an introducing
-/// commit equal to `introduced` or to an entry of `mapped`, or a nonempty
-/// landing equal to a nonempty `landed`. A matching number alone never
-/// counts.
+/// Whether the copy of `id` that `rev` holds is the record `entry`
+/// registers, judged from the registry entry alone (R-111): its
+/// introduction ([`introduction`]) equal to `introduced` or to an entry of
+/// `mapped`, or its nonempty landing equal to a nonempty `landed`. An older
+/// add of the id that another record's lifetime owns never counts, and a
+/// matching number alone never counts.
 ///
 /// # Errors
 ///
@@ -309,24 +472,17 @@ pub fn is_replica(
     rev: &str,
     id: &RegId,
 ) -> Result<bool, IdsError> {
-    let intros = adding_commits(git, rev, id)?;
-    let known: Vec<&str> = entry
-        .introduced_sha()
-        .into_iter()
-        .chain(entry.mapped.iter().map(String::as_str))
-        .collect();
-    if intros.iter().any(|intro| known.contains(&intro.as_str())) {
+    let Some(intro) = introduction(git, rev, id)? else {
+        return Ok(false);
+    };
+    let known = entry.introduced_sha() == Some(intro.as_str()) || entry.mapped.contains(&intro);
+    if known {
         return Ok(true);
     }
     let Some(landed) = entry.landed_sha() else {
         return Ok(false);
     };
-    for intro in &intros {
-        if intro == landed || landed_for(git, id, intro)?.as_deref() == Some(landed) {
-            return Ok(true);
-        }
-    }
-    Ok(false)
+    Ok(intro == landed || landed_for(git, id, &intro)?.as_deref() == Some(landed))
 }
 
 /// One entry of NUL-delimited raw diff output (`diff-tree -z`).
@@ -338,26 +494,58 @@ pub(crate) struct RawChange {
 
 /// Parse `diff-tree --raw -z` output: a `:meta` field, then its path.
 pub(crate) fn raw_changes(output: &str) -> Vec<RawChange> {
+    raw_fields(z_fields(output))
+}
+
+/// Parse raw diff fields. A combined entry (`--cc`, a merge) starts with
+/// one colon per parent and carries one status letter per parent; it
+/// takes a letter only when every parent agrees on it, else `M`, so `A`
+/// means that no parent held the path. The blob is the result's.
+fn raw_fields<'a>(mut fields: impl Iterator<Item = &'a str>) -> Vec<RawChange> {
     let mut changes = Vec::new();
-    let mut fields = z_fields(output);
     while let Some(meta) = fields.next() {
-        let Some(meta) = meta.strip_prefix(':') else {
+        let body = meta.trim_start_matches(':');
+        let parents = meta.len() - body.len();
+        if parents == 0 {
             continue;
-        };
+        }
         let Some(path) = fields.next() else {
             break;
         };
-        let parts: Vec<&str> = meta.split_whitespace().collect();
-        if let [_, _, _, blob, status] = parts.as_slice() {
-            changes.push(RawChange {
-                blob: (*blob).to_string(),
-                status: status.chars().next().unwrap_or('?'),
-                path: path.to_string(),
-            });
+        let parts: Vec<&str> = body.split_whitespace().collect();
+        if parts.len() != 2 * parents + 3 {
+            continue;
         }
+        let letters = parts[2 * parents + 2];
+        let status = if parents == 1 {
+            letters.chars().next().unwrap_or('?')
+        } else {
+            let mut chars = letters.chars();
+            let first = chars.next().unwrap_or('?');
+            if chars.all(|letter| letter == first) {
+                first
+            } else {
+                'M'
+            }
+        };
+        changes.push(RawChange {
+            blob: parts[2 * parents + 1].to_string(),
+            status,
+            path: path.to_string(),
+        });
     }
     changes
 }
+
+/// Fail on a shallow clone: its boundary commits look like adds, so an
+/// introduction read from it would be invented (R-111).
+fn complete_history(git: &Git) -> Result<(), IdsError> {
+    if git.is_shallow()? {
+        return Err(IdsError::Shallow);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -371,5 +559,193 @@ mod tests {
         );
         assert!(is_landing_branch("integration/EPC-020-delivery-system"));
         assert!(!is_landing_branch("task/TSK-101-id-registry"));
+    }
+
+    /// A hermetic scratch repository for the lifetime fixtures.
+    struct Repo {
+        dir: tempfile::TempDir,
+    }
+
+    impl Repo {
+        fn new() -> Repo {
+            let repo = Repo {
+                dir: tempfile::tempdir().unwrap(),
+            };
+            repo.git(&["init", "-q", "-b", "main"]);
+            repo.write("README.md", "fixture\n");
+            repo.commit("root");
+            repo
+        }
+
+        fn git(&self, args: &[&str]) -> String {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.test"])
+                .args(args)
+                .current_dir(self.dir.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+
+        fn write(&self, path: &str, text: &str) {
+            let file = self.dir.path().join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, text).unwrap();
+        }
+
+        fn remove(&self, path: &str) {
+            std::fs::remove_file(self.dir.path().join(path)).unwrap();
+        }
+
+        fn commit(&self, message: &str) -> String {
+            self.git(&["add", "-A"]);
+            self.git(&["commit", "-q", "-m", message]);
+            self.git(&["rev-parse", "HEAD"])
+        }
+
+        /// Fork a side line, add unrelated work on both, and start their
+        /// merge without committing it.
+        fn start_merge(&self) {
+            self.git(&["checkout", "-q", "-b", "side"]);
+            self.write("side.txt", "side\n");
+            self.commit("side");
+            self.git(&["checkout", "-q", "main"]);
+            self.write("main.txt", "main\n");
+            self.commit("main");
+            self.git(&["merge", "-q", "--no-ff", "--no-commit", "side"]);
+        }
+
+        fn handle(&self) -> Git {
+            Git::new(self.dir.path())
+        }
+    }
+
+    const TASK: &str = "project-management/tasks/TSK-001.md";
+    const NESTED: &str = "project-management/epics/EPC-001/tasks/TSK-001.md";
+
+    fn record(title: &str) -> String {
+        format!("---\nid: TSK-001\ntitle: \"{title}\"\n---\n")
+    }
+
+    /// SL-4: the record is deleted, then a merge result adds a different
+    /// record under its id at `path`. Returns the merge.
+    fn merge_born(repo: &Repo, path: &str) -> String {
+        repo.write(TASK, &record("original"));
+        repo.commit("original");
+        repo.remove(TASK);
+        repo.commit("delete");
+        repo.start_merge();
+        repo.write(path, &record("replacement"));
+        repo.commit("replacement in the merge")
+    }
+
+    /// SL-4: the record is renamed to another id, then a merge result
+    /// renames it back, unchanged or one byte longer. Returns the
+    /// original add and the merge.
+    fn rename_back(repo: &Repo, changed: bool) -> (String, String) {
+        repo.write(TASK, &record("original"));
+        let original = repo.commit("original");
+        repo.git(&["mv", TASK, "project-management/tasks/TSK-002.md"]);
+        repo.commit("rename away");
+        repo.start_merge();
+        repo.git(&["mv", "project-management/tasks/TSK-002.md", TASK]);
+        if changed {
+            repo.write(TASK, &format!("{} ", record("original")));
+        }
+        (original, repo.commit("rename back in the merge"))
+    }
+
+    fn id() -> RegId {
+        RegId::parse("TSK-001").unwrap()
+    }
+
+    #[test]
+    fn the_add_log_holds_merge_additions_and_their_paths() {
+        for path in [TASK, NESTED] {
+            let repo = Repo::new();
+            let merge = merge_born(&repo, path);
+            let log = add_log(&repo.handle(), "HEAD").unwrap();
+            let (shas, paths) = &log[&id()];
+            assert_eq!(shas.last(), Some(&merge), "{path}: {shas:?}");
+            assert!(paths.contains(path), "{path}: {paths:?}");
+        }
+        let repo = Repo::new();
+        let (_, merge) = rename_back(&repo, true);
+        let log = add_log(&repo.handle(), "HEAD").unwrap();
+        assert_eq!(log[&id()].0.last(), Some(&merge), "{:?}", log[&id()]);
+    }
+
+    #[test]
+    fn the_one_add_shortcut_agrees_with_the_forced_lifetime_walk() {
+        let mut cases: Vec<(String, Repo, String)> = Vec::new();
+        for path in [TASK, NESTED] {
+            let repo = Repo::new();
+            let merge = merge_born(&repo, path);
+            cases.push((format!("merge-born at {path}"), repo, merge));
+        }
+        for changed in [false, true] {
+            let repo = Repo::new();
+            let (original, merge) = rename_back(&repo, changed);
+            let expected = if changed { merge } else { original };
+            cases.push((format!("rename back, changed={changed}"), repo, expected));
+        }
+        let repo = Repo::new();
+        repo.write(TASK, &record("only"));
+        let only = repo.commit("only add");
+        repo.write(TASK, &record("edited"));
+        repo.commit("edit");
+        cases.push(("one add".to_string(), repo, only));
+        for (name, repo, expected) in cases {
+            let git = repo.handle();
+            for (id, (shas, paths)) in add_log(&git, "HEAD").unwrap() {
+                let shortcut = resolve(&git, "HEAD", &id, &shas, &paths, &mut None).unwrap();
+                let walked = lifetime_start(&git, "HEAD", &id, &paths, &shas)
+                    .unwrap()
+                    .unwrap_or_else(|| shas[0].clone());
+                let held = git
+                    .tree("HEAD", &RECORD_ROOTS)
+                    .unwrap()
+                    .iter()
+                    .any(|(_, _, path)| record_id_from_path(path).as_ref() == Some(&id));
+                if held {
+                    assert_eq!(shortcut, walked, "{name}: {id}");
+                }
+            }
+            let intro = introduction(&git, "HEAD", &id()).unwrap();
+            assert_eq!(intro.as_ref(), Some(&expected), "{name}");
+        }
+    }
+
+    #[test]
+    fn combined_entries_are_adds_only_when_no_parent_held_the_path() {
+        let z = "0000000";
+        let output = format!(
+            ":000000 100644 {z} aaa A\0tasks/TSK-001.md\0\
+             ::000000 000000 100644 {z} {z} bbb AA\0tasks/TSK-002.md\0\
+             ::000000 100644 100644 {z} ccc ddd AM\0tasks/TSK-003.md\0\
+             ::100644 100644 000000 eee fff {z} DD\0tasks/TSK-004.md\0"
+        );
+        let changes: Vec<(char, String, String)> = raw_changes(&output)
+            .into_iter()
+            .map(|change| (change.status, change.blob, change.path))
+            .collect();
+        assert_eq!(
+            changes,
+            vec![
+                ('A', "aaa".to_string(), "tasks/TSK-001.md".to_string()),
+                ('A', "bbb".to_string(), "tasks/TSK-002.md".to_string()),
+                ('M', "ddd".to_string(), "tasks/TSK-003.md".to_string()),
+                ('D', z.to_string(), "tasks/TSK-004.md".to_string()),
+            ]
+        );
     }
 }
