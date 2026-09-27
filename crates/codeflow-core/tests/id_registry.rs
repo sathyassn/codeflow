@@ -588,6 +588,79 @@ fn a_rebinding_restore_is_refused_by_the_ledger_rule() {
     );
 }
 
+/// A registry work tree on the host's current tip, for hand-made commits
+/// that bypass the hooks (the counterfeit a broken client could push).
+fn forge_checkout(world: &World, name: &str) -> PathBuf {
+    let work = world.clone_as(name, "forger@example.test");
+    git(&work, &["fetch", "-q", "origin", "codeflow/registry"]);
+    git(&work, &["checkout", "-q", "-b", "reg", "FETCH_HEAD"]);
+    std::fs::create_dir_all(work.join("ids/TSK")).unwrap();
+    work
+}
+
+fn forged_entry(number: &str) -> String {
+    codeflow_core::ids::Entry::issued(
+        RegId::parse(&format!("TSK-{number}")).unwrap(),
+        new_uid(),
+        "forged",
+        "forger@example.test",
+        "main",
+    )
+    .render()
+}
+
+#[test]
+fn a_number_an_invalid_commit_introduced_is_never_issued_again() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    task(&a, "one").unwrap();
+    let work = forge_checkout(&world, "forger");
+    // A counterfeit restore: it names TSK-002 but adds a file never added.
+    std::fs::write(work.join("ids/TSK/002.toml"), forged_entry("002")).unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-q", "-m", "restore: TSK-002"]);
+    // A merge whose tree alone introduces TSK-003.
+    git(&work, &["checkout", "-q", "-b", "side"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "side"]);
+    git(&work, &["checkout", "-q", "reg"]);
+    git(&work, &["commit", "-q", "--allow-empty", "-m", "main line"]);
+    git(&work, &["merge", "-q", "--no-ff", "--no-commit", "side"]);
+    std::fs::write(work.join("ids/TSK/003.toml"), forged_entry("003")).unwrap();
+    git(&work, &["add", "."]);
+    git(&work, &["commit", "-q", "-m", "merge side"]);
+    git(&work, &["push", "-q", "origin", "reg:codeflow/registry"]);
+
+    let ledger = world.remote_ledger();
+    for number in ["002", "003"] {
+        let id = RegId::parse(&format!("TSK-{number}")).unwrap();
+        assert!(
+            ledger.holds(&id),
+            "TSK-{number} is used although its commit broke the rule"
+        );
+    }
+    assert_eq!(ledger.max_seq(Kind::Tsk), 3);
+    assert!(
+        ledger.violations.iter().any(|v| v
+            .message
+            .contains("ids/TSK/002.toml, which was never added")),
+        "{:?}",
+        ledger.violations
+    );
+    assert!(
+        ledger
+            .violations
+            .iter()
+            .any(|v| v.message.contains("merge commit")),
+        "{:?}",
+        ledger.violations
+    );
+    assert_eq!(
+        task(&a, "after the counterfeit").unwrap().id.to_string(),
+        "TSK-004",
+        "neither number becomes issuable again"
+    );
+}
+
 #[test]
 fn quoted_record_paths_are_still_judged() {
     let world = World::new();

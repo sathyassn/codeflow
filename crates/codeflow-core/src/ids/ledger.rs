@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use super::entry::{Entry, Kind, RegId};
-use super::git::Git;
+use super::git::{z_fields, Git};
 use super::IdsError;
 
 /// The first addition of one registry path.
@@ -121,7 +121,33 @@ impl Ledger {
         Ok(ledger)
     }
 
+    /// Judge one commit, then record every path it adds for the first time.
+    /// The bookkeeping never depends on the verdict: a number a broken
+    /// commit introduced (a counterfeit restore, a merge tree) stays used,
+    /// so it can never be issued again (R-7, R-9).
     fn apply(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, Vec<u8>>) {
+        let fresh: Vec<&Change> = commit
+            .changes
+            .iter()
+            .filter(|change| change.status == 'A' && !self.first.contains_key(&change.path))
+            .collect();
+        self.judge(commit, blobs);
+        for change in fresh {
+            let entry = blobs
+                .get(&change.blob)
+                .and_then(|bytes| Entry::parse(&change.path, &String::from_utf8_lossy(bytes)).ok());
+            self.first.insert(
+                change.path.clone(),
+                FirstAdd {
+                    commit: commit.sha.clone(),
+                    blob: change.blob.clone(),
+                    entry,
+                },
+            );
+        }
+    }
+
+    fn judge(&mut self, commit: &RawCommit, blobs: &std::collections::HashMap<String, Vec<u8>>) {
         let sha = commit.sha.as_str();
         if commit.parents > 1 {
             self.violations.push(Finding::new(
@@ -158,17 +184,7 @@ impl Ledger {
                         format!("re-adds {path}, first added in {first}, outside a typed restore (R-8, R-108)"),
                     ));
                 }
-                'A' => {
-                    let entry = self.added_entry(sha, change, blobs);
-                    self.first.insert(
-                        path.to_string(),
-                        FirstAdd {
-                            commit: sha.to_string(),
-                            blob: change.blob.clone(),
-                            entry,
-                        },
-                    );
-                }
+                'A' => self.check_addition(sha, change, blobs),
                 status => self.violations.push(Finding::new(
                     sha,
                     format!("modifies {path} (status {status}) outside a typed restore (R-8)"),
@@ -178,20 +194,20 @@ impl Ledger {
     }
 
     /// Judge a new file an addition commit brings: an `ids/` path in mode
-    /// 100644 holding a valid entry. Returns the entry when it parses.
-    fn added_entry(
+    /// 100644 holding a valid entry.
+    fn check_addition(
         &mut self,
         sha: &str,
         change: &Change,
         blobs: &std::collections::HashMap<String, Vec<u8>>,
-    ) -> Option<Entry> {
+    ) {
         let path = change.path.as_str();
         if RegId::from_registry_path(path).is_none() {
             self.violations.push(Finding::new(
                 sha,
                 format!("adds {path}, which is not an ids/ file (R-8, R-109)"),
             ));
-            return None;
+            return;
         }
         if change.mode != "100644" {
             self.violations.push(Finding::new(
@@ -203,13 +219,9 @@ impl Ledger {
             .get(&change.blob)
             .map(|bytes| String::from_utf8_lossy(bytes).to_string())
             .unwrap_or_default();
-        match Entry::parse(path, &text) {
-            Ok(entry) => Some(entry),
-            Err(problems) => {
-                for problem in problems {
-                    self.violations.push(Finding::new(sha, problem));
-                }
-                None
+        if let Err(problems) = Entry::parse(path, &text) {
+            for problem in problems {
+                self.violations.push(Finding::new(sha, problem));
             }
         }
     }
@@ -366,6 +378,9 @@ pub fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
 }
 
+/// The registry history, oldest first, with each commit's changes as
+/// NUL-delimited raw records. A merge lists its changes against its first
+/// parent, so a file only the merge tree introduces is still seen.
 fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
     let log = git.run(&[
         "log",
@@ -374,34 +389,39 @@ fn raw_history(git: &Git, tip: &str) -> Result<Vec<RawCommit>, IdsError> {
         "--no-renames",
         "--root",
         "--raw",
+        "-z",
+        "--diff-merges=first-parent",
         "--no-abbrev",
         "--format=%x1e%H%x1f%P%x1f%s",
         tip,
     ])?;
     let mut commits = Vec::new();
     for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
-        let mut lines = record.lines();
-        let header = lines.next().unwrap_or_default();
-        let mut fields = header.split('\x1f');
-        let sha = fields.next().unwrap_or_default().to_string();
-        let parents = fields.next().unwrap_or_default().split_whitespace().count();
-        let subject = fields.next().unwrap_or_default().to_string();
-        let changes = lines
-            .filter_map(|line| {
-                let line = line.strip_prefix(':')?;
-                let (meta, path) = line.split_once('\t')?;
-                let parts: Vec<&str> = meta.split_whitespace().collect();
-                let [_old_mode, mode, _old_blob, blob, status] = parts.as_slice() else {
-                    return None;
-                };
-                Some(Change {
-                    mode: (*mode).to_string(),
-                    blob: (*blob).to_string(),
-                    status: status.chars().next().unwrap_or('?'),
-                    path: path.to_string(),
-                })
-            })
-            .collect();
+        let mut fields = z_fields(record);
+        let header = fields.next().unwrap_or_default();
+        let mut parts = header.split('\x1f');
+        let sha = parts.next().unwrap_or_default().trim().to_string();
+        let parents = parts.next().unwrap_or_default().split_whitespace().count();
+        let subject = parts.next().unwrap_or_default().to_string();
+        let mut changes = Vec::new();
+        while let Some(meta) = fields.next() {
+            let Some(meta) = meta.strip_prefix(':') else {
+                continue;
+            };
+            let Some(path) = fields.next() else {
+                break;
+            };
+            let meta: Vec<&str> = meta.split_whitespace().collect();
+            let [_old_mode, mode, _old_blob, blob, status] = meta.as_slice() else {
+                continue;
+            };
+            changes.push(Change {
+                mode: (*mode).to_string(),
+                blob: (*blob).to_string(),
+                status: status.chars().next().unwrap_or('?'),
+                path: path.to_string(),
+            });
+        }
         commits.push(RawCommit {
             sha,
             parents,
