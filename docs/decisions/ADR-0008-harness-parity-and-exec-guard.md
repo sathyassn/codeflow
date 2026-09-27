@@ -143,3 +143,21 @@ bind an interactive Codex session through the byte-compatible payload contract
 (headless `codex exec` protection stays on the git-hook plane). The plane count
 is unchanged (the exec-guard is a second guard within the existing harness-guard
 plane, not a fifth plane); the doctor check count is unchanged.
+
+## Amendment: 2026-09-27 (appended, TSK-137)
+
+Removed: the v1 scanner modules that no guard ran, `security/path.rs`,
+`fileops.rs`, `branch.rs`, `tmp.rs` and `network.rs`, the git scanning in
+`security/git.rs` (only `is_on_protected_branch` stays, for the policy
+loader), the unused helpers in `security/pattern.rs`, and `SecurityChecker`
+with its module list, about 3,000 lines with their tests. Why: exec-guard runs
+only `dangerous.rs` and `privilege.rs` through its own stage, and git-guard
+has its own rules, so the removed code had no production caller: a second set
+of rules that never ran beside the ones the live guards own. Nothing an
+adopter configures or sees changes.
+
+Changed at the same time: recursive removal strictly below a temp root
+(`$TMPDIR`, `/tmp`, `/var/tmp`, the macOS per-user `/var/folders/<xx>/<id>/T`,
+each also under `/private`) is no longer classified as a protected target.
+An agent's scratch space lives there, below the protected `/private` and
+`/var`; the roots themselves and every other system directory stay blocked.
