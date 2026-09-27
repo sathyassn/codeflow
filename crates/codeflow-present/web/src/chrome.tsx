@@ -1561,7 +1561,7 @@ function anchorNotice(anchor: FeedbackAnchor) {
       : <p class="cf-anchor-note">Matched uniquely in this revision.</p>;
     case "entity_reanchored": return anchor.label_changed
       ? <p class="cf-anchor-warning">The part it names was relabelled in this revision.</p>
-      : <p class="cf-anchor-note">The part it names changed in this revision.</p>;
+      : <p class="cf-anchor-note">Still names the same part; the block around it changed in this revision.</p>;
     default: return null;
   }
 }

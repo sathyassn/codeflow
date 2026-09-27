@@ -195,6 +195,9 @@ try {
   await earlier.locator("summary").click();
   const notices = await earlier.innerText();
   assert.match(notices, /The part it names was relabelled in this revision\./u, notices.slice(0, 2_000));
+  // A part whose label held while its block changed is named as the same part (Grok F1).
+  assert.match(notices, /Still names the same part; the block around it changed in this revision\./u, notices.slice(0, 2_000));
+  assert.doesNotMatch(notices, /The part it names changed/u, notices.slice(0, 2_000));
   assert.match(notices, /Shown on the block: /u, notices.slice(0, 2_000));
   // The offline export keeps the framing outside the stage frame.
   const exported = join(root, "delivery-export.html");
