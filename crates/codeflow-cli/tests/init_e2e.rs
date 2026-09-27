@@ -351,6 +351,24 @@ fn assert_present_cleanup_inventory_is_narrow(root: &Path) {
     assert_user_owned_present_files(root);
 }
 
+/// TSK-137: the inert `human_authorization` key is gone from the scaffolded
+/// policy, which validates without a deprecation warning.
+fn assert_policy_has_no_human_authorization(root: &Path) {
+    assert!(
+        !read(root, ".codeflow/policy.json").contains("human_authorization"),
+        "fresh policy still carries human_authorization"
+    );
+    let validate = codeflow(root, &["validate"]);
+    assert!(
+        validate.status.success(),
+        "validate failed on a fresh policy"
+    );
+    assert!(
+        !String::from_utf8_lossy(&validate.stderr).contains("deprecated"),
+        "a fresh policy printed a deprecation"
+    );
+}
+
 #[test]
 fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
     let dir = tempfile::tempdir().unwrap();
@@ -377,6 +395,7 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
         !report.contains("CONFLICT"),
         "fresh init conflicted:\n{report}"
     );
+    assert_policy_has_no_human_authorization(&root);
     assert!(
         report.contains("/cf-customize")
             && report.contains("docs/product.md")

@@ -27,13 +27,8 @@
 //!   permission prompt. Set `block` in `policy.json` to harden a specific repo;
 //!   authorization never relaxes the catastrophic floor above.
 //!
-//! [`network`](crate::security::network) and [`tmp`](crate::security::tmp) are
-//! intentionally NOT wired here: v1 network semantics conflict with the v2 PR
-//! doctrine, and the tmp module is inert without managed scratch folders. The
-//! remaining modules (`git`, `path`, `fileops`, `branch`) and the
-//! `SecurityChecker` orchestrator are likewise unwired anywhere today — the
-//! live git protections are the separate `hooks/git_guard.rs` implementation
-//! (see the `security` module doc for the full wired/unwired map).
+//! These two are the only scanner modules; the unwired v1 modules were
+//! removed (TSK-137). The live git protections are `hooks/git_guard.rs`.
 
 use crate::security::dangerous::DangerousModule;
 use crate::security::privilege::PrivilegeModule;

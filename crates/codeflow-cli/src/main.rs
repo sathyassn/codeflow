@@ -98,6 +98,22 @@ enum Command {
     Present(cmd::present::PresentArgs),
 }
 
+/// Whether a command records its repository in the user registry. Hook
+/// entry points, `ci` and the read-only checks (`validate`, `work`,
+/// `estimate`) do not; `orient` and `status` do, since the session-start
+/// orient is the main sign that a repository is in use.
+fn touches_registry(command: &Command) -> bool {
+    !matches!(
+        command,
+        Command::Hook(_)
+            | Command::GitHook(_)
+            | Command::Ci(_)
+            | Command::Validate(_)
+            | Command::Work(_)
+            | Command::Estimate(_)
+    )
+}
+
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let cwd = std::env::current_dir()?;
@@ -110,9 +126,10 @@ fn main() -> anyhow::Result<()> {
         }
     }
 
-    // Forecast checking is strictly read-only, including the user registry.
-    // Other commands retain their existing best-effort upkeep (charter §7).
-    if !matches!(cli.command, Command::Estimate(_)) {
+    // Hooks, CI and read-only commands leave the user registry alone: they
+    // run in sandboxes and CI, and forecast checking is strictly read-only.
+    // Other commands keep their best-effort upkeep (charter §7).
+    if touches_registry(&cli.command) {
         cmd::touch_registry_best_effort();
     }
 

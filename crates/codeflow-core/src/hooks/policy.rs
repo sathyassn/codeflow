@@ -413,41 +413,6 @@ impl Default for SecuritySection {
     }
 }
 
-/// How a genuine *human* authorization of an irreversible/security action is
-/// established (ADR-0009). The principle: an agent sharing the host shares any
-/// in-band credential (an env var, a token file, the TTY), so real human-only
-/// authorization needs an OUT-OF-BAND factor on a channel the agent cannot
-/// reach. Today the de-facto out-of-band factor is the remote PR-merge
-/// (server-enforced, agent-unreachable) — which is why remote+CI is the
-/// authoritative boundary and the local env-var override is only a convenience.
-///
-/// This is an inert seam: only `None` exists, the future adapters
-/// (`totp`/`push`/`webauthn`) are deferred. The guards read it as a no-op
-/// check-point so an adapter can slot in without re-threading the call sites.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum HumanAuthorization {
-    /// No additional out-of-band factor is required — current behavior. The
-    /// env-var human override stands on its own, contained because the
-    /// authoritative boundary is the remote (ADR-0009).
-    #[default]
-    None,
-}
-
-impl HumanAuthorization {
-    /// Whether a claimed human override is honored under this mode. The single
-    /// no-op check-point the future out-of-band adapter replaces: today `None`
-    /// simply passes the in-band env override through unchanged; an adapter
-    /// would additionally require its out-of-band factor here before returning
-    /// `true`. See ADR-0009.
-    #[must_use]
-    pub fn authorizes_override(self, human_override_env: bool) -> bool {
-        match self {
-            Self::None => human_override_env,
-        }
-    }
-}
-
 /// Full `.codeflow/policy.json` shape (only the parts the hook plane reads).
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(default)]
@@ -455,8 +420,6 @@ pub struct Policy {
     pub schema_version: u32,
     pub git: GitPolicy,
     pub security: SecuritySection,
-    /// Out-of-band human-authorization mode (ADR-0009). Default `none`.
-    pub human_authorization: HumanAuthorization,
 }
 
 /// Where [`Policy::load`] sources the effective policy from — for callers that
@@ -956,6 +919,17 @@ mod tests {
     }
 
     #[test]
+    fn test_policy_with_the_removed_human_authorization_key_still_loads() {
+        // TSK-137: the key is gone from the schema; an older file that still
+        // carries it loads (serde ignores it) instead of failing every hook.
+        let p: Policy = serde_json::from_str(
+            r#"{"human_authorization":"none","git":{"commit_format":"warn"}}"#,
+        )
+        .unwrap();
+        assert_eq!(p.git.commit_format, PolicyLevel::Warn);
+    }
+
+    #[test]
     fn test_load_effective_armed_is_strict() {
         let dir = tempfile::tempdir().unwrap();
         let (policy, armed) = Policy::load_effective(dir.path());
@@ -1038,24 +1012,6 @@ mod tests {
         let mut g = GitPolicy::default();
         g.suspend_for_bootstrap();
         assert_eq!(g.hook_integrity, PolicyLevel::Off);
-    }
-
-    #[test]
-    fn test_human_authorization_default_none_is_noop() {
-        let p = Policy::default();
-        assert_eq!(p.human_authorization, HumanAuthorization::None);
-        // `none` passes the in-band env override straight through (no-op seam).
-        assert!(HumanAuthorization::None.authorizes_override(true));
-        assert!(!HumanAuthorization::None.authorizes_override(false));
-    }
-
-    #[test]
-    fn test_human_authorization_parses_and_defaults() {
-        let p: Policy = serde_json::from_str(r#"{"human_authorization":"none"}"#).unwrap();
-        assert_eq!(p.human_authorization, HumanAuthorization::None);
-        // Missing key falls back to the default `none`.
-        let p: Policy = serde_json::from_str(r#"{"schema_version":1}"#).unwrap();
-        assert_eq!(p.human_authorization, HumanAuthorization::None);
     }
 
     #[test]

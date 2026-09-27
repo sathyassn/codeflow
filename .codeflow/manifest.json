@@ -977,7 +977,7 @@
     ".codeflow/policy.json": {
       "src": "policy.json",
       "ownership": "user-owned",
-      "sha256": "35ac02a61239ae54caede9f0ae39d19e14cc1e6d30b2e583a29f532e0024a514",
+      "sha256": "493a4182b847a65a9d26bb64b573a2360d02d5e0417d5942931b483a3f650b86",
       "exec": false
     },
     ".codeflow/schemas/present/document-v1.schema.json": {

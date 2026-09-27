@@ -61,6 +61,9 @@ pub fn run(args: &GitHookArgs) -> i32 {
             );
             return 1;
         }
+        for warning in policy_schema::deprecation_warnings(&root) {
+            eprintln!("codeflow commit-msg: warning: {warning}");
+        }
     }
 
     let (policy, _armed) = Policy::load_effective(&root);
@@ -74,17 +77,7 @@ pub fn run(args: &GitHookArgs) -> i32 {
         StageName::CommitMsg => ("commit-msg", commit_msg(&root, &policy, &args.args)),
         StageName::PreMergeCommit => (
             "pre-merge-commit",
-            git_hook::pre_merge_commit(
-                &root,
-                &policy.git,
-                token,
-                // Out-of-band human-authorization check-point (ADR-0009): today
-                // `none` passes the env override through unchanged; a future
-                // adapter would require its factor here.
-                policy
-                    .human_authorization
-                    .authorizes_override(super::human_override_present()),
-            ),
+            git_hook::pre_merge_commit(&root, &policy.git, token, super::human_override_present()),
         ),
         StageName::ReferenceTransaction => unreachable!("handled above"),
         StageName::PrePush => {
@@ -212,10 +205,7 @@ fn run_reference_transaction_with_reader(
 
     let (policy, _armed) = Policy::load_effective(root);
     let token = super::integrate_token_present();
-    // Out-of-band human-authorization check-point (ADR-0009): `none` is a no-op.
-    let human = policy
-        .human_authorization
-        .authorizes_override(super::human_override_present());
+    let human = super::human_override_present();
     match git_hook::reference_transaction(root, &policy.git, &stdin, token, human) {
         Ok(report) => super::render_outcome(
             "reference-transaction",

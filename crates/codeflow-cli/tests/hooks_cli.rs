@@ -923,6 +923,189 @@ fn exec_guard_unwraps_bundled_shell_flags_without_blocking_project_cleanup() {
     }
 }
 
+/// Run the exec-guard on `command` with `TMPDIR` set, from `repo`.
+fn exec_guard_with_tmpdir(repo: &Path, tmpdir: &Path, command: &str) -> Output {
+    run_with_stdin(
+        codeflow()
+            .args(["hook", "exec-guard"])
+            .env("TMPDIR", tmpdir)
+            .current_dir(repo),
+        &guard_payload(command, repo),
+    )
+}
+
+#[test]
+fn exec_guard_allows_removal_below_temp_roots_and_blocks_system_paths() {
+    // TSK-137 AC-5: an agent's scratch space sits below `/private` and
+    // `/var` on macOS; removal there is allowed, the same command on a
+    // system directory, a temp root itself or a path leading out of temp
+    // space is still blocked.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let scratch = tempfile::tempdir().unwrap();
+    let base = std::fs::canonicalize(scratch.path()).unwrap();
+    let base = base.to_str().unwrap();
+    let tmpdir = scratch.path().join("agent-tmp");
+    std::fs::create_dir(&tmpdir).unwrap();
+    let own = format!("{base}/agent-tmp");
+    let link = format!("{base}/outside-link");
+    #[cfg(unix)]
+    std::os::unix::fs::symlink("/etc", &link).unwrap();
+    let guard = |command: &str| exec_guard_with_tmpdir(dir.path(), &tmpdir, command);
+
+    let mut allowed = vec![
+        format!("rm -rf {own}/work"),
+        format!("rm -rf \"{own}/quoted dir\""),
+        format!("rm -rf {own}/sub/*"),
+        format!("rm -rf {base}/sibling"),
+        "rm -rf /private/var/folders/ab/cd123/T/scratch".to_string(),
+        "rm -rf /private/tmp/claude-501/work".to_string(),
+        "rm -rf /var/tmp/cache && ls".to_string(),
+    ];
+    if cfg!(target_os = "macos") {
+        allowed.push("rm -rf /var/folders/xy/zz9/T/build".to_string());
+    }
+    for command in &allowed {
+        let out = guard(command);
+        assert!(
+            out.status.success(),
+            "should allow: {command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    let mut blocked = vec![
+        "rm -rf /etc/hosts".to_string(),
+        "rm -rf /private/var/db/receipts".to_string(),
+        "rm -rf /var/lib/dpkg".to_string(),
+        // Temp roots themselves, the per-user one and globs over them.
+        "rm -rf /tmp".to_string(),
+        "rm -rf /tmp/".to_string(),
+        "rm -rf /tmp/*".to_string(),
+        "rm -rf /private/tmp".to_string(),
+        "rm -rf /var/tmp".to_string(),
+        "rm -rf /private/var/folders/ab/cd123/T".to_string(),
+        // The configured `$TMPDIR` itself, nested below `/private/tmp` or
+        // the per-user root.
+        format!("rm -rf {own}"),
+        format!("rm -rf {own}/"),
+        format!("rm -rf {own}/*"),
+        // Lexical escapes.
+        "rm -rf /private/tmp/claude-501/../../etc".to_string(),
+        "rm -rf //private//tmp/../etc/hosts".to_string(),
+        // Lookalikes of the per-user root.
+        "rm -rf /private/var/folders/not-xx/id/T/cache".to_string(),
+        "rm -rf /private/var/foldersXX/ab/id/T/cache".to_string(),
+        "rm -rf /private/var/folders/ab/id/T-not/cache".to_string(),
+    ];
+    if cfg!(unix) {
+        // A link below temp space leading to `/etc`, however spelled.
+        blocked.extend([
+            format!("rm -rf {link}/hosts"),
+            format!("rm -rf \"{link}/hosts\""),
+            format!("rm -rf {link}/*"),
+            format!("rm -rf {link}/../var/db"),
+        ]);
+    }
+    for command in &blocked {
+        let out = guard(command);
+        assert_eq!(out.status.code(), Some(2), "should block: {command}");
+        assert!(String::from_utf8_lossy(&out.stderr).contains("security.dangerous_commands"));
+    }
+}
+
+/// A scratch directory below the shared temp root, and its spellings: the
+/// canonical one and, where `/tmp` is a link to `/private/tmp`, the other.
+fn shared_temp_scratch() -> (tempfile::TempDir, Vec<String>) {
+    let scratch = tempfile::Builder::new()
+        .tempdir_in("/tmp")
+        .or_else(|_| tempfile::tempdir())
+        .unwrap();
+    let canonical = std::fs::canonicalize(scratch.path()).unwrap();
+    let canonical = canonical.to_str().unwrap().to_string();
+    let mut spellings = vec![canonical.clone()];
+    if let Some(rest) = canonical.strip_prefix("/private/tmp/") {
+        spellings.push(format!("/tmp/{rest}"));
+    } else if let Some(rest) = canonical.strip_prefix("/tmp/") {
+        spellings.push(format!("/private/tmp/{rest}"));
+    }
+    (scratch, spellings)
+}
+
+#[cfg(unix)]
+#[test]
+fn exec_guard_refuses_unresolved_temp_paths_through_both_aliases() {
+    // TSK-137 round 2 (T137-1a, T137-1b): an operand whose identity the
+    // classifier cannot establish (a literal backslash in a quoted name) or
+    // whose containment it cannot resolve (a glob before the last component)
+    // is refused under temp space, through `/tmp` and `/private/tmp` alike.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let (scratch, spellings) = shared_temp_scratch();
+    std::os::unix::fs::symlink("/etc", scratch.path().join("odd\\link")).unwrap();
+    std::os::unix::fs::symlink("/etc", scratch.path().join("glob-link")).unwrap();
+    let guard = |command: &str| exec_guard_with_tmpdir(dir.path(), scratch.path(), command);
+
+    for base in &spellings {
+        for command in [
+            format!("rm -rf '{base}/odd\\link/hosts'"),
+            format!("rm -rf {base}/odd\\\\link/hosts"),
+            format!("rm -rf {base}/glob-*/hosts"),
+            format!("rm -rf {base}/glob-*/../var/db"),
+            format!("rm -rf {base}/glob-link/hosts"),
+            format!("rm -rf \"{base}/$SUB\"/x"),
+        ] {
+            let out = guard(&command);
+            assert_eq!(out.status.code(), Some(2), "should block: {command}");
+        }
+        // Ordinary temp removal through the same spelling stays allowed.
+        for command in [
+            format!("rm -rf {base}/work"),
+            format!("rm -rf '{base}/quoted dir'"),
+            format!("rm -rf {base}/glob-*"),
+        ] {
+            let out = guard(&command);
+            assert!(
+                out.status.success(),
+                "should allow: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+    let out = guard("rm -rf /private/etc/hosts");
+    assert_eq!(out.status.code(), Some(2));
+}
+
+#[test]
+fn exec_guard_honours_no_system_directory_as_tmpdir() {
+    // TSK-137 T137-2: `$TMPDIR` confers no exemption; a system directory
+    // given as one leaves its descendants blocked.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    for (tmpdir, command) in [
+        ("/private/etc", "rm -rf /private/etc/hosts"),
+        ("/private/var", "rm -rf /private/var/db"),
+        ("/usr/local", "rm -rf /usr/local/bin"),
+        ("/usr", "rm -rf /usr/lib"),
+        ("/", "rm -rf /etc/ssh"),
+    ] {
+        let out = exec_guard_with_tmpdir(dir.path(), Path::new(tmpdir), command);
+        assert_eq!(out.status.code(), Some(2), "TMPDIR={tmpdir}: {command}");
+    }
+    // An alias spelling of a valid `$TMPDIR` still protects the directory.
+    #[cfg(unix)]
+    {
+        let scratch = tempfile::tempdir().unwrap();
+        let real = scratch.path().join("real");
+        std::fs::create_dir(&real).unwrap();
+        let alias = scratch.path().join("alias");
+        std::os::unix::fs::symlink(&real, &alias).unwrap();
+        let real = std::fs::canonicalize(&real).unwrap();
+        let out = exec_guard_with_tmpdir(dir.path(), &alias, &format!("rm -rf {}", real.display()));
+        assert_eq!(out.status.code(), Some(2), "alias TMPDIR root");
+    }
+}
+
 #[test]
 fn git_guard_blocks_pr_body_attribution() {
     // AC #13: attribution in a PR body blocked at gh pr create.
