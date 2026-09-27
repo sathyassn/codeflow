@@ -68,7 +68,7 @@
 .cf-m-cap { fill: var(--cf-fig-line); }
 .cf-m-act { fill: var(--cf-fig-accent); stroke: var(--cf-fig-ground); stroke-width: 2.5; }
 .cf-m-cov { fill: var(--cf-fig-line); }
-.cf-m-part { fill: var(--cf-fig-fill); stroke: var(--cf-fig-line); stroke-width: 1.4; stroke-dasharray: 2.5 1.8; }
+.cf-m-part { fill: var(--cf-fig-line-soft); fill-opacity: 0.5; stroke: var(--cf-fig-line); stroke-width: 1.4; stroke-dasharray: 2.5 1.8; }
 .cf-m-notrun { stroke: var(--cf-fig-hatch); stroke-width: 1; }
 .cf-m-hatchline { stroke: var(--cf-fig-hatch); stroke-width: 1.5; }
 .cf-m-na { fill: none; stroke: var(--cf-fig-line-soft); stroke-width: 1; stroke-opacity: var(--cf-fig-na-alpha); }
