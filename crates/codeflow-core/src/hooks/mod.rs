@@ -26,6 +26,7 @@
 //! Every blocking message names the violated policy rule and the sanctioned
 //! path (charter §6.2).
 
+pub mod adoption;
 pub mod delegate_turn;
 pub mod exec_guard;
 pub mod git_guard;

@@ -193,6 +193,16 @@ fn update_adds_keys_preserves_custom_and_default_equal_values_and_template() {
         let mut expected = policy;
         expected["git"]["pr_release_impact"] = json!("warn");
         expected["git"]["pr_breaking_level"] = json!("major");
+        expected["git"]["automation_profiles"] = json!([]);
+        if !custom {
+            // The kept template lacks the required headings: update records
+            // the diagnosis beside every preserved value (SPC-013 R-84).
+            expected["git"]["pr_section_mapping"] = json!({
+                "state": "diagnosed",
+                "headings": {"Summary": "Overview"},
+                "decided": "none",
+            });
+        }
         assert_eq!(after, expected);
         assert_eq!(
             std::fs::read_to_string(&template_path).unwrap(),

@@ -34,6 +34,7 @@
     "pr_required_sections": ["Summary", "Changes", "Reviews", "Release impact"],
     "pr_code_sections": ["Testing"],
     "work_records": "block",
+    "automation_profiles": [],
     "branch_naming": "block",
     "branch_prefixes": ["feat/", "fix/", "docs/", "refactor/", "test/", "chore/", "ci/", "hotfix/", "plan/", "task/", "spike/", "experiment/", "integration/"],
     "secret_scan": "block",

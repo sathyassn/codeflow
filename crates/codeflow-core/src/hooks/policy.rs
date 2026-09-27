@@ -58,6 +58,83 @@ impl fmt::Display for PolicyLevel {
     }
 }
 
+/// One trusted automation profile (SPC-013 R-82): the bot actors or app ids
+/// it trusts, the branch pattern its pull requests use, and content for the
+/// PR sections its bot body omits (heading to content).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AutomationProfile {
+    pub name: String,
+    pub actors: Vec<String>,
+    pub branch_pattern: String,
+    #[serde(default)]
+    pub sections: std::collections::BTreeMap<String, String>,
+}
+
+impl AutomationProfile {
+    /// `true` when `actor` is one of the profile's actors and `branch`
+    /// matches its pattern. The actor `unknown` (a local run, a fork pull
+    /// request, or no actor passed) never matches.
+    #[must_use]
+    pub fn matches(&self, actor: &str, branch: &str) -> bool {
+        actor != UNKNOWN_ACTOR
+            && !actor.is_empty()
+            && self.actors.iter().any(|a| a == actor)
+            && self.branch_matches(branch)
+    }
+
+    /// `true` when `branch` matches the profile's glob pattern.
+    #[must_use]
+    pub fn branch_matches(&self, branch: &str) -> bool {
+        glob::Pattern::new(&self.branch_pattern).is_ok_and(|p| p.matches(branch))
+    }
+}
+
+/// The actor `codeflow ci` reports when no trusted actor was passed.
+pub const UNKNOWN_ACTOR: &str = "unknown";
+
+/// The four states of a kept brownfield PR template (SPC-013 R-84).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MappingState {
+    /// Found and proposed; no operator decision yet.
+    Diagnosed,
+    /// The operator accepted the heading mapping.
+    Accepted,
+    /// The operator refused it; the missing headings go into the template.
+    Refused,
+    /// The project sets its own section list in policy.
+    Custom,
+}
+
+impl fmt::Display for MappingState {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Self::Diagnosed => "diagnosed",
+            Self::Accepted => "accepted",
+            Self::Refused => "refused",
+            Self::Custom => "custom",
+        })
+    }
+}
+
+/// `git.pr_section_mapping`: the state, the proposed or accepted heading
+/// mapping (required heading to the template's heading), and the decision
+/// date (`none` while diagnosed).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PrSectionMapping {
+    pub state: MappingState,
+    #[serde(default)]
+    pub headings: std::collections::BTreeMap<String, String>,
+    #[serde(default = "decided_none")]
+    pub decided: String,
+}
+
+fn decided_none() -> String {
+    "none".to_string()
+}
+
 /// The `git` section of `.codeflow/policy.json` (charter §6.1, verbatim
 /// schema). Defaults carry the v1 strictness decision (D16).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -226,6 +303,18 @@ pub struct GitPolicy {
     /// at all: `allow` (default) or `forbid`. Forbidding never narrows the
     /// surfaces a direct change is refused on (R-71).
     pub direct_changes: String,
+    /// Trusted automation profiles (SPC-013 R-82). A profile applies in
+    /// `codeflow ci` only when the actor the workflow passes and the head
+    /// branch both match, and only as read from the target side of the
+    /// range. It skips branch naming and the commit message shape rules and
+    /// supplies content for the PR sections its bot omits; it never changes
+    /// a level. Default empty.
+    pub automation_profiles: Vec<AutomationProfile>,
+    /// The decision about a kept brownfield PR template (SPC-013 R-84,
+    /// R-115). Absent by default; `init` and `update` write `diagnosed`
+    /// when a kept template's headings do not match the required sections.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pr_section_mapping: Option<PrSectionMapping>,
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
@@ -282,6 +371,8 @@ impl Default for GitPolicy {
             work_records: PolicyLevel::Block,
             product_paths: None,
             direct_changes: "allow".to_string(),
+            automation_profiles: Vec::new(),
+            pr_section_mapping: None,
             branch_naming: PolicyLevel::Block,
             branch_prefixes: [
                 "feat/",
