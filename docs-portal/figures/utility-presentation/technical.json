@@ -195,7 +195,9 @@
     "narrow": {
       "recompose": "list",
       "drops": [],
-      "marks": "same"
+      "marks": "same",
+      "elongation_max": 2.4,
+      "reason": "Twelve rules list one under another at phone width, each with its four owners named beside them."
     },
     "twin": {
       "columns": [

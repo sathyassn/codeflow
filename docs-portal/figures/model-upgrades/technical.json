@@ -143,7 +143,9 @@
     "narrow": {
       "recompose": "list",
       "drops": [],
-      "marks": "same"
+      "marks": "same",
+      "elongation_max": 2.2,
+      "reason": "Seven changes list one under another at phone width, each with its five checks named beside them."
     },
     "twin": {
       "columns": [

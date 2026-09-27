@@ -213,7 +213,9 @@
     "narrow": {
       "recompose": "list",
       "drops": [],
-      "marks": "same"
+      "marks": "same",
+      "elongation_max": 2.3,
+      "reason": "Nine protected actions list one under another at phone width, each with its four planes named beside them."
     },
     "twin": {
       "columns": [
