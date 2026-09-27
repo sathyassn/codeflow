@@ -1111,3 +1111,127 @@ fn known_hole_a_later_fix_for_the_same_task_still_binds() {
         "a completion reviewed before a later fix",
     );
 }
+
+/// [`line_task`] with AC-1 narrowed, as a planning amendment leaves it.
+fn amended_task(id: &str, status: &str, closeout: &str) -> String {
+    line_task(id, status, closeout).replace("shall work.", "shall work on Linux.")
+}
+
+/// A block reviewed at `reviewed` whose AC-1 is waived by `by`.
+fn waived_block(reviewed: &str, by: &str) -> String {
+    block(
+        reviewed,
+        &[
+            &format!("AC-1: waived | {by}"),
+            "AC-2: verified | journey ran",
+        ],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    )
+}
+
+/// Amend TSK-001 AC-1 on `branch`, cut from [`LINE`]; returns the commit.
+fn amend(root: &Path, branch: &str) -> String {
+    git(root, &["switch", "-C", branch, LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended_task("TSK-001", "todo", "Pending.\n"),
+    );
+    commit(root, "docs(records): narrow TSK-001 AC-1")
+}
+
+/// A waiver is judged against the task's own integration target, not the
+/// pull request's base: an amendment landed on the line binds in the task
+/// pull request and again when the line lands on main.
+#[test]
+fn a_waiver_amended_on_the_line_binds_into_main() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    amend(root, "plan/narrow");
+    let amendment = land(root, "plan/narrow");
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended_task("TSK-001", "complete", &waived_block(&reviewed, &amendment)),
+    );
+    commit(root, "docs(records): complete TSK-001");
+    assert_passes(
+        &ci_on(root, LINE, "task/TSK-001-work", "Task: TSK-001"),
+        "the task pull request into its line",
+    );
+    land(root, "task/TSK-001-work");
+    let result = ci_on(root, "main", LINE, "");
+    assert_passes(&result, "the line into main");
+    assert!(binding_lines(&result).is_empty(), "{}", result.1);
+}
+
+/// A waiver amendment fails when it never landed on the task's line (it is
+/// only on a side branch the task merged), when the completion does not
+/// contain it, or when it names the head the verb completes on.
+#[test]
+fn a_waiver_amendment_must_have_landed_on_the_task_line() {
+    for (what, needle) in [
+        ("only on a side branch", "which is not on the target"),
+        (
+            "landed after the task branched",
+            "which the completion does not contain",
+        ),
+        ("the head", "names the pull request head"),
+    ] {
+        let dir = line_repo(&["TSK-001"]);
+        let root = dir.path();
+        let (reviewed, amendment) = match what {
+            "only on a side branch" => {
+                let amendment = amend(root, "side/narrow");
+                git(root, &["switch", "-C", "task/TSK-001-work", LINE]);
+                git(
+                    root,
+                    &["merge", "--no-ff", "-m", "merge: side", "side/narrow"],
+                );
+                write(root, "src/work.rs", "pub fn work() {}\n");
+                (commit(root, "feat: build on the line"), amendment)
+            }
+            "landed after the task branched" => {
+                let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+                amend(root, "plan/narrow");
+                let amendment = land(root, "plan/narrow");
+                git(root, &["switch", "task/TSK-001-work"]);
+                (reviewed, amendment)
+            }
+            _ => {
+                amend(root, "plan/narrow");
+                land(root, "plan/narrow");
+                let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+                (reviewed.clone(), reviewed)
+            }
+        };
+        write(
+            root,
+            &record_path("TSK-001"),
+            &amended_task(
+                "TSK-001",
+                "in_progress",
+                &waived_block(&reviewed, &amendment),
+            ),
+        );
+        let verb = status_complete(root, "TSK-001");
+        assert_ne!(verb.0, 0, "{what}: the verb: {}", verb.1);
+        assert!(verb.1.contains(needle), "{what}: the verb: {}", verb.1);
+        if what == "the head" {
+            continue;
+        }
+        write(
+            root,
+            &record_path("TSK-001"),
+            &amended_task("TSK-001", "complete", &waived_block(&reviewed, &amendment)),
+        );
+        commit(root, "docs(records): complete TSK-001");
+        assert_blocks(
+            &ci_on(root, LINE, "task/TSK-001-work", "Task: TSK-001"),
+            what,
+            &["AC-1 waiver", needle],
+        );
+    }
+}

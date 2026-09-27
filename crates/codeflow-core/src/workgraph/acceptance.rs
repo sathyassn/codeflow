@@ -137,16 +137,18 @@ impl Landing<'_> {
 ///    completion changes planning records only (several records may
 ///    complete together).
 ///
-/// Every waiver names a commit on the target, not C, that amended this
-/// record's criterion. A leaf that serves its epic's journey says what ran
-/// (R-53).
+/// Every waiver names a commit, not C, that amended this record's
+/// criterion, is in C's history and is on the task's own integration
+/// target, a local or remote-tracking branch; `default_target` stands in
+/// only for a task that declares no target. A leaf that serves its epic's
+/// journey says what ran (R-53).
 #[must_use]
 pub fn bind_completion(
     repo: &Repository,
     task: &RecordView,
     graph: &Graph,
     landing: Landing<'_>,
-    target_tip: Option<Oid>,
+    default_target: Option<Oid>,
 ) -> Vec<Finding> {
     let Some(block) = active_block(task) else {
         return Vec::new();
@@ -172,7 +174,7 @@ pub fn bind_completion(
                 id,
                 &result.evidence,
                 landing.commit(),
-                target_tip,
+                task_target(repo, task, default_target),
             ) {
                 bind(format!("{}: {id} waiver {problem}", task.id));
             }
@@ -401,6 +403,21 @@ fn later_change(
         .then(|| "the record changed outside its status and Closeout".to_string())
 }
 
+/// The tip of the line `task` belongs to: its declared integration target
+/// as a local or remote-tracking branch, or `default_target` when it
+/// declares none. A declared target that does not resolve is `None`.
+fn task_target(repo: &Repository, task: &RecordView, default_target: Option<Oid>) -> Option<Oid> {
+    match task
+        .integration_target
+        .as_deref()
+        .map(str::trim)
+        .filter(|target| !target.is_empty())
+    {
+        Some(target) => super::work_start::target_reference(repo, target).map(|commit| commit.id()),
+        None => default_target,
+    }
+}
+
 /// Why a waiver's commit is not the planning amendment for this record and
 /// criterion on the target, if it is not.
 fn waiver_problem(
@@ -408,7 +425,7 @@ fn waiver_problem(
     task: &RecordView,
     id: &str,
     evidence: &str,
-    head: Oid,
+    completion: Oid,
     target_tip: Option<Oid>,
 ) -> Option<String> {
     let Some(amendment) = commit_of(repo, evidence.trim()) else {
@@ -417,7 +434,7 @@ fn waiver_problem(
             evidence.trim()
         ));
     };
-    if amendment == head {
+    if amendment == completion {
         return Some(
             "names the pull request head; a waiver is a planning amendment on the target".into(),
         );
@@ -428,6 +445,12 @@ fn waiver_problem(
     if !is_ancestor_or_same(repo, amendment, tip) {
         return Some(format!(
             "names {}, which is not on the target",
+            evidence.trim()
+        ));
+    }
+    if !is_ancestor_or_same(repo, amendment, completion) {
+        return Some(format!(
+            "names {}, which the completion does not contain; rebase onto the amendment",
             evidence.trim()
         ));
     }
@@ -590,6 +613,8 @@ pub enum BindAt {
 
 /// The binding findings of a range: every task record it completes, or
 /// whose active block it changes, bound at the commit `at` chooses.
+/// `default_target` stands in for a task that declares no integration
+/// target when its waivers are judged.
 ///
 /// # Errors
 ///
@@ -599,7 +624,7 @@ pub fn completions_in_range(
     repo: &Repository,
     base: &str,
     head: &str,
-    target_tip: Option<Oid>,
+    default_target: Option<Oid>,
     at: BindAt,
 ) -> Result<Vec<Finding>, String> {
     let oid = |revision: &str| {
@@ -635,7 +660,7 @@ pub fn completions_in_range(
                 task,
                 &after,
                 Landing::Commit(landing),
-                target_tip,
+                default_target,
             ));
         }
     }

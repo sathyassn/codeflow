@@ -202,16 +202,16 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             task.id
         )];
     };
-    let target_tip =
-        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-            .and_then(|target| repo.revparse_single(&target).ok())
-            .and_then(|object| object.peel_to_commit().ok())
-            .map(|commit| commit.id());
+    // A task without a declared target belongs to the default one.
+    let default_target = super::work_start::resolve_work_target(repo_root, None)
+        .and_then(|target| repo.revparse_single(&target).ok())
+        .and_then(|object| object.peel_to_commit().ok())
+        .map(|commit| commit.id());
     let landing = super::acceptance::Landing::Worktree {
         head,
         changed: &changed,
     };
-    super::acceptance::bind_completion(&repo, task, graph, landing, target_tip)
+    super::acceptance::bind_completion(&repo, task, graph, landing, default_target)
         .into_iter()
         .map(|finding| format!("{}: {}", finding.rule, finding.message))
         .collect()
