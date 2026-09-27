@@ -720,6 +720,51 @@ publication date._
   self-hosted runner needs Actions runner 2.327.1 or later for Node 24
   actions.
 
+### Fixed
+
+<!-- codeflow:release-impact patch -->
+- **`git gc` works in a hooked clone.** The reference-transaction hook no
+  longer refuses `git pack-refs`, which `git gc` and auto gc run: moving a
+  protected branch such as `main` from a loose ref into packed-refs, and
+  pruning the loose copy, leave it on the same commit. A transaction line
+  passes only when the ref keeps its current value; a prune passes only
+  while packed-refs holds that value and is not being rewritten. A real
+  move or deletion of a protected branch still blocks.
+
+<!-- codeflow:release-impact patch -->
+- **git-guard judges the repository a command targets.** A git command that
+  reaches another repository through `cd`, `git -C`, `--git-dir`, a
+  `GIT_DIR=` prefix or a path held in a variable set earlier on the same line
+  is judged by that repository's branch and its own policy, so a commit on
+  another repository's feature branch is no longer refused as a commit on the
+  session's `main`. A repository without a CodeFlow policy keeps the default
+  protection of `main` and `master`. `git -C <repo> --git-dir=<git dir>` is
+  judged by the git dir it writes to, which closes a wrong allow. A `cd`
+  that can fail proves its move only to commands chained with `&&`. When the
+  guard cannot prove the target, for example an unset or escaped variable,
+  a path built from a command substitution, a subshell, `pushd` or an `env`
+  option, it blocks a commit, merge, push or other
+  mutation and says how to name the repository: a literal path, or
+  `cd <path> &&` first. A git command whose subcommand, global options or,
+  for a commit, merge, push or other judged command, arguments come from a
+  command substitution is refused too; generated text is accepted only in a
+  quoted message such as `-m "$(…)"`. A read-only command keeps working
+  with a substitution after its subcommand, as in `git show "$(…)"`, since
+  its arguments cannot turn it into a mutation. An unclassifiable command is
+  still judged by every other rule, such as the protected-commit check, and
+  the strictest verdict wins. A git alias is judged by what it expands to,
+  read with `git config` in the target repository (including `-c` and
+  `include.path`); a `!` shell alias or one the guard cannot read blocks.
+  `git rebase <upstream> <branch>` is judged by `<branch>`, which it
+  rewrites. A checkout or rebase that can fail moves the branch only for
+  commands after `&&`; after `;` or a newline the earlier branch still
+  counts. An alias written earlier in the same command line is not read
+  from disk: the command blocks. A git command inside `for`, `while`, `if`
+  or `case` bodies is judged too. This also blocks a commit written inside a
+  subshell such as `(cd <repo> && git commit)`.
+
+### Changed
+
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 
 - **Optional agentic operating and estimation method (ADR-0057).** Standard and
@@ -890,47 +935,6 @@ publication date._
 > reduce the release to a minor version.
 
 ### Fixed
-
-<!-- codeflow:release-impact patch -->
-- **`git gc` works in a hooked clone.** The reference-transaction hook no
-  longer refuses `git pack-refs`, which `git gc` and auto gc run: moving a
-  protected branch such as `main` from a loose ref into packed-refs, and
-  pruning the loose copy, leave it on the same commit. A transaction line
-  passes only when the ref keeps its current value; a prune passes only
-  while packed-refs holds that value and is not being rewritten. A real
-  move or deletion of a protected branch still blocks.
-
-<!-- codeflow:release-impact patch -->
-- **git-guard judges the repository a command targets.** A git command that
-  reaches another repository through `cd`, `git -C`, `--git-dir`, a
-  `GIT_DIR=` prefix or a path held in a variable set earlier on the same line
-  is judged by that repository's branch and its own policy, so a commit on
-  another repository's feature branch is no longer refused as a commit on the
-  session's `main`. A repository without a CodeFlow policy keeps the default
-  protection of `main` and `master`. `git -C <repo> --git-dir=<git dir>` is
-  judged by the git dir it writes to, which closes a wrong allow. A `cd`
-  that can fail proves its move only to commands chained with `&&`. When the
-  guard cannot prove the target, for example an unset or escaped variable,
-  a path built from a command substitution, a subshell, `pushd` or an `env`
-  option, it blocks a commit, merge, push or other
-  mutation and says how to name the repository: a literal path, or
-  `cd <path> &&` first. A git command whose subcommand, global options or,
-  for a commit, merge, push or other judged command, arguments come from a
-  command substitution is refused too; generated text is accepted only in a
-  quoted message such as `-m "$(…)"`. A read-only command keeps working
-  with a substitution after its subcommand, as in `git show "$(…)"`, since
-  its arguments cannot turn it into a mutation. An unclassifiable command is
-  still judged by every other rule, such as the protected-commit check, and
-  the strictest verdict wins. A git alias is judged by what it expands to,
-  read with `git config` in the target repository (including `-c` and
-  `include.path`); a `!` shell alias or one the guard cannot read blocks.
-  `git rebase <upstream> <branch>` is judged by `<branch>`, which it
-  rewrites. A checkout or rebase that can fail moves the branch only for
-  commands after `&&`; after `;` or a newline the earlier branch still
-  counts. An alias written earlier in the same command line is not read
-  from disk: the command blocks. A git command inside `for`, `while`, `if`
-  or `case` bodies is judged too. This also blocks a commit written inside a
-  subshell such as `(cd <repo> && git commit)`.
 
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
   the official pinned Node distribution's compression libraries and explain
