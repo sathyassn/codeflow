@@ -696,7 +696,8 @@ function readingPathFigure(definitions) {
 
 // One generated page for the records the guide does not publish: the folder,
 // what it holds, how many it holds at this commit, and where it lives. It
-// lists folders, never files.
+// lists folders, never files. The wrapper lets a phone-width screen stack
+// each folder's row instead of squeezing four columns.
 function renderRecordPointerPage() {
   const rows = recordFolders.map((folder) => {
     const count = folder.exists && folder.files.length ? String(folder.files.length) : "none yet";
@@ -708,7 +709,7 @@ function renderRecordPointerPage() {
   const lead = `The guide has no page for a decision or a work record. ${total} of them sit in ${recordFolders.length} repository folders at the commit this portal was built from.`;
   const prefixes = [...new Set(recordFolders.map((folder) => folder.id_prefix))];
   const closing = `Pages in this guide cite these records by id (${prefixes.join(", ")}), and each id links to its file in the repository.`;
-  return `---\ntitle: ${JSON.stringify(RECORD_POINTER_TITLE)}\ndescription: ${JSON.stringify("The repository folders that hold the decisions, epics, tasks and specs this guide cites.")}\nslug: ${JSON.stringify(recordPointerRoute)}\n${sidebarFrontmatter(recordPointerRoute)}---\n\n${escapeMarkdownInline(lead)}\n\n| Folder | Purpose | Count | Repository |\n|---|---|---|---|\n${rows.join("\n")}\n\n${escapeMarkdownInline(closing)}\n`;
+  return `---\ntitle: ${JSON.stringify(RECORD_POINTER_TITLE)}\ndescription: ${JSON.stringify("The repository folders that hold the decisions, epics, tasks and specs this guide cites.")}\nslug: ${JSON.stringify(recordPointerRoute)}\n${sidebarFrontmatter(recordPointerRoute)}---\n\n${escapeMarkdownInline(lead)}\n\n<div class="portal-record-folders">\n\n| Folder | Purpose | Count | Repository |\n|---|---|---|---|\n${rows.join("\n")}\n\n</div>\n\n${escapeMarkdownInline(closing)}\n`;
 }
 
 function staleStubPage(sourcePath, sourceHash, bytes, error) {

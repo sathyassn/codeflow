@@ -126,6 +126,14 @@ publication date._
   as a failed artifact in the results instead of ending the run.
 
 <!-- codeflow:release-impact patch -->
+- **Portal altitude tabs, records table and home reading path.** The
+  Concept, Architecture and Technical tabs sit on one line; before, the
+  second and third tab sat lower. At phone width the records page stacks
+  each folder's row, so the purpose reads as a sentence instead of one word
+  per line. The home page shows every step of the reading path, one row per
+  step from top to bottom, under a tighter title block.
+
+<!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
   minutes, repairs assertion-red checks without being asked, reports

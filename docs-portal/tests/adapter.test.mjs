@@ -2332,6 +2332,7 @@ test("the records switch drops record sources and points at their folders", asyn
     const pointer = await readFile(path.join(root, "src/content/docs/system/records.md"), "utf8");
     assert.match(pointer, /title: "Where decisions and work records live"/);
     assert.equal(pointer.match(/^\| `/gm).length, 4);
+    assert.match(pointer, /<div class="portal-record-folders">\n\n\| Folder \| Purpose \| Count \| Repository \|\n[\s\S]*\|\n\n<\/div>\n/);
     assert.match(pointer, new RegExp("\\| `docs/decisions` \\| Accepted decisions\\\\\\. \\| 1 \\| \\[docs/decisions\\]\\(https://github\\.com/example/repo/tree/[0-9a-f]{40}/docs/decisions\\) \\|"));
     assert.match(pointer, /\| `project-management\/specs` \| Planning inputs\\\. \| none yet \| `project-management\/specs` \|/);
     assert.match(pointer, /3 of them sit in 4 repository folders/);

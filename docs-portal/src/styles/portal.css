@@ -617,14 +617,32 @@ html[data-cfp-tabs="on"] .sl-markdown-content .portal-altitude > :is(.sl-heading
   }
 }
 /* The home reading path is the stage figure with one linked step per
-   configured layer, so it inherits the stage wrapping and stacking. */
-.portal-reading-path { margin-block: 2.5rem 1rem; }
+   configured layer. It reads top to bottom at every width, so every
+   configured step is in view, each step is one row with its name beside
+   its summary, and the rows share one width. */
+.cf-main .hero { grid-template-columns: 100%; padding-block: 2rem 0.5rem; }
+.sl-markdown-content .portal-reading-path { margin-block: 1.25rem 1rem; }
+.portal-reading-path .portal-stage-flow { flex-direction: column; flex-wrap: nowrap; align-items: stretch; gap: 0; row-gap: 0; }
+.portal-reading-path .portal-stage-group { flex: 0 0 auto; min-inline-size: 0; }
+.portal-reading-path .portal-stage-arrow { flex: 0 0 1.25rem; width: 2px; height: auto; margin-inline-start: 1.5rem; }
+.portal-reading-path .portal-stage-arrow::after { position: absolute; inset-inline-end: auto; inset-inline-start: -4px; inset-block-start: auto; inset-block-end: -1px; border-block: 7px solid var(--cf-diagram-line); border-block-end: 0; border-inline: 5px solid transparent; }
 .portal-reading-path .portal-stage-node { padding: 0; }
 .portal-reading-path .portal-stage-node > a {
-  display: block;
+  display: grid;
+  /* 8.5rem fits the longest default layer name, REFERENCE, in the mono
+     label face with room to spare; a longer configured name wraps inside
+     its column. Rows are separate grids, so the column cannot size to
+     max-content across them. */
+  grid-template-columns: 8.5rem minmax(0, 1fr);
+  column-gap: 1rem;
+  align-items: baseline;
   padding: 0.75rem 0.875rem;
   text-decoration: none;
   color: inherit;
+}
+.portal-reading-path .portal-stage-node .s { margin-top: 0; }
+@media (max-width: 30rem) {
+  .portal-reading-path .portal-stage-node > a { grid-template-columns: minmax(0, 1fr); row-gap: 2px; }
 }
 .portal-reading-path .portal-stage-node > a:hover .k { color: var(--cf-accent-strong); }
 
@@ -690,7 +708,8 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--cf-focus); outl
 .cf-main h1 { margin: 0 0 10px; font-size: var(--cf-fs-display); }
 .cf-main .sl-markdown-content { font-family: var(--cf-font-sans); font-size: var(--cf-fs-body); }
 .portal-altitude-tabs { display: flex; gap: 24px; border-bottom: 1px solid var(--cf-border); margin-block: 24px; }
-.portal-altitude-tabs [role="tab"] { position: relative; border: 0; border-radius: 0; padding: 10px 0; font-family: var(--cf-font-sans); font-size: var(--cf-fs-ui); font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--cf-text-muted); background: transparent; }
+/* margin: 0 undoes Starlight's sibling gap (.sl-markdown-content :not(...) + :not(...) sets margin-top), which pushed every tab after the first down. */
+.portal-altitude-tabs [role="tab"] { position: relative; margin: 0; border: 0; border-radius: 0; padding: 10px 0; font-family: var(--cf-font-sans); font-size: var(--cf-fs-ui); font-weight: 500; text-transform: none; letter-spacing: normal; color: var(--cf-text-muted); background: transparent; }
 .portal-altitude-tabs [role="tab"]:hover { color: var(--cf-text); background: transparent; }
 .portal-altitude-tabs [role="tab"][aria-selected="true"] { color: var(--cf-text); background: transparent; font-weight: 600; box-shadow: inset 0 -2px var(--cf-accent); }
 .portal-provenance::before { content: ""; display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--cf-positive); }
@@ -725,4 +744,21 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--cf-focus); outl
   .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(4)::before { content: "Valid values"; }
   .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(5)::before { content: "Purpose"; }
   .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(6)::before { content: "Notes"; }
+
+/* The record pointer table: at phone width each folder's row stacks, so the
+   purpose reads as a line of prose instead of one word per line. The header
+   stays in the document for assistive technology. The Count and Repository
+   labels are RECORD_POINTER_COLUMNS in page-classes.mjs; a test pins them. */
+@media (max-width: 40rem) {
+  .sl-markdown-content .portal-record-folders table,
+  .sl-markdown-content .portal-record-folders tbody,
+  .sl-markdown-content .portal-record-folders tr,
+  .sl-markdown-content .portal-record-folders td { display: block; width: auto; overflow: visible; }
+  .sl-markdown-content .portal-record-folders thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .sl-markdown-content .portal-record-folders tr { padding-block: 12px; border-block-end: 1px solid var(--cf-border); }
+  .sl-markdown-content .portal-record-folders td { margin: 0; padding: 2px 0; border: 0; }
+  .sl-markdown-content .portal-record-folders td:nth-child(3)::before,
+  .sl-markdown-content .portal-record-folders td:nth-child(4)::before { margin-inline-end: 8px; font-family: var(--cf-font-mono); font-size: var(--cf-fs-micro); letter-spacing: 0.06em; text-transform: uppercase; color: var(--cf-text-muted); }
+  .sl-markdown-content .portal-record-folders td:nth-child(3)::before { content: "Count"; }
+  .sl-markdown-content .portal-record-folders td:nth-child(4)::before { content: "Repository"; }
 }
