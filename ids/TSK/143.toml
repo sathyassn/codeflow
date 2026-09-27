@@ -1,0 +1,11 @@
+id = "TSK-143"
+uid = "6afeece0-67a9-477e-9991-c513a063cd74"
+kind = "TSK"
+title = "spec and decision wording matches shipped behaviour"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T14:00:05Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
