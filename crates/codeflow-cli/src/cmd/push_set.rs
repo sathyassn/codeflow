@@ -4,9 +4,16 @@
 //!   the destination's own history to the pushed sha.
 //! - The tree checks (`codeflow validate --docs` and the test-config targets
 //!   with a `quick` mode) read the working tree, so they run only when a
-//!   pushed sha is the checked-out commit and no tracked file differs from
-//!   it. Any other pushed branch gets a note that its tree checks did not run
-//!   and CI runs them; they are never reported as passed for it.
+//!   pushed sha is the checked-out commit, no tracked file differs from it,
+//!   and the checkout is complete (no sparse checkout, every submodule
+//!   initialized at its recorded commit). Otherwise the hook notes that they
+//!   did not run and CI runs them; they are never reported as passed for a
+//!   tree they did not see. Untracked files are part of the working checkout
+//!   and can influence a quick target, which the pass line says.
+//! - The hook blocks on what it can see and never claims more: when neither
+//!   the destination's current sha nor its own tracking refs give a base,
+//!   the range is reported unresolved and left to CI, never compared with a
+//!   local branch.
 //! - The whole set is timed; over [`git_hook::PUSH_SET_BUDGET`] the hook names
 //!   the slowest step.
 //!
@@ -56,7 +63,7 @@ pub(super) fn run(
 
     for r in &pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        match range_base(root, r, namespace.as_deref(), &policy.protected_branches) {
+        match range_base(root, r, namespace.as_deref()) {
             Some(base) => {
                 let args = [
                     "ci",
@@ -70,14 +77,15 @@ pub(super) fn run(
                 run_check(&exe, root, &args, policy, report, &mut steps);
             }
             None => report.notes.push(format!(
-                "`codeflow ci` did not run for '{branch}': the destination has no history to \
-                 compare with and no protected branch resolves here; CI runs the commit checks"
+                "`codeflow ci` did not run for '{branch}': range unresolved (no destination \
+                 sha or tracking history for this destination); CI checks it"
             )),
         }
     }
 
     let head = rev_parse(root, "HEAD");
-    let clean = tracked_tree_clean(root);
+    let incomplete = incomplete_checkout(root);
+    let clean = incomplete.is_none() && tracked_tree_clean(root);
     let at_head = |r: &&&PushRef| clean && head.as_deref() == Some(r.local_sha.as_str());
     if pushed.iter().any(|r| at_head(&r)) {
         run_check(
@@ -91,7 +99,9 @@ pub(super) fn run(
         steps.extend(git_hook::run_push_targets(root, policy, report));
     }
     for r in pushed.iter().filter(|r| !at_head(r)) {
-        let why = if clean {
+        let why = if let Some(reason) = &incomplete {
+            reason.clone()
+        } else if clean {
             format!("{} is not the checked-out commit", short(&r.local_sha))
         } else {
             "tracked files differ from the checked-out commit".to_string()
@@ -184,47 +194,57 @@ fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
     })
 }
 
-/// The exclusive base of a pushed branch's range:
+/// The exclusive base of a pushed branch's range, from the destination's
+/// own history only:
 /// 1. the destination's current sha, when it names a known commit;
 /// 2. else the newest commit the pushed sha shares with the destination's
 ///    own tracking refs (the pushed sha itself when nothing is new);
-/// 3. else the first protected branch that resolves, in the destination's
-///    namespace and then locally (a first push);
-/// 4. else `None`: there is nothing to compare with.
-fn range_base(
-    root: &Path,
-    r: &PushRef,
-    namespace: Option<&str>,
-    protected: &[String],
-) -> Option<String> {
+/// 3. else `None`: the range is unresolved and CI checks it. A local branch
+///    is never substituted: it may be stale or not the destination's base.
+fn range_base(root: &Path, r: &PushRef, namespace: Option<&str>) -> Option<String> {
     let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
     if !zero && is_commit(root, &r.remote_sha) {
         return Some(r.remote_sha.clone());
     }
-    if let Some(ns) = namespace {
-        let glob = format!("--glob={ns}*");
-        if let Some(listed) = git(
-            root,
-            &["rev-list", "--boundary", &r.local_sha, "--not", &glob],
-        ) {
-            if listed.trim().is_empty() {
-                return Some(r.local_sha.clone());
-            }
-            if let Some(boundary) = listed.lines().find_map(|line| line.strip_prefix('-')) {
-                return Some(boundary.to_string());
-            }
-        }
+    let ns = namespace?;
+    let glob = format!("--glob={ns}*");
+    let listed = git(
+        root,
+        &["rev-list", "--boundary", &r.local_sha, "--not", &glob],
+    )?;
+    if listed.trim().is_empty() {
+        return Some(r.local_sha.clone());
     }
-    protected
-        .iter()
-        .filter(|b| !b.contains(['*', '?', '[']))
-        .flat_map(|b| {
-            namespace
-                .map(|ns| format!("{ns}{b}"))
-                .into_iter()
-                .chain(std::iter::once(format!("refs/heads/{b}")))
-        })
-        .find_map(|candidate| rev_parse(root, &candidate))
+    listed
+        .lines()
+        .find_map(|line| line.strip_prefix('-'))
+        .map(str::to_string)
+}
+
+/// Why the working checkout is not the whole committed tree, if it is not:
+/// a sparse checkout, or a submodule that is uninitialized, at another
+/// commit or conflicted.
+fn incomplete_checkout(root: &Path) -> Option<String> {
+    let sparse =
+        git(root, &["config", "--bool", "core.sparseCheckout"]).is_some_and(|v| v.trim() == "true");
+    if sparse {
+        return Some("the checkout is sparse".to_string());
+    }
+    if !root.join(".gitmodules").exists() {
+        return None;
+    }
+    let Some(status) = git(root, &["submodule", "status", "--recursive"]) else {
+        return Some("submodule state could not be read".to_string());
+    };
+    status.lines().find_map(|line| {
+        let path = line.get(1..)?.split_whitespace().nth(1).unwrap_or("?");
+        match line.chars().next()? {
+            '-' => Some(format!("submodule {path} is not initialized")),
+            '+' => Some(format!("submodule {path} is not at its recorded commit")),
+            'U' => Some(format!("submodule {path} has merge conflicts")),
+            _ => None,
+        }
+    })
 }
 
 fn git(root: &Path, args: &[&str]) -> Option<String> {

@@ -931,7 +931,8 @@ pub fn run_push_targets(
         }) => {
             if passed {
                 report.notes.push(format!(
-                    "quick targets passed ({} target(s))",
+                    "quick targets passed on the working checkout ({} target(s); untracked \
+                     files there can influence them, CI checks the pushed commit)",
                     results.len()
                 ));
             } else {
