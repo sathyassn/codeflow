@@ -493,6 +493,26 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
         assert_blocks(&ci(root, name, &body("")), name, needle);
     }
 
+    // An epic cancelled on the target after the line forked is closed.
+    git(root, &["switch", "-q", "-c", "plan/cancel", "main"]);
+    std::fs::write(
+        root.join("project-management/epics/EPC-001.md"),
+        EPIC.replace("status: planning", "status: cancelled"),
+    )
+    .unwrap();
+    git(root, &["commit", "-qam", "chore: cancel the epic"]);
+    git(root, &["switch", "-q", "main"]);
+    merge(root, "plan/cancel");
+    git(root, &["switch", "-q", line]);
+    assert_blocks(
+        &ci(root, line, &body("")),
+        "cancelled after fork",
+        "EPC-001 is cancelled",
+    );
+    git(root, &["switch", "-q", "main"]);
+    git(root, &["reset", "-q", "--hard", "HEAD~1"]);
+    git(root, &["switch", "-q", line]);
+
     // The line lands on the project's default target only.
     git(root, &["branch", "release/next", "main"]);
     git(root, &["switch", "-q", line]);

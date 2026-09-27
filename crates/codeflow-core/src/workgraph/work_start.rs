@@ -344,8 +344,9 @@ pub fn check_epic_line(
             .map_err(|error| format!("{revision}: {error}"))
     };
     let head_commit = commit(head)?;
+    let target_tip = commit(base)?.id();
     let merge_base = repo
-        .merge_base(commit(base)?.id(), head_commit.id())
+        .merge_base(target_tip, head_commit.id())
         .map_err(|error| error.to_string())?;
     let records_at = |oid: git2::Oid| {
         repo.find_commit(oid)
@@ -353,7 +354,10 @@ pub fn check_epic_line(
             .map_err(|error| error.to_string())
             .and_then(|tree| records_from_tree(&repo, &tree).map_err(|error| error.to_string()))
     };
-    let at_base = records_at(merge_base)?;
+    // The target's current records decide, so an epic closed on the target
+    // after the line forked is closed here; the merge-base only bounds the
+    // range and the first-parent walk.
+    let at_base = records_at(target_tip)?;
     let at_head = records_at(head_commit.id())?;
     let epic = at_base
         .get(epic_id)
