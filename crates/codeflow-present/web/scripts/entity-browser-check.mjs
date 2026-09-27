@@ -98,6 +98,28 @@ try {
       }
     }
   }
+  // A drawing shown at a different scale on each axis (T118-3): stretched to
+  // about 0.3 px per unit vertically, the stroke padding must hold inside the
+  // service's 8 unit tolerance on that axis, or the submit below is refused.
+  const stretch = (on) => page.evaluate((stretched) => {
+    const svg = document.querySelector("[data-cf-block-id='stage-registry'] svg");
+    if (stretched) {
+      svg.setAttribute("preserveAspectRatio", "none");
+      svg.style.height = "130px";
+    } else {
+      svg.removeAttribute("preserveAspectRatio");
+      svg.style.height = "auto";
+    }
+    const matrix = svg.getScreenCTM();
+    return { x: Math.hypot(matrix.a, matrix.b), y: Math.hypot(matrix.c, matrix.d) };
+  }, on);
+  const scale = await stretch(true);
+  assert.ok(scale.y < 0.75 && scale.x > scale.y * 1.5, `the stage did not stretch: ${JSON.stringify(scale)}`);
+  const stretched = { ...TARGETS[0], name: "rectangle on a stretched drawing" };
+  await capture(page, stretched, "mouse");
+  await saveNote(page, "Stretched: keep this part as drawn.", stretched.label, stretched.name);
+  expected.push({ where: stretched.name, target: stretched });
+  await stretch(false);
   // QA defect 5 in its figure form: a drag across a figure's label pins, or
   // says why it cannot; it is never a dead gesture.
   await armComment(page);
@@ -184,7 +206,7 @@ try {
     .map((line) => line.innerText));
   assert.ok(exportedTitles.includes("Figure 2 · How a task number is issued"), JSON.stringify(exportedTitles));
   assert.ok(exportedTitles.includes("Figure 5 · From a question to a release"), JSON.stringify(exportedTitles));
-  process.stdout.write(`cf-present entity checks passed: ${TARGETS.length} targets by ${GESTURES.join(", ")} in ${THEMES.join(" and ")}, a figure label drag that pins (QA defect 5), select enclosing, framing titles, ${stored.length} notes stored with server labels and PNG crops, re-anchored with relabel and block fallback notices, and framing titles visible in the export\n`);
+  process.stdout.write(`cf-present entity checks passed: ${TARGETS.length} targets by ${GESTURES.join(", ")} in ${THEMES.join(" and ")}, one on a drawing stretched unevenly, a figure label drag that pins (QA defect 5), select enclosing, framing titles, ${stored.length} notes stored with server labels and PNG crops, re-anchored with relabel and block fallback notices, and framing titles visible in the export\n`);
 } finally {
   if (context) await context.close().catch(() => undefined);
   if (sessionId) {

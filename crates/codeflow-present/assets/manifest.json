@@ -14,7 +14,7 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-KQJ4ILTU.js",
+      "present.app": "/app/assets/app-TJIYR7S4.js",
       "present.style": "/app/assets/app-EYRIQCGA.css"
     },
     "inline": {
@@ -42,14 +42,14 @@
         ]
       },
       {
-        "request_path": "/app/assets/app-KQJ4ILTU.js",
-        "stored_path": "service/app-KQJ4ILTU.js.br",
+        "request_path": "/app/assets/app-TJIYR7S4.js",
+        "stored_path": "service/app-TJIYR7S4.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 80056,
-        "encoded_bytes": 24489,
-        "sha256": "dfff25d09dcc66da0ead77b540c85ff445d3ea7e43c2ac318b423c3d539bd776",
-        "etag": "\"sha256-3/8l0J3MZtoOrXe1QMhf9EXT6n5Dwqwxi0I8PVOb13Y=\"",
+        "raw_bytes": 80166,
+        "encoded_bytes": 24531,
+        "sha256": "77b7efd4eec40da3d4ac307466d97f14699fb6a5c3fba94f7668695973e332b4",
+        "etag": "\"sha256-d7fv1O7EDaPUrDB0Ztl/FGmftqXD+6lPdmhpWXPjMrQ=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -315,8 +315,8 @@
     ],
     "metrics": {
       "asset_count": 15,
-      "raw_corpus_bytes": 1025329,
-      "brotli_corpus_bytes": 268877,
+      "raw_corpus_bytes": 1025439,
+      "brotli_corpus_bytes": 268919,
       "largest_raw_chunk_bytes": 186275,
       "largest_brotli_chunk_bytes": 131206
     }
@@ -338,5 +338,5 @@
     "largest_brotli_chunk_bytes": 145000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "bba0fe325e4d5506ac8b374d3a0ec9b5acc217310128ed889cf4e13988c96f39"
+  "corpus_sha256": "690b3c7c7c6f9e0808f37fba10ef5317c8f2813dc2f081fc52887e7bcc60d700"
 }

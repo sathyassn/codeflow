@@ -130,19 +130,21 @@ function intersectingSvg(root: HTMLElement, box: DOMRect): SVGSVGElement | null 
   return svg instanceof SVGSVGElement ? svg : null;
 }
 
+// The crop is drawn from the same user-space rectangle `userSpaceBox`
+// reports, through the drawing's own screen transform (viewBox origin,
+// aspect placement and non-uniform scale included), and stretched exactly
+// onto the crop, so its pixels are the pixels under the box (T118-2).
 async function rasterizeSvgCrop(svg: SVGSVGElement, box: DOMRect, png: boolean): Promise<ExcerptImage | null> {
-  const svgRect = svg.getBoundingClientRect();
+  const user = userRect(svg, box);
+  if (!user || user.width <= 0 || user.height <= 0) return null;
   const clone = svg.cloneNode(true) as SVGSVGElement;
   bakeSvgPaints(svg, clone);
-  const vb = svg.viewBox.baseVal;
-  const userW = vb && vb.width > 0 ? vb.width : svgRect.width;
-  const userH = vb && vb.height > 0 ? vb.height : svgRect.height;
-  const sx = userW / Math.max(1, svgRect.width);
-  const sy = userH / Math.max(1, svgRect.height);
   clone.setAttribute("xmlns", "http://www.w3.org/2000/svg");
-  clone.setAttribute("viewBox", `${(box.left - svgRect.left) * sx} ${(box.top - svgRect.top) * sy} ${Math.max(1, box.width * sx)} ${Math.max(1, box.height * sy)}`);
+  clone.setAttribute("viewBox", `${user.x} ${user.y} ${user.width} ${user.height}`);
+  clone.setAttribute("preserveAspectRatio", "none");
   clone.setAttribute("width", String(Math.round(box.width)));
   clone.setAttribute("height", String(Math.round(box.height)));
+  clone.removeAttribute("style");
   return canvasFromSvgMarkup(new XMLSerializer().serializeToString(clone), box, groundOf(svg), png);
 }
 
@@ -156,33 +158,46 @@ function groundOf(element: Element): string {
 }
 
 /**
- * The thin-stroke padding in CSS px (SPC-014 B4), held inside the service's
- * containment tolerance of 8 user units when the drawing is shown below 0.75
- * px per unit, so a correct crop is never refused as outside its entity.
+ * The thin-stroke padding in CSS px on each axis (SPC-014 B4), held inside
+ * the service's containment tolerance of 8 user units on that axis when the
+ * drawing is shown below 0.75 px per unit there, so a correct crop is never
+ * refused as outside its entity, whatever the aspect placement (T118-3).
  */
-export function entityCropPadding(svg: SVGSVGElement, strokePadding: number): number {
+export function entityCropPadding(svg: SVGSVGElement, strokePadding: number): { x: number; y: number } {
   const matrix = svg.getScreenCTM();
-  const pxPerUnit = matrix ? Math.hypot(matrix.a, matrix.b) : 1;
-  return Math.min(strokePadding, 7.5 * (pxPerUnit || 1));
+  const perUnitX = matrix ? Math.hypot(matrix.a, matrix.b) : 1;
+  const perUnitY = matrix ? Math.hypot(matrix.c, matrix.d) : 1;
+  return {
+    x: Math.min(strokePadding, 7.5 * (perUnitX || 1)),
+    y: Math.min(strokePadding, 7.5 * (perUnitY || 1)),
+  };
 }
 
 /** A client rectangle widened on every side, as the entity crop pads thin strokes. */
-export function paddedRect(rect: DOMRect, padding: number): DOMRect {
-  return new DOMRect(rect.left - padding, rect.top - padding, rect.width + 2 * padding, rect.height + 2 * padding);
+export function paddedRect(rect: DOMRect, padding: number | { x: number; y: number }): DOMRect {
+  const { x, y } = typeof padding === "number" ? { x: padding, y: padding } : padding;
+  return new DOMRect(rect.left - x, rect.top - y, rect.width + 2 * x, rect.height + 2 * y);
 }
 
-/** A client rectangle in the user space of an SVG, at most three decimals (SPC-014 I2). */
-export function userSpaceBox(svg: SVGSVGElement, box: DOMRect): { x: number; y: number; width: number; height: number } | null {
+// A client rectangle in an SVG's user space, unrounded.
+function userRect(svg: SVGSVGElement, box: DOMRect): { x: number; y: number; width: number; height: number } | null {
   const matrix = svg.getScreenCTM()?.inverse();
   if (!matrix) return null;
   const corners = [[box.left, box.top], [box.right, box.top], [box.left, box.bottom], [box.right, box.bottom]]
     .map(([x, y]) => new DOMPoint(x, y).matrixTransform(matrix));
   const xs = corners.map((point) => point.x);
   const ys = corners.map((point) => point.y);
-  const round = (value: number): number => Math.round(value * 1000) / 1000;
   const left = Math.min(...xs);
   const top = Math.min(...ys);
-  return { x: round(left), y: round(top), width: round(Math.max(...xs) - left), height: round(Math.max(...ys) - top) };
+  return { x: left, y: top, width: Math.max(...xs) - left, height: Math.max(...ys) - top };
+}
+
+/** A client rectangle in the user space of an SVG, at most three decimals (SPC-014 I2). */
+export function userSpaceBox(svg: SVGSVGElement, box: DOMRect): { x: number; y: number; width: number; height: number } | null {
+  const user = userRect(svg, box);
+  if (!user) return null;
+  const round = (value: number): number => Math.round(value * 1000) / 1000;
+  return { x: round(user.x), y: round(user.y), width: round(user.width), height: round(user.height) };
 }
 
 async function rasterizeDomSlice(root: HTMLElement, box: DOMRect): Promise<ExcerptImage | null> {

@@ -89,12 +89,24 @@ export async function checkEntityCrops(browser) {
       <rect class="node" x="20" y="20" width="60" height="40" fill="#1a5fb4"/>
       <line class="edge" x1="90" y1="40" x2="170" y2="40" stroke="#222" stroke-width="1.5"/>
     </svg>`;
-    await page.setContent(`<style>body{margin:0;background:#fff}</style><main id="document">${drawing("one", 200)}${drawing("half", 100)}${drawing("double", 400)}</main>`);
+    // A drawing whose viewBox starts at -100,0 and is letterboxed into a
+    // square, and one stretched to 2 px per unit across and 0.5 down (T118-2,
+    // T118-3). Each crop of the red node must carry red. The blue node sits
+    // where a crop that ignored the origin and the letterbox would land.
+    const placed = `<svg id="placed" viewBox="-100 0 200 100" width="400" height="400" style="display:block;background:#fff">
+      <rect class="node" x="-80" y="20" width="60" height="40" fill="#e01b24"/>
+      <rect x="0" y="20" width="100" height="60" fill="#1a5fb4"/>
+    </svg>`;
+    const stretched = `<svg id="stretched" viewBox="0 0 200 100" width="400" height="50" preserveAspectRatio="none" style="display:block;background:#fff">
+      <rect class="node" x="20" y="20" width="60" height="40" fill="#e01b24"/>
+      <rect x="120" y="20" width="60" height="40" fill="#1a5fb4"/>
+    </svg>`;
+    await page.setContent(`<style>body{margin:0;background:#fff}</style><main id="document">${drawing("one", 200)}${drawing("half", 100)}${drawing("double", 400)}${placed}${stretched}</main>`);
     await page.addScriptTag({ content: compiled.outputFiles[0].text });
     const cells = await page.evaluate(async () => {
       const root = document.getElementById("document");
       const h = cropHarness;
-      async function crop(svg, element) {
+      async function crop(svg, element, sampleCentre = false) {
         const rect = element.getBoundingClientRect();
         const padding = h.entityCropPadding(svg, 6);
         const box = h.paddedRect(rect, padding);
@@ -103,9 +115,19 @@ export async function checkEntityCrops(browser) {
         const decoded = new Image();
         decoded.src = `data:${image.media_type};base64,${image.data_base64}`;
         await decoded.decode();
+        let centre = null;
+        if (sampleCentre) {
+          const canvas = document.createElement("canvas");
+          canvas.width = decoded.width;
+          canvas.height = decoded.height;
+          const context = canvas.getContext("2d");
+          context.drawImage(decoded, 0, 0);
+          centre = [...context.getImageData(Math.floor(decoded.width / 2), Math.floor(decoded.height / 2), 1, 1).data.slice(0, 3)];
+        }
         return {
+          centre,
           image: { media_type: image.media_type, width: decoded.width, height: decoded.height },
-          expected: { width: rect.width + 2 * padding, height: rect.height + 2 * padding },
+          expected: { width: rect.width + 2 * padding.x, height: rect.height + 2 * padding.y },
           userBox: h.userSpaceBox(svg, box),
         };
       }
@@ -113,6 +135,10 @@ export async function checkEntityCrops(browser) {
       for (const id of ["one", "half", "double"]) {
         const svg = document.getElementById(id);
         out[id] = { node: await crop(svg, svg.querySelector(".node")), edge: await crop(svg, svg.querySelector(".edge")) };
+      }
+      for (const id of ["placed", "stretched"]) {
+        const svg = document.getElementById(id);
+        out[id] = { node: await crop(svg, svg.querySelector(".node"), true) };
       }
       // Controls: the whole drawing is the wrong size for the node; empty ground is one colour.
       const one = document.getElementById("one");
@@ -137,9 +163,21 @@ export async function checkEntityCrops(browser) {
           && box.y + box.height <= entity.y + entity.height + 8, `${label}: ${JSON.stringify(box)} is outside the tolerance`);
       }
     }
+    const placedBounds = { placed: { x: -80, y: 20, width: 60, height: 40 }, stretched: bounds.node };
+    for (const id of ["placed", "stretched"]) {
+      const cell = cells[id].node;
+      assert.ok(cell.image && sizeMatches(cell), `${id}: ${JSON.stringify(cell)}`);
+      const [red, green, blue] = cell.centre;
+      assert.ok(red > 190 && green < 60 && blue < 60, `${id}: the crop carries ${cell.centre}, not the red node`);
+      const entity = placedBounds[id];
+      const box = cell.userBox;
+      assert.ok(box.x >= entity.x - 8 && box.y >= entity.y - 8
+        && box.x + box.width <= entity.x + entity.width + 8
+        && box.y + box.height <= entity.y + entity.height + 8, `${id}: ${JSON.stringify(box)} is outside the tolerance`);
+    }
     assert.ok(cells.wrong.image && !sizeMatches({ ...cells.wrong, expected: cells.one.node.expected }), "the wrong-element control passed the size rule");
     assert.equal(cells.blank, null, "a crop of empty ground was not refused");
-    process.stdout.write("entity crops passed: PNG at 1, 0.5 and 2 px per unit within 2 px, inside the 8 unit tolerance, wrong-size and blank controls\n");
+    process.stdout.write("entity crops passed: PNG at 1, 0.5 and 2 px per unit within 2 px, inside the 8 unit tolerance, the right pixels under an offset letterboxed viewBox and an uneven stretch, wrong-size and blank controls\n");
   } finally {
     await context.close();
   }
