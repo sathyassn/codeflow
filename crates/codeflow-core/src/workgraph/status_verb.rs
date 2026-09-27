@@ -199,8 +199,11 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
             .and_then(|target| repo.revparse_single(&target).ok())
             .and_then(|object| object.peel_to_commit().ok())
             .map(|commit| commit.id());
-    super::acceptance::bind_completion(&repo, task, graph, head, target_tip)
+    super::acceptance::uncommitted_outside(&repo, task)
         .into_iter()
+        .chain(super::acceptance::bind_completion(
+            &repo, task, graph, head, target_tip,
+        ))
         .map(|finding| format!("{}: {}", finding.rule, finding.message))
         .collect()
 }

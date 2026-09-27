@@ -323,10 +323,18 @@ fn work_checks<'a>(
         base,
         head,
     });
-    if let Some(body) = pr_body {
-        classification::dispatch(root, git, body, branch, range_parts.as_ref(), tagged, ran);
-    }
-    acceptance::dispatch(root, git, range_parts.as_ref(), branch, tagged, ran);
+    let class = pr_body.and_then(|body| {
+        classification::dispatch(root, git, body, branch, range_parts.as_ref(), tagged, ran)
+    });
+    acceptance::dispatch(
+        root,
+        git,
+        range_parts.as_ref(),
+        branch,
+        class.as_ref(),
+        tagged,
+        ran,
+    );
 }
 
 /// The durable-record rows of the dispatch, in their append-only order

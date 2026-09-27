@@ -14,8 +14,11 @@
 
 use git2::{Oid, Repository};
 
+use super::classify::is_planning_path;
 use super::lifecycle::{Graph, RecordView};
-use super::record_text::{outcome_word, AcceptanceBlock, Criterion};
+use super::record_text::{
+    frontmatter_len, outcome_word, scan_record, section_span, AcceptanceBlock, Criterion,
+};
 use super::work_start::RecordKind;
 
 /// The acceptance block names the reviewed commit, and waivers name their
@@ -74,40 +77,29 @@ fn blob_at(repo: &Repository, commit: Oid, path: &str) -> Option<String> {
     Some(String::from_utf8_lossy(blob.content()).into_owned())
 }
 
-/// A record's text without its `status:` line and its `## Closeout`
-/// section: what must not change after the reviewed commit.
+/// A record's text without its frontmatter `status:` field and its
+/// `## Closeout` section: what must not change after the reviewed commit.
+/// The Closeout is the section the record parser finds (the one the
+/// acceptance block is read from), so a heading inside a comment, an HTML
+/// block or a fence neither ends nor opens it.
 fn reviewed_part(content: &str) -> String {
-    let mut out = Vec::new();
-    let mut in_frontmatter = false;
-    let mut in_closeout = false;
-    let mut in_fence = false;
-    for (index, line) in content.lines().enumerate() {
-        let trimmed = line.trim_end();
-        if index == 0 && trimmed == "---" {
-            in_frontmatter = true;
-            out.push(line);
-            continue;
-        }
-        if in_frontmatter {
-            if trimmed == "---" {
-                in_frontmatter = false;
-            } else if line.starts_with("status:") {
-                continue;
-            }
-            out.push(line);
-            continue;
-        }
-        if trimmed.starts_with("```") || trimmed.starts_with("~~~") {
-            in_fence = !in_fence;
-        }
-        if !in_fence && trimmed.starts_with("## ") {
-            in_closeout = trimmed == "## Closeout";
-        }
-        if !in_closeout {
-            out.push(line);
-        }
-    }
-    out.join("\n").trim_end().to_string()
+    let lines: Vec<&str> = content.lines().collect();
+    let frontmatter = frontmatter_len(&lines);
+    let scanned = scan_record(&lines);
+    let closeout = section_span(&scanned, "## Closeout");
+    lines
+        .iter()
+        .enumerate()
+        .filter(|(index, line)| {
+            let status_field = *index > 0 && *index < frontmatter && line.starts_with("status:");
+            let in_closeout = closeout.is_some_and(|(start, end)| (start..end).contains(index));
+            !status_field && !in_closeout
+        })
+        .map(|(_, line)| *line)
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
 }
 
 /// Bind a completed task's active acceptance block to the reviewed commit
@@ -133,7 +125,6 @@ pub fn bind_completion(
             "{}: reviewed commit {} is not in this repository",
             task.id, block.reviewed
         )),
-        Some(reviewed) if reviewed == head => {}
         Some(reviewed) if !is_ancestor_or_same(repo, reviewed, head) => bind(format!(
             "{}: reviewed commit {} is not the head or an ancestor of it; review the result that lands",
             task.id, block.reviewed
@@ -160,6 +151,45 @@ pub fn bind_completion(
     findings
 }
 
+/// Uncommitted changes outside the task record, for a completion made in a
+/// working tree (`task status complete`): the reviewed result is a commit,
+/// so a staged, unstaged or new file outside this record was never reviewed
+/// (R-60). Ignored files do not count. Empty when the record has no active
+/// block to bind.
+#[must_use]
+pub fn uncommitted_outside(repo: &Repository, task: &RecordView) -> Vec<Finding> {
+    if active_block(task).is_none() {
+        return Vec::new();
+    }
+    let mut options = git2::StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .include_ignored(false);
+    let Ok(statuses) = repo.statuses(Some(&mut options)) else {
+        return vec![finding(
+            BINDING_RULE,
+            format!("{}: the working tree's state cannot be read", task.id),
+        )];
+    };
+    let paths: Vec<String> = statuses
+        .iter()
+        .map(|entry| String::from_utf8_lossy(entry.path_bytes()).replace('\\', "/"))
+        .filter(|path| *path != task.path)
+        .collect();
+    if paths.is_empty() {
+        return Vec::new();
+    }
+    vec![finding(
+        BINDING_RULE,
+        format!(
+            "{}: uncommitted changes outside the record were never reviewed ({}); commit them and review the result again",
+            task.id,
+            paths.join(", ")
+        ),
+    )]
+}
+
 /// Why the diff from `reviewed` to `head` is more than this record's status
 /// and Closeout, if it is.
 fn later_change(repo: &Repository, task: &RecordView, reviewed: Oid, head: Oid) -> Option<String> {
@@ -180,7 +210,12 @@ fn later_change(repo: &Repository, task: &RecordView, reviewed: Oid, head: Oid) 
     if let Some(path) = other.first() {
         return Some(format!("{path} changed"));
     }
-    let then = blob_at(repo, reviewed, &task.path)?;
+    let Some(then) = blob_at(repo, reviewed, &task.path) else {
+        return Some(format!(
+            "{} is not in the reviewed commit, so its scope was never reviewed; it appeared",
+            task.path
+        ));
+    };
     (reviewed_part(&then) != reviewed_part(&task.content))
         .then(|| "the record changed outside its status and Closeout".to_string())
 }
@@ -215,8 +250,27 @@ fn waiver_problem(
             evidence.trim()
         ));
     }
-    let commit = repo.find_commit(amendment).ok()?;
+    let Ok(commit) = repo.find_commit(amendment) else {
+        return Some(format!("names {}, which cannot be read", evidence.trim()));
+    };
     let parent = commit.parent_id(0).ok();
+    // What the amendment brought onto the target (for a merge, against the
+    // target-side parent) changes planning records only (R-52, R-60).
+    match non_planning_change(repo, parent, amendment) {
+        Ok(None) => {}
+        Ok(Some(path)) => {
+            return Some(format!(
+                "names {}, which also changes {path}; a planning amendment changes planning records only",
+                evidence.trim()
+            ));
+        }
+        Err(_) => {
+            return Some(format!(
+                "names {}, whose change cannot be read",
+                evidence.trim()
+            ));
+        }
+    }
     let criterion = |oid: Option<Oid>| {
         oid.and_then(|oid| blob_at(repo, oid, &task.path))
             .and_then(|content| RecordView::parse(RecordKind::Task, &task.path, &content).ok())
@@ -237,6 +291,27 @@ fn waiver_problem(
             task.id
         )),
     }
+}
+
+/// The first path the change from `parent` (none for a root commit) to
+/// `commit` touches outside the planning records; an error when a tree or
+/// the diff cannot be read.
+fn non_planning_change(
+    repo: &Repository,
+    parent: Option<Oid>,
+    commit: Oid,
+) -> Result<Option<String>, git2::Error> {
+    let tree = |oid: Oid| repo.find_commit(oid).and_then(|commit| commit.tree());
+    let after = tree(commit)?;
+    let before = parent.map(tree).transpose()?;
+    let diff = repo.diff_tree_to_tree(before.as_ref(), Some(&after), None)?;
+    let outside = diff
+        .deltas()
+        .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
+        .flatten()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .find(|path| !is_planning_path(path));
+    Ok(outside)
 }
 
 /// The epic journey criterion a task serves, when it has no journey of its
@@ -377,9 +452,20 @@ pub fn journey_requirement_at(
     Ok(journey_requirement(&graph, task_id))
 }
 
+/// Whether a range may change task criteria (R-52): a planning-only change
+/// or a validated epic integration line. The caller decides it from the
+/// pull request's validated class, never from the branch prefix alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Criteria {
+    /// Criteria stay as the target has them.
+    Frozen,
+    /// A planning-only range or a validated epic line may change them.
+    Amendable,
+}
+
 /// The findings of a pull request from `base` (the target tip) to `head`:
-/// criteria frozen for any branch but a planning branch or an epic line,
-/// and every completion in the range bound to `head`.
+/// criteria frozen unless `criteria` is [`Criteria::Amendable`], and every
+/// completion in the range bound to `head`.
 ///
 /// # Errors
 ///
@@ -389,7 +475,7 @@ pub fn pull_request_findings(
     repo_root: &std::path::Path,
     base: &str,
     head: &str,
-    branch: &str,
+    criteria: Criteria,
 ) -> Result<Vec<Finding>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
     let oid = |revision: &str| {
@@ -400,7 +486,7 @@ pub fn pull_request_findings(
     };
     let target_tip = oid(base)?;
     let mut found = Vec::new();
-    if !branch.starts_with("plan/") && !branch.starts_with("integration/") {
+    if criteria == Criteria::Frozen {
         let anchor = repo
             .merge_base(target_tip, oid(head)?)
             .map_err(|error| error.message().to_string())?;
@@ -430,5 +516,33 @@ mod tests {
         assert_ne!(reviewed_part(base), reviewed_part(&title));
         let after_closeout = format!("{base}\n## Notes\n\nNew.\n");
         assert_ne!(reviewed_part(base), reviewed_part(&after_closeout));
+    }
+
+    /// A `## Closeout` line inside a comment or a fence is not the Closeout,
+    /// so the text after it stays under review; a `status:` line outside the
+    /// frontmatter is reviewed text.
+    #[test]
+    fn only_the_parsed_closeout_is_outside_review() {
+        let base = "---\nid: TSK-001\nstatus: todo\n---\n\n# TSK-001\n\n## Description\n\n{hidden}\n\nVisible scope.\n\n## Acceptance Criteria\n\n- AC-1 When run, the system shall work.\n\n## Closeout\n\nPending.\n";
+        for hidden in [
+            "<!--\n## Closeout\n-->",
+            "````text\n```\n## Closeout\n```\n````",
+            "~~~\n## Closeout\n~~~",
+        ] {
+            let before = base.replace("{hidden}", hidden);
+            let narrowed = before.replace("Visible scope.", "Narrower scope.");
+            assert_ne!(reviewed_part(&before), reviewed_part(&narrowed), "{hidden}");
+            let done = before
+                .replace("status: todo", "status: complete")
+                .replace("Pending.", "Done.");
+            assert_eq!(reviewed_part(&before), reviewed_part(&done), "{hidden}");
+        }
+        let body_status = base
+            .replace("{hidden}", "status: todo")
+            .replace("status: todo\n\nVisible", "status: done\n\nVisible");
+        assert_ne!(
+            reviewed_part(&base.replace("{hidden}", "status: todo")),
+            reviewed_part(&body_status)
+        );
     }
 }

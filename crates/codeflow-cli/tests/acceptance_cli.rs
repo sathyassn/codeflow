@@ -294,8 +294,12 @@ fn a_waiver_names_its_amendment_on_the_target() {
         &task("TSK-001", "todo", &amended, "Pending.\n"),
     );
     let amendment = commit(root, "docs(records): narrow TSK-001 AC-1");
-    write(root, "docs/note.md", "# Note\n");
-    let unrelated = commit(root, "docs: add a note");
+    write(
+        root,
+        "project-management/epics/EPC-001.md",
+        &EPIC.replace("An outcome.", "An outcome, restated."),
+    );
+    let unrelated = commit(root, "docs(records): restate the epic");
 
     let waived = |reviewed: &str, by: &str| {
         block(
@@ -550,6 +554,278 @@ fn an_after_release_criterion_is_deferred_never_verified() {
         } else {
             assert_ne!(result.0, 0, "{needle}: {}", result.1);
             assert!(result.1.contains(needle), "{needle}: {}", result.1);
+        }
+    }
+}
+
+/// A valid two-criterion block reviewed at `reviewed`.
+fn valid_block(reviewed: &str) -> String {
+    block(
+        reviewed,
+        &[
+            "AC-1: verified | cargo test | 3 passed",
+            "AC-2: verified | journey ran",
+        ],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    )
+}
+
+/// Review round 1, T105-1: the freeze follows the validated class, not the
+/// branch prefix. Tracked code on a `plan/` branch keeps criteria frozen; a
+/// records-only planning change on a `fix/` branch may amend them.
+#[test]
+fn the_freeze_follows_the_class_not_the_prefix() {
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let loosened = OWN_JOURNEY.replace("shall work.", "shall mostly work.");
+
+    code_change(root, "plan/code-with-criteria", "pub fn work() {}\n");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &loosened, "Pending.\n"),
+    );
+    commit(root, "docs(records): loosen AC-1");
+    assert_blocks(
+        &ci(root, "plan/code-with-criteria", "TSK-001"),
+        "tracked code on a plan/ prefix",
+        &["work.criteria_frozen"],
+    );
+
+    git(root, &["switch", "-C", "fix/criteria", "main"]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", &loosened, "Pending.\n"),
+    );
+    commit(root, "docs(records): loosen AC-1");
+    let planning = ci_with(root, "fix/criteria", "");
+    assert_passes(&planning, "a records-only planning change on fix/");
+    assert!(
+        !planning.1.contains("work.criteria_frozen"),
+        "{}",
+        planning.1
+    );
+}
+
+/// Review round 1, T105-2: a reviewed commit that predates the record
+/// never reviewed its scope, even when only the record changed since.
+#[test]
+fn a_reviewed_commit_without_the_record_fails() {
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let before_record = head(root);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task("TSK-001", "todo", OWN_JOURNEY, "Pending.\n"),
+    );
+    commit(root, "docs(records): plan TSK-001");
+    git(root, &["switch", "-C", BRANCH, "main"]);
+    complete(root, "TSK-001", OWN_JOURNEY, &valid_block(&before_record));
+    assert_blocks(
+        &ci(root, BRANCH, "TSK-001"),
+        "a reviewed commit that predates the record",
+        &[
+            "work.acceptance_binding",
+            "is not in the reviewed commit, so its scope was never reviewed",
+        ],
+    );
+}
+
+/// Review round 1, T105-3: a `## Closeout` line in a Description comment
+/// does not hide the text after it from the binding.
+#[test]
+fn a_hidden_closeout_heading_hides_nothing() {
+    let dir = repo(&[], "");
+    let root = dir.path();
+    let hidden = |text: &str, status: &str, closeout: &str| {
+        task("TSK-001", status, OWN_JOURNEY, closeout).replace(
+            "## Description\n\nWork.\n",
+            &format!("## Description\n\n<!--\n## Closeout\n-->\n\n{text}\n"),
+        )
+    };
+    write(
+        root,
+        &record_path("TSK-001"),
+        &hidden("Visible scope.", "todo", "Pending.\n"),
+    );
+    commit(root, "docs(records): plan TSK-001");
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+
+    write(
+        root,
+        &record_path("TSK-001"),
+        &hidden("Visible scope.", "complete", &valid_block(&reviewed)),
+    );
+    commit(root, "docs(records): record the acceptance");
+    assert_passes(
+        &ci(root, BRANCH, "TSK-001"),
+        "status and the real Closeout only",
+    );
+
+    write(
+        root,
+        &record_path("TSK-001"),
+        &hidden("Narrower scope.", "complete", &valid_block(&reviewed)),
+    );
+    commit(root, "docs(records): narrow the scope");
+    assert_blocks(
+        &ci(root, BRANCH, "TSK-001"),
+        "a scope edit after a hidden heading",
+        &["the record changed outside its status and Closeout"],
+    );
+}
+
+/// Review round 1, T105-4: `task status complete` refuses staged, unstaged
+/// and new files outside the record, which the reviewed commit never held;
+/// uncommitted edits to the record itself are how it completes.
+#[test]
+fn task_status_complete_refuses_uncommitted_code() {
+    for what in ["unstaged", "staged", "untracked"] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task(
+                "TSK-001",
+                "in_progress",
+                OWN_JOURNEY,
+                &valid_block(&reviewed),
+            ),
+        );
+        match what {
+            "untracked" => write(root, "src/new.rs", "pub fn new() {}\n"),
+            _ => write(root, "src/lib.rs", "pub fn dirty() {}\n"),
+        }
+        if what == "staged" {
+            git(root, &["add", "src/lib.rs"]);
+        }
+        let result = status_complete(root, "TSK-001");
+        assert_ne!(result.0, 0, "{what}: {}", result.1);
+        assert!(
+            result
+                .1
+                .contains("uncommitted changes outside the record were never reviewed"),
+            "{what}: {}",
+            result.1
+        );
+        let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+        assert!(record.contains("status: in_progress"), "{what}: {record}");
+    }
+
+    let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+    let root = dir.path();
+    let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task(
+            "TSK-001",
+            "in_progress",
+            OWN_JOURNEY,
+            &valid_block(&reviewed),
+        ),
+    );
+    let renamed = task(
+        "TSK-001",
+        "in_progress",
+        OWN_JOURNEY,
+        &valid_block(&reviewed),
+    )
+    .replace("title: \"work TSK-001\"", "title: \"renamed\"");
+    write(root, &record_path("TSK-001"), &renamed);
+    let result = status_complete(root, "TSK-001");
+    assert_ne!(result.0, 0, "a scope edit in the record: {}", result.1);
+    assert!(
+        result
+            .1
+            .contains("the record changed outside its status and Closeout"),
+        "{}",
+        result.1
+    );
+
+    write(
+        root,
+        &record_path("TSK-001"),
+        &task(
+            "TSK-001",
+            "in_progress",
+            OWN_JOURNEY,
+            &valid_block(&reviewed),
+        ),
+    );
+    let result = status_complete(root, "TSK-001");
+    assert_eq!(result.0, 0, "record-only dirt completes: {}", result.1);
+}
+
+/// Review round 1, T105-5: a waiver names a planning amendment. A merge or
+/// a commit that also brings code onto the target is not one; a merge of a
+/// records-only planning branch is.
+#[test]
+fn a_waiver_amendment_changes_planning_records_only() {
+    let amended = OWN_JOURNEY.replace("shall work.", "shall work on Linux.");
+    let waived = |reviewed: &str, by: &str| {
+        block(
+            reviewed,
+            &[
+                &format!("AC-1: waived | {by}"),
+                "AC-2: verified | journey ran",
+            ],
+            "verified | tests/journey.rs",
+            "none: nothing deferred",
+        )
+    };
+    for (what, with_code, merged) in [
+        ("a mixed merge", true, true),
+        ("a mixed commit", true, false),
+        ("a planning-only merge", false, true),
+    ] {
+        let dir = repo(&[("TSK-001", OWN_JOURNEY)], "");
+        let root = dir.path();
+        if merged {
+            git(root, &["switch", "-C", "plan/narrow", "main"]);
+        }
+        write(
+            root,
+            &record_path("TSK-001"),
+            &task("TSK-001", "todo", &amended, "Pending.\n"),
+        );
+        if with_code {
+            write(root, "src/lib.rs", "pub fn own_work() {}\n");
+        }
+        let mut amendment = commit(root, "docs(records): narrow TSK-001 AC-1");
+        if merged {
+            git(root, &["switch", "main"]);
+            git(
+                root,
+                &[
+                    "merge",
+                    "--no-ff",
+                    "-m",
+                    "merge: narrow AC-1",
+                    "plan/narrow",
+                ],
+            );
+            amendment = head(root);
+        }
+        let reviewed = code_change(root, BRANCH, "pub fn work() {}\n");
+        complete(root, "TSK-001", &amended, &waived(&reviewed, &amendment));
+        let result = ci(root, BRANCH, "TSK-001");
+        if with_code {
+            assert_blocks(
+                &result,
+                what,
+                &[
+                    "AC-1 waiver",
+                    "which also changes src/lib.rs; a planning amendment changes planning records only",
+                ],
+            );
+        } else {
+            assert_passes(&result, what);
         }
     }
 }

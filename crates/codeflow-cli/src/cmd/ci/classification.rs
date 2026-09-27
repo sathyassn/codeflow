@@ -197,7 +197,8 @@ pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool
 /// Run the classification for `codeflow ci`. Classification judges the
 /// whole range against the target's own state: tracking is on when it is on
 /// at the target or at the head, and the paths are the range's diff from
-/// the merge-base, merge resolutions included.
+/// the merge-base, merge resolutions included. Returns the validated class,
+/// or `None` when the pull request was not classified.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
@@ -206,10 +207,10 @@ pub(super) fn dispatch(
     range: Option<&Range<'_>>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
-) {
+) -> Option<Class> {
     match tracking_on(root, range) {
         Ok(true) => {}
-        Ok(false) => return,
+        Ok(false) => return None,
         Err(error) => {
             push(
                 tagged,
@@ -218,7 +219,7 @@ pub(super) fn dispatch(
                 "repair CodeFlow state or task-home access before classifying work",
             );
             ran.push("classification");
-            return;
+            return None;
         }
     }
     ran.push("classification");
@@ -229,7 +230,7 @@ pub(super) fn dispatch(
             "the range could not be read, so the pull request cannot be classified".to_string(),
             "pass --base and --head so CI can read the range",
         );
-        return;
+        return None;
     };
     let changes = match range_changes(root, range.base, range.head) {
         Ok(changes) => changes,
@@ -240,7 +241,7 @@ pub(super) fn dispatch(
                 format!("cannot list the paths the range changes: {error}"),
                 "pass --base and --head so CI can read the range",
             );
-            return;
+            return None;
         }
     };
     let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
@@ -264,7 +265,7 @@ pub(super) fn dispatch(
                 format!("unclassified pull request: {reason}"),
                 HINT,
             );
-            return;
+            return None;
         }
     };
     match &class {
@@ -298,6 +299,7 @@ pub(super) fn dispatch(
             println!("codeflow ci: pull request class: automation profile {profile}");
         }
     }
+    Some(class)
 }
 
 /// A selection lands only by a planning pull request (SPC-013 R-43): a range
@@ -510,7 +512,11 @@ fn is_record_of(path: &str, task_id: &str) -> bool {
 /// resolving a merge counts, a rename is both its sides, and paths are read
 /// NUL-delimited without display quoting. A failure is an error, never an
 /// empty range.
-fn range_changes(root: &Path, base: &str, head: &str) -> Result<Vec<(String, String)>, String> {
+pub(super) fn range_changes(
+    root: &Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<(String, String)>, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(root)

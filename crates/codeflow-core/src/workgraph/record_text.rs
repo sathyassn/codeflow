@@ -264,10 +264,10 @@ pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
         .collect()
 }
 
-/// [`scan`] for a whole record: the frontmatter is hidden and never parsed
-/// as Markdown.
-pub(crate) fn scan_record(lines: &[&str]) -> Vec<ScannedLine> {
-    let close = (lines.first().map(|line| line.trim_end()) == Some("---"))
+/// The number of lines the frontmatter takes, fences included (0 without
+/// a closed frontmatter).
+pub(crate) fn frontmatter_len(lines: &[&str]) -> usize {
+    (lines.first().map(|line| line.trim_end()) == Some("---"))
         .then(|| {
             lines
                 .iter()
@@ -275,7 +275,13 @@ pub(crate) fn scan_record(lines: &[&str]) -> Vec<ScannedLine> {
                 .position(|line| line.trim_end() == "---")
         })
         .flatten()
-        .map_or(0, |index| index + 2);
+        .map_or(0, |index| index + 2)
+}
+
+/// [`scan`] for a whole record: the frontmatter is hidden and never parsed
+/// as Markdown.
+pub(crate) fn scan_record(lines: &[&str]) -> Vec<ScannedLine> {
+    let close = frontmatter_len(lines);
     let mut scanned = vec![ScannedLine::new(LineKind::Hidden, ""); close];
     scanned.extend(scan(&lines[close..]));
     scanned
