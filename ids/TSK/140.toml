@@ -1,0 +1,11 @@
+id = "TSK-140"
+uid = "e56d9cb0-6e08-46cc-984d-9b19a266a6c5"
+kind = "TSK"
+title = "fix a completed task in one pull request"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T13:59:28Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
