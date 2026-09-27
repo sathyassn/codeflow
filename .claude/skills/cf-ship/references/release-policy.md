@@ -109,9 +109,11 @@ role. The independent reviewer still judges the meaning of the change.
 
 Give each pending entry a stable identity, such as a unique bold label, so a
 checker can tell an addition, an edit and a withdrawal apart. An edit under
-an existing label is assessed at its impact like an addition; only an edit
-that keeps every impact and changes no shipped behavior is wording. Renaming
-a label withdraws the old entry and adds a new one.
+an existing label is assessed at its impact like an addition, whatever the
+PR declares: a checker cannot prove that changed words keep their meaning, so
+only rewrapping, which keeps every word, is no edit. The entry is the whole
+rendered bullet, continuation lines included. Renaming a label withdraws the
+old entry and adds a new one.
 
 Check release state as early as it is cheap, and keep the pull request check
 authoritative:
@@ -123,7 +125,10 @@ authoritative:
   each landing and say what was not checked against the host.
 - When the base itself fails its release state, accept only a repair that
   changes the changelog and coupled version stamps, judged by the base's
-  configuration, and refuse other work until it lands.
+  configuration, keeps every existing entry's words, and leaves each stamp,
+  baseline and recorded hash consistent; refuse other work until it lands.
+  A pull request runs the checker in its own merge tree, so ship this repair
+  path before the state can break: a checker without it cannot pass a repair.
 
 A published section stays byte-identical. Correct it with a dated erratum
 that names the version, never by editing the section. Before the tag, render
@@ -167,9 +172,9 @@ four fields, then the project's own fields (unit, changelog entry, evidence):
 - `Rationale`: the consumer-visible effect and the evidence for the level.
 - `Migration`: always present. It is normally `none` for nonbreaking work.
   When Breaking is yes, give steps or a pointer to a Breaking change section.
-  A nonbreaking PR that refines or reconciles a pending breaking entry, such
-  as a wording-only edit declared `none`, still carries that entry's
-  migration reference.
+  A PR that refines or reconciles a pending breaking entry carries that
+  entry's migration reference; a checker that assesses edits at the entry's
+  impact also requires the break to be declared.
 - A value is chosen, never left as the template's alternatives.
 
 In stable SemVer, as CodeFlow uses it, Breaking is yes if and only if Impact

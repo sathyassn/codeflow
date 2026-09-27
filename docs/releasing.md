@@ -24,8 +24,9 @@ One publisher remains:
 PRs carry one `Release impact` section with `Impact`, `Breaking`,
 `Rationale`, `Migration`, `Unit` and `Evidence`. `Breaking: yes` holds if and
 only if `Impact: major`, and a break needs substantive migration guidance.
-A nonbreaking refinement of a pending major entry still carries its migration
-reference, and a field left at the template's alternatives fails.
+An edit of a pending major entry is assessed at major, so it declares the
+break and keeps its migration guidance, and a field left at the template's
+alternatives fails.
 The legacy `Contract` field is accepted during the transition and must agree
 with `Breaking` when both appear. `scripts/release.py check-pr` compares
 the declaration with the current target, actual proposed merge tree, pending
@@ -42,11 +43,15 @@ is unique among pending entries; a duplicate or an unlabelled entry blocks.
 The bounded legacy group keeps its explicit identity (`legacy:pre-policy-v3`).
 `check-pr` matches entries by label: a new label is an addition, a missing
 label is a withdrawal (it needs the `Withdrawal` field), and a changed body
-or impact under a kept label is an edit of that item. An edit is assessed at
-its impact like an addition; only a PR that declares `Impact: none`, keeps
-every edited impact and touches nothing outside `CHANGELOG.md` and `docs/`
-counts as wording. Lowering an entry's impact needs `Withdrawal`, and a
-renamed label is a withdrawal plus an addition.
+or impact under a kept label is an edit of that item. An entry is the whole
+bullet as Markdown renders it, including unindented lines that continue its
+paragraph. An edit is assessed at its impact like an addition, whatever the
+declaration: the checker cannot prove that changed words keep their meaning,
+so only rewrapping, which keeps every word, the label and the impact, is not
+an edit. Moving an entry under another heading is not an edit either.
+Lowering an entry's impact needs `Withdrawal`, and a renamed label is a
+withdrawal plus an addition. Notes outside entries, such as the upgrade steps,
+carry no impact and are judged in review.
 
 Three planes check release state, from cheapest to authoritative:
 
@@ -65,7 +70,9 @@ branch with its pull request target (a task branch's `integration_target`,
 else `main`) and warns when that range touches behaviour paths with no
 pending entry added or edited and no `Impact: none` in the local PR draft
 named by `CODEFLOW_PR_DRAFT`. A work-in-progress push is never blocked by a
-missing entry. Behaviour is every path outside `docs/`,
+missing entry. On a base whose release tree is already invalid the
+preflight only warns, so it does not catch every new break there; the pull
+request job does. Behaviour is every path outside `docs/`,
 `project-management/` and the record templates, with the skill trees always
 included; the table is `crates/codeflow-core/src/workgraph/path_sets.toml`,
 which `codeflow ci` reads for the adopter-facing set as well.
@@ -77,9 +84,16 @@ proposed merge passes, `check-pr` accepts a PR that changes only
 `AGENTS.md`, `CLAUDE.md`, the managed baselines of the last two and their
 manifest hashes, which `sync` writes together). The configuration comes from
 the base, so a repair that changes `.release/config.json` is refused; the
-output names the invariant repaired. Published sections are held to their
-exact public source, and version non-reuse and the impact floors still
-apply. Any other PR onto a broken base is refused until the repair lands.
+output names the invariant repaired. A repair keeps every existing pending
+entry's words and impact (rewrapping aside); an edit waits for its own PR.
+When a repair touches a managed baseline or the manifest, each baseline must
+carry the one managed stamp of the release version and the manifest must
+record its exact hash. Published sections are held to their exact public
+source, and version non-reuse and the impact floors still apply. Any other
+PR onto a broken base is refused until the repair lands. The checker a PR
+runs is the one in its own merge tree, so a line whose checker predates the
+typed repair cannot take a green repair PR; see the TSK-106 review record
+for how that line was repaired.
 
 **Errata.** Published sections stay byte-frozen. A correction is a dated
 note in the `## Errata` block before the first version section:
