@@ -14,6 +14,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "cargo fmt --all -- --check"
+        },
         "essential": {
           "command": "cargo fmt --all -- --check"
         },
@@ -40,6 +43,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "cargo clippy --workspace --all-targets -- -D warnings"
+        },
         "essential": {
           "command": "cargo clippy --workspace --all-targets -- -D warnings"
         },
@@ -89,6 +95,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "python3 scripts/gate-parity.py"
+        },
         "essential": {
           "command": "python3 scripts/gate-parity.py"
         },
@@ -115,6 +124,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "python3 -B evals/skill-triggers/test_triggers.py"
+        },
         "essential": {
           "command": "python3 -B evals/skill-triggers/test_triggers.py"
         },
@@ -128,6 +140,9 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
+        "quick": {
+          "command": "python3 -B evals/herdr-delivery/test_delivery.py"
+        },
         "essential": {
           "command": "python3 -B evals/herdr-delivery/test_delivery.py"
         },
