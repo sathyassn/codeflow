@@ -216,8 +216,15 @@ pub fn create_adr(repo_root: &Path, template: &str, title: &str) -> Result<NewRe
     }
     let id = next_adr_id(repo_root);
     let date = crate::workgraph::now_rfc3339()[..10].to_string();
+    // The frontmatter title is a YAML scalar; the heading keeps the text.
+    let encoded =
+        serde_json::to_string(title).map_err(|error| StoreError::Invalid(error.to_string()))?;
     let mut content = template
         .replace("ADR-NNNN", &id)
+        .replace(
+            "title: <short decision title>",
+            &format!("title: {encoded}"),
+        )
         .replace("<short decision title>", title)
         .replace("YYYY-MM-DD", &date);
     if let Some(start) = content.find("\nstatus:") {
@@ -229,6 +236,7 @@ pub fn create_adr(repo_root: &Path, template: &str, title: &str) -> Result<NewRe
             "\nstatus: proposed          # proposed | accepted | superseded",
         );
     }
+    check_adr(&content, &id, title)?;
     let dir = repo_root.join("docs/decisions");
     fs::create_dir_all(&dir)?;
     let path: PathBuf = dir.join(format!("{id}-{}.md", slug(title)));
@@ -238,6 +246,31 @@ pub fn create_adr(repo_root: &Path, template: &str, title: &str) -> Result<NewRe
         .open(&path)?;
     std::io::Write::write_all(&mut file, content.as_bytes())?;
     Ok(NewRecord { id, path })
+}
+
+/// The generated ADR must parse and carry what was asked for, before it is
+/// written and reported.
+fn check_adr(content: &str, id: &str, title: &str) -> Result<(), StoreError> {
+    let invalid =
+        |why: &str| StoreError::Invalid(format!("generated {id} is not a valid ADR: {why}"));
+    let yaml = content
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.split_once("\n---\n"))
+        .map(|(yaml, _)| yaml)
+        .ok_or_else(|| invalid("no frontmatter"))?;
+    let data: serde_yaml::Mapping =
+        serde_yaml::from_str(yaml).map_err(|error| invalid(&error.to_string()))?;
+    let field = |name: &str| data.get(name).and_then(serde_yaml::Value::as_str);
+    if field("id") != Some(id) {
+        return Err(invalid("the id does not round-trip"));
+    }
+    if field("title") != Some(title) {
+        return Err(invalid("the title does not round-trip"));
+    }
+    if field("status") != Some("proposed") {
+        return Err(invalid("the status is not proposed"));
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -270,5 +303,34 @@ mod tests {
         assert!(text.contains("\nstatus: proposed "), "{text}");
         assert!(text.contains("# ADR-0008: Adopt a registry"), "{text}");
         assert!(record.path.ends_with("ADR-0008-adopt-a-registry.md"));
+    }
+
+    #[test]
+    fn adr_titles_are_yaml_encoded_and_the_record_round_trips() {
+        let dir = tempfile::tempdir().unwrap();
+        let template = "---\nid: ADR-NNNN\ntitle: <short decision title>\ndate: YYYY-MM-DD\nstatus: accepted          # proposed | accepted | superseded\n---\n\n# ADR-NNNN: <short decision title>\n";
+        for title in [
+            "Choose storage: keep SQLite",
+            "Say \"no\" to 'magic'",
+            "Pin #1 # not a comment",
+            "- a leading dash, [brackets] and {braces}",
+            "yes",
+        ] {
+            let record = create_adr(dir.path(), template, title).unwrap();
+            let text = fs::read_to_string(&record.path).unwrap();
+            check_adr(&text, &record.id, title).unwrap();
+            assert!(text.contains(&format!(": {title}\n")), "{text}");
+        }
+        let generated =
+            |title: &str| format!("---\nid: ADR-0001\ntitle: {title}\nstatus: proposed\n---\n");
+        assert!(
+            check_adr(&generated("a: b"), "ADR-0001", "a: b").is_err(),
+            "unparseable"
+        );
+        assert!(
+            check_adr(&generated("other"), "ADR-0001", "asked").is_err(),
+            "wrong title"
+        );
+        assert!(check_adr(&generated("asked"), "ADR-0001", "asked").is_ok());
     }
 }

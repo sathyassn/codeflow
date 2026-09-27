@@ -247,13 +247,21 @@ fn each_light_path_takes_one_command_and_one_pull_request() {
     // A new ADR: one command, proposed, one direct pull request.
     git(&root, &["switch", "-q", "-c", "docs/adr", line]);
     let adr = ok(
-        &codeflow(&root, &["adr", "new", "Adopt a cache"]),
+        &codeflow(&root, &["adr", "new", "Adopt a cache: keep it small"]),
         "adr new",
     );
     let path = adr.split_whitespace().nth(1).unwrap().to_string();
     let text = std::fs::read_to_string(&path).unwrap();
     assert!(text.contains("\nstatus: proposed "), "{text}");
-    assert!(text.contains(": Adopt a cache"), "{text}");
+    assert!(
+        text.contains("\ntitle: \"Adopt a cache: keep it small\"\n"),
+        "{text}"
+    );
+    assert!(text.contains(": Adopt a cache: keep it small\n"), "{text}");
+    ok(
+        &codeflow(&root, &["validate", "--docs"]),
+        "validate --docs after adr new",
+    );
     commit(&root, "docs: propose the cache decision");
     let (code, out) = pull_request(&root, "docs/adr", line, "Task: none: propose a decision");
     assert_eq!(code, 0, "{out}");
