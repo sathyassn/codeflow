@@ -95,14 +95,16 @@ fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
             "herdr pane send-text",
         ],
     );
+    // TSK-129: the Herdr host rules and delivery moved with the lifecycle into
+    // its lane file; the core names that lane.
+    assert_contains(DELEGATE, &["resources/lane-lifecycle.md"]);
     assert_contains(
-        DELEGATE,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "cf-herdr",
             "tmux is the degraded TTY host",
             "idle`/`done` is not turn completion",
+            "herdr pane send-text",
         ],
     );
-    // TSK-129: Herdr delivery moved with the lifecycle into its lane file.
-    assert_contains(DELEGATE_LIFECYCLE_LANE, &["herdr pane send-text"]);
 }

@@ -1,4 +1,4 @@
-# UI and design verification
+## UI and design verification
 
 `DESIGN_INTENT` is proportional. A cosmetic correction records `N/A` with the
 unchanged accepted direction; a bounded change inside an established design

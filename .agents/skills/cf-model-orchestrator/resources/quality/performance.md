@@ -1,4 +1,4 @@
-# Performance, scale and concurrency
+## Performance, scale and concurrency
 
 For performance-, scale-, or concurrency-sensitive paths, review the actual
 operating shape rather than only functional output: algorithmic complexity and

@@ -31,6 +31,22 @@ fn read_quality_contract() -> String {
     contract
 }
 
+/// TSK-129: capability-routing also loads by section from an index.
+fn read_routing_contract() -> String {
+    let resources = "assets/base/agents/skills/cf-model-orchestrator/resources";
+    let mut sections: Vec<_> = std::fs::read_dir(repo_root().join(resources).join("routing"))
+        .expect("routing sections")
+        .map(|entry| entry.expect("section entry").path())
+        .collect();
+    sections.sort();
+    let mut contract = read(&format!("{resources}/capability-routing.md"));
+    for section in sections {
+        contract.push('\n');
+        contract.push_str(&std::fs::read_to_string(&section).expect("read section"));
+    }
+    contract
+}
+
 fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
@@ -171,9 +187,7 @@ fn orchestrator_is_host_neutral_with_capability_routed_execution() {
     let skill = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/SKILL.md",
     ));
-    let capability_routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let capability_routing = normalize_whitespace(&read_routing_contract());
 
     for required in [
         "Detect capabilities, not model identity.",
@@ -246,9 +260,7 @@ fn grok_hosted_duo_canary_record_exists_and_stays_unqualified() {
 
 #[test]
 fn cross_family_entry_preserves_receiving_primary_ownership() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let routing = normalize_whitespace(&read_routing_contract());
     for required in [
         "The first line of every cross-family task declares `ROLE: peer`",
         "qualified primary at its default effort",
@@ -265,9 +277,7 @@ fn cross_family_entry_preserves_receiving_primary_ownership() {
 
 #[test]
 fn current_ensemble_and_routing_pin_grok_catalog() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let routing = normalize_whitespace(&read_routing_contract());
     let ensemble = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
     ));
@@ -376,9 +386,7 @@ fn orchestrator_skill_avoids_superseded_roles_and_model_pins() {
 
 #[test]
 fn accountable_execution_preserves_design_and_evidence_boundaries() {
-    let routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let routing = normalize_whitespace(&read_routing_contract());
     let quality = normalize_whitespace(&read_quality_contract());
     let design = normalize_whitespace(&read("assets/base/agents/skills/cf-design/SKILL.md"));
     let cases = read("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
@@ -717,9 +725,7 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
     let claude = read("assets/base/CLAUDE.md.tmpl").replace("\r\n", "\n");
     let ensemble =
         read("assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
-    let capability_routing = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
+    let capability_routing = normalize_whitespace(&read_routing_contract());
     let herdr = normalize_whitespace(&read("assets/base/agents/skills/cf-herdr/SKILL.md"));
     let claude_completion = normalize_whitespace(&read(
         "assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md",
@@ -843,7 +849,7 @@ fn quality_contract_pins_evidence_coverage_and_ui() {
     let contract = normalize_whitespace(&format!(
         "{}\n{}",
         read_quality_contract(),
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md")
+        read_routing_contract()
     ));
 
     for required in [

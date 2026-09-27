@@ -1,4 +1,4 @@
-# Coverage
+## Coverage
 
 Scenario coverage comes first: happy paths, boundaries, malformed input,
 timeouts, partial failure, authorization, concurrency/idempotency, recovery,

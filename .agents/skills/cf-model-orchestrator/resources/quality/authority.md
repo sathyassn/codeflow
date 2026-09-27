@@ -1,4 +1,4 @@
-# Responsible authority and data
+## Responsible authority and data
 
 Apply authority to effects, not tool verbs. Before an action with material
 effects, bind its legitimate purpose, action, resource, necessary data,

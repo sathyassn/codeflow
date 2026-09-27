@@ -1,4 +1,4 @@
-# Independent review
+## Independent review
 
 The approved reviewer from a lineage different from the actual author's
 reviews the actual unit, reruns relevant gates, and checks conformance with the

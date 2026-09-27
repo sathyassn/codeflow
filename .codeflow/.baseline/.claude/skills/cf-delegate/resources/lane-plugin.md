@@ -67,3 +67,10 @@ through the thread before relying on it.
 Ask every consult for a closing `VERDICT: approved|changes_requested` line so
 the reply is checkable, and branch on it, then re-derive the findings
 yourself (see the skill's Guardrails).
+
+## Evidence on this lane
+
+Launch is a created native thread or first output within a bounded window;
+silence is not a launch. Provenance and recheck are the native thread ID and
+its resumable thread, with model and effort labeled as above. Failure is an
+explicit plugin or harness error, then one bounded retry with diagnosis.

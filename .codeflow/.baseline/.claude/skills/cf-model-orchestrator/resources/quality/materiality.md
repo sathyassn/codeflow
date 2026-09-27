@@ -1,4 +1,4 @@
-# Materiality and prioritization
+## Materiality and prioritization
 
 Discovery is broad; action is selective. Use this sequence for code, design,
 documentation, research, operations, and proactive observations:

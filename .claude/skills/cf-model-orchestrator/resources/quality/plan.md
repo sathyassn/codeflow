@@ -1,4 +1,4 @@
-# Versioned plan contract
+## Versioned plan contract
 
 Each settled plan records:
 

@@ -1,4 +1,4 @@
-# Catastrophic and irreversible actions
+## Catastrophic and irreversible actions
 
 For a catastrophic or irreversible action, the ledger also records independent
 Claude and Codex risk assessments, the authenticated human approval, exact

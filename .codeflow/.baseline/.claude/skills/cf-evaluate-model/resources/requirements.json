@@ -59,11 +59,16 @@
       "statement": "Plan vN separates responsible-primary accountability from actual execution. Substantial separable routine work uses a capable permitted route when available, while direct primary execution requires a concrete bounded exception; actual authored lineage controls independent review.",
       "sources": [
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
           "markers": [
             "TASK_ID | RESPONSIBLE_PRIMARY seat@effort",
             "Delegate substantial, well-specified routine implementation",
-            "Record the concrete reason",
+            "Record the concrete reason"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/review.md",
+          "markers": [
             "review lineage is opposite the session that authored the work"
           ]
         },
@@ -82,7 +87,7 @@
       "statement": "Candidate status, native reachability/application, scoped workload qualification, full primary promotion, and economical-default evidence are separate claims. Scoped qualification pre-registers qualifying versus comparison arms without post-hoc reclassification. Only the qualifying route/tuple must pass three fresh trials per case and qualifying arm; comparison outcomes inform claims, while invalid controls or fixtures and unresolved validity threats still block.",
       "sources": [
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/route-status.md",
           "markers": [
             "Route status and actual execution",
             "three fresh accepted trials",
@@ -117,7 +122,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/design.md",
           "markers": [
             "Claude design owner produces direction and real design implementation",
             "Claude absence alone is not an override"
@@ -293,7 +298,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/design.md",
           "markers": [
             "owns intent, direction, implementation/execution and fidelity judgment under `cf-design`",
             "Default UI assignment is Claude as responsible primary and executor",
@@ -904,7 +909,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
           "markers": [
             "Same-family workers run inside the host harness",
             "never as a separate CLI session or Herdr tab",
@@ -986,7 +991,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
           "markers": [
             "is reassignment: create Plan vN+1",
             "permitted worker change"
@@ -1009,7 +1014,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
           "markers": [
             "TASK_ID | RESPONSIBLE_PRIMARY seat@effort",
             "requested from observed"
@@ -1032,7 +1037,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/review.md",
           "markers": [
             "Each actual executor first-verifies its unit",
             "responsible primary inspects",
@@ -1156,7 +1161,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/hosts.md",
           "markers": [
             "when a documented trigger fires and the family is available",
             "never a silent third vote"
@@ -1179,13 +1184,18 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/roles.md",
           "markers": [
             "Every native session declares one role",
             "The first line of every cross-family task declares `ROLE: peer`",
-            "Later primary-approval prose cannot repair an incorrect initial dispatch",
             "delegating back to the host lineage",
             "generic same-lineage subagent cannot satisfy"
+          ]
+        },
+        {
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/hosts.md",
+          "markers": [
+            "Later primary-approval prose cannot repair an incorrect initial dispatch"
           ]
         }
       ]
@@ -1204,7 +1214,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/assignment.md",
           "markers": [
             "Admissible usage evidence",
             "Never combine apparently separate limits",
@@ -1233,7 +1243,7 @@
           ]
         },
         {
-          "path": ".agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+          "path": ".agents/skills/cf-model-orchestrator/resources/routing/evidence.md",
           "markers": [
             "## Admissible cross-lineage evidence",
             "only with native runtime provenance",

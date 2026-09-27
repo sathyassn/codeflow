@@ -44,13 +44,8 @@ codex ──durable delegate lifecycle over interactive claude CLI──▶ clau
   Codex App/interactive CLI route under the fallback contract below. A missing
   plugin is not proof that Codex itself is unavailable.
 - **codex → claude: the interactive `claude` CLI driven through CodeFlow's
-  schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036; pattern below). The
-  lifecycle owns startup, acceptance, and terminal correlation. When
-  `HERDR_ENV=1`, load `cf-herdr` and run that Claude process in a named Herdr
-  tab; tmux is the degraded TTY host when Herdr is unavailable. Herdr
-  `idle`/`done` is not turn completion. The account and interactive response
-  must be verified with a scoped TTY canary; verify the full lifecycle round
-  trip on install and whenever the Claude CLI or hook configuration changes.
+  schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036). Its host and
+  canary rules are in [the lifecycle lane](resources/lane-lifecycle.md).
 
 **Prohibited at all times** — no exceptions, including batch/pipeline stages:
 headless task execution in either direction (`codex exec`, `claude -p` /
@@ -97,56 +92,19 @@ Read this core, then only the lane for the host you are on:
   sibling Stop-hook preflight, pane access, effective autonomy, consult and
   edit sessions, and cleanup. A Claude host does not load it.
 
-## Evidence contract — five obligations, both lanes
+## Evidence contract, both lanes
 
-The two adapters stay distinct — the plugin lane is vendor-owned forward
-transport; the lifecycle lane is CodeFlow-owned reverse protocol — but every
-delegated exchange meets the same five obligations:
+Every delegated exchange meets the one five-obligation evidence contract in
+[capability-routing's admissible evidence](../cf-model-orchestrator/resources/routing/evidence.md):
+launch, provenance, return, failure and recheck. Each lane file states what
+satisfies them on that lane; re-derive the returned work yourself.
 
-1. **Launch.** Verify the delegated session actually started: `wait --until
-   ready` on the reverse lane; a created native thread or first output within
-   a bounded window on the forward lane. Silence is not a launch.
-2. **Provenance.** Attribute output only with native runtime provenance: the
-   schema-v2 records binding session, digest, and `prompt_id` on the reverse
-   lane; the native Codex thread ID plus model/effort labeled by source
-   (`observed` when exposed, otherwise `requested`) on the forward lane. On
-   the reverse lane the terminal `wait` result already carries `provenance`:
-   the thread (the Claude session), and model and effort as `requested` at
-   `init` and `observed` at session start, each `unknown` when not given.
-   Cite that record; do not record these by hand. A relay is transport, not
-   author.
-3. **Return.** Verify the returned work itself — the bounded terminal message
-   or thread result, the scoped worktree diff, and the cited evidence,
-   re-derived by you.
-4. **Failure.** Failure is legible and bounded: stable exit states, durable
-   poison, or an explicit plugin/harness error, then one bounded retry with
-   diagnosis — never silent substitution, never completion inferred from
-   silence.
-5. **Recheck.** Evidence stays recheckable after the fact: durable state
-   records until cleanup on the reverse lane; the resumable native thread on
-   the forward lane. On the forward lane, record model/effort as observed
-   only when the transport exposes actual values, otherwise as requested
-   (never silently upgrade), and grade inferred completion explicitly as
-   inferred. On the reverse lane the lifecycle records them.
+## Edit access
 
-## Edit-access doctrine (delegate tier)
-
-A delegate that edits works **only** inside a worktree on a feature branch —
-the same worktree-per-session discipline that binds every agent here. From
-Claude Code, scope `/codex:rescue` to the worktree; from codex, start the
-lifecycle claude session in the worktree. Let it commit conventionally.
-
-Never grant edit access on the root checkout or a protected branch. The point
-of the doctrine: a delegate's commits pass through **CodeFlow's existing gates
-unchanged** — pre-commit secret scan, commit-msg format and no-AI-attribution,
-the test gate, and an independent review pass through the primary harness's
-normal review gate judge its work exactly as they judge yours. Enforcement is
-author-agnostic, so a delegate cannot lower the bar. The git-hook plane is
-harness-agnostic by design: the protected-branch merge and ref guards
-(`pre-merge-commit`, `reference-transaction`) bind a delegate exactly as they
-bind any agent, so it cannot ff-merge, `reset --hard`, or delete a protected
-branch. Review the handoff before it ships; a delegate's output is a proposal,
-not a merge — a human lands it.
+Before any write-enabled handoff, read [edit access](resources/edit-access.md):
+a delegate edits only inside a worktree on a feature branch, never on the root
+checkout or a protected branch, and its commits pass CodeFlow's gates
+unchanged.
 
 ## agy — retired as a delegate tier (no interactive lane)
 

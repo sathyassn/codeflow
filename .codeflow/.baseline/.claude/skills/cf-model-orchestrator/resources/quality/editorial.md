@@ -1,4 +1,4 @@
-# Editorial quality
+## Editorial quality
 
 Apply `cf-editorial-review` to substantial documentation, ADRs, proposals,
 release notes, PR narratives, operator communications, and user-facing copy.

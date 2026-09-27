@@ -1,4 +1,4 @@
-# Completion gate
+## Completion gate
 
 Completion requires:
 

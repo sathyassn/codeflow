@@ -5,6 +5,13 @@ Claude host does not load it; it uses [the plugin lane](lane-plugin.md).
 
 ## Preflight
 
+The lifecycle owns startup, acceptance, and terminal correlation. When
+`HERDR_ENV=1`, load `cf-herdr` and run that Claude process in a named Herdr
+tab; tmux is the degraded TTY host when Herdr is unavailable. Herdr
+`idle`/`done` is not turn completion. The account and interactive response
+must be verified with a scoped TTY canary; verify the full lifecycle round
+trip on install and whenever the Claude CLI or hook configuration changes.
+
 `claude` on PATH, `claude mcp list` succeeds, and a short interactive TTY
 canary gets an authenticated response. When `HERDR_ENV=1`, require `herdr` and
 load `cf-herdr`; `tmux` is not required. Outside Herdr, require `tmux`.
@@ -126,3 +133,13 @@ signal.
   byte-compatible compatibility for existing callers until a later major
   release; the two hook modes are mutually exclusive and never fall back to
   one another. New work always uses the lifecycle.
+
+## Evidence on this lane
+
+Launch is `wait --until ready`. Provenance is the schema-v2 records binding
+session, digest, and `prompt_id`; the terminal `wait` result already carries
+`provenance`: the thread (the Claude session), and model and effort as
+`requested` at `init` and `observed` at session start, each `unknown` when not
+given. Cite that record; do not record these by hand. Failure is a stable exit
+state or durable poison, then one bounded retry with diagnosis in a fresh run.
+Recheck is the durable state records until cleanup.

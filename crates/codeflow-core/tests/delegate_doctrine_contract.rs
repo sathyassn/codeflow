@@ -37,8 +37,30 @@ fn root() -> PathBuf {
 }
 
 fn read(relative: &str) -> String {
-    std::fs::read_to_string(root().join(relative))
-        .unwrap_or_else(|error| panic!("read {relative}: {error}"))
+    let text = std::fs::read_to_string(root().join(relative))
+        .unwrap_or_else(|error| panic!("read {relative}: {error}"));
+    // TSK-129: capability-routing loads by section from an index, so a pin on
+    // it reads the index together with every section file.
+    if relative == ROUTING {
+        return with_sections(
+            text,
+            "assets/base/agents/skills/cf-model-orchestrator/resources/routing",
+        );
+    }
+    text
+}
+
+fn with_sections(mut text: String, dir: &str) -> String {
+    let mut sections: Vec<_> = std::fs::read_dir(root().join(dir))
+        .unwrap_or_else(|error| panic!("read {dir}: {error}"))
+        .map(|entry| entry.expect("section entry").path())
+        .collect();
+    sections.sort();
+    for section in sections {
+        text.push('\n');
+        text.push_str(&std::fs::read_to_string(&section).expect("read section"));
+    }
+    text
 }
 
 fn normalized(value: &str) -> String {
@@ -229,7 +251,7 @@ fn generic_claude_relay_never_counts_as_codex() {
     assert_contains(
         ROUTING,
         &[
-            "A relay — plugin, adapter, relay subagent, or transport session — is transport, not author.",
+            "A relay (plugin, adapter, relay subagent, or transport session) is transport, not author.",
             "a relay answering in the other vendor's name is evidence fabrication",
         ],
     );
@@ -336,15 +358,22 @@ fn legacy_result_mode_is_compatibility_only_and_mutually_exclusive() {
 
 #[test]
 fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
+    // TSK-129: the five obligations have one home in capability-routing; the
+    // cf-delegate core points there and each lane states its specifics.
     assert_contains(
         DELEGATE_SKILL,
         &[
-            "five obligations, both lanes",
-            "**Launch.**",
-            "**Provenance.**",
-            "**Return.**",
-            "**Failure.**",
-            "**Recheck.**",
+            "Evidence contract, both lanes",
+            "one five-obligation evidence contract",
+            "routing/evidence.md",
+        ],
+    );
+    assert_contains(DELEGATE_PLUGIN_LANE, &["## Evidence on this lane"]);
+    assert_contains(
+        DELEGATE_LIFECYCLE_LANE,
+        &[
+            "## Evidence on this lane",
+            "the terminal `wait` result already carries `provenance`",
         ],
     );
     assert_contains(

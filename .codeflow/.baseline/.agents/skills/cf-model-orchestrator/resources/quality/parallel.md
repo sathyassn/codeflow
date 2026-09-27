@@ -1,4 +1,4 @@
-# Parallel execution contract
+## Parallel execution contract
 
 Parallelize only workstreams whose inputs and outputs can be isolated. Record:
 

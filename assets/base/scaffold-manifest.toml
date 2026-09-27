@@ -356,6 +356,12 @@ dest = ".claude/skills/cf-delegate/resources/lane-lifecycle.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "claude/skills/cf-delegate/resources/edit-access.md"
+dest = ".claude/skills/cf-delegate/resources/edit-access.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # The five workflow commands are now SKILL.md skills. Claude Code merged custom
 # commands into skills (v2.1.101, 2026-04-11): `.claude/skills/<name>/SKILL.md`
 # creates `/<name>` just like the old `.claude/commands/<name>.md` did. Keeping
@@ -523,6 +529,54 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/capability-routing.md"
 dest = ".claude/skills/cf-model-orchestrator/resources/capability-routing.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/assignment.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/assignment.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/design.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/design.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/effort.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/effort.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/evidence.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/hosts.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/hosts.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/review.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/review.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/roles.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/roles.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
+dest = ".claude/skills/cf-model-orchestrator/resources/routing/route-status.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
@@ -906,6 +960,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "claude/skills/cf-delegate/resources/edit-access.md"
+dest = ".agents/skills/cf-delegate/resources/edit-access.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-plan/SKILL.md"
 dest = ".agents/skills/cf-plan/SKILL.md"
 ownership = "managed"
@@ -1064,6 +1124,54 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-model-orchestrator/resources/capability-routing.md"
 dest = ".agents/skills/cf-model-orchestrator/resources/capability-routing.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/assignment.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/assignment.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/design.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/design.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/effort.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/effort.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/evidence.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/evidence.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/hosts.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/hosts.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/review.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/review.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/roles.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/roles.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
+dest = ".agents/skills/cf-model-orchestrator/resources/routing/route-status.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

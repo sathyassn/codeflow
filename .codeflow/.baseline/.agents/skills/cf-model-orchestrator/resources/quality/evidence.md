@@ -1,4 +1,4 @@
-# Evidence ledger
+## Evidence ledger
 
 For every material claim, record the acceptance criterion or risk it supports,
 the command/tool/source used, the observed result, and the responsible seat.

@@ -912,7 +912,7 @@ fn no_claude_host_path_makes_the_turn_adapter_mandatory() {
     // cannot pass by deleting them.
     for owner in [
         "agents/skills/cf-model-orchestrator/SKILL.md",
-        "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+        "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
         "claude/skills/cf-delegate/resources/lane-lifecycle.md",
     ] {
         assert!(
@@ -928,7 +928,7 @@ fn no_claude_host_path_makes_the_turn_adapter_mandatory() {
         "the adapter must state that a Claude host does not load it"
     );
     let routing = normalized(&read_text(
-        &base.join("agents/skills/cf-model-orchestrator/resources/capability-routing.md"),
+        &base.join("agents/skills/cf-model-orchestrator/resources/routing/effort.md"),
     ));
     assert!(
         routing.contains(

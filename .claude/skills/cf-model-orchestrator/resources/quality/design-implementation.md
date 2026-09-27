@@ -1,4 +1,4 @@
-# Design and implementation quality
+## Design and implementation quality
 
 Approve the smallest coherent solution that fully satisfies the accepted
 behavior, not the fewest lines. Every material abstraction, public interface,

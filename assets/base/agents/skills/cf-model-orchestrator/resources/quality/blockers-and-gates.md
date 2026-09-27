@@ -1,4 +1,4 @@
-# Blocker navigation and gate redness
+## Blocker navigation and gate redness
 
 Do not confuse missing evidence with missing operator intent. Classify an
 impediment before escalating it:
