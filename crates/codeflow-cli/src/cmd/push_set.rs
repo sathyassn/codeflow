@@ -11,10 +11,10 @@
 //!   tree they did not see. Untracked files are part of the working checkout
 //!   and can influence a quick target, which the pass line says.
 //! - The hook blocks on what it can see and never claims more: the range
-//!   leaves out only history known to be on the destination (its current sha
-//!   and the tracking refs of its default, protected and integration
-//!   branches). When nothing gives a base, the range is reported unresolved
-//!   and left to CI, never compared with a local branch.
+//!   leaves out only history known to be on the destination (the sha it
+//!   advertised for the branch, or for a new branch its protected branches'
+//!   tracking refs). When nothing gives a base, the range is reported
+//!   unresolved and left to CI, never compared with a local branch.
 //! - The whole set is timed; over [`git_hook::PUSH_SET_BUDGET`] the hook names
 //!   the slowest step.
 //!
@@ -65,7 +65,8 @@ pub(super) fn run(
     for r in &pushed {
         let branch = r.remote_branch().unwrap_or_default();
         match range_base(root, r, namespace.as_deref(), &policy.protected_branches) {
-            Some(base) => {
+            Some(RangeBase { base, note }) => {
+                report.notes.extend(note);
                 let args = [
                     "ci",
                     "--base",
@@ -78,8 +79,8 @@ pub(super) fn run(
                 run_check(&exe, root, &args, policy, report, &mut steps);
             }
             None => report.notes.push(format!(
-                "`codeflow ci` did not run for '{branch}': range unresolved (no destination \
-                 sha or tracking history for this destination); CI checks it"
+                "`codeflow ci` did not run for '{branch}': range unresolved (a new branch \
+                 and no tracked protected branch of this destination); CI checks it"
             )),
         }
     }
@@ -195,19 +196,29 @@ fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
     })
 }
 
-/// The exclusive base of a pushed branch's range. Only history known to be
-/// on the destination is left out of the range:
-/// 1. the destination's current sha, when the pushed sha extends it, or when
-///    they share no history (`codeflow ci` then reports the unrelated base);
-/// 2. otherwise, as for a new branch or a rewrite such as a rebase, a
-///    boundary of the commits not reachable from the destination's current
-///    sha nor from landed history: the destination's tracking refs of its
-///    default branch (`HEAD`), the protected branches and `integration/*`.
-///    The pushed branch's own tracking ref, like any other tracking ref, may
-///    be stale (the destination may since have dropped a commit this push
-///    restores), so it never excludes anything. Any such boundary is safe:
-///    what it reaches is on the destination, and what it does not reach is
-///    checked. The pushed sha itself when nothing is new;
+/// The exclusive base of a pushed branch's range, and a note when the range
+/// is wider than the push itself.
+struct RangeBase {
+    base: String,
+    note: Option<String>,
+}
+
+/// The base of a pushed branch's range. Only history known to be on the
+/// destination is left out, and a cached tracking ref proves that only for a
+/// branch the destination may not rewrite:
+/// 1. an existing destination branch: its current sha, which the destination
+///    advertised for this push. For a fast-forward the range is exactly the
+///    push. For a rewrite (a rebase or amend) it also holds any commits the
+///    rewrite brought in from other branches; they are checked again, and the
+///    note says so, because a cached tracking ref cannot prove they are still
+///    on the destination (a feature or integration branch may have been
+///    rewritten since the last fetch). With no shared history, `codeflow ci`
+///    reports the unrelated base;
+/// 2. a new branch: a boundary of the commits not reachable from the
+///    destination's protected branches' tracking refs. Policy forbids
+///    rewriting a protected branch, so even an old cached tip is history the
+///    destination keeps; any such boundary is a safe base. The pushed sha
+///    itself when nothing is new;
 /// 3. else `None`: the range is unresolved and CI checks it. A local branch
 ///    is never substituted: it may be stale or not the destination's base.
 fn range_base(
@@ -215,9 +226,8 @@ fn range_base(
     r: &PushRef,
     namespace: Option<&str>,
     protected: &[String],
-) -> Option<String> {
+) -> Option<RangeBase> {
     let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
-    let mut known: Vec<String> = Vec::new();
     if !zero && is_commit(root, &r.remote_sha) {
         let extends = git(
             root,
@@ -225,31 +235,43 @@ fn range_base(
         )
         .is_some();
         let related = git(root, &["merge-base", &r.remote_sha, &r.local_sha]).is_some();
-        if extends || !related {
-            return Some(r.remote_sha.clone());
-        }
-        known.push(r.remote_sha.clone());
+        let note = (!extends && related).then(|| {
+            let range = format!("{}..{}", r.remote_sha, r.local_sha);
+            let count = git(root, &["rev-list", "--count", &range])
+                .map_or_else(|| "?".to_string(), |n| n.trim().to_string());
+            format!(
+                "'{}' rewrites the destination's {}: `codeflow ci` checks all {count} \
+                 commit(s) not on it, including any the rewrite brought in from other \
+                 branches",
+                r.remote_branch().unwrap_or_default(),
+                short(&r.remote_sha)
+            )
+        });
+        return Some(RangeBase {
+            base: r.remote_sha.clone(),
+            note,
+        });
     }
-    if let Some(ns) = namespace {
-        known.extend(
-            std::iter::once("HEAD")
-                .chain(protected.iter().map(String::as_str))
-                .map(|branch| format!("{ns}{branch}"))
-                .filter(|reference| is_commit(root, reference)),
-        );
-        let integration = format!("{ns}integration/*");
-        let any_integration = git(
-            root,
-            &[
-                "for-each-ref",
-                "--count=1",
-                "--format=%(refname)",
-                &integration,
-            ],
-        )
-        .is_some_and(|out| !out.trim().is_empty());
-        if any_integration {
-            known.push(format!("--glob={integration}"));
+    let ns = namespace?;
+    let mut known: Vec<String> = Vec::new();
+    for branch in protected {
+        let reference = format!("{ns}{branch}");
+        if branch.contains(['*', '?', '[']) {
+            let any = git(
+                root,
+                &[
+                    "for-each-ref",
+                    "--count=1",
+                    "--format=%(refname)",
+                    &reference,
+                ],
+            )
+            .is_some_and(|out| !out.trim().is_empty());
+            if any {
+                known.push(format!("--glob={reference}"));
+            }
+        } else if is_commit(root, &reference) {
+            known.push(reference);
         }
     }
     if known.is_empty() {
@@ -259,12 +281,18 @@ fn range_base(
     args.extend(known.iter().map(String::as_str));
     let listed = git(root, &args)?;
     if listed.trim().is_empty() {
-        return Some(r.local_sha.clone());
+        return Some(RangeBase {
+            base: r.local_sha.clone(),
+            note: None,
+        });
     }
     listed
         .lines()
         .find_map(|line| line.strip_prefix('-'))
-        .map(str::to_string)
+        .map(|base| RangeBase {
+            base: base.to_string(),
+            note: None,
+        })
 }
 
 /// Why the working checkout is not the whole committed tree, if it is not:

@@ -107,10 +107,13 @@ publication date._
   the pre-push hook no longer runs the test suite. It runs the push set and
   blocks on what it can see, leaving the rest to CI. `codeflow ci` runs on
   each pushed branch's range, leaving out only history known to be on the
-  destination: its current commit and the tracking refs of its default,
-  protected and `integration/*` branches, never the pushed branch's own
-  tracking ref, which may be stale. When none of them gives a base, the hook
-  reports the range unresolved and never compares with a local branch. `codeflow validate
+  destination: the commit the destination advertises for the branch, or,
+  for a new branch, the tracking refs of its protected branches, which
+  policy keeps from being rewritten. Other tracking refs may be stale and
+  never shrink the range. After a rebase the range therefore also holds the
+  commits the rebase brought in, and the hook says so. When nothing gives a
+  base, the hook reports the range unresolved and never compares with a
+  local branch. `codeflow validate
   --docs` and the `.codeflow/test-config.json` targets that define a `quick`
   mode run only when the pushed commit is the checked-out one, with no
   tracked changes, no sparse checkout and every submodule initialized at its
