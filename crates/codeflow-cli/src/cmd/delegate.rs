@@ -29,6 +29,14 @@ pub enum DelegateCommand {
         /// Absolute path for the owner-only protocol state.
         #[arg(long, value_name = "DIR")]
         state_dir: PathBuf,
+        /// The model selector the delegate CLI is launched with; recorded
+        /// as requested provenance (`unknown` when omitted).
+        #[arg(long, value_name = "SELECTOR")]
+        model: Option<String>,
+        /// The effort the delegate CLI is launched with; recorded as
+        /// requested provenance (`unknown` when omitted).
+        #[arg(long, value_name = "LEVEL")]
+        effort: Option<String>,
     },
     /// Arm one prompt for a delegate turn.
     Arm {
@@ -80,7 +88,19 @@ pub enum WaitState {
 #[must_use]
 pub fn run(args: &DelegateArgs) -> i32 {
     match &args.command {
-        DelegateCommand::Init { run_id, state_dir } => match delegate::init(run_id, state_dir) {
+        DelegateCommand::Init {
+            run_id,
+            state_dir,
+            model,
+            effort,
+        } => match delegate::init_with_launch(
+            run_id,
+            state_dir,
+            &delegate::Launch {
+                model: model.clone(),
+                effort: effort.clone(),
+            },
+        ) {
             Ok(settings) => {
                 println!("{}", settings.display());
                 0

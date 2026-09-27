@@ -19,6 +19,7 @@
 
 pub mod dangerous;
 pub mod git;
+pub mod headless;
 pub mod pattern;
 pub mod policy;
 pub mod privilege;

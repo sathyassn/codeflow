@@ -402,6 +402,11 @@ pub struct SecuritySection {
     /// The exec-guard only surfaces in-session feedback; it never vetoes the
     /// human decision the ask tier exists to capture.
     pub privilege_escalation: PolicyLevel,
+    /// A headless peer run (`claude -p`, `codex exec`, `grok -p`), TSK-136.
+    /// Peer seats run interactively; a headless run has no verified native
+    /// session or recheckable thread. Default `warn`: scripting outside a
+    /// delegation stays possible, and `block` refuses it.
+    pub headless_peer_runs: PolicyLevel,
 }
 
 impl Default for SecuritySection {
@@ -409,6 +414,7 @@ impl Default for SecuritySection {
         Self {
             dangerous_commands: PolicyLevel::Block,
             privilege_escalation: PolicyLevel::Warn,
+            headless_peer_runs: PolicyLevel::Warn,
         }
     }
 }
@@ -733,6 +739,7 @@ mod tests {
         let s = SecuritySection::default();
         assert_eq!(s.dangerous_commands, PolicyLevel::Block);
         assert_eq!(s.privilege_escalation, PolicyLevel::Warn);
+        assert_eq!(s.headless_peer_runs, PolicyLevel::Warn);
     }
 
     #[test]
@@ -763,6 +770,14 @@ mod tests {
         assert_eq!(
             from_asset.security.privilege_escalation,
             defaults.privilege_escalation
+        );
+        assert_eq!(
+            from_asset.security.headless_peer_runs,
+            defaults.headless_peer_runs
+        );
+        assert!(
+            asset.contains("\"headless_peer_runs\": \"warn\""),
+            "the shipped policy states the headless peer level"
         );
     }
 

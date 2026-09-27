@@ -98,6 +98,39 @@ struct ReadyRecord {
     source: String,
     session_id: String,
     cwd: String,
+    /// The model the session reported at startup, or `unknown` (TSK-136).
+    #[serde(default = "unknown")]
+    model: String,
+    /// The effort the session reported at startup, or `unknown`.
+    #[serde(default = "unknown")]
+    effort: String,
+}
+
+/// The value recorded when the transport does not expose it: never a guess.
+pub const UNKNOWN: &str = "unknown";
+
+fn unknown() -> String {
+    UNKNOWN.to_string()
+}
+
+/// What the launcher asked for, recorded by `init` (TSK-136).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Launch {
+    /// The model selector passed to the delegate CLI, when known.
+    pub model: Option<String>,
+    /// The effort passed to the delegate CLI, when known.
+    pub effort: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct LaunchRecord {
+    schema_version: u8,
+    run_id: String,
+    /// Requested model, or `unknown` when the launcher did not say.
+    model: String,
+    /// Requested effort, or `unknown` when the launcher did not say.
+    effort: String,
 }
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -205,6 +238,10 @@ struct HookPayload {
     error: Option<serde_json::Value>,
     #[serde(default)]
     error_details: Option<serde_json::Value>,
+    #[serde(default)]
+    model: Option<serde_json::Value>,
+    #[serde(default)]
+    effort: Option<serde_json::Value>,
 }
 
 /// Create a schema-v2 run directory and its task-scoped Claude settings.
@@ -217,7 +254,41 @@ struct HookPayload {
 /// Returns an error for invalid identifiers or paths, insecure ownership or
 /// modes, conflicting records, and filesystem durability failures.
 pub fn init(run_id: &str, state_dir: &Path) -> Result<PathBuf, DelegateError> {
+    init_with_launch(run_id, state_dir, &Launch::default())
+}
+
+/// [`init`], also recording the model and effort the launcher requested, so
+/// each turn's result carries its provenance without a manual step. A value
+/// the launcher does not give is recorded as `unknown`.
+///
+/// # Errors
+///
+/// As [`init`], and for a model or effort that is empty, too long or holds
+/// control characters.
+pub fn init_with_launch(
+    run_id: &str,
+    state_dir: &Path,
+    launch: &Launch,
+) -> Result<PathBuf, DelegateError> {
     validate_id("run", run_id)?;
+    let requested = |label: &str, value: Option<&String>| -> Result<String, DelegateError> {
+        value.map_or_else(
+            || Ok(unknown()),
+            |value| {
+                provenance_value(value).ok_or_else(|| {
+                    DelegateError::invalid(format!(
+                        "delegate {label} must be 1 to 128 characters with no control characters"
+                    ))
+                })
+            },
+        )
+    };
+    let record = LaunchRecord {
+        schema_version: SCHEMA_VERSION,
+        run_id: run_id.to_string(),
+        model: requested("model", launch.model.as_ref())?,
+        effort: requested("effort", launch.effort.as_ref())?,
+    };
     validate_absolute(state_dir)?;
     validate_outside_git_worktree(state_dir)?;
     create_private_dir(state_dir)?;
@@ -229,7 +300,30 @@ pub fn init(run_id: &str, state_dir: &Path) -> Result<PathBuf, DelegateError> {
     let settings_path = state_dir.join("settings.json");
     let settings = task_settings(run_id, state_dir);
     install_json(&settings_path, &settings)?;
+    install_json(&state_dir.join("launch.json"), &record)?;
     Ok(settings_path)
+}
+
+/// A provenance value as recorded: trimmed, 1 to 128 characters, no control
+/// characters.
+fn provenance_value(value: &str) -> Option<String> {
+    let value = value.trim();
+    (!value.is_empty() && value.len() <= 128 && !value.chars().any(char::is_control))
+        .then(|| value.to_string())
+}
+
+/// A value a hook payload reports: a string, or an object's first string
+/// field among `keys` (`{"id": ...}`, `{"level": ...}`). Anything else is
+/// `unknown`.
+fn observed(value: Option<&serde_json::Value>, keys: &[&str]) -> String {
+    let text = match value {
+        Some(serde_json::Value::String(text)) => Some(text.as_str()),
+        Some(serde_json::Value::Object(map)) => keys
+            .iter()
+            .find_map(|key| map.get(*key).and_then(serde_json::Value::as_str)),
+        _ => None,
+    };
+    text.and_then(provenance_value).unwrap_or_else(unknown)
 }
 
 /// Arm exactly one prompt for a run.
@@ -448,6 +542,8 @@ fn session_start(
         source,
         session_id: required_nonempty(payload.session_id, "SessionStart session_id")?,
         cwd: required_nonempty(payload.cwd, "SessionStart cwd")?,
+        model: observed(payload.model.as_ref(), &["id", "name", "display_name"]),
+        effort: observed(payload.effort.as_ref(), &["level", "name"]),
     };
     let path = state_dir.join("ready.json");
     match install_json(&path, &record) {
@@ -1315,13 +1411,61 @@ fn observe_wait(
                     .map(|record| serialize_wait(record, false))
                     .transpose();
             }
-            state
-                .result
-                .as_ref()
-                .map(|record| serialize_wait(record, record.status == "failed"))
-                .transpose()
+            let Some(record) = state.result.as_ref() else {
+                return Ok(None);
+            };
+            let mut json = serde_json::to_value(record)
+                .map_err(|error| DelegateError::unsafe_state(error.to_string()))?;
+            json["provenance"] = provenance(run_id, state_dir, &record.session_id)?;
+            serialize_wait(&json, record.status == "failed").map(Some)
         }
     }
+}
+
+/// The provenance of a turn: the thread (the Claude session) it ran in, and
+/// the model and effort requested at launch and observed at startup, each
+/// `unknown` where no record gives it (TSK-136).
+fn provenance(
+    run_id: &str,
+    state_dir: &Path,
+    session_id: &str,
+) -> Result<serde_json::Value, DelegateError> {
+    let launch: Option<LaunchRecord> = read_optional_json(&state_dir.join("launch.json"))?;
+    if let Some(launch) = &launch {
+        validate_header(launch.schema_version, &launch.run_id, run_id, "launch")?;
+    }
+    let (requested_model, requested_effort) =
+        launch.map_or_else(|| (unknown(), unknown()), |l| (l.model, l.effort));
+    let (observed_model, observed_effort, reason) =
+        match observed_ready(run_id, state_dir, session_id) {
+            Ok(ready) => (ready.model, ready.effort, None),
+            Err(reason) => (unknown(), unknown(), Some(reason)),
+        };
+    let mut provenance = serde_json::json!({
+        "thread_id": session_id,
+        "model": {"requested": requested_model, "observed": observed_model},
+        "effort": {"requested": requested_effort, "observed": observed_effort},
+    });
+    if let Some(reason) = reason {
+        provenance["observed_unknown_reason"] = reason.into();
+    }
+    Ok(provenance)
+}
+
+/// The ready record whose observed model and effort a terminal result may
+/// cite: present, valid by the same rule as `wait --until ready`, and from
+/// the session that produced the result. Otherwise why it cannot be used.
+fn observed_ready(run_id: &str, state_dir: &Path, session_id: &str) -> Result<ReadyRecord, String> {
+    let ready: Option<ReadyRecord> = read_optional_json(&state_dir.join("ready.json"))
+        .map_err(|_| "the ready record could not be read".to_string())?;
+    let ready = ready.ok_or_else(|| "no ready record".to_string())?;
+    validate_ready_record(&ready, run_id).map_err(|_| {
+        "the ready record is malformed or mis-correlated (schema, run, event or source)".to_string()
+    })?;
+    if ready.session_id != session_id {
+        return Err("the ready record is from another session".to_string());
+    }
+    Ok(ready)
 }
 
 fn serialize_wait(record: &impl Serialize, failed: bool) -> Result<WaitResult, DelegateError> {

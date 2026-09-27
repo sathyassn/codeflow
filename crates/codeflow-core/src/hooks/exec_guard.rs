@@ -1,7 +1,9 @@
 //! `exec-guard` — the `PreToolUse` shell security hook (ADR-0008).
 //!
 //! A thin adapter over two existing security modules — [`DangerousModule`] and
-//! [`PrivilegeModule`] — that runs them against a Bash command. Catastrophic
+//! [`PrivilegeModule`] — that runs them against a Bash command, plus the
+//! headless peer run check (`claude -p`, `codex exec`, `grok -p`; TSK-136) at
+//! the level `security.headless_peer_runs` sets, `warn` by default. Catastrophic
 //! commands are a non-relaxable block; privilege escalation maps to the level
 //! configured in `policy.json`'s `security` section. It sits alongside
 //! `git-guard` on the `PreToolUse` (Bash/PowerShell) event and
@@ -31,6 +33,7 @@
 //! removed (TSK-137). The live git protections are `hooks/git_guard.rs`.
 
 use crate::security::dangerous::DangerousModule;
+use crate::security::headless::{headless_peer_run, HeadlessRun};
 use crate::security::privilege::PrivilegeModule;
 use crate::security::{CheckContext, SecurityModule, SecurityPolicy, Verdict};
 
@@ -69,8 +72,42 @@ pub fn evaluate(command: &str, levels: &SecuritySection) -> Vec<Violation> {
             violations.push(privilege_violation(levels.privilege_escalation, &verdict));
         }
     }
+    if levels.headless_peer_runs.is_active() {
+        if let Some(run) = headless_peer_run(command) {
+            violations.push(headless_violation(levels.headless_peer_runs, &run));
+        }
+    }
 
     violations
+}
+
+fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Violation {
+    let enforcement = if level == PolicyLevel::Block {
+        "configured policy refuses it"
+    } else {
+        "the default warn level lets a script outside a delegation run"
+    };
+    Violation::new(
+        "security.headless_peer_runs",
+        level,
+        format!(
+            "headless peer run `{}`{}: peer seats run interactively, so a headless run has no \
+             verified native session, task tools or recheckable thread",
+            run.form,
+            if run.parsed {
+                ""
+            } else {
+                " (the line could not be fully parsed; its text names the peer with a \
+                 headless flag)"
+            }
+        ),
+        format!(
+            "delegate through an interactive seat instead: Claude Code to Codex through the \
+             Codex plugin, Codex to Claude through `codeflow delegate` over the interactive \
+             `claude` CLI, or a named Herdr tab (cf-delegate); {enforcement} \
+             (policy security.headless_peer_runs)"
+        ),
+    )
 }
 
 fn dangerous_violation(level: PolicyLevel, verdict: &Verdict) -> Violation {
@@ -115,7 +152,34 @@ mod tests {
         SecuritySection {
             dangerous_commands: dangerous,
             privilege_escalation: privilege,
+            headless_peer_runs: PolicyLevel::Warn,
         }
+    }
+
+    #[test]
+    fn test_headless_peer_run_warns_by_default_and_blocks_when_set() {
+        let v = evaluate("codex exec 'fix it'", &SecuritySection::default());
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "security.headless_peer_runs");
+        assert_eq!(v[0].level, PolicyLevel::Warn);
+        assert!(!any_blocking(&v));
+        assert!(v[0].message.contains("`codex exec`"));
+        assert!(v[0].remedy.contains("codeflow delegate"));
+
+        let block = SecuritySection {
+            headless_peer_runs: PolicyLevel::Block,
+            ..SecuritySection::default()
+        };
+        let v = evaluate("claude -p 'review'", &block);
+        assert_eq!(v[0].level, PolicyLevel::Block);
+        assert!(any_blocking(&v));
+
+        let off = SecuritySection {
+            headless_peer_runs: PolicyLevel::Off,
+            ..SecuritySection::default()
+        };
+        assert!(evaluate("grok -p x", &off).is_empty());
+        assert!(evaluate("codex --version", &block).is_empty());
     }
 
     #[test]

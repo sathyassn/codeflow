@@ -403,3 +403,128 @@ fn sigint_after_acceptance_exits_130_and_poisons_the_run() {
         Some(11)
     );
 }
+
+/// Drive one completed turn and return the terminal wait output.
+fn completed_turn(state: &Path, session_start: &str) -> serde_json::Value {
+    assert_eq!(hook(state, session_start).status.code(), Some(0));
+    assert_eq!(arm(state, "turn-1", "hello").status.code(), Some(0));
+    let submitted = format!(
+        r#"{{"hook_event_name":"UserPromptSubmit","session_id":"s1","prompt_id":"{PROMPT_ID}","prompt":"hello"}}"#
+    );
+    assert_eq!(hook(state, &submitted).status.code(), Some(0));
+    let stopped = format!(
+        r#"{{"hook_event_name":"Stop","session_id":"s1","prompt_id":"{PROMPT_ID}","last_assistant_message":"done"}}"#
+    );
+    assert_eq!(hook(state, &stopped).status.code(), Some(0));
+    let terminal = wait(state, Some("turn-1"), "terminal", "0");
+    assert_eq!(terminal.status.code(), Some(0));
+    serde_json::from_slice(&terminal.stdout).unwrap()
+}
+
+#[test]
+fn terminal_result_records_requested_and_observed_provenance() {
+    // TSK-136 AC-2: the thread and the model and effort, as requested at
+    // launch and as the session reported them, travel with the result.
+    let temp = tempfile::tempdir().unwrap();
+    let state = temp.path().join("state");
+    let output = run(codeflow()
+        .args(["delegate", "init", "--run-id", "run-1", "--state-dir"])
+        .arg(&state)
+        .args(["--model", "opus", "--effort", "high"]));
+    assert_eq!(output.status.code(), Some(0));
+    let result = completed_turn(
+        &state,
+        r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"s1","cwd":"/tmp","model":{"id":"claude-opus-5-5","display_name":"Opus 5.5"},"effort":"high"}"#,
+    );
+    assert_eq!(
+        result["provenance"],
+        serde_json::json!({
+            "thread_id": "s1",
+            "model": {"requested": "opus", "observed": "claude-opus-5-5"},
+            "effort": {"requested": "high", "observed": "high"},
+        })
+    );
+}
+
+#[test]
+fn provenance_the_transport_does_not_give_is_unknown() {
+    let (_temp, state) = initialized();
+    let result = completed_turn(
+        &state,
+        r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"s1","cwd":"/tmp","model":7}"#,
+    );
+    assert_eq!(result["status"], "completed");
+    assert_eq!(
+        result["provenance"],
+        serde_json::json!({
+            "thread_id": "s1",
+            "model": {"requested": "unknown", "observed": "unknown"},
+            "effort": {"requested": "unknown", "observed": "unknown"},
+        })
+    );
+}
+
+#[test]
+fn init_rejects_an_unusable_requested_model_or_effort() {
+    for flags in [["--model", ""], ["--effort", "high\nlow"]] {
+        let temp = tempfile::tempdir().unwrap();
+        let state = temp.path().join("state");
+        let output = run(codeflow()
+            .args(["delegate", "init", "--run-id", "run-1", "--state-dir"])
+            .arg(&state)
+            .args(flags));
+        assert_ne!(output.status.code(), Some(0), "{flags:?}");
+        assert!(!state.join("launch.json").exists(), "{flags:?}");
+    }
+}
+
+#[test]
+fn terminal_provenance_cites_only_a_valid_ready_record() {
+    // T136-4: the terminal result uses the ready record's observed values
+    // only when `wait --until ready` would accept it and it is from the
+    // same session; otherwise they are unknown, and the result says why.
+    let start = r#"{"hook_event_name":"SessionStart","source":"startup","session_id":"s1","cwd":"/tmp","model":"native-model","effort":"high"}"#;
+    for case in ["event", "run", "source", "schema", "session", "unreadable"] {
+        let (_temp, state) = initialized();
+        let result = completed_turn(&state, start);
+        assert_eq!(
+            result["provenance"]["model"]["observed"], "native-model",
+            "{case}"
+        );
+        assert!(result["provenance"]
+            .get("observed_unknown_reason")
+            .is_none());
+
+        let path = state.join("ready.json");
+        let mut ready: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&path).unwrap()).unwrap();
+        match case {
+            "event" => ready["event"] = "UserPromptSubmit".into(),
+            "run" => ready["run_id"] = "different-run".into(),
+            "source" => ready["source"] = "resume".into(),
+            "schema" => ready["schema_version"] = 9.into(),
+            "session" => ready["session_id"] = "s2".into(),
+            _ => ready = serde_json::json!({"not": "a ready record"}),
+        }
+        std::fs::write(&path, serde_json::to_string(&ready).unwrap()).unwrap();
+        if case != "session" && case != "unreadable" {
+            assert_eq!(
+                wait(&state, None, "ready", "0").status.code(),
+                Some(11),
+                "{case}"
+            );
+        }
+        let terminal = wait(&state, Some("turn-1"), "terminal", "0");
+        assert_eq!(terminal.status.code(), Some(0), "{case}");
+        let result: serde_json::Value = serde_json::from_slice(&terminal.stdout).unwrap();
+        let provenance = &result["provenance"];
+        assert_eq!(provenance["model"]["observed"], "unknown", "{case}");
+        assert_eq!(provenance["effort"]["observed"], "unknown", "{case}");
+        assert!(
+            provenance["observed_unknown_reason"]
+                .as_str()
+                .is_some_and(|r| !r.is_empty()),
+            "{case}: {provenance}"
+        );
+    }
+}

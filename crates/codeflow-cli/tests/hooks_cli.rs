@@ -1190,6 +1190,163 @@ fn reference_transaction_lets_ref_packing_through_and_blocks_a_move() {
     assert_eq!(rev(dir.path(), "main"), main);
 }
 
+/// The TSK-136 review round 1 probes: commands that run a peer headless.
+const HEADLESS_PROBES: &[&str] = &[
+    "claude -p x",
+    "codex exec x",
+    "grok -p x",
+    "'claude' -p x",
+    "cl\"au\"de -p x",
+    r"clau\de -p x",
+    "$(printf claude) -p x",
+    "/usr/local/bin/claude -p x",
+    "alias peer='claude -p'\npeer x",
+    "shopt -s expand_aliases\nalias peer='claude -p'\npeer x",
+    "peer() { claude -p x; }; peer",
+    "printf x | xargs claude -p",
+    r"find . -maxdepth 0 -exec claude -p x \;",
+    "timeout 5 claude -p x",
+    "nice -n 1 claude -p x",
+    "time claude -p x",
+    "command claude -p x",
+    "exec claude -p x",
+    "bash -lc 'claude -p x'",
+    "env bash -lc 'echo harmless; claude -p x'",
+    "env bash -c 'echo harmless; claude -p x'",
+    "bash <<< 'claude -p x'",
+    "for x in one; do claude -p x; done",
+    "while false; do claude -p x; done",
+    "while true; do claude -p x; break; done",
+    "if true; then claude -p x; fi",
+    "(claude -p x)",
+    "{ claude -p x; }",
+    "claude -p <<< x",
+    "claude -dp x",
+    "grok -px",
+    "grok --single x",
+    "grok --single=x",
+    "grok --prompt-file prompt.txt",
+    "grok --prompt-json \"[]\"",
+    "codex --model demo exec x",
+    "codex --model=demo exec x",
+    "codex -c model=\"demo\" exec x",
+    "claude --help -p",
+];
+
+/// The same review's controls: commands that are not headless runs.
+const HEADLESS_CONTROLS: &[&str] = &[
+    "claude --help",
+    "codex login",
+    "grok --version",
+    "claude -- -p",
+    "grok -- -p",
+    "codex -- exec",
+    "claude --system-prompt \"-p\"",
+    "rg -p pattern",
+    "cat -- -p",
+    "git commit -m 'claude -p x'",
+    "printf '%s' 'claude -p x'",
+];
+
+#[test]
+fn exec_guard_classifies_every_review_probe() {
+    // T136-1 to T136-3: shell syntax, wrappers, Grok's native forms and
+    // argument roles, through the real hook at the block level.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(
+        dir.path(),
+        r#"{"security": {"headless_peer_runs": "block"}}"#,
+    );
+    let guard = |command: &str| {
+        run_with_stdin(
+            codeflow()
+                .args(["hook", "exec-guard"])
+                .current_dir(dir.path()),
+            &guard_payload(command, dir.path()),
+        )
+    };
+    for command in HEADLESS_PROBES {
+        let out = guard(command);
+        let err = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(2), "should block: {command}: {err}");
+        assert!(
+            err.contains("security.headless_peer_runs"),
+            "{command}: {err}"
+        );
+    }
+    for command in HEADLESS_CONTROLS {
+        let out = guard(command);
+        assert_eq!(out.status.code(), Some(0), "should allow: {command}");
+        assert!(
+            out.stderr.is_empty(),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+#[test]
+fn exec_guard_flags_headless_peer_runs_per_level() {
+    // TSK-136 AC-1: each headless form warns by default with the rule and the
+    // interactive path, is refused at block, and nothing else is touched.
+    let runs = [
+        "claude -p 'review this'",
+        "codex exec 'fix it'",
+        "grok -p 'x'",
+    ];
+    let others = [
+        "codex --version",
+        "claude",
+        "claude --model opus --effort high",
+        "grok --version",
+        "git commit -m 'no claude -p here'",
+    ];
+    for level in ["default", "warn", "block", "off"] {
+        let dir = tempfile::tempdir().unwrap();
+        init_repo(dir.path(), "feat/x");
+        if level != "default" {
+            write_policy(
+                dir.path(),
+                &format!(r#"{{"security": {{"headless_peer_runs": "{level}"}}}}"#),
+            );
+        }
+        let guard = |command: &str| {
+            run_with_stdin(
+                codeflow()
+                    .args(["hook", "exec-guard"])
+                    .current_dir(dir.path()),
+                &guard_payload(command, dir.path()),
+            )
+        };
+        for command in runs {
+            let out = guard(command);
+            let err = String::from_utf8_lossy(&out.stderr).to_string();
+            match level {
+                "block" => {
+                    assert_eq!(out.status.code(), Some(2), "{level}: {command}: {err}");
+                    assert!(err.contains("security.headless_peer_runs"), "{err}");
+                }
+                "off" => {
+                    assert_eq!(out.status.code(), Some(0), "{level}: {command}");
+                    assert!(!err.contains("headless"), "{err}");
+                }
+                _ => {
+                    assert_eq!(out.status.code(), Some(0), "{level}: {command}: {err}");
+                    assert!(err.contains("security.headless_peer_runs"), "{err}");
+                    assert!(err.contains("codeflow delegate"), "{err}");
+                }
+            }
+        }
+        for command in others {
+            let out = guard(command);
+            let err = String::from_utf8_lossy(&out.stderr);
+            assert_eq!(out.status.code(), Some(0), "{level}: {command}: {err}");
+            assert!(!err.contains("headless"), "{level}: {command}: {err}");
+        }
+    }
+}
+
 #[test]
 fn git_guard_blocks_pr_body_attribution() {
     // AC #13: attribution in a PR body blocked at gh pr create.
