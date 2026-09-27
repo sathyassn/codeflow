@@ -662,6 +662,54 @@ fn a_number_an_invalid_commit_introduced_is_never_issued_again() {
 }
 
 #[test]
+fn seed_cannot_move_the_checkpoint_across_a_rewrite() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    let first = task(&a, "one").unwrap();
+    let lost = task(&a, "two").unwrap();
+    let first_commit = world
+        .remote_ledger()
+        .first_add(&first.id)
+        .unwrap()
+        .commit
+        .clone();
+    // The host (no branch rules) is rewound, and an ordinary forced fetch
+    // brings the rewound tip into the tracking ref.
+    git(
+        &world.bare(),
+        &["update-ref", "refs/heads/codeflow/registry", &first_commit],
+    );
+    git(&a, &["fetch", "-q", "origin"]);
+    let saved = state::load(&Git::new(&a)).unwrap().last_verified.clone();
+    // Seed has something new to register: an epic record on main.
+    let epic = a.join("project-management/epics/EPC-001.md");
+    std::fs::create_dir_all(epic.parent().unwrap()).unwrap();
+    std::fs::write(&epic, record_text("EPC-001", None)).unwrap();
+    commit_all(&a, "an epic");
+    match seed::seed(&a, None) {
+        Err(IdsError::Rewritten(reason)) => {
+            assert!(reason.contains("does not descend"), "{reason}");
+        }
+        other => panic!("seed must refuse a rewritten registry, got {other:?}"),
+    }
+    assert_eq!(
+        world.remote_ledger().tip.as_deref(),
+        Some(first_commit.as_str()),
+        "seed refused before pushing anything onto the rewound registry"
+    );
+    assert_eq!(
+        state::load(&Git::new(&a)).unwrap().last_verified,
+        saved,
+        "the checkpoint did not move"
+    );
+    assert!(
+        matches!(task(&a, "after").unwrap_err(), IdsError::Rewritten(_)),
+        "issue still refuses, so {} is never reissued",
+        lost.id
+    );
+}
+
+#[test]
 fn seed_reports_a_permission_refusal_once_even_beside_a_lock_message() {
     let world = World::new();
     let a = world.clone_as("a", "a@example.test");

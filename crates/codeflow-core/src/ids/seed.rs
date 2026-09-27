@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 use super::entry::{frontmatter_value, new_uid, record_id_from_path, Entry, RegId, RECORD_ROOTS};
 use super::git::{z_fields, Git};
 use super::inventory::{self, branch_name, is_landing_branch};
-use super::issue::{self, Request};
+use super::issue::{self, Fetched, Pushed, Request};
 use super::ledger::{short, Ledger};
 use super::{state, tracking_ref, IdsError, Standing, AUTHORITY, PUSH_ATTEMPTS, REGISTRY_REF};
 
@@ -98,7 +98,10 @@ pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport
     let mut reason = String::new();
     for _ in 0..PUSH_ATTEMPTS {
         if online {
-            fetch_registry(git)?;
+            if let Fetched::Offline(reason) = issue::fetch(git, AUTHORITY)? {
+                return Err(IdsError::Offline(reason));
+            }
+            issue::verify_descent(git, AUTHORITY)?;
         }
         let registry = if online {
             tracking.clone()
@@ -142,58 +145,20 @@ pub(super) fn seed_locked(git: &Git, map: Option<&SeedMap>) -> Result<SeedReport
             report.standing = Some(Standing::Local);
             return Ok(report);
         }
-        let output = git.output(&[
-            "push",
-            "--porcelain",
-            AUTHORITY,
-            &format!("{commit}:{REGISTRY_REF}"),
-        ])?;
-        if output.status.success() {
-            git.run(&["update-ref", "-m", "codeflow ids seed", &tracking, &commit])?;
-            git.run(&[
-                "update-ref",
-                "-m",
-                "codeflow ids seed",
-                REGISTRY_REF,
-                &commit,
-            ])?;
-            state::update(git, |state| {
-                state
-                    .last_verified
-                    .insert(AUTHORITY.to_string(), commit.clone());
-            })?;
-            report.standing = Some(Standing::Reserved);
-            return Ok(report);
-        }
-        reason = format!(
-            "{}{}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let lower = reason.to_lowercase();
-        if !(lower.contains("fetch first")
-            || lower.contains("non-fast-forward")
-            || lower.contains("cannot lock ref"))
-        {
-            return Err(IdsError::Refused(reason.trim().to_string()));
+        match issue::push(git, AUTHORITY, &commit)? {
+            Pushed::Accepted => {
+                issue::adopt(git, AUTHORITY, &commit)?;
+                report.standing = Some(Standing::Reserved);
+                return Ok(report);
+            }
+            Pushed::Moved(why) => reason = why,
+            Pushed::Failed(error) => return Err(error),
+            // Nothing is assumed: seeding again is idempotent once the
+            // authority answers.
+            Pushed::Unclear(why) => return Err(IdsError::Transport(why)),
         }
     }
     Err(IdsError::Contended(PUSH_ATTEMPTS, reason))
-}
-
-fn fetch_registry(git: &Git) -> Result<(), IdsError> {
-    let refspec = format!(
-        "refs/heads/{}:{}",
-        super::REGISTRY_BRANCH,
-        tracking_ref(AUTHORITY)
-    );
-    let output = git.output(&["fetch", "--no-tags", AUTHORITY, &refspec])?;
-    let stderr = String::from_utf8_lossy(&output.stderr).to_lowercase();
-    if output.status.success() || stderr.contains("find remote ref") {
-        Ok(())
-    } else {
-        Err(IdsError::Offline(stderr.trim().to_string()))
-    }
 }
 
 /// The entries a seed would add: every id on every ref or in retained

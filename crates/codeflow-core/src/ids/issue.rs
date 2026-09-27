@@ -57,13 +57,13 @@ pub struct Reservation {
     pub note: Option<String>,
 }
 
-enum Fetched {
+pub(super) enum Fetched {
     Ok,
     Absent,
     Offline(String),
 }
 
-enum Pushed {
+pub(super) enum Pushed {
     Accepted,
     Moved(String),
     Failed(IdsError),
@@ -342,9 +342,11 @@ fn set_ref(git: &Git, name: &str, new: &str, old: Option<&str>) -> Result<(), Id
     git.run(&args).map(|_| ())
 }
 
-/// After an accepted push or a verified read-back: the tracking ref, the
-/// local registry and the last verified tip all move to `tip`.
-fn adopt(git: &Git, remote: &str, tip: &str) -> Result<(), IdsError> {
+/// After an accepted push or a verified read-back: the last verified tip,
+/// the tracking ref and the local registry all move to `tip`, which must
+/// descend from the saved checkpoint.
+pub(super) fn adopt(git: &Git, remote: &str, tip: &str) -> Result<(), IdsError> {
+    checkpoint(git, remote, tip)?;
     git.run(&[
         "update-ref",
         "-m",
@@ -352,15 +354,11 @@ fn adopt(git: &Git, remote: &str, tip: &str) -> Result<(), IdsError> {
         &tracking_ref(remote),
         tip,
     ])?;
-    git.run(&["update-ref", "-m", "codeflow ids", REGISTRY_REF, tip])?;
-    state::update(git, |state| {
-        state
-            .last_verified
-            .insert(remote.to_string(), tip.to_string());
-    })
+    git.run(&["update-ref", "-m", "codeflow ids", REGISTRY_REF, tip])
+        .map(|_| ())
 }
 
-fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
+pub(super) fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
     let tracking = tracking_ref(remote);
     let refspec = format!("refs/heads/{}:{tracking}", super::REGISTRY_BRANCH);
     let output = git.output(&["fetch", "--no-tags", remote, &refspec])?;
@@ -393,26 +391,36 @@ fn fetch(git: &Git, remote: &str) -> Result<Fetched, IdsError> {
 
 /// R-10: refuse when the fetched tip does not descend from the last tip
 /// this clone verified.
-fn verify_descent(git: &Git, remote: &str) -> Result<(), IdsError> {
+pub(super) fn verify_descent(git: &Git, remote: &str) -> Result<(), IdsError> {
     let Some(tip) = git.rev(&tracking_ref(remote)) else {
         return Ok(());
     };
+    checkpoint(git, remote, &tip)
+}
+
+/// The one writer of the saved checkpoint (R-10). `tip` becomes the last
+/// verified tip only when it descends from the one saved before, so no
+/// command path (issue, sync, read-back, seed, restore) can move the
+/// checkpoint across a rewrite and make a lost number issuable again.
+fn checkpoint(git: &Git, remote: &str, tip: &str) -> Result<(), IdsError> {
     let state = state::load(git)?;
     if let Some(last) = state.last_verified.get(remote) {
-        if git.rev(last).is_none() || !git.is_ancestor(last, &tip) {
+        if git.rev(last).is_none() || !git.is_ancestor(last, tip) {
             return Err(IdsError::Rewritten(format!(
-                "the fetched tip {} does not descend from the last verified tip {}",
-                short(&tip),
+                "the registry tip {} does not descend from the last verified tip {}",
+                short(tip),
                 short(last)
             )));
         }
     }
     state::update(git, |state| {
-        state.last_verified.insert(remote.to_string(), tip.clone());
+        state
+            .last_verified
+            .insert(remote.to_string(), tip.to_string());
     })
 }
 
-fn push(git: &Git, remote: &str, commit: &str) -> Result<Pushed, IdsError> {
+pub(super) fn push(git: &Git, remote: &str, commit: &str) -> Result<Pushed, IdsError> {
     let refspec = format!("{commit}:{REGISTRY_REF}");
     let output = git.output(&["push", "--porcelain", remote, &refspec])?;
     if output.status.success() {
@@ -639,10 +647,8 @@ fn publish_pending(git: &Git, remote: &str) -> Result<SyncReport, IdsError> {
             return Err(IdsError::Clash(clash_message(git, &clashes)?));
         }
         if remaining.is_empty() {
+            checkpoint(git, remote, &tip)?;
             set_ref(git, REGISTRY_REF, &tip, Some(&local))?;
-            state::update(git, |state| {
-                state.last_verified.insert(remote.to_string(), tip.clone());
-            })?;
             return Ok(report);
         }
         let refs: Vec<&Entry> = remaining.iter().collect();
@@ -826,6 +832,7 @@ pub fn restore(root: &Path, ids: &[RegId]) -> Result<Vec<RegId>, IdsError> {
         if let Fetched::Offline(reason) = fetch(&git, AUTHORITY)? {
             return Err(IdsError::Offline(reason));
         }
+        verify_descent(&git, AUTHORITY)?;
         tracking_ref(AUTHORITY)
     } else {
         REGISTRY_REF.to_string()
@@ -836,6 +843,7 @@ pub fn restore(root: &Path, ids: &[RegId]) -> Result<Vec<RegId>, IdsError> {
             if let Fetched::Offline(reason) = fetch(&git, AUTHORITY)? {
                 return Err(IdsError::Offline(reason));
             }
+            verify_descent(&git, AUTHORITY)?;
         }
         let ledger = Ledger::read(&git, &registry)?;
         let Some(tip) = ledger.tip.clone() else {
