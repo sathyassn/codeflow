@@ -21,7 +21,7 @@ Homes used below:
 | Old duty | New duty | Why | Pin |
 |---|---|---|---|
 | Every non-trivial repository task must begin with `/cf-model-orchestrator`; when unsure, treat work as non-trivial | Orchestration entry is decided by touched paths: adopter-facing paths, research or analysis that will drive one, and plan, design, security or irreversible work route; other edits go direct; when unsure, route. At the minimal tier nothing goes direct: every change lands through a branch and a reviewed PR | Operator decision 2026-09-26 ("orchestration entry by touched paths, checked in CI"); the path set is `workgraph/path_sets.toml`, which `codeflow ci` enforces for direct changes | `artifact_budget_contract` (path-decided orchestration route), `orchestration_contract` (stage-aware test), CF-MM-001 |
-| Written content policy: "review judges replies" | No hook sees a chat reply; the rules hold by discipline and evaluation judges them | Guidelines strand item 6: no reviewer reads replies | `orchestration_contract` editorial test |
+| Written content policy: "review judges replies" | No hook sees a chat reply; the rules hold by discipline; at the standard and full tiers `cf-editorial-review` judges substantial prose and the `cf-evaluate-model` evaluations check replies | Guidelines strand item 6: no reviewer reads replies | `orchestration_contract` editorial test |
 | Minimal "Think independently" and "Think in depth" bullets, standard "Challenge decisions independently" | One merged bullet in WD carrying both texts' sentences | Duplicate family across tiers (strand item 25) | `orchestration_contract` reasoning test |
 
 ## Standard and full contract
