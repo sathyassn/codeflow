@@ -2,7 +2,7 @@
   "spec": "SPC-014",
   "placeholders": {
     "{{digest:<block-id>}}": "the block digest the store computes (state.rs block_digest) for that block in the named document",
-    "{{form_digest:<block-id>}}": "SHA-256 of the form block's canonical JSON",
+    "{{form_digest:<block-id>}}": "the form digest the server renders as data-cf-form-digest: state.rs block_digest of that form block (serde_json::to_vec of the block, SHA-256, lowercase hex); tests read it from the server, never compute it separately",
     "{{answer_id:<n>}}": "the answer_id of the receipt returned for request n of the same fixture",
     "{{head}}": "the HEAD commit of the test repository"
   },
