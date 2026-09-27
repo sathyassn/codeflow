@@ -460,6 +460,19 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
         "plan/line",
         &[("project-management/tasks/TSK-003.md", &record)],
     );
+    // Bind the hand-written record in the shared id registry (TSK-101), as
+    // a maintainer's seed does, so the merge rule judges the line itself.
+    let seeded = codeflow()
+        .args(["ids", "seed"])
+        .current_dir(root)
+        .output()
+        .unwrap();
+    assert!(
+        seeded.status.success(),
+        "ids seed: {}{}",
+        String::from_utf8_lossy(&seeded.stdout),
+        String::from_utf8_lossy(&seeded.stderr)
+    );
     git(root, &["switch", "-q", line]);
     merge(root, "plan/line");
     git(root, &["switch", "-q", "-c", "task/TSK-003-work"]);
@@ -472,6 +485,11 @@ fn only_a_verified_epic_line_lands_as_one_pull_request() {
     assert_passes(&landed, "verified epic line");
     assert!(
         landed.1.contains("class: epic integration line of EPC-001"),
+        "{}",
+        landed.1
+    );
+    assert!(
+        landed.1.contains("bound by provenance: TSK-003"),
         "{}",
         landed.1
     );
