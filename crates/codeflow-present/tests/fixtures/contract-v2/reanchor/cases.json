@@ -1,0 +1,121 @@
+{
+  "source_document": "documents/v2-framed.json",
+  "target_document": "reanchor/revision-2.json",
+  "cases": [
+    {
+      "name": "same revision",
+      "note": {
+        "block_id": "answer-flow",
+        "entity_id": "service",
+        "label": "Service"
+      },
+      "shown_on": 1,
+      "expect": {
+        "state": "entity_anchored"
+      }
+    },
+    {
+      "name": "entity kept, label changed",
+      "note": {
+        "block_id": "answer-flow",
+        "entity_id": "service",
+        "label": "Service"
+      },
+      "shown_on": 2,
+      "expect": {
+        "state": "entity_reanchored",
+        "label_changed": true
+      }
+    },
+    {
+      "name": "entity removed, quote found",
+      "note": {
+        "block_id": "answer-flow",
+        "entity_id": "submit-edge",
+        "label": "submit",
+        "excerpt_text": "Ledger"
+      },
+      "shown_on": 2,
+      "expect": {
+        "state": "reanchored",
+        "changed": true
+      }
+    },
+    {
+      "name": "entity removed, quote not found",
+      "note": {
+        "block_id": "answer-flow",
+        "entity_id": "submit-edge",
+        "label": "submit"
+      },
+      "shown_on": 2,
+      "expect": {
+        "state": "block_fallback"
+      }
+    },
+    {
+      "name": "text edited, fuzzy match",
+      "canonical_text": {
+        "1": "The paths are in Figure 1 and the stage in Figure 2; the limits are in Table 1.",
+        "2": "The two paths are in Figure 1 and the stage is in Figure 2."
+      },
+      "note": {
+        "block_id": "intro",
+        "selector": {
+          "exact": "The paths are in",
+          "prefix": "",
+          "suffix": " Figure 1 and the stage in Figur",
+          "start_utf16": 0,
+          "end_utf16": 16
+        }
+      },
+      "shown_on": 2,
+      "expect": {
+        "state": "reanchored",
+        "changed": true,
+        "start_utf16": 0,
+        "end_utf16": 20,
+        "score": 0.8625
+      }
+    },
+    {
+      "name": "text rewritten, fuzzy below threshold",
+      "canonical_text": {
+        "1": "Answers stay on this machine.",
+        "2": "Everything is stored privately."
+      },
+      "note": {
+        "block_id": "outro",
+        "selector": {
+          "exact": "Answers stay on this machine",
+          "prefix": "",
+          "suffix": ".",
+          "start_utf16": 0,
+          "end_utf16": 28
+        }
+      },
+      "shown_on": 2,
+      "expect": {
+        "state": "block_fallback",
+        "best_score": 0.5833
+      }
+    },
+    {
+      "name": "block removed",
+      "note": {
+        "block_id": "snippet"
+      },
+      "shown_on": 2,
+      "expect": {
+        "state": "orphaned"
+      }
+    },
+    {
+      "name": "self re-anchor keeps every note",
+      "property": "re-anchoring a revision to itself returns the original state for every note",
+      "expect": {
+        "state": "unchanged"
+      }
+    }
+  ]
+}

@@ -80,7 +80,7 @@ true.
 |---|---|
 | Per session | one loopback service, one single-use file bootstrap, and one isolated browser profile |
 | Review chrome | Host, Origin, cookie and CSP checks protect it |
-| Untrusted static HTML | served from a revision-qualified sandbox without scripts, same-origin, forms, navigation, or network |
+| Untrusted static HTML | validated (no scripts, handlers, links, embeds, forms or remote URLs) and inlined into the live page under a per-block scoped host and the application CSP, so notes can target its parts; export wraps it in a sandboxed `iframe` `srcdoc` without scripts or same-origin (ADR-0049 update of 2026-09-26) |
 | Export | a self-contained read-only HTML artifact at full fidelity, with no credentials, review controls, profile paths, feedback history, or service state |
 | Platform adapters | fail closed rather than falling back to the operator's browser |
 | CLI adapter | `present` exposes open, update, list, show, history, feedback, resolve, export, close and clear, and does not become a resident service, product UI framework, or documentation portal |

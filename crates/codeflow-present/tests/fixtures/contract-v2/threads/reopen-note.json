@@ -1,0 +1,12 @@
+{
+  "setup": [
+    "anchors/entity-valid-figure.json",
+    "delivered",
+    "acknowledged"
+  ],
+  "request": {
+    "session_id": "7c1e2d3a-0000-4000-8000-000000000001",
+    "target": "5d0b8f7e-0000-4000-8000-0000000000a1",
+    "note_id": "9a4f6c21-0000-4000-8000-0000000000b1"
+  }
+}
