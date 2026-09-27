@@ -937,3 +937,202 @@ fn no_claude_host_path_makes_the_turn_adapter_mandatory() {
         "the Claude-host return rule must stay in capability-routing"
     );
 }
+
+// TSK-129 AC-1: the per-task reading chain has a tested byte cap.
+//
+// How the chain is derived. It is what a Claude-host session is told to read
+// for one full implementation task after the always-loaded layer (AGENTS.md
+// and CLAUDE.md, budgeted above and by TSK-127):
+// - orient and route: the routing gate invokes `cf-model-orchestrator`, and
+//   CLAUDE.md says to read and follow cf-method's workflow-lifecycle;
+// - before launch: CLAUDE.md names `current-ensemble.json` and
+//   `capability-routing.md`, which names `routing-policy.json`; the orchestrator
+//   names `cf-delegate`, whose core names the plugin lane for a Claude host;
+// - every exchange: the orchestrator names `quality-contract.md`;
+// - plan, build and ship: `cf-plan`; `cf-develop` and the verification
+//   selection it names; `cf-ship` and its PR evidence reference.
+// A split contract counts its index plus every section whose index row says
+// "every task". A section with a trigger row is read only when that trigger
+// fires, so it is outside the per-task chain; `CONDITIONAL_READS` records each
+// one and why, and the test fails if an index gains or loses a trigger row
+// without that list changing in review.
+//
+// Baseline: 203,489 bytes, measured on the integration line at `95e25f514`
+// (the TSK-129 start) over the same stages, when the turn adapter and the
+// whole cf-delegate skill, quality contract and capability-routing were read.
+const READING_CHAIN_BASELINE_BYTES: usize = 203_489;
+const READING_CHAIN_CAP_BYTES: usize = 148 * KIB;
+// AC-1: the cap sits at least 50 KB below the baseline.
+const _: () = assert!(READING_CHAIN_BASELINE_BYTES - READING_CHAIN_CAP_BYTES >= 50_000);
+
+const READING_CHAIN: &[(&str, &str)] = &[
+    (
+        "orient and route",
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+    ),
+    ("orient and route", "claude/skills/cf-method/SKILL.md"),
+    (
+        "orient and route",
+        "claude/skills/cf-method/references/workflow-lifecycle.md",
+    ),
+    (
+        "before launch",
+        "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    ),
+    (
+        "before launch",
+        "agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
+    ),
+    (
+        "before launch",
+        "agents/skills/cf-model-orchestrator/resources/routing-policy.json",
+    ),
+    ("before launch", "claude/skills/cf-delegate/SKILL.md"),
+    (
+        "before launch",
+        "claude/skills/cf-delegate/resources/lane-plugin.md",
+    ),
+    (
+        "every exchange",
+        "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+    ),
+    ("plan", "agents/skills/cf-plan/SKILL.md"),
+    ("build", "agents/skills/cf-develop/SKILL.md"),
+    (
+        "build",
+        "agents/skills/cf-model-orchestrator/resources/verification-selection.md",
+    ),
+    ("ship", "agents/skills/cf-ship/SKILL.md"),
+    ("ship", "agents/skills/cf-ship/references/pr-evidence.md"),
+];
+
+/// Indexes whose "every task" rows join the chain.
+const SECTION_INDEXES: &[&str] = &[
+    "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
+    "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
+];
+
+/// Reads outside the per-task chain, each with the reason it is conditional.
+const CONDITIONAL_READS: &[(&str, &str)] = &[
+    (
+        "agents/skills/cf-model-orchestrator/resources/quality/blockers-and-gates.md",
+        "only when a step is blocked or a check is red or unfinished",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/resources/quality/parallel.md",
+        "only when work fans out into parallel tasks",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/resources/quality/editorial.md",
+        "only for substantial prose or a review of its presentation",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/resources/quality/ui-design.md",
+        "only when a user-facing surface or its design intent changes",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/resources/quality/irreversible.md",
+        "only before a catastrophic or irreversible action",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/resources/quality/performance.md",
+        "only for a performance-, scale-, or concurrency-sensitive path",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/resources/quality/research-planning.md",
+        "only for a research, analysis or planning-only run",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/resources/routing/route-status.md",
+        "only when a route is qualified or a qualification, promotion or savings claim is made",
+    ),
+    (
+        "agents/skills/cf-model-orchestrator/resources/routing/design.md",
+        "only for product, UX, UI, interaction, or visual design work",
+    ),
+    (
+        "claude/skills/cf-delegate/resources/lane-lifecycle.md",
+        "the lifecycle lane is read on a Codex host",
+    ),
+    (
+        "claude/skills/cf-delegate/resources/claude-turn-completion.md",
+        "the turn adapter is read on a Codex host",
+    ),
+    (
+        "claude/skills/cf-delegate/resources/edit-access.md",
+        "only before a write-enabled handoff",
+    ),
+];
+
+/// The section files an index table links, split by its "Read" column.
+fn index_rows(base: &Path, index: &str) -> (Vec<String>, Vec<String>) {
+    let dir = Path::new(index).parent().expect("index directory");
+    let (mut every, mut triggered) = (Vec::new(), Vec::new());
+    for line in read_text(&base.join(index)).lines() {
+        let Some(start) = line.find("](") else {
+            continue;
+        };
+        let target = &line[start + 2..line[start..].find(')').expect("link end") + start];
+        let path = dir.join(target).to_string_lossy().replace('\\', "/");
+        if line.trim_end().ends_with("| every task |") {
+            every.push(path);
+        } else {
+            assert!(
+                line.contains("| when "),
+                "{index} row has no read rule: {line}"
+            );
+            triggered.push(path);
+        }
+    }
+    assert!(!every.is_empty(), "{index} lists no every-task section");
+    (every, triggered)
+}
+
+// The one expected failure: the chain stays over its cap until TSK-129 splits
+// `cf-model-orchestrator/SKILL.md` after TSK-127 lands (SPC-013 R-118,
+// amended 2026-09-27). That change removes this attribute; the cap is not
+// loosened. Any other panic still fails the test.
+#[test]
+#[should_panic(expected = "reading chain exceeds its cap")]
+fn per_task_reading_chain_stays_within_its_cap() {
+    use std::fmt::Write as _;
+    let base = repo_root().join("assets/base");
+    let mut chain: Vec<(String, String)> = Vec::new();
+    let mut triggered = BTreeSet::new();
+    for (stage, path) in READING_CHAIN {
+        chain.push(((*stage).to_string(), (*path).to_string()));
+        if SECTION_INDEXES.contains(path) {
+            let (every, conditional) = index_rows(&base, path);
+            chain.extend(every.into_iter().map(|p| ((*stage).to_string(), p)));
+            triggered.extend(conditional);
+        }
+    }
+    let recorded: BTreeSet<String> = CONDITIONAL_READS
+        .iter()
+        .map(|(path, _)| (*path).to_string())
+        .filter(|path| path.contains("/resources/quality/") || path.contains("/resources/routing/"))
+        .collect();
+    assert_eq!(
+        triggered, recorded,
+        "an index trigger row changed; record the conditional read and its reason"
+    );
+    for (path, reason) in CONDITIONAL_READS {
+        assert!(base.join(path).is_file(), "{path} ({reason}) is missing");
+        assert!(
+            chain.iter().all(|(_, p)| p != path),
+            "{path} is conditional ({reason}) but sits in the chain"
+        );
+    }
+    let mut total = 0;
+    let mut report = String::new();
+    for (stage, path) in &chain {
+        let bytes = authored_bytes(&read(&base.join(path))).len();
+        total += bytes;
+        let _ = write!(report, "\n  {stage}: {path} {bytes}");
+    }
+    assert!(
+        total <= READING_CHAIN_CAP_BYTES,
+        "reading chain exceeds its cap: {total} bytes against {READING_CHAIN_CAP_BYTES} \
+         (baseline {READING_CHAIN_BASELINE_BYTES}){report}"
+    );
+}
