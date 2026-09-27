@@ -31,9 +31,10 @@
 #   --no-session-owner  Who owns that gate; required with --no-session-reason.
 #   --skip-canary       Record the delegate canary unavailable without running it.
 #   --trust-wait-seconds <N>
-#                       How long the operator gets to answer the canary
-#                       session's workspace-trust prompt (default: 240; 0
-#                       waits not at all).
+#                       How long the operator gets to answer a canary
+#                       workspace-trust prompt that does not name this run's
+#                       own sample (default: 240; 0 waits not at all). The
+#                       harness answers a prompt for its own sample itself.
 #   --keep              Do not delete the work directory (teardown is still reported).
 
 set -eu
@@ -300,11 +301,27 @@ trap 'exit 143' TERM
 
 WORK_PARENT=${WORK_PARENT_OPT:-${TMPDIR:-/tmp}}
 mkdir -p "$WORK_PARENT"
-WORK_PARENT=$(CDPATH= cd -- "$WORK_PARENT" && pwd)
+# The physical path, so a sample's folder is the same string the session's own
+# working directory resolves to (the trust prompt is matched on it exactly).
+WORK_PARENT=$(CDPATH= cd -P -- "$WORK_PARENT" && pwd -P)
 WORK="$WORK_PARENT/cfqual-$$-$(date -u '+%Y%m%dT%H%M%SZ')"
 mkdir "$WORK" || { printf 'could not create an owned work directory at %s\n' "$WORK" >&2; exit 1; }
 WORK_OWNED=1
 TEARDOWN_LOG="$WORK/teardown.log"
+
+# Every sample folder is named by the harness from lowercase letters, digits
+# and hyphens plus this run's random nonce, so a trust prompt can name only
+# this run's own sample by an exact path match (plain_sample_path in lib.sh).
+SAMPLE_NONCE=$(od -An -N8 -tx1 /dev/urandom | tr -d ' \n')
+case $SAMPLE_NONCE in
+  ????????????*) ;;
+  *) printf 'could not read a sample nonce from /dev/urandom\n' >&2; exit 1 ;;
+esac
+
+# sample_dir <sample> <tier> - the folder of one sample in this run.
+sample_dir() {
+  printf '%s/%s-%s-%s\n' "$WORK" "$1" "$2" "$SAMPLE_NONCE"
+}
 
 RESULTS="$WORK/results.tsv"
 TRANSCRIPT="$WORK/transcript.log"
@@ -1381,7 +1398,7 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
     printf '\n$ %s\n%s\n' "$_start_cmd" "$_start_out" >>"$TRANSCRIPT"
     # Say what actually blocked the session rather than that something failed.
     # A fresh scaffolded sample carries its own .claude/settings.json, and the
-    # harness asks a human to trust that workspace before it takes a prompt;
+    # session asks whether to trust that workspace before it takes a prompt;
     # the pane needs a moment to paint that prompt before it can be read.
     sleep 8
     # One-shot detection, so this read takes `recent`: the question may already
@@ -1391,26 +1408,42 @@ print(json.load(sys.stdin)["result"]["root_pane"]["tab_id"])')
     _pane_text=$(herdr pane read "$HERDR_PANE" --source recent --lines 120 2>/dev/null || true)
     printf 'pane after failed agent start:\n%s\n' "$_pane_text" >>"$TRANSCRIPT"
     HERDR_AGENT=""
-    if ! printf '%s' "$_pane_text" | grep -qF -- "$TRUST_PROMPT_MATCH"; then
+    if ! printf '%s' "$_pane_text" | asks_trust; then
       canary_unavailable \
         "$_start_cmd failed; reply: $(oneline "$_start_out"); pane text is in the transcript" \
         "operator environment"
       return
     fi
 
-    # The blocker is the trust prompt, and no agent may answer it. The reason
-    # is assembled in two pieces so the sentence about the wait stays inside
-    # the recorded cell, which `record` cuts at 400 characters.
-    _trust_why="the Claude Code workspace-trust prompt blocked startup in the tab this run created: the sample carries the scaffolded .claude/settings.json, and the session asks a human to trust the folder before it accepts any prompt"
+    # The blocker is the trust prompt. The harness answers it only for the
+    # sample this run created (cf-method/references/autonomy.md); any other
+    # folder is the operator's. The reason is assembled in two pieces so the
+    # sentence about the wait stays inside the recorded cell, which `record`
+    # cuts at 400 characters.
+    _trust_why="the Claude Code workspace-trust prompt blocked startup in the tab this run created: the sample carries the scaffolded .claude/settings.json, and the session asks whether to trust the folder before it accepts any prompt"
     _trust_detail="Command: $_start_cmd. Reply: $(oneline "$_start_out")"
 
-    # resolve_trust_prompt asks the operator, waits, and then proves a live
-    # session on this pane and tab. It returns non-zero for every outcome that
-    # is not a proven session, so the canary is recorded unavailable with the
-    # reason it actually hit and `delegate wait --until ready` never runs on a
-    # session nobody has seen.
+    # resolve_trust_prompt answers for this run's own sample or asks the
+    # operator, waits, and then proves a live session on this pane and tab.
+    # It returns non-zero for every outcome that is not a proven session, so
+    # the canary is recorded unavailable with the reason it actually hit and
+    # `delegate wait --until ready` never runs on a session nobody has seen.
     if ! resolve_trust_prompt "$HERDR_PANE" "$HERDR_TAB" "$DIR" \
       "$TRUST_WAIT_SECONDS" "$_agent_name" "$_state/settings.json"; then
+      if [ "$TRUST_OUTCOME" = stopped ]; then
+        # The harness said yes and could not confirm the effect. Nothing more
+        # is sent to that session: the live lane ends here, the answer is a
+        # failed row, every later live row names the stop, and the ordinary
+        # teardown closes the tab after the remaining static rows.
+        printf '\nSTOPPED: %s\n' "$TRUST_REASON"
+        record "$SAMPLE" "$TIER" "trust prompt answered by the harness" \
+          "the answer reached this run's own sample and nothing else" \
+          "$RESULT_FAILED" "the dialog gone and the session in $DIR after the answer" \
+          "$TRUST_REASON"
+        canary_unavailable "the run stopped after the harness answered the trust prompt: $TRUST_REASON" \
+          "$TRUST_OWNER"
+        return
+      fi
       canary_unavailable "$_trust_why; $TRUST_REASON. $_trust_detail" "$TRUST_OWNER"
       return
     fi
@@ -1713,7 +1746,7 @@ qualify_boundary() {
 run_sample_tier() {
   SAMPLE=$1
   TIER=$2
-  DIR="$WORK/$SAMPLE-$TIER"
+  DIR=$(sample_dir "$SAMPLE" "$TIER")
   rm -rf "$DIR"
   mkdir -p "$DIR"
   printf '\n=== %s / %s ===\n' "$SAMPLE" "$TIER" >&2
@@ -1754,7 +1787,7 @@ done
 once_only_lane() {
   SAMPLE=$1
   TIER=$2
-  DIR="$WORK/$SAMPLE-$TIER"
+  DIR=$(sample_dir "$SAMPLE" "$TIER")
   if [ ! -d "$DIR" ]; then
     shift 2
     for _lane in "$@"; do
