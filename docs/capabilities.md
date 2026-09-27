@@ -478,10 +478,25 @@ guards. Task frontmatter keeps non-executable structural `depends_on` data.
 shape, parent-or-standalone ownership, spec readiness, stable integration
 targets, completed acceptance criteria, and malformed, dangling,
 self-referential, duplicate, or cyclic topology. Explicit `codeflow work start`
-always checks the assigned CodeFlow task branch's planning anchor. Pre-commit
-and detached CI apply that same read-only merge-base check when full-tier or
-recognizable historical CodeFlow task tracking is active. It proves validated
-planning is present on the declared stable target. Material graph or cross-task
+checks the planning anchor of the task the branch carries on any work prefix
+(`task/`, `fix/`, `feat/`, `spike/` and the rest; not `plan/` or
+`integration/`). CI applies the same read-only merge-base check once per pull
+request when full-tier or recognizable historical task tracking is active; the
+per-commit hook no longer does. It proves validated planning is present on the
+declared stable target. With tracking on, `codeflow ci` classifies every pull
+request: tracked (`Task: TSK-NNN`, or the id the branch carries), direct change
+(`Task: none: <reason>`), planning-only (records and `docs/plan/` only), an
+epic integration line, or an automation profile; an unclassified one, a
+mismatched `Task:` line, a pull request that adds the record it claims, and a
+spike that lands anything but `docs/research/` findings and its own record
+block. A direct change is refused on the floor of one embedded path table
+(policy, hooks, managed instructions, CI files, manifests, record schema,
+shipped templates) plus the project's own `git.product_paths` and
+`git.breaking_watch_paths`; `init` writes a stack default for
+`git.product_paths`, `update` adds it once, and `git.direct_changes: forbid`
+refuses direct changes entirely. `task new --follow-up-of`, `epic new
+--integration` and `adr new` (numbered, written `proposed`) are one command
+each. Material graph or cross-task
 contract changes force Plan vN+1; in-node implementation detail does not.
 Record status moves only by legal transitions (SPC-013 R-30 to R-35).
 `codeflow task status`, `epic status` and `spec status` write the status and
