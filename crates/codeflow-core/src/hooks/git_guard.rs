@@ -315,7 +315,7 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
             ProgramKind::Gh => check_gh(args, ctx, violations),
             // A program named by a substitution could be git itself.
             ProgramKind::Other if has_substitution(program) => {
-                if let Some(v) = unclassifiable_violation(ctx, "its program name") {
+                if let Some(v) = unclassifiable_violation(ctx.policy, None, "its program name") {
                     violations.push(v);
                 }
             }
@@ -1516,20 +1516,49 @@ fn check_git(
         return;
     }
 
-    if let Some(place) = unclassifiable_git(args) {
-        out.extend(unclassifiable_violation(ctx, place));
-        return;
-    }
-
+    // Classification uncertainty adds its own verdict; it never ends the
+    // judgment, so every other applicable rule still runs (R4-1).
+    let unclassified = unclassifiable_git(args);
     let Some((sub, rest)) = git_subcommand(args) else {
+        if let Some(u) = &unclassified {
+            out.extend(unclassifiable_violation(ctx.policy, None, u.place()));
+        }
         return;
     };
 
     let judged = judge_target(args, branches, moved, ctx);
+    if let Some(u) = &unclassified {
+        let known = match u {
+            Unclassified::Subcommand(_) => None,
+            Unclassified::Arguments(_) => Some(sub),
+        };
+        // A subcommand that acts on the branch it runs on can only reach a
+        // protected branch through its target, which is judged below; its
+        // unknown arguments matter only there. Any other unknown part can
+        // name a protected ref from anywhere.
+        let acts_on_current = known.is_some_and(|s| CURRENT_BRANCH_SUBCOMMANDS.contains(&s));
+        let exposed = !acts_on_current
+            || judged
+                .cases
+                .iter()
+                .any(|(branch, rules)| rules.branch_is_protected(branch));
+        if exposed {
+            let strictest = judged
+                .cases
+                .iter()
+                .filter_map(|(_, rules)| unclassifiable_violation(rules, known, u.place()))
+                .max_by_key(|v| severity(v.level));
+            out.extend(strictest);
+        }
+    }
     if matches!(sub, "checkout" | "switch") {
         // A checkout in a retargeted dir moves that dir's branch, not the
-        // session's. One the guard cannot place moves nothing it tracks.
-        if let Some(target) = checkout_target(rest) {
+        // session's. One the guard cannot place moves nothing it tracks, and
+        // a substituted target is assumed to be protected.
+        if let Some(mut target) = checkout_target(rest) {
+            if has_substitution(&target) {
+                target = assumed_protected_branch(ctx.policy).unwrap_or(target);
+            }
             match &judged.track {
                 Track::Session => branches.session = target,
                 Track::Dir(dir) => branches.switch_in(dir, target),
@@ -1590,22 +1619,44 @@ const JUDGED_SUBCOMMANDS: &[&str] = &[
     "switch",
 ];
 
+/// Subcommands that act on the branch checked out where they run. Their
+/// arguments cannot move them to another branch.
+const CURRENT_BRANCH_SUBCOMMANDS: &[&str] = &["commit", "merge", "cherry-pick", "rebase", "reset"];
+
+/// Which part of a git invocation a substitution leaves unknown.
+enum Unclassified {
+    /// A global option or the subcommand itself: any git command may run.
+    Subcommand(&'static str),
+    /// Arguments of a subcommand the guard judges.
+    Arguments(&'static str),
+}
+
+impl Unclassified {
+    fn place(&self) -> &'static str {
+        match self {
+            Self::Subcommand(place) | Self::Arguments(place) => place,
+        }
+    }
+}
+
 /// Where a substitution makes a git invocation unclassifiable, if anywhere
 /// (TSK-112, R3-1): in a global option or at or before the subcommand, where
 /// it can change which command runs; or, for a subcommand the guard judges,
 /// anywhere unquoted (word splitting can add arguments) and in any argument
 /// other than a quoted message value (`-m`, `--message`). A read-only
 /// subcommand's arguments cannot turn it into a mutation.
-fn unclassifiable_git(args: &[String]) -> Option<&'static str> {
+fn unclassifiable_git(args: &[String]) -> Option<Unclassified> {
     let mut idx = 0;
     let sub = loop {
         let t = args.get(idx)?;
         if has_substitution(t) {
-            return Some("a global option or the subcommand");
+            return Some(Unclassified::Subcommand(
+                "a global option or the subcommand",
+            ));
         }
         if GIT_GLOBAL_VALUE_FLAGS.contains(&t.as_str()) {
             if args.get(idx + 1).is_some_and(|v| has_substitution(v)) {
-                return Some("a global option");
+                return Some(Unclassified::Subcommand("a global option"));
             }
             idx += 2;
         } else if t.starts_with('-') {
@@ -1619,7 +1670,9 @@ fn unclassifiable_git(args: &[String]) -> Option<&'static str> {
     }
     let rest = &args[idx + 1..];
     if rest.iter().any(|a| a.contains(SUBSTITUTED_BARE)) {
-        return Some("an unquoted position, where word splitting can add arguments");
+        return Some(Unclassified::Arguments(
+            "an unquoted position, where word splitting can add arguments",
+        ));
     }
     let mut i = 0;
     while i < rest.len() {
@@ -1633,27 +1686,79 @@ fn unclassifiable_git(args: &[String]) -> Option<&'static str> {
         }
         let message_inline = a.starts_with("--message=") || (a.starts_with("-m") && a.len() > 2);
         if has_substitution(a) && !message_inline {
-            return Some("an argument other than the message");
+            return Some(Unclassified::Arguments(
+                "an argument other than the message",
+            ));
         }
         i += 1;
     }
     None
 }
 
-/// The block for a git command the guard cannot classify, at the level of
-/// `local_ref_protection` (charter §6.1: unknown ref-writers deny).
-fn unclassifiable_violation(ctx: &GuardContext<'_>, place: &str) -> Option<Violation> {
-    let level = ctx.policy.local_ref_protection;
-    (level.is_active() && !ctx.integrate_token).then(|| {
-        Violation::new(
-            "git.local_ref_protection",
-            level,
-            format!(
-                "command unresolved: a command substitution in {place} decides what this git command does, so the guard cannot prove it leaves protected branches alone"
-            ),
-            UNCLASSIFIABLE_REMEDY.to_string(),
-        )
-    })
+/// The rules an unknown part of a git invocation could break: every branch
+/// rule when the subcommand is unknown (`None`), else the rules of `sub`.
+fn exposed_rules(sub: Option<&str>, p: &GitPolicy) -> Vec<(&'static str, PolicyLevel)> {
+    let all = [
+        ("git.commit_to_protected", p.commit_to_protected),
+        ("git.merge_to_protected", p.merge_to_protected),
+        ("git.push_to_protected", p.push_to_protected),
+        ("git.force_push_protected", p.force_push_protected),
+        ("git.delete_protected", p.delete_protected),
+        ("git.hard_reset_protected", p.hard_reset_protected),
+        ("git.local_ref_protection", p.local_ref_protection),
+        ("git.hook_integrity", p.hook_integrity),
+    ];
+    let names: &[&str] = match sub {
+        None => return all.to_vec(),
+        Some("commit") => &["git.commit_to_protected"],
+        Some("merge" | "cherry-pick") => &["git.merge_to_protected"],
+        Some("rebase" | "reset") => &["git.hard_reset_protected"],
+        Some("push") => &[
+            "git.push_to_protected",
+            "git.force_push_protected",
+            "git.delete_protected",
+        ],
+        Some("branch") => &["git.delete_protected", "git.local_ref_protection"],
+        Some("config") => &["git.hook_integrity"],
+        Some("checkout" | "switch") => &["git.local_ref_protection", "git.commit_to_protected"],
+        Some(_) => &["git.local_ref_protection", "git.delete_protected"],
+    };
+    all.into_iter()
+        .filter(|(name, _)| names.contains(name))
+        .collect()
+}
+
+/// Order policy levels by strictness.
+fn severity(level: PolicyLevel) -> u8 {
+    match level {
+        PolicyLevel::Block => 2,
+        PolicyLevel::Warn => 1,
+        PolicyLevel::Allow | PolicyLevel::Off => 0,
+    }
+}
+
+/// The verdict for a git invocation the guard cannot classify: the strictest
+/// of the rules its unknown part could break, under `policy` (charter §6.1:
+/// unknown ref-writers deny). `None` when every such rule is off or allows.
+fn unclassifiable_violation(
+    policy: &GitPolicy,
+    sub: Option<&str>,
+    place: &str,
+) -> Option<Violation> {
+    // The strictest level; on a tie, the first rule listed.
+    let (rule, level) = exposed_rules(sub, policy)
+        .into_iter()
+        .filter(|(_, level)| level.is_active())
+        .rev()
+        .max_by_key(|(_, level)| severity(*level))?;
+    Some(Violation::new(
+        rule,
+        level,
+        format!(
+            "command unresolved: a command substitution in {place} decides what this git command does, so the guard cannot prove it leaves protected branches alone"
+        ),
+        UNCLASSIFIABLE_REMEDY.to_string(),
+    ))
 }
 
 /// How to make an unclassifiable git command classifiable.
@@ -5319,18 +5424,19 @@ mod tests {
             ("$(printf git) push origin main", "feat/s"),
             ("command `printf git` push origin main", "feat/s"),
             ("git push origin \"$(printf main)\"", "feat/s"),
-            ("git commit -m $(printf 'x --no-verify')", "feat/s"),
+            ("git commit -m $(printf 'x --no-verify')", "main"),
         ] {
             let r = report(cmd, session);
             assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
             let v = r
                 .violations
                 .iter()
-                .find(|v| v.rule == "git.local_ref_protection")
+                .find(|v| {
+                    v.message
+                        .starts_with("command unresolved: a command substitution in")
+                })
                 .unwrap_or_else(|| panic!("{cmd}: {:?}", r.violations));
-            assert!(v
-                .message
-                .starts_with("command unresolved: a command substitution in"));
+            assert_eq!(v.level, PolicyLevel::Block, "{cmd}");
             assert!(v.remedy.contains("literally"), "{}", v.remedy);
         }
         // Quoted message values and read-only subcommands stay classifiable.
@@ -5372,7 +5478,15 @@ mod tests {
                     let mut inserted = words.clone();
                     inserted.insert(pos, s);
                     let cmd = inserted.join(" ");
-                    for session in ["main", "feat/s"] {
+                    // Just after the subcommand, an unknown argument of a
+                    // current-branch subcommand matters only on a protected
+                    // target (R4-1); the main session covers that position.
+                    let sessions: &[&str] = if pos > sub_at {
+                        &["main"]
+                    } else {
+                        &["main", "feat/s"]
+                    };
+                    for &session in sessions {
                         let r = report(&cmd, session);
                         assert!(
                             blocks(&r.violations),
@@ -5406,6 +5520,68 @@ mod tests {
     fn report(cmd: &str, session: &str) -> Evaluation {
         let p = default_policy();
         evaluate_report(cmd, &ctx_with_dir_branch(&p, session, &fixture_resolver))
+    }
+
+    // R4-1: classification uncertainty never ends the judgment early. With
+    // `commit_to_protected: block`, a commit on main blocks whatever level
+    // `local_ref_protection` has, on both reproduced forms.
+    #[test]
+    fn test_tsk112_uncertainty_keeps_the_protected_commit_check() {
+        let forms = [
+            "git commit --allow-empty -m x --author=\"$(printf 'X <x@example.com>')\"",
+            "git commit $(printf '') --allow-empty -m x",
+        ];
+        for local in [PolicyLevel::Off, PolicyLevel::Warn, PolicyLevel::Block] {
+            let mut p = default_policy();
+            p.commit_to_protected = PolicyLevel::Block;
+            p.local_ref_protection = local;
+            for cmd in forms
+                .iter()
+                .copied()
+                .chain(["git commit --allow-empty -m x"])
+            {
+                let r = evaluate_report(cmd, &ctx_with_dir_branch(&p, "main", &fixture_resolver));
+                assert!(
+                    blocks(&r.violations),
+                    "{cmd} ({local:?}): {:?}",
+                    r.violations
+                );
+                assert!(
+                    r.violations
+                        .iter()
+                        .any(|v| v.rule == "git.commit_to_protected"
+                            && v.level == PolicyLevel::Block),
+                    "{cmd} ({local:?}): {:?}",
+                    r.violations
+                );
+            }
+            // A warning never authorizes: with every exposed rule at warn,
+            // the verdict still carries the warning.
+            let mut w = p.clone();
+            w.commit_to_protected = PolicyLevel::Warn;
+            for cmd in forms {
+                let r = evaluate_report(cmd, &ctx_with_dir_branch(&w, "main", &fixture_resolver));
+                assert!(
+                    r.violations.iter().any(|v| v.level == PolicyLevel::Warn),
+                    "{cmd} ({local:?}): {:?}",
+                    r.violations
+                );
+            }
+            // On a feature branch the target is not protected, so unknown
+            // commit arguments cannot reach a protected branch.
+            for cmd in forms {
+                let r = evaluate_report(cmd, &ctx_with_dir_branch(&p, "feat/s", &fixture_resolver));
+                assert!(
+                    r.violations.is_empty(),
+                    "{cmd} ({local:?}): {:?}",
+                    r.violations
+                );
+            }
+        }
+        // Default policy: both forms block on main.
+        for cmd in forms {
+            assert!(blocks(&report(cmd, "main").violations), "{cmd}");
+        }
     }
 
     // Regression: the path held in a variable used to fall back to the

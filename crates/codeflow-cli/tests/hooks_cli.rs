@@ -496,6 +496,36 @@ fn git_guard_blocks_targets_it_cannot_prove() {
     }
 }
 
+// TSK-112 round 4 (R4-1): an unclassifiable argument never skips the
+// protected-commit check. With `commit_to_protected: block`, a commit on main
+// blocks at every `local_ref_protection` level, with or without a substitution.
+#[test]
+fn git_guard_uncertainty_keeps_the_protected_commit_check() {
+    for local in ["off", "warn", "block"] {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path(), "main");
+        write_policy(
+            tmp.path(),
+            &format!(
+                r#"{{"git":{{"protected_branches":["main","master"],"commit_to_protected":"block","local_ref_protection":"{local}"}}}}"#
+            ),
+        );
+        for command in [
+            "git commit --allow-empty -m x --author=\"$(printf 'X <x@example.com>')\"",
+            "git commit $(printf '') --allow-empty -m x",
+            "git commit --allow-empty -m x",
+        ] {
+            let out = guard_run(command, tmp.path());
+            assert_eq!(
+                out.status.code(),
+                Some(2),
+                "{local}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
 #[test]
 fn git_guard_allows_force_push_to_feature_branch() {
     let dir = tempfile::tempdir().unwrap();
