@@ -282,6 +282,7 @@
     ],
     "SessionStart": [
       {
+        "matcher": "startup|resume|clear|compact",
         "hooks": [
           {
             "type": "command",
@@ -296,6 +297,16 @@
           {
             "type": "command",
             "command": "codeflow hook session-summary"
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "codeflow hook prompt-reminder"
           }
         ]
       }

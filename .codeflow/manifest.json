@@ -683,7 +683,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "0731dc9541d27921e3c4579e73f5c394870b0a89d2d78fe270bc3d76a0b8d372",
+      "sha256": "e2d10025fb1b304c802b06399e5e58d680dae8b5eea0829f4ffb999802f40437",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
@@ -1451,7 +1451,7 @@
     ".codex/hooks.json": {
       "src": "codex/hooks.json",
       "ownership": "managed",
-      "sha256": "f76574fc2e303dad3c8f744dd6c97af72ff9651023b1f3d596f45b8dc24f5164",
+      "sha256": "a6cff20962ec958d9f12874f672758d6246a495d9f40d6ef0457ea812f4fe56c",
       "exec": false
     },
     ".github/pull_request_template.md": {

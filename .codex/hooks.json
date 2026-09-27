@@ -16,6 +16,13 @@
           { "type": "command", "command": "codeflow hook session-orient", "timeout": 10 }
         ]
       }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          { "type": "command", "command": "codeflow hook prompt-reminder", "timeout": 10 }
+        ]
+      }
     ]
   }
 }
