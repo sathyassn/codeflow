@@ -60,10 +60,11 @@ re-read this block before acting.
 opt-in repository guide, and `/cf-herdr` hosts a peer terminal when
 `HERDR_ENV=1`.
 
-**Mechanics:** `codeflow orient`, `status`, `test`, `validate [--docs]`,
-`doctor`, `recall "<query>"`, `integrate <branch>`, `present`, `portal`,
-`remote`; `codeflow --help` lists the rest. Durable work records need the full
-tier.
+**Mechanics:** `codeflow orient`, `status`, `work next`, `work claim <id>`,
+`work start <id>`, `task new`, `task status`, `epic new`, `spec new --for <id>`,
+`adr new`, `test`, `validate [--docs]`, `doctor`, `recall "<query>"`,
+`integrate <branch>`, `present`, `portal`, `remote`; `codeflow --help` lists
+the rest.
 
 ## Where things live
 
@@ -75,10 +76,12 @@ tier.
 | How: structure and decisions | `docs/architecture.md` and `docs/decisions/` |
 | Trace: what happened and why | the ledger and `codeflow recall` |
 
-Work in progress lives in the harness's task tools; the full tier adds
-durable records. Before building, check `docs/capabilities.md` and the recent
-ADRs. Answer "why is X this way" by following links or `codeflow recall "X"`,
-never by reading all the code.
+Planned and active work lives in `project-management/` (epics, specs, tasks,
+allocated by the CLI). The traceability spine runs capability, work item,
+ADR or spec, PR, ledger; `validate --docs` checks it. Before building, check
+`docs/capabilities.md` and the recent ADRs. Answer "why is X this way" by
+following frontmatter links or `codeflow recall "X"`, never by reading all
+the code.
 
 <!-- codeflow:managed:end -->
 

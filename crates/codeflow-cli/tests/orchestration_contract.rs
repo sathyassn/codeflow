@@ -434,7 +434,6 @@ fn accountable_execution_preserves_design_and_evidence_boundaries() {
 #[test]
 fn independent_planning_cannot_degrade_to_plan_then_critique() {
     let skill = read("assets/base/agents/skills/cf-model-orchestrator/SKILL.md");
-    let agents = read("assets/base/AGENTS.md.tmpl");
     let capabilities = read("docs/capabilities.md");
     let normalized = normalize_whitespace(&skill);
 
@@ -463,11 +462,12 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
         );
     }
 
+    // TSK-127 moved the entry-point cell's doctrine into the owning skill.
     assert!(
-        normalize_whitespace(&agents).contains(
-            "both independently research/analyze/plan; Claude leads design; the host assigns each task"
+        normalized.contains(
+            "Both families independently research, analyze, and plan; Claude owns design and integrated judgment; the host assigns"
         ),
-        "always-loaded AGENTS contract must expose independent planning"
+        "the orchestrator skill must expose independent planning in its description"
     );
     assert!(
         normalize_whitespace(&capabilities).contains("seventeen health checks"),
@@ -647,7 +647,26 @@ fn responsible_autonomy_has_detailed_quality_and_security_owners() {
 
 #[test]
 fn always_loaded_reasoning_and_output_contract_survives_refactors() {
-    let agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+    // TSK-127: the map keeps the one-line kernel; the full text is one hop
+    // away in the shared references every tier installs.
+    let map = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
+    for required in [
+        "Evidence and honest analysis outrank agreement",
+        "Find broadly; act by materiality.",
+        "Prove it where it runs.",
+        ".codeflow/rules/workflow-discipline.md",
+        ".codeflow/rules/writing.md",
+    ] {
+        assert!(
+            map.contains(required),
+            "rule map lost its kernel line: {required}"
+        );
+    }
+    let agents = normalize_whitespace(&format!(
+        "{}\n{}",
+        read("assets/base/rules/workflow-discipline.md"),
+        read("assets/base/rules/writing.md")
+    ));
 
     for required in [
         "then the best current external sources",
@@ -668,7 +687,7 @@ fn always_loaded_reasoning_and_output_contract_survives_refactors() {
     ] {
         assert!(
             agents.contains(required),
-            "always-loaded contract lost a load-bearing duty: {required}"
+            "workflow and writing references lost a load-bearing duty: {required}"
         );
     }
 }
@@ -743,16 +762,28 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
         );
     }
 
+    // TSK-127: entry is decided by touched paths (operator decision of
+    // 2026-09-26); the map states it, CLAUDE.md carries the stage detail.
+    let agents = normalize_whitespace(&agents);
     for required in [
-        "Every non-trivial repository task **must begin with**",
+        "Orchestration entry is decided by touched paths",
         "`/cf-model-orchestrator`",
-        "research- or planning-only task stops before implementation",
-        "supporting flows, not",
-        "When uncertain whether work is trivial, treat",
+        "when unsure, route",
     ] {
         assert!(
             agents.contains(required),
-            "AGENTS template lost duo entry-point marker: {required}"
+            "AGENTS map lost duo entry-point marker: {required}"
+        );
+    }
+    let claude_normalized = normalize_whitespace(&claude);
+    for required in [
+        "Research or planning-only work exits after joint settlement",
+        "are supporting or solo flows, not alternate entry points",
+        "when unsure, route",
+    ] {
+        assert!(
+            claude_normalized.contains(required),
+            "CLAUDE template lost duo entry-point marker: {required}"
         );
     }
     for required in [
@@ -968,8 +999,9 @@ fn project_organization_has_one_authority_and_honest_closeout() {
 
 #[test]
 fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
-    let full_agents = normalize_whitespace(&read("assets/base/AGENTS.md.tmpl"));
-    let minimal_agents = normalize_whitespace(&read("assets/base/AGENTS.minimal.md.tmpl"));
+    // TSK-127: one writing reference serves every tier.
+    let full_agents = normalize_whitespace(&read("assets/base/rules/writing.md"));
+    let minimal_agents = full_agents.clone();
     let lifecycle = normalize_whitespace(&read(
         "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
     ));

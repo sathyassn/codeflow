@@ -276,6 +276,7 @@ mod tests {
         for (path, member) in [
             ("CLAUDE.md", "managed_instructions"),
             (".claude/skills/cf-plan/SKILL.md", "managed_instructions"),
+            (".codeflow/rules/writing.md", "managed_instructions"),
             (".github/workflows/release.yml", "ci_workflows"),
             ("crates/codeflow-core/src/hooks/policy.rs", "product_paths"),
         ] {

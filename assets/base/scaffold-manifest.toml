@@ -84,22 +84,29 @@ schema_version = 1
 
 # --- root contracts ---------------------------------------------------------
 
-# AGENTS.md and CLAUDE.md are tier-honest: two entries each, one dest, selected
-# by tier (the same same-dest / disjoint-selector shape the settings presets
-# use). The full contract advertises the whole method — the six-layer model, the
-# /cf-* skills, project-management/, the session digest. A --minimal repo installs
-# the four-plane enforcement floor but none of that method machinery, so it gets a
-# trimmed contract that advertises only what its tier installs: the git rules
-# (now all hook-enforced at minimal) and the working principles. Both minimal and
-# the full tiers ship a CLAUDE.md, because minimal now wires .claude/settings.json
-# (the git-guard/exec-guard + orient/summary hooks) and Claude Code needs the lean
-# contract to document them.
+# AGENTS.md and CLAUDE.md are tier-honest and rendered from one kernel,
+# `rule-map.toml` (TSK-127): one AGENTS entry per tier and one CLAUDE entry
+# for minimal and one for the method tiers, each dest selected by tier (the
+# same same-dest / disjoint-selector shape the settings presets use). Each
+# map points only at files its tier installs: the minimal map at the
+# references under .codeflow/rules/, the standard and full maps also at the
+# /cf-* skills, and only the full map at project-management/. Every tier ships
+# a CLAUDE.md, because every tier wires .claude/settings.json (the
+# git-guard/exec-guard + orient/summary hooks).
 [[entry]]
 src = "AGENTS.md.tmpl"
 dest = "AGENTS.md"
 ownership = "managed-region"
 region = "markdown"
-tiers = ["standard", "full"]
+tiers = ["standard"]
+template = true
+
+[[entry]]
+src = "AGENTS.full.md.tmpl"
+dest = "AGENTS.md"
+ownership = "managed-region"
+region = "markdown"
+tiers = ["full"]
 template = true
 
 [[entry]]
@@ -131,6 +138,32 @@ src = "gitignore"
 dest = ".gitignore"
 ownership = "managed-region"
 region = "hash"
+tiers = ["minimal", "standard", "full"]
+
+# The references one hop away from the rule map (TSK-127): the full text
+# behind the always rules and the moment table, at every tier.
+[[entry]]
+src = "rules/workflow-discipline.md"
+dest = ".codeflow/rules/workflow-discipline.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "rules/git-rules.md"
+dest = ".codeflow/rules/git-rules.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "rules/worktrees.md"
+dest = ".codeflow/rules/worktrees.md"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
+src = "rules/writing.md"
+dest = ".codeflow/rules/writing.md"
+ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
 # --- policy (user-owned, schema-versioned) ----------------------------------
