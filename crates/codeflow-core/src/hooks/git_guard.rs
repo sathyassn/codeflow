@@ -5366,6 +5366,29 @@ mod tests {
         assert!(r.violations.is_empty(), "{:?}", r.violations);
     }
 
+    // A git op nested in a substitution runs in a subshell whose own `cd`
+    // the tracker does not follow: its target is unresolved.
+    #[test]
+    fn test_tsk112_nested_moves_are_unresolved() {
+        for cmd in [
+            "echo \"$(cd /scratch-main && git commit -m x)\"",
+            "echo \"$(R=/scratch-main; git -C \"$R\" commit -m x)\"",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(
+                has_rule(&r.violations, "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // Nothing moves inside: a nested literal target still resolves.
+        let r = report(
+            "echo \"$(git -C /scratch log -1)\"; git -C /scratch commit -m x",
+            "main",
+        );
+        assert!(r.violations.is_empty(), "{:?}", r.violations);
+    }
+
     // A commit message built by a heredoc substitution keeps the line flat.
     #[test]
     fn test_tsk112_heredoc_message_keeps_the_move_resolvable() {
