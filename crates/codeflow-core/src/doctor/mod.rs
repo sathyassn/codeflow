@@ -1519,10 +1519,13 @@ fn check_id_registry(opts: &Options) -> CheckResult {
                 "durable work tracking is off; no registry applies".into(),
             )
         }
+        // Whether a registry applies is unknown, so it is not applicable
+        // here; the enforcing surfaces (pre-commit, CI) refuse until the
+        // state is repaired, and the warning keeps the cause visible.
         Err(error) => {
             return result(
-                Status::Fail,
-                format!("cannot determine durable-work tracking: {error}"),
+                Status::Warn,
+                format!("not applicable: durable-work tracking cannot be determined ({error})"),
             )
         }
     }
@@ -1789,6 +1792,37 @@ mod tests {
             exec_command: Some(|_, _| Err("not available".into())),
             ..Options::default()
         }
+    }
+
+    #[test]
+    fn id_registry_is_not_applicable_when_project_state_is_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cf = dir.path().join(".codeflow");
+        std::fs::create_dir_all(&cf).unwrap();
+        // A project.toml without the state fields `init` writes.
+        std::fs::write(cf.join("project.toml"), "tier = \"standard\"\n").unwrap();
+        let opts = Options {
+            project_dir: dir.path().to_string_lossy().into_owned(),
+            ..test_opts()
+        };
+        let result = check_id_registry(&opts);
+        assert_eq!(result.status, Status::Warn, "{}", result.message);
+        assert!(
+            result.message.starts_with("not applicable:"),
+            "{}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn id_registry_passes_when_tracking_is_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = Options {
+            project_dir: dir.path().to_string_lossy().into_owned(),
+            ..test_opts()
+        };
+        let result = check_id_registry(&opts);
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
     }
 
     #[test]
