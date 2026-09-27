@@ -11,11 +11,6 @@
     "caption": "You type nineteen of the commands; hook, git-hook and ci are called by the wiring that init installs.",
     "states": [
       {
-        "name": "job",
-        "mark": "layer",
-        "means": "A job"
-      },
-      {
         "name": "typed",
         "mark": "agent",
         "means": "You run it"
@@ -60,516 +55,456 @@
     ],
     "wide": {
       "width": 720,
-      "height": 396,
+      "height": 270,
       "draw": [
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 16,
-          "y": 16,
-          "w": 224,
-          "h": 184,
-          "rx": 8,
-          "id": "g0"
-        },
-        {
           "text": "Scaffold",
-          "x": 30,
-          "y": 40,
-          "style": "strong",
-          "for": [
-            "g0"
-          ]
+          "x": 16,
+          "y": 24,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 40,
-          "cy": 64,
-          "r": 6,
+          "cx": 124,
+          "cy": 19,
+          "r": 7,
           "id": "g0c0"
         },
         {
           "text": "init",
-          "x": 56,
-          "y": 69,
+          "x": 140,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c0",
-            "g0"
+            "g0c0"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 40,
-          "cy": 88,
-          "r": 6,
+          "cx": 208,
+          "cy": 19,
+          "r": 7,
           "id": "g0c1"
         },
         {
           "text": "update",
-          "x": 56,
-          "y": 93,
+          "x": 224,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c1",
-            "g0"
+            "g0c1"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 40,
-          "cy": 112,
-          "r": 6,
+          "cx": 309,
+          "cy": 19,
+          "r": 7,
           "id": "g0c2"
         },
         {
           "text": "epic",
-          "x": 56,
-          "y": 117,
+          "x": 325,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c2",
-            "g0"
+            "g0c2"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 40,
-          "cy": 136,
-          "r": 6,
+          "cx": 393,
+          "cy": 19,
+          "r": 7,
           "id": "g0c3"
         },
         {
           "text": "spec",
-          "x": 56,
-          "y": 141,
+          "x": 409,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c3",
-            "g0"
+            "g0c3"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 40,
-          "cy": 160,
-          "r": 6,
+          "cx": 477,
+          "cy": 19,
+          "r": 7,
           "id": "g0c4"
         },
         {
           "text": "task",
-          "x": 56,
-          "y": 165,
+          "x": 493,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c4",
-            "g0"
+            "g0c4"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 40,
-          "cy": 184,
-          "r": 6,
+          "cx": 561,
+          "cy": 19,
+          "r": 7,
           "id": "g0c5"
         },
         {
           "text": "estimate",
-          "x": 56,
-          "y": 189,
+          "x": 577,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c5",
-            "g0"
+            "g0c5"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 248,
-          "y": 16,
-          "w": 224,
-          "h": 184,
-          "rx": 8,
-          "id": "g1"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 42,
+          "x2": 704,
+          "y2": 42
         },
         {
           "text": "Enforce",
-          "x": 262,
-          "y": 40,
-          "style": "strong",
-          "for": [
-            "g1"
-          ]
+          "x": 16,
+          "y": 70,
+          "style": "strong"
         },
         {
           "state": "invoked",
           "shape": "circle",
-          "cx": 272,
-          "cy": 64,
-          "r": 6,
+          "cx": 124,
+          "cy": 65,
+          "r": 7,
           "id": "g1c0"
         },
         {
           "text": "hook",
-          "x": 288,
-          "y": 69,
+          "x": 140,
+          "y": 70,
           "style": "mono",
           "for": [
-            "g1c0",
-            "g1"
+            "g1c0"
           ]
         },
         {
           "state": "invoked",
           "shape": "circle",
-          "cx": 272,
-          "cy": 88,
-          "r": 6,
+          "cx": 208,
+          "cy": 65,
+          "r": 7,
           "id": "g1c1"
         },
         {
           "text": "git-hook",
-          "x": 288,
-          "y": 93,
+          "x": 224,
+          "y": 70,
           "style": "mono",
           "for": [
-            "g1c1",
-            "g1"
+            "g1c1"
           ]
         },
         {
           "state": "invoked",
           "shape": "circle",
-          "cx": 272,
-          "cy": 112,
-          "r": 6,
+          "cx": 326,
+          "cy": 65,
+          "r": 7,
           "id": "g1c2"
         },
         {
           "text": "ci",
-          "x": 288,
-          "y": 117,
+          "x": 342,
+          "y": 70,
           "style": "mono",
           "for": [
-            "g1c2",
-            "g1"
+            "g1c2"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 272,
-          "cy": 136,
-          "r": 6,
+          "cx": 393,
+          "cy": 65,
+          "r": 7,
           "id": "g1c3"
         },
         {
           "text": "policy",
-          "x": 288,
-          "y": 141,
+          "x": 409,
+          "y": 70,
           "style": "mono",
           "for": [
-            "g1c3",
-            "g1"
+            "g1c3"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 272,
-          "cy": 160,
-          "r": 6,
+          "cx": 494,
+          "cy": 65,
+          "r": 7,
           "id": "g1c4"
         },
         {
           "text": "remote",
-          "x": 288,
-          "y": 165,
+          "x": 510,
+          "y": 70,
           "style": "mono",
           "for": [
-            "g1c4",
-            "g1"
+            "g1c4"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 480,
-          "y": 16,
-          "w": 224,
-          "h": 184,
-          "rx": 8,
-          "id": "g2"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 88,
+          "x2": 704,
+          "y2": 88
         },
         {
           "text": "Verify",
-          "x": 494,
-          "y": 40,
-          "style": "strong",
-          "for": [
-            "g2"
-          ]
+          "x": 16,
+          "y": 116,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 504,
-          "cy": 64,
-          "r": 6,
+          "cx": 124,
+          "cy": 111,
+          "r": 7,
           "id": "g2c0"
         },
         {
           "text": "test",
-          "x": 520,
-          "y": 69,
+          "x": 140,
+          "y": 116,
           "style": "mono",
           "for": [
-            "g2c0",
-            "g2"
+            "g2c0"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 504,
-          "cy": 88,
-          "r": 6,
+          "cx": 208,
+          "cy": 111,
+          "r": 7,
           "id": "g2c1"
         },
         {
           "text": "validate",
-          "x": 520,
-          "y": 93,
+          "x": 224,
+          "y": 116,
           "style": "mono",
           "for": [
-            "g2c1",
-            "g2"
+            "g2c1"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 504,
-          "cy": 112,
-          "r": 6,
+          "cx": 326,
+          "cy": 111,
+          "r": 7,
           "id": "g2c2"
         },
         {
           "text": "integrate",
-          "x": 520,
-          "y": 117,
+          "x": 342,
+          "y": 116,
           "style": "mono",
           "for": [
-            "g2c2",
-            "g2"
+            "g2c2"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 504,
-          "cy": 136,
-          "r": 6,
+          "cx": 452,
+          "cy": 111,
+          "r": 7,
           "id": "g2c3"
         },
         {
           "text": "doctor",
-          "x": 520,
-          "y": 141,
+          "x": 468,
+          "y": 116,
           "style": "mono",
           "for": [
-            "g2c3",
-            "g2"
+            "g2c3"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 504,
-          "cy": 160,
-          "r": 6,
+          "cx": 553,
+          "cy": 111,
+          "r": 7,
           "id": "g2c4"
         },
         {
           "text": "work",
-          "x": 520,
-          "y": 165,
+          "x": 569,
+          "y": 116,
           "style": "mono",
           "for": [
-            "g2c4",
-            "g2"
+            "g2c4"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 16,
-          "y": 212,
-          "w": 224,
-          "h": 184,
-          "rx": 8,
-          "id": "g3"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 134,
+          "x2": 704,
+          "y2": 134
         },
         {
           "text": "Remember",
-          "x": 30,
-          "y": 236,
-          "style": "strong",
-          "for": [
-            "g3"
-          ]
+          "x": 16,
+          "y": 162,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 40,
-          "cy": 260,
-          "r": 6,
+          "cx": 124,
+          "cy": 157,
+          "r": 7,
           "id": "g3c0"
         },
         {
           "text": "orient",
-          "x": 56,
-          "y": 265,
+          "x": 140,
+          "y": 162,
           "style": "mono",
           "for": [
-            "g3c0",
-            "g3"
+            "g3c0"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 40,
-          "cy": 284,
-          "r": 6,
+          "cx": 225,
+          "cy": 157,
+          "r": 7,
           "id": "g3c1"
         },
         {
           "text": "status",
-          "x": 56,
-          "y": 289,
+          "x": 241,
+          "y": 162,
           "style": "mono",
           "for": [
-            "g3c1",
-            "g3"
+            "g3c1"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 40,
-          "cy": 308,
-          "r": 6,
+          "cx": 326,
+          "cy": 157,
+          "r": 7,
           "id": "g3c2"
         },
         {
           "text": "recall",
-          "x": 56,
-          "y": 313,
+          "x": 342,
+          "y": 162,
           "style": "mono",
           "for": [
-            "g3c2",
-            "g3"
+            "g3c2"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 248,
-          "y": 212,
-          "w": 224,
-          "h": 184,
-          "rx": 8,
-          "id": "g4"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 180,
+          "x2": 704,
+          "y2": 180
         },
         {
           "text": "Delegate",
-          "x": 262,
-          "y": 236,
-          "style": "strong",
-          "for": [
-            "g4"
-          ]
+          "x": 16,
+          "y": 208,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 272,
-          "cy": 260,
-          "r": 6,
+          "cx": 124,
+          "cy": 203,
+          "r": 7,
           "id": "g4c0"
         },
         {
           "text": "delegate",
-          "x": 288,
-          "y": 265,
+          "x": 140,
+          "y": 208,
           "style": "mono",
           "for": [
-            "g4c0",
-            "g4"
+            "g4c0"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 480,
-          "y": 212,
-          "w": 224,
-          "h": 184,
-          "rx": 8,
-          "id": "g5"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 226,
+          "x2": 704,
+          "y2": 226
         },
         {
           "text": "Present",
-          "x": 494,
-          "y": 236,
-          "style": "strong",
-          "for": [
-            "g5"
-          ]
+          "x": 16,
+          "y": 254,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 504,
-          "cy": 260,
-          "r": 6,
+          "cx": 124,
+          "cy": 249,
+          "r": 7,
           "id": "g5c0"
         },
         {
           "text": "portal",
-          "x": 520,
-          "y": 265,
+          "x": 140,
+          "y": 254,
           "style": "mono",
           "for": [
-            "g5c0",
-            "g5"
+            "g5c0"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 504,
-          "cy": 284,
-          "r": 6,
+          "cx": 225,
+          "cy": 249,
+          "r": 7,
           "id": "g5c1"
         },
         {
           "text": "present",
-          "x": 520,
-          "y": 289,
+          "x": 241,
+          "y": 254,
           "style": "mono",
           "for": [
-            "g5c1",
-            "g5"
+            "g5c1"
           ]
         }
       ]
@@ -579,516 +514,456 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 552,
+      "height": 370,
       "draw": [
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 8,
-          "y": 10,
-          "w": 168,
-          "h": 186,
-          "rx": 8,
-          "id": "g0"
-        },
-        {
           "text": "Scaffold",
-          "x": 20,
-          "y": 34,
-          "style": "strong",
-          "for": [
-            "g0"
-          ]
+          "x": 8,
+          "y": 24,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 56,
+          "cx": 110,
+          "cy": 19,
           "r": 6,
           "id": "g0c0"
         },
         {
           "text": "init",
-          "x": 42,
-          "y": 61,
+          "x": 124,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c0",
-            "g0"
+            "g0c0"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 80,
+          "cx": 184,
+          "cy": 19,
           "r": 6,
           "id": "g0c1"
         },
         {
           "text": "update",
-          "x": 42,
-          "y": 85,
+          "x": 198,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c1",
-            "g0"
+            "g0c1"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 104,
+          "cx": 275,
+          "cy": 19,
           "r": 6,
           "id": "g0c2"
         },
         {
           "text": "epic",
-          "x": 42,
-          "y": 109,
+          "x": 289,
+          "y": 24,
           "style": "mono",
           "for": [
-            "g0c2",
-            "g0"
+            "g0c2"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 128,
+          "cx": 110,
+          "cy": 47,
           "r": 6,
           "id": "g0c3"
         },
         {
           "text": "spec",
-          "x": 42,
-          "y": 133,
+          "x": 124,
+          "y": 52,
           "style": "mono",
           "for": [
-            "g0c3",
-            "g0"
+            "g0c3"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 152,
+          "cx": 184,
+          "cy": 47,
           "r": 6,
           "id": "g0c4"
         },
         {
           "text": "task",
-          "x": 42,
-          "y": 157,
+          "x": 198,
+          "y": 52,
           "style": "mono",
           "for": [
-            "g0c4",
-            "g0"
+            "g0c4"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 176,
+          "cx": 258,
+          "cy": 47,
           "r": 6,
           "id": "g0c5"
         },
         {
           "text": "estimate",
-          "x": 42,
-          "y": 181,
+          "x": 272,
+          "y": 52,
           "style": "mono",
           "for": [
-            "g0c5",
-            "g0"
+            "g0c5"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 8,
-          "y": 206,
-          "w": 168,
-          "h": 162,
-          "rx": 8,
-          "id": "g1"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 66,
+          "x2": 352,
+          "y2": 66
         },
         {
           "text": "Enforce",
-          "x": 20,
-          "y": 230,
-          "style": "strong",
-          "for": [
-            "g1"
-          ]
+          "x": 8,
+          "y": 90,
+          "style": "strong"
         },
         {
           "state": "invoked",
           "shape": "circle",
-          "cx": 28,
-          "cy": 252,
+          "cx": 110,
+          "cy": 85,
           "r": 6,
           "id": "g1c0"
         },
         {
           "text": "hook",
-          "x": 42,
-          "y": 257,
+          "x": 124,
+          "y": 90,
           "style": "mono",
           "for": [
-            "g1c0",
-            "g1"
+            "g1c0"
           ]
         },
         {
           "state": "invoked",
           "shape": "circle",
-          "cx": 28,
-          "cy": 276,
+          "cx": 184,
+          "cy": 85,
           "r": 6,
           "id": "g1c1"
         },
         {
           "text": "git-hook",
-          "x": 42,
-          "y": 281,
+          "x": 198,
+          "y": 90,
           "style": "mono",
           "for": [
-            "g1c1",
-            "g1"
+            "g1c1"
           ]
         },
         {
           "state": "invoked",
           "shape": "circle",
-          "cx": 28,
-          "cy": 300,
+          "cx": 292,
+          "cy": 85,
           "r": 6,
           "id": "g1c2"
         },
         {
           "text": "ci",
-          "x": 42,
-          "y": 305,
+          "x": 306,
+          "y": 90,
           "style": "mono",
           "for": [
-            "g1c2",
-            "g1"
+            "g1c2"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 324,
+          "cx": 110,
+          "cy": 113,
           "r": 6,
           "id": "g1c3"
         },
         {
           "text": "policy",
-          "x": 42,
-          "y": 329,
+          "x": 124,
+          "y": 118,
           "style": "mono",
           "for": [
-            "g1c3",
-            "g1"
+            "g1c3"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 348,
+          "cx": 201,
+          "cy": 113,
           "r": 6,
           "id": "g1c4"
         },
         {
           "text": "remote",
-          "x": 42,
-          "y": 353,
+          "x": 215,
+          "y": 118,
           "style": "mono",
           "for": [
-            "g1c4",
-            "g1"
+            "g1c4"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 8,
-          "y": 378,
-          "w": 168,
-          "h": 162,
-          "rx": 8,
-          "id": "g2"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 132,
+          "x2": 352,
+          "y2": 132
         },
         {
           "text": "Verify",
-          "x": 20,
-          "y": 402,
-          "style": "strong",
-          "for": [
-            "g2"
-          ]
+          "x": 8,
+          "y": 156,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 424,
+          "cx": 110,
+          "cy": 151,
           "r": 6,
           "id": "g2c0"
         },
         {
           "text": "test",
-          "x": 42,
-          "y": 429,
+          "x": 124,
+          "y": 156,
           "style": "mono",
           "for": [
-            "g2c0",
-            "g2"
+            "g2c0"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 448,
+          "cx": 184,
+          "cy": 151,
           "r": 6,
           "id": "g2c1"
         },
         {
           "text": "validate",
-          "x": 42,
-          "y": 453,
+          "x": 198,
+          "y": 156,
           "style": "mono",
           "for": [
-            "g2c1",
-            "g2"
+            "g2c1"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 472,
+          "cx": 110,
+          "cy": 179,
           "r": 6,
           "id": "g2c2"
         },
         {
           "text": "integrate",
-          "x": 42,
-          "y": 477,
+          "x": 124,
+          "y": 184,
           "style": "mono",
           "for": [
-            "g2c2",
-            "g2"
+            "g2c2"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 496,
+          "cx": 226,
+          "cy": 179,
           "r": 6,
           "id": "g2c3"
         },
         {
           "text": "doctor",
-          "x": 42,
-          "y": 501,
+          "x": 240,
+          "y": 184,
           "style": "mono",
           "for": [
-            "g2c3",
-            "g2"
+            "g2c3"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 28,
-          "cy": 520,
+          "cx": 110,
+          "cy": 207,
           "r": 6,
           "id": "g2c4"
         },
         {
           "text": "work",
-          "x": 42,
-          "y": 525,
+          "x": 124,
+          "y": 212,
           "style": "mono",
           "for": [
-            "g2c4",
-            "g2"
+            "g2c4"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 184,
-          "y": 10,
-          "w": 168,
-          "h": 114,
-          "rx": 8,
-          "id": "g3"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 226,
+          "x2": 352,
+          "y2": 226
         },
         {
           "text": "Remember",
-          "x": 196,
-          "y": 34,
-          "style": "strong",
-          "for": [
-            "g3"
-          ]
+          "x": 8,
+          "y": 250,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 204,
-          "cy": 56,
+          "cx": 110,
+          "cy": 245,
           "r": 6,
           "id": "g3c0"
         },
         {
           "text": "orient",
-          "x": 218,
-          "y": 61,
+          "x": 124,
+          "y": 250,
           "style": "mono",
           "for": [
-            "g3c0",
-            "g3"
+            "g3c0"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 204,
-          "cy": 80,
+          "cx": 201,
+          "cy": 245,
           "r": 6,
           "id": "g3c1"
         },
         {
           "text": "status",
-          "x": 218,
-          "y": 85,
+          "x": 215,
+          "y": 250,
           "style": "mono",
           "for": [
-            "g3c1",
-            "g3"
+            "g3c1"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 204,
-          "cy": 104,
+          "cx": 110,
+          "cy": 273,
           "r": 6,
           "id": "g3c2"
         },
         {
           "text": "recall",
-          "x": 218,
-          "y": 109,
+          "x": 124,
+          "y": 278,
           "style": "mono",
           "for": [
-            "g3c2",
-            "g3"
+            "g3c2"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 184,
-          "y": 134,
-          "w": 168,
-          "h": 66,
-          "rx": 8,
-          "id": "g4"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 292,
+          "x2": 352,
+          "y2": 292
         },
         {
           "text": "Delegate",
-          "x": 196,
-          "y": 158,
-          "style": "strong",
-          "for": [
-            "g4"
-          ]
+          "x": 8,
+          "y": 316,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 204,
-          "cy": 180,
+          "cx": 110,
+          "cy": 311,
           "r": 6,
           "id": "g4c0"
         },
         {
           "text": "delegate",
-          "x": 218,
-          "y": 185,
+          "x": 124,
+          "y": 316,
           "style": "mono",
           "for": [
-            "g4c0",
-            "g4"
+            "g4c0"
           ]
         },
         {
-          "state": "job",
-          "shape": "rect",
-          "x": 184,
-          "y": 210,
-          "w": 168,
-          "h": 90,
-          "rx": 8,
-          "id": "g5"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 330,
+          "x2": 352,
+          "y2": 330
         },
         {
           "text": "Present",
-          "x": 196,
-          "y": 234,
-          "style": "strong",
-          "for": [
-            "g5"
-          ]
+          "x": 8,
+          "y": 354,
+          "style": "strong"
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 204,
-          "cy": 256,
+          "cx": 110,
+          "cy": 349,
           "r": 6,
           "id": "g5c0"
         },
         {
           "text": "portal",
-          "x": 218,
-          "y": 261,
+          "x": 124,
+          "y": 354,
           "style": "mono",
           "for": [
-            "g5c0",
-            "g5"
+            "g5c0"
           ]
         },
         {
           "state": "typed",
           "shape": "circle",
-          "cx": 204,
-          "cy": 280,
+          "cx": 201,
+          "cy": 349,
           "r": 6,
           "id": "g5c1"
         },
         {
           "text": "present",
-          "x": 218,
-          "y": 285,
+          "x": 215,
+          "y": 354,
           "style": "mono",
           "for": [
-            "g5c1",
-            "g5"
+            "g5c1"
           ]
         }
       ]
