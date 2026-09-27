@@ -560,7 +560,8 @@ publication date._
   judged by the git dir it writes to, which closes a wrong allow. A `cd`
   that can fail proves its move only to commands chained with `&&`. When the
   guard cannot prove the target, for example an unset or escaped variable,
-  a subshell or an `env` option, it blocks a commit, merge, push or other
+  a path built from a command substitution, a subshell, `pushd` or an `env`
+  option, it blocks a commit, merge, push or other
   mutation and says how to name the repository: a literal path, or
   `cd <path> &&` first. This also blocks a commit written inside a
   subshell such as `(cd <repo> && git commit)`.
