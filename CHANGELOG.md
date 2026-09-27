@@ -17,6 +17,33 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Model catalog resolution (ADR-0069).** `codeflow models resolve --duty
+  <duty>` reads the managed catalog, the personal overlay and the project
+  selection and prints each participant a duty needs, with the pinned id to
+  launch, its effort, the remaining alternatives and any obligation, or the
+  open participant and why; `--json` serves launchers. It exits non-zero when
+  a required participant is open and launches nothing. A design override
+  counts only from an `OPERATOR_OVERRIDE` block committed in that task's
+  record on its integration target. `codeflow doctor --check model-bindings`
+  diagnoses the catalog and scans for pinned model selectors outside it.
+
+<!-- codeflow:release-impact minor -->
+- **One reference for when an agent stops (ADR-0070).** The new
+  `cf-method/references/autonomy.md` holds the only full list of decisions
+  that belong to the operator, a short ladder and a decision table, and the
+  trust prompt rule: an agent answers a workspace trust prompt for its own
+  task's folder or a sample it created, and any other folder goes to the
+  operator. The contracts, the lifecycle, the orchestrator and cf-plan point
+  at it instead of keeping their own lists.
+
+<!-- codeflow:release-impact minor -->
+- **Autonomy evaluation cases.** The `autonomy-with-judgment` pack adds
+  seventeen blind cases, nine where an agent asks when it should act and
+  eight where it acts when it should stop, each with a faulty control that
+  fails. The stand-in answers the cases check are replayed from outside the
+  trial's checkout, so a trial cannot read them.
+
+<!-- codeflow:release-impact minor -->
 - **Portable pull request checks.** `codeflow ci` reads Markdown sections,
   rejects explicitly empty PR bodies and ambiguous headings, and warns about
   summary detail, missing testing limits and oversized evidence. Generic release
@@ -167,6 +194,19 @@ publication date._
   or substitution that a shell or any other program can run is still checked.
   A `cd` or `-C` chain that switches to a new branch before committing is
   judged on that branch.
+
+<!-- codeflow:release-impact patch -->
+- **A change runs to its finish line.** A brief that asks for a change runs
+  through to the readiness report. After two review rounds, a disagreement
+  on a reversible choice inside the accepted outcome is settled by the
+  judgment primary and recorded as settled dissent, never as approval; a
+  dissent on safety, security or correctness keeps the gate closed. A seat
+  lost mid-run moves to its next eligible alternative with reduced
+  assurance. The primary merges a green, reviewed pull request into an
+  integration branch that no protected-branch rule covers, with a no fast
+  forward merge, and reruns the gate; every protected target stays a human
+  merge. "Ready on local evidence" needs a completed green result for every
+  owed check and names each hosted job that never ran.
 
 <!-- codeflow:release-impact major -->
 - **Model catalog schema 5 (ADR-0069).** The managed
