@@ -5,9 +5,9 @@ On-demand detail for a Grok Build (`grok` CLI) host. Durable duties stay in
 
 ## In-session guards
 
-CodeFlow binds `codeflow hook git-guard` / `exec-guard` on PreToolUse and
-`session-orient` on SessionStart plus Grok `PreCompact`/`PostCompact`, via
-`.grok/hooks/codeflow.json`.
+CodeFlow binds `codeflow hook git-guard` / `exec-guard` on PreToolUse via
+`.grok/hooks/codeflow.json`. Grok drops event output: after a compaction,
+run `codeflow orient`.
 The guard parser accepts Grok's camelCase stdin (`toolName`, `toolInput`,
 `run_terminal_command`) as well as Claude/Codex snake_case. Grok also scans
 `.claude/settings.json` when compat is on. Project hooks load only after

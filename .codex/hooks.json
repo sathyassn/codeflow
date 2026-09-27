@@ -20,7 +20,7 @@
     "UserPromptSubmit": [
       {
         "hooks": [
-          { "type": "command", "command": "codeflow hook prompt-reminder", "timeout": 10 }
+          { "type": "command", "command": "codeflow hook session-orient", "timeout": 10 }
         ]
       }
     ]

@@ -282,7 +282,7 @@
     ],
     "SessionStart": [
       {
-        "matcher": "startup|resume|clear|compact",
+        "matcher": "startup|resume|clear|compact|fork",
         "hooks": [
           {
             "type": "command",
@@ -306,7 +306,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "codeflow hook prompt-reminder"
+            "command": "codeflow hook session-orient"
           }
         ]
       }
