@@ -21,8 +21,9 @@ use std::path::Path;
 use git2::{Repository, TreeWalkMode, TreeWalkResult};
 
 use super::record_text::{
-    acceptance_blocks, check_acceptance, outcome_word, parse_blocker, parse_cancellation,
-    parse_criteria, CriteriaList, FencedAcceptance,
+    acceptance_blocks, check_acceptance, check_block, outcome_word, parse_blocker,
+    parse_cancellation, parse_criteria, reopen_reasons, AcceptanceBlock, CriteriaList, Criterion,
+    FencedAcceptance,
 };
 use super::work_start::{record_kind_for_tree_path, RecordKind};
 use super::{is_legacy_task_format_id, is_valid_epic_format_id, is_valid_spec_format_id};
@@ -277,6 +278,16 @@ impl Baseline {
         }
     }
 
+    /// The visible warning of a checkout that cannot see the baseline.
+    fn warning(&self) -> Option<String> {
+        match self {
+            Self::Unavailable(commit) => Some(format!(
+                "work-records migration baseline {commit} is not in this clone's history; records the range did not add are judged leniently (fetch full history to enforce the rules in full)"
+            )),
+            _ => None,
+        }
+    }
+
     /// How fully the rules apply to a record that no transition touched.
     fn mode(&self, record: &RecordView) -> Mode {
         match self {
@@ -346,6 +357,19 @@ impl Verdict {
         self.warnings.dedup();
     }
 }
+
+/// What a judge knows about the change beyond the two record states: the
+/// tree it started from and the paths it touches. `None` means unknown, and
+/// the rules that need it are left to the judge that knows it (CI and
+/// `validate --since` know both).
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ChangeContext<'a> {
+    pub base: Option<&'a Graph>,
+    pub changed_paths: Option<&'a [String]>,
+}
+
+/// Paths a planning-only change may touch (R-70).
+const PLANNING_PATHS: [&str; 2] = ["project-management/", "docs/plan/"];
 
 /// A change that re-applies the rules in full (R-83): a status change, a
 /// criteria change or a changed acceptance block.
@@ -451,12 +475,24 @@ fn spec_transition_allowed(from: &str, to: &str) -> Result<(), &'static str> {
 }
 
 /// Reopening keeps the old acceptance block, marked superseded with the
-/// reopen reason (R-30).
+/// reopen reason (R-30). A task completed before the migration has no block
+/// to keep; it records the reason as a Closeout line `- reopened: <reason>`
+/// and no block is invented.
 fn reopen_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<String> {
     let mut problems = Vec::new();
     if !after.active_blocks().is_empty() {
         problems
             .push("a reopened task keeps no active acceptance block; mark it superseded".into());
+    }
+    if before.is_some_and(|record| record.active_blocks().is_empty()) {
+        let old = before.map_or(0, |record| reopen_reasons(&record.body).len());
+        if reopen_reasons(&after.body).len() <= old {
+            problems.push(
+                "reopening a task completed without an acceptance block needs a Closeout line `- reopened: <reason>`"
+                    .into(),
+            );
+        }
+        return problems;
     }
     let old_count = before.map_or(0, |record| record.superseded_blocks().len());
     let superseded = after.superseded_blocks();
@@ -540,15 +576,10 @@ fn task_state_problems(task: &RecordView, graph: &Graph) -> Vec<String> {
         "cancelled" => problems.extend(cancellation_problems(task)),
         "complete" if !task.is_legacy() => {
             problems.extend(completion_problems(task));
-            for spec in consumed_specs(task, graph) {
-                if let Some(record) = graph.get(&spec, RecordKind::Spec) {
-                    if record.status == "superseded" {
-                        problems.push(format!(
-                            "acceptance cannot cite superseded spec {spec}; move the task to {}",
-                            record.superseded_by.as_deref().unwrap_or("its successor")
-                        ));
-                    }
-                }
+            for (spec, successor) in superseded_specs(task, graph) {
+                problems.push(format!(
+                    "acceptance cannot cite superseded spec {spec}; move the task to {successor}"
+                ));
             }
         }
         _ => {}
@@ -601,6 +632,25 @@ fn consumed_specs(task: &RecordView, graph: &Graph) -> Vec<String> {
     specs
 }
 
+/// The consumed specs of a task that are superseded, with their successor.
+/// Acceptance that cites one is invalidated (R-32) until the task is
+/// reconciled with the successor.
+fn superseded_specs(task: &RecordView, graph: &Graph) -> Vec<(String, String)> {
+    consumed_specs(task, graph)
+        .into_iter()
+        .filter_map(|spec| {
+            let record = graph.get(&spec, RecordKind::Spec)?;
+            (record.status == "superseded").then(|| {
+                let successor = record
+                    .superseded_by
+                    .clone()
+                    .unwrap_or_else(|| "its successor".into());
+                (spec, successor)
+            })
+        })
+        .collect()
+}
+
 fn epic_state_problems(epic: &RecordView, graph: &Graph) -> Vec<String> {
     match epic.status.as_str() {
         "complete" => epic_close_problems(epic, graph),
@@ -626,14 +676,7 @@ fn epic_close_problems(epic: &RecordView, graph: &Graph) -> Vec<String> {
             open.join(", ")
         ));
     }
-    let own_block = epic
-        .active_blocks()
-        .into_iter()
-        .next()
-        .map(|block| block.parsed);
-    if let Some(Err(error)) = &own_block {
-        problems.push(error.to_string());
-    }
+    let own_block = epic_own_block(epic, graph, &mut problems);
     for criterion in &epic.criteria.items {
         if let Err(reason) = epic_criterion_verified(epic, criterion, graph, own_block.as_ref()) {
             problems.push(format!(
@@ -662,25 +705,85 @@ fn epic_close_problems(epic: &RecordView, graph: &Graph) -> Vec<String> {
     problems
 }
 
-fn epic_criterion_verified(
+fn serving_tasks<'g>(
     epic: &RecordView,
-    criterion: &super::record_text::Criterion,
-    graph: &Graph,
-    own_block: Option<
-        &Result<super::record_text::AcceptanceBlock, super::record_text::AcceptanceError>,
-    >,
-) -> Result<(), String> {
-    let serving: Vec<(&RecordView, &super::record_text::Criterion)> = graph
+    criterion: &Criterion,
+    graph: &'g Graph,
+) -> Vec<(&'g RecordView, &'g Criterion)> {
+    graph
         .tasks()
         .flat_map(|task| task.criteria.items.iter().map(move |item| (task, item)))
         .filter(|(_, item)| item.serves() == Some((epic.id.clone(), criterion.id.clone())))
+        .collect()
+}
+
+/// A legacy ticked checkbox still verifies an ordinary criterion; a journey
+/// criterion always needs journey evidence.
+fn ticked_ordinary(criterion: &Criterion) -> bool {
+    criterion.checkbox == Some(true) && !criterion.is_journey()
+}
+
+/// The epic's own acceptance block, when it is the one active block and it
+/// passes the structural rules of R-60 for the criteria no task serves.
+/// Problems with it are reported, and an invalid block proves nothing.
+fn epic_own_block(
+    epic: &RecordView,
+    graph: &Graph,
+    problems: &mut Vec<String>,
+) -> Option<AcceptanceBlock> {
+    let required: Vec<Criterion> = epic
+        .criteria
+        .items
+        .iter()
+        .filter(|criterion| serving_tasks(epic, criterion, graph).is_empty())
+        .filter(|criterion| !ticked_ordinary(criterion))
+        .cloned()
         .collect();
+    let active = epic.active_blocks();
+    let block = match active.as_slice() {
+        [] => return None,
+        [block] => block,
+        _ => {
+            problems
+                .push("one acceptance block per completion; mark older blocks superseded".into());
+            return None;
+        }
+    };
+    match &block.parsed {
+        Ok(parsed) => {
+            let issues = check_block(parsed, &required, &epic.criteria.items);
+            if issues.is_empty() {
+                Some(parsed.clone())
+            } else {
+                problems.extend(
+                    issues
+                        .into_iter()
+                        .map(|issue| format!("epic acceptance block: {issue}")),
+                );
+                None
+            }
+        }
+        Err(error) => {
+            problems.push(error.to_string());
+            None
+        }
+    }
+}
+
+fn epic_criterion_verified(
+    epic: &RecordView,
+    criterion: &Criterion,
+    graph: &Graph,
+    own_block: Option<&AcceptanceBlock>,
+) -> Result<(), String> {
+    let serving = serving_tasks(epic, criterion, graph);
     if !serving.is_empty() {
         if serving.iter().all(|(task, _)| task.status == "cancelled") {
             return Err("served only by cancelled tasks".into());
         }
         let verified = serving.iter().any(|(task, item)| {
             task.status == "complete"
+                && superseded_specs(task, graph).is_empty()
                 && task.active_blocks().first().is_some_and(|block| {
                     block.parsed.as_ref().is_ok_and(|parsed| {
                         let result_ok = parsed.criteria.iter().any(|(id, result)| {
@@ -695,29 +798,24 @@ fn epic_criterion_verified(
         });
         return if verified {
             Ok(())
+        } else if serving
+            .iter()
+            .any(|(task, _)| task.status == "complete" && !superseded_specs(task, graph).is_empty())
+        {
+            Err("its serving task's acceptance cites a superseded spec; reconcile the task with the successor".into())
         } else {
             Err("no complete serving task verified it".into())
         };
     }
-    if criterion.checkbox == Some(true) {
+    if ticked_ordinary(criterion) || own_block.is_some() {
+        // A valid own block was checked against every unserved criterion.
         return Ok(());
     }
-    match own_block {
-        Some(Ok(parsed)) => {
-            let result_ok = parsed.criteria.iter().any(|(id, result)| {
-                *id == criterion.id && matches!(result.outcome.as_str(), "verified" | "waived")
-            });
-            let journey_ok = !criterion.is_journey() || outcome_word(&parsed.journey) == "verified";
-            if result_ok && journey_ok {
-                Ok(())
-            } else if result_ok {
-                Err("the journey was not verified".into())
-            } else {
-                Err("the epic acceptance block does not verify it".into())
-            }
-        }
-        _ => Err("no task serves it and the epic has no acceptance block".into()),
-    }
+    Err(if criterion.is_journey() {
+        "no task serves it and the epic has no valid acceptance block verifying the journey".into()
+    } else {
+        "no task serves it and the epic has no valid acceptance block".into()
+    })
 }
 
 /// The derived spec state of R-51.
@@ -772,6 +870,17 @@ fn relationship_problems(record: &RecordView, graph: &Graph) -> Vec<String> {
     if record.kind != RecordKind::Spec {
         return problems;
     }
+    if record.supersedes.contains(&record.id) {
+        problems.push("a spec cannot supersede itself".into());
+    }
+    if record.superseded_by.as_deref() == Some(record.id.as_str()) {
+        problems
+            .push("a spec cannot be superseded by itself; a changed contract is a new spec".into());
+    } else if supersession_cycle(record, graph) {
+        problems.push(
+            "the `superseded_by` chain returns to this spec; supersession cannot cycle".into(),
+        );
+    }
     for old in &record.supersedes {
         match graph.get(old, RecordKind::Spec) {
             None => problems.push(format!("supersedes missing spec {old}")),
@@ -811,6 +920,61 @@ fn relationship_problems(record: &RecordView, graph: &Graph) -> Vec<String> {
     problems
 }
 
+/// Whether following `superseded_by` from `record` returns to it.
+fn supersession_cycle(record: &RecordView, graph: &Graph) -> bool {
+    let mut next = record.superseded_by.clone();
+    for _ in 0..=graph.records.len() {
+        match next {
+            Some(id) if id == record.id => return true,
+            Some(id) => {
+                next = graph
+                    .get(&id, RecordKind::Spec)
+                    .and_then(|spec| spec.superseded_by.clone());
+            }
+            None => return false,
+        }
+    }
+    false
+}
+
+/// The rules of R-32 that need the change itself: approval and supersession
+/// travel in a planning-only change, and supersession adds its successor.
+fn context_problems(
+    before: Option<&RecordView>,
+    after: &RecordView,
+    context: ChangeContext<'_>,
+) -> Vec<String> {
+    let mut problems = Vec::new();
+    let to = after.status.as_str();
+    let moved = before.is_none_or(|record| record.status != to);
+    if after.kind != RecordKind::Spec || !moved || !matches!(to, "approved" | "superseded") {
+        return problems;
+    }
+    if let Some(paths) = context.changed_paths {
+        let product: Vec<&str> = paths
+            .iter()
+            .map(String::as_str)
+            .filter(|path| !PLANNING_PATHS.iter().any(|prefix| path.starts_with(prefix)))
+            .collect();
+        if !product.is_empty() {
+            problems.push(format!(
+                "a spec becomes {to} only in a planning-only change (project-management/ and docs/plan/); this change also touches {}",
+                product.join(", ")
+            ));
+        }
+    }
+    if to == "superseded" {
+        if let (Some(base), Some(successor)) = (context.base, after.superseded_by.as_deref()) {
+            if base.records.contains_key(successor) {
+                problems.push(format!(
+                    "the successor {successor} already existed before this change; supersession adds a new spec revision in the same change"
+                ));
+            }
+        }
+    }
+    problems
+}
+
 // ---------------------------------------------------------------------------
 // Judgements
 // ---------------------------------------------------------------------------
@@ -818,19 +982,26 @@ fn relationship_problems(record: &RecordView, graph: &Graph) -> Vec<String> {
 /// Judge one record change: the verdict a verb and a hand edit share.
 ///
 /// `before` is the record as it was (`None` when the change adds it), `graph`
-/// is the whole tree after the change.
+/// is the whole tree after the change, and `context` what is known about the
+/// change itself.
 #[must_use]
 pub fn judge_change(
     before: Option<&RecordView>,
     after: &RecordView,
     graph: &Graph,
     baseline: &Baseline,
+    context: ChangeContext<'_>,
 ) -> Verdict {
     let mut verdict = Verdict::default();
     verdict.apply(
         Mode::Strict,
         &after.path,
         transition_problems(before, after),
+    );
+    verdict.apply(
+        Mode::Strict,
+        &after.path,
+        context_problems(before, after, context),
     );
     let mode = if before.is_none_or(|old| significant_change(old, after)) {
         Mode::Strict
@@ -840,7 +1011,8 @@ pub fn judge_change(
     verdict.apply(
         mode,
         &after.path,
-        state_problems(after, graph, baseline.is_new(after)),
+        // A record the change adds is new whatever history the checkout has.
+        state_problems(after, graph, before.is_none() || baseline.is_new(after)),
     );
     verdict.apply(
         Mode::Strict,
@@ -864,19 +1036,91 @@ pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<V
         Some(head) => Graph::from_revision(&repo, head)?,
         None => Graph::from_worktree(repo_root),
     };
+    let paths = changed_paths(&repo, base, head)?;
+    let context = ChangeContext {
+        base: Some(&before),
+        changed_paths: Some(&paths),
+    };
     let baseline = Baseline::load(repo_root);
     let mut verdict = Verdict::default();
+    verdict.warnings.extend(baseline.warning());
     for record in after.records.values() {
         let old = before.records.get(&record.id);
         if old.is_some_and(|old| old.content == record.content) {
             continue;
         }
-        let judged = judge_change(old, record, &after, &baseline);
+        let judged = judge_change(old, record, &after, &baseline, context);
         verdict.errors.extend(judged.errors);
         verdict.warnings.extend(judged.warnings);
     }
     verdict.sort();
     Ok(verdict)
+}
+
+/// Every path a change touches, from `base` to `head` (a revision), or to
+/// the working tree with its index and untracked files when `head` is `None`.
+///
+/// # Errors
+///
+/// Returns a message when a revision or the diff cannot be read.
+pub fn changed_paths(
+    repo: &Repository,
+    base: &str,
+    head: Option<&str>,
+) -> Result<Vec<String>, String> {
+    let tree = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_tree())
+            .map_err(|error| format!("cannot read the tree of {revision}: {}", error.message()))
+    };
+    let base_tree = tree(base)?;
+    let diff = if let Some(head) = head {
+        repo.diff_tree_to_tree(Some(&base_tree), Some(&tree(head)?), None)
+    } else {
+        let mut options = git2::DiffOptions::new();
+        options.include_untracked(true).recurse_untracked_dirs(true);
+        repo.diff_tree_to_workdir_with_index(Some(&base_tree), Some(&mut options))
+    }
+    .map_err(|error| format!("cannot diff from {base}: {}", error.message()))?;
+    let mut paths: Vec<String> = diff
+        .deltas()
+        .flat_map(|delta| [delta.old_file().path(), delta.new_file().path()])
+        .flatten()
+        .map(|path| path.to_string_lossy().replace('\\', "/"))
+        .collect();
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+/// The change context of a status verb run in `repo_root`: the paths of the
+/// uncommitted work (the verb cannot know the pull request's base; CI and
+/// `validate --since` judge the whole range) and the tree at the merge-base
+/// of `HEAD` and the default work target, when one resolves.
+#[must_use]
+pub fn working_context(repo_root: &Path) -> (Option<Graph>, Option<Vec<String>>) {
+    let Ok(repo) = Repository::discover(repo_root) else {
+        return (None, None);
+    };
+    let paths = changed_paths(&repo, "HEAD", None).ok();
+    let base = super::work_start::default_work_target(repo_root)
+        .and_then(|target| {
+            let head = repo
+                .revparse_single("HEAD")
+                .ok()?
+                .peel_to_commit()
+                .ok()?
+                .id();
+            let target = repo
+                .revparse_single(&target)
+                .ok()?
+                .peel_to_commit()
+                .ok()?
+                .id();
+            repo.merge_base(head, target).ok()
+        })
+        .and_then(|anchor| Graph::from_revision(&repo, &anchor.to_string()).ok());
+    (base, paths)
 }
 
 /// Judge a pull request: the records changed from the merge-base of `base`
@@ -907,11 +1151,7 @@ pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
     let graph = Graph::from_worktree(repo_root);
     let baseline = Baseline::load(repo_root);
     let mut verdict = Verdict::default();
-    if let Baseline::Unavailable(commit) = &baseline {
-        verdict.warnings.push(format!(
-            "work-records migration baseline {commit} is not in this clone's history; record rules only warn here (fetch full history to enforce them)"
-        ));
-    }
+    verdict.warnings.extend(baseline.warning());
     for record in graph.records.values() {
         verdict.apply(
             baseline.mode(record),

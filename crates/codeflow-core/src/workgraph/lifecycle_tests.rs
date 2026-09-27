@@ -1029,3 +1029,407 @@ fn epic_close_refuses_a_spec_whose_other_consumer_is_terminal_and_incomplete() {
     repo.commit("plan");
     assert!(refusal(close_epic_with_block(&repo)).contains("no other open consumer"));
 }
+
+// ---------------------------------------------------------------------------
+// Review round 1 regressions (R1 to R7), each built from the reviewer's probe
+// ---------------------------------------------------------------------------
+
+/// R1: a block inside an HTML comment or inside an enclosing example fence
+/// never completes a task; the same block, visible, does.
+#[test]
+fn hidden_or_example_acceptance_does_not_complete_a_task() {
+    let visible = fenced(&block(&["AC-1", "AC-2"], "none | no journey criterion"));
+    for (closeout, hidden) in [
+        (format!("<!--\n{visible}\n-->"), true),
+        (format!("````text\n{visible}\n````"), true),
+        (format!("~~~\n{visible}\n~~~"), true),
+        (format!("Text <!-- note --> kept.\n\n{visible}"), false),
+        (visible.clone(), false),
+    ] {
+        let (repo, base) = project();
+        repo.write(TASK_PATH, &task("TSK-001", "complete", CRITERIA, &closeout));
+        repo.commit("complete by hand");
+        let verdict = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+        if hidden {
+            assert!(
+                verdict
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("needs an acceptance block")),
+                "{closeout}: {verdict:?}"
+            );
+        } else {
+            assert!(verdict.is_clean(), "{closeout}: {verdict:?}");
+        }
+    }
+}
+
+/// R1: a Blocker section inside a comment does not satisfy a blocked task.
+#[test]
+fn a_commented_blocker_does_not_block_a_task() {
+    let section = "## Blocker\n- reason: unavailable\n- owner: reviewer\n- revisit: later\n";
+    for (wrapped, hidden) in [
+        (format!("<!--\n{section}-->\n\n## Closeout"), true),
+        (format!("<!-- guidance -->\n{section}\n## Closeout"), false),
+    ] {
+        let (repo, base) = project();
+        let content =
+            task("TSK-001", "blocked", CRITERIA, "Pending.").replace("## Closeout", &wrapped);
+        repo.write(TASK_PATH, &content);
+        let verdict = repo.judge(&base);
+        assert_eq!(
+            verdict
+                .errors
+                .iter()
+                .any(|e| e.contains("needs a `## Blocker`")),
+            hidden,
+            "{content}: {verdict:?}"
+        );
+        assert_eq!(verdict.is_clean(), !hidden, "{verdict:?}");
+    }
+}
+
+fn epic_with_closeout(status: &str, criteria: &str, closeout: &str) -> String {
+    format!(
+        "{}\n## Closeout\n\n{closeout}\n",
+        epic(status, "", criteria)
+    )
+}
+
+/// R2: the epic's own block passes the same structural rules as a task's.
+#[test]
+fn an_epic_closes_only_on_a_valid_own_block() {
+    let invalid = block(&["AC-1"], "none | n/a")
+        .replace(&"a".repeat(40), "invalid")
+        .replace("verdict: approved", "verdict: rejected");
+    let two = format!(
+        "{}\n\n{}",
+        fenced(&block(&["AC-1"], "none | n/a")),
+        fenced(&block(&["AC-1"], "none | n/a"))
+    );
+    let cases = [
+        (fenced(&invalid), Some("acceptance verdict is `rejected`")),
+        (fenced(&invalid), Some("full commit sha")),
+        (two, Some("one acceptance block per completion")),
+        (fenced(&block(&["AC-1"], "none | n/a")), None),
+    ];
+    for (closeout, needle) in cases {
+        let repo = Repo::new();
+        repo.write(EPIC_PATH, &epic("planning", "", EPIC_CRITERION));
+        let base = repo.commit("plan");
+        repo.write(
+            EPIC_PATH,
+            &epic_with_closeout("complete", EPIC_CRITERION, &closeout),
+        );
+        let verdict = repo.judge(&base);
+        match needle {
+            Some(needle) => assert!(
+                verdict.errors.iter().any(|e| e.contains(needle)),
+                "{needle}: {verdict:?}"
+            ),
+            None => assert!(verdict.is_clean(), "{verdict:?}"),
+        }
+    }
+}
+
+/// R2: ticking a legacy journey checkbox is not journey evidence; an
+/// ordinary legacy checkbox still reads as before.
+#[test]
+fn a_ticked_legacy_journey_checkbox_does_not_close_an_epic() {
+    let ticked = "- [x] AC-1 Installed CLI works (journey)";
+    let journey = fenced(&block(
+        &["AC-1"],
+        "verified | installed CLI on a fresh init",
+    ));
+    for (criteria, closeout, clean) in [
+        (ticked, String::new(), false),
+        (ticked, journey.clone(), true),
+        (
+            "- [x] AC-1 An ordinary legacy criterion",
+            String::new(),
+            true,
+        ),
+    ] {
+        let repo = Repo::new();
+        let before = criteria.replace("[x]", "[ ]");
+        repo.write(EPIC_PATH, &epic("planning", "", &before));
+        let baseline = repo.commit("legacy epic");
+        repo.set_baseline(&baseline);
+        let base = repo.commit("record the baseline");
+        repo.write(
+            EPIC_PATH,
+            &epic_with_closeout("complete", criteria, &closeout),
+        );
+        let verdict = repo.judge(&base);
+        assert_eq!(verdict.is_clean(), clean, "{criteria}: {verdict:?}");
+        if !clean {
+            assert!(
+                verdict
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("verifying the journey")),
+                "{verdict:?}"
+            );
+        }
+    }
+}
+
+const SPC_1: &str = "project-management/specs/SPC-001.md";
+const SPC_2: &str = "project-management/specs/SPC-002.md";
+
+/// R3: a spec never supersedes itself, supersession never cycles, and the
+/// successor is a new revision added by the same change.
+#[test]
+fn supersession_needs_a_distinct_new_successor() {
+    // Self-supersession, as the probe wrote it.
+    let repo = Repo::new();
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    let base = repo.commit("approved");
+    repo.write(
+        SPC_1,
+        &spec(
+            "SPC-001",
+            "superseded",
+            "supersedes: [SPC-001]\nsuperseded_by: SPC-001\n",
+        ),
+    );
+    let errors = repo.judge(&base).errors.join("\n");
+    assert!(errors.contains("cannot supersede itself"), "{errors}");
+    assert!(
+        errors.contains("cannot be superseded by itself"),
+        "{errors}"
+    );
+
+    // A cycle between two specs that both existed before.
+    let repo = Repo::new();
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    repo.write(SPC_2, &spec("SPC-002", "approved", ""));
+    let base = repo.commit("approved");
+    repo.write(
+        SPC_1,
+        &spec(
+            "SPC-001",
+            "superseded",
+            "supersedes: [SPC-002]\nsuperseded_by: SPC-002\n",
+        ),
+    );
+    repo.write(
+        SPC_2,
+        &spec(
+            "SPC-002",
+            "superseded",
+            "supersedes: [SPC-001]\nsuperseded_by: SPC-001\n",
+        ),
+    );
+    let errors = repo.judge(&base).errors.join("\n");
+    assert!(errors.contains("supersession cannot cycle"), "{errors}");
+    assert!(
+        errors.contains("already existed before this change"),
+        "{errors}"
+    );
+
+    // A successor that existed before the change, by verb and by hand.
+    let repo = Repo::new();
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    repo.write(SPC_2, &spec("SPC-002", "draft", ""));
+    let base = repo.commit("both exist");
+    repo.write(SPC_2, &spec("SPC-002", "draft", "supersedes: [SPC-001]\n"));
+    repo.commit("list the old spec");
+    let by = StatusChange {
+        by: Some("SPC-002".into()),
+        ..change("superseded")
+    };
+    let refused = refusal(set_status(repo.root(), RecordKind::Spec, "SPC-001", &by).map(drop));
+    assert!(refused.contains("SPC-002 already existed"), "{refused}");
+    repo.write(
+        SPC_1,
+        &spec("SPC-001", "superseded", "superseded_by: SPC-002\n"),
+    );
+    let errors = repo.judge(&base).errors.join("\n");
+    assert!(errors.contains("SPC-002 already existed"), "{errors}");
+}
+
+/// R4: approval travels only in a planning-only change, for the verb, the
+/// working-tree range and the committed pull request range.
+#[test]
+fn spec_approval_travels_only_in_a_planning_only_change() {
+    let repo = Repo::new();
+    repo.write(SPC_1, &spec("SPC-001", "draft", ""));
+    let base = repo.commit("draft");
+    repo.git(&["switch", "-q", "-c", "feat/product"]);
+    repo.write("product.rs", "fn product() {}\n");
+    let refused = refusal(
+        set_status(
+            repo.root(),
+            RecordKind::Spec,
+            "SPC-001",
+            &change("approved"),
+        )
+        .map(drop),
+    );
+    assert!(refused.contains("planning-only change"), "{refused}");
+    assert!(refused.contains("product.rs"), "{refused}");
+    assert!(repo.read(SPC_1).contains("status: draft"));
+
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    let by_hand = repo.judge(&base);
+    assert!(
+        by_hand.errors.iter().any(|e| e.contains("planning-only")),
+        "{by_hand:?}"
+    );
+    repo.commit("approve in a product range");
+    let range = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    assert!(
+        range.errors.iter().any(|e| e.contains("planning-only")),
+        "{range:?}"
+    );
+
+    // Control: records and plans only.
+    let repo = Repo::new();
+    repo.write(SPC_1, &spec("SPC-001", "draft", ""));
+    let base = repo.commit("draft");
+    repo.git(&["switch", "-q", "-c", "plan/approve-spc-001"]);
+    repo.write("docs/plan/notes.md", "Approval notes.\n");
+    set_status(
+        repo.root(),
+        RecordKind::Spec,
+        "SPC-001",
+        &change("approved"),
+    )
+    .unwrap();
+    repo.commit("approve in a planning range");
+    let range = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    assert!(range.is_clean(), "{range:?}");
+}
+
+/// R5: an unchanged complete task whose consumed spec is superseded in the
+/// same range no longer verifies the epic criterion it serves.
+#[test]
+fn acceptance_citing_a_superseded_spec_cannot_close_an_epic() {
+    let serving = "- AC-1 Work correctly (serves EPC-001 AC-1)";
+    let done = fenced(&block(&["AC-1"], "none | n/a"));
+    let completed =
+        task("TSK-001", "complete", serving, &done).replace("specs: []", "specs: [SPC-001]");
+    for supersede in [true, false] {
+        let repo = Repo::new();
+        repo.write(EPIC_PATH, &epic("planning", "", EPIC_CRITERION));
+        repo.write(TASK_PATH, &completed);
+        repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+        let baseline = repo.commit("delivered");
+        repo.set_baseline(&baseline);
+        let base = repo.commit("record the baseline");
+        if supersede {
+            repo.write(
+                SPC_1,
+                &spec("SPC-001", "superseded", "superseded_by: SPC-002\n"),
+            );
+            repo.write(SPC_2, &spec("SPC-002", "draft", "supersedes: [SPC-001]\n"));
+        }
+        repo.write(EPIC_PATH, &epic("complete", "", EPIC_CRITERION));
+        repo.commit("close the epic");
+        let verdict = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+        if supersede {
+            assert!(
+                verdict
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("cites a superseded spec")),
+                "{verdict:?}"
+            );
+        } else {
+            assert!(verdict.is_clean(), "{verdict:?}");
+        }
+    }
+}
+
+/// R6: a task completed before the migration (ticked criteria, an ordinary
+/// Closeout, no block) reopens through the verb with a reason; no block is
+/// invented, and the hand edit shares the verdict.
+#[test]
+fn a_task_completed_before_the_migration_reopens_with_a_reason() {
+    let (repo, _) = baseline_project();
+    let base = repo.commit("before reopening");
+    let root = repo.root().to_path_buf();
+    let reopened = verb_and_hand_agree(&repo, TASK_PATH, || {
+        let reopen = StatusChange {
+            reason: Some("new requirement".into()),
+            ..change("todo")
+        };
+        set_status(&root, RecordKind::Task, "TSK-001", &reopen).map(drop)
+    });
+    assert!(reopened.contains("Done long ago.\n\n- reopened: new requirement\n"));
+    assert!(!reopened.contains("acceptance"));
+
+    repo.write(
+        TASK_PATH,
+        &task(
+            "TSK-001",
+            "todo",
+            "- [x] first\n- [x] second",
+            "Done long ago.",
+        ),
+    );
+    let without_line = repo.judge(&base);
+    assert!(
+        without_line
+            .errors
+            .iter()
+            .any(|e| e.contains("`- reopened: <reason>`")),
+        "{without_line:?}"
+    );
+}
+
+/// R7: a record the range adds is new even when the migration baseline is
+/// outside the clone's history, and the missing history is reported. A
+/// real shallow clone and its full-history source agree.
+#[test]
+fn a_record_the_range_adds_is_new_in_a_shallow_clone() {
+    let source = Repo::new();
+    source.write(EPIC_PATH, &epic("planning", "", EPIC_CRITERION));
+    let baseline = source.commit("records");
+    source.set_baseline(&baseline);
+    source.commit("record the baseline");
+    let base = source.commit("establish the migration");
+    source.write(
+        TASK_PATH,
+        &task(
+            "TSK-001",
+            "todo",
+            "- [ ] AC-1 New criterion with a checkbox",
+            "Pending.",
+        ),
+    );
+    source.commit("add a task");
+
+    let clone = tempfile::tempdir().unwrap();
+    let url = format!("file://{}", source.root().display());
+    let status = Command::new("git")
+        .args(["clone", "--quiet", "--depth", "2", &url])
+        .arg(clone.path())
+        .status()
+        .unwrap();
+    assert!(status.success());
+    assert!(matches!(
+        Baseline::load(clone.path()),
+        Baseline::Unavailable(_)
+    ));
+
+    for (root, shallow) in [(clone.path(), true), (source.root(), false)] {
+        let verdict = judge_range(root, &base, Some("HEAD")).unwrap();
+        assert!(
+            verdict
+                .errors
+                .iter()
+                .any(|e| e.contains("without a checkbox")),
+            "shallow={shallow}: {verdict:?}"
+        );
+        assert_eq!(
+            verdict
+                .warnings
+                .iter()
+                .any(|w| w.contains("not in this clone's history")),
+            shallow,
+            "{verdict:?}"
+        );
+    }
+}

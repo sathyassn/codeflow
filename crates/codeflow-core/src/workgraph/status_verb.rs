@@ -14,7 +14,8 @@ use std::path::{Path, PathBuf};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
 
-use super::lifecycle::{judge_change, Baseline, Graph, RecordView};
+use super::lifecycle::{judge_change, working_context, Baseline, ChangeContext, Graph, RecordView};
+use super::record_text::{scan, section_span, LineKind};
 use super::work_start::RecordKind;
 
 /// What a status verb was asked to do.
@@ -138,11 +139,16 @@ pub fn set_status(
     let proposed = propose(record, change).map_err(|problem| VerbError::Refused(vec![problem]))?;
     let after = RecordView::parse(kind, &record.path, &proposed)
         .map_err(|problem| VerbError::Refused(vec![problem]))?;
+    let (base, paths) = working_context(repo_root);
     let verdict = judge_change(
         Some(record),
         &after,
         &graph.with(after.clone()),
         &Baseline::load(repo_root),
+        ChangeContext {
+            base: base.as_ref(),
+            changed_paths: paths.as_deref(),
+        },
     );
     if !verdict.is_clean() {
         return Err(VerbError::Refused(verdict.errors));
@@ -224,7 +230,16 @@ fn propose(record: &RecordView, change: &StatusChange) -> Result<String, String>
             }
             if from == "complete" {
                 let reason = required(change.reason.as_ref(), "--reason", "reopening")?;
-                content = supersede_active_block(&content, reason)?;
+                content = match supersede_active_block(&content, reason) {
+                    Some(superseded) => superseded,
+                    // A record completed before the migration has no block;
+                    // the reopen reason is recorded, no block is invented.
+                    None => append_to_section(
+                        &content,
+                        "## Closeout",
+                        &format!("- reopened: {reason}\n"),
+                    ),
+                };
             }
         }
         (RecordKind::Task | RecordKind::Epic, "complete") => {
@@ -292,21 +307,10 @@ pub fn set_frontmatter_value(content: &str, key: &str, value: &str) -> Result<St
     Ok(lines.join("\n"))
 }
 
-/// Line index range `[start, end)` of a level-two section, heading included.
+/// Line index range `[start, end)` of a level-two section, heading included,
+/// read in Markdown context exactly as the judge reads it.
 fn section_range(lines: &[&str], heading: &str) -> Option<(usize, usize)> {
-    let start = lines.iter().position(|line| line.trim_end() == heading)?;
-    let mut in_fence = false;
-    let mut end = lines.len();
-    for (index, line) in lines.iter().enumerate().skip(start + 1) {
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
-        }
-        if !in_fence && line.starts_with("## ") {
-            end = index;
-            break;
-        }
-    }
-    Some((start, end))
+    section_span(&scan(lines), heading)
 }
 
 fn remove_section(content: &str, heading: &str) -> String {
@@ -365,31 +369,33 @@ fn append_to_section(content: &str, heading: &str, text: &str) -> String {
 }
 
 /// Mark the active acceptance block superseded with the reopen reason,
-/// keeping every other byte of it.
-fn supersede_active_block(content: &str, reason: &str) -> Result<String, String> {
+/// keeping every other byte of it; `None` when the Closeout has no active
+/// block (a record completed before the migration).
+fn supersede_active_block(content: &str, reason: &str) -> Option<String> {
     let lines: Vec<&str> = content.split('\n').collect();
-    let (start, end) = section_range(&lines, "## Closeout")
-        .ok_or("reopening needs the acceptance block in the Closeout")?;
+    let scanned = scan(&lines);
+    let (start, end) = section_span(&scanned, "## Closeout")?;
     let mut index = start;
     while index < end {
-        if lines[index].trim() == "```yaml" {
-            let header = lines[index + 1..end]
-                .iter()
-                .position(|line| !line.trim().is_empty())
-                .map(|offset| index + 1 + offset);
-            if let Some(header) = header {
-                if lines[header].trim_end() == "acceptance:" {
-                    let mut out: Vec<String> =
-                        lines.iter().map(|line| (*line).to_string()).collect();
-                    out[header] = "acceptance_superseded:".to_string();
-                    out.insert(header + 1, format!("  reason: {reason}"));
-                    return Ok(out.join("\n"));
-                }
-            }
-        }
+        let open = &scanned[index];
         index += 1;
+        if open.kind != LineKind::FenceOpen || open.marker != b'`' || open.info != "yaml" {
+            continue;
+        }
+        let body_end = (index..end).find(|&at| scanned[at].kind != LineKind::FenceContent)?;
+        if scanned[body_end].kind != LineKind::FenceClose {
+            return None;
+        }
+        let header = (index..body_end).find(|&at| !scanned[at].visible.trim().is_empty());
+        if let Some(header) = header.filter(|&at| scanned[at].visible.trim_end() == "acceptance:") {
+            let mut out: Vec<String> = lines.iter().map(|line| (*line).to_string()).collect();
+            out[header] = "acceptance_superseded:".to_string();
+            out.insert(header + 1, format!("  reason: {reason}"));
+            return Some(out.join("\n"));
+        }
+        index = body_end + 1;
     }
-    Err("reopening a complete task needs its active acceptance block to supersede".into())
+    None
 }
 
 #[cfg(test)]
@@ -420,6 +426,21 @@ mod tests {
         let created =
             append_to_section("---\nid: EPC-001\n---\n\n## Summary\n", "## Closeout", "x");
         assert!(created.ends_with("## Summary\n\n## Closeout\n\nx\n"));
+    }
+
+    #[test]
+    fn reopening_supersedes_the_real_block_not_an_example() {
+        let block = "acceptance:\n  reviewed: x\n";
+        let hidden = format!(
+            "---\nid: TSK-001\n---\n\n## Closeout\n\n<!--\n```yaml\n{block}```\n-->\n\n````text\n```yaml\n{block}```\n````\n"
+        );
+        assert_eq!(supersede_active_block(&hidden, "regression"), None);
+        let content = format!("{hidden}\n```yaml\n{block}```\n");
+        let reopened = supersede_active_block(&content, "regression").unwrap();
+        assert_eq!(reopened.matches("acceptance_superseded:").count(), 1);
+        assert!(reopened.ends_with(
+            "```yaml\nacceptance_superseded:\n  reason: regression\n  reviewed: x\n```\n"
+        ));
     }
 
     #[test]

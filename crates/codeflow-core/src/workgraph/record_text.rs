@@ -77,61 +77,178 @@ pub fn is_criterion_id(value: &str) -> bool {
     })
 }
 
-/// Lines of the level-two section `heading` (for example `## Closeout`),
-/// excluding the heading line. A `## ` line inside a fenced block does not end
-/// the section.
-#[must_use]
-pub fn section_lines<'a>(body: &'a str, heading: &str) -> Option<Vec<&'a str>> {
-    let mut lines = body.lines();
-    lines.by_ref().find(|line| line.trim_end() == heading)?;
-    let mut collected = Vec::new();
-    let mut in_fence = false;
-    for line in lines {
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
+/// How one line of a record reads once Markdown context is applied: a line
+/// inside an HTML comment or a fenced block is never a heading, criterion,
+/// blocker field, cancellation line or acceptance fence.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum LineKind {
+    /// Visible text outside any fence, with inline comments removed.
+    Text,
+    /// Inside an HTML comment.
+    Hidden,
+    /// Opens a fenced block.
+    FenceOpen,
+    /// Inside a fenced block.
+    FenceContent,
+    /// Closes a fenced block.
+    FenceClose,
+}
+
+/// One scanned line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct ScannedLine {
+    pub kind: LineKind,
+    /// The visible text: comment-free for `Text`, the raw line inside a fence,
+    /// empty for `Hidden`.
+    pub visible: String,
+    /// The fence character (`` ` `` or `~`) of a `FenceOpen` line.
+    pub marker: u8,
+    /// The info string of a `FenceOpen` line.
+    pub info: String,
+}
+
+impl ScannedLine {
+    fn new(kind: LineKind, visible: &str) -> Self {
+        Self {
+            kind,
+            visible: visible.to_string(),
+            marker: 0,
+            info: String::new(),
         }
-        if !in_fence && line.starts_with("## ") {
-            break;
-        }
-        collected.push(line);
     }
-    Some(collected)
 }
 
-/// Whether the body has the level-two section `heading`.
-#[must_use]
-pub fn has_section(body: &str, heading: &str) -> bool {
-    section_lines(body, heading).is_some()
+/// A `CommonMark` fence line: up to three spaces, then three or more backticks
+/// or tildes, then the info string (no backtick in a backtick fence's info).
+fn fence_marker(line: &str) -> Option<(u8, usize, &str)> {
+    let rest = line.trim_start_matches(' ');
+    if line.len() - rest.len() > 3 {
+        return None;
+    }
+    let marker = *rest.as_bytes().first()?;
+    if marker != b'`' && marker != b'~' {
+        return None;
+    }
+    let length = rest.bytes().take_while(|byte| *byte == marker).count();
+    let info = rest[length..].trim();
+    (length >= 3 && !(marker == b'`' && info.contains('`'))).then_some((marker, length, info))
 }
 
-/// Remove HTML comments (complete or unclosed) from a run of lines, keeping
-/// line structure for the visible remainder.
-fn visible_lines(lines: &[&str]) -> Vec<String> {
-    let mut visible = Vec::new();
-    let mut in_comment = false;
-    for line in lines {
-        let mut out = String::new();
-        let mut rest = *line;
-        loop {
-            if in_comment {
-                if let Some(end) = rest.find("-->") {
+/// Remove inline HTML comments from one line; `in_comment` carries an
+/// unclosed comment to the following lines.
+fn strip_comments(line: &str, in_comment: &mut bool) -> String {
+    let mut out = String::new();
+    let mut rest = line;
+    loop {
+        if *in_comment {
+            match rest.find("-->") {
+                Some(end) => {
                     rest = &rest[end + 3..];
-                    in_comment = false;
-                } else {
-                    break;
+                    *in_comment = false;
                 }
-            } else if let Some(start) = rest.find("<!--") {
-                out.push_str(&rest[..start]);
-                rest = &rest[start + 4..];
-                in_comment = true;
+                None => return out,
+            }
+        } else if let Some(start) = rest.find("<!--") {
+            out.push_str(&rest[..start]);
+            rest = &rest[start + 4..];
+            *in_comment = true;
+        } else {
+            out.push_str(rest);
+            return out;
+        }
+    }
+}
+
+/// Scan lines in Markdown context: fences (matched by character and length)
+/// and HTML comments. A comment that starts a line hides every line up to and
+/// including the one that closes it, as a `CommonMark` HTML block does.
+pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
+    let mut out = Vec::with_capacity(lines.len());
+    let mut fence: Option<(u8, usize)> = None;
+    let mut in_comment = false;
+    for raw in lines {
+        let line = raw.trim_end_matches('\r');
+        if let Some((marker, length)) = fence {
+            let closes = fence_marker(line).is_some_and(|(found, count, info)| {
+                found == marker && count >= length && info.is_empty()
+            });
+            if closes {
+                fence = None;
+                out.push(ScannedLine::new(LineKind::FenceClose, line));
             } else {
-                out.push_str(rest);
-                break;
+                out.push(ScannedLine::new(LineKind::FenceContent, line));
+            }
+            continue;
+        }
+        if in_comment {
+            in_comment = !line.contains("-->");
+            out.push(ScannedLine::new(LineKind::Hidden, ""));
+            continue;
+        }
+        let indent = line.len() - line.trim_start_matches(' ').len();
+        if indent <= 3 && line[indent..].starts_with("<!--") {
+            in_comment = !line[indent + 4..].contains("-->");
+            out.push(ScannedLine::new(LineKind::Hidden, ""));
+            continue;
+        }
+        let visible = strip_comments(line, &mut in_comment);
+        if visible == line {
+            if let Some((marker, length, info)) = fence_marker(line) {
+                fence = Some((marker, length));
+                out.push(ScannedLine {
+                    kind: LineKind::FenceOpen,
+                    visible,
+                    marker,
+                    info: info.to_string(),
+                });
+                continue;
             }
         }
-        visible.push(out);
+        out.push(ScannedLine::new(LineKind::Text, &visible));
     }
-    visible
+    out
+}
+
+/// Line index range `[start, end)` of the level-two section `heading`,
+/// heading included. Only a visible text line opens or ends a section.
+pub(crate) fn section_span(lines: &[ScannedLine], heading: &str) -> Option<(usize, usize)> {
+    let is_text = |line: &ScannedLine| line.kind == LineKind::Text;
+    let start = lines
+        .iter()
+        .position(|line| is_text(line) && line.visible.trim_end() == heading)?;
+    let end = lines
+        .iter()
+        .enumerate()
+        .skip(start + 1)
+        .find(|(_, line)| is_text(line) && line.visible.starts_with("## "))
+        .map_or(lines.len(), |(index, _)| index);
+    Some((start, end))
+}
+
+/// The scanned lines of the section `heading`, excluding the heading line.
+fn section(body: &str, heading: &str) -> Option<Vec<ScannedLine>> {
+    let lines: Vec<&str> = body.lines().collect();
+    let mut scanned = scan(&lines);
+    let (start, end) = section_span(&scanned, heading)?;
+    scanned.truncate(end);
+    Some(scanned.split_off(start + 1))
+}
+
+/// The visible text lines of a section, outside fences and comments.
+fn section_text(body: &str, heading: &str) -> Option<Vec<String>> {
+    section(body, heading).map(|lines| {
+        lines
+            .into_iter()
+            .filter(|line| line.kind == LineKind::Text)
+            .map(|line| line.visible)
+            .collect()
+    })
+}
+
+/// Whether the body has the level-two section `heading` as visible text.
+#[must_use]
+pub fn has_section(body: &str, heading: &str) -> bool {
+    section(body, heading).is_some()
 }
 
 fn collapse(text: &str) -> String {
@@ -143,12 +260,24 @@ fn collapse(text: &str) -> String {
 #[must_use]
 pub fn parse_criteria(body: &str) -> CriteriaList {
     let mut list = CriteriaList::default();
-    let Some(lines) = section_lines(body, "## Acceptance Criteria") else {
+    let Some(lines) = section(body, "## Acceptance Criteria") else {
         return list;
     };
     let mut current: Option<Criterion> = None;
     let mut position = 0usize;
-    for line in visible_lines(&lines) {
+    for scanned in lines {
+        match scanned.kind {
+            LineKind::Hidden => continue,
+            LineKind::Text => {}
+            LineKind::FenceOpen | LineKind::FenceContent | LineKind::FenceClose => {
+                // A fenced block is not criterion text; it ends the item.
+                if let Some(done) = current.take() {
+                    list.items.push(done);
+                }
+                continue;
+            }
+        }
+        let line = scanned.visible;
         if line.trim().is_empty() {
             continue;
         }
@@ -267,8 +396,8 @@ fn first_value(found: &[(String, String)], key: &str) -> String {
 /// Parse `## Blocker`; `None` when the section is absent.
 #[must_use]
 pub fn parse_blocker(body: &str) -> Option<Blocker> {
-    let lines = section_lines(body, "## Blocker")?;
-    let found = keyed_bullets(&visible_lines(&lines), &["reason", "owner", "revisit"]);
+    let lines = section_text(body, "## Blocker")?;
+    let found = keyed_bullets(&lines, &["reason", "owner", "revisit"]);
     Some(Blocker {
         reason: first_value(&found, "reason"),
         owner: first_value(&found, "owner"),
@@ -320,32 +449,27 @@ impl Cancellation {
 /// Parse the cancellation lines of `## Closeout` (empty when absent).
 #[must_use]
 pub fn parse_cancellation(body: &str) -> Cancellation {
-    let Some(lines) = section_lines(body, "## Closeout") else {
+    let Some(lines) = section_text(body, "## Closeout") else {
         return Cancellation::default();
     };
-    let found = keyed_bullets(
-        &outside_fences(&visible_lines(&lines)),
-        &["cancelled", "scope"],
-    );
+    let found = keyed_bullets(&lines, &["cancelled", "scope"]);
     Cancellation {
         reason: first_value(&found, "cancelled"),
         scope: first_value(&found, "scope"),
     }
 }
 
-fn outside_fences(lines: &[String]) -> Vec<String> {
-    let mut in_fence = false;
-    let mut out = Vec::new();
-    for line in lines {
-        if line.trim_start().starts_with("```") {
-            in_fence = !in_fence;
-            continue;
-        }
-        if !in_fence {
-            out.push(line.clone());
-        }
-    }
-    out
+/// The reopen reasons of a Closeout: `- reopened: <reason>` lines, written
+/// when a task completed before the migration (no acceptance block) reopens.
+#[must_use]
+pub fn reopen_reasons(body: &str) -> Vec<String> {
+    section_text(body, "## Closeout")
+        .map(|lines| keyed_bullets(&lines, &["reopened"]))
+        .unwrap_or_default()
+        .into_iter()
+        .map(|(_, value)| value)
+        .filter(|value| !is_blank_value(value))
+        .collect()
 }
 
 /// One criterion result of an acceptance block: `<outcome> | <evidence>`.
@@ -604,21 +728,27 @@ impl FencedAcceptance {
     }
 }
 
-/// Every fenced `yaml` block of `## Closeout` whose first line opens an
-/// acceptance or superseded acceptance block.
+/// Every closed backtick `yaml` fence of `## Closeout` whose first line opens
+/// an acceptance or superseded acceptance block. A fence inside an HTML
+/// comment or inside another fence is not a block.
 #[must_use]
 pub fn acceptance_blocks(body: &str) -> Vec<FencedAcceptance> {
-    let Some(lines) = section_lines(body, "## Closeout") else {
+    let Some(lines) = section(body, "## Closeout") else {
         return Vec::new();
     };
     let mut blocks = Vec::new();
-    let mut current: Option<Vec<&str>> = None;
+    let mut current: Option<Vec<String>> = None;
     for line in lines {
-        let trimmed = line.trim();
-        match current.as_mut() {
-            None if trimmed == "```yaml" => current = Some(Vec::new()),
-            None => {}
-            Some(_) if trimmed == "```" => {
+        match line.kind {
+            LineKind::FenceOpen => {
+                current = (line.marker == b'`' && line.info == "yaml").then(Vec::new);
+            }
+            LineKind::FenceContent => {
+                if let Some(collected) = current.as_mut() {
+                    collected.push(line.visible);
+                }
+            }
+            LineKind::FenceClose => {
                 let inner = current.take().unwrap_or_default().join("\n");
                 let head = inner.trim_start();
                 if head.starts_with("acceptance:") || head.starts_with("acceptance_superseded:") {
@@ -626,7 +756,7 @@ pub fn acceptance_blocks(body: &str) -> Vec<FencedAcceptance> {
                     blocks.push(FencedAcceptance { inner, parsed });
                 }
             }
-            Some(collected) => collected.push(line),
+            LineKind::Text | LineKind::Hidden => {}
         }
     }
     blocks
@@ -654,6 +784,19 @@ fn is_short_or_full_sha(value: &str) -> bool {
 /// proves structure only and does not prove the evidence is honest.
 #[must_use]
 pub fn check_acceptance(block: &AcceptanceBlock, criteria: &[Criterion]) -> Vec<String> {
+    check_block(block, criteria, criteria)
+}
+
+/// [`check_acceptance`] for a block that proves only the `required` subset of
+/// the record's `known` criteria, as an epic's own block does for the
+/// criteria no task serves. Listing another known criterion is allowed.
+#[must_use]
+pub fn check_block(
+    block: &AcceptanceBlock,
+    required: &[Criterion],
+    known: &[Criterion],
+) -> Vec<String> {
+    let criteria = required;
     let mut problems = Vec::new();
     if !is_full_sha(&block.reviewed) {
         problems.push("acceptance `reviewed` must be a full commit sha".to_string());
@@ -680,7 +823,7 @@ pub fn check_acceptance(block: &AcceptanceBlock, criteria: &[Criterion]) -> Vec<
         }
     }
     for (id, _) in &block.criteria {
-        if !criteria.iter().any(|criterion| criterion.id == *id) {
+        if !known.iter().any(|criterion| criterion.id == *id) {
             problems.push(format!(
                 "acceptance block lists {id}, which the record does not have"
             ));
@@ -902,6 +1045,52 @@ mod tests {
         }
     }
 
+    #[test]
+    fn markdown_context_hides_comments_and_enclosed_fences() {
+        let inner = render_acceptance(&block());
+        let visible = format!("```yaml\n{inner}```");
+        let body = format!(
+            "## Closeout\n\n<!--\n{visible}\n-->\n\n````markdown\n{visible}\n## Not a heading\n````\n\n\
+~~~\n{visible}\n~~~\n\n```yaml\n{inner}```\n"
+        );
+        let found = acceptance_blocks(&body);
+        assert_eq!(found.len(), 1, "only the visible top-level fence counts");
+        assert_eq!(found[0].parsed, Ok(block()));
+
+        // An unclosed fence runs to the end of the document and is no block.
+        assert!(acceptance_blocks(&format!("## Closeout\n\n```yaml\n{inner}")).is_empty());
+        // A fence closes only on its own character, at its length or longer.
+        let lines = ["````yaml", "```", "~~~~", "`````", "after"];
+        let kinds: Vec<LineKind> = scan(&lines).into_iter().map(|line| line.kind).collect();
+        assert_eq!(
+            kinds,
+            [
+                LineKind::FenceOpen,
+                LineKind::FenceContent,
+                LineKind::FenceContent,
+                LineKind::FenceClose,
+                LineKind::Text
+            ]
+        );
+        // A commented heading opens no section; an inline comment keeps one.
+        assert!(!has_section("<!--\n## Blocker\n-->\n", "## Blocker"));
+        assert!(!has_section("<!-- ## Blocker -->\n", "## Blocker"));
+        assert!(has_section("## Blocker <!-- note -->\n", "## Blocker"));
+        let criteria = parse_criteria(
+            "## Acceptance Criteria\n\n<!--\n- AC-9 hidden\n-->\n- AC-1 shown\n```text\n- AC-8 example\n```\n",
+        );
+        assert_eq!(
+            criteria.signature(),
+            vec![("AC-1".to_string(), "shown".to_string())]
+        );
+        assert_eq!(
+            reopen_reasons(
+                "## Closeout\n\n- reopened: one\n<!-- - reopened: two -->\n- reopened: <reason>\n"
+            ),
+            vec!["one".to_string()]
+        );
+    }
+
     /// A small deterministic generator (xorshift) standing in for a
     /// property-testing crate: the parsers must never panic on arbitrary
     /// input, and every rendered valid block must parse back to itself.
@@ -958,6 +1147,8 @@ mod tests {
             "\n",
             "```yaml",
             "```",
+            "````",
+            "~~~",
             "## Closeout",
             "## Acceptance Criteria",
             "- ",
@@ -982,6 +1173,7 @@ mod tests {
             let _ = parse_criteria(&text);
             let _ = parse_blocker(&text);
             let _ = parse_cancellation(&text);
+            let _ = reopen_reasons(&text);
         }
     }
 
