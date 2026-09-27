@@ -20,9 +20,12 @@ publication date._
 - **Acceptance bound to the reviewed commit.** Completing a task with
   `task status complete`, and every completion in a pull request range in
   `codeflow ci`, now checks that the acceptance block's `reviewed` commit is
-  the head or an ancestor after which only the record's status and Closeout
-  changed, and that each waiver names a planning-only amendment commit on
-  the target that changed that criterion. `task status complete` also
+  the completing commit (a task pull request's head) or an ancestor after
+  which only the record's status and Closeout changed, or the second parent
+  of a clean landing merge that only merges and planning records follow,
+  and that each waiver names a planning-only amendment commit that changed
+  that criterion, is in the completion's history and is on the task's own
+  integration target. `task status complete` also
   refuses uncommitted changes outside the record. A pull request that
   changes a task's criteria is refused unless its validated class is
   planning-only or a checked epic line, whatever its branch prefix. A range touching the adopter-facing path set

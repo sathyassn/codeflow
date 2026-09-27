@@ -180,8 +180,9 @@ pub fn set_status(
     })
 }
 
-/// The binding of a completion to the reviewed commit (R-60), with `HEAD` as
-/// the head: the verb runs where the reviewed result is checked out.
+/// The binding of a completion to the reviewed commit (R-60), with the
+/// working tree over `HEAD` as the completion: the verb runs where the
+/// reviewed result is checked out, and applies the judge CI applies.
 fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     let Ok(repo) = git2::Repository::discover(repo_root) else {
         return vec!["cannot open the repository to bind the acceptance block".into()];
@@ -194,16 +195,24 @@ fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
     else {
         return vec!["no HEAD commit to bind the acceptance block to".into()];
     };
-    let target_tip =
-        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
-            .and_then(|target| repo.revparse_single(&target).ok())
-            .and_then(|object| object.peel_to_commit().ok())
-            .map(|commit| commit.id());
-    super::acceptance::uncommitted_outside(&repo, task)
+    let Ok(changed) = super::acceptance::worktree_changes(&repo) else {
+        return vec![format!(
+            "{}: {}: the working tree's state cannot be read",
+            super::acceptance::BINDING_RULE,
+            task.id
+        )];
+    };
+    // A task without a declared target belongs to the default one.
+    let default_target = super::work_start::resolve_work_target(repo_root, None)
+        .and_then(|target| repo.revparse_single(&target).ok())
+        .and_then(|object| object.peel_to_commit().ok())
+        .map(|commit| commit.id());
+    let landing = super::acceptance::Landing::Worktree {
+        head,
+        changed: &changed,
+    };
+    super::acceptance::bind_completion(&repo, task, graph, landing, default_target)
         .into_iter()
-        .chain(super::acceptance::bind_completion(
-            &repo, task, graph, head, target_tip,
-        ))
         .map(|finding| format!("{}: {}", finding.rule, finding.message))
         .collect()
 }

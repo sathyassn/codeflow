@@ -163,11 +163,17 @@ fn ci(root: &Path, branch: &str, id: &str) -> (i32, String) {
 }
 
 fn ci_with(root: &Path, branch: &str, task_line: &str) -> (i32, String) {
+    ci_on(root, "main", branch, task_line)
+}
+
+/// `codeflow ci` from `base` to `HEAD` as `branch`, with `task_line` in the
+/// pull request body.
+fn ci_on(root: &Path, base: &str, branch: &str, task_line: &str) -> (i32, String) {
     let out = codeflow()
         .args([
             "ci",
             "--base",
-            "main",
+            base,
             "--head",
             "HEAD",
             "--branch",
@@ -833,4 +839,430 @@ fn a_waiver_amendment_changes_planning_records_only() {
             assert_passes(&result, what);
         }
     }
+}
+
+// The binding of a completion made after its task landed (the merge rule):
+// R is the second parent of a clean landing merge M on the completion's
+// first-parent chain, only merges and planning records follow M, and the
+// completion changes planning records only. `task status complete` and
+// `codeflow ci` apply the same judge.
+
+const LINE: &str = "integration/EPC-001-line";
+
+/// A task record targeting [`LINE`], with [`OWN_JOURNEY`] criteria.
+fn line_task(id: &str, status: &str, closeout: &str) -> String {
+    task(id, status, OWN_JOURNEY, closeout).replace(
+        "integration_target: main",
+        &format!("integration_target: {LINE}"),
+    )
+}
+
+/// `main` holds `ids` targeting [`LINE`], which is cut from it.
+fn line_repo(ids: &[&str]) -> tempfile::TempDir {
+    let tasks: Vec<(&str, &str)> = ids.iter().map(|id| (*id, OWN_JOURNEY)).collect();
+    let dir = repo(&tasks, "");
+    let root = dir.path();
+    for id in ids {
+        write(root, &record_path(id), &line_task(id, "todo", "Pending.\n"));
+    }
+    commit(root, "docs(records): target the line");
+    git(root, &["branch", LINE, "main"]);
+    dir
+}
+
+/// A commit on `branch`, cut from [`LINE`], writing `path`; returns it.
+fn build(root: &Path, branch: &str, path: &str) -> String {
+    git(root, &["switch", "-C", branch, LINE]);
+    write(root, path, &format!("// {branch}\n"));
+    commit(root, "feat: build on the line")
+}
+
+/// Land `branch` on [`LINE`] with a merge commit; returns the merge.
+fn land(root: &Path, branch: &str) -> String {
+    git(root, &["switch", LINE]);
+    git(
+        root,
+        &[
+            "merge",
+            "--no-ff",
+            "-m",
+            &format!("merge: {branch}"),
+            branch,
+        ],
+    );
+    head(root)
+}
+
+/// Write `id` as `status` with a valid block reviewed at `reviewed`.
+fn write_done(root: &Path, id: &str, status: &str, reviewed: &str) {
+    write(
+        root,
+        &record_path(id),
+        &line_task(id, status, &valid_block(reviewed)),
+    );
+}
+
+/// The binding findings of a result, as its needle list sees them.
+fn binding_lines(result: &(i32, String)) -> Vec<&str> {
+    result
+        .1
+        .lines()
+        .filter(|line| line.contains("TSK-00") && line.contains("reviewed commit"))
+        .collect()
+}
+
+/// The line lands on main as one pull request. Two tasks each completed in
+/// their own pull request (rule 1) and landed in turn, so the second
+/// landing merge also brings the first task's code; a third task landed
+/// first and completed later by a planning pull request (rule 2), and a
+/// planning amendment then narrows a completed record. Each completion is
+/// judged where it was introduced, not at the line tip.
+#[test]
+fn the_line_into_main_binds_each_completion_where_it_was_made() {
+    let dir = line_repo(&["TSK-001", "TSK-002", "TSK-003"]);
+    let root = dir.path();
+    let first = build(root, "task/TSK-001-one", "src/one.rs");
+    write_done(root, "TSK-001", "complete", &first);
+    commit(root, "docs(records): complete TSK-001");
+    let second = build(root, "task/TSK-002-two", "src/two.rs");
+    write_done(root, "TSK-002", "complete", &second);
+    commit(root, "docs(records): complete TSK-002");
+    let third = build(root, "task/TSK-003-three", "src/three.rs");
+    land(root, "task/TSK-001-one");
+    land(root, "task/TSK-002-two");
+    land(root, "task/TSK-003-three");
+    build(root, "feat/other", "src/other.rs");
+    land(root, "feat/other");
+    git(root, &["switch", "-C", "plan/complete-tsk003", LINE]);
+    write_done(root, "TSK-003", "complete", &third);
+    commit(root, "docs(records): complete TSK-003");
+    land(root, "plan/complete-tsk003");
+    // A later planning amendment of a completed record is not part of its
+    // completion.
+    git(root, &["switch", "-C", "plan/narrow-tsk001", LINE]);
+    let record = std::fs::read_to_string(root.join(record_path("TSK-001"))).unwrap();
+    write(
+        root,
+        &record_path("TSK-001"),
+        &record.replace("Work.\n", "Narrower work.\n"),
+    );
+    commit(root, "docs(records): narrow TSK-001");
+    land(root, "plan/narrow-tsk001");
+
+    let result = ci_on(root, "main", LINE, "");
+    assert_passes(&result, "the line into main");
+    assert!(result.1.contains(SCOPE), "{}", result.1);
+}
+
+/// A task landed without its completion is completed by a planning pull
+/// request with `reviewed` at the landed head, after a planning merge, a
+/// planning amendment of the record itself, or an unrelated code merge on
+/// the line; the verb and CI agree.
+#[test]
+fn a_late_completion_binds_to_the_landing_merge() {
+    let restated = EPIC.replace("An outcome.", "An outcome, restated.");
+    let narrowed =
+        line_task("TSK-001", "todo", "Pending.\n").replace("Work.\n", "Narrower work.\n");
+    let amended = record_path("TSK-001");
+    for (what, other, content) in [
+        (
+            "after a planning merge",
+            "project-management/epics/EPC-001.md",
+            restated.as_str(),
+        ),
+        (
+            "after an amendment of the record",
+            amended.as_str(),
+            narrowed.as_str(),
+        ),
+        (
+            "after an unrelated code merge",
+            "src/other.rs",
+            "pub fn other() {}\n",
+        ),
+    ] {
+        let dir = line_repo(&["TSK-001"]);
+        let root = dir.path();
+        let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+        land(root, "task/TSK-001-work");
+        git(root, &["switch", "-C", "other/change", LINE]);
+        write(root, other, content);
+        commit(root, "docs: another change");
+        land(root, "other/change");
+
+        git(root, &["switch", "-C", "plan/complete-tsk001", LINE]);
+        let done = line_task("TSK-001", "in_progress", &valid_block(&reviewed));
+        let done = if other == amended {
+            done.replace("Work.\n", "Narrower work.\n")
+        } else {
+            done
+        };
+        write(root, &amended, &done);
+        let verb = status_complete(root, "TSK-001");
+        assert_eq!(verb.0, 0, "{what}: the verb: {}", verb.1);
+        commit(root, "docs(records): complete TSK-001");
+        let result = ci_on(root, LINE, "plan/complete-tsk001", "");
+        assert_passes(&result, what);
+        assert!(binding_lines(&result).is_empty(), "{what}: {}", result.1);
+    }
+}
+
+/// A late completion fails when the landing merge is not the clean
+/// re-merge of its parents (an evil merge), when code lands directly on
+/// the line after it, when the task landed by a squash (no merge has the
+/// reviewed commit as a parent), or when the completion itself changes
+/// code. The verb refuses each before it writes, and CI blocks it.
+#[test]
+fn a_late_completion_fails_without_a_clean_landing() {
+    for (what, needle) in [
+        ("an evil merge", "is not the clean re-merge of its parents"),
+        (
+            "a direct code commit on the line",
+            "changes src/direct.rs after the landing merge",
+        ),
+        ("a squash landing", "is not the head or an ancestor of it"),
+        (
+            "a completion that changes code",
+            "the completion also changes src/extra.rs",
+        ),
+    ] {
+        let dir = line_repo(&["TSK-001"]);
+        let root = dir.path();
+        let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+        git(root, &["switch", LINE]);
+        match what {
+            "an evil merge" => {
+                git(
+                    root,
+                    &["merge", "--no-ff", "--no-commit", "task/TSK-001-work"],
+                );
+                write(root, "src/evil.rs", "pub fn evil() {}\n");
+                commit(root, "merge: task/TSK-001-work");
+            }
+            "a squash landing" => {
+                git(root, &["merge", "--squash", "task/TSK-001-work"]);
+                commit(root, "feat: squash TSK-001");
+            }
+            _ => {
+                land(root, "task/TSK-001-work");
+            }
+        }
+        if what == "a direct code commit on the line" {
+            write(root, "src/direct.rs", "pub fn direct() {}\n");
+            commit(root, "feat: straight onto the line");
+        }
+
+        git(root, &["switch", "-C", "plan/complete-tsk001", LINE]);
+        if what == "a completion that changes code" {
+            write(root, "src/extra.rs", "pub fn extra() {}\n");
+        }
+
+        write_done(root, "TSK-001", "in_progress", &reviewed);
+        let verb = status_complete(root, "TSK-001");
+        assert_ne!(verb.0, 0, "{what}: the verb: {}", verb.1);
+        assert!(verb.1.contains(needle), "{what}: the verb: {}", verb.1);
+
+        write_done(root, "TSK-001", "complete", &reviewed);
+        commit(root, "docs(records): complete TSK-001");
+        assert_blocks(
+            &ci_on(root, LINE, "plan/complete-tsk001", ""),
+            what,
+            &["work.acceptance_binding", needle],
+        );
+    }
+}
+
+/// One planning commit completes two landed tasks; each binds to its own
+/// landing merge.
+#[test]
+fn one_pull_request_completes_two_landed_tasks() {
+    let dir = line_repo(&["TSK-001", "TSK-002"]);
+    let root = dir.path();
+    let first = build(root, "task/TSK-001-one", "src/one.rs");
+    let second = build(root, "task/TSK-002-two", "src/two.rs");
+    land(root, "task/TSK-001-one");
+    land(root, "task/TSK-002-two");
+    git(root, &["switch", "-C", "plan/complete-both", LINE]);
+    write_done(root, "TSK-001", "complete", &first);
+    write_done(root, "TSK-002", "complete", &second);
+    commit(root, "docs(records): complete TSK-001 and TSK-002");
+    let result = ci_on(root, LINE, "plan/complete-both", "");
+    assert_passes(&result, "two completions in one commit");
+    assert!(binding_lines(&result).is_empty(), "{}", result.1);
+}
+
+/// Known and accepted: a later fix pull request for the same task is a
+/// merge after the landing merge, so a completion reviewed before the fix
+/// still binds by the merge rule. cf-reviewer refuses a block whose
+/// reviewed commit predates a later fix; the binding does not see it.
+#[test]
+fn known_hole_a_later_fix_for_the_same_task_still_binds() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    build(root, "fix/TSK-001-follow-up", "src/work.rs");
+    land(root, "fix/TSK-001-follow-up");
+    git(root, &["switch", "-C", "plan/complete-tsk001", LINE]);
+    write_done(root, "TSK-001", "complete", &reviewed);
+    commit(root, "docs(records): complete TSK-001");
+    assert_passes(
+        &ci_on(root, LINE, "plan/complete-tsk001", ""),
+        "a completion reviewed before a later fix",
+    );
+}
+
+/// [`line_task`] with AC-1 narrowed, as a planning amendment leaves it.
+fn amended_task(id: &str, status: &str, closeout: &str) -> String {
+    line_task(id, status, closeout).replace("shall work.", "shall work on Linux.")
+}
+
+/// A block reviewed at `reviewed` whose AC-1 is waived by `by`.
+fn waived_block(reviewed: &str, by: &str) -> String {
+    block(
+        reviewed,
+        &[
+            &format!("AC-1: waived | {by}"),
+            "AC-2: verified | journey ran",
+        ],
+        "verified | tests/journey.rs",
+        "none: nothing deferred",
+    )
+}
+
+/// Amend TSK-001 AC-1 on `branch`, cut from [`LINE`]; returns the commit.
+fn amend(root: &Path, branch: &str) -> String {
+    git(root, &["switch", "-C", branch, LINE]);
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended_task("TSK-001", "todo", "Pending.\n"),
+    );
+    commit(root, "docs(records): narrow TSK-001 AC-1")
+}
+
+/// A waiver is judged against the task's own integration target, not the
+/// pull request's base: an amendment landed on the line binds in the task
+/// pull request and again when the line lands on main.
+#[test]
+fn a_waiver_amended_on_the_line_binds_into_main() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    amend(root, "plan/narrow");
+    let amendment = land(root, "plan/narrow");
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended_task("TSK-001", "complete", &waived_block(&reviewed, &amendment)),
+    );
+    commit(root, "docs(records): complete TSK-001");
+    assert_passes(
+        &ci_on(root, LINE, "task/TSK-001-work", "Task: TSK-001"),
+        "the task pull request into its line",
+    );
+    land(root, "task/TSK-001-work");
+    let result = ci_on(root, "main", LINE, "");
+    assert_passes(&result, "the line into main");
+    assert!(binding_lines(&result).is_empty(), "{}", result.1);
+}
+
+/// A waiver amendment fails when it never landed on the task's line (it is
+/// only on a side branch the task merged), when the completion does not
+/// contain it, or when it names the task branch's own head, which is not on
+/// the line.
+#[test]
+fn a_waiver_amendment_must_have_landed_on_the_task_line() {
+    for (what, needle) in [
+        ("only on a side branch", "which is not on the target"),
+        (
+            "landed after the task branched",
+            "which the completion does not contain",
+        ),
+        ("the task branch's head", "which is not on the target"),
+    ] {
+        let dir = line_repo(&["TSK-001"]);
+        let root = dir.path();
+        let (reviewed, amendment) = match what {
+            "only on a side branch" => {
+                let amendment = amend(root, "side/narrow");
+                git(root, &["switch", "-C", "task/TSK-001-work", LINE]);
+                git(
+                    root,
+                    &["merge", "--no-ff", "-m", "merge: side", "side/narrow"],
+                );
+                write(root, "src/work.rs", "pub fn work() {}\n");
+                (commit(root, "feat: build on the line"), amendment)
+            }
+            "landed after the task branched" => {
+                let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+                amend(root, "plan/narrow");
+                let amendment = land(root, "plan/narrow");
+                git(root, &["switch", "task/TSK-001-work"]);
+                (reviewed, amendment)
+            }
+            _ => {
+                amend(root, "plan/narrow");
+                land(root, "plan/narrow");
+                let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+                (reviewed.clone(), reviewed)
+            }
+        };
+        write(
+            root,
+            &record_path("TSK-001"),
+            &amended_task(
+                "TSK-001",
+                "in_progress",
+                &waived_block(&reviewed, &amendment),
+            ),
+        );
+        let verb = status_complete(root, "TSK-001");
+        assert_ne!(verb.0, 0, "{what}: the verb: {}", verb.1);
+        assert!(verb.1.contains(needle), "{what}: the verb: {}", verb.1);
+        if what == "the task branch's head" {
+            continue;
+        }
+        write(
+            root,
+            &record_path("TSK-001"),
+            &amended_task("TSK-001", "complete", &waived_block(&reviewed, &amendment)),
+        );
+        commit(root, "docs(records): complete TSK-001");
+        assert_blocks(
+            &ci_on(root, LINE, "task/TSK-001-work", "Task: TSK-001"),
+            what,
+            &["AC-1 waiver", needle],
+        );
+    }
+}
+
+/// A late completion cut exactly at the amendment merge completes: the
+/// verb's `HEAD` is the completion's parent, so naming it as the waiver's
+/// amendment is not naming the head.
+#[test]
+fn a_completion_cut_at_the_amendment_merge_binds() {
+    let dir = line_repo(&["TSK-001"]);
+    let root = dir.path();
+    let reviewed = build(root, "task/TSK-001-work", "src/work.rs");
+    land(root, "task/TSK-001-work");
+    amend(root, "plan/narrow");
+    let amendment = land(root, "plan/narrow");
+    git(root, &["switch", "-C", "plan/complete-tsk001", LINE]);
+    assert_eq!(head(root), amendment, "cut at the amendment merge");
+    write(
+        root,
+        &record_path("TSK-001"),
+        &amended_task(
+            "TSK-001",
+            "in_progress",
+            &waived_block(&reviewed, &amendment),
+        ),
+    );
+    let verb = status_complete(root, "TSK-001");
+    assert_eq!(verb.0, 0, "the verb: {}", verb.1);
+    commit(root, "docs(records): complete TSK-001");
+    let result = ci_on(root, LINE, "plan/complete-tsk001", "");
+    assert_passes(&result, "the completion pull request");
+    assert!(binding_lines(&result).is_empty(), "{}", result.1);
 }
