@@ -557,10 +557,13 @@ publication date._
   another repository's feature branch is no longer refused as a commit on the
   session's `main`. A repository without a CodeFlow policy keeps the default
   protection of `main` and `master`. `git -C <repo> --git-dir=<git dir>` is
-  judged by the git dir it writes to, which closes a wrong allow. When the
-  guard cannot resolve the target, for example an unset variable or a
-  subshell, it judges the session repository as before and says the target
-  was unresolved.
+  judged by the git dir it writes to, which closes a wrong allow. A `cd`
+  that can fail proves its move only to commands chained with `&&`. When the
+  guard cannot prove the target, for example an unset or escaped variable,
+  a subshell or an `env` option, it blocks a commit, merge, push or other
+  mutation and says how to name the repository: a literal path, or
+  `cd <path> &&` first. This also blocks a commit written inside a
+  subshell such as `(cd <repo> && git commit)`.
 
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
   the official pinned Node distribution's compression libraries and explain
