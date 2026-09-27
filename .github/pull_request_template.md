@@ -84,8 +84,9 @@ Task: `TSK-NNN | none: <reason>`
      release unit, and Breaking is yes if and only if Impact is major. The
      adjacent changelog annotations are the one version input: put a
      codeflow:release-impact patch|minor|major HTML marker directly before
-     each new pending changelog entry, and Impact must equal the highest one
-     added. Declared impact cannot be below conventional commit markers. A
+     each pending changelog entry, which a unique bold label identifies, and
+     Impact must equal the highest one this PR adds or edits. Declared
+     impact cannot be below conventional commit markers. A
      watched contract path needs Breaking stated; a path match does not prove
      a break. When this PR removes pending content or lowers the target, add
      a Withdrawal field that says what was removed and why the remaining net
