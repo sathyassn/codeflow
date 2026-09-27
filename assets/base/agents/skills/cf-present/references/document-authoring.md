@@ -189,6 +189,9 @@ block's `title` now shows as a visible title line.
 - **Legend or migrate.** When a stage's marks encode meaning (a colour, a
   dash, a shape), give it a `legend`. When the stage shows a relationship the
   figure grammar can draw, migrate it to a `figure` block instead.
+- **Keep a stage narrow.** A stage scales to the column, so one wider than
+  about 600 units is unreadable on a phone. Draw it as a `figure` block,
+  which reflows, or split it into narrower stages.
 
 ## Converting a diagram block
 
