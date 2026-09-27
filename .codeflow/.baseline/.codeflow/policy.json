@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "git": {
+    "product_paths": ["src/**", "crates/**", "build.rs"],
     "protected_branches": ["main", "master"],
     "commit_to_protected": "block",
     "push_to_protected": "block",
@@ -44,6 +45,5 @@
   "security": {
     "dangerous_commands": "block",
     "privilege_escalation": "warn"
-  },
-  "human_authorization": "none"
+  }
 }
