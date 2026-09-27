@@ -3,8 +3,8 @@
 //! Intercepts git operations the client-side git hooks can't reach:
 //! force-push / push / delete against protected branches, hard reset on a
 //! protected branch, checkout-and-commit dodges, raw merges on protected,
-//! and AI attribution or emoji in `gh pr create` bodies (charter §6.4,
-//! AC #13). Every rule reads its level from `policy.json.git` — the guard
+//! and AI attribution or emoji in `gh pr create` and `gh pr edit` bodies
+//! (charter §6.4, AC #13). Every rule reads its level from `policy.json.git` — the guard
 //! gives instant in-session feedback; CI + remote protection stay the hard
 //! line (D19).
 
@@ -1760,20 +1760,22 @@ fn check_gh(args: &[String], ctx: &GuardContext<'_>, out: &mut Vec<Violation>) {
         return;
     }
     match plain.get(1) {
-        Some(&"create") => check_gh_pr_create(&plain[2..], ctx.policy, out),
+        // `gh pr edit` takes the same body flags, so an edited body is
+        // scanned like a new one (ADR-0067).
+        Some(&"create" | &"edit") => check_gh_pr_body(&plain[2..], ctx.policy, out),
         Some(&"merge") => check_gh_pr_merge(&plain[2..], ctx, out),
         _ => {}
     }
 }
 
-/// Scan a `gh pr create` body for AI attribution / emoji (charter §6.4) and
-/// policy characters (ADR-0067).
+/// Scan a `gh pr create` or `gh pr edit` body for AI attribution / emoji
+/// (charter §6.4) and policy characters (ADR-0067).
 ///
 /// Both the inline `--body`/`-b` value and the content of a `--body-file`/`-F`
 /// file are scanned. Fail-open (matching the guard's doctrine): a missing or
 /// unreadable body file passes rather than blocking. A stdin body (`-F -`) is
 /// out of scope — its content is not available to the guard, so it is not read.
-fn check_gh_pr_create(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation>) {
+fn check_gh_pr_body(rest: &[&str], policy: &GitPolicy, out: &mut Vec<Violation>) {
     let inline = flag_value(rest, &["--body", "-b"]);
     let from_file = flag_value(rest, &["--body-file", "-F"])
         .filter(|path| *path != "-")
@@ -3264,6 +3266,25 @@ mod tests {
             "{}",
             v[0].message
         );
+    }
+
+    // Codex EPC-017 review, finding 5: an edited body is scanned too.
+    #[test]
+    fn test_pr_edit_body_policy_character_blocked() {
+        let p = default_policy();
+        let inline = "gh pr edit 12 --body 'Adds a hook \u{2014} and a test.'";
+        let v = evaluate(inline, &ctx(&p, "feat/x"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "git.policy_characters");
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("body.md");
+        std::fs::write(&path, "Summary: pages 1\u{2013}3.").unwrap();
+        let from_file = format!("gh pr edit -F '{}'", path.display());
+        let v = evaluate(&from_file, &ctx(&p, "feat/x"));
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].rule, "git.policy_characters");
+        let clean = "gh pr edit 12 --title 'feat: x' --body 'Summary: adds a test.'";
+        assert!(evaluate(clean, &ctx(&p, "feat/x")).is_empty());
     }
 
     #[test]

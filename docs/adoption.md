@@ -245,6 +245,10 @@ New policy keys arrive this way too. When a codeflow upgrade adds a
 `pr_merge_to_protected`, and `local_ref_protection` keys added in ADR-0007),
 `update` inserts it with its shipped default and reports it, and never touches
 the values you already set — so tightening ships without a manual migration.
+Keep the order: upgrade the `codeflow` on `PATH` before `codeflow update`. The
+hooks run that binary, and one older than a new key rejects the policy file,
+which blocks every commit until the binary is upgraded (for example
+`git.policy_characters`, ADR-0067).
 
 ## Optional repository guide portal
 
@@ -474,7 +478,7 @@ not introduce a competing `project.md` or `projects.md`.
    protected-branch rules, test gate). Keep `codeflow test` and `codeflow
    validate --docs` green before push.
 4. **Land by PR, merged by a human.** Push the branch, open a PR from the
-   template (summary, changes, testing, linked epic/capability IDs); a
+   template (summary, changes, testing, reviews, release impact); a
    human merges it when required checks are evidenced green (an infra-killed
    duplicate CI job is not a failed check; an agent-performed `gh pr merge`
    into a protected base is blocked — that is the boundary). With no remote, `codeflow

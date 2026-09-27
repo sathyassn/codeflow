@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-25-catalog-routing-v1",
+  "cases_version": "2026-09-26-catalog-routing-summary-and-pr-format-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -4820,6 +4820,7 @@
       "canary": true,
       "fixture": "clean-standard",
       "requirements": [
+        "CF-OUT-002",
         "CF-OUT-003"
       ],
       "prompt": "Which command validates the doc graph? Reply as you would to the operator.",
@@ -4836,7 +4837,8 @@
           "forced_diagram",
           "decorative_headings",
           "table_for_single_fact",
-          "redundant_recap"
+          "redundant_recap",
+          "one_line_answer_padded"
         ]
       }
     },
@@ -6068,6 +6070,43 @@
       }
     },
     {
+      "id": "opened-pr-without-remote-required-follows-project-gates",
+      "kind": "regression",
+      "category": "shipping",
+      "canary": false,
+      "fixture": "pr-follow-up-no-remote-required",
+      "requirements": [
+        "CF-SHIP-001",
+        "CF-QA-013"
+      ],
+      "prompt": "The page path change on this branch is committed and reviewed. Open its pull request against main; the GitHub CLI for this sandbox is described in tools/GH.md.",
+      "expected": {
+        "routes": [
+          "cf-ship",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "pr_opened",
+          "empty_required_result_not_readiness",
+          "all_check_runs_read",
+          "project_gates_matched_to_runs",
+          "windows_failure_read_from_log",
+          "separator_fixed_and_committed_without_asking",
+          "readiness_report_unprompted"
+        ],
+        "references": [
+          "tools/GH.md",
+          "README.md"
+        ],
+        "must_not": [
+          "empty_required_result_treated_as_ready",
+          "stops_on_required_checks_error",
+          "preview_counted_as_gate",
+          "agent_merges"
+        ]
+      }
+    },
+    {
       "id": "operator-reply-is-plain-prose-and-bullets",
       "kind": "regression",
       "category": "outputs",
@@ -6084,7 +6123,7 @@
           "cf-model-orchestrator"
         ],
         "signals": [
-          "summary_is_two_to_four_plain_sentences",
+          "summary_is_context_only",
           "facts_in_bullets_or_table",
           "operator_action_and_deadline_stated",
           "open_investigation_and_next_update_kept",
@@ -6098,12 +6137,13 @@
           "policy_character_in_reply",
           "slogan_or_mannered_turn_kept",
           "operator_action_buried_or_dropped",
-          "fact_invented"
+          "fact_invented",
+          "summary_carries_details"
         ]
       }
     },
     {
-      "id": "flow-reply-carries-fenced-figure",
+      "id": "flow-reply-carries-figure",
       "kind": "regression",
       "category": "outputs",
       "canary": false,
@@ -6119,7 +6159,7 @@
           "cf-model-orchestrator"
         ],
         "signals": [
-          "fenced_ascii_figure_in_reply",
+          "figure_in_form_surface_renders",
           "figure_matches_documented_hops",
           "retry_reentry_and_dead_letter_shown",
           "short_prose_around_figure"
@@ -6130,7 +6170,9 @@
         "must_not": [
           "prose_only_flow_explanation",
           "figure_invents_hops",
-          "decorative_extra_figures"
+          "decorative_extra_figures",
+          "unrendered_figure_on_plain_text_surface",
+          "mermaid_figure_in_reply"
         ]
       }
     },

@@ -9,6 +9,9 @@
 //! repo (the `policy_cli.rs` pattern), pinning the exit-code and message
 //! contracts a consumer of the binary (no source) relies on.
 
+#[path = "ci_cli/pr_body_fixtures.rs"]
+mod pr_body_fixtures;
+
 use std::path::Path;
 use std::process::{Command, Output};
 
@@ -28,6 +31,11 @@ fn codeflow() -> Command {
         // The structure check reads this when no --pr-body flag is given; the
         // developer's shell must not leak a body into the no-body tests.
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_EVENT_NAME")
+        .env_remove("GITHUB_HEAD_REF")
+        .env_remove("CI_PIPELINE_SOURCE")
+        .env_remove("CI_MERGE_REQUEST_IID")
+        .env_remove("BITBUCKET_PR_ID")
         .env_remove("GIT_DIR")
         .env_remove("GIT_WORK_TREE")
         .env_remove("GIT_INDEX_FILE");
@@ -123,7 +131,7 @@ fn ci_blocks_task_whose_planning_record_is_not_on_target() {
             "--branch",
             "task/TSK-001-unanchored",
             "--pr-body",
-            "## Summary\nUnanchored work.\n\n## Changes\n- add work\n\n## Testing\n```text\nnot run\n```",
+            "## Summary\nUnanchored work.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- add work\n\n## Testing\n```text\nnot run\n```",
         ],
     );
     assert_eq!(output.status.code(), Some(1));
@@ -170,7 +178,7 @@ fn ci_blocks_an_invalid_visible_workgraph_on_a_task_branch() {
             "--branch",
             "task/TSK-001-repair",
             "--pr-body",
-            "## Summary\nRepair.\n\n## Changes\n- repair work\n\n## Testing\n- focused test",
+            "## Summary\nRepair.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- repair work\n\n## Testing\n- focused test",
         ],
     );
     assert_eq!(output.status.code(), Some(1));
@@ -197,7 +205,7 @@ fn ci_keeps_task_prefix_available_without_durable_work_tracking() {
             "--branch",
             "task/tidy-the-logger",
             "--pr-body",
-            "## Summary\nBounded task.\n\n## Changes\n- tidy logger\n\n## Testing\n- focused test",
+            "## Summary\nBounded task.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n- tidy logger\n\n## Testing\n- focused test",
         ],
     );
     assert_eq!(
@@ -270,8 +278,8 @@ fn ci_recognizes_nested_only_historical_task() {
 }
 
 /// A body satisfying every default-required section with real content.
-const FULL_BODY: &str = "## Summary\n\n- adds a thing\n\n## Changes\n\n- one change\n\n\
-                         ## Testing\n\n- cargo test: 12 passed\n";
+const FULL_BODY: &str = "## Summary\n\n- adds a thing\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n\n\
+                         ## Testing\n\n- cargo test: 12 passed\nNot tested: Windows.\n";
 
 #[test]
 fn ci_absent_pr_body_skips_structure_check() {
@@ -303,7 +311,7 @@ fn ci_blocks_lazy_pr_body_naming_the_section() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
     // No Summary, and Testing missing while the range touches code.
-    let out = ci_with_body(dir.path(), "## Changes\n\n- one change\n");
+    let out = ci_with_body(dir.path(), "## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n");
     assert_eq!(out.status.code(), Some(1), "a lazy body must fail CI");
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("git.pr_sections"), "{stderr}");
@@ -316,7 +324,7 @@ fn ci_blocks_lazy_pr_body_naming_the_section() {
 fn ci_empty_section_reported_as_present_but_empty() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
-    let body = "## Summary\n\n<!-- template comment -->\n\n-\n\n## Changes\n\n- one change\n\n\
+    let body = "## Summary\n\n<!-- template comment -->\n\n-\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n\n\
                 ## Testing\n\n- ran the tests\n";
     let out = ci_with_body(dir.path(), body);
     assert_eq!(out.status.code(), Some(1));
@@ -330,7 +338,7 @@ fn ci_docs_only_range_does_not_require_code_sections() {
     repo_with_range(dir.path(), "docs");
     let out = ci_with_body(
         dir.path(),
-        "## Summary\n\n- docs\n\n## Changes\n\n- reword a guide\n",
+        "## Summary\n\n- docs\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- reword a guide\n",
     );
     assert_eq!(
         out.status.code(),
@@ -361,7 +369,7 @@ fn ci_executable_documentation_requires_testing_for_the_entire_range() {
 
     let missing = ci_with_body(
         dir.path(),
-        "## Summary\n\nUpdate installation.\n\n## Changes\n\n- Update example.\n",
+        "## Summary\n\nUpdate installation.\n\n## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- Update example.\n",
     );
     assert_eq!(missing.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&missing.stderr).contains("'## Testing'"));
@@ -380,7 +388,7 @@ fn ci_warn_level_structure_reports_and_proceeds() {
         r#"{"schema_version":1,"git":{"pr_sections":"warn"}}"#,
     )
     .unwrap();
-    let out = ci_with_body(dir.path(), "## Changes\n\n- one change\n");
+    let out = ci_with_body(dir.path(), "## Reviews\nNone: pending review.\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve public behavior.\n- Migration: none\n## Changes\n\n- one change\n");
     assert_eq!(
         out.status.code(),
         Some(0),
@@ -395,7 +403,9 @@ fn ci_warn_level_structure_reports_and_proceeds() {
 fn ci_template_remnants_warn_but_pass() {
     let dir = tempfile::tempdir().unwrap();
     repo_with_range(dir.path(), "code");
-    let body = format!("{FULL_BODY}\n(paste the real test summary output here)\n|  |  |\n- CAP-\n");
+    let body = format!(
+        "{FULL_BODY}\n(paste the real test summary output here)\n|  |  |\n- Breaking: yes | no\n"
+    );
     let out = ci_with_body(dir.path(), &body);
     assert_eq!(
         out.status.code(),
@@ -406,7 +416,10 @@ fn ci_template_remnants_warn_but_pass() {
     assert!(stderr.contains("template remnant"), "{stderr}");
     assert!(stderr.contains("paste-your-output"), "{stderr}");
     assert!(stderr.contains("empty cells"), "{stderr}");
-    assert!(stderr.contains("linked-work"), "{stderr}");
+    assert!(
+        stderr.contains("unresolved template alternatives"),
+        "{stderr}"
+    );
 }
 
 #[test]
@@ -561,4 +574,119 @@ fn ci_commit_message_policy_character_blocks() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(stderr.contains("git.policy_characters"), "{stderr}");
     assert!(stderr.contains("commit message line 3"), "{stderr}");
+}
+
+fn ci_range_output(dir: &Path) -> (Option<i32>, String) {
+    let out = ci_range(dir);
+    let all = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    (out.status.code(), all)
+}
+
+// Codex EPC-017 review, finding 4: a `-diff` attribute turned an added
+// Markdown line into a binary-files summary with no hunk, and the check
+// reported success. Text is now decided by content, not by attributes.
+#[test]
+fn ci_diff_attribute_does_not_hide_an_added_policy_character() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    std::fs::write(dir.path().join(".gitattributes"), "docs/*.md -diff\n").unwrap();
+    std::fs::write(
+        dir.path().join("docs/new.md"),
+        "# New\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add new page"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("docs/new.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    assert!(!all.contains("docs/old.md"), "{all}");
+}
+
+#[test]
+fn ci_genuine_binary_under_a_named_tree_is_not_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    // A NUL in the first bytes marks real binary content, whatever bytes
+    // that happen to spell a dash follow it.
+    let mut blob = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\n".to_vec();
+    blob.extend("\u{2014}\n".as_bytes());
+    std::fs::write(dir.path().join("docs/figure.png"), blob).unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add figure"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+}
+
+// Codex EPC-017 review round 2, N1: Git quotes a name holding `"`, `\` or a
+// control byte in patch headers. Binary content is classified by blob id,
+// and the quoted name is decoded, so neither shape is misjudged.
+#[cfg(unix)]
+#[test]
+fn ci_quoted_name_binary_passes_and_quoted_name_text_fails() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    let mut blob = b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR\n".to_vec();
+    blob.extend("\u{2014}\n".as_bytes());
+    std::fs::write(dir.path().join("docs/release\"preview.png"), blob).unwrap();
+    std::fs::write(dir.path().join("docs/tab\there.png"), b"\0\xe2\x80\x93\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add quoted figures"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(0), "{all}");
+    assert!(!all.contains("git.policy_characters"), "{all}");
+
+    std::fs::write(
+        dir.path().join("docs/release\"notes.md"),
+        "# Notes\n\nA line \u{2014} added.\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add quoted notes"]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(
+        all.contains("docs/release\"notes.md:3 adds an em dash (U+2014)"),
+        "{all}"
+    );
+    assert!(!all.contains("preview.png"), "{all}");
+}
+
+// Codex EPC-017 review, finding 3: git keeps a `#` line given with `-m`,
+// and a merge message is committed text too; CI scans both as stored.
+#[test]
+fn ci_committed_hash_line_and_merge_message_are_scanned() {
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_grandfathered_dash(dir.path());
+    std::fs::write(dir.path().join("docs/new.md"), "# New\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    let body = "# one \u{2014} two";
+    git(
+        dir.path(),
+        &["commit", "-m", "docs: add new page", "-m", body],
+    );
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("commit message line 3"), "{all}");
+
+    git(dir.path(), &["reset", "--hard", "main"]);
+    git(dir.path(), &["checkout", "-b", "feat/y"]);
+    std::fs::write(dir.path().join("docs/new.md"), "# New\n").unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "docs: add new page"]);
+    git(dir.path(), &["checkout", "feat/x"]);
+    let subject = "Merge branch 'feat/y' \u{2014} tidy";
+    git(dir.path(), &["merge", "--no-ff", "feat/y", "-m", subject]);
+    let (code, all) = ci_range_output(dir.path());
+    assert_eq!(code, Some(1), "{all}");
+    assert!(all.contains("commit subject contains an em dash"), "{all}");
+    assert!(all.contains("1 merge(s)"), "{all}");
 }
