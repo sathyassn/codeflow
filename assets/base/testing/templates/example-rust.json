@@ -38,13 +38,13 @@
       "enabled": true,
       "runner": "custom",
       "modes": {
-        "quick": {
-          "command": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings"
-        },
         "essential": {
           "command": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings"
         },
         "full": {
+          "command": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings"
+        },
+        "quick": {
           "command": "cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings"
         }
       }
