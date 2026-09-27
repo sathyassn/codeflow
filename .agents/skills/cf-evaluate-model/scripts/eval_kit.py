@@ -484,6 +484,21 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
                 errors.append(f"{case_id}: duplicate role")
         except EvalError as error:
             errors.append(str(error))
+        if "hosts" in case:
+            try:
+                hosts = string_list(case["hosts"], f"{case_id}.hosts")
+                unknown_hosts = set(hosts) - {
+                    harness.get("lineage") for harness in harnesses.values()
+                }
+                if unknown_hosts:
+                    errors.append(
+                        f"{case_id}: unknown host lineages: "
+                        + ", ".join(sorted(unknown_hosts))
+                    )
+                if len(hosts) != len(set(hosts)):
+                    errors.append(f"{case_id}: duplicate host lineage")
+            except EvalError as error:
+                errors.append(str(error))
         expected = case.get("expected")
         if not isinstance(expected, dict):
             errors.append(f"{case_id}: expected must be an object")
@@ -1032,8 +1047,18 @@ def computed_trial_status(trial: dict, case: dict) -> str:
     return "pass" if passed else "fail"
 
 
-def expected_trial_pairs(suite: str, cases_doc: dict) -> set[tuple[str, int]]:
-    cases = cases_doc["cases"]
+def applies_to_host(case: dict, lineage: str | None) -> bool:
+    """A case without `hosts` applies to every subject harness; one with
+    `hosts` applies only when the subject harness's lineage is listed. With no
+    known lineage every case is selected, so nothing is silently dropped."""
+
+    return lineage is None or "hosts" not in case or lineage in case["hosts"]
+
+
+def expected_trial_pairs(
+    suite: str, cases_doc: dict, lineage: str | None = None
+) -> set[tuple[str, int]]:
+    cases = [case for case in cases_doc["cases"] if applies_to_host(case, lineage)]
     selected = cases if suite == "full" else [case for case in cases if case["canary"]]
     repetitions = cases_doc["full_trials"] if suite == "full" else 1
     return {(case["id"], trial) for case in selected for trial in range(1, repetitions + 1)}
@@ -1320,7 +1345,10 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
             "requested and observed model/effort differ without a "
             "harness_context_mismatch validity flag"
         )
-    expected_pairs = expected_trial_pairs(suite, cases_doc)
+    subject = harnesses.get(system.get("harness")) if isinstance(system, dict) else None
+    expected_pairs = expected_trial_pairs(
+        suite, cases_doc, subject.get("lineage") if subject else None
+    )
     missing = expected_pairs - seen
     extra = seen - expected_pairs
     if missing:

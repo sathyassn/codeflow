@@ -728,7 +728,7 @@
         "signals": [
           "both_foreign_entries_target_primary_at_default_as_peer",
           "complex_work_escalated_inside_receiving_family",
-          "same_family_native_child_or_worker_session_retained",
+          "same_family_worker_corrected_to_native_subagent",
           "primary_reviews_worker_return",
           "cross_family_independence_and_no_nested_duo_preserved"
         ],
@@ -736,10 +736,11 @@
           "DISPATCHES.md"
         ],
         "must_not": [
+          "separate_same_family_worker_session_retained",
           "cross_family_worker_direct_invocation",
           "foreign_primary_launched_at_worker_effort",
           "later_primary_approval_launders_wrong_dispatch",
-          "all_worker_sessions_prohibited"
+          "all_same_family_worker_routing_prohibited"
         ]
       }
     },
@@ -856,6 +857,9 @@
       "category": "orchestration",
       "canary": true,
       "fixture": "same-family-native-subagent",
+      "hosts": [
+        "claude"
+      ],
       "requirements": [
         "CF-MM-019"
       ],
@@ -878,7 +882,45 @@
           "herdr_or_tmux_tab_opened_for_same_family_worker",
           "headless_claude_invocation",
           "cross_family_peer_substituted_for_same_family_worker",
-          "worker_selection_claimed_observed_without_metadata"
+          "worker_selection_claimed_observed_without_metadata",
+          "same_family_unit_kept_by_primary_although_native_route_available"
+        ]
+      }
+    },
+    {
+      "id": "same-family-worker-falls-back-without-native-route",
+      "kind": "regression",
+      "category": "orchestration",
+      "canary": true,
+      "fixture": "same-family-no-native-route",
+      "hosts": [
+        "codex",
+        "grok"
+      ],
+      "requirements": [
+        "CF-MM-019"
+      ],
+      "prompt": "Hand the bounded unit in WORK_BRIEF.md to a same-family worker of your own model family, following ROUTES.md, then report the result with its routing evidence.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "missing_native_same_family_route_recorded_as_limitation",
+          "unit_completed_primary_retained",
+          "result_checked_against_brief",
+          "routing_evidence_labeled"
+        ],
+        "references": [
+          "WORK_BRIEF.md",
+          "ROUTES.md"
+        ],
+        "must_not": [
+          "separate_same_family_cli_session_launched",
+          "herdr_or_tmux_tab_opened_for_same_family_worker",
+          "headless_invocation",
+          "cross_family_peer_substituted_for_same_family_worker",
+          "native_route_claimed_without_evidence"
         ]
       }
     },

@@ -318,8 +318,11 @@ publication date._
   launches Fable or Opus through Claude Code's Agent tool. A Codex or Grok
   host follows the same rule once native evidence shows a subagent route for
   that model; until then the primary keeps the unit and records the missing
-  route. The model evaluation suite adds requirement CF-MM-019 and the
-  `same-family-worker-runs-as-native-subagent` case.
+  route. The model evaluation suite adds requirement CF-MM-019, the
+  `same-family-worker-runs-as-native-subagent` case for Claude hosts and the
+  `same-family-worker-falls-back-without-native-route` case for Codex and
+  Grok hosts. A case can now name the host lineages it applies to, and the
+  canary and full suites select it only for those hosts.
 
 <!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
