@@ -26,13 +26,16 @@ fn required_placeholders(kind: RecordKind) -> &'static [&'static str] {
     match kind {
         RecordKind::Task => &[
             "{{NNN}}",
+            "{{UID}}",
             "{{TITLE_YAML}}",
             "{{DATE}}",
             "{{EPIC_ID}}",
             "{{STANDALONE_REASON}}",
             "{{TARGET_BRANCH}}",
         ],
-        RecordKind::Epic | RecordKind::Spec => &["{{NNN}}", "{{TITLE_YAML}}", "{{DATE}}"],
+        RecordKind::Epic | RecordKind::Spec => {
+            &["{{NNN}}", "{{UID}}", "{{TITLE_YAML}}", "{{DATE}}"]
+        }
     }
 }
 
@@ -55,6 +58,7 @@ pub fn check(kind: RecordKind, text: &str) -> Result<(), String> {
         RecordKind::Task => ("TSK", "tasks"),
     };
     let mut ctx = TemplateContext::new();
+    ctx.set("UID", crate::ids::new_uid().as_str());
     for (key, value) in [
         ("NNN", "999"),
         ("TITLE", "template check"),

@@ -14,6 +14,7 @@ use std::process::{Command, Output};
 
 const CI: &str = include_str!("../../../assets/base/ci/codeflow-ci.yml");
 const POLICY: &str = include_str!("../../../assets/base/ci/codeflow-policy.yml");
+const REGISTRY: &str = include_str!("../../../assets/base/ci/codeflow-registry.yml");
 const ASSET: &str = "codeflow-cli-x86_64-unknown-linux-gnu";
 
 /// The `run:` script of every step whose name starts with `prefix`: the
@@ -192,14 +193,19 @@ fn every_install_step_is_the_same_verified_script() {
     let mut blocks = run_blocks(CI, "Install codeflow");
     blocks.extend(run_blocks(CI, "Install candidate codeflow"));
     blocks.extend(run_blocks(POLICY, "Install codeflow"));
-    assert_eq!(blocks.len(), 3, "gates, candidate and the enforcing job");
+    blocks.extend(run_blocks(REGISTRY, "Install codeflow"));
+    assert_eq!(
+        blocks.len(),
+        4,
+        "gates, candidate and the two enforcing jobs"
+    );
     assert!(blocks.iter().all(|b| b == &blocks[0]));
     assert!(blocks[0].contains("sha256.sum"));
-    for workflow in [CI, POLICY] {
+    for workflow in [CI, POLICY, REGISTRY] {
         assert!(!workflow.contains("PLACEHOLDER"));
     }
     // The enforcing jobs read the pin from the target checkout.
-    assert!(POLICY.contains("PIN_REF: HEAD"));
+    assert!(POLICY.contains("PIN_REF: HEAD") && REGISTRY.contains("PIN_REF: HEAD"));
 }
 
 #[test]

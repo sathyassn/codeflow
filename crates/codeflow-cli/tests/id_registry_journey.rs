@@ -590,6 +590,13 @@ fn the_enforcing_registry_workflow_cannot_be_changed_by_the_pull_request_it_judg
                 "checkout stays on the target branch: {step:?}"
             );
         }
+        // The pinned install runs only the verified release download, the
+        // same script in every enforcing job (TSK-107, `ci_pin.rs`).
+        if step.get("name").and_then(serde_yaml::Value::as_str)
+            == Some("Install codeflow (target-pinned, checksum-verified)")
+        {
+            continue;
+        }
         let run = step
             .get("run")
             .and_then(serde_yaml::Value::as_str)
