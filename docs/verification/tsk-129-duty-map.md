@@ -88,6 +88,31 @@ task are read on every task; the others are read when their trigger fires.
 | Review: mixed authorship and discarded attempts | `orchestrator/quality/review.md` | deduplicated with a pointer |
 | Review: design role and UI assignment | `orchestrator/routing/design.md` (trigger) | moved |
 
+## Orchestrator skill
+
+`agents/skills/cf-model-orchestrator/SKILL.md` keeps what every task needs.
+Trigger-only text moved verbatim to `references/` (dashes reworded), and
+unpinned text that already had a home became a pointer. `orchestrator/`
+below means `agents/skills/cf-model-orchestrator/`.
+
+| Original text | Home after the split | How |
+|---|---|---|
+| Project model overrides (`.codeflow/model-selection.json`) | `orchestrator/references/model-overrides.md` (trigger) | moved with a pointer |
+| Seat matrix rows for Grok Build and other harnesses | `orchestrator/references/other-hosts.md` (trigger) | moved; the matrix keeps a row pointing there |
+| Herdr tab reuse and per-host lane reach | `cf-herdr`, the matrix, `cf-delegate` and `orchestrator/resources/grok-host.md` | deduplicated; the skill keeps one sentence and the missing-lane rule |
+| Preflight: estimates, capacity and deadlines route | `orchestrator/references/estimates.md` (trigger) | moved with a pointer |
+| Preflight: Grok autonomy boundary | `orchestrator/references/other-hosts.md` (trigger) | moved with a pointer |
+| Preflight: solo `/cf-develop` requirements | `orchestrator/references/solo-fallback.md` (trigger) | moved; the auth and mid-run failure rule stays |
+| Design stage: `cf-design` for a changed user-facing surface | the skill's opening paragraph | deduplicated; it already said so |
+| Tasking: concurrent UI resources and the parallel execution graph | `orchestrator/references/parallel-tasks.md` (trigger) | moved with a pointer |
+| Tasking: design fidelity, executability, reassignment | the skill, one sentence; reassignment detail in `orchestrator/resources/routing/assignment.md` | deduplicated |
+| Execution: delegation, candidates, worker ownership | `orchestrator/resources/routing/assignment.md`, `hosts.md`, `route-status.md` | deduplicated with a pointer |
+| Execution: Claude-host plugin commands and provenance | the skill keeps the commands; provenance detail in `claude/skills/cf-delegate/resources/lane-plugin.md` | deduplicated; the lane gains the project-default sentence |
+| Review: the Codex-host test-running review session | `orchestrator/references/codex-host.md` (trigger) | moved with a pointer |
+| Review: deferral batch disposition | `orchestrator/resources/quality/materiality.md` | deduplicated with a pointer |
+| Closeout: failed-stage return | `claude/skills/cf-method/references/workflow-lifecycle.md` | deduplicated with a pointer |
+| cf-delegate plugin lane: worker routing and effort guidance | `orchestrator/resources/routing/assignment.md` | deduplicated with a pointer |
+
 ## Pins and eval markers
 
 - Test pins now read the file that holds each duty. Where a test pins "the
@@ -98,7 +123,8 @@ task are read on every task; the others are read when their trigger fires.
   pin to the core pointer plus each lane's evidence section.
 - In `cf-evaluate-model/resources/requirements.json`, the 40 sources that
   named the quality contract or capability routing (146 markers) now name
-  the split file holding each marker. Marker text, statements and levels are
+  the split file holding each marker, and the CF-EVAL-003 source moved from
+  the orchestrator skill to its model overrides reference. Marker text, statements and levels are
   unchanged. Three sources whose markers now sit in two files (CF-QA-002,
   CF-MM-017, CF-MM-011) became one source per file; each file's markers keep
   their original relative order.

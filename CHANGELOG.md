@@ -275,10 +275,12 @@ publication date._
   as a UI change, a red gate or a route qualification. cf-delegate is a
   common core plus one file per lane, so a Claude host reads the plugin lane
   and a Codex host the lifecycle lane, and the Claude turn lifecycle adapter
-  is read only on a Codex host. Duplicated rules now live in one place with
-  pointers from the others. `codeflow update` replaces the old whole files
-  and installs the new section files at the standard and full tiers. A new
-  test caps the per-task reading chain at 148 KiB.
+  is read only on a Codex host. cf-model-orchestrator keeps what every task
+  needs and moves trigger-only guidance, such as project model overrides,
+  other hosts and parallel tasks, to references. Duplicated rules now live
+  in one place with pointers from the others. `codeflow update` replaces the
+  old whole files and installs the new section files at the standard and
+  full tiers. A new test caps the per-task reading chain at 148 KiB.
 
 <!-- codeflow:release-impact patch -->
 - **Work start past a stale local target.** `codeflow work start` and the
