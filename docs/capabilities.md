@@ -483,7 +483,11 @@ Record status moves only by legal transitions (SPC-013 R-30 to R-35).
 only the sections the transition needs: a `## Blocker` with reason, owner and
 revisit for a blocked task, Closeout lines `- cancelled:` and `- scope:` for a
 cancelled record, and a fenced `yaml` acceptance block on completion.
-Reopening keeps the old block under `acceptance_superseded:` with its reason.
+Reopening keeps the old block under `acceptance_superseded:` with its reason;
+a task completed before the migration, with no block, records a Closeout line
+`- reopened: <reason>` instead. Sections and blocks inside HTML comments or
+enclosing fences never count. A spec is approved or superseded only in a
+planning-only change, and supersession adds its successor in that change.
 The verbs are safe editors, not the only writers: one core judge rules on a
 verb's proposal, on a hand edit (`validate --docs --since <ref>`) and on each
 record a pull request changes (`codeflow ci`). No verb writes `in_progress`,

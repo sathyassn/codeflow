@@ -264,6 +264,9 @@ spec or task records, records `work_records_baseline` in
 `.codeflow/project.toml` once, as the current commit. Records whose bytes are
 unchanged since that commit keep the rules they were written under; a status
 change, a criteria change or a new record follows the status verbs' rules.
+A task completed before that commit, with no acceptance block, reopens with
+`codeflow task status <id> todo --reason <text>`, which keeps its Closeout and
+adds the line `- reopened: <text>`.
 
 ## Optional repository guide portal
 
