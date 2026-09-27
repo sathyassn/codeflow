@@ -645,13 +645,12 @@ fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
     let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     assert!(
-        stdout(&output).contains("-> origin/main"),
+        stdout(&output).contains("-> refs/remotes/origin/main"),
         "{}",
         stdout(&output)
     );
     assert!(
-        stderr(&output)
-            .contains("local branch 'main' is 1 commit(s) behind its upstream 'origin/main'"),
+        stderr(&output).contains("behind its upstream 'refs/remotes/origin/main'"),
         "{}",
         stderr(&output)
     );
@@ -666,7 +665,7 @@ fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
     let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
     assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
     assert!(
-        stderr(&output).contains("'main' and 'origin/main' have diverged"),
+        stderr(&output).contains("'main' and 'refs/remotes/origin/main' have diverged"),
         "{}",
         stderr(&output)
     );

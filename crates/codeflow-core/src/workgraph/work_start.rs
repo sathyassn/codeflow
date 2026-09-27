@@ -279,7 +279,9 @@ fn local_or_upstream(
     if upstream_id == local_id {
         return keep();
     }
-    let upstream = upstream_target(&upstream_ref);
+    // The exact ref compared is the ref anchored on: a shortened name such
+    // as `origin/main` could resolve to a different ref.
+    let upstream = upstream_ref;
     let (ahead, behind) = repo
         .graph_ahead_behind(local_id, upstream_id)
         .map_err(|error| WorkStartError::Repository(error.to_string()))?;
@@ -300,18 +302,6 @@ fn local_or_upstream(
             behind,
         }),
     }
-}
-
-/// A configured upstream ref as a work target that resolves back to it:
-/// `main` for a local branch, `origin/main` for origin, else the full ref.
-fn upstream_target(reference: &str) -> String {
-    if let Some(branch) = reference.strip_prefix("refs/heads/") {
-        return branch.to_string();
-    }
-    if let Some(branch) = reference.strip_prefix("refs/remotes/origin/") {
-        return format!("origin/{branch}");
-    }
-    reference.to_string()
 }
 
 /// Whether a ref may serve as a stable planning authority.
@@ -1441,6 +1431,46 @@ mod tests {
     }
 
     #[test]
+    fn a_local_upstream_is_anchored_by_its_exact_ref() {
+        // SR-2: `main` tracks the local branch `origin/main`
+        // (`branch.main.remote = .`), while a remote `origin/main` exists
+        // too. The ref compared must be the ref anchored on.
+        let dir = fixture();
+        add_remote(dir.path(), "origin", false);
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        advance_remote_main(dir.path(), "origin");
+        git(dir.path(), &["branch", "-q", "origin/main", "main"]);
+        git(dir.path(), &["checkout", "-q", "origin/main"]);
+        git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "local upstream"],
+        );
+        git(dir.path(), &["checkout", "-q", "main"]);
+        git(dir.path(), &["config", "branch.main.remote", "."]);
+        git(
+            dir.path(),
+            &["config", "branch.main.merge", "refs/heads/origin/main"],
+        );
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "refs/heads/origin/main");
+        let repo = Repository::discover(dir.path()).unwrap();
+        let anchored = target_reference(&repo, &resolved.target).unwrap().id();
+        let local_upstream = repo
+            .find_reference("refs/heads/origin/main")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id();
+        assert_eq!(anchored, local_upstream);
+        assert!(is_stable_work_target(&resolved.target));
+    }
+
+    #[test]
     fn a_target_behind_its_configured_upstream_moves_to_it() {
         let dir = fixture();
         add_remote(dir.path(), "upstream", true);
@@ -1482,15 +1512,15 @@ mod tests {
         let resolved = resolve_work_target_checked(dir.path(), Some("main"))
             .unwrap()
             .unwrap();
-        assert_eq!(resolved.target, "origin/main");
+        assert_eq!(resolved.target, "refs/remotes/origin/main");
         let note = resolved.note.unwrap();
         assert!(
-            note.contains("'main' is 1 commit(s) behind its upstream 'origin/main'"),
+            note.contains("'main' is 1 commit(s) behind its upstream 'refs/remotes/origin/main'"),
             "{note}"
         );
         assert_eq!(
             resolve_work_target(dir.path(), Some("main")).as_deref(),
-            Some("origin/main")
+            Some("refs/remotes/origin/main")
         );
     }
 
@@ -1521,7 +1551,7 @@ mod tests {
         );
         let message = error.to_string();
         assert!(
-            message.contains("'main' and 'origin/main' have diverged"),
+            message.contains("'main' and 'refs/remotes/origin/main' have diverged"),
             "{message}"
         );
         // The unchecked resolver keeps its old answer for non-anchoring callers.
