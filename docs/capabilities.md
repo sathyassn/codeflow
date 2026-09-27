@@ -53,8 +53,12 @@ orient/summary hooks in `.claude/settings.json`, the `.codex/` starter, and
 `.grok/hooks/codeflow.json`, the armed `policy.json`, `.gitignore` including
 `.worktrees/`, and a lean `AGENTS.md` + `CLAUDE.md`);
 `--standard` adds the method (Claude/agent skills, reviewer agents, the pipeline)
-and the six-layer docs spine and full contract; `--full` adds
-project-management/. Idempotent, non-destructive, offline (assets embedded via
+and the six-layer docs spine; `--full` adds project-management/. Every tier's
+`AGENTS.md` is a moment-keyed rule map rendered from one kernel
+(`assets/base/rule-map.toml`): at most 12 one-line always rules, a "when you
+are about to" table and pointers one hop away to the references in
+`.codeflow/rules/`, leaving at least 16 KiB for the project section under
+Codex's 32 KiB limit. Idempotent, non-destructive, offline (assets embedded via
 rust-embed), with bootstrap grace, husky/hooksPath detection, and a printed
 per-file report. Standard/full reports close with `/cf-customize`, pointing at
 the consuming project's product, architecture, agent context, harness settings,
@@ -303,10 +307,11 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` runs seventeen health checks: hooks, Claude wiring, Codex wiring, Grok wiring, config,
+`codeflow doctor` runs eighteen health checks: hooks, Claude wiring, Codex wiring, Grok wiring, config,
 permissions, network, delegates, qualified model bindings, delegate round-trip, repo integrity, CI
 perimeter, managed-region
-drift, consuming-project customization, test config, the id registry, and adopter fit. The Grok check reports
+drift, consuming-project customization, always-loaded instruction size (a warning when `AGENTS.md`
+exceeds Codex's 32 KiB limit), test config, the id registry, and adopter fit. The Grok check reports
 structural `.grok/hooks` wiring and the one-time `/hooks-trust` step; it does
 not inspect trust state (ADR-0054). The customization
 check remains quiet for minimal/non-method repos, warns while product,

@@ -195,6 +195,7 @@ const CHECK_NAMES: &[&str] = &[
     "ci-perimeter",
     "managed-drift",
     "customization",
+    "instructions",
     "test-config",
     "id-registry",
     "adopter-fit",
@@ -226,6 +227,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("ci-perimeter", check_ci_perimeter);
     m.insert("managed-drift", check_managed_drift);
     m.insert("customization", check_customization);
+    m.insert("instructions", check_instructions);
     m.insert("test-config", check_test_config);
     m.insert("id-registry", check_id_registry);
     m.insert("adopter-fit", check_adopter_fit);
@@ -1768,6 +1770,47 @@ fn check_customization(opts: &Options) -> CheckResult {
     }
 }
 
+/// Always-loaded instruction size (TSK-127). Codex reads at most 32 KiB of
+/// project instructions and silently cuts the rest, and the project section
+/// sits last in `AGENTS.md`, so an oversized file loses the adopter's own
+/// rules first. Warns, never fails: the fix is the project's call.
+fn check_instructions(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let limit = crate::scaffold::rule_map::CODEX_INSTRUCTION_LIMIT_BYTES;
+    let path = PathBuf::from(&opts.project_dir).join("AGENTS.md");
+    let (status, message) = match std::fs::metadata(&path) {
+        Err(_) => (
+            Status::Pass,
+            "no AGENTS.md (instruction size check not applicable)".to_string(),
+        ),
+        Ok(meta) => {
+            let bytes = usize::try_from(meta.len()).unwrap_or(usize::MAX);
+            if bytes > limit {
+                (
+                    Status::Warn,
+                    format!(
+                        "AGENTS.md is {bytes} bytes, over Codex's {limit}-byte instruction limit: Codex cuts the end of the file, where the project section lives; move project detail into files the section points at"
+                    ),
+                )
+            } else {
+                (
+                    Status::Pass,
+                    format!(
+                        "AGENTS.md is {bytes} bytes, {} under Codex's {limit}-byte instruction limit",
+                        limit - bytes
+                    ),
+                )
+            }
+        }
+    };
+    CheckResult {
+        name: "instructions".into(),
+        status,
+        message,
+        duration: start.elapsed(),
+    }
+}
+
 /// Generic-testing config health. When `.codeflow/test-config.json` exists,
 /// runs the testing engine's config-health checks (cwd existence, command
 /// parsing, path safety, glob validity, runner probes, …) and WARNS with a
@@ -1879,7 +1922,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 17);
+        assert_eq!(check_names().len(), 18);
     }
 
     #[test]
@@ -2443,6 +2486,25 @@ mod tests {
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let result = check_customization(&opts);
         assert_eq!(result.status, Status::Pass);
+    }
+
+    #[test]
+    fn test_instructions_warns_past_the_codex_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        assert_eq!(check_instructions(&opts).status, Status::Pass);
+
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(32 * 1024)).unwrap();
+        let at_limit = check_instructions(&opts);
+        assert_eq!(at_limit.status, Status::Pass, "{}", at_limit.message);
+        assert!(at_limit.message.contains("0 under"));
+
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(32 * 1024 + 1)).unwrap();
+        let over = check_instructions(&opts);
+        assert_eq!(over.status, Status::Warn);
+        assert!(over.message.contains("32769 bytes"), "{}", over.message);
+        assert!(over.message.contains("project section"));
     }
 
     /// git in a tempdir, isolated from the host config (mirrors orient's
