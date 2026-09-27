@@ -4,7 +4,10 @@ use pulldown_cmark::{html, CowStr, Event, Options, Parser, Tag, TagEnd};
 use sha2::{Digest, Sha256};
 
 use crate::{
-    document::{Block, EvidenceState, PresentationDocument, TreeNode},
+    document::{
+        reference_segments, Block, EvidenceState, FrameKind, Framing, PresentationDocument,
+        TextSegment, TreeNode,
+    },
     limits,
     state::FeedbackSnapshot,
 };
@@ -23,6 +26,14 @@ pub struct RenderOptions<'a> {
     pub interactive: bool,
 }
 
+/// What a block renders against: the caller's options and the document's
+/// schema version and framing (SPC-014 B5).
+struct Context<'a> {
+    options: &'a RenderOptions<'a>,
+    version: u32,
+    framing: Framing,
+}
+
 #[derive(Clone, Copy)]
 pub struct RenderIdentity<'a> {
     pub src: &'a str,
@@ -31,9 +42,14 @@ pub struct RenderIdentity<'a> {
 
 #[must_use]
 pub fn render_document(document: &PresentationDocument, options: &RenderOptions<'_>) -> String {
+    let context = Context {
+        options,
+        version: document.schema_version,
+        framing: Framing::of(document),
+    };
     let mut body = String::new();
     for block in &document.blocks {
-        render_block(block, options, &mut body);
+        render_block(block, &context, &mut body);
     }
 
     let mut html = String::with_capacity(body.len() + 4_096);
@@ -173,7 +189,9 @@ pub fn render_retired(document: &serde_json::Value) -> String {
 }
 
 #[allow(clippy::too_many_lines)]
-fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String) {
+fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
+    let options = context.options;
+    let framing = &context.framing;
     output.push_str("<section class=\"block block--");
     output.push_str(block_kind(block));
     output.push_str("\" id=\"");
@@ -198,7 +216,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
         escape_html_to(summary, output);
         output.push_str("</span></summary>");
         for child in blocks {
-            render_block(child, options, output);
+            render_block(child, context, output);
         }
         output.push_str("</details></section>");
         return;
@@ -217,19 +235,23 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             escape_html_to(&tab.label, output);
             output.push_str("</summary>");
             for child in &tab.blocks {
-                render_block(child, options, output);
+                render_block(child, context, output);
             }
             output.push_str("</details>");
         }
         output.push_str("</div></section>");
         return;
     }
+    let frame = frame_of(block, context);
+    if let Some(frame) = &frame {
+        open_frame(frame, output);
+    }
     output.push_str("<div data-cf-review-text-root data-cf-canonical-text=\"");
-    escape_attr_to(&block.canonical_review_text(), output);
+    escape_attr_to(&block.canonical_review_text(framing), output);
     output.push_str("\">");
 
     match block {
-        Block::Narrative { markdown, .. } => render_markdown(markdown, output),
+        Block::Narrative { markdown, .. } => render_markdown(framing, markdown, output),
         Block::Bullets { ordered, items, .. } => {
             let tag = if *ordered { "ol" } else { "ul" };
             output.push('<');
@@ -237,7 +259,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             output.push('>');
             for item in items {
                 output.push_str("<li>");
-                render_markdown(item, output);
+                render_markdown(framing, item, output);
                 output.push_str("</li>");
             }
             output.push_str("</");
@@ -258,7 +280,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 escape_html_to(title, output);
                 output.push_str("</h2>");
             }
-            render_markdown(markdown, output);
+            render_markdown(framing, markdown, output);
             output.push_str("</aside>");
         }
         Block::Comparison { columns, .. } => {
@@ -267,7 +289,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 output.push_str("<article><h2>");
                 escape_html_to(&column.title, output);
                 output.push_str("</h2>");
-                render_markdown(&column.markdown, output);
+                render_markdown(framing, &column.markdown, output);
                 output.push_str("</article>");
             }
             output.push_str("</div>");
@@ -283,7 +305,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             output.push_str("</h2><span class=\"decision__status\">");
             escape_html_to(&format!("{status:?}"), output);
             output.push_str("</span></header>");
-            render_markdown(markdown, output);
+            render_markdown(framing, markdown, output);
             output.push_str("</article>");
         }
         Block::Table { columns, rows, .. } => {
@@ -298,7 +320,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 output.push_str("<tr>");
                 for cell in row {
                     output.push_str("<td>");
-                    render_markdown(cell, output);
+                    render_markdown(framing, cell, output);
                     output.push_str("</td>");
                 }
                 output.push_str("</tr>");
@@ -389,7 +411,12 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 .pointer("/figure/caption")
                 .and_then(serde_json::Value::as_str)
                 .unwrap_or_default();
-            output.push_str("<div class=\"figure-block\" data-cf-figure-block=\"pending\" data-cf-figure-declaration=\"");
+            let number = framing.number(block.id()).map(|(_, number)| number);
+            output.push_str("<div class=\"figure-block\" data-cf-figure-block=\"pending\"");
+            if let Some(number) = number {
+                let _ = write!(output, " data-cf-figure-number=\"{number}\"");
+            }
+            output.push_str(" data-cf-figure-declaration=\"");
             escape_attr_to(&declaration.to_string(), output);
             output.push_str("\"><div data-cf-figure-output><p class=\"figure-block__title\">");
             escape_html_to(title, output);
@@ -457,7 +484,7 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
                 output.push_str("<figure class=\"stage\"><div class=\"cf-stage-host\" id=\"");
                 escape_attr_to(&host, output);
                 output.push_str("\">");
-                match crate::safe_html::scoped_html(html, &host) {
+                match crate::safe_html::scoped_html(html, &host, context.version) {
                     Ok(scoped) => output.push_str(&scoped),
                     Err(_) => output.push_str("<p>HTML content failed isolation validation.</p>"),
                 }
@@ -471,7 +498,117 @@ fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String)
             }
         }
     }
-    output.push_str("</div></section>");
+    output.push_str("</div>");
+    if let Some(frame) = &frame {
+        close_frame(block, frame, output);
+    }
+    output.push_str("</section>");
+}
+
+/// The runtime-drawn frame of a block (SPC-014 B5): its number and title.
+/// The `figure` block draws its own title line in the grammar module, so it
+/// gets only its number, on the mount.
+struct Frame {
+    kind: FrameKind,
+    number: Option<usize>,
+    title: String,
+}
+
+fn frame_of(block: &Block, context: &Context<'_>) -> Option<Frame> {
+    let number = context.framing.number(block.id()).map(|(_, number)| number);
+    match block {
+        Block::Html {
+            title: Some(title), ..
+        } => Some(Frame {
+            kind: FrameKind::Figure,
+            number,
+            title: title.clone(),
+        }),
+        Block::Table {
+            title: Some(title), ..
+        } if context.version >= 2 => Some(Frame {
+            kind: FrameKind::Table,
+            number,
+            title: title.clone(),
+        }),
+        _ => None,
+    }
+}
+
+fn open_frame(frame: &Frame, output: &mut String) {
+    output.push_str("<figure class=\"cf-frame\" data-cf-frame=\"");
+    output.push_str(match frame.kind {
+        FrameKind::Figure => "figure",
+        FrameKind::Table => "table",
+    });
+    output.push('"');
+    if let Some(number) = frame.number {
+        let _ = write!(output, " data-cf-number=\"{number}\"");
+    }
+    output.push_str("><p class=\"cf-frame-title\">");
+    if let Some(number) = frame.number {
+        output.push_str("<span class=\"cf-frame-number\">");
+        output.push_str(frame.kind.noun());
+        let _ = write!(output, " {number}");
+        output.push_str("</span> · ");
+    }
+    output.push_str("<span class=\"cf-frame-name\">");
+    escape_html_to(&frame.title, output);
+    output.push_str("</span></p>");
+}
+
+fn close_frame(block: &Block, _frame: &Frame, output: &mut String) {
+    match block {
+        Block::Html {
+            caption,
+            legend,
+            description,
+            ..
+        } => {
+            if let Some(legend) = legend {
+                output.push_str("<ul class=\"cf-legend\" aria-label=\"Legend\">");
+                for (index, entry) in legend.iter().enumerate() {
+                    let id = format!("{}{}", crate::entity::LEGEND_PREFIX, index + 1);
+                    output.push_str("<li data-cf-entity=\"");
+                    escape_attr_to(&id, output);
+                    output.push_str("\" data-cf-entity-label=\"");
+                    escape_attr_to(
+                        &crate::entity::finish_label(&crate::entity::legend_entry_text(
+                            &entry.label,
+                            &entry.means,
+                        )),
+                        output,
+                    );
+                    output.push_str("\"><span class=\"cf-legend-label\">");
+                    escape_html_to(&entry.label, output);
+                    output.push_str("</span>: ");
+                    escape_html_to(&entry.means, output);
+                    output.push_str("</li>");
+                }
+                output.push_str("</ul>");
+            }
+            if let Some(caption) = caption {
+                output.push_str("<figcaption class=\"cf-frame-caption\">");
+                escape_html_to(caption, output);
+                output.push_str("</figcaption>");
+            }
+            if let Some(description) = description {
+                output.push_str("<details class=\"cf-frame-details\"><summary>Details</summary><p class=\"cf-frame-description\">");
+                escape_html_to(description, output);
+                output.push_str("</p></details>");
+            }
+        }
+        Block::Table {
+            caption: Some(caption),
+            ..
+        } => {
+            output.push_str("<figcaption class=\"cf-frame-caption\">");
+            escape_html_to(caption, output);
+            output.push_str("</figcaption>");
+        }
+        _ => {}
+    }
+    output.push_str("</figure>");
 }
 
 fn block_kind(block: &Block) -> &'static str {
@@ -495,7 +632,11 @@ fn block_kind(block: &Block) -> &'static str {
     }
 }
 
-fn render_markdown(markdown: &str, output: &mut String) {
+fn render_markdown(framing: &Framing, markdown: &str, output: &mut String) {
+    if framing.enabled() {
+        render_markdown_with_references(framing, markdown, output);
+        return;
+    }
     let mut link_stack = Vec::new();
     let parser =
         Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH).filter_map(|event| match event {
@@ -525,6 +666,66 @@ fn render_markdown(markdown: &str, output: &mut String) {
             event => Some(event),
         });
     html::push_html(output, parser);
+}
+
+/// Schema v2 Markdown: `[fig:<id>]` and `[table:<id>]` outside links render
+/// as a link to the numbered block, whose text is the label the canonical
+/// review text also holds (SPC-014 B5).
+fn render_markdown_with_references(framing: &Framing, markdown: &str, output: &mut String) {
+    let mut link_stack = Vec::new();
+    let mut events = Vec::new();
+    for (event, in_link) in crate::document::coalesced_markdown(markdown) {
+        match event {
+            Event::Html(_)
+            | Event::InlineHtml(_)
+            | Event::Start(Tag::Image { .. })
+            | Event::End(TagEnd::Image) => {}
+            Event::Start(Tag::Link { dest_url, .. }) => {
+                let destination = dest_url.as_ref();
+                let safe = safe_markdown_destination(destination);
+                link_stack.push(safe);
+                if safe {
+                    let mut trusted = String::from("<a href=\"");
+                    escape_attr_to(destination, &mut trusted);
+                    trusted.push('"');
+                    if !destination.starts_with('#') {
+                        trusted.push_str(" target=\"_blank\" rel=\"noopener noreferrer\"");
+                    }
+                    trusted.push('>');
+                    events.push(Event::Html(CowStr::Boxed(trusted.into_boxed_str())));
+                }
+            }
+            Event::End(TagEnd::Link) => {
+                if link_stack.pop().unwrap_or(false) {
+                    events.push(Event::Html(CowStr::Borrowed("</a>")));
+                }
+            }
+            Event::Text(text) if !in_link => {
+                for segment in reference_segments(&text) {
+                    match segment {
+                        TextSegment::Text(part) => {
+                            events.push(Event::Text(CowStr::Boxed(part.into())));
+                        }
+                        TextSegment::Reference { kind, id } => {
+                            if let Some(label) = framing.reference_label(kind, id) {
+                                let mut link = String::from("<a class=\"cf-ref\" href=\"#");
+                                escape_attr_to(id, &mut link);
+                                link.push_str("\">");
+                                escape_html_to(&label, &mut link);
+                                link.push_str("</a>");
+                                events.push(Event::Html(CowStr::Boxed(link.into_boxed_str())));
+                            } else {
+                                let literal = format!("[{}:{id}]", kind.reference_prefix());
+                                events.push(Event::Text(CowStr::Boxed(literal.into_boxed_str())));
+                            }
+                        }
+                    }
+                }
+            }
+            event => events.push(event),
+        }
+    }
+    html::push_html(output, events.into_iter());
 }
 
 fn safe_markdown_destination(destination: &str) -> bool {
@@ -660,6 +861,7 @@ pub(crate) mod tests {
     #[test]
     fn markdown_drops_raw_html() {
         let document = PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Safe".to_string(),
             language: None,
@@ -693,6 +895,7 @@ pub(crate) mod tests {
     fn markdown_links_and_images_cannot_navigate_to_unsafe_resources() {
         let mut rendered = String::new();
         render_markdown(
+            &Framing::default(),
             "[safe](https://example.com) [bad](JaVaScRiPt:alert(1)) ![remote](https://example.com/a.png)",
             &mut rendered,
         );
@@ -758,6 +961,7 @@ pub(crate) mod tests {
             },
         ];
         let document = PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Nested".to_string(),
             language: Some("en-CA".to_string()),
@@ -803,7 +1007,7 @@ pub(crate) mod tests {
             assert_eq!(roots.len(), 1);
             assert_eq!(
                 roots[0].text().collect::<String>(),
-                block.canonical_review_text()
+                block.canonical_review_text(&crate::document::Framing::default())
             );
         }
     }
@@ -821,6 +1025,7 @@ pub(crate) mod tests {
             }
         });
         let document = PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Figure".to_string(),
             language: None,

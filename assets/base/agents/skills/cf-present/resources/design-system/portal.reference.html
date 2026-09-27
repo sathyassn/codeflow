@@ -91,7 +91,7 @@
             <h2 class="cf-h2" id="two-landing-paths">Two landing paths</h2>
             <p class="cf-lede">A change reaches <code>main</code> by one of two paths. A person makes the last step on both.</p>
 <figure class="cf-fig" data-cf-block-id="fig-landing" data-cf-figure="flow">
-  <span class="cf-fig-kicker">Figure 1 · Two landing paths</span>
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 1</span> · <span class="cf-fig-name">Two landing paths from a task branch to main</span></p>
   <div class="cf-fig-stage">
     <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 252" role="img" aria-labelledby="f1w-t f1w-d">
       <title id="f1w-t">Two landing paths from a task branch to main</title>
@@ -150,8 +150,9 @@
     <li data-state="stop" data-cf-anchor="legend-stop" data-cf-anchor-label="legend, gate that stops travel"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line class="cf-m-stop" x1="14" y1="1" x2="14" y2="15"/></svg>Gate that stops travel</li>
   </ul>
   <figcaption class="cf-fig-caption">One task lands as a pull request; a body of work lands task by task on an integration branch, and both end at a human merge behind green checks.</figcaption>
-  <details class="cf-twin">
-    <summary>Table twin</summary>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, where agents merge, to the integration branch, then along a path not yet travelled to the same human merge. A gate that stops travel sits in the gate column on both paths.</p>
     <div class="cf-twin-scroll"><table>
       <thead><tr><th scope="col">Path</th><th scope="col">Who opens</th><th scope="col">Who merges</th><th scope="col">What stops it</th></tr></thead>
       <tbody>
@@ -178,7 +179,7 @@
             <h2 class="cf-h2" id="four-enforcement-planes">Four enforcement planes</h2>
             <p class="cf-lead">Four planes check the same policy at different moments.</p>
 <figure class="cf-fig" data-cf-figure="layering">
-  <span class="cf-fig-kicker">Figure 2 · Enforcement planes</span>
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 2</span> · <span class="cf-fig-name">Four enforcement planes along the life of one change</span></p>
   <div class="cf-fig-stage">
     <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 248" role="img" aria-labelledby="f2w-t f2w-d">
       <title id="f2w-t">Four enforcement planes along the life of one change</title>
@@ -236,8 +237,9 @@
     <li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-done" d="M3 13L25 3"/></svg>One change</li>
   </ul>
   <figcaption class="cf-fig-caption">Local planes give fast feedback and can be edited; only the remote plane at merge is a boundary. Hooks are the git hooks, Guard is the session git-guard, Remote is remote branch protection.</figcaption>
-  <details class="cf-twin">
-    <summary>Table twin</summary>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane that is remote and required. One change crosses all four planes in that order.</p>
     <div class="cf-twin-scroll"><table>
       <thead><tr><th scope="col">Plane</th><th scope="col">Moments</th><th scope="col">Shared source</th><th scope="col">Can be bypassed locally</th></tr></thead>
       <tbody>
@@ -265,7 +267,7 @@
             <h2 class="cf-h2" id="what-each-plane-checks">What each plane checks</h2>
             <p class="cf-lead">The grid shows which plane enforces which rule.</p>
 <figure class="cf-fig" data-cf-figure="coverage">
-<span class="cf-fig-kicker">Figure 3 · Rules by plane</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure 3</span> · <span class="cf-fig-name">Which plane enforces which rule</span></p>
 <div class="cf-fig-stage">
 <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 316" role="img" aria-labelledby="f3w-t f3w-d">
 <title id="f3w-t">Which plane enforces which rule</title>
@@ -366,8 +368,9 @@
 <li data-state="nc"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-nc" x="7" y="1" width="14" height="14" rx="2"/><path class="cf-m-nc-cross" d="M8.224 2.224L19.776 13.776M19.776 2.224L8.224 13.776"/></svg>Not claimed</li>
 </ul>
 <figcaption class="cf-fig-caption">Every rule has at least one plane; the secret scan is the one rule every plane enforces. Hooks and Guard are the local planes; Remote is branch protection.</figcaption>
-<details class="cf-twin">
-<summary>Table twin</summary>
+<details class="cf-fig-details">
+<summary>Details</summary>
+<p class="cf-fig-description">A grid of seven rules against four planes. Conventional subject: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. Body bullets only: git hooks covered, session git-guard partial, CI covered, remote branch protection not applicable. No AI attribution: git hooks covered, session git-guard covered, CI covered, remote branch protection not applicable. Secret scan: git hooks covered, session git-guard covered, CI covered, remote branch protection covered. Protected branch push: git hooks covered, session git-guard covered, CI not applicable, remote branch protection covered. Breaking change footer: git hooks partial, session git-guard not run, CI covered, remote branch protection not applicable. Ticket reference: git hooks covered, session git-guard not applicable, CI partial, remote branch protection not claimed.</p>
 <div class="cf-twin-scroll"><table>
 <thead><tr><th scope="col">Rule</th><th scope="col">Git hooks</th><th scope="col">Session git-guard</th><th scope="col">CI</th><th scope="col">Remote branch protection</th></tr></thead><tbody>
 <tr><td>Conventional subject</td><td>Covered</td><td>Partial</td><td>Covered</td><td>Not applicable</td></tr>
@@ -386,7 +389,7 @@
             <h2 class="cf-h2" id="start-a-task-in-a-worktree">Start a task in a worktree</h2>
             <p class="cf-lead">Three assertions come before the first mutation.</p>
 <figure class="cf-fig" data-cf-figure="sequence">
-  <span class="cf-fig-kicker">Figure 4 · Work-start sequence</span>
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 4</span> · <span class="cf-fig-name">The checks that come before the first edit</span></p>
   <div class="cf-fig-stage">
     <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 416" role="img" aria-labelledby="f4w-t f4w-d">
       <title id="f4w-t">The checks that come before the first edit</title>
@@ -445,8 +448,9 @@
     <li data-state="time" data-cf-wide><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-f-axis" d="M3 8H21"/><path class="cf-f-axis-head" d="M20 3.5L26 8L20 12.5Z"/></svg>Time</li>
   </ul>
   <figcaption class="cf-fig-caption">Identity, intent match and currency are checked in that order, and a mismatch stops the task before any edit.</figcaption>
-  <details class="cf-twin">
-    <summary>Table twin</summary>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">Time runs down. Identity with git worktree list. Intent match, comparing with the assignment; on a mismatch the task stops and surfaces the problem. git fetch origin. Currency, checking the base is the tip of origin/main. git worktree add .worktrees/slug. codeflow work start TSK-NNN. First edit.</p>
     <div class="cf-twin-scroll"><table>
       <thead><tr><th scope="col">Step</th><th scope="col">Command</th><th scope="col">What it proves</th></tr></thead>
       <tbody>
@@ -477,7 +481,7 @@ codeflow work start TSK-060</code></pre>
             <h2 class="cf-h2" id="when-a-gate-blocks">When a gate blocks</h2>
             <p class="cf-lead">A blocked change has one route: fix the cause, then continue.</p>
 <figure class="cf-fig" data-cf-figure="state">
-  <span class="cf-fig-kicker">Figure 5 · Change states</span>
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 5</span> · <span class="cf-fig-name">States of a change and the one route out of a red check</span></p>
   <div class="cf-fig-stage">
     <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 236" role="img" aria-labelledby="f5w-t f5w-d">
       <title id="f5w-t">States of a change and the one route out of a red check</title>
@@ -539,8 +543,9 @@ codeflow work start TSK-060</code></pre>
     <li data-state="blocked"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path class="cf-m-blocked" d="M1 8H27"/><path class="cf-m-cross" d="M9 3L19 13M19 3L9 13"/></svg>Forbidden route</li>
   </ul>
   <figcaption class="cf-fig-caption">A red check returns the change to editing; there is no route from red to merged.</figcaption>
-  <details class="cf-twin">
-    <summary>Table twin</summary>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">Editing, committed, pushed, pull request open, then checks green and merged. From pull request open a failing check leads to checks red. From checks red the only route returns to editing to fix the cause. A route from checks red to merged, a bypass, is forbidden.</p>
     <div class="cf-twin-scroll"><table>
       <thead><tr><th scope="col">From</th><th scope="col">Event</th><th scope="col">To</th></tr></thead>
       <tbody>
@@ -567,7 +572,7 @@ codeflow work start TSK-060</code></pre>
             <h2 class="cf-h2" id="commit-message-limits">Commit message limits</h2>
             <p class="cf-lead">The rules are lengths and a shape.</p>
 <figure class="cf-fig" data-cf-figure="extent">
-  <span class="cf-fig-kicker">Figure 6 · Commit message lengths</span>
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 6</span> · <span class="cf-fig-name">Commit message limits drawn to length</span></p>
   <div class="cf-fig-stage">
     <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 328" role="img" aria-labelledby="f6w-t f6w-d">
       <title id="f6w-t">Commit message limits drawn to length</title>
@@ -631,8 +636,9 @@ codeflow work start TSK-060</code></pre>
     <li data-state="optional"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect class="cf-m-optional" x="1.75" y="3.75" width="24.5" height="8.5" rx="2"/></svg>Optional</li>
   </ul>
   <figcaption class="cf-fig-caption">Subject description 50, subject line 72, at most three body bullets of 72, one optional breaking footer.</figcaption>
-  <details class="cf-twin">
-    <summary>Table twin</summary>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">The subject feat(portal): add display panel uses 31 of 72 characters, with marks at 50 for the description and 72 for the whole line. The body holds three bullets, each at most 72 characters; a fourth bullet is not allowed. An optional BREAKING CHANGE footer follows.</p>
     <div class="cf-twin-scroll"><table>
       <thead><tr><th scope="col">Part</th><th scope="col">Limit</th><th scope="col">Example</th></tr></thead>
       <tbody>

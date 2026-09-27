@@ -83,11 +83,17 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
       9: () => { document.querySelector(".cf-fig-caption").textContent = "First sentence. Second sentence."; },
       10: () => document.querySelector(".cf-fig-svg [data-state] *").setAttribute("fill", "#ff0000"),
       11: () => { for (const desc of document.querySelectorAll(".cf-fig-svg desc")) desc.remove(); },
-      12: () => document.querySelector("details.cf-twin").remove(),
+      12: () => document.querySelector("details.cf-fig-details").remove(),
     };
     for (const [rule, breakage] of Object.entries(breakages)) {
       const observed = await probe(page, css, html, breakage);
       assert.ok(rulesOf(observed).includes(Number(rule)), `rule ${rule} (${FIGURE_RULES[rule]}) did not fail: ${JSON.stringify(figureRuleFailures(observed))}`);
+    }
+    // Rule 11 also fails a figure whose title line is not shown (SPC-014 B5),
+    // or shows a name other than the SVG title.
+    for (const hide of [() => { document.querySelector(".cf-fig-title").style.display = "none"; }, () => { document.querySelector(".cf-fig-name").textContent = "Another title"; }]) {
+      const observed = await probe(page, css, html, hide);
+      assert.ok(rulesOf(observed).includes(11), `the title rule did not fail: ${JSON.stringify(figureRuleFailures(observed))}`);
     }
     // Rule 3: the layering specimen with its remote plane declared on the
     // local layer mark, so only the cap tells the two planes apart.

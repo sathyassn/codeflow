@@ -1,6 +1,16 @@
+use std::collections::{HashMap, HashSet};
+
 use scraper::{node::Text, ElementRef, Html, Node};
 
-use crate::{PresentError, Result};
+use crate::{entity, limits, PresentError, Result};
+
+/// The closed `data-cf-*` vocabulary a schema v2 stage may use (SPC-014 B2).
+const VOCABULARY: &[&str] = &[
+    "data-cf-target",
+    "data-cf-group",
+    "data-cf-label",
+    "data-cf-for",
+];
 
 const FORBIDDEN_ELEMENTS: &[&str] = &[
     "a",
@@ -72,8 +82,8 @@ pub(crate) fn visible_text_from_html(source: &str) -> String {
 
 /// Parse and serialize authored HTML so style rules cannot address runtime
 /// siblings or ancestors. The caller owns the host identity and containment.
-pub(crate) fn scoped_html(source: &str, host: &str) -> Result<String> {
-    validate_sandbox_html(source)?;
+pub(crate) fn scoped_html(source: &str, host: &str, schema_version: u32) -> Result<String> {
+    validate_sandbox_html(source, schema_version)?;
     let mut fragment = Html::parse_fragment(source);
     let styles = fragment
         .tree
@@ -93,18 +103,120 @@ pub(crate) fn scoped_html(source: &str, host: &str) -> Result<String> {
             }));
         }
     }
+    if schema_version >= 2 {
+        entity::annotate_stage(&mut fragment);
+    }
     Ok(fragment.root_element().inner_html())
 }
 
-pub(crate) fn validate_sandbox_html(source: &str) -> Result<()> {
+/// Validate authored stage HTML. Schema v2 admits the closed entity
+/// vocabulary; schema v1 refuses every `data-cf-*` attribute as it always
+/// has.
+pub(crate) fn validate_sandbox_html(source: &str, schema_version: u32) -> Result<()> {
     let fragment = Html::parse_fragment(source);
+    let vocabulary = schema_version >= 2;
     for element in fragment.tree.nodes().filter_map(ElementRef::wrap) {
-        validate_element(element)?;
+        validate_element(element, vocabulary)?;
+    }
+    if vocabulary {
+        validate_vocabulary(&fragment)?;
     }
     Ok(())
 }
 
-fn validate_element(element: ElementRef<'_>) -> Result<()> {
+/// The structural rules of the closed vocabulary (B2): id grammar and
+/// uniqueness, the reserved `none`, groups without nested targets, labels
+/// only beside an entity, and `data-cf-for` naming entities of this stage.
+fn validate_vocabulary(fragment: &Html) -> Result<()> {
+    let mut seen: HashMap<&str, &str> = HashMap::new();
+    for element in fragment.tree.nodes().filter_map(ElementRef::wrap) {
+        let value = element.value();
+        let target = value.attr("data-cf-target");
+        let group = value.attr("data-cf-group");
+        if target.is_some() && group.is_some() {
+            return Err(invalid(
+                "an element may carry data-cf-target or data-cf-group, not both",
+            ));
+        }
+        if group == Some("none") {
+            return Err(invalid(
+                "data-cf-group may not be none: none is reserved for data-cf-target",
+            ));
+        }
+        for (attribute, id) in [("data-cf-target", target), ("data-cf-group", group)] {
+            let Some(id) = id.filter(|id| *id != "none") else {
+                continue;
+            };
+            if !entity::is_entity_id(id) {
+                return Err(invalid(format!(
+                    "{attribute} {id:?} does not match the entity id grammar (lower-case kebab-case, at most 64 characters)"
+                )));
+            }
+            if id.starts_with(entity::LEGEND_PREFIX) {
+                return Err(invalid(format!(
+                    "{attribute} {id:?} uses the prefix legend-, which is reserved for legend entries"
+                )));
+            }
+            if seen.insert(id, attribute).is_some() {
+                return Err(invalid(format!(
+                    "entity id {id:?} is used twice in the stage"
+                )));
+            }
+        }
+        if let Some(label) = value.attr("data-cf-label") {
+            if target.is_none_or(|id| id == "none") && group.is_none() {
+                return Err(invalid(
+                    "data-cf-label is allowed only beside data-cf-target or data-cf-group",
+                ));
+            }
+            let characters = label
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ")
+                .chars()
+                .count();
+            if characters == 0 || characters > limits::MAX_ENTITY_LABEL_CHARS {
+                return Err(invalid(format!(
+                    "data-cf-label must be 1 to {} characters after whitespace collapse",
+                    limits::MAX_ENTITY_LABEL_CHARS
+                )));
+            }
+        }
+        if let Some(group) = group {
+            for descendant in element.descendants().skip(1).filter_map(ElementRef::wrap) {
+                if let Some(name) = ["data-cf-target", "data-cf-group", "data-cf-for"]
+                    .into_iter()
+                    .find(|name| descendant.value().attr(name).is_some())
+                {
+                    return Err(invalid(format!(
+                        "{name} inside the data-cf-group {group:?}: a group is selected as one and its parts are never separate targets"
+                    )));
+                }
+            }
+        }
+    }
+    let declared: HashSet<String> = entity::declared_ids(fragment);
+    for element in fragment.tree.nodes().filter_map(ElementRef::wrap) {
+        let Some(names) = element.value().attr("data-cf-for") else {
+            continue;
+        };
+        let ids = names.split_whitespace().collect::<Vec<_>>();
+        if ids.is_empty() || ids.len() > limits::MAX_ENTITY_FOR_IDS {
+            return Err(invalid(format!(
+                "data-cf-for must name 1 to {} entity ids",
+                limits::MAX_ENTITY_FOR_IDS
+            )));
+        }
+        if let Some(missing) = ids.iter().find(|id| !declared.contains(**id)) {
+            return Err(invalid(format!(
+                "data-cf-for names {missing:?}, which is not an entity of this stage"
+            )));
+        }
+    }
+    Ok(())
+}
+
+fn validate_element(element: ElementRef<'_>, vocabulary: bool) -> Result<()> {
     let tag = element.value().name().to_ascii_lowercase();
     // These obsolete raw-text/fallback modes do not compose safely with the
     // surrounding review document. In particular, </plaintext> does not end
@@ -142,7 +254,13 @@ fn validate_element(element: ElementRef<'_>) -> Result<()> {
                 "static html may not enter the browser top layer or seize focus",
             ));
         }
-        if local.starts_with("data-cf-")
+        if local.starts_with("data-cf-") && vocabulary {
+            if !VOCABULARY.contains(&local.as_str()) {
+                return Err(invalid(format!(
+                    "html attribute {local} is outside the closed data-cf vocabulary (data-cf-target, data-cf-group, data-cf-label, data-cf-for)"
+                )));
+            }
+        } else if local.starts_with("data-cf-")
             || (matches!(local.as_str(), "id" | "class")
                 && value
                     .split_whitespace()
@@ -253,7 +371,7 @@ mod tests {
     #[test]
     fn isolates_styles_and_preserves_visible_review_text() {
         let html = "<style>body, #cf-present-chrome {display:none} .label {color:red}</style><p class='label'>Visible passed</p><svg><text>passed</text></svg>";
-        let scoped = scoped_html(html, "cf-host").unwrap();
+        let scoped = scoped_html(html, "cf-host", 1).unwrap();
         assert!(scoped.contains("#cf-host body, #cf-host #cf-present-chrome"));
         assert!(scoped.contains("#cf-host .label"));
         assert_eq!(visible_text_from_html(html), "Visible passed passed");
@@ -269,13 +387,18 @@ mod tests {
                 format!("<svg><foreignObject><{tag}>text</{tag}></foreignObject></svg>"),
             ] {
                 assert!(
-                    scoped_html(&source, "cf-host").is_err(),
+                    scoped_html(&source, "cf-host", 1).is_err(),
                     "accepted {source}"
                 );
             }
         }
         // Pre/code is the composable way to show literal markup.
-        let html = scoped_html("<pre><code>&lt;plaintext&gt;text</code></pre>", "cf-host").unwrap();
+        let html = scoped_html(
+            "<pre><code>&lt;plaintext&gt;text</code></pre>",
+            "cf-host",
+            1,
+        )
+        .unwrap();
         let document = Html::parse_document(&format!(
             "<div id='cf-host'>{html}</div><button id='review'>Comment</button>"
         ));
@@ -290,7 +413,7 @@ mod tests {
             "<div class='user cf-marker'>x</div>",
             "<div DATA-CF-BLOCK-ID='trusted'>x</div>",
         ] {
-            assert!(validate_sandbox_html(html).is_err(), "accepted {html}");
+            assert!(validate_sandbox_html(html, 1).is_err(), "accepted {html}");
         }
         for html in [
             "<div popover>overlay</div>",
@@ -298,10 +421,11 @@ mod tests {
             "<input autofocus>",
             "<button commandfor='overlay' command='show-modal'>open</button>",
         ] {
-            assert!(validate_sandbox_html(html).is_err(), "accepted {html}");
+            assert!(validate_sandbox_html(html, 1).is_err(), "accepted {html}");
         }
         assert!(validate_sandbox_html(
-            "<svg><defs><path id='cfx-arrow'/></defs><use href='#cfx-arrow'/></svg>"
+            "<svg><defs><path id='cfx-arrow'/></defs><use href='#cfx-arrow'/></svg>",
+            1
         )
         .is_ok());
     }
@@ -310,7 +434,7 @@ mod tests {
     fn allows_static_html_inline_style_and_local_svg_references() {
         let html = r#"<style>.card{color:#123;background:#fff}</style>
           <section class="card"><svg><defs><linearGradient id="g"/></defs><rect fill="url(#g)"/></svg></section>"#;
-        assert!(validate_sandbox_html(html).is_ok());
+        assert!(validate_sandbox_html(html, 1).is_ok());
     }
 
     #[test]
@@ -333,7 +457,7 @@ mod tests {
             r#"<svg><animate attributeName="href" to="https://example.test"/></svg>"#,
             r#"<svg><set attributeName="href" to="https://example.test"/></svg>"#,
         ] {
-            assert!(validate_sandbox_html(html).is_err(), "accepted {html}");
+            assert!(validate_sandbox_html(html, 1).is_err(), "accepted {html}");
         }
     }
 }

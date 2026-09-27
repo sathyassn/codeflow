@@ -7,9 +7,13 @@
 
 pub mod browser;
 pub mod config;
+#[cfg(test)]
+mod contract_tests;
 pub mod document;
+pub mod entity;
 pub mod error;
 pub mod export;
+mod fuzzy;
 pub mod limits;
 mod media;
 mod platform;

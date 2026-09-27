@@ -1,0 +1,27 @@
+{
+  "event_id": "5d0b8f7e-0000-4000-8000-0000000000a1",
+  "session_id": "7c1e2d3a-0000-4000-8000-000000000001",
+  "revision": 1,
+  "verdict": "request_changes",
+  "instruction": "Fix the marked parts.",
+  "notes": [
+    {
+      "id": "9a4f6c21-0000-4000-8000-0000000000b1",
+      "block_id": "answer-flow",
+      "block_label": "Figure",
+      "kind": "comment",
+      "body": "This part is wrong.",
+      "element_selector": {
+        "element_path": "svg:nth-of-type(1) > line:nth-of-type(1)",
+        "tag_name": "line",
+        "label": "submit",
+        "block_digest": "{{digest:answer-flow}}"
+      },
+      "entity_selector": {
+        "entity_id": "submit-edge",
+        "label": "submit",
+        "block_digest": "{{digest:answer-flow}}"
+      }
+    }
+  ]
+}

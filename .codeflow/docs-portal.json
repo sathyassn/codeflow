@@ -62,7 +62,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "b88a23c3f45e28262e696e4329c339d49febf49a2ccd04c61712c975ea720bfc"
+      "pristine_sha256": "83b06f51611db52760f522b03eefd23db7a6de104adda29bf86e87b29b35b841"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",
@@ -78,7 +78,7 @@
     },
     "scripts/figure-grammar.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "de253801791e872dfe74b05c4c262bdbbbbaab1660873319a17ccb3ec83d77e8"
+      "pristine_sha256": "38d8e84dbaa51677ae0afbedb10eee720491b8ffa260fcdbe6d75502a5a73fd4"
     },
     "scripts/generator.mjs": {
       "ownership": "managed",
@@ -194,7 +194,7 @@
     },
     "src/styles/figure.css": {
       "ownership": "managed",
-      "pristine_sha256": "e6927dddf670bbeb9e546c50d533c1fff48dadf8b35e0243981c39df2de5f2ef"
+      "pristine_sha256": "d9a39d1035f27672e46a489e0e559c414e579515e87caca27c1ba4a3575adf2e"
     },
     "src/styles/portal.css": {
       "ownership": "managed",
@@ -218,7 +218,7 @@
     },
     "tests/composition-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "dc093eefff645827d17814594db896a4de8119a89a9444df43fe03dc6fb2bdef"
+      "pristine_sha256": "38f3c162b155ff6728a41290a9134f83e78ee9872e2a58b88fbd514ce28ded6b"
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
@@ -226,15 +226,15 @@
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ef5d6944b0f8e336dfa6b5b675417fc16f74372840e5c905f287d4b948a24ec3"
+      "pristine_sha256": "9d10f6ce28bb10b0db7b2cdea01b15b1d7d0bc85c120eaca46d191b4304f330d"
     },
     "tests/figure-grammar.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "fba80b4118df78b5595b1b60bfa81bfcf6fd344bc3d4632f9da2f5a6fdd9fa46"
+      "pristine_sha256": "629cd26c4fccf563749ce9cb182dbeb05b93c441e7f584dc269dece7e5e6b567"
     },
     "tests/figure-rules-browser.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "2e610748c8a46b98b6c8dc94dce3f0b648d716823d0f0fd131e13be42f52d7d4"
+      "pristine_sha256": "c8f272d66394f07f21c9289ca852aacd65b6d29c4ddf1fe5d5af22e700ae7c9a"
     },
     "tests/fixtures/authority-contract.json": {
       "ownership": "managed",
@@ -306,55 +306,55 @@
     },
     "tests/fixtures/figures/rendered/01-flow.html": {
       "ownership": "managed",
-      "pristine_sha256": "17a69784e6457d79bea7b1d7adb545171eca0a414d50b4554a0d9733a082bf5c"
+      "pristine_sha256": "d7e1a1a7d3cf1c839b6df6d68b0399d691961b3facc975b1133efc4293a0a7a4"
     },
     "tests/fixtures/figures/rendered/02-structure.html": {
       "ownership": "managed",
-      "pristine_sha256": "1481056b10650255e35673f3fba56eceadb8a989f05fd2a2493ae17fdb9b0ce9"
+      "pristine_sha256": "6f7bb905bc834586f0b64935d96de224199dadc521014be45f07f0759b66675d"
     },
     "tests/fixtures/figures/rendered/03-layering.html": {
       "ownership": "managed",
-      "pristine_sha256": "61fed97e03dd0c87a55d7d0a9a59a77c18d52b50dd9ef5a50b8cae4c83682a42"
+      "pristine_sha256": "53967e2519b2f59fd385091f8d6e7d4335c3af543285ab8d9eace500838ab323"
     },
     "tests/fixtures/figures/rendered/04-sequence.html": {
       "ownership": "managed",
-      "pristine_sha256": "d1b3d2748903577f7e9f0b1811925f492efd675555e10fe6a6142ce3c63819a3"
+      "pristine_sha256": "b47e868f97ea44a28b7d2b7fca10cbb7dcafd22857b8fa9d44e3f9a38b6a3ae5"
     },
     "tests/fixtures/figures/rendered/05-state.html": {
       "ownership": "managed",
-      "pristine_sha256": "aa5481db8ae0155c9842087f94499beb64d56864991ab2746bf1ee1337be6a32"
+      "pristine_sha256": "523b2518874fb7628e394b3c55e287356b2726ac5dbd167690e15149a8b1083c"
     },
     "tests/fixtures/figures/rendered/06-coverage.html": {
       "ownership": "managed",
-      "pristine_sha256": "aa8af2f16b433150d39380d046bde638f85a00117a08beadfda04ac0670eb481"
+      "pristine_sha256": "5760c515831522545f13a322f572a783d1d943a83493f9ad0c166b7a65795f0e"
     },
     "tests/fixtures/figures/rendered/07-extent.html": {
       "ownership": "managed",
-      "pristine_sha256": "1e0fec3de045142e51e2fa7e7ba6cbf1785286ee32789dc57ee275a9309930d2"
+      "pristine_sha256": "ba56e88d08a662596d2b9857acd0436f265b74d9ed37004e7bf5622464f3e2c0"
     },
     "tests/fixtures/figures/rendered/08-derivation.html": {
       "ownership": "managed",
-      "pristine_sha256": "b160aa9dcf349946301a439de8af06fda3fb4290405a1c180283c0182964150b"
+      "pristine_sha256": "3db35de9d8a27c4e930b4705422df50dc4714b9a0e2ff22207fe85d86aa6934e"
     },
     "tests/fixtures/figures/rendered/09-graph.html": {
       "ownership": "managed",
-      "pristine_sha256": "bbc466b6c7b24cf5b70fe3cc65e6a6b7edb82ed4568d177c3048e47644dee3be"
+      "pristine_sha256": "d101263ba75caed77c18429379121a66b4d876b7f5b1c90d5a83544ae103e3eb"
     },
     "tests/fixtures/figures/rendered/10-extent-derived.html": {
       "ownership": "managed",
-      "pristine_sha256": "6c6c8298a73bc50d20060ba29f66c1d9d792deeb231e7e40b65705997a13b3e3"
+      "pristine_sha256": "63916d4ac3825d3e8540bfc4379f27e5d14a0fe6189a93be7efe3013638a1e58"
     },
     "tests/fixtures/figures/rendered/controls/coverage-derived.html": {
       "ownership": "managed",
-      "pristine_sha256": "571a11d09c138cc9c917bf03418904bbdbb64fb7a380f20d763454e5a9a1f1df"
+      "pristine_sha256": "4d65076f566a77753c9066291ef1372f271509e202179e92077aa0b5cc4947ab"
     },
     "tests/fixtures/figures/rendered/controls/coverage-wrapped.html": {
       "ownership": "managed",
-      "pristine_sha256": "5d2f8e9d533f8856577168177533cd9e1b2abb81f240e16b6e1792ab4217c4e1"
+      "pristine_sha256": "72e24d052c92613836bc9101f376b2ed68fd06e3cec103d5e2f122b561e58ec8"
     },
     "tests/fixtures/figures/rendered/controls/extent-short.html": {
       "ownership": "managed",
-      "pristine_sha256": "93eee0f06ca49590f987d361e6a499cd3c6637a5c6d74b83400a9cf0f362900f"
+      "pristine_sha256": "110374a80ae7f1eea15517930131ff6c0e196b99c9699be6338e86fc4cc558ab"
     },
     "tests/fixtures/route-contract.json": {
       "ownership": "managed",

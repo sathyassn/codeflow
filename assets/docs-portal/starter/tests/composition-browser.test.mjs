@@ -139,7 +139,7 @@ test("a hollow carrier, or one inside another carrier, does not count", { skip: 
     // The same page, authored: a grammar figure in every panel, and the
     // checklist the declaration is for. The legend list and the twin table
     // inside a figure are its own parts, not further carriers.
-    const figure = '<figure class="cf-fig"><svg class="cf-fig-svg"></svg><ul class="cf-legend"><li>key</li></ul><figcaption>a figure</figcaption><details class="cf-twin"><table><tbody><tr><td>row</td></tr></tbody></table></details></figure>';
+    const figure = '<figure class="cf-fig"><svg class="cf-fig-svg"></svg><ul class="cf-legend"><li>key</li></ul><figcaption>a figure</figcaption><details class="cf-fig-details"><table><tbody><tr><td>row</td></tr></tbody></table></details></figure>';
     const authored = await observe(document(
       figure,
       `${figure}<table><thead><tr><th>Part</th></tr></thead><tbody><tr><td>First</td></tr></tbody></table>`,

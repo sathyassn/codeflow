@@ -45,7 +45,7 @@ figure:
 ```
 
 <figure class="cf-fig" data-cf-figure="flow">
-<span class="cf-fig-kicker">Figure · Two landing paths</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">Two landing paths from a task branch to main</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 212" role="img" aria-labelledby="fg-flow-t fg-flow-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-flow-t">Two landing paths from a task branch to main</title>
 <desc id="fg-flow-d">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, an agent merge point, to the integration branch, then along travel not yet made to the same human merge. A gate that stops travel crosses both paths in the gate column.</desc>
@@ -68,7 +68,7 @@ figure:
 <li data-state="stop"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line x1="14" y1="3" x2="14" y2="13" stroke="var(--cf-fig-stop)" stroke-width="4" stroke-linecap="square"/></svg>Gate that stops travel</li>
 </ul>
 <figcaption class="cf-fig-caption">One task lands as a pull request and a body of work lands task by task on an integration branch, and both end at a human merge behind green checks.</figcaption>
-<details class="cf-twin"><summary>Table twin</summary>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, an agent merge point, to the integration branch, then along travel not yet made to the same human merge. A gate that stops travel crosses both paths in the gate column.</p>
 <table><thead><tr><th>Path</th><th>Who opens</th><th>Who merges</th><th>What stops it</th></tr></thead>
 <tbody><tr><td>A: one task</td><td>an agent opens the pull request</td><td>a person, on green checks</td><td>a red required check</td></tr>
 <tr><td>B: body of work</td><td>agents land each task with <code>codeflow integrate</code></td><td>a person merges the finished body</td><td>a red required check on the integration pull request</td></tr></tbody></table>
@@ -109,7 +109,7 @@ figure:
 ```
 
 <figure class="cf-fig" data-cf-figure="structure">
-<span class="cf-fig-kicker">Figure · One source, four copies</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">Where a skill lives and what keeps its copies identical</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 228" role="img" aria-labelledby="fg-struct-t fg-struct-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-struct-t">Where a skill lives and what keeps its copies identical</title>
 <desc id="fg-struct-d">Three regions. The owner region assets/base holds the skill source. The live region holds two copies, .claude/skills and .agents/skills. The baseline region .codeflow/.baseline holds the same two copies again. Solid arrows run from the source to each live copy and from each live copy to its baseline copy, meaning managed copy. A dashed line with open square ends runs under all regions, meaning the parity test compares every copy with the source byte for byte.</desc>
@@ -133,7 +133,7 @@ figure:
 <li data-state="compares"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M6 8H22" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="1.5" stroke-dasharray="6 4"/><rect x="1" y="4" width="8" height="8" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line-mid)" stroke-width="1.5"/><rect x="19" y="4" width="8" height="8" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line-mid)" stroke-width="1.5"/></svg>Compared byte for byte</li>
 </ul>
 <figcaption class="cf-fig-caption">Edit the source under assets/base only; the four copies are written by the scaffold and a test fails the build when any copy drifts.</figcaption>
-<details class="cf-twin"><summary>Table twin</summary>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Three regions. The owner region assets/base holds the skill source. The live region holds two copies, .claude/skills and .agents/skills. The baseline region .codeflow/.baseline holds the same two copies again. Solid arrows run from the source to each live copy and from each live copy to its baseline copy, meaning managed copy. A dashed line with open square ends runs under all regions, meaning the parity test compares every copy with the source byte for byte.</p>
 <table><thead><tr><th>Region</th><th>Path</th><th>Written by</th><th>Checked by</th></tr></thead>
 <tbody><tr><td>owner</td><td><code>assets/base/agents/skills/</code></td><td>the author</td><td>manifest entry</td></tr>
 <tr><td>live</td><td><code>.claude/skills/</code>, <code>.agents/skills/</code></td><td><code>codeflow update</code></td><td>parity test</td></tr>
@@ -173,7 +173,7 @@ figure:
 ```
 
 <figure class="cf-fig" data-cf-figure="layering">
-<span class="cf-fig-kicker">Figure · Enforcement planes</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">Four enforcement planes along the life of one change</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 248" role="img" aria-labelledby="fg-layer-t fg-layer-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-layer-t">Four enforcement planes along the life of one change</title>
 <desc id="fg-layer-d">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane drawn with an end cap, meaning remote and required. One change crosses all four planes in that order.</desc>
@@ -193,7 +193,7 @@ figure:
 <li data-state="done"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M3 13L25 3" fill="none" stroke="var(--cf-fig-accent)" stroke-width="3" stroke-linecap="round"/></svg>One change</li>
 </ul>
 <figcaption class="cf-fig-caption">Local planes give fast feedback and can be edited, and only the remote plane at merge is a boundary.</figcaption>
-<details class="cf-twin"><summary>Table twin</summary>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane drawn with an end cap, meaning remote and required. One change crosses all four planes in that order.</p>
 <table><thead><tr><th>Plane</th><th>Moments</th><th>Shared source</th><th>Can be bypassed locally</th></tr></thead>
 <tbody><tr><td>Git hooks</td><td>commit, push</td><td><code>.codeflow/policy.json</code></td><td>yes, hooks can be edited</td></tr>
 <tr><td>Session git-guard</td><td>edit to push</td><td><code>.codeflow/policy.json</code></td><td>yes, the session setup can be edited</td></tr>
@@ -242,7 +242,7 @@ figure:
 ```
 
 <figure class="cf-fig" data-cf-figure="sequence">
-<span class="cf-fig-kicker">Figure · Before the first edit</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">The exchanges that come before the first edit</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 300" role="img" aria-labelledby="fg-seq-t fg-seq-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-seq-t">The exchanges that come before the first edit</title>
 <desc id="fg-seq-d">Three lifelines: agent, git, codeflow. Time runs down. The agent calls git worktree list and git answers with the paths and branches. The agent decides identity and intent match, a human decision ring. The agent calls git fetch origin and decides currency. The agent calls codeflow work start TSK-NNN; codeflow answers anchored, or refuses at a stop bar. The first edit follows the answer.</desc>
@@ -265,7 +265,7 @@ figure:
 <li data-state="stop"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line x1="14" y1="3" x2="14" y2="13" stroke="var(--cf-fig-stop)" stroke-width="4" stroke-linecap="square"/></svg>Refusal stops the sequence</li>
 </ul>
 <figcaption class="cf-fig-caption">The agent asks git where it is and whether it is current, then asks codeflow whether the task is anchored, and edits nothing until the last answer is yes.</figcaption>
-<details class="cf-twin"><summary>Table twin</summary>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Three lifelines: agent, git, codeflow. Time runs down. The agent calls git worktree list and git answers with the paths and branches. The agent decides identity and intent match, a human decision ring. The agent calls git fetch origin and decides currency. The agent calls codeflow work start TSK-NNN; codeflow answers anchored, or refuses at a stop bar. The first edit follows the answer.</p>
 <table><thead><tr><th>Step</th><th>From</th><th>To</th><th>Outcome</th></tr></thead>
 <tbody><tr><td><code>git worktree list</code></td><td>agent</td><td>git</td><td>paths and branches</td></tr>
 <tr><td>identity, intent match</td><td>agent</td><td>agent</td><td>stop on a mismatch</td></tr>
@@ -313,7 +313,7 @@ figure:
 ```
 
 <figure class="cf-fig" data-cf-figure="state">
-<span class="cf-fig-kicker">Figure · Change states</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">States of a change and the one route out of a red check</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 236" role="img" aria-labelledby="fg-state-t fg-state-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-state-t">States of a change and the one route out of a red check</title>
 <desc id="fg-state-d">Editing, committed, pushed, pull request open, then checks green and merged. From pull request open a failing check leads to checks red. From checks red the only route returns to editing to fix the cause, drawn as a heavy dipped arc. A route from checks red to merged, a bypass, is forbidden, drawn dashed with a cross.</desc>
@@ -333,7 +333,7 @@ figure:
 <li data-state="blocked"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H26" fill="none" stroke="var(--cf-fig-line-soft)" stroke-width="1.5" stroke-dasharray="2 4"/><path d="M10 4L18 12M18 4L10 12" fill="none" stroke="var(--cf-fig-stop)" stroke-width="2"/></svg>Forbidden route</li>
 </ul>
 <figcaption class="cf-fig-caption">A red check sends the change back to editing, and no route leads from red to merged.</figcaption>
-<details class="cf-twin"><summary>Table twin</summary>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Editing, committed, pushed, pull request open, then checks green and merged. From pull request open a failing check leads to checks red. From checks red the only route returns to editing to fix the cause, drawn as a heavy dipped arc. A route from checks red to merged, a bypass, is forbidden, drawn dashed with a cross.</p>
 <table><thead><tr><th>From</th><th>To</th><th>On</th><th>Allowed</th></tr></thead>
 <tbody><tr><td>editing</td><td>committed</td><td>commit passes hooks</td><td>yes</td></tr>
 <tr><td>committed</td><td>pushed</td><td>push</td><td>yes</td></tr>
@@ -378,7 +378,7 @@ figure:
 ```
 
 <figure class="cf-fig" data-cf-figure="coverage">
-<span class="cf-fig-kicker">Figure · Rules by plane</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">Which plane enforces which rule</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 232" role="img" aria-labelledby="fg-cov-t fg-cov-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-cov-t">Which plane enforces which rule</title>
 <desc id="fg-cov-d">A grid of five rules against four planes. Secret scan: hooks covered, guard covered, CI covered, remote covered. Protected branch push: hooks covered, guard covered, CI not applicable, remote covered. No AI attribution: hooks covered, guard covered, CI covered, remote not applicable. Breaking change footer: hooks partial, guard not run, CI covered, remote not applicable. Ticket reference: hooks covered, guard not applicable, CI partial, remote not claimed.</desc>
@@ -400,7 +400,7 @@ figure:
 <li data-state="nc"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="7" y="1" width="14" height="14" rx="2" fill="none" stroke="var(--cf-fig-line-soft)" stroke-width="1.4"/><path d="M8 2L20 14M20 2L8 14" fill="none" stroke="var(--cf-fig-stop)" stroke-width="1.4"/></svg>Not claimed</li>
 </ul>
 <figcaption class="cf-fig-caption">Every rule is enforced by at least one plane, and the one crossed cell is a claim no plane makes. Hooks and Guard are the local planes; Remote is branch protection.</figcaption>
-<details class="cf-twin"><summary>Table twin</summary>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">A grid of five rules against four planes. Secret scan: hooks covered, guard covered, CI covered, remote covered. Protected branch push: hooks covered, guard covered, CI not applicable, remote covered. No AI attribution: hooks covered, guard covered, CI covered, remote not applicable. Breaking change footer: hooks partial, guard not run, CI covered, remote not applicable. Ticket reference: hooks covered, guard not applicable, CI partial, remote not claimed.</p>
 <table><thead><tr><th>Rule</th><th>Hooks</th><th>Guard</th><th>CI</th><th>Remote</th></tr></thead>
 <tbody><tr><td>Secret scan</td><td>covered</td><td>covered</td><td>covered</td><td>covered</td></tr>
 <tr><td>Protected branch push</td><td>covered</td><td>covered</td><td>not applicable</td><td>covered</td></tr>
@@ -447,7 +447,7 @@ figure:
 ```
 
 <figure class="cf-fig" data-cf-figure="extent">
-<span class="cf-fig-kicker">Figure · Commit message lengths</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">Commit message limits drawn to length</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 328" role="img" aria-labelledby="fg-ext-t fg-ext-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-ext-t">Commit message limits drawn to length</title>
 <desc id="fg-ext-d">The subject feat(portal): add display panel uses 31 of 72 characters, with limit bars at 50 for the description and 72 for the whole line. The body holds three bullets, each at most 72 characters, drawn to their length with the room left dashed; a fourth bullet is not allowed and is drawn as a denied bar with a cross. An optional BREAKING CHANGE footer follows, drawn as a dashed outline.</desc>
@@ -472,7 +472,7 @@ figure:
 <li data-state="optional"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><rect x="2" y="4" width="24" height="8" rx="2" fill="none" stroke="var(--cf-fig-line-mid)" stroke-width="1.5" stroke-dasharray="6 4"/></svg>Optional</li>
 </ul>
 <figcaption class="cf-fig-caption">A subject fits inside 50 with the whole line inside 72, three bullets each fit inside 72, a fourth is refused, and the footer is the one optional part.</figcaption>
-<details class="cf-twin"><summary>Table twin</summary>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">The subject feat(portal): add display panel uses 31 of 72 characters, with limit bars at 50 for the description and 72 for the whole line. The body holds three bullets, each at most 72 characters, drawn to their length with the room left dashed; a fourth bullet is not allowed and is drawn as a denied bar with a cross. An optional BREAKING CHANGE footer follows, drawn as a dashed outline.</p>
 <table><thead><tr><th>Part</th><th>Limit</th><th>Example length</th><th>Rule</th></tr></thead>
 <tbody><tr><td>subject description</td><td>50</td><td>31</td><td>required</td></tr>
 <tr><td>subject line</td><td>72</td><td>31</td><td>required</td></tr>
@@ -518,7 +518,7 @@ figure:
 ```
 
 <figure class="cf-fig" data-cf-figure="derivation">
-<span class="cf-fig-kicker">Figure · How a portal page is derived</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">A portal page derived from repository sources and checked against them</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 244" role="img" aria-labelledby="fg-der-t fg-der-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-der-t">A portal page derived from repository sources and checked against them</title>
 <desc id="fg-der-d">Repository Markdown sources, a filled source pin, feed the adapter, a transform diamond. The adapter derives the generated page, an outlined product box, and declares the evidence manifest, a dashed box. The validator, a check ring, compares the manifest against the repository bytes and the output bytes with dashed lines ending in open squares.</desc>
@@ -550,7 +550,7 @@ figure:
 <li data-state="check"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><circle cx="14" cy="8" r="6.5" fill="var(--cf-fig-ground)" stroke="var(--cf-fig-line)" stroke-width="2.5"/><path d="M10.5 8L13 10.5L17.5 5.5" fill="none" stroke="var(--cf-fig-accent)" stroke-width="2"/></svg>Check that fails the build</li>
 </ul>
 <figcaption class="cf-fig-caption">The adapter is the only thing that derives, and the validator proves the result against repository bytes without running any project code.</figcaption>
-<details class="cf-twin"><summary>Table twin</summary>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Repository Markdown sources, a filled source pin, feed the adapter, a transform diamond. The adapter derives the generated page, an outlined product box, and declares the evidence manifest, a dashed box. The validator, a check ring, compares the manifest against the repository bytes and the output bytes with dashed lines ending in open squares.</p>
 <table><thead><tr><th>Part</th><th>Kind</th><th>Made by</th><th>Checked against</th></tr></thead>
 <tbody><tr><td>repository sources</td><td>source</td><td>authors</td><td>the recorded commit</td></tr>
 <tr><td>adapter</td><td>transform</td><td>Node, in the portal workspace</td><td>adapter tests</td></tr>
@@ -593,7 +593,7 @@ figure:
 ```
 
 <figure class="cf-fig" data-cf-figure="graph">
-<span class="cf-fig-kicker">Figure · Task graph of one epic</span>
+<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">The nine tasks of EPC-016 and their sixteen dependencies</span></p>
 <svg class="cf-fig-svg" viewBox="0 0 720 320" role="img" aria-labelledby="fg-graph-t fg-graph-d" font-family="var(--cf-fig-font)" font-size="14" font-weight="500" fill="var(--cf-fig-line)">
 <title id="fg-graph-t">The nine tasks of EPC-016 and their sixteen dependencies</title>
 <desc id="fg-graph-d">Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy accent arcs mark the critical path 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.</desc>
@@ -609,7 +609,7 @@ figure:
 <li data-state="trans"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><path d="M2 8H20" fill="none" stroke="var(--cf-fig-line)" stroke-width="1.75"/><path d="M19 4L26 8L19 12Z" fill="var(--cf-fig-line)"/></svg>Depends on</li>
 </ul>
 <figcaption class="cf-fig-caption">The doctrine, the kit, the runtime, the chrome, the pages and the closeout are the critical path; the evaluation cases, Agent OS and the annotation fixes run beside it. Ids are TSK-058 to TSK-071.</figcaption>
-<details class="cf-twin"><summary>Table twin</summary>
+<details class="cf-fig-details"><summary>Details</summary><p class="cf-fig-description">Ring nodes ranked left to right, each labelled with its task number: 058; then 070 and 062; then 059; then 060; then 061, 063 and 071; then 064. Heavy accent arcs mark the critical path 058 to 070 to 059 to 060 to 061 to 064. Ordinary arcs: 058 to 062, 058 to 061, 058 to 063, 059 to 061, 059 to 063, 059 to 071, 060 to 063, 060 to 071, 062 to 064, 063 to 064, 071 to 064.</p>
 <table><thead><tr><th>Task</th><th>Depends on</th><th>On the critical path</th></tr></thead>
 <tbody><tr><td>TSK-058</td><td>none</td><td>yes</td></tr><tr><td>TSK-070</td><td>058</td><td>yes</td></tr><tr><td>TSK-062</td><td>058</td><td>no</td></tr><tr><td>TSK-059</td><td>070</td><td>yes</td></tr><tr><td>TSK-060</td><td>059</td><td>yes</td></tr><tr><td>TSK-061</td><td>058, 059, 060</td><td>yes</td></tr><tr><td>TSK-063</td><td>058, 059, 060</td><td>no</td></tr><tr><td>TSK-071</td><td>059, 060</td><td>no</td></tr><tr><td>TSK-064</td><td>061, 062, 063, 071</td><td>yes</td></tr></tbody></table>
 </details>

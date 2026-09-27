@@ -34,11 +34,31 @@ pub enum PresentError {
         #[source]
         source: std::io::Error,
     },
+    /// A review or answer the service refuses with a typed code (SPC-014
+    /// I3); the page reads the code, the CLI treats it as invalid input.
+    #[error("{message}")]
+    Review {
+        code: &'static str,
+        message: String,
+        details: serde_json::Value,
+    },
     #[error(transparent)]
     Json(#[from] serde_json::Error),
 }
 
 impl PresentError {
+    pub fn review(
+        code: &'static str,
+        message: impl Into<String>,
+        details: serde_json::Value,
+    ) -> Self {
+        Self::Review {
+            code,
+            message: message.into(),
+            details,
+        }
+    }
+
     pub fn io(path: impl Into<PathBuf>, source: std::io::Error) -> Self {
         Self::Io {
             path: path.into(),

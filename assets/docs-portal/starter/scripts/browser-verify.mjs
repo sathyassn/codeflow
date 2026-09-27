@@ -429,7 +429,7 @@ export function pinnedKitSheets(snapshot, commit, portalRelative) {
 //      descendant, pseudo-elements included, equals a clean copy of the same
 //      page: loaded afresh, stripped of any CSS the first check refuses, with
 //      the pinned rendering in place of each figure.
-//   3. Each figure, its caption and its legend are visible at full opacity,
+//   3. Each figure, its title, caption and legend are visible at full opacity,
 //      whatever the clean copy shows, and no ancestor moves, clips, filters
 //      or hides it unless the clean copy's does too.
 export async function figureGateFailures(page, visitRoute, assignments, generated, declarations, kitSheets, inlineScripts) {
@@ -721,7 +721,7 @@ export async function pageCssFailures(page, pinnedSheets, parser = null) {
     // whatever the tag, so no figure markup (a kit class or a figure data
     // attribute, as validate --portal reads it) may sit on or inside any
     // element with that class.
-    const figureMarkup = (element) => [...element.classList].some((name) => /^(?:cf-companion|cf-fig|cf-m-|cf-f-|cf-t--)/.test(name) || ["cf-t", "cf-legend", "cf-key", "cf-twin", "cf-twin-scroll"].includes(name))
+    const figureMarkup = (element) => [...element.classList].some((name) => /^(?:cf-companion|cf-fig|cf-m-|cf-f-|cf-t--)/.test(name) || ["cf-t", "cf-legend", "cf-key", "cf-twin-scroll"].includes(name))
       || [...element.attributes].some((attribute) => /^data-cf-(?:companion|figure)/.test(attribute.name));
     for (const element of document.querySelectorAll(".expressive-code, .expressive-code *")) if (figureMarkup(element)) { carriers.add("a figure or companion inside a code block"); break; }
     for (const element of scope) {
@@ -820,7 +820,7 @@ async function settle(page) {
 // The legend and the twin as the page lays them out. The clean copy carries
 // the same site styles, so a site rule that reaches into the figure shows in
 // both and only an absolute reading can see it: each legend key centred on
-// its label, and the twin marker the figure sheet's chevron with no fill or
+// its label, and the Details marker the figure sheet's chevron with no fill or
 // mask from the site.
 export function readFigureChrome() {
   return [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
@@ -832,7 +832,7 @@ export function readFigureChrome() {
       const label = range.getBoundingClientRect();
       return { state: item.dataset.state, offset: (key.top + key.height / 2) - (label.top + label.height / 2) };
     });
-    const summary = figure.querySelector(".cf-twin > summary");
+    const summary = figure.querySelector(".cf-fig-details > summary");
     const marker = summary === null ? null : getComputedStyle(summary, "::before");
     return {
       id: figure.dataset.cfFigureId,
@@ -850,7 +850,7 @@ export function figureChromeFailures(figures) {
     }
     const marker = figure.marker;
     if (marker !== null && (!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(marker.background) || marker.image !== "none" || marker.mask !== "none" || marker.width !== "6px" || marker.border !== "solid")) {
-      failures.push(`figure ${figure.id}: the twin marker is not the figure sheet's chevron (${JSON.stringify(marker)})`);
+      failures.push(`figure ${figure.id}: the Details marker is not the figure sheet's chevron (${JSON.stringify(marker)})`);
     }
   }
   return failures;
@@ -889,7 +889,7 @@ export function readFigureContext() {
       styles,
       chain,
       opacity,
-      visible: { figure: visible(figure) && box.width > 0 && box.height > 0, caption: visible(figure.querySelector(".cf-fig-caption")), legend: visible(figure.querySelector(".cf-legend")) },
+      visible: { figure: visible(figure) && box.width > 0 && box.height > 0, title: visible(figure.querySelector(".cf-fig-title .cf-fig-name")), caption: visible(figure.querySelector(".cf-fig-caption")), legend: visible(figure.querySelector(".cf-legend")) },
     };
   });
 }
