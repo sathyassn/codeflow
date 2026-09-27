@@ -310,8 +310,8 @@ deletion) with a legible report of anything the plan tier cannot apply.
 `codeflow doctor` runs eighteen health checks: hooks, Claude wiring, Codex wiring, Grok wiring, config,
 permissions, network, delegates, qualified model bindings, delegate round-trip, repo integrity, CI
 perimeter, managed-region
-drift, consuming-project customization, always-loaded instruction size (a warning when `AGENTS.md`
-exceeds Codex's 32 KiB limit), test config, the id registry, and adopter fit. The Grok check reports
+drift, consuming-project customization, always-loaded instruction size (a warning when the
+`AGENTS.md` chain Codex loads for any directory, root to nested, exceeds its 32 KiB limit), test config, the id registry, and adopter fit. The Grok check reports
 structural `.grok/hooks` wiring and the one-time `/hooks-trust` step; it does
 not inspect trust state (ADR-0054). The customization
 check remains quiet for minimal/non-method repos, warns while product,

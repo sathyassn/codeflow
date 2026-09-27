@@ -226,8 +226,11 @@ publication date._
   cf-present where the harness can show it; and orchestration entry is
   decided by the paths a task touches. The full tier gets its own map, which
   alone names `project-management/`. `codeflow update` replaces the managed
-  block and keeps the project section; `doctor` gains an `instructions`
-  check that warns when `AGENTS.md` passes Codex's 32 KiB limit.
+  block and keeps the project section byte for byte, CRLF line breaks and
+  a missing final newline included; `doctor` gains an `instructions` check
+  that warns when the `AGENTS.md` chain Codex loads for any directory, root
+  to nested, passes its 32 KiB limit. Map rows print skill references as
+  paths from the repository root (`.agents/skills/...`).
   Migration: `codeflow update` never edits the project section, so a
   project section that cites the old section names ("Git rules", "Worktree
   doctrine", "Workflow discipline", "Entry points", "Planning and tracking",

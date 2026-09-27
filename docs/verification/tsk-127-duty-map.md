@@ -118,5 +118,7 @@ Homes used below:
 - Complex explanations go through cf-present where the harness shows it
   (map rule and moment).
 - Precedence line and "re-read after compaction" (map header).
-- `codeflow doctor` `instructions` check: warns when `AGENTS.md` passes
-  Codex's 32 KiB limit.
+- `codeflow doctor` `instructions` check: warns when the `AGENTS.md` chain
+  Codex loads for any directory (root file plus nested files, an
+  `AGENTS.override.md` replacing its directory's file) passes Codex's 32 KiB
+  limit.
