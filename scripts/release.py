@@ -471,7 +471,9 @@ class Baseline:
     comparison_commit: str
 
 
-def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
+def bootstrap_shape(config: dict[str, Any]) -> None:
+    """Fail when the bootstrap record is not in the shape this checker reads,
+    before anything is compared with the repository or the host."""
     published = config["bootstrap"].get("published")
     comparison = config["bootstrap"].get("comparison")
     if not isinstance(published, dict) or not isinstance(comparison, dict):
@@ -486,6 +488,15 @@ def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
     ):
         fail("bootstrap version, comparison tag, tree, and source are malformed")
     semver(version)
+    if not re.fullmatch(r"[0-9a-f]{64}", str(published.get("source_archive_sha256", ""))):
+        fail("bootstrap archive checksum must be 64 lowercase hex characters")
+
+
+def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
+    bootstrap_shape(config)
+    published, comparison = config["bootstrap"]["published"], config["bootstrap"]["comparison"]
+    version, tag = str(published["version"]), comparison["tag"]
+    tree, source = comparison["tree"], published["source_commit"]
     # The tag is identified by its content. A history rewrite that keeps the
     # tagged tree (the public repository's path filter) changes the commit
     # id, never the content every later check compares against.
@@ -493,9 +504,6 @@ def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
     actual_tree = git("rev-parse", f"{actual}^{{tree}}", cwd=cwd)
     if actual_tree != tree:
         fail(f"bootstrap tag {tag} resolves to tree {actual_tree}, expected {tree}; never move it")
-    checksum = str(published.get("source_archive_sha256", ""))
-    if not re.fullmatch(r"[0-9a-f]{64}", checksum):
-        fail("bootstrap archive checksum must be 64 lowercase hex characters")
     return Baseline(version, tag, source, actual)
 
 
@@ -997,8 +1005,7 @@ def check_pr(args: argparse.Namespace) -> None:
     if watched and fields.get("contract") == "not-applicable":
         fail("watched contract changes require compatible or breaking assessment")
     proposed = merge_tree(base, head, cwd=args.root)
-    # The base is judged by the configuration it carries (R-95).
-    base_config = config_at_ref(base, cwd=args.root) if file_at_optional(base, CONFIG_PATH, cwd=args.root) else config
+    base_config, base_configuration = carried_config(base, config, cwd=args.root)
     before_text = file_at_ref(base, "CHANGELOG.md", cwd=args.root).decode()
     after_text = file_at_ref(proposed, "CHANGELOG.md", cwd=args.root).decode()
     adopting = bool(re.search(r"(?m)^## \[Unreleased\]\s*$", before_text)) and "legacy-group=" in after_text
@@ -1087,7 +1094,28 @@ def check_pr(args: argparse.Namespace) -> None:
     }
     if repair is not None:
         result["repair"] = repair
+    if base_configuration is not None:
+        result["base_configuration"] = base_configuration
     print(json.dumps(result, sort_keys=True))
+
+
+def carried_config(
+    base: str, config: dict[str, Any], *, cwd: Path
+) -> tuple[dict[str, Any], str | None]:
+    """The configuration the base is judged by (R-95): the one it carries, so
+    a pull request cannot redefine the baseline it is checked against. A base
+    whose configuration this checker cannot read (a line that migrated the
+    schema, as a whole line landing on its target shows) is judged with the
+    pull request's configuration, and the output says so; the change is a
+    watched path for review. A repair still may not change the configuration."""
+    if file_at_optional(base, CONFIG_PATH, cwd=cwd) is None:
+        return config, "the pull request's; the base carries none"
+    try:
+        carried = config_at_ref(base, cwd=cwd)
+        bootstrap_shape(carried)
+    except ReleaseError as error:
+        return config, f"the pull request's; the base's predates this checker ({error})"
+    return carried, None
 
 
 def pending_section(text: str, baseline: Baseline, *, repair: bool) -> ChangelogSection | None:

@@ -1806,6 +1806,31 @@ class TypedRepairTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
             self.check(head, self.repo.body("patch"))
 
+    def test_a_base_configuration_this_checker_cannot_read_yields_to_the_pull_requests(self) -> None:
+        # A whole line landing on a target whose configuration predates the
+        # line's schema: the base is judged with the line's configuration,
+        # and the output says so.
+        self.repo.pending("2.0.1", [("patch", "Fix a crash")])
+        self.repo.write_stamps("2.0.1")
+        current = json.loads(self.repo.config.read_text())
+        older = json.loads(json.dumps(current))
+        del older["bootstrap"]["comparison"]["tree"]
+        self.repo.write(".release/config.json", json.dumps(older, indent=2) + "\n")
+        self.base = self.repo.commit("fix: a crash")
+        self.repo.write(".release/config.json", json.dumps(current, indent=2) + "\n")
+        head = self.repo.commit("chore(release): migrate the configuration")
+        result = self.check(head)
+        self.assertNotIn("repair", result)
+        self.assertIn("the base's predates this checker", result["base_configuration"])
+
+    def test_a_readable_base_configuration_is_the_one_used(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "Fix a crash")])
+        self.repo.write_stamps("2.0.1")
+        self.base = self.repo.commit("fix: a crash")
+        self.repo.write("product.txt", "work\n")
+        head = self.repo.commit("chore: work")
+        self.assertNotIn("base_configuration", self.check(head))
+
     def test_a_repair_may_rewrap_an_existing_entry(self) -> None:
         text = (self.repo.root / "CHANGELOG.md").read_text()
         self.repo.write("CHANGELOG.md", text.replace("- **Fix a crash.**", "- **Fix a\n  crash.**"))
