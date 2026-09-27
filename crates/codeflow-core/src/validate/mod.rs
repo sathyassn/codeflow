@@ -994,6 +994,46 @@ Criteria
         assert!(warns.is_empty(), "Expected no warnings, got: {warns:?}");
     }
 
+    /// TSK-103 AC-5: a join awaiting selection is a valid blocked record
+    /// whose Blocker names the selection; anything less is an error.
+    #[test]
+    fn a_join_awaiting_selection_validates_only_when_held_by_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::create_dir_all(root.join("project-management/tasks")).unwrap();
+        std::fs::create_dir_all(root.join("docs/plan")).unwrap();
+        std::fs::write(root.join("docs/plan/choice.md"), "# Choice\n").unwrap();
+        let path = root.join("project-management/tasks/TSK-004.md");
+        let record = |status: &str, reason: &str, revisit: &str, path: &str| {
+            format!(
+                "---\nid: TSK-004\nepic_id: EPC-001\nstandalone_reason: null\nintegration_target: main\ntitle: join\nstatus: {status}\nwork_type: feat\ndepends_on: []\nawaiting_selection: {path}\ncreated: 2026-09-27\n---\n\n# TSK-004\n\n## Blocker\n\n- reason: {reason}\n- owner: primary\n- revisit: {revisit}\n"
+            )
+        };
+        let errors = |content: String| {
+            std::fs::write(&path, content).unwrap();
+            validate_task(&path, &ValidateOptions::default())
+                .unwrap()
+                .0
+                .into_iter()
+                .filter(|error| error.field == "awaiting_selection")
+                .map(|error| error.message)
+                .collect::<Vec<_>>()
+        };
+        let good = "docs/plan/choice.md";
+        assert!(errors(record("blocked", "awaiting selection", good, good)).is_empty());
+        assert!(errors(record("todo", "awaiting selection", good, good))[0].contains("`blocked`"));
+        assert!(errors(record("blocked", "wait", good, good))[0].contains("awaiting selection"));
+        assert!(
+            errors(record("blocked", "awaiting selection", "later", good))[0].contains("revisit")
+        );
+        let missing = "docs/plan/missing.md";
+        assert!(
+            errors(record("blocked", "awaiting selection", missing, missing))
+                .iter()
+                .any(|message| message.contains("exists"))
+        );
+    }
+
     #[test]
     fn test_validate_task_missing_required_fields() {
         let dir = tempfile::tempdir().unwrap();

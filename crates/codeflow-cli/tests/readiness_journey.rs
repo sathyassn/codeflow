@@ -165,6 +165,7 @@ const OTHER: &str = "integration/EPC-002-other";
 /// | TSK-005 Taken | backlog | ready, then claimed elsewhere |
 /// | TSK-006 Across | other | ready |
 /// | TSK-007 Cross | backlog | waiting on TSK-006 on the other line |
+#[allow(clippy::too_many_lines)] // One fixture plans the whole backlog in order.
 fn planned_project() -> (tempfile::TempDir, PathBuf) {
     let dir = tempfile::tempdir().unwrap();
     let root = dir.path().join("proj");
@@ -182,7 +183,13 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
     }
     git(
         dir.path(),
-        &["clone", "-q", "--bare", root.to_str().unwrap(), bare.to_str().unwrap()],
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            root.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
     );
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["fetch", "-q", "origin"]);
@@ -200,7 +207,10 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
         ("EPC-001", LINE, "Cross"),
     ] {
         ok(
-            &codeflow(&root, &["task", "new", "--epic", epic, "--into", line, title]),
+            &codeflow(
+                &root,
+                &["task", "new", "--epic", epic, "--into", line, title],
+            ),
             "task new",
         );
     }
@@ -214,7 +224,12 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
         );
     }
     for n in 1..=7 {
-        edit(&root, &task_file(&format!("TSK-00{n}")), "- AC-1\n", criterion);
+        edit(
+            &root,
+            &task_file(&format!("TSK-00{n}")),
+            "- AC-1\n",
+            criterion,
+        );
     }
     edit(
         &root,
@@ -233,8 +248,16 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
         &codeflow(
             &root,
             &[
-                "task", "status", "TSK-003", "blocked", "--reason", "wait", "--owner",
-                "primary", "--revisit", "vendor reply",
+                "task",
+                "status",
+                "TSK-003",
+                "blocked",
+                "--reason",
+                "wait",
+                "--owner",
+                "primary",
+                "--revisit",
+                "vendor reply",
             ],
         ),
         "block TSK-003",
@@ -270,7 +293,10 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
         "\nawaiting_selection: docs/plan/choice.md\ncreated:",
     );
     commit(&root, "chore: hold two tasks");
-    ok(&codeflow(&root, &["validate", "--docs"]), "validate the plan");
+    ok(
+        &codeflow(&root, &["validate", "--docs"]),
+        "validate the plan",
+    );
     let (code, out) = pull_request(&root, "plan/backlog", LINE, "");
     assert_eq!(code, 0, "{out}");
     assert!(out.contains("class: planning-only"), "{out}");
@@ -285,7 +311,15 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
 fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
     let (_dir, root) = planned_project();
     // Another agent claims TSK-005 from its own clone.
-    git(&root, &["push", "-q", "origin", "HEAD:refs/heads/feat/TSK-005-elsewhere"]);
+    git(
+        &root,
+        &[
+            "push",
+            "-q",
+            "origin",
+            "HEAD:refs/heads/feat/TSK-005-elsewhere",
+        ],
+    );
     git(&root, &["fetch", "-q", "--prune", "origin"]);
 
     let next = ok(&codeflow(&root, &["work", "next"]), "work next");
@@ -295,7 +329,10 @@ fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
         "{next}"
     );
     assert!(!lines[0].contains("fetched never"), "{next}");
-    assert!(lines[1].starts_with("ready    TSK-001 Root (EPC-001"), "{next}");
+    assert!(
+        lines[1].starts_with("ready    TSK-001 Root (EPC-001"),
+        "{next}"
+    );
     assert!(next.contains("ready    TSK-006 Across (EPC-002"), "{next}");
     assert!(!next.contains("TSK-005 Taken"), "claimed elsewhere: {next}");
     assert!(next.contains("waiting  TSK-002"), "{next}");
@@ -331,25 +368,49 @@ fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
         &codeflow(&root, &["work", "next", "--epic", "EPC-002"]),
         "work next --epic",
     );
-    assert!(other.contains("TSK-006") && !other.contains("TSK-001"), "{other}");
+    assert!(
+        other.contains("TSK-006") && !other.contains("TSK-001"),
+        "{other}"
+    );
 
     let claimed = ok(&codeflow(&root, &["work", "claim", "TSK-001"]), "claim");
-    assert!(claimed.contains("task/TSK-001-root from origin/"), "{claimed}");
+    assert!(
+        claimed.contains("task/TSK-001-root from origin/"),
+        "{claimed}"
+    );
     assert!(!claimed.to_lowercase().contains("lock"), "{claimed}");
-    git(&root, &["rev-parse", "--verify", "origin/task/TSK-001-root"]);
-    let taken = refused(&codeflow(&root, &["work", "claim", "TSK-005"]), "claim taken");
+    git(
+        &root,
+        &["rev-parse", "--verify", "origin/task/TSK-001-root"],
+    );
+    let taken = refused(
+        &codeflow(&root, &["work", "claim", "TSK-005"]),
+        "claim taken",
+    );
     assert!(taken.contains("feat/TSK-005-elsewhere"), "{taken}");
-    let waiting = refused(&codeflow(&root, &["work", "claim", "TSK-002"]), "claim waiting");
+    let waiting = refused(
+        &codeflow(&root, &["work", "claim", "TSK-002"]),
+        "claim waiting",
+    );
     assert!(waiting.contains("TSK-001"), "{waiting}");
-    let held = refused(&codeflow(&root, &["work", "claim", "TSK-004"]), "claim join");
-    assert!(held.contains("awaiting selection") || held.contains("blocked"), "{held}");
+    let held = refused(
+        &codeflow(&root, &["work", "claim", "TSK-004"]),
+        "claim join",
+    );
+    assert!(
+        held.contains("awaiting selection") || held.contains("blocked"),
+        "{held}"
+    );
 
     let status = ok(&codeflow(&root, &["status"]), "status");
     assert!(
         status.contains("tasks: ready 1 · active 2 · waiting 2 · blocked 2 · invalid 0"),
         "{status}"
     );
-    assert!(status.contains("active: TSK-001 Root (task/TSK-001-root)"), "{status}");
+    assert!(
+        status.contains("active: TSK-001 Root (task/TSK-001-root)"),
+        "{status}"
+    );
     assert!(status.contains("ready: TSK-006 Across"), "{status}");
     assert!(
         status.contains(&format!("retain-live branch {OTHER}")),
@@ -357,11 +418,13 @@ fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
     );
     let orient = ok(&codeflow(&root, &["orient"]), "orient");
     assert!(
-        orient.contains("tasks: ready 1 · active 2 · waiting 2 · blocked 2 · invalid 0; next: TSK-006"),
+        orient.contains(
+            "tasks: ready 1 · active 2 · waiting 2 · blocked 2 · invalid 0; next: TSK-006"
+        ),
         "{orient}"
     );
-    let help = ok(&codeflow(&root, &["work", "claim", "--help"]), "claim help");
-    assert!(!help.to_lowercase().contains("lock"), "{help}");
+    let claim_help = ok(&codeflow(&root, &["work", "claim", "--help"]), "claim help");
+    assert!(!claim_help.to_lowercase().contains("lock"), "{claim_help}");
 }
 
 #[test]
@@ -373,7 +436,10 @@ fn the_three_contexts_judge_one_task_the_same_way() {
     ok(&codeflow(&root, &["work", "claim", "TSK-001"]), "claim");
     git(&root, &["switch", "-q", "task/TSK-001-root"]);
     git(&root, &["branch", "fix/TSK-001-other", LINE]);
-    let started = ok(&codeflow(&root, &["work", "start", "TSK-001"]), "work start");
+    let started = ok(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "work start",
+    );
     assert!(started.contains("anchored"), "{started}");
     assert!(
         started.contains("conflict: other visible branches carry TSK-001: fix/TSK-001-other (reported, not refused)"),
@@ -416,15 +482,24 @@ fn the_three_contexts_judge_one_task_the_same_way() {
     commit(&root, "chore: complete the root");
     let (code, out) = pull_request(&root, "task/TSK-001-root", LINE, "");
     assert_eq!(code, 0, "{out}");
-    assert!(out.contains("class: tracked TSK-001 (from the branch)"), "{out}");
+    assert!(
+        out.contains("class: tracked TSK-001 (from the branch)"),
+        "{out}"
+    );
     git(&root, &["push", "-q", "origin", "task/TSK-001-root"]);
     land(&root, LINE, "task/TSK-001-root");
 
     // A complete task fails every context.
-    let late = refused(&codeflow(&root, &["work", "claim", "TSK-001"]), "claim complete");
+    let late = refused(
+        &codeflow(&root, &["work", "claim", "TSK-001"]),
+        "claim complete",
+    );
     assert!(late.contains("complete"), "{late}");
     git(&root, &["switch", "-q", "-c", "fix/TSK-001-late", LINE]);
-    let late = refused(&codeflow(&root, &["work", "start", "TSK-001"]), "start complete");
+    let late = refused(
+        &codeflow(&root, &["work", "start", "TSK-001"]),
+        "start complete",
+    );
     assert!(late.contains("'complete'"), "{late}");
     std::fs::write(root.join("src/root.rs"), "pub fn late() {}\n").unwrap();
     commit(&root, "fix: a late change");
@@ -438,15 +513,25 @@ fn the_three_contexts_judge_one_task_the_same_way() {
     for branch in ["fix/TSK-002-a", "feat/TSK-002-b", "spike/TSK-002-c"] {
         git(&root, &["switch", "-q", "-c", branch, LINE]);
         let started = ok(&codeflow(&root, &["work", "start", "TSK-002"]), branch);
-        assert!(started.contains(&format!("for {branch} -> {LINE}")), "{started}");
+        assert!(
+            started.contains(&format!("for {branch} -> {LINE}")),
+            "{started}"
+        );
     }
-    let last = ok(&codeflow(&root, &["work", "start", "TSK-002"]), "spike start");
+    let last = ok(
+        &codeflow(&root, &["work", "start", "TSK-002"]),
+        "spike start",
+    );
     assert!(
-        last.contains("fix/TSK-002-a, feat/TSK-002-b") || last.contains("feat/TSK-002-b, fix/TSK-002-a"),
+        last.contains("fix/TSK-002-a, feat/TSK-002-b")
+            || last.contains("feat/TSK-002-b, fix/TSK-002-a"),
         "{last}"
     );
     // Competing-branch negative control.
-    let competing = refused(&codeflow(&root, &["work", "claim", "TSK-002"]), "competing claim");
+    let competing = refused(
+        &codeflow(&root, &["work", "claim", "TSK-002"]),
+        "competing claim",
+    );
     assert!(competing.contains("already claimed"), "{competing}");
     // Mismatched-association negative control.
     git(&root, &["switch", "-q", "fix/TSK-002-a"]);
@@ -469,7 +554,29 @@ fn the_three_contexts_judge_one_task_the_same_way() {
             &codeflow(&root, &["task", "status", "TSK-004", "todo"]),
             "unblock the join",
         );
-        edit(&root, &task_file("TSK-004"), "depends_on: []", "depends_on: [TSK-003]");
+        edit(
+            &root,
+            &task_file("TSK-004"),
+            "depends_on: []",
+            "depends_on: [TSK-001]",
+        );
+        // The unselected alternative is cancelled.
+        ok(
+            &codeflow(
+                &root,
+                &[
+                    "task",
+                    "status",
+                    "TSK-003",
+                    "cancelled",
+                    "--reason",
+                    "option B not selected",
+                    "--scope",
+                    "dropped with option B",
+                ],
+            ),
+            "cancel the alternative",
+        );
         commit(&root, "chore: select option A");
         let (code, out) = pull_request(&root, branch, LINE, "");
         if branch.starts_with("plan/") {
@@ -479,4 +586,13 @@ fn the_three_contexts_judge_one_task_the_same_way() {
             assert!(out.contains("work.selection"), "{out}");
         }
     }
+    // Landed, the selection unblocks the join; the cancelled alternative
+    // does not hold it.
+    land(&root, LINE, "plan/select");
+    let next = ok(
+        &codeflow(&root, &["work", "next"]),
+        "work next after selection",
+    );
+    assert!(next.contains("ready    TSK-004 Join"), "{next}");
+    assert!(!next.contains("TSK-003"), "{next}");
 }

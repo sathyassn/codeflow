@@ -964,7 +964,7 @@ fn validate_dependencies(
     for dependency in dependencies {
         match dependency.kind {
             DependencyKind::Code => {
-                code_dependency(repo, records, task_id, target, &dependency.id)?
+                code_dependency(repo, records, task_id, target, &dependency.id)?;
             }
             DependencyKind::Research | DependencyKind::Decision => {
                 pinned_dependency(repo, records, task_id, target, dependency)?;

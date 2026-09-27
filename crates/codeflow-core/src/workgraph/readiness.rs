@@ -846,6 +846,15 @@ mod tests {
             root,
             &["merge", "-q", "--no-ff", "-m", "land", "task/TSK-001-done"],
         );
+        // A squash landing: patch-equivalent on main, not an ancestor.
+        run(root, &["switch", "-q", "-c", "fix/TSK-001-squash", "main"]);
+        fs::write(root.join("squash.txt"), "squash\n").unwrap();
+        let squashed = commit(root, "squash");
+        run(root, &["switch", "-q", "main"]);
+        // Main moves on first, so the squash is a new commit, not the tip.
+        fs::write(root.join("other.txt"), "other\n").unwrap();
+        commit(root, "other");
+        run(root, &["cherry-pick", &squashed]);
 
         let backlog = backlog(root).unwrap();
         let of = |id: &str| backlog.entries.iter().find(|entry| entry.task_id == id);
@@ -866,7 +875,7 @@ mod tests {
             backlog.conflicts.get("TSK-007").unwrap(),
             &["fix/TSK-007-two", "task/TSK-007-one"]
         );
-        assert_eq!(backlog.landed, ["task/TSK-001-done"]);
+        assert_eq!(backlog.landed, ["fix/TSK-001-squash", "task/TSK-001-done"]);
         let progress = backlog.epics.get("EPC-001").unwrap();
         assert_eq!((progress.total, progress.complete), (6, 1));
         assert_eq!(backlog.entries[0].state, State::Ready, "ready first");

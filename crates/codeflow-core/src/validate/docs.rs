@@ -1341,6 +1341,44 @@ mod tests {
         assert!(report.is_clean(), "issues: {:?}", report.issues);
     }
 
+    /// TSK-103 AC-10: a dependency is a bare id or `{id, kind, pin}`; the
+    /// object form resolves and joins the cycle check like a bare id, and a
+    /// malformed entry is reported.
+    #[test]
+    fn dependency_kinds_are_linted_like_bare_ids() {
+        let dir = clean_repo();
+        task_file(dir.path(), "TSK-001-001", "[]");
+        task_file(dir.path(), "TSK-001-002", "[TSK-001-001]");
+        task_file(
+            dir.path(),
+            "TSK-001-003",
+            "[{id: TSK-001-001, kind: research, pin: 0123abcd}, {id: TSK-001-002, kind: decision}]",
+        );
+        let report = lint_docs(dir.path());
+        assert!(report.is_clean(), "issues: {:?}", report.issues);
+
+        task_file(
+            dir.path(),
+            "TSK-001-004",
+            "[{id: TSK-001-404, kind: research, pin: 0123abcd}]",
+        );
+        task_file(dir.path(), "TSK-001-005", "[{id: TSK-001-001, kind: code}]");
+        let report = lint_docs(dir.path());
+        let messages: Vec<&str> = report
+            .issues
+            .iter()
+            .map(|issue| issue.message.as_str())
+            .collect();
+        assert!(
+            messages.iter().any(|m| m.contains("TSK-001-404")),
+            "{messages:?}"
+        );
+        assert!(
+            messages.iter().any(|m| m.contains("bare id")),
+            "{messages:?}"
+        );
+    }
+
     #[test]
     fn nested_task_dependencies_are_linted() {
         let dir = clean_repo();
