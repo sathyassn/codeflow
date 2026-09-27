@@ -1,0 +1,11 @@
+id = "TSK-148"
+uid = "2a361939-9882-4e61-92e6-49ba69dc8cce"
+kind = "TSK"
+title = "release branch integrates each line as it lands"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T17:23:22Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
