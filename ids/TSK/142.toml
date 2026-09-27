@@ -1,0 +1,11 @@
+id = "TSK-142"
+uid = "91e89d92-3e0f-4860-9384-2eb1c4ef3432"
+kind = "TSK"
+title = "local full gate parity on one machine"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T13:59:52Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
