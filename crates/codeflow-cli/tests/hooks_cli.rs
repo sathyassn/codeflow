@@ -370,6 +370,7 @@ fn git_guard_judges_the_repository_a_command_targets() {
 // session is on an unprotected branch, so every block below comes from the
 // repository git would actually write to, which is on `main`.
 #[test]
+#[allow(clippy::too_many_lines)] // one fixture replaying the review probe tables
 fn git_guard_blocks_targets_it_cannot_prove() {
     let tmp = tempfile::tempdir().unwrap();
     let session = tmp.path().join("session");
@@ -435,6 +436,33 @@ fn git_guard_blocks_targets_it_cannot_prove() {
     init_repo(&main_session, "main");
     let failed_cd = format!("R={f}; cd \"$R\" > {absent}; git commit -m 'fix: p'");
     assert_eq!(guard_run(&failed_cd, &main_session).status.code(), Some(2));
+
+    // Round 3 (R3-1): a substitution before the subcommand hides it. The
+    // first three run from a protected session, the last from a feature one.
+    let p = protected.to_string_lossy();
+    for (command, from) in [
+        (
+            "git $(printf '') commit --allow-empty -m 'fix: p'".to_string(),
+            &main_session,
+        ),
+        (
+            "git `printf ''` commit --allow-empty -m 'fix: p'".to_string(),
+            &main_session,
+        ),
+        (
+            "git $(printf -- '--no-pager') commit --allow-empty -m 'fix: p'".to_string(),
+            &main_session,
+        ),
+        (
+            format!("git -C {p} $(printf '') commit --allow-empty -m 'fix: p'"),
+            &session,
+        ),
+    ] {
+        let out = guard_run(&command, from);
+        assert_eq!(out.status.code(), Some(2), "{command}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("command unresolved"), "{command}: {stderr}");
+    }
 
     // Round 2 (R2-1): a protected repository nested in the feature one,
     // reached through a substitution in the path.

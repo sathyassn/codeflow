@@ -17,8 +17,9 @@ use serde::Deserialize;
 use crate::security::pattern::is_path_targeted;
 
 use super::git_target::{
-    self, assignment, expand_word, flat_top_level, join_path, launcher_env, map_top_level, Cwd,
-    Join, ShellState, Val, GIT_LOCATION_VARS, SUBSTITUTED,
+    self, assignment, expand_word, flat_top_level, has_substitution, join_path, launcher_env,
+    map_top_level, substitution_placeholder, Cwd, Join, ShellState, Val, GIT_LOCATION_VARS,
+    SUBSTITUTED_BARE,
 };
 use super::policy::{GitPolicy, PolicyLevel};
 use super::{standards, Violation, HUMAN_OVERRIDE_ENV, INTEGRATE_TOKEN_ENV};
@@ -312,6 +313,12 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
                 check_git(args, &mut branches, &moved, ctx, violations, &mut notes);
             }
             ProgramKind::Gh => check_gh(args, ctx, violations),
+            // A program named by a substitution could be git itself.
+            ProgramKind::Other if has_substitution(program) => {
+                if let Some(v) = unclassifiable_violation(ctx, "its program name") {
+                    violations.push(v);
+                }
+            }
             ProgramKind::Other => {}
         }
     }
@@ -853,14 +860,14 @@ fn split_into_segments(command: &str, out: &mut Vec<String>, depth: usize, code_
             line.substitution(inner, &cur, code_context, out, depth);
             // The segment keeps a placeholder for the text the shell will
             // substitute, so a word built from it is never read as known.
-            cur.push(SUBSTITUTED);
+            cur.push(substitution_placeholder(in_double));
             i = ni;
             continue;
         }
         if c == '`' {
             let (inner, ni) = capture_backtick(&chars, i + 1);
             line.substitution(inner, &cur, code_context, out, depth);
-            cur.push(SUBSTITUTED);
+            cur.push(substitution_placeholder(in_double));
             i = ni;
             continue;
         }
@@ -1433,8 +1440,7 @@ impl LineFacts {
             }
             let program = strip_launchers(&words).map(|(program, _)| program);
             let mover = cd_target(&tokens).is_some()
-                || program
-                    .is_some_and(|p| git_target::moves_directory(p) || p.contains(SUBSTITUTED));
+                || program.is_some_and(|p| git_target::moves_directory(p) || has_substitution(p));
             let nested = roles.is_some_and(|r| r[idx].is_none());
             facts.any_mover |= mover;
             let sets_var = program.is_none_or(|p| p == "export")
@@ -1510,6 +1516,11 @@ fn check_git(
         return;
     }
 
+    if let Some(place) = unclassifiable_git(args) {
+        out.extend(unclassifiable_violation(ctx, place));
+        return;
+    }
+
     let Some((sub, rest)) = git_subcommand(args) else {
         return;
     };
@@ -1560,6 +1571,93 @@ fn check_git(
     }
     out.extend(found);
 }
+
+/// Subcommands whose arguments the guard judges. A substitution in their
+/// arguments can change what they do to a branch.
+const JUDGED_SUBCOMMANDS: &[&str] = &[
+    "commit",
+    "merge",
+    "cherry-pick",
+    "rebase",
+    "reset",
+    "branch",
+    "config",
+    "update-ref",
+    "symbolic-ref",
+    "fast-import",
+    "push",
+    "checkout",
+    "switch",
+];
+
+/// Where a substitution makes a git invocation unclassifiable, if anywhere
+/// (TSK-112, R3-1): in a global option or at or before the subcommand, where
+/// it can change which command runs; or, for a subcommand the guard judges,
+/// anywhere unquoted (word splitting can add arguments) and in any argument
+/// other than a quoted message value (`-m`, `--message`). A read-only
+/// subcommand's arguments cannot turn it into a mutation.
+fn unclassifiable_git(args: &[String]) -> Option<&'static str> {
+    let mut idx = 0;
+    let sub = loop {
+        let t = args.get(idx)?;
+        if has_substitution(t) {
+            return Some("a global option or the subcommand");
+        }
+        if GIT_GLOBAL_VALUE_FLAGS.contains(&t.as_str()) {
+            if args.get(idx + 1).is_some_and(|v| has_substitution(v)) {
+                return Some("a global option");
+            }
+            idx += 2;
+        } else if t.starts_with('-') {
+            idx += 1;
+        } else {
+            break t.as_str();
+        }
+    };
+    if !JUDGED_SUBCOMMANDS.contains(&sub) {
+        return None;
+    }
+    let rest = &args[idx + 1..];
+    if rest.iter().any(|a| a.contains(SUBSTITUTED_BARE)) {
+        return Some("an unquoted position, where word splitting can add arguments");
+    }
+    let mut i = 0;
+    while i < rest.len() {
+        let a = rest[i].as_str();
+        let takes_message = a == "-m"
+            || a == "--message"
+            || (a.starts_with('-') && !a.starts_with("--") && a.ends_with('m'));
+        if takes_message {
+            i += 2; // the message value may hold a quoted substitution
+            continue;
+        }
+        let message_inline = a.starts_with("--message=") || (a.starts_with("-m") && a.len() > 2);
+        if has_substitution(a) && !message_inline {
+            return Some("an argument other than the message");
+        }
+        i += 1;
+    }
+    None
+}
+
+/// The block for a git command the guard cannot classify, at the level of
+/// `local_ref_protection` (charter §6.1: unknown ref-writers deny).
+fn unclassifiable_violation(ctx: &GuardContext<'_>, place: &str) -> Option<Violation> {
+    let level = ctx.policy.local_ref_protection;
+    (level.is_active() && !ctx.integrate_token).then(|| {
+        Violation::new(
+            "git.local_ref_protection",
+            level,
+            format!(
+                "command unresolved: a command substitution in {place} decides what this git command does, so the guard cannot prove it leaves protected branches alone"
+            ),
+            UNCLASSIFIABLE_REMEDY.to_string(),
+        )
+    })
+}
+
+/// How to make an unclassifiable git command classifiable.
+const UNCLASSIFIABLE_REMEDY: &str = "write the git command, its options and its targets literally; generated text belongs only in a quoted message (`-m \"$(…)\"`), or compute a value first and pass it as a literal";
 
 /// How to make an unresolved target resolvable.
 const UNRESOLVED_REMEDY: &str = "name the repository with a literal path (`git -C /path/to/repo …`) or change to it first (`cd /path/to/repo && git …`), so the guard can read its branch and policy";
@@ -5190,6 +5288,121 @@ mod tests {
         }
     }
 
+    fn blocks(v: &[Violation]) -> bool {
+        v.iter().any(|x| x.level == PolicyLevel::Block)
+    }
+
+    // R3-1: a substitution at or before the git subcommand, or in a global
+    // option, decides which command runs; the command is unclassifiable and
+    // blocks, and the message says how to rewrite it.
+    #[test]
+    fn test_tsk112_substitution_before_the_subcommand_blocks() {
+        for (cmd, session) in [
+            (
+                "git $(printf '') commit --allow-empty -m \"fix: probe\"",
+                "main",
+            ),
+            (
+                "git `printf ''` commit --allow-empty -m \"fix: probe\"",
+                "main",
+            ),
+            (
+                "git $(printf -- '--no-pager') commit --allow-empty -m \"fix: probe\"",
+                "main",
+            ),
+            (
+                "git -C /scratch-main $(printf '') commit --allow-empty -m \"fix: probe\"",
+                "feat/s",
+            ),
+            ("git \"$(printf commit)\" -m x", "feat/s"),
+            ("git -c \"$(printf x=y)\" commit -m x", "feat/s"),
+            ("$(printf git) push origin main", "feat/s"),
+            ("command `printf git` push origin main", "feat/s"),
+            ("git push origin \"$(printf main)\"", "feat/s"),
+            ("git commit -m $(printf 'x --no-verify')", "feat/s"),
+        ] {
+            let r = report(cmd, session);
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+            let v = r
+                .violations
+                .iter()
+                .find(|v| v.rule == "git.local_ref_protection")
+                .unwrap_or_else(|| panic!("{cmd}: {:?}", r.violations));
+            assert!(v
+                .message
+                .starts_with("command unresolved: a command substitution in"));
+            assert!(v.remedy.contains("literally"), "{}", v.remedy);
+        }
+        // Quoted message values and read-only subcommands stay classifiable.
+        for cmd in [
+            "git commit -m \"$(printf 'fix: x')\"",
+            "git commit -am \"$(printf 'fix: x')\"",
+            "git commit --message=\"$(printf 'fix: x')\"",
+            "git merge --no-ff -m \"$(printf 'merge x')\" feat/y",
+            "git log \"$(git merge-base a b)\"..HEAD",
+            "git show $(git rev-parse HEAD)",
+        ] {
+            let r = report(cmd, "feat/s");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
+    // R3-1, property style: a substitution inserted at, or attached to, any
+    // argv position up to and including the subcommand never yields an allow.
+    #[test]
+    fn test_tsk112_no_placeholder_before_the_subcommand_allows() {
+        let bases: [(&str, usize); 5] = [
+            ("git commit --allow-empty -m x", 1),
+            ("git -C /scratch-main commit -m x", 3),
+            ("git --no-pager -C /scratch push origin main", 4),
+            ("git -c core.editor=true merge --no-ff feat/y", 3),
+            ("git reset --hard HEAD~1", 1),
+        ];
+        let subs = [
+            "$(printf '')",
+            "`printf ''`",
+            "\"$(printf '')\"",
+            "$(printf -- --no-pager)",
+        ];
+        let mut cases = 0;
+        for (base, sub_at) in bases {
+            let words: Vec<&str> = base.split(' ').collect();
+            for s in subs {
+                for pos in 1..=sub_at + 1 {
+                    let mut inserted = words.clone();
+                    inserted.insert(pos, s);
+                    let cmd = inserted.join(" ");
+                    for session in ["main", "feat/s"] {
+                        let r = report(&cmd, session);
+                        assert!(
+                            blocks(&r.violations),
+                            "{cmd} ({session}): {:?}",
+                            r.violations
+                        );
+                        cases += 1;
+                    }
+                }
+                for pos in 1..=sub_at {
+                    for attached in [format!("{s}{}", words[pos]), format!("{}{s}", words[pos])] {
+                        let mut joined = words.clone();
+                        joined[pos] = &attached;
+                        let cmd = joined.join(" ");
+                        for session in ["main", "feat/s"] {
+                            let r = report(&cmd, session);
+                            assert!(
+                                blocks(&r.violations),
+                                "{cmd} ({session}): {:?}",
+                                r.violations
+                            );
+                            cases += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert!(cases > 200, "{cases}");
+    }
+
     fn report(cmd: &str, session: &str) -> Evaluation {
         let p = default_policy();
         evaluate_report(cmd, &ctx_with_dir_branch(&p, session, &fixture_resolver))
@@ -5421,16 +5634,12 @@ mod tests {
             "$(printf cd) /scratch-main; git commit -m x",
         ] {
             let r = report(cmd, "feat/s");
-            assert!(
-                has_rule(&r.violations, "git.commit_to_protected"),
-                "{cmd}: {:?}",
-                r.violations
-            );
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
         }
         // A substitution in the message does not touch the location.
         for cmd in [
             "git -C /scratch commit -m \"$(printf 'fix: x')\"",
-            "cd /scratch && git commit -m `printf x`",
+            "cd /scratch && git commit -m \"`printf x`\"",
         ] {
             let r = report(cmd, "main");
             assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);

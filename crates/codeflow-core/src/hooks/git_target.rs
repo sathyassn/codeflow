@@ -18,9 +18,29 @@ use std::collections::HashMap;
 use super::git_guard::{capture_backtick, capture_balanced, starts_word};
 
 /// Stands in a segment's text for a `$(…)` or backtick substitution the
-/// splitter cut out: the shell will put that command's output there, which
-/// the guard cannot know.
+/// splitter cut out from inside double quotes: the shell will put that
+/// command's output there, as part of one word, and the guard cannot know it.
 pub(super) const SUBSTITUTED: char = '\u{1}';
+
+/// Stands for a substitution the splitter cut out from outside quotes: its
+/// output is also split into words and globbed, so it can add, remove or
+/// reorder arguments.
+pub(super) const SUBSTITUTED_BARE: char = '\u{2}';
+
+/// The placeholder for a substitution cut out inside (`quoted`) or outside
+/// double quotes.
+pub(super) fn substitution_placeholder(quoted: bool) -> char {
+    if quoted {
+        SUBSTITUTED
+    } else {
+        SUBSTITUTED_BARE
+    }
+}
+
+/// `true` when `word` holds a substitution placeholder of either kind.
+pub(super) fn has_substitution(word: &str) -> bool {
+    word.contains([SUBSTITUTED, SUBSTITUTED_BARE])
+}
 
 /// How a top-level simple command is joined to the one before it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -60,12 +80,12 @@ pub(super) fn flat_top_level(command: &str) -> Option<Vec<(String, Join)>> {
         // placeholder in the segment text, and so does this scanner.
         if c == '$' && next == Some('(') {
             i = capture_balanced(&chars, i + 2).1;
-            cur.push(SUBSTITUTED);
+            cur.push(substitution_placeholder(in_double));
             continue;
         }
         if c == '`' {
             i = capture_backtick(&chars, i + 1).1;
-            cur.push(SUBSTITUTED);
+            cur.push(substitution_placeholder(in_double));
             continue;
         }
         if c == '$' && matches!(next, Some('\'' | '"')) {
@@ -176,7 +196,7 @@ fn close_segment(
         }
         return Some(());
     };
-    if CONTROL_WORDS.contains(&first) || first.contains(SUBSTITUTED) {
+    if CONTROL_WORDS.contains(&first) || has_substitution(first) {
         return None;
     }
     if first == "!" && words.next().is_some_and(moves_directory) {
@@ -228,7 +248,7 @@ pub(super) fn expand_word(word: &str, vars: &HashMap<String, Val>) -> Result<Str
     let mut i = 0;
     while i < chars.len() {
         let c = chars[i];
-        if c == SUBSTITUTED {
+        if c == SUBSTITUTED || c == SUBSTITUTED_BARE {
             return Err("a command substitution".to_string());
         }
         if matches!(c, '*' | '?' | '[') {
