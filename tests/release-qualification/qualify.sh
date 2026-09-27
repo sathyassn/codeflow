@@ -1256,15 +1256,16 @@ except Exception:
     print(0)' "${_event:-none}" 2>/dev/null)
   present_run resolve "$_sid" "${_event:-00000000-0000-0000-0000-000000000000}" \
     --event-version "${_version:-0}" --status addressed
-  if [ -n "$_event" ] && [ "$_delivered" = yes ] && [ "$CF_STATUS" = 0 ] &&
-    printf '%s' "$CF_OUT" | grep -qF "resolved $_event as addressed"; then
-    _s=$RESULT_PASSED
-  else
-    _s=$RESULT_FAILED
-  fi
+  _resolve_status=$CF_STATUS
+  _resolve_out=$CF_OUT
+  # The effect, not the acknowledgement: history is read again and must show
+  # the event addressed after the version it was resolved at.
+  present_run history "$_sid"
+  _s=$(grade_present_resolve "$_event" "$_delivered" "$_version" \
+    "$_resolve_status" "$_resolve_out" "$CF_OUT")
   record "$SAMPLE" "$TIER" "present resolve" "positive: resolve a real reviewer envelope" \
-    "$_s" "a submitted envelope delivered by feedback, then marked addressed at its current version" \
-    "event ${_event:-not submitted}; delivered $_delivered; version $_version; $(observed_exit)"
+    "$_s" "a submitted envelope delivered by feedback, then marked addressed at its current version, and history read afterwards shows it addressed" \
+    "event ${_event:-not submitted}; delivered $_delivered; version $_version; resolve exit $_resolve_status; history after resolve exit $CF_STATUS"
 
   present_run close "$_sid"
   _close_status=$CF_STATUS
