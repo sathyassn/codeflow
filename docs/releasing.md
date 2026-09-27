@@ -21,7 +21,13 @@ One publisher remains:
   installers and is the only tag, release, and artifact publisher. Its
   generated workflow runs only by explicit human dispatch on `main`.
 
-PRs carry one `Release impact` section. `scripts/release.py check-pr` compares
+PRs carry one `Release impact` section with `Impact`, `Breaking`,
+`Rationale`, `Migration`, `Unit` and `Evidence`. `Breaking: yes` holds if and
+only if `Impact: major`, and a break needs substantive migration guidance.
+A nonbreaking refinement of a pending major entry still carries its migration
+reference, and a field left at the template's alternatives fails.
+The legacy `Contract` field is accepted during the transition and must agree
+with `Breaking` when both appear. `scripts/release.py check-pr` compares
 the declaration with the current target, actual proposed merge tree, pending
 annotations, coupled stamps, and conventional-marker floor. It checks known
 contradictions and watched contracts; it does not infer compatibility. Put one
@@ -143,6 +149,24 @@ and secret scans, and measured unpacked/archive/release-binary size changes.
 Keep native macOS, Linux and Windows execution claims separate from cross-target
 type checking. Missing native platform or installer evidence remains explicit
 and blocks claiming that platform's release qualification.
+
+### Policy key upgrade order
+
+`codeflow update` adds each new `.codeflow/policy.json` key to an existing
+consumer with its default. The git-hook shims run whichever `codeflow` is on
+`PATH`, and a binary older than the key rejects the policy file, so every
+commit fails at `commit-msg`. A release that adds a policy key says in its
+notes: upgrade the `codeflow` on `PATH` first, then run `codeflow update`.
+
+| Policy file | Hook binary | Result |
+|---|---|---|
+| Without the new key | older | passes, rule not checked |
+| Without the new key | newer | rule checked at its default |
+| With the new key | newer | rule checked as set |
+| With the new key | older | every commit blocked: unknown key |
+
+Recovery from the last row is to upgrade the binary on `PATH`; do not delete
+the key to make the hook pass.
 
 ### Same-PR preparation and deliberate publication
 

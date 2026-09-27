@@ -135,3 +135,36 @@ three named smells cover.
 ## Architecture impact
 
 None.
+
+## Note (2026-09-24): summary shape and figure form
+
+On 2026-09-24 the operator changed two rules in this record: the shape of a
+summary and the form of a reply figure. The text above stays unchanged as
+the record of what was first decided.
+
+- The summary rule said "two to four sentences of plain prose". Agents met
+  it with four dense sentences that already carried the details, so the
+  count was the wrong test.
+- A summary now gives context only: one to three short sentences on what
+  the text is and why it exists, with no mechanism, file name, identifier,
+  number, rule list or caveat.
+- Every detail follows as bullets, one point each, in a logical order.
+  Tables carry tabular data and fenced blocks carry pasted output.
+- The smell is judged by what the summary carries. A summary past three
+  sentences fails, and one that holds a code span, a path, a list of three
+  or more, or a number other than a count in plain words is flagged.
+- The reply figure rule said "fenced ASCII in chat", whatever the surface
+  could show. The form now matches the surface: an inline HTML figure where
+  the harness renders one, or a `cf-present` page when the figure needs a
+  full page or anchored review; fenced ASCII only on a terminal or other
+  plain-text surface, or when the surface is unknown.
+- Mermaid is not used for a reply figure. The existing diagram block inside
+  `cf-present` pages is a separate decision and is unchanged.
+- Owners: `cf-ship/references/pr-evidence.md` for the pull request body and
+  `cf-method/references/workflow-lifecycle.md` for replies and figures. The
+  contract and the pull request template point at them.
+- The evaluation kit grades both changes with faulty controls:
+  `summary_carries_details` on the operator reply case, and
+  `unrendered_figure_on_plain_text_surface` and `mermaid_figure_in_reply` on
+  the flow case, which passes with an inline HTML figure or `cf-present`
+  where HTML renders and with ASCII on a plain-text surface.

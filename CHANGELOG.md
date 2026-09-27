@@ -17,11 +17,55 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Model catalog resolution (ADR-0069).** `codeflow models resolve --duty
+  <duty>` reads the managed catalog, the personal overlay and the project
+  selection and prints each participant a duty needs, with the pinned id to
+  launch, its effort, the remaining alternatives and any obligation, or the
+  open participant and why; `--json` serves launchers. It exits non-zero when
+  a required participant is open and launches nothing. A design override
+  counts only from an `OPERATOR_OVERRIDE` block committed in that task's
+  record on its integration target. `codeflow doctor --check model-bindings`
+  diagnoses the catalog and scans for pinned model selectors outside it.
+
+<!-- codeflow:release-impact minor -->
+- **One reference for when an agent stops (ADR-0070).** The new
+  `cf-method/references/autonomy.md` holds the only full list of decisions
+  that belong to the operator, a short ladder and a decision table, and the
+  trust prompt rule: an agent answers a workspace trust prompt for its own
+  task's folder or a sample it created, and any other folder goes to the
+  operator. The contracts, the lifecycle, the orchestrator and cf-plan point
+  at it instead of keeping their own lists.
+
+<!-- codeflow:release-impact minor -->
+- **Autonomy evaluation cases.** The `autonomy-with-judgment` pack adds
+  seventeen blind cases, nine where an agent asks when it should act and
+  eight where it acts when it should stop, each with a faulty control that
+  fails. The stand-in answers the cases check are replayed from outside the
+  trial's checkout, so a trial cannot read them.
+
+<!-- codeflow:release-impact minor -->
+- **Portable pull request checks.** `codeflow ci` reads Markdown sections,
+  rejects explicitly empty PR bodies and ambiguous headings, and warns about
+  summary detail, missing testing limits and oversized evidence. Generic release
+  checks default to warn, with a project-owned breaking level and commit floor.
+  Fresh installs include Reviews and Release impact in the required sections
+  and ship the PR template at every tier. Without an explicit list, the
+  built-in default stays Summary and Changes. Updates preserve existing policy
+  values and customized templates. Upgrade order matters: `codeflow update`
+  adds `git.pr_release_impact` and `git.pr_breaking_level`, and an older
+  binary then fails every `codeflow ci` run with exit 2 and
+  `unknown key git.pr_release_impact`. Upgrade the local and CI binaries
+  first, then commit the policy change from `codeflow update`.
+
+<!-- codeflow:release-impact minor -->
 - **Written content policy check (ADR-0067).** The commit-msg hook and
   `codeflow ci` block em and en dashes in new commit messages, pull request
   bodies and lines a change adds under `docs/`, `project-management/` and the
   skill trees. Existing lines are left alone. The new `git.policy_characters`
   key defaults to `block`, including when a policy file omits it.
+  `codeflow update` adds the key to an existing `policy.json`. Upgrade the
+  `codeflow` on `PATH` before running `codeflow update`: the hooks call that
+  binary, and an older one rejects the new key and blocks every commit.
 
 <!-- codeflow:release-impact minor -->
 - **Responsible-autonomy diagnostics.** The standard/full model-evaluation kit
@@ -47,6 +91,23 @@ publication date._
   a figure when the point is a relationship and give only printed or
   verified links; mannered prose and bare-identifier titles are editorial
   defects. The evaluation kit adds an `operating-doctrine` pack.
+
+<!-- codeflow:release-impact patch -->
+- **Summary shape and reply figures.** A pull request body, report or reply
+  opens with one to three short sentences of context only, and every detail
+  follows as bullets in a logical order. A reply figure matches its surface:
+  an inline HTML figure where the harness renders one, a `cf-present` page
+  when it needs a full page, fenced ASCII on a terminal or other plain-text
+  surface, and never Mermaid. The operating-doctrine evaluation cases grade
+  both with faulty controls.
+
+<!-- codeflow:release-impact minor -->
+- **Pull request template.** The shipped template has five fixed sections
+  (Summary, Changes, Testing, Reviews, Release impact) with short comments,
+  and lists its conditional sections with the exact condition for each. The
+  Release impact block states `Breaking: yes | no` and always carries
+  `Migration`. Existing policies are unchanged: the required headings are
+  still Summary, Changes and, for code, Testing.
 
 <!-- codeflow:release-impact patch -->
 - **Claude Code preset prompts.** The shipped preset sets no permission mode
@@ -122,6 +183,30 @@ publication date._
   release, while cargo-dist remains the sole explicitly dispatched publisher;
   the candidate branch, follow-up release PR, and git-cliff authority are
   retired without moving the historical v2.1 tag.
+
+<!-- codeflow:release-impact patch -->
+- **Git-guard reads data as data.** The in-session git-guard no longer blocks
+  reading the hook path (`git config core.hooksPath`, `--get`, `--list`,
+  `--show-origin`); it still blocks every write form in every scope, and now
+  also `git config --edit` and removing the `core` section. Heredoc bodies,
+  comments and quoted text are no longer read as commands when only data
+  tools such as `cat`, `git commit -F -` or `gh pr create` read them; a body
+  or substitution that a shell or any other program can run is still checked.
+  A `cd` or `-C` chain that switches to a new branch before committing is
+  judged on that branch.
+
+<!-- codeflow:release-impact patch -->
+- **A change runs to its finish line.** A brief that asks for a change runs
+  through to the readiness report. After two review rounds, a disagreement
+  on a reversible choice inside the accepted outcome is settled by the
+  judgment primary and recorded as settled dissent, never as approval; a
+  dissent on safety, security or correctness keeps the gate closed. A seat
+  lost mid-run moves to its next eligible alternative with reduced
+  assurance. The primary merges a green, reviewed pull request into an
+  integration branch that no protected-branch rule covers, with a no fast
+  forward merge, and reruns the gate; every protected target stays a human
+  merge. "Ready on local evidence" needs a completed green result for every
+  owed check and names each hosted job that never ran.
 
 <!-- codeflow:release-impact major -->
 - **Model catalog schema 5 (ADR-0069).** The managed
@@ -304,17 +389,6 @@ publication date._
 > reduce the release to a minor version.
 
 ### Fixed
-
-<!-- codeflow:release-impact patch -->
-- **Git-guard reads data as data.** The in-session git-guard no longer blocks
-  reading the hook path (`git config core.hooksPath`, `--get`, `--list`,
-  `--show-origin`); it still blocks every write form in every scope, and now
-  also `git config --edit` and removing the `core` section. Heredoc bodies,
-  comments and quoted text are no longer read as commands when only data
-  tools such as `cat`, `git commit -F -` or `gh pr create` read them; a body
-  or substitution that a shell or any other program can run is still checked.
-  A `cd` or `-C` chain that switches to a new branch before committing is
-  judged on that branch.
 
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
   the official pinned Node distribution's compression libraries and explain

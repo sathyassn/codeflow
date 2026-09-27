@@ -89,7 +89,7 @@ fn task_branch_ci(dir: &Path, branch: &str, valid_body: bool) -> Output {
     if valid_body {
         command.args([
             "--pr-body",
-            "## Summary\nBounded task.\n\n## Changes\n- implementation\n\n## Testing\n- focused test",
+            "## Summary\nBounded task.\n\n## Changes\n- implementation\n\n## Testing\n- focused test\nNot tested: Windows.\n\n## Reviews\nNone: pending review.\n\n## Release impact\n- Impact: patch\n- Breaking: no\n- Rationale: Preserve the public contract.\n- Migration: none",
         ]);
     }
     command.output().unwrap()
@@ -1147,6 +1147,309 @@ fn real_wired_hook_blocks_commit_via_git() {
         "commit on main must be refused by the wired hook"
     );
     assert!(String::from_utf8_lossy(&out.stderr).contains("git.commit_to_protected"),);
+}
+
+// Codex EPC-017 review round 2: Git runs commit-msg before its own message
+// cleanup, so the installed hook must scan what that cleanup keeps. These
+// drive real `git commit` through the wired hook in each cleanup situation.
+
+#[cfg(unix)]
+fn wire_commit_msg_hook(dir: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+    let hook = dir.join(".git/hooks/commit-msg");
+    std::fs::create_dir_all(hook.parent().unwrap()).unwrap();
+    std::fs::write(
+        &hook,
+        format!(
+            "#!/bin/sh\nexec '{}' git-hook commit-msg \"$@\"\n",
+            env!("CARGO_BIN_EXE_codeflow")
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&hook, std::fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// An editor that puts `text` above Git's template, keeping every hint line.
+#[cfg(unix)]
+fn prepending_editor(dir: &Path, name: &str, text: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let body = dir.join(format!("{name}.txt"));
+    std::fs::write(&body, text).unwrap();
+    let editor = dir.join(format!("{name}.sh"));
+    std::fs::write(
+        &editor,
+        format!(
+            "#!/bin/sh\ncat '{}' \"$1\" > \"$1.new\" && mv \"$1.new\" \"$1\"\n",
+            body.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&editor, std::fs::Permissions::from_mode(0o755)).unwrap();
+    editor
+}
+
+/// Stage a fresh file holding an em dash, then run `git <args>` with the
+/// hook wired. `editor: None` is a non-editor commit.
+#[cfg(unix)]
+fn wired_commit(dir: &Path, args: &[&str], editor: Option<&Path>) -> Output {
+    static N: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    let n = N.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let file = format!("staged-{n}.txt");
+    std::fs::write(dir.join(&file), "range 1\u{2014}3\n").unwrap();
+    git(dir, &["add", &file]);
+    let out = run_wired_git(dir, args, editor);
+    if !out.status.success() {
+        git(dir, &["reset", "-q", "--", &file]);
+    }
+    out
+}
+
+/// Run `git <args>` with the hook wired, in the C locale so Git writes its
+/// untranslated cut signature.
+#[cfg(unix)]
+fn run_wired_git(dir: &Path, args: &[&str], editor: Option<&Path>) -> Output {
+    let mut cmd = Command::new("git");
+    cmd.args(args)
+        .current_dir(dir)
+        .env("LC_ALL", "C")
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("CODEFLOW_HOME", isolated_home())
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .env_remove("CODEFLOW_INTEGRATE_TOKEN")
+        .env_remove("CODEFLOW_HUMAN_OVERRIDE");
+    match editor {
+        Some(e) => cmd.env("GIT_EDITOR", e),
+        None => cmd.env_remove("GIT_EDITOR"),
+    };
+    cmd.output().unwrap()
+}
+
+#[cfg(unix)]
+fn assert_policy_character_block(out: &Output, case: &str) {
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!out.status.success(), "{case}: commit must be refused");
+    assert!(stderr.contains("git.policy_characters"), "{case}: {stderr}");
+}
+
+/// Assert the commit landed and return its stored message.
+#[cfg(unix)]
+fn assert_committed(dir: &Path, out: &Output, case: &str) -> String {
+    assert!(
+        out.status.success(),
+        "{case}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let log = Command::new("git")
+        .args(["log", "-1", "--format=%B"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&log.stdout).into_owned()
+}
+
+#[cfg(unix)]
+#[test]
+fn wired_commit_msg_scans_hash_lines_git_keeps_without_editor() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    wire_commit_msg_hook(dir.path());
+    let msg = "feat: add ranges\n\n# pages 1\u{2014}3\n";
+
+    // `-m` cleans whitespace only: Git would record the `#` line.
+    let out = wired_commit(dir.path(), &["commit", "-m", msg], None);
+    assert_policy_character_block(&out, "-m default");
+    // The same for `-F` and for each non-stripping cleanup config.
+    let file = dir.path().join("MSG");
+    std::fs::write(&file, msg).unwrap();
+    let out = wired_commit(dir.path(), &["commit", "-F", file.to_str().unwrap()], None);
+    assert_policy_character_block(&out, "-F default");
+    for mode in ["whitespace", "verbatim", "scissors"] {
+        let config = format!("commit.cleanup={mode}");
+        let out = wired_commit(dir.path(), &["-c", &config, "commit", "-m", msg], None);
+        assert_policy_character_block(&out, &config);
+    }
+
+    // commit.cleanup=strip really drops the line, so the hook allows it.
+    let out = wired_commit(
+        dir.path(),
+        &["-c", "commit.cleanup=strip", "commit", "-m", msg],
+        None,
+    );
+    let stored = assert_committed(dir.path(), &out, "commit.cleanup=strip");
+    assert_eq!("feat: add ranges\n\n", stored);
+}
+
+#[cfg(unix)]
+#[test]
+fn wired_commit_msg_scans_scissors_text_git_keeps() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    wire_commit_msg_hook(dir.path());
+    let cut = "# ------------------------ >8 ------------------------";
+    let msg = format!("feat: add ranges\n\n{cut}\n- pages 1\u{2013}3\n");
+
+    // Without an editor or verbose mode, Git keeps the cut line and below.
+    let out = wired_commit(dir.path(), &["commit", "-m", &msg], None);
+    assert_policy_character_block(&out, "-m exact cut line");
+    let loose = "feat: add ranges\n\n# ---- >8 ----\n- pages 1\u{2013}3\n";
+    let out = wired_commit(dir.path(), &["commit", "-m", loose], None);
+    assert_policy_character_block(&out, "-m loose scissors");
+
+    // Codex round 3, N2: an edited commit with no verbose flag strips the
+    // bare cut line as a comment and keeps the bullet below it.
+    let editor = prepending_editor(dir.path(), "bare-cut", &msg);
+    let out = wired_commit(dir.path(), &["commit"], Some(&editor));
+    assert_policy_character_block(&out, "editor, bare exact cut line");
+
+    // Git truncates here, but commit.verbose is not proof for every hook
+    // run (a direct merge ignores it), so the hook scans conservatively.
+    let out = wired_commit(
+        dir.path(),
+        &["-c", "commit.verbose=true", "commit", "-m", &msg],
+        None,
+    );
+    assert_policy_character_block(&out, "-m, commit.verbose");
+}
+
+// Codex round 3, N2: a direct `git merge` cleans up with verbose off even
+// when commit.verbose is set, so a cut line and what follows are kept.
+#[cfg(unix)]
+#[test]
+fn wired_commit_msg_scans_direct_merge_text_despite_commit_verbose() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    git(dir.path(), &["checkout", "-q", "-b", "feat/side"]);
+    std::fs::write(dir.path().join("side.txt"), "side\n").unwrap();
+    git(dir.path(), &["add", "side.txt"]);
+    git(dir.path(), &["commit", "-q", "-m", "feat: side"]);
+    git(dir.path(), &["checkout", "-q", "feat/x"]);
+    std::fs::write(dir.path().join("main.txt"), "main\n").unwrap();
+    git(dir.path(), &["add", "main.txt"]);
+    git(dir.path(), &["commit", "-q", "-m", "feat: main"]);
+    wire_commit_msg_hook(dir.path());
+
+    let cut = "# ------------------------ >8 ------------------------";
+    let msg = format!("Merge feat/side\n\n{cut}\n- pages 1\u{2013}3\n");
+    let out = run_wired_git(
+        dir.path(),
+        &[
+            "-c",
+            "commit.verbose=true",
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "feat/side",
+            "-m",
+            &msg,
+        ],
+        None,
+    );
+    assert_policy_character_block(&out, "direct merge, commit.verbose");
+    git(dir.path(), &["merge", "--abort"]);
+
+    // Control: the same merge without the dash lands with the text kept.
+    let clean = format!("Merge feat/side\n\n{cut}\n- pages 1 to 3\n");
+    let out = run_wired_git(
+        dir.path(),
+        &[
+            "-c",
+            "commit.verbose=true",
+            "merge",
+            "--no-ff",
+            "--no-edit",
+            "feat/side",
+            "-m",
+            &clean,
+        ],
+        None,
+    );
+    let stored = assert_committed(dir.path(), &out, "direct merge control");
+    assert!(stored.contains("- pages 1 to 3"), "{stored}");
+}
+
+#[cfg(unix)]
+#[test]
+fn wired_commit_msg_scans_hash_lines_an_editor_session_keeps() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    wire_commit_msg_hook(dir.path());
+    let editor = prepending_editor(
+        dir.path(),
+        "kept",
+        "feat: edited\n\n# local note \u{2014} kept\n",
+    );
+
+    // A non-stripping cleanup keeps the edited `#` line.
+    let out = wired_commit(
+        dir.path(),
+        &["-c", "commit.cleanup=whitespace", "commit"],
+        Some(&editor),
+    );
+    assert_policy_character_block(&out, "editor, commit.cleanup=whitespace");
+    // With `;` as the comment prefix, Git keeps `#` lines.
+    let out = wired_commit(
+        dir.path(),
+        &["-c", "core.commentChar=;", "commit"],
+        Some(&editor),
+    );
+    assert_policy_character_block(&out, "editor, core.commentChar=;");
+}
+
+// Codex round 3, N3: `core.commentString` is used byte for byte. With `# `,
+// Git keeps `#kept` and drops only lines starting `# `.
+#[cfg(unix)]
+#[test]
+fn wired_commit_msg_uses_the_exact_comment_string() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    git(dir.path(), &["config", "core.commentString", "# "]);
+    wire_commit_msg_hook(dir.path());
+
+    let kept = prepending_editor(dir.path(), "hash-kept", "feat: x\n\n#kept \u{2014} line\n");
+    let out = wired_commit(dir.path(), &["commit"], Some(&kept));
+    assert_policy_character_block(&out, "commentString `# `, #kept line");
+
+    let dropped = prepending_editor(
+        dir.path(),
+        "hash-space",
+        "feat: x\n\n# real comment \u{2014} dropped\n",
+    );
+    let out = wired_commit(dir.path(), &["commit"], Some(&dropped));
+    let stored = assert_committed(dir.path(), &out, "commentString `# `, comment");
+    assert_eq!("feat: x\n\n", stored);
+}
+
+#[cfg(unix)]
+#[test]
+fn wired_commit_msg_allows_edited_template_comments_and_diff_preview() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    wire_commit_msg_hook(dir.path());
+
+    // Default strip cleanup: the `#` note, Git's hints and the verbose diff
+    // preview (the staged file holds an em dash) are all dropped by Git.
+    let editor = prepending_editor(
+        dir.path(),
+        "dropped",
+        "feat: edited\n\n# local note \u{2014} dropped\n",
+    );
+    let out = wired_commit(dir.path(), &["commit", "-v"], Some(&editor));
+    let stored = assert_committed(dir.path(), &out, "editor -v");
+    assert_eq!("feat: edited\n\n", stored);
+
+    // Scissors cleanup keeps `#` lines but cuts the verbose preview.
+    let editor = prepending_editor(dir.path(), "scissors", "feat: scissors\n");
+    let out = wired_commit(
+        dir.path(),
+        &["-c", "commit.cleanup=scissors", "commit", "-v"],
+        Some(&editor),
+    );
+    let stored = assert_committed(dir.path(), &out, "editor scissors -v");
+    assert!(stored.starts_with("feat: scissors\n"), "{stored}");
+    assert!(!stored.contains(">8"), "{stored}");
 }
 
 // ---------------------------------------------------------------------------

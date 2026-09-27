@@ -288,7 +288,51 @@ fn commit_msg(
         &message,
         &staged_files(root),
         merge_in_progress(root),
+        &git_hook::MessageSource::Pending(pending_cleanup(root)),
     ))
+}
+
+/// The hook's best-effort inference of Git's cleanup of the commit-msg
+/// message file, for early feedback only.
+/// Git runs the hook before its cleanup and exports `GIT_EDITOR=:` to it when
+/// no editor runs (`-m`, `-F`, `--no-edit`), which keeps `#` lines by
+/// default. `commit.cleanup` and the comment prefix come from Git's effective
+/// config, `git -c` included, read byte for byte. A command-line `--cleanup`,
+/// `-v` or `--no-verbose` is not visible to a hook, so the inference can be
+/// wrong in either direction; `codeflow ci` scans the stored message and
+/// stays the authority.
+fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
+    let editor_used = std::env::var_os("GIT_EDITOR").is_none_or(|e| e != ":");
+    let mode = git_config_values(root, &["--get", "commit.cleanup"]).pop();
+    // core.commentString and core.commentChar set one value; the last wins.
+    let comment = git_config_values(root, &["--get-regexp", r"^core\.comment(char|string)$"])
+        .pop()
+        .map(|entry| {
+            entry
+                .split_once('\n')
+                .map_or(String::new(), |(_, v)| v.to_string())
+        });
+    git_hook::GitCleanup::resolve(mode.as_deref(), editor_used, comment.as_deref())
+}
+
+/// The NUL-separated entries of one `git config -z` read in `root`, exact
+/// bytes, value text unchanged; empty when unset or unreadable.
+fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
+    Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(["config", "-z"])
+        .args(args)
+        .output()
+        .ok()
+        .filter(|o| o.status.success())
+        .map(|o| {
+            String::from_utf8_lossy(&o.stdout)
+                .split_terminator('\0')
+                .map(str::to_string)
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// True while git is creating a real merge commit — `MERGE_HEAD` exists in the
