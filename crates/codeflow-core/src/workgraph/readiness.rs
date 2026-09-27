@@ -58,6 +58,9 @@ pub struct Snapshot {
     pub reference: Option<String>,
     /// The tip commit read.
     pub tip: Option<String>,
+    /// Why the target could not be read, when it could not (a local branch
+    /// diverged from its upstream).
+    pub problem: Option<String>,
 }
 
 /// One open task and its derived state.
@@ -127,10 +130,15 @@ impl Backlog {
         let tips = self
             .snapshots
             .iter()
-            .map(|snapshot| match (&snapshot.reference, &snapshot.tip) {
-                (Some(reference), Some(tip)) => format!("{reference}@{}", &tip[..tip.len().min(9)]),
-                _ => format!("{} (not found)", snapshot.target),
-            })
+            .map(
+                |snapshot| match (&snapshot.reference, &snapshot.tip, &snapshot.problem) {
+                    (Some(reference), Some(tip), _) => {
+                        format!("{reference}@{}", &tip[..tip.len().min(9)])
+                    }
+                    (_, _, Some(problem)) => format!("{} ({problem})", snapshot.target),
+                    _ => format!("{} (not found)", snapshot.target),
+                },
+            )
             .collect::<Vec<_>>()
             .join(", ");
         format!(
@@ -142,9 +150,10 @@ impl Backlog {
     }
 }
 
-/// The identity of a declared target: `main`, `refs/heads/main`,
-/// `origin/main` and `refs/remotes/origin/main` are one target; a target on
-/// another remote (`refs/remotes/upstream/main`) keeps its remote.
+/// The identity of a target name, for comparing a branch with declared
+/// targets: `main`, `refs/heads/main`, `origin/main` and
+/// `refs/remotes/origin/main` name one line; a target on another remote
+/// (`refs/remotes/upstream/main`) keeps its remote.
 fn canonical_target(declared: &str) -> String {
     declared
         .strip_prefix("refs/heads/")
@@ -154,40 +163,73 @@ fn canonical_target(declared: &str) -> String {
         .to_string()
 }
 
-/// The remote a canonical target is read from, when it names one other than
-/// `origin` (`refs/remotes/<remote>/<branch>`).
-fn target_remote(canonical: &str) -> Option<&str> {
-    canonical
+/// A resolved target: the ref read, its tip, or why it cannot be read.
+type Resolved = Result<Option<(String, git2::Oid)>, String>;
+
+/// Resolve a declared target exactly as `work start` does
+/// ([`super::resolve_work_target_checked`]): a bare name reads the local
+/// branch, or its configured upstream when the local branch is strictly
+/// behind it, and `origin/<name>` only where no local branch exists; an
+/// explicit ref is read as written. One resolver, so `work next`,
+/// `work claim` and `work start` read one line. `Ok(None)` when the target
+/// resolves nowhere here; an error when the local branch and its upstream
+/// have diverged.
+fn resolve_target(repo_root: &Path, repo: &Repository, declared: &str) -> Resolved {
+    let resolved = super::resolve_work_target_checked(repo_root, Some(declared))
+        .map_err(|error| error.to_string())?;
+    Ok(resolved.and_then(|resolved| {
+        let commit = super::work_start::target_reference(repo, &resolved.target)?;
+        Some((resolved.target, commit.id()))
+    }))
+}
+
+/// A resolved target as output shows it (`upstream/main`, not
+/// `refs/remotes/upstream/main`).
+fn shown(target: &str) -> String {
+    target
         .strip_prefix("refs/remotes/")
-        .and_then(|rest| rest.split_once('/'))
-        .map(|(remote, _)| remote)
+        .or_else(|| target.strip_prefix("refs/heads/"))
+        .unwrap_or(target)
+        .to_string()
 }
 
-/// Resolve a canonical target to the ref the new-claim context reads. An
-/// explicit ref is read exactly, never through another remote; a plain name
-/// reads the fetched `origin` copy first and the local branch otherwise.
-fn claim_reference(repo: &Repository, canonical: &str) -> Option<(String, git2::Oid)> {
-    let candidates = if canonical.starts_with("refs/") {
-        vec![canonical.to_string()]
-    } else {
-        vec![
-            format!("refs/remotes/origin/{canonical}"),
-            format!("refs/heads/{canonical}"),
-        ]
-    };
-    candidates.into_iter().find_map(|name| {
-        let oid = repo.find_reference(&name).ok()?.peel_to_commit().ok()?.id();
-        Some((
-            name.trim_start_matches("refs/remotes/")
-                .trim_start_matches("refs/heads/")
-                .to_string(),
-            oid,
-        ))
-    })
+/// The remote `work claim` fetches before it judges `declared`: the remote
+/// an explicit remote-tracking ref names; for a bare name, the configured
+/// upstream remote of its local branch, or `origin` when no local branch
+/// exists (a clone that reads `origin/<name>`).
+///
+/// # Errors
+///
+/// Returns the reason when an explicit remote-tracking ref names no
+/// configured remote.
+fn target_fetch_remote(repo: &Repository, declared: &str) -> Result<Option<String>, String> {
+    let owned = |buf: git2::Buf| std::str::from_utf8(&buf).ok().map(str::to_owned);
+    if declared.starts_with("refs/remotes/") {
+        return repo
+            .branch_remote_name(declared)
+            .ok()
+            .and_then(owned)
+            .map(Some)
+            .ok_or_else(|| format!("target '{declared}' names a remote that is not configured"));
+    }
+    if declared.starts_with("origin/") {
+        return Ok(Some("origin".to_string()));
+    }
+    let local = format!(
+        "refs/heads/{}",
+        declared.strip_prefix("refs/heads/").unwrap_or(declared)
+    );
+    if repo.find_reference(&local).is_ok() {
+        return Ok(repo.branch_upstream_remote(&local).ok().and_then(owned));
+    }
+    Ok(Some("origin".to_string()))
 }
 
-/// Every visible branch name (local, and `origin/` stripped of its remote)
-/// carrying a task id on a sanctioned work prefix, with its tip.
+/// Every visible branch carrying a task id on a sanctioned work prefix, with
+/// its tip: local branches and `origin`'s by branch name (a branch and its
+/// published copy are one claim), another remote's as `<remote>/<branch>`,
+/// so a claim visible on any remote counts and distinct claims stay
+/// distinct.
 fn visible_work_branches(
     repo: &Repository,
     prefixes: &[String],
@@ -202,17 +244,34 @@ fn visible_work_branches(
         let Some(name) = branch.name().ok().flatten() else {
             continue;
         };
-        let name = match kind {
-            BranchType::Local => name.to_string(),
-            BranchType::Remote => match name.strip_prefix("origin/") {
-                Some(rest) if rest != "HEAD" => rest.to_string(),
-                _ => continue,
-            },
+        let (name, short) = match kind {
+            BranchType::Local => (name.to_string(), name.to_string()),
+            BranchType::Remote => {
+                let Some(remote) = repo
+                    .branch_remote_name(&format!("refs/remotes/{name}"))
+                    .ok()
+                    .and_then(|buf| std::str::from_utf8(&buf).ok().map(str::to_owned))
+                else {
+                    continue;
+                };
+                let Some(short) = name
+                    .strip_prefix(&format!("{remote}/"))
+                    .filter(|short| *short != "HEAD")
+                else {
+                    continue;
+                };
+                let shown = if remote == "origin" {
+                    short.to_string()
+                } else {
+                    name.to_string()
+                };
+                (shown, short.to_string())
+            }
         };
         let Some(oid) = branch.get().peel_to_commit().ok().map(|commit| commit.id()) else {
             continue;
         };
-        let Some(suffix) = work_suffix(prefixes, &name) else {
+        let Some(suffix) = work_suffix(prefixes, &short) else {
             continue;
         };
         let Some(id) = ids
@@ -306,8 +365,8 @@ fn fetched_at(repo: &Repository) -> Option<String> {
     Some(super::rfc3339_at(modified))
 }
 
-/// The declared targets of the task records in the working tree, and the
-/// default target for records that declare none.
+/// The declared targets of the task records in the working tree, as
+/// written, and the default target for records that declare none.
 fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
     let mut targets: BTreeSet<String> =
         crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
@@ -316,12 +375,78 @@ fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
                 let stem = path.file_stem()?.to_str()?.to_string();
                 super::declared_work_target(repo_root, &stem)
             })
-            .map(|target| canonical_target(&target))
             .collect();
     if let Some(default) = super::default_work_target(repo_root) {
-        targets.insert(canonical_target(&default));
+        targets.insert(default);
     }
     targets
+}
+
+/// Declared targets resolved once each, as `work start` resolves them.
+struct Targets<'a> {
+    repo_root: &'a Path,
+    repo: &'a Repository,
+    seen: BTreeMap<String, Resolved>,
+}
+
+impl<'a> Targets<'a> {
+    fn new(repo_root: &'a Path, repo: &'a Repository) -> Self {
+        Self {
+            repo_root,
+            repo,
+            seen: BTreeMap::new(),
+        }
+    }
+
+    fn resolve(&mut self, declared: &str) -> Resolved {
+        self.seen
+            .entry(declared.to_string())
+            .or_insert_with(|| resolve_target(self.repo_root, self.repo, declared))
+            .clone()
+    }
+}
+
+/// One target tip read: the declared target, the resolved ref, its tip and
+/// the records there.
+type Tip = (String, String, git2::Oid, BTreeMap<String, Record>);
+
+/// Read each declared target's tip once (two spellings of one ref are one
+/// tip) and name every snapshot, including the ones that cannot be read.
+fn read_tips(
+    repo: &Repository,
+    targets: &mut Targets<'_>,
+    declared: BTreeSet<String>,
+    snapshots: &mut Vec<Snapshot>,
+) -> Result<Vec<Tip>, String> {
+    let mut tips: Vec<Tip> = Vec::new();
+    for target in declared {
+        let (reference, tip, problem) = match targets.resolve(&target) {
+            Ok(Some((reference, oid))) => (Some(reference), Some(oid), None),
+            Ok(None) => (None, None, None),
+            Err(problem) => (None, None, Some(problem)),
+        };
+        if let (Some(reference), Some(oid)) = (&reference, tip) {
+            if tips
+                .iter()
+                .any(|(_, seen, tip, _)| seen == reference && *tip == oid)
+            {
+                continue;
+            }
+            let tree = repo
+                .find_commit(oid)
+                .and_then(|commit| commit.tree())
+                .map_err(|error| error.to_string())?;
+            let records = records_from_tree(repo, &tree).map_err(|error| error.to_string())?;
+            tips.push((target.clone(), reference.clone(), oid, records));
+        }
+        snapshots.push(Snapshot {
+            target,
+            reference: reference.as_deref().map(shown),
+            tip: tip.map(|oid| oid.to_string()),
+            problem,
+        });
+    }
+    Ok(tips)
 }
 
 /// Compute the backlog from the last-fetched refs. Makes no network call.
@@ -332,52 +457,43 @@ fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
 pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let prefixes = work_prefixes(repo_root);
-    let default = super::default_work_target(repo_root).map(|target| canonical_target(&target));
+    let default = super::default_work_target(repo_root);
     let mut out = Backlog {
         fetched_at: fetched_at(&repo),
         ..Backlog::default()
     };
-    let mut tips: Vec<(String, git2::Oid, BTreeMap<String, Record>)> = Vec::new();
-    for target in declared_targets(repo_root) {
-        match claim_reference(&repo, &target) {
-            Some((reference, oid)) => {
-                let tree = repo
-                    .find_commit(oid)
-                    .and_then(|commit| commit.tree())
-                    .map_err(|error| error.to_string())?;
-                let records = records_from_tree(&repo, &tree).map_err(|error| error.to_string())?;
-                out.snapshots.push(Snapshot {
-                    target: target.clone(),
-                    reference: Some(reference),
-                    tip: Some(oid.to_string()),
-                });
-                tips.push((target, oid, records));
-            }
-            None => out.snapshots.push(Snapshot {
-                target,
-                reference: None,
-                tip: None,
-            }),
-        }
-    }
+    // Each declared target resolved once, as `work start` resolves it.
+    let mut resolved = Targets::new(repo_root, &repo);
+    let tips = read_tips(
+        &repo,
+        &mut resolved,
+        declared_targets(repo_root),
+        &mut out.snapshots,
+    )?;
+    let mut resolve = |declared: &str| resolved.resolve(declared);
 
     let ids: BTreeSet<String> = tips
         .iter()
-        .flat_map(|(_, _, records)| records.keys().cloned())
+        .flat_map(|(_, _, _, records)| records.keys().cloned())
         .collect();
     let carried = visible_work_branches(&repo, &prefixes, &ids);
     let mut judged = BTreeSet::new();
-    for (target, tip, records) in &tips {
+    for (_, reference, tip, records) in &tips {
         for record in records
             .values()
             .filter(|record| record.kind == RecordKind::Task)
         {
-            let declared = record
+            // A record belongs to this tip when its own declared target
+            // resolves to this ref, whatever spelling it uses.
+            let Some(declared) = record
                 .integration_target
-                .as_deref()
-                .map(canonical_target)
-                .or_else(|| default.clone());
-            if declared.as_deref() != Some(target.as_str()) || !judged.insert(record.id.clone()) {
+                .clone()
+                .or_else(|| default.clone())
+            else {
+                continue;
+            };
+            let here = matches!(resolve(&declared), Ok(Some((seen, oid))) if seen == *reference && oid == *tip);
+            if !here || !judged.insert(record.id.clone()) {
                 continue;
             }
             if let Some(epic) = &record.epic_id {
@@ -399,16 +515,17 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
             if names.len() > 1 {
                 out.conflicts.insert(record.id.clone(), names.clone());
             }
-            let (state, reason) = match validate_anchored_task(&repo, records, &record.id, target) {
-                Ok(_) if names.is_empty() => (State::Ready, String::new()),
-                Ok(_) => (State::Active, String::new()),
-                Err(error) => match error.not_ready() {
-                    NotReady::Closed => continue,
-                    NotReady::Blocked => (State::Blocked, error.to_string()),
-                    NotReady::Waiting => (State::Waiting, error.to_string()),
-                    NotReady::Invalid => (State::Invalid, error.to_string()),
-                },
-            };
+            let (state, reason) =
+                match validate_anchored_task(&repo, records, &record.id, reference) {
+                    Ok(_) if names.is_empty() => (State::Ready, String::new()),
+                    Ok(_) => (State::Active, String::new()),
+                    Err(error) => match error.not_ready() {
+                        NotReady::Closed => continue,
+                        NotReady::Blocked => (State::Blocked, error.to_string()),
+                        NotReady::Waiting => (State::Waiting, error.to_string()),
+                        NotReady::Invalid => (State::Invalid, error.to_string()),
+                    },
+                };
             // A claim on a waiting task makes it active; a Blocker or an
             // invalid record keeps precedence over any branch, which is still
             // listed with the entry.
@@ -421,7 +538,7 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
                 task_id: record.id.clone(),
                 title: record.title.clone(),
                 epic_id: record.epic_id.clone(),
-                target: target.clone(),
+                target: declared.clone(),
                 state,
                 reason,
                 branches: names,
@@ -457,11 +574,13 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
     }
 }
 
-/// Claim `task_id` (R-23): fetch `origin` when it exists, judge the task in
-/// the new-claim context on the fetched target tip, refuse when a visible
-/// branch already carries its id, then create `task/<id>-<slug>` from that
-/// tip and push it. The pushed branch is an advisory mark that others see;
-/// nothing depends on it being exclusive.
+/// Claim `task_id` (R-23): fetch the remote its target resolves through,
+/// and `origin`, then resolve the target again exactly as `work start` does
+/// and judge the task in the new-claim context on that tip; refuse when a
+/// branch already carries its id (visible here, or listed on `origin` or the
+/// target's remote); then create `task/<id>-<slug>` from that tip and
+/// publish it to `origin` create-only. The pushed branch is an advisory mark
+/// that others see; nothing depends on it being exclusive.
 ///
 /// # Errors
 ///
@@ -469,44 +588,52 @@ fn git(repo_root: &Path, args: &[&str]) -> Result<String, String> {
 pub fn claim(repo_root: &Path, task_id: &str) -> Result<Claim, String> {
     let declared = super::declared_work_target(repo_root, task_id)
         .ok_or_else(|| format!("{task_id} has no visible record with an integration_target"))?;
-    let target = canonical_target(&declared);
     let remotes: Vec<String> = git(repo_root, &["remote"])?
         .lines()
         .map(str::to_string)
         .collect();
     let has_origin = remotes.iter().any(|remote| remote == "origin");
-    // Fetch the remote the target names (never substituting origin for it)
-    // and origin, where claims are published.
-    let mut fetch: Vec<&str> = target_remote(&target).into_iter().collect();
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    // Fetch the remote the target resolves through (never substituting
+    // origin for it), and origin, where claims are published.
+    let target_remote = target_fetch_remote(&repo, &declared)?
+        .filter(|remote| remotes.iter().any(|known| known == remote));
+    let mut fetch: Vec<&str> = target_remote.as_deref().into_iter().collect();
     if has_origin && !fetch.contains(&"origin") {
         fetch.push("origin");
     }
     for remote in fetch {
-        if !remotes.iter().any(|known| known == remote) {
-            return Err(format!(
-                "target '{target}' names remote '{remote}', which is not configured"
-            ));
-        }
         git(repo_root, &["fetch", "--prune", "--quiet", remote])
             .map_err(|error| format!("fetch {remote} failed: {error}"))?;
     }
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
-    let (reference, tip) = claim_reference(&repo, &target)
-        .ok_or_else(|| format!("target '{target}' does not resolve here"))?;
+    let (reference, tip) = resolve_target(repo_root, &repo, &declared)?
+        .ok_or_else(|| format!("target '{declared}' does not resolve here"))?;
     let tree = repo
         .find_commit(tip)
         .and_then(|commit| commit.tree())
         .map_err(|error| error.to_string())?;
     let records = records_from_tree(&repo, &tree).map_err(|error| error.to_string())?;
-    validate_anchored_task(&repo, &records, task_id, &target)
-        .map_err(|error| format!("not ready on {reference}: {error}"))?;
+    let reference_shown = shown(&reference);
+    validate_anchored_task(&repo, &records, task_id, &reference)
+        .map_err(|error| format!("not ready on {reference_shown}: {error}"))?;
     let ids = BTreeSet::from([task_id.to_string()]);
     let prefixes = work_prefixes(repo_root);
     let mut carried = visible_work_branches(&repo, &prefixes, &ids)
         .remove(task_id)
         .unwrap_or_default();
+    let mut listed: Vec<&str> = Vec::new();
     if has_origin {
-        carried.extend(remote_claims(&repo, repo_root, &prefixes, task_id)?);
+        listed.push("origin");
+    }
+    if let Some(remote) = target_remote
+        .as_deref()
+        .filter(|remote| *remote != "origin")
+    {
+        listed.push(remote);
+    }
+    for remote in listed {
+        carried.extend(remote_claims(&repo, repo_root, &prefixes, task_id, remote)?);
     }
     let (open, _) = split_landed(&repo, repo_root, &carried, tip);
     if !open.is_empty() {
@@ -538,22 +665,25 @@ pub fn claim(repo_root: &Path, task_id: &str) -> Result<Claim, String> {
     }
     Ok(Claim {
         branch,
-        from: format!("{reference}@{}", &tip.to_string()[..9]),
+        from: format!("{reference_shown}@{}", &tip.to_string()[..9]),
         pushed: has_origin,
     })
 }
 
-/// Branches on `origin` carrying `task_id`, read from the remote itself so
+/// Branches on `remote` carrying `task_id`, read from the remote itself so
 /// a narrow fetch refspec cannot hide a claim. A tip this clone does not
 /// have is kept as an open claim (its landing cannot be proven here).
+/// `origin`'s are named by branch, another remote's as `<remote>/<branch>`,
+/// as [`visible_work_branches`] names them.
 fn remote_claims(
     repo: &Repository,
     repo_root: &Path,
     prefixes: &[String],
     task_id: &str,
+    remote: &str,
 ) -> Result<Vec<(String, git2::Oid)>, String> {
-    let listed = git(repo_root, &["ls-remote", "--heads", "origin"])
-        .map_err(|error| format!("cannot list origin's branches: {error}"))?;
+    let listed = git(repo_root, &["ls-remote", "--heads", remote])
+        .map_err(|error| format!("cannot list {remote}'s branches: {error}"))?;
     Ok(listed
         .lines()
         .filter_map(|line| {
@@ -565,13 +695,40 @@ fn remote_claims(
             }
             let oid = git2::Oid::from_str(sha).ok()?;
             let known = repo.find_commit(oid).is_ok();
+            let shown = if remote == "origin" {
+                name.to_string()
+            } else {
+                format!("{remote}/{name}")
+            };
             // An unknown tip is never landed: keep it open with a null id.
-            Some((
-                name.to_string(),
-                if known { oid } else { git2::Oid::ZERO_SHA1 },
-            ))
+            Some((shown, if known { oid } else { git2::Oid::ZERO_SHA1 }))
         })
         .collect())
+}
+
+/// Whether `branch` (local, or `origin/<branch>`) holds an open claim: it
+/// carries a task id on a sanctioned work prefix and its tip has not landed
+/// on `target` (R-27). `work next` calls such a task active, so cleanup
+/// keeps its branch, even when its tip is contained in the target because
+/// nothing has been committed on it yet.
+pub(crate) fn is_open_claim(
+    repo_root: &Path,
+    repo: &Repository,
+    branch: &str,
+    tip: git2::Oid,
+    target: git2::Oid,
+) -> bool {
+    let name = branch.strip_prefix("origin/").unwrap_or(branch);
+    let carries_task = work_suffix(&work_prefixes(repo_root), name).is_some_and(|suffix| {
+        let mut parts = suffix.splitn(3, '-');
+        match (parts.next(), parts.next()) {
+            (Some(kind), Some(number)) => {
+                super::is_valid_task_format_id(&format!("{kind}-{number}"))
+            }
+            _ => false,
+        }
+    });
+    carries_task && !landed(repo, repo_root, tip, target)
 }
 
 /// Other open (unlanded) visible branches carrying `task_id` than `own`: the
@@ -586,7 +743,7 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Vec<String>
         .remove(task_id)
         .unwrap_or_default();
     let target_tip = super::declared_work_target(repo_root, task_id)
-        .and_then(|target| claim_reference(&repo, &canonical_target(&target)))
+        .and_then(|target| resolve_target(repo_root, &repo, &target).ok().flatten())
         .map(|(_, oid)| oid);
     let open = match target_tip {
         Some(tip) => split_landed(&repo, repo_root, &carried, tip).0,
@@ -999,7 +1156,9 @@ mod tests {
         let claimed = claim(root, "TSK-002").unwrap();
         assert_eq!(claimed.branch, "task/TSK-002-work-tsk-002");
         assert!(claimed.pushed);
-        assert!(claimed.from.starts_with("origin/main@"));
+        // `main` tracks `origin/main` and equals it: the local branch is read,
+        // as `work start` reads it.
+        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
         let remote = run(bare.path(), &["branch", "--list"]);
         assert!(remote.contains("task/TSK-002-work-tsk-002"), "{remote}");
 
@@ -1007,7 +1166,7 @@ mod tests {
         assert!(second.contains("already claimed"), "{second}");
         assert!(!second.to_lowercase().contains("lock"), "{second}");
         let waiting = claim(root, "TSK-003").unwrap_err();
-        assert!(waiting.contains("not ready on origin/main"), "{waiting}");
+        assert!(waiting.contains("not ready on main"), "{waiting}");
         assert!(backlog(root).unwrap().fetched_at.is_some(), "claim fetched");
         assert_eq!(
             other_branches(root, "TSK-002", "task/TSK-002-work-tsk-002"),
@@ -1360,5 +1519,265 @@ mod tests {
         assert_eq!(blocked.branches, ["task/TSK-001-work"]);
         assert!(blocked.reason.contains("vendor"));
         assert_eq!(backlog.in_state(State::Active).count(), 0);
+    }
+
+    const HOLD: &str =
+        "\n## Blocker\n\n- reason: upstream hold\n- owner: operator\n- revisit: approved\n";
+
+    /// TSK-001 on `main`, held by a Blocker when `held`.
+    fn main_task(root: &Path, held: bool) {
+        task(
+            root,
+            "TSK-001",
+            if held { "blocked" } else { "todo" },
+            "[]",
+            "",
+        );
+        if held {
+            let path = root.join("project-management/tasks/TSK-001.md");
+            let text = fs::read_to_string(&path).unwrap();
+            fs::write(&path, format!("{text}{HOLD}")).unwrap();
+        }
+    }
+
+    fn bare_from(root: &Path, source: &str) -> tempfile::TempDir {
+        let bare = tempfile::tempdir().unwrap();
+        run(bare.path(), &["init", "-q", "--bare"]);
+        run(
+            root,
+            &[
+                "push",
+                "-q",
+                bare.path().to_str().unwrap(),
+                &format!("{source}:refs/heads/main"),
+            ],
+        );
+        bare
+    }
+
+    /// A clone whose `main` tracks `upstream/main` (TSK-001 held when
+    /// `upstream_held`), with `origin` a fork one commit ahead of upstream
+    /// that flips the hold. Every remote is fetched. Returns the remotes.
+    fn forked(root: &Path, upstream_held: bool) -> (tempfile::TempDir, tempfile::TempDir) {
+        main_task(root, upstream_held);
+        commit(root, "upstream plan");
+        let upstream = bare_from(root, "main");
+        run(
+            root,
+            &[
+                "remote",
+                "add",
+                "upstream",
+                upstream.path().to_str().unwrap(),
+            ],
+        );
+        run(root, &["fetch", "-q", "upstream"]);
+        run(root, &["branch", "-q", "-u", "upstream/main", "main"]);
+        run(root, &["switch", "-q", "-c", "fork", "main"]);
+        main_task(root, !upstream_held);
+        commit(root, "fork flips the hold");
+        let origin = bare_from(root, "fork");
+        run(
+            root,
+            &["remote", "add", "origin", origin.path().to_str().unwrap()],
+        );
+        run(root, &["switch", "-q", "main"]);
+        run(root, &["branch", "-q", "-D", "fork"]);
+        run(root, &["fetch", "-q", "origin"]);
+        (upstream, origin)
+    }
+
+    /// `work start` on a fresh task branch cut from `from`, with the target
+    /// resolved as the CLI resolves it.
+    fn start_from(root: &Path, from: &str) -> Result<(), String> {
+        run(root, &["switch", "-q", "-c", "task/TSK-001-probe", from]);
+        let result = crate::workgraph::resolve_work_target_checked(root, Some("main"))
+            .map_err(|error| error.to_string())
+            .and_then(|resolved| {
+                let target = resolved.map(|resolved| resolved.target).unwrap();
+                crate::workgraph::check_work_start(root, "TSK-001", &target)
+                    .map(drop)
+                    .map_err(|error| error.to_string())
+            });
+        run(root, &["switch", "-q", "main"]);
+        run(root, &["branch", "-q", "-D", "task/TSK-001-probe"]);
+        result
+    }
+
+    /// R2-1: `main` tracks `upstream/main`; `origin` is a fork that removes
+    /// the upstream Blocker. Next, claim and start all read `main` (the
+    /// configured upstream line) and all refuse.
+    #[test]
+    fn a_fork_origin_never_stands_in_for_the_configured_upstream() {
+        let dir = repo();
+        let root = dir.path();
+        let (_upstream, _origin) = forked(root, true);
+        let backlog = backlog(root).unwrap();
+        assert_eq!(entry(&backlog, "TSK-001").state, State::Blocked);
+        assert!(
+            backlog.snapshot_line().contains(" main@"),
+            "{}",
+            backlog.snapshot_line()
+        );
+        let refused = claim(root, "TSK-001").unwrap_err();
+        assert!(refused.contains("not ready on main"), "{refused}");
+        assert!(refused.contains("upstream hold"), "{refused}");
+        let started = start_from(root, "main").unwrap_err();
+        assert!(started.contains("upstream hold"), "{started}");
+    }
+
+    /// R2-1, the other direction: upstream is ready and the fork adds a
+    /// Blocker. All three accept, and the claim is cut from `main`.
+    #[test]
+    fn a_ready_upstream_is_ready_whatever_the_fork_says() {
+        let dir = repo();
+        let root = dir.path();
+        let (_upstream, origin) = forked(root, false);
+        let backlog = backlog(root).unwrap();
+        assert_eq!(entry(&backlog, "TSK-001").state, State::Ready);
+        let claimed = claim(root, "TSK-001").unwrap();
+        assert!(claimed.from.starts_with("main@"), "{}", claimed.from);
+        let published = run(origin.path(), &["branch", "--list"]);
+        assert!(published.contains(&claimed.branch), "{published}");
+        start_from(root, &claimed.branch).unwrap();
+    }
+
+    /// R2-1 controls: a local `main` ahead of its upstream is read as it is;
+    /// one diverged from it is refused by all three with one reason.
+    #[test]
+    fn a_local_target_ahead_is_read_and_a_diverged_one_is_refused() {
+        let dir = repo();
+        let root = dir.path();
+        let (upstream, _origin) = forked(root, true);
+        main_task(root, false);
+        commit(root, "local release of the hold");
+        let ahead = backlog(root).unwrap();
+        assert_eq!(entry(&ahead, "TSK-001").state, State::Ready);
+        start_from(root, "main").unwrap();
+
+        // Upstream moves on too: the local branch and its upstream diverge.
+        let other = tempfile::tempdir().unwrap();
+        run(
+            Path::new("."),
+            &[
+                "clone",
+                "-q",
+                upstream.path().to_str().unwrap(),
+                other.path().to_str().unwrap(),
+            ],
+        );
+        run(other.path(), &["config", "user.email", "test@example.com"]);
+        run(other.path(), &["config", "user.name", "Test"]);
+        fs::write(other.path().join("elsewhere.txt"), "x\n").unwrap();
+        commit(other.path(), "upstream moves");
+        run(other.path(), &["push", "-q", "origin", "main"]);
+        run(root, &["fetch", "-q", "upstream"]);
+        let diverged = backlog(root).unwrap();
+        assert!(diverged
+            .entries
+            .iter()
+            .all(|entry| entry.task_id != "TSK-001"));
+        let line = diverged.snapshot_line();
+        assert!(line.contains("main (local branch 'main' and"), "{line}");
+        assert!(line.contains("have diverged"), "{line}");
+        let refused = claim(root, "TSK-001").unwrap_err();
+        assert!(refused.contains("have diverged"), "{refused}");
+        let started = start_from(root, "main").unwrap_err();
+        assert!(started.contains("have diverged"), "{started}");
+    }
+
+    /// R2-2: a claim visible on the declared target's remote counts, fetched
+    /// or listed only by that remote; it is named with its remote.
+    #[test]
+    fn a_claim_on_the_target_remote_counts() {
+        let dir = repo();
+        let root = dir.path();
+        task_in(
+            root,
+            "TSK-001",
+            Some("EPC-001"),
+            "refs/remotes/upstream/main",
+            "todo",
+            "[]",
+            "",
+        );
+        commit(root, "plan");
+        let upstream = bare_from(root, "main");
+        run(
+            upstream.path(),
+            &["branch", "task/TSK-001-already-working", "main"],
+        );
+        run(
+            root,
+            &[
+                "remote",
+                "add",
+                "upstream",
+                upstream.path().to_str().unwrap(),
+            ],
+        );
+        run(root, &["fetch", "-q", "upstream"]);
+        let _origin = with_origin(root);
+
+        let backlog = backlog(root).unwrap();
+        let claimed = entry(&backlog, "TSK-001");
+        assert_eq!(claimed.state, State::Active);
+        assert_eq!(claimed.branches, ["upstream/task/TSK-001-already-working"]);
+        let refused = claim(root, "TSK-001").unwrap_err();
+        assert!(
+            refused.contains("upstream/task/TSK-001-already-working"),
+            "{refused}"
+        );
+
+        // A refspec that fetches only `main` hides it locally; listing the
+        // remote still finds it.
+        run(
+            root,
+            &[
+                "config",
+                "remote.upstream.fetch",
+                "+refs/heads/main:refs/remotes/upstream/main",
+            ],
+        );
+        run(
+            root,
+            &[
+                "update-ref",
+                "-d",
+                "refs/remotes/upstream/task/TSK-001-already-working",
+            ],
+        );
+        let refused = claim(root, "TSK-001").unwrap_err();
+        assert!(
+            refused.contains("upstream/task/TSK-001-already-working"),
+            "{refused}"
+        );
+    }
+
+    /// R2-3: a just-created claim is active in `work next` and retained,
+    /// never removable, in the same `status` output.
+    #[test]
+    fn a_fresh_claim_is_active_and_never_removable() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        commit(root, "plan");
+        let _origin = with_origin(root);
+        let claimed = claim(root, "TSK-001").unwrap();
+        let view = crate::status::collect_status(root);
+        let rendered = crate::status::render_status(&view, false);
+        let line = rendered
+            .lines()
+            .find(|line| line.contains(&claimed.branch) && line.contains("retain"))
+            .unwrap_or_else(|| panic!("no cleanup line for the claim:\n{rendered}"));
+        assert!(line.contains("retain-live"), "{line}");
+        assert!(line.contains("open claim"), "{line}");
+        assert!(
+            !rendered
+                .lines()
+                .any(|line| line.contains(&claimed.branch) && line.contains("removable")),
+            "{rendered}"
+        );
+        assert!(rendered.contains("active"), "{rendered}");
     }
 }

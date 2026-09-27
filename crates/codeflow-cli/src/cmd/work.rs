@@ -118,6 +118,7 @@ fn next_json(backlog: &Backlog) -> serde_json::Value {
             "target": snapshot.target,
             "ref": snapshot.reference,
             "tip": snapshot.tip,
+            "problem": snapshot.problem,
         })).collect::<Vec<_>>(),
         "fetched_at": backlog.fetched_at,
         "tasks": backlog.entries.iter().map(|entry| json!({

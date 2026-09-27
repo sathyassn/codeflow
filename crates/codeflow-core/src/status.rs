@@ -41,7 +41,8 @@ pub enum CleanupDisposition {
     PreserveDirty,
     /// Clean, but landing could not be proven from local Git evidence.
     RetainUnproven,
-    /// An integration line an open task still targets (SPC-013 R-44).
+    /// An integration line an open task still targets (SPC-013 R-44), or a
+    /// task branch holding an open claim (R-27).
     RetainLive,
 }
 
@@ -354,6 +355,12 @@ fn classify_cleanup(
             "landing target or revision unavailable".to_string(),
         );
     };
+    if branch.is_some_and(|name| readiness::is_open_claim(repo_root, repo, name, oid, target.oid)) {
+        return (
+            CleanupDisposition::RetainLive,
+            format!("open claim: nothing of it has landed in {}", target.name),
+        );
+    }
     if oid == target.oid || repo.graph_descendant_of(target.oid, oid).unwrap_or(false) {
         return (
             CleanupDisposition::Removable,

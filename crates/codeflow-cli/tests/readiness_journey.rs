@@ -193,6 +193,9 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
     );
     git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
     git(&root, &["fetch", "-q", "origin"]);
+    // The scaffold holds a record (ADR-0001), so the shared id registry is
+    // seeded once before the first new record (TSK-101).
+    ok(&codeflow(&root, &["ids", "seed"]), "ids seed");
 
     git(&root, &["switch", "-q", "-c", "plan/backlog", LINE]);
     ok(&codeflow(&root, &["epic", "new", "Backlog"]), "epic new");
@@ -324,8 +327,10 @@ fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
 
     let next = ok(&codeflow(&root, &["work", "next"]), "work next");
     let lines: Vec<&str> = next.lines().collect();
+    // The line resolves as `work start` resolves it: the local branch,
+    // which has no configured upstream and holds every landing.
     assert!(
-        lines[0].starts_with(&format!("snapshot: origin/{LINE}@")),
+        lines[0].starts_with(&format!("snapshot: {LINE}@")),
         "{next}"
     );
     assert!(!lines[0].contains("fetched never"), "{next}");
@@ -375,7 +380,7 @@ fn work_next_and_claim_pick_the_ready_task_and_status_agrees() {
 
     let claimed = ok(&codeflow(&root, &["work", "claim", "TSK-001"]), "claim");
     assert!(
-        claimed.contains("task/TSK-001-root from origin/"),
+        claimed.contains(&format!("task/TSK-001-root from {LINE}@")),
         "{claimed}"
     );
     assert!(!claimed.to_lowercase().contains("lock"), "{claimed}");

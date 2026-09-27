@@ -38,8 +38,9 @@ publication date._
   next [--epic] [--json]` lists the ready tasks first, then waiting and
   blocked ones with their reasons, from the refs as last fetched, and names
   that snapshot. `codeflow work claim TSK-NNN` fetches, checks the task on
-  its target tip, refuses one a visible branch already carries, and pushes
-  `task/TSK-NNN-<slug>`; the branch is an advisory claim. `work start`, CI,
+  its target tip as `work start` resolves it, refuses one a branch on any
+  remote already carries, and pushes `task/TSK-NNN-<slug>`; the branch is
+  an advisory claim. `work start`, CI,
   `status` and `orient` read the same rule: `status` shows active, ready,
   landed and conflicting branches with epic progress and keeps a live
   integration line, and `orient` prints a task summary. A `depends_on` entry
