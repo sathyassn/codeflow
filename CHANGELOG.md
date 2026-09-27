@@ -102,6 +102,22 @@ publication date._
   reports privilege escalation it detects. Deny rules are unchanged. `codeflow update` refreshes the managed region of
   `.claude/settings.json` and keeps project-owned keys.
 
+<!-- codeflow:release-impact minor -->
+- **A pre-push gate under a minute that blocks.** Public behaviour change:
+  `git.test_gate_on_push` now defaults to `block`, in fresh installs at every
+  tier and in the built-in default. The pre-push hook no longer runs the test
+  suite. It runs the push set: `codeflow validate --docs`, `codeflow ci` on
+  each pushed branch's range, and the `.codeflow/test-config.json` targets
+  that define a `quick` mode. It no longer falls back to `essential`, so a
+  config without `quick` modes runs only the two built-in checks, and the
+  suite stays in the full gate and CI. When the push set takes longer than
+  60 seconds, the hook names the slowest target and the `modes.quick` key that
+  moves it out. The Rust and Go test-config templates add a lint target in the
+  push set. `codeflow update` moves a `test_gate_on_push` still at the old
+  shipped `warn` to `block` and keeps any value you set yourself. To restore
+  the old advisory level, set `"test_gate_on_push": "warn"` in
+  `.codeflow/policy.json`.
+
 <!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
