@@ -329,7 +329,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "c53f1118a51bd3a33dd7bc9470793a2d4cec818fbb2c57c47b9eaff502f29630",
+      "sha256": "f023c3d25c9aca02e90ee23e22d3046796bae6c441058741481f3631e23ef5f6",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/capability-routing.md": {
@@ -809,7 +809,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "c53f1118a51bd3a33dd7bc9470793a2d4cec818fbb2c57c47b9eaff502f29630",
+      "sha256": "f023c3d25c9aca02e90ee23e22d3046796bae6c441058741481f3631e23ef5f6",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/capability-routing.md": {

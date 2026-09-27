@@ -40,6 +40,7 @@ For a new or materially reshaped user-facing surface, load `cf-design` before
 settling Plan vN; a bounded change may record its explicit `conform` or `N/A`
 path instead. Before deciding whether to ask the operator, escalate or stop,
 read "What belongs to the operator" in `cf-method/references/autonomy.md`.
+Staged routes keep startup concise.
 
 ## Outcome modes
 
