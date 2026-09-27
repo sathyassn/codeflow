@@ -701,3 +701,28 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--cf-focus); outl
 @media (max-width: 599.98px) { .cf-main { padding-inline: 16px; } .cf-footer-nav { gap: 8px; } }
 
 .portal-provenance[data-stale="true"]::before { border-radius: 0; clip-path: polygon(50% 0, 100% 100%, 0 100%); background: var(--cf-warning); }
+
+/* A generated lookup table (skill catalog, policy reference): at phone width
+   each row stacks, its first cell as the heading and every other cell under
+   its column label, so a long description reads as prose instead of a
+   squeezed column. The labels are the generator's columns; a codeflow-core
+   test pins them to lookups.rs. The header stays for assistive technology. */
+@media (max-width: 639.98px) {
+  .sl-markdown-content .portal-lookup table,
+  .sl-markdown-content .portal-lookup tbody,
+  .sl-markdown-content .portal-lookup tr,
+  .sl-markdown-content .portal-lookup td { display: block; width: auto; overflow: visible; }
+  .sl-markdown-content .portal-lookup thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+  .sl-markdown-content .portal-lookup tr { padding-block: 12px; border-block-end: 1px solid var(--cf-border); }
+  .sl-markdown-content .portal-lookup td { margin: 0; padding: 2px 0; border: 0; }
+  .sl-markdown-content .portal-lookup td:first-child { padding-block-end: 6px; }
+  .sl-markdown-content .portal-lookup td:not(:first-child)::before { display: block; margin-block-start: 6px; font-family: var(--cf-font-mono); font-size: var(--cf-fs-micro); letter-spacing: 0.06em; text-transform: uppercase; color: var(--cf-text-muted); }
+  .portal-lookup[data-cf-lookup="skill-catalog"] td:nth-child(2)::before { content: "Use it for"; }
+  .portal-lookup[data-cf-lookup="skill-catalog"] td:nth-child(3)::before { content: "Installed at tiers"; }
+  .portal-lookup[data-cf-lookup="skill-catalog"] td:nth-child(4)::before { content: "Installed in"; }
+  .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(2)::before { content: "Type"; }
+  .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(3)::before { content: "Default"; }
+  .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(4)::before { content: "Valid values"; }
+  .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(5)::before { content: "Purpose"; }
+  .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(6)::before { content: "Notes"; }
+}

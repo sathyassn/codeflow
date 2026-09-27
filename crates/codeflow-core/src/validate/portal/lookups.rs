@@ -52,6 +52,26 @@ fn end_marker(derive: &str) -> String {
     format!("<!-- codeflow-derived {derive} end -->")
 }
 
+/// The columns of the skill catalog table.
+pub const SKILL_COLUMNS: [&str; 4] = ["Skill", "Use it for", "Installed at tiers", "Installed in"];
+/// The columns of each policy reference table.
+pub const POLICY_COLUMNS: [&str; 6] =
+    ["Key", "Type", "Default", "Valid values", "Purpose", "Notes"];
+
+/// A generated table inside the wrapper the portal stacks at phone width:
+/// each row reads as a block, its first cell as the heading and every other
+/// cell under the column label the starter's stylesheet gives it
+/// (`.portal-lookup[data-cf-lookup]` in `portal.css`, pinned to these
+/// columns by a test).
+fn lookup_table(derive: &str, columns: &[&str], rows: &[String]) -> String {
+    format!(
+        "<div class=\"portal-lookup\" data-cf-lookup=\"{derive}\">\n\n| {} |\n|{}\n{}\n\n</div>",
+        columns.join(" | "),
+        "---|".repeat(columns.len()),
+        rows.join("\n")
+    )
+}
+
 /// A table cell: pipes escaped, line breaks folded to spaces.
 fn cell(text: &str) -> String {
     text.split_whitespace()
@@ -113,9 +133,9 @@ pub fn skill_catalog(assets: &dyn AssetSource) -> Result<Generated, String> {
     }
     let count = rows.len();
     let text = format!(
-        "{}\n\nThe skills CodeFlow installs, one row per skill. Each description is the skill's own, from its `SKILL.md`; the harness reads it to decide when the skill applies. The minimal tier installs no skill.\n\n| Skill | Use it for | Installed at tiers | Installed in |\n|---|---|---|---|\n{}\n\n{}\n",
+        "{}\n\nThe skills CodeFlow installs, one row per skill. Each description is the skill's own, from its `SKILL.md`; the harness reads it to decide when the skill applies. The minimal tier installs no skill.\n\n{}\n\n{}\n",
         begin_marker(SKILL_CATALOG),
-        rows.join("\n"),
+        lookup_table(SKILL_CATALOG, &SKILL_COLUMNS, &rows),
         end_marker(SKILL_CATALOG)
     );
     Ok(Generated { text, rows: count })
@@ -167,8 +187,8 @@ pub fn policy_reference() -> Generated {
     for (group, rows) in &sections {
         write!(
             text,
-            "\n## {group}\n\n| Key | Type | Default | Valid values | Purpose | Notes |\n|---|---|---|---|---|---|\n{}\n",
-            rows.join("\n")
+            "\n## {group}\n\n{}\n",
+            lookup_table(POLICY_REFERENCE, &POLICY_COLUMNS, rows)
         )
         .expect("writing to a String cannot fail");
     }
@@ -314,6 +334,46 @@ mod tests {
     }
 
     #[test]
+    fn each_lookup_table_sits_in_the_wrapper_the_starter_stacks() {
+        let css = std::fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../assets/docs-portal/starter/src/styles/portal.css"),
+        )
+        .unwrap();
+        let catalog = skill_catalog(&assets()).unwrap().text;
+        let reference = policy_reference().text;
+        for (derive, columns, text, tables) in [
+            (SKILL_CATALOG, &SKILL_COLUMNS[..], &catalog, 1),
+            (POLICY_REFERENCE, &POLICY_COLUMNS[..], &reference, 3),
+        ] {
+            let open = format!(
+                "<div class=\"portal-lookup\" data-cf-lookup=\"{derive}\">\n\n| {} |",
+                columns.join(" | ")
+            );
+            assert_eq!(text.matches(&open).count(), tables, "{text}");
+            assert_eq!(text.matches("\n\n</div>").count(), tables, "{text}");
+            // Every column after the first carries its label at phone width,
+            // taken from the same column list the header row is written from.
+            for (index, column) in columns.iter().enumerate().skip(1) {
+                let rule = format!(
+                    ".portal-lookup[data-cf-lookup=\"{derive}\"] td:nth-child({}) ::before {{ content: \"{column}\"; }}",
+                    index + 1
+                )
+                .replace(") ::", ")::");
+                assert!(css.contains(&rule), "portal.css lacks {rule}");
+            }
+            let extra = format!(
+                ".portal-lookup[data-cf-lookup=\"{derive}\"] td:nth-child({})::before",
+                columns.len() + 1
+            );
+            assert!(
+                !css.contains(&extra),
+                "portal.css labels a column {derive} does not have"
+            );
+        }
+    }
+
+    #[test]
     fn a_page_is_held_to_its_derivation_and_the_dispatcher() {
         let dir = assets();
         let stage_names = stages();
@@ -342,6 +402,15 @@ mod tests {
             .contains("regenerate it"));
         let catalog = page_with_title("Skills", &skill_catalog(&dir).unwrap());
         assert!(verify_lookup_page(SKILL_CATALOG, &catalog, &inputs).is_ok());
+        // A table taken out of its stacking wrapper is an edit of the region.
+        let unwrapped = catalog.replacen(
+            "<div class=\"portal-lookup\" data-cf-lookup=\"skill-catalog\">\n\n",
+            "",
+            1,
+        );
+        assert!(verify_lookup_page(SKILL_CATALOG, &unwrapped, &inputs)
+            .unwrap_err()
+            .contains("regenerate it"));
         assert!(
             verify_lookup_page(SKILL_CATALOG, &format!("{catalog}\nMore.\n"), &inputs).is_err()
         );

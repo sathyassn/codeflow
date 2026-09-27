@@ -8,12 +8,18 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 
 ## Top-level keys
 
+<div class="portal-lookup" data-cf-lookup="policy-reference">
+
 | Key | Type | Default | Valid values | Purpose | Notes |
 |---|---|---|---|---|---|
 | `schema_version` | uint | `0` | a non-negative integer | Version of the policy.json schema. | The scaffold writes 1; the loader does not read or migrate on it today (inert). |
 | `human_authorization` | enum | `none` | none | Out-of-band human-authorization mode for irreversible actions (ADR-0009). | Only `none` exists today: an inert seam for future totp/push/webauthn adapters. |
 
+</div>
+
 ## Git keys
+
+<div class="portal-lookup" data-cf-lookup="policy-reference">
 
 | Key | Type | Default | Valid values | Purpose | Notes |
 |---|---|---|---|---|---|
@@ -56,12 +62,18 @@ Level keys accept `off`, `warn`, `allow` or `block`: block = violations stop the
 | `git.security_review` | Level | `warn` | off \| warn \| allow \| block | The umbrella gate for the CI security-review job. | Ships at warn (ADR-0016); harden to block when ready. |
 | `git.dep_audit` | Level | `warn` | off \| warn \| allow \| block | The dependency-audit gate in CI. | Ships at warn (ADR-0016); harden to block when ready. |
 
+</div>
+
 ## Security keys
+
+<div class="portal-lookup" data-cf-lookup="policy-reference">
 
 | Key | Type | Default | Valid values | Purpose | Notes |
 |---|---|---|---|---|---|
 | `security.dangerous_commands` | enum | `block` | block | Destructive commands the exec-guard catches (rm -rf on system paths, dd to devices, mkfs, fork bombs). | Non-relaxable safety floor: stale or hand-edited weaker values are ignored by enforcement and rejected by validation. |
 | `security.privilege_escalation` | Level | `warn` | off \| warn \| allow \| block | Privilege escalation the exec-guard catches (Unix sudo/su/doas/pkexec, Windows gsudo/runas/elevated PowerShell, LD_PRELOAD/PATH injection). | Default warn, not block: the harness's ask tier owns sudo prompting; the guard only surfaces in-session feedback. |
+
+</div>
 
 <!-- codeflow-derived policy-reference end -->
 

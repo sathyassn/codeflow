@@ -4,6 +4,8 @@
 
 The skills CodeFlow installs, one row per skill. Each description is the skill's own, from its `SKILL.md`; the harness reads it to decide when the skill applies. The minimal tier installs no skill.
 
+<div class="portal-lookup" data-cf-lookup="skill-catalog">
+
 | Skill | Use it for | Installed at tiers | Installed in |
 |---|---|---|---|
 | `/cf-consult` | Get an independent second opinion from another vendor's CLI (read-only), then synthesize it against your own analysis. Use when you want an outside pass on a file, diff, design, or question, including dual-lineage review. Do not use for edit handoffs (cf-delegate) or same-vendor self-review. | standard, full | `.claude/skills/`, `.agents/skills/` |
@@ -22,5 +24,7 @@ The skills CodeFlow installs, one row per skill. Each description is the skill's
 | `/cf-present` | Create, open, revise, and close a structured local CodeFlow review document when a complex explanation, comparison, plan, decision, evidence set, diff, or visual review would materially benefit from one coherent interactive surface and anchored user feedback. Also use when the user asks for a presentation or review surface. Keep short or linearly explained answers in the native conversation; do not use this skill to build product UI, a durable documentation portal, or arbitrary one-off HTML. | standard, full | `.claude/skills/`, `.agents/skills/` |
 | `/cf-ship` | Land finished work (docs and capability updates, then a PR through the gates). Use when a change is reviewed and green and ready to merge. | standard, full | `.claude/skills/`, `.agents/skills/` |
 | `/cf-stack` | Set up or extend the project's stack (test config, lint config, standards). Use when detecting or configuring the build/test/lint mechanics of a repo. | standard, full | `.claude/skills/`, `.agents/skills/` |
+
+</div>
 
 <!-- codeflow-derived skill-catalog end -->
