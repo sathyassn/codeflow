@@ -54,9 +54,15 @@ publication date._
 <!-- codeflow:release-impact minor -->
 - **Headless peer runs are flagged, and delegated turns carry their
   provenance.** exec-guard now recognizes a Bash command that runs a peer
-  harness headless (`claude -p` or `--print`, `codex exec` or `codex e`,
-  `grok -p`), including behind `sh -c`, `env` or leading assignments, and
-  names the interactive route instead: the Codex plugin, `codeflow
+  harness headless: `claude -p`/`--print` and `claude ultrareview`, `codex
+  exec` (or `e`) and `codex review`, and `grok -p`/`--single`,
+  `--prompt-file`, `--prompt-json` and `grok agent`. It reads the line the
+  way git-guard does (control-structure bodies, groups, substitutions, `bash
+  -c`), unwraps launchers such as `nice`, `timeout`, `sudo`, `xargs` and
+  `find -exec`, and never reads an option's value or anything after `--` as
+  the headless flag. A line it cannot resolve, such as an alias or a
+  here-string, is flagged when its text names the peer with a headless
+  flag, and the message says so. It names the interactive route instead: the Codex plugin, `codeflow
   delegate` over the interactive `claude` CLI, or a named Herdr tab. The new
   policy key `security.headless_peer_runs` sets the level: fresh installs
   and the built-in default use `warn`, `block` refuses, `off` disables it,
@@ -64,7 +70,9 @@ publication date._
   `codeflow delegate init` takes `--model` and `--effort`; the terminal
   `codeflow delegate wait` result then carries `provenance`: the thread
   (the Claude session), and model and effort as requested at `init` and as
-  observed in the `SessionStart` payload, each `unknown` when not given.
+  observed in the `SessionStart` payload, each `unknown` when not given; a
+  ready record that `wait --until ready` would reject, or from another
+  session, is not cited, and `observed_unknown_reason` says why.
 
 <!-- codeflow:release-impact minor -->
 - **Work record lifecycle.** `codeflow task status`, `epic status` and
