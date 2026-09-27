@@ -7,7 +7,7 @@ const CONTEXT_UNITS = 32;
 const REGION_SCALE = 1_000_000;
 const ANNOTATABLE = [
   "h1", "h2", "h3", "p", "li", "blockquote", "pre", "code", "table", "thead", "tbody", "tr", "th", "td",
-  "figure", "figcaption", "img", "video", "audio", "svg", "details", "summary", "article", "aside",
+  "figure", "figcaption", "img", "video", "audio", "svg", "details", "summary", "article", "aside", ".cf-line",
 ].join(",");
 
 /**
@@ -400,7 +400,9 @@ export function captureResolution(resolution: Resolution): CapturedTarget | null
 export function captureRegion(documentRoot: HTMLElement, start: Point, end: Point): CapturedTarget | null {
   const selected = normalizedRect(start, end);
   if (selected.width < 4 || selected.height < 4) return null;
-  const blocks = [...documentRoot.querySelectorAll<HTMLElement>("[data-cf-block-id]")];
+  // Blocks inside a closed disclosure or an unopened tab are not shown and
+  // never take an area drawn over the block that hides them (QA defect 2).
+  const blocks = [...documentRoot.querySelectorAll<HTMLElement>("[data-cf-block-id]")].filter(isShown);
   const containing = blocks
     .filter((block) => containsRect(block.getBoundingClientRect(), selected))
     .sort((left, right) => rectArea(left.getBoundingClientRect()) - rectArea(right.getBoundingClientRect()))[0];

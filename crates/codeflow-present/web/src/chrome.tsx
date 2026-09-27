@@ -4,7 +4,7 @@
  * Feedback still posts /app/api/reviews for harness-agnostic delivery.
  */
 import { createPortal } from "preact/compat";
-import { useEffect, useMemo, useRef, useState } from "preact/hooks";
+import { useEffect, useLayoutEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   AppearanceMode,
   ChromeConfig,
@@ -40,6 +40,7 @@ import {
   STROKE_PADDING_PX,
 } from "./selection";
 import type { CapturedTarget, Point } from "./selection";
+import { fitCrops } from "./budget";
 import { captureRectJpeg, entityCropPadding, paddedRect, userSpaceBox } from "./excerpt";
 import {
   applyAppearance,
@@ -125,10 +126,13 @@ const SPEECH_PATH =
 
 export function Chrome({ config, documentRoot }: ChromeProps) {
   const [appearance, setAppearance] = useState(initialAppearance);
-  const [notes, setNotes] = useState<readonly PendingFeedback[]>([]);
-  const [verdict, setVerdict] = useState<ReviewVerdict>("approve_with_notes");
-  const [instruction, setInstruction] = useState("");
-  const [status, setStatus] = useState("Ready for review.");
+  // Unsent notes survive a reload of this tab (QA defect 4), until a submit
+  // succeeds. They stay in this browser's session storage for this session.
+  const [draft] = useState(() => readDraft(config.session_id));
+  const [notes, setNotes] = useState<readonly PendingFeedback[]>(draft?.notes ?? []);
+  const [verdict, setVerdict] = useState<ReviewVerdict>(draft?.verdict ?? "approve_with_notes");
+  const [instruction, setInstruction] = useState(draft?.instruction ?? "");
+  const [status, setStatus] = useState(() => draftNotice(draft, config.revision) ?? "Ready for review.");
   const [busy, setBusy] = useState(false);
   const [activeSection, setActiveSection] = useState<string | null>(null);
   const [eventMessage, setEventMessage] = useState<string | null>(null);
@@ -157,6 +161,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   };
 
   const dockRef = useRef<HTMLElement>(null);
+  const floatRef = useRef<HTMLDivElement>(null);
   const composerTextRef = useRef<HTMLTextAreaElement>(null);
   const regionDraftRef = useRef<RegionDraft | null>(null);
   const submitAttemptRef = useRef<{ fingerprint: string; eventId: string } | null>(null);
@@ -188,6 +193,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   notesCountRef.current = notes.length;
   composerOpenRef.current = composerOpen;
   pendingPinRef.current = pendingPin;
+  // The float is placed near the pointer, then kept inside the viewport by
+  // its measured width, so ESC is never cut off (QA defect 7).
+  useLayoutEffect(() => {
+    const float = floatRef.current;
+    if (!float) return;
+    const overflow = float.getBoundingClientRect().right - (window.innerWidth - 8);
+    if (overflow > 0) float.style.left = `${Math.max(8, float.offsetLeft - overflow)}px`;
+  }, [pendingPin, composerOpen]);
   settingsOpenRef.current = settingsOpen;
   const railVisible = commentMode && panelOpen;
 
@@ -229,7 +242,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       window.getSelection()?.removeAllRanges();
       setStatus(notesCountRef.current ? `${notesCountRef.current} note${notesCountRef.current === 1 ? "" : "s"} queued · Comment off` : "Ready for review.");
     } else {
-      setPanelOpen(true);
+      // Where the rail is a bottom sheet it would cover half the document;
+      // the Comment button opens it on request (QA defect 7).
+      setPanelOpen(!sheetLayout());
       setHintMode("element");
       setStatus("Comment on: select text, click a figure, or drag an area.");
     }
@@ -262,6 +277,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     return undefined;
   }, [appearance, settingsOpen]);
 
+  useEffect(() => writeDraft(config.session_id, config.revision, notes, verdict, instruction), [notes, verdict, instruction]);
+  useEffect(() => {
+    const notice = draftNotice(draft, config.revision);
+    if (notice) showToast(notice, { sticky: true });
+  }, []);
   useEffect(() => observeSections(documentRoot, setActiveSection), [documentRoot, config.revision]);
   useEffect(
     () => followSessionEvents(`${config.revision}:${config.event_sequence}`, handleEvent, setEventMessage),
@@ -585,6 +605,15 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
       if (regionGesture) {
         window.getSelection()?.removeAllRanges();
+        // The browser still sends a click when the box ends on the element it
+        // began on; on a disclosure summary that click would open it and move
+        // the area just marked. A drawn box activates nothing.
+        const swallow = (click: MouseEvent): void => {
+          click.preventDefault();
+          click.stopPropagation();
+        };
+        window.addEventListener("click", swallow, { capture: true, once: true });
+        window.setTimeout(() => window.removeEventListener("click", swallow, { capture: true }), 0);
         const captured = captureRegion(documentRoot, { x: g.x0, y: g.y0 }, { x: event.clientX, y: event.clientY });
         if (captured) {
           // Keep the marquee visible under the float/composer — it shows what
@@ -645,7 +674,20 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       pinCapture(captured, event.clientX, event.clientY, { openComposer: false, element: resolved });
     };
 
+    // An image's native drag would take the pointer (dragstart, then
+    // pointercancel), so a box drawn over it never pinned and its marquee
+    // stayed behind (QA defect 1). While commenting, the gesture is ours.
+    const onDragStart = (event: DragEvent): void => {
+      if (event.target instanceof Element && event.target.closest("img, video, a")) event.preventDefault();
+    };
+    const onPointerCancel = (): void => {
+      dragGestureRef.current = null;
+      regionDraftRef.current = null;
+      setRegionDraft(null);
+    };
     document.addEventListener("selectionchange", onSelection);
+    documentRoot.addEventListener("dragstart", onDragStart);
+    window.addEventListener("pointercancel", onPointerCancel);
     document.addEventListener("keydown", onShift);
     document.addEventListener("keyup", onShift);
     documentRoot.addEventListener("pointerdown", onPointerDown);
@@ -654,6 +696,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     return () => {
       window.clearTimeout(pinTimer);
       document.removeEventListener("selectionchange", onSelection);
+      documentRoot.removeEventListener("dragstart", onDragStart);
+      window.removeEventListener("pointercancel", onPointerCancel);
       document.removeEventListener("keydown", onShift);
       document.removeEventListener("keyup", onShift);
       documentRoot.removeEventListener("pointerdown", onPointerDown);
@@ -693,7 +737,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       return;
     }
     if (!commentModeRef.current) armComment(true);
-    else setPanelOpen(true);
+    else if (!sheetLayout()) setPanelOpen(true);
     setPendingPin({ captured, clientX, clientY, ...(opts?.element ? { element: opts.element } : {}) });
     setComposerBody("");
     setEditingId(null);
@@ -736,7 +780,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       let excerptImage = null;
       let cropBox: EntitySelector["crop_box"] | null = null;
       if (c.region_selector) {
-        const box = resolveRegion(documentRoot, c.region_selector);
+        const region = resolveRegion(documentRoot, c.region_selector);
+        // A whole-document note shows what was on screen: the full page
+        // squeezed into one crop was a sliver (QA defect 8).
+        const whole = c.region_selector.scope === "document" && c.region_selector.height_ppm === 1_000_000 && c.region_selector.width_ppm === 1_000_000;
+        const box = region && whole ? visiblePart(region) : region;
         if (box) excerptImage = await captureRectJpeg(documentRoot, box);
       } else if (c.element_selector) {
         const el = (c.entity_selector ? resolveEntity(documentRoot, c.blockId, c.entity_selector.entity_id) : null)
@@ -782,7 +830,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setComposerOpen(false);
     setComposerBody("");
     setEditingId(null);
-    setPanelOpen(true);
+    if (!sheetLayout()) setPanelOpen(true);
+    else if (!panelOpen) showToast("Note saved. The Comment button opens your notes and Submit.");
   }
   saveComposerRef.current = () => {
     void saveComposer();
@@ -805,7 +854,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setComposerBody(note.body);
     setPendingPin(null);
     setComposerOpen(true);
-    setPanelOpen(true);
+    if (!sheetLayout()) setPanelOpen(true);
   }
 
   /* ─── Tool helpers (secondary path; selection captured on pointerdown so click does not clear it) ─── */
@@ -849,13 +898,26 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setStatus(`Each note or review summary is limited to ${config.review_limits.max_text_utf16} characters.`);
       return;
     }
-    const payload = {
+    const payloadOf = (list: readonly (typeof normalizedNotes)[number][]) => ({
       session_id: config.session_id,
       revision: config.revision,
       verdict,
-      notes: normalizedNotes,
+      notes: [...list],
       ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
-    };
+    });
+    // Crops share what the notes leave of the body limit (QA defect 3): a
+    // crop is made smaller, or left out, and no note is lost.
+    const requestBytes = (list: readonly (typeof normalizedNotes)[number][]): number =>
+      new TextEncoder().encode(JSON.stringify({ event_id: crypto.randomUUID(), ...payloadOf(list) })).byteLength;
+    setStatus("Preparing the review…");
+    const fitted = await fitCrops(normalizedNotes, config.review_limits.max_payload_bytes, requestBytes);
+    const payload = payloadOf(fitted.notes);
+    const cropNotice = fitted.reduced || fitted.dropped
+      ? ` To fit the review limit, ${[
+        fitted.reduced ? `${fitted.reduced} ${fitted.reduced === 1 ? "picture was" : "pictures were"} made smaller` : "",
+        fitted.dropped ? `${fitted.dropped} ${fitted.dropped === 1 ? "picture was" : "pictures were"} left out` : "",
+      ].filter(Boolean).join(" and ")}; every note was kept.`
+      : "";
     const fingerprint = JSON.stringify(payload);
     const previous = submitAttemptRef.current;
     const eventId = previous?.fingerprint === fingerprint ? previous.eventId : crypto.randomUUID();
@@ -869,11 +931,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     setStatus("Submitting review…");
     try {
       const response = await postJson<ReviewResponse>("/app/api/reviews", request);
+      clearDraft(config.session_id);
       setNotes([]);
       setInstruction("");
       submitAttemptRef.current = null;
       armComment(false);
-      const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"} (${response.event_id}).`;
+      const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"} (${response.event_id}).${cropNotice}`;
       setStatus(confirmation);
       showToast(confirmation);
     } catch (error) {
@@ -1150,9 +1213,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       </header>
 
       {commentMode ? (
-        <div class="cf-hint on" data-testid="comment-hint" data-capture-mode={hintMode} role="status">
+        <div class="cf-hint on" data-testid="comment-hint" data-capture-mode={hintMode}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z" /></svg>
-          <span>Comment: select words, click a figure part, or drag a box. Esc leaves.</span>
+          <span role="status">Comment: select words, click a figure part, or drag a box. Esc leaves.</span>
+          <button type="button" class="cf-hint-leave" data-testid="comment-leave" onClick={() => armComment(false)}>
+            Done
+          </button>
         </div>
       ) : null}
 
@@ -1174,7 +1240,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         <div
           class="cf-float on"
           data-testid="float-chip"
-          style={`left:${Math.min(Math.max(8, pendingPin.clientX - 40), window.innerWidth - 200)}px;top:${Math.min(Math.max(8, pendingPin.clientY + 8), window.innerHeight - 48)}px`}
+          ref={floatRef}
+          style={`left:${Math.max(8, pendingPin.clientX - 40)}px;top:${Math.min(Math.max(8, pendingPin.clientY + 8), window.innerHeight - 48)}px`}
         >
           <button type="button" class="main" data-testid="float-comment" onClick={openComposerFromFloat}>
             <span class="ico" aria-hidden="true">
@@ -1466,7 +1533,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             class={`pri${notes.length === 0 ? " is-empty" : ""}`}
             id="submitAllBtn"
             data-testid="submit-all"
-            disabled={busy || notes.length === 0}
+            disabled={busy || (notes.length === 0 && verdict === "approve_with_notes")}
             onClick={() => void submitReview()}
           >
             {busy ? "Submitting…" : notes.length === 0 ? "Submit review" : `Submit review (${notes.length})`}
@@ -1491,6 +1558,11 @@ function regionDraftStyle(draft: RegionDraft): string {
   const left = Math.min(draft.start.x, draft.current.x);
   const top = Math.min(draft.start.y, draft.current.y);
   return `left:${left}px;top:${top}px;width:${Math.abs(draft.current.x - draft.start.x)}px;height:${Math.abs(draft.current.y - draft.start.y)}px`;
+}
+
+/** The width at which the notes rail becomes a bottom sheet (styles.css). */
+function sheetLayout(): boolean {
+  return window.matchMedia("(max-width: 879.98px)").matches;
 }
 
 function composerPositionStyle(clientX: number, clientY: number): string {
@@ -1566,6 +1638,65 @@ function anchorNotice(anchor: FeedbackAnchor) {
   }
 }
 
+function visiblePart(rect: DOMRect): DOMRect | null {
+  const top = Math.max(rect.top, 0);
+  const bottom = Math.min(rect.bottom, window.innerHeight);
+  const left = Math.max(rect.left, 0);
+  const right = Math.min(rect.right, window.innerWidth);
+  return bottom - top >= 4 && right - left >= 4 ? new DOMRect(left, top, right - left, bottom - top) : null;
+}
+
+interface Draft {
+  readonly revision: number;
+  readonly notes: readonly PendingFeedback[];
+  readonly verdict: ReviewVerdict;
+  readonly instruction: string;
+}
+
+const draftKey = (sessionId: string): string => `cf-present-draft:${sessionId}`;
+
+function readDraft(sessionId: string): Draft | null {
+  try {
+    const stored = JSON.parse(sessionStorage.getItem(draftKey(sessionId)) ?? "null") as Draft | null;
+    return stored && Array.isArray(stored.notes) && stored.notes.length > 0 ? stored : null;
+  } catch {
+    return null;
+  }
+}
+
+// A draft too large for the storage keeps its notes without their pictures.
+function writeDraft(sessionId: string, revision: number, notes: readonly PendingFeedback[], verdict: ReviewVerdict, instruction: string): void {
+  if (notes.length === 0) {
+    clearDraft(sessionId);
+    return;
+  }
+  const withoutPictures = notes.map((note) => (note.excerpt?.image ? { ...note, excerpt: { ...(note.excerpt.text ? { text: note.excerpt.text } : {}) } } : note));
+  for (const kept of [notes, withoutPictures]) {
+    try {
+      sessionStorage.setItem(draftKey(sessionId), JSON.stringify({ revision, notes: kept, verdict, instruction }));
+      return;
+    } catch {
+      // Try the smaller draft, then give up quietly: the notes stay on screen.
+    }
+  }
+}
+
+function clearDraft(sessionId: string): void {
+  try {
+    sessionStorage.removeItem(draftKey(sessionId));
+  } catch {
+    // Storage unavailable: nothing was kept.
+  }
+}
+
+function draftNotice(draft: Draft | null, revision: number): string | null {
+  if (!draft) return null;
+  const count = `${draft.notes.length} unsent ${draft.notes.length === 1 ? "note" : "notes"}`;
+  return draft.revision === revision
+    ? `Restored ${count}.`
+    : `Restored ${count} from revision ${draft.revision}. A note on a block that changed may be refused when you submit; edit or remove it then.`;
+}
+
 function noteLimitMessage(limit: number): string {
   return `A review can contain at most ${limit} ${limit === 1 ? "note" : "notes"}.`;
 }
@@ -1597,8 +1728,11 @@ function observeSections(root: HTMLElement, onChange: (id: string) => void): () 
   return () => observer.disconnect();
 }
 
+// A block inside a disclosure or a tab is hidden until opened, so the
+// sections list names the disclosure or tabs block only (QA defect 8).
 function sectionElements(root: HTMLElement): HTMLElement[] {
-  return [...root.querySelectorAll<HTMLElement>("section[data-cf-block-id][data-cf-block-label]")];
+  return [...root.querySelectorAll<HTMLElement>("section[data-cf-block-id][data-cf-block-label]")]
+    .filter((section) => !section.parentElement?.closest("details"));
 }
 
 function isEditable(target: EventTarget | null): boolean {

@@ -212,7 +212,10 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
         summary, blocks, ..
     } = block
     {
-        output.push_str("<details><summary><span data-cf-review-text-root>");
+        output
+            .push_str("<details><summary><span data-cf-review-text-root data-cf-canonical-text=\"");
+        escape_attr_to(&block.canonical_review_text(framing), output);
+        output.push_str("\">");
         escape_html_to(summary, output);
         output.push_str("</span></summary>");
         for child in blocks {
@@ -222,8 +225,11 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
         return;
     }
     if let Block::Tabs { tabs, .. } = block {
-        output
-            .push_str("<div class=\"tabs\"><div class=\"tabs__labels\" data-cf-review-text-root>");
+        output.push_str(
+            "<div class=\"tabs\"><div class=\"tabs__labels\" data-cf-review-text-root data-cf-canonical-text=\"",
+        );
+        escape_attr_to(&block.canonical_review_text(framing), output);
+        output.push_str("\">");
         for tab in tabs {
             output.push_str("<span>");
             escape_html_to(&tab.label, output);
@@ -359,7 +365,16 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
             output.push_str("<div class=\"cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable code\"><pre><code data-cf-language=\"");
             escape_attr_to(language, output);
             output.push_str("\">");
-            escape_html_to(code, output);
+            // Each line is its own element target (QA defect 6); the text
+            // is unchanged, so selections and the highlighter still see it.
+            for line in code.split_inclusive('\n') {
+                output.push_str("<span class=\"cf-line\">");
+                escape_html_to(line.strip_suffix('\n').unwrap_or(line), output);
+                output.push_str("</span>");
+                if line.ends_with('\n') {
+                    output.push('\n');
+                }
+            }
             output.push_str("</code></pre></div>");
         }
         Block::Diff { diff, caption, .. } => {
@@ -379,7 +394,7 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
                 };
                 output.push('<');
                 output.push_str(tag);
-                output.push('>');
+                output.push_str(" class=\"cf-line\">");
                 if !label.is_empty() {
                     output.push_str("<span class=\"sr-only\">");
                     output.push_str(label);
@@ -1005,9 +1020,18 @@ pub(crate) mod tests {
                 })
                 .collect::<Vec<_>>();
             assert_eq!(roots.len(), 1);
+            // Every root carries the canonical text the client quotes from; the
+            // client maps a selection to it ignoring whitespace (selection.ts),
+            // which separates a block's parts.
+            let canonical = block.canonical_review_text(&crate::document::Framing::default());
             assert_eq!(
-                roots[0].text().collect::<String>(),
-                block.canonical_review_text(&crate::document::Framing::default())
+                roots[0].value().attr("data-cf-canonical-text"),
+                Some(canonical.as_str())
+            );
+            let compact = |text: &str| text.split_whitespace().collect::<String>();
+            assert_eq!(
+                compact(&roots[0].text().collect::<String>()),
+                compact(&canonical)
             );
         }
     }

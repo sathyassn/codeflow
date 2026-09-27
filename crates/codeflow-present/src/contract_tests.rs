@@ -877,3 +877,63 @@ fn a_quote_search_past_its_budget_falls_to_the_block_with_a_notice() {
         anchor
     );
 }
+
+/// QA defect 8: a whole-document note stays positioned across revisions; a
+/// part of the document stays pinned to its revision with its reason.
+#[test]
+fn a_whole_document_note_survives_a_revision() {
+    let first = supported("documents/v2-framed.json");
+    let second = supported("reanchor/revision-2.json");
+    let (_temp, store) = store();
+    let session = store
+        .create(ParsedDocument::Supported(first.clone()))
+        .unwrap();
+    let region = |width_ppm: u32| {
+        let mut note = note("intro", &find(&first, "intro").review_label());
+        note.region_selector = Some(crate::state::RegionSelector {
+            scope: crate::state::RegionScope::Document,
+            anchor_id: "document".to_string(),
+            block_digest: crate::state::block_digest(find(&first, "intro")),
+            x_ppm: 0,
+            y_ppm: 0,
+            width_ppm,
+            height_ppm: crate::limits::REGION_COORDINATE_SCALE,
+            capture_width_px: 800,
+            capture_height_px: 4000,
+        });
+        note
+    };
+    let envelope = FeedbackEnvelope {
+        event_id: Uuid::new_v4(),
+        session_id: session.id,
+        revision: 1,
+        actor: "operator".to_string(),
+        verdict: FeedbackVerdict::ApproveWithNotes,
+        instruction: None,
+        notes: vec![
+            region(crate::limits::REGION_COORDINATE_SCALE),
+            region(500_000),
+        ],
+        created_at_unix: 0,
+    };
+    store.append_feedback(envelope).unwrap();
+    store
+        .update_document(session.id, ParsedDocument::Supported(second))
+        .unwrap();
+    let after = store.feedback_snapshot(session.id).unwrap();
+    let anchors: Vec<_> = after.items[0]
+        .notes
+        .iter()
+        .map(|note| note.anchor.clone())
+        .collect();
+    assert!(
+        matches!(anchors[0], FeedbackAnchor::RegionReanchored { .. }),
+        "{:?}",
+        anchors[0]
+    );
+    assert!(
+        matches!(anchors[1], FeedbackAnchor::Orphaned { .. }),
+        "{:?}",
+        anchors[1]
+    );
+}

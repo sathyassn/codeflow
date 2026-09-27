@@ -572,6 +572,9 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 #cf-present-document .comparison,
 #cf-present-document table,
 #cf-present-document pre { margin-inline: 0; max-inline-size: 100%; }
+/* One code or diff line is one element target (QA defect 6): it spans the
+   full width, so a click or drag on its blank end still names the line. */
+#cf-present-document pre .cf-line { display: inline-block; min-inline-size: 100%; }
 #cf-present-document iframe,
 #cf-present-document img,
 #cf-present-document video { max-inline-size: 100%; }
@@ -880,8 +883,11 @@ code { font-family: var(--cf-font-mono); }
   font-family: var(--cf-font-sans);
   font-size: 0.82rem;
   overflow: hidden;
+  max-width: calc(100vw - 16px);
 }
 .cf-float.on { display: flex; }
+.cf-float .main { min-width: 0; }
+.cf-float .esc { flex: none; }
 .cf-float .main {
   display: flex;
   align-items: center;
@@ -905,6 +911,7 @@ code { font-family: var(--cf-font-mono); }
 .cf-float .ico svg { width: 16px; height: 16px; }
 .cf-float .lab { font-weight: 600; color: var(--cf-text); }
 .cf-float .q {
+  min-width: 0;
   max-width: 12rem;
   font-family: var(--cf-font-mono);
   font-size: 0.9em;
@@ -1244,6 +1251,13 @@ code { font-family: var(--cf-font-mono); }
   font: 0.9rem/1.4 var(--cf-font-sans);
 }
 .cf-toast.on { display: block; }
+/* A notice is text only; it never takes a click meant for the control under
+   it, and it moves off the open notes rail so Submit stays in view. */
+.cf-toast { pointer-events: none; }
+#cf-feedback-panel[data-open="true"] ~ .cf-toast { right: auto; left: 22px; }
+@media (max-width: 879.98px) {
+  #cf-feedback-panel[data-open="true"] ~ .cf-toast { left: 12px; right: 12px; bottom: calc(min(46vh, 440px) + 12px); }
+}
 
 /* Tools (secondary — not the primary Comment path) */
 .cf-tools {
@@ -1368,7 +1382,7 @@ svg.cf-hot-sel {
   background: color-mix(in srgb, var(--cf-accent) 22%, transparent);
 }
 #cf-present-document[data-cf-capture-mode="element"] { cursor: crosshair; }
-#cf-present-document[data-cf-capture-mode="element"] :is(h1,h2,h3,p,li,blockquote,pre,code,table,th,td,figure,img,video,audio,svg,details,summary,article,aside):is(:hover, :focus-visible) {
+#cf-present-document[data-cf-capture-mode="element"] :is(h1,h2,h3,p,li,blockquote,pre,code,.cf-line,table,th,td,figure,img,video,audio,svg,details,summary,article,aside):is(:hover, :focus-visible) {
   outline: 2px solid var(--cf-focus);
   outline-offset: 3px;
 }
@@ -1556,3 +1570,7 @@ html:has(.cf-chrome-frame[data-rail="open"]) .cf-hint { max-inline-size: none; }
 /* The kit's single instruction strip stays readable when it wraps on phones. */
 .cf-hint { height: auto; min-height: var(--cf-strip-h); padding: 6px 16px; gap: 10px; flex-wrap: nowrap; font-size: var(--cf-fs-ui); }
 .cf-hint svg { flex: none; width: 16px; height: 16px; fill: none; stroke: var(--cf-accent); stroke-width: 1.6; stroke-linejoin: round; }
+.cf-hint > span { flex: 1 1 auto; min-width: 0; }
+.cf-hint-leave { flex: none; margin-inline-start: auto; padding: 4px 12px; border: 1px solid var(--cf-border-strong); border-radius: 999px; background: var(--cf-surface-raised); color: var(--cf-text); font: 600 var(--cf-fs-ui)/1.2 var(--cf-font-sans); cursor: pointer; }
+.cf-hint-leave:hover { background: var(--cf-surface-subtle); }
+.cf-hint-leave:focus-visible { outline: 2px solid var(--cf-accent); outline-offset: 2px; }

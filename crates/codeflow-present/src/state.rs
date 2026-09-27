@@ -1412,6 +1412,29 @@ impl SessionStore {
         Ok(session)
     }
 
+    /// Waits, at most `timeout`, until the session's service has released its
+    /// lease, so a `close` returns only once the service has exited and an
+    /// immediate `clear` finds nothing running. `false` when it is still
+    /// running at the deadline.
+    pub fn wait_for_service_exit(&self, id: Uuid, timeout: std::time::Duration) -> Result<bool> {
+        if self.load(id)?.service_instance.is_none() {
+            return Ok(true);
+        }
+        let deadline = std::time::Instant::now() + timeout;
+        loop {
+            if let Some(lease) =
+                self.try_acquire_runtime_lease(id, ".service.lock", "running service")?
+            {
+                drop(lease);
+                return Ok(true);
+            }
+            if std::time::Instant::now() >= deadline {
+                return Ok(false);
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+    }
+
     pub fn enforce_retention(&self) -> Result<Vec<Uuid>> {
         let _project_lease = self.lock_project_mutation()?;
         Self::cleanup_staged_creates_unlocked(&self.root.join("sessions"))?;
@@ -1597,13 +1620,13 @@ impl SessionStore {
         let events = self.read_events_unlocked(id)?;
         let ledger = FeedbackLedger::replay(&events)?;
         let Some(state) = ledger.state(event_id) else {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} does not belong to session {id}"
             )));
         };
         if let Some(existing_resolution) = state.resolution {
             if existing_resolution != resolution {
-                return Err(PresentError::InvalidDocument(format!(
+                return Err(PresentError::InvalidRequest(format!(
                     "feedback event {event_id} is already resolved as {existing_resolution:?}"
                 )));
             }
@@ -1612,19 +1635,19 @@ impl SessionStore {
             {
                 return Ok(state.version);
             }
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} is at version {}, not {expected_version}",
                 state.version
             )));
         }
         if state.version != expected_version {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} is at version {}, not {expected_version}",
                 state.version
             )));
         }
         if state.lifecycle != FeedbackLifecycle::Delivered {
-            return Err(PresentError::InvalidDocument(format!(
+            return Err(PresentError::InvalidRequest(format!(
                 "feedback event {event_id} must be delivered before it can be resolved"
             )));
         }
@@ -2993,6 +3016,16 @@ fn reanchor_region(
     match selector.scope {
         RegionScope::Block if selector.block_digest == block_digest(block) => Some(anchored(true)),
         RegionScope::Block => None,
+        // A whole-document note names no layout, so every revision holds it
+        // (QA defect 8); a part of the document stays pinned to its revision.
+        RegionScope::Document
+            if selector.x_ppm == 0
+                && selector.y_ppm == 0
+                && selector.width_ppm == limits::REGION_COORDINATE_SCALE
+                && selector.height_ppm == limits::REGION_COORDINATE_SCALE =>
+        {
+            Some(anchored(true))
+        }
         RegionScope::Document => Some(FeedbackAnchor::Orphaned {
             reason: "a document-wide visual region is pinned to its source revision".to_string(),
         }),

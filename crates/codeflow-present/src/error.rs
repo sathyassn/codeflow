@@ -7,6 +7,10 @@ pub enum PresentError {
     DocumentTooLarge { limit: usize },
     #[error("invalid presentation document: {0}")]
     InvalidDocument(String),
+    /// A command's own input is wrong (an event, a version, a duration),
+    /// not the document (QA defect 10).
+    #[error("invalid request: {0}")]
+    InvalidRequest(String),
     #[error("unsupported presentation schema version {found}; supported version is {supported}")]
     UnsupportedSchema { found: u32, supported: u32 },
     #[error("invalid presentation session id: {0}")]
