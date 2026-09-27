@@ -1055,6 +1055,117 @@ fn a_backfilled_uid_keeps_the_baseline_exemption_and_nothing_else_does() {
     assert!(!validate_lifecycle(repo.root()).is_clean());
 }
 
+/// A task completed before the baseline whose evidence is gone takes the
+/// historical form of R-101 in place of an acceptance block; nothing else
+/// does, and a transition or criteria change still needs a block (R-83).
+#[test]
+fn a_pre_baseline_completion_accepts_the_historical_form_and_nothing_less() {
+    const HISTORICAL: &str = "Done long ago.\n\n- acceptance: historical evidence unavailable; landed\n  by merge `dcbc3d837` (PR 466); reviews as recorded above.";
+    let with_closeout = |repo: &Repo, closeout: &str| {
+        let content = repo.read(TASK_PATH);
+        let (head, _) = content.split_once("## Closeout").unwrap();
+        repo.write(TASK_PATH, &format!("{head}## Closeout\n\n{closeout}\n"));
+    };
+    let (repo, baseline) = baseline_project();
+    with_closeout(&repo, HISTORICAL);
+    let tree = validate_lifecycle(repo.root());
+    assert!(tree.is_clean() && tree.warnings.is_empty(), "{tree:?}");
+    let range = repo.judge(&baseline);
+    assert!(range.is_clean() && range.warnings.is_empty(), "{range:?}");
+
+    for incomplete in [
+        "Done long ago.\n\n- acceptance: historical evidence unavailable; PR 466.",
+        "Done long ago.\n\n- acceptance: see merge `dcbc3d837`.",
+        "Done long ago.\n\n- acceptance: historical evidence unavailable; merge `xyz`.",
+        "Done long ago. historical evidence unavailable; merge `dcbc3d837`.",
+    ] {
+        with_closeout(&repo, incomplete);
+        let tree = validate_lifecycle(repo.root());
+        assert!(
+            tree.is_clean()
+                && tree
+                    .warnings
+                    .iter()
+                    .any(|w| w.contains("- acceptance: historical evidence unavailable")),
+            "{incomplete}: {tree:?}"
+        );
+    }
+
+    // A criteria change is judged in full: the historical form is not enough.
+    with_closeout(&repo, HISTORICAL);
+    repo.write(
+        TASK_PATH,
+        &repo
+            .read(TASK_PATH)
+            .replace("- [x] second", "- [x] second, reworded"),
+    );
+    assert!(!validate_lifecycle(repo.root()).is_clean());
+    assert!(!repo.judge(&baseline).is_clean());
+
+    // A task completed after the baseline never takes the historical form.
+    let (repo, _) = baseline_project();
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &task("TSK-002", "complete", CRITERIA, HISTORICAL),
+    );
+    assert!(validate_lifecycle(repo.root())
+        .errors
+        .iter()
+        .any(|e| e.contains("TSK-002") && e.contains("needs an acceptance block")));
+}
+
+/// Fable's F4 probe (TSK-109 review): a reopen and a re-completion after
+/// the baseline, in one range or seen only at the tree, never take the
+/// historical form; the range is judged per commit, so a middle commit that
+/// reopens without its `- reopened:` line is still seen (R-83).
+#[test]
+fn a_reopen_and_recompletion_after_the_baseline_never_take_the_historical_form() {
+    const REOPENED: &str = "Done long ago.\n\n- reopened: a gap was found";
+    const RECOMPLETED: &str = "Done long ago.\n\n- reopened: a gap was found\n- acceptance: historical evidence unavailable; landed by merge `dcbc3d837`.";
+    let criteria = "- [x] first\n- [x] second";
+    let (repo, baseline) = baseline_project();
+    repo.write(TASK_PATH, &task("TSK-001", "todo", criteria, REOPENED));
+    let reopened = repo.commit("reopen");
+    let reopen_verdict = repo.judge(&baseline);
+    assert!(
+        reopen_verdict.is_clean(),
+        "reopen itself: {reopen_verdict:?}"
+    );
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "complete", criteria, RECOMPLETED),
+    );
+    let refused = |verdict: &Verdict| {
+        verdict
+            .errors
+            .iter()
+            .any(|e| e.contains("needs an acceptance block"))
+    };
+    assert!(refused(&repo.judge(&reopened)), "per-commit range");
+    assert!(refused(&repo.judge(&baseline)), "endpoint range");
+    assert!(refused(&validate_lifecycle(repo.root())), "tree");
+
+    // No reopen line: only the per-commit walk of the range sees the reopen.
+    let (repo, baseline) = baseline_project();
+    let historical =
+        "Done long ago.\n\n- acceptance: historical evidence unavailable; landed by merge `dcbc3d837`.";
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", criteria, "Done long ago."),
+    );
+    repo.commit("reopen by hand without a reason");
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "complete", criteria, historical),
+    );
+    repo.commit("complete again on the historical form");
+    assert!(
+        refused(&repo.judge(&baseline)),
+        "{:?}",
+        repo.judge(&baseline)
+    );
+}
+
 #[test]
 fn reopening_changing_criteria_or_completing_again_applies_the_new_rules() {
     let (repo, _) = baseline_project();
