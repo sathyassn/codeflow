@@ -198,7 +198,7 @@
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "f6ec80c578e731a849d206fd0c6ad95106e5a07b62a2f3be9db7603e4d592caf"
+      "pristine_sha256": "7e4a9d6c4eb9e5eb711616f325885b69fdf41d6331ee9f068f9b4eb2da1f3f29"
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
@@ -222,7 +222,7 @@
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "be9d7bda599b3b0a2326c12a65c9a966586629747f1649816b24a2d5e489dd9c"
+      "pristine_sha256": "b75f2f85f83327875fb8be573d9fadd61445d07037ddb314fb558d44674a3dc2"
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",

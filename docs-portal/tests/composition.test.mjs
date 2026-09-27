@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { paletteSwatchFailures, PALETTE_PILL_GROUPS } from "../scripts/browser-verify.mjs";
 import {
@@ -397,6 +398,7 @@ test("a generated lookup table is wrapped to stack at phone width, and only that
   assert.equal(html.match(/<div class="portal-lookup" data-cf-lookup="policy-reference">\s*<table>/g).length, 2, html);
   // A lookup page whose generated table lost its columns fails closed.
   assert.throws(() => wrapLookupTables("| Skill | Notes |\n|---|---|\n| a | b |\n", "skill-catalog", "docs/skills.md"), /docs\/skills\.md: the skill-catalog page carries no table with the generated columns Skill, Use it for, Installed at tiers, Installed in/);
+});
 
 test("the record table's phone labels are the adapter's columns", async () => {
   const css = await readFile(new URL("../src/styles/portal.css", import.meta.url), "utf8");

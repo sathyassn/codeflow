@@ -744,6 +744,7 @@ a:focus-visible, button:focus-visible { outline: 2px solid var(--cf-focus); outl
   .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(4)::before { content: "Valid values"; }
   .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(5)::before { content: "Purpose"; }
   .portal-lookup[data-cf-lookup="policy-reference"] td:nth-child(6)::before { content: "Notes"; }
+}
 
 /* The record pointer table: at phone width each folder's row stacks, so the
    purpose reads as a line of prose instead of one word per line. The header
