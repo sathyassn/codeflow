@@ -200,7 +200,7 @@ bounded to named unresolved choices.
 ## Carry the idea across contexts
 
 Decide which viewports, input modes, and platforms are applicable, then treat
-the governing idea — not the fact inventory — as the thing that must survive
+the governing idea, not the fact inventory, as the thing that must survive
 each one. The two are routinely confused: an encoding can keep every fact in a
 narrow context and still lose its point.
 

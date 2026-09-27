@@ -42,6 +42,15 @@ export const PAGE_CLASS_REASONS = Object.freeze(["accepted-record", "governance"
 // regenerates from the binary and compares with the committed page.
 export const DERIVED_LOOKUPS = Object.freeze(["capability-registry", "skill-catalog", "policy-reference"]);
 
+// The columns of the tables the binary generates for two of them, in the
+// generator's order (lookups.rs in codeflow-core, which a test pins to this
+// list and to the stylesheet's labels). The adapter wraps each such table in
+// `.portal-lookup` so it stacks at phone width under these labels.
+export const LOOKUP_COLUMNS = Object.freeze({
+  "skill-catalog": ["Skill", "Use it for", "Installed at tiers", "Installed in"],
+  "policy-reference": ["Key", "Type", "Default", "Valid values", "Purpose", "Notes"],
+});
+
 // The generated record pointer page (ADR-0064) is one table of folders. The
 // records themselves are repository files, never portal pages.
 export const RECORD_POINTER_COLUMNS = Object.freeze(["Folder", "Purpose", "Count", "Repository"]);

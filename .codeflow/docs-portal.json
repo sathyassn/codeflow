@@ -54,7 +54,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "f3a4ce61ad1ee834b47de25da73621b552281ab2f5ee22558d16925d83c0b420"
+      "pristine_sha256": "ff1293f0c3edc2e16f4f918d3987f2f6895aeb3e43a3e0bc6b21873c56a3e84d"
     },
     "scripts/as-is-markdown.mjs": {
       "ownership": "managed",
@@ -94,7 +94,7 @@
     },
     "scripts/lib.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "41e080f56181c1f71ca524e928784e55ac2a80b0a26c9e25ba1ea6f0e45305da"
+      "pristine_sha256": "8c5b91efdba58805719e425c802fcd8ff7adff3bea415bb1bb46b1af02a84efe"
     },
     "scripts/limits.mjs": {
       "ownership": "managed",
@@ -102,7 +102,7 @@
     },
     "scripts/page-classes.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "63a4acb1b065bc4c57cef62da68b903204227fd9a40f7f6f007b96c57d1ffd5b"
+      "pristine_sha256": "4996ff229a2839b7805cc27a05e72d5b819afa443c51d5aeba2c461dd39c74bd"
     },
     "scripts/process-environment.mjs": {
       "ownership": "managed",
@@ -198,7 +198,7 @@
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "3c8a94d42bf350fff95d8b68c932147a38290e338baf691bcdc43729bcbd5f4f"
+      "pristine_sha256": "7e4a9d6c4eb9e5eb711616f325885b69fdf41d6331ee9f068f9b4eb2da1f3f29"
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
@@ -206,7 +206,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "18b1733717886eeb1d25ef6f4cda8ec5c4fb93f3864a7e5161d53dc388e62b66"
+      "pristine_sha256": "b6ccb48e24b50197a79de15860b8bbd6102d3c570090ff305039a34fc78e13ab"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
@@ -222,7 +222,7 @@
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "aa2e7b5efb2c0a18895fb40a7115288e7553a7ba22ad3f1f9e551e28c0b5eea7"
+      "pristine_sha256": "b75f2f85f83327875fb8be573d9fadd61445d07037ddb314fb558d44674a3dc2"
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",

@@ -9,7 +9,7 @@
   },
   "rubric": {
     "path": ".agents/skills/cf-estimate/references/rubric.md",
-    "sha256": "6be380b10ecf6b156169bb31c5ca6b368d054eac12523bd2912f971c4d2f6d21"
+    "sha256": "c3c795bad66d940ca6247de682074ef5a858c31132d1dc7e33c0ec52494b415d"
   },
   "packages": [
     {

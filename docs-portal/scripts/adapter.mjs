@@ -7,10 +7,10 @@ import {
   findRepositoryRoot, headingAnchors, localRouteFor, parseMarkdown, placeCapabilityTable,
   pinnedSourceUrl as providerSourceUrl, recordFilesFor, referencedIds, renderCapabilityFences, renderPrimitiveTokenCss, rewriteRepositoryMarkdown, safeRelative, sha256, titleFor,
   recoverUnavailableIds, renderStageFences, strictUrlSegment, stripLeadingTitleHeading, validatePageMetadata, validatePortalConfig, validatePrimitiveTokens, withBase,
-  altitudeWords, asIsHeadingsDemoted, asIsRegionStart, tableRowCount, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks,
+  altitudeWords, asIsHeadingsDemoted, asIsRegionStart, tableRowCount, insertPanelFigures, resolveAsIsLinks, topLevelHtmlBlocks, wrapLookupTables,
 } from "./lib.mjs";
 import { bindDerivedData, checkFacts, composeFigure, GRAMMAR_VERSION, markdownSections, parseFactSource, renderFigure, validateDeclaration } from "./figure-grammar.mjs";
-import { ALTITUDE_PANELS, PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
+import { ALTITUDE_PANELS, LOOKUP_COLUMNS, PAGE_CLASSES, pageClassFor } from "./page-classes.mjs";
 import { GitSnapshot } from "./git-snapshot.mjs";
 import { DEMOTE_HEADINGS } from "./as-is-markdown.mjs";
 import { GENERATOR } from "./generator.mjs";
@@ -584,7 +584,8 @@ function renderPage(page, bindings, routesById, previews, referencedMedia, ancho
     panelBlocks.get(binding.panel).push(binding.anchor === undefined ? value : { value, heading: sections.find((section) => section.anchor === binding.anchor).text });
   });
   const withFigures = insertPanelFigures(sourceMarkdown, panelBlocks, page.source_path);
-  const safeBody = decorateAltitude(page.source_path === CAPABILITY_REGISTRY ? renderCapabilityRegistry(withFigures, page.source_path) : withFigures);
+  const lookupBody = page.page_class === PAGE_CLASSES.derivedLookup.id && Object.hasOwn(LOOKUP_COLUMNS, page.derive) ? wrapLookupTables(withFigures, page.derive, page.source_path) : withFigures;
+  const safeBody = decorateAltitude(page.source_path === CAPABILITY_REGISTRY ? renderCapabilityRegistry(lookupBody, page.source_path) : lookupBody);
   return `${pageFrontmatter(page)}\n\n<div data-pagefind-body data-codeflow-search-root="${escapeHtml(page.route)}">\n\n${safeBody}${recordContextFor(page, routesById)}\n\n</div>\n`;
 }
 
@@ -695,7 +696,8 @@ function readingPathFigure(definitions) {
 
 // One generated page for the records the guide does not publish: the folder,
 // what it holds, how many it holds at this commit, and where it lives. It
-// lists folders, never files.
+// lists folders, never files. The wrapper lets a phone-width screen stack
+// each folder's row instead of squeezing four columns.
 function renderRecordPointerPage() {
   const rows = recordFolders.map((folder) => {
     const count = folder.exists && folder.files.length ? String(folder.files.length) : "none yet";
@@ -707,7 +709,7 @@ function renderRecordPointerPage() {
   const lead = `The guide has no page for a decision or a work record. ${total} of them sit in ${recordFolders.length} repository folders at the commit this portal was built from.`;
   const prefixes = [...new Set(recordFolders.map((folder) => folder.id_prefix))];
   const closing = `Pages in this guide cite these records by id (${prefixes.join(", ")}), and each id links to its file in the repository.`;
-  return `---\ntitle: ${JSON.stringify(RECORD_POINTER_TITLE)}\ndescription: ${JSON.stringify("The repository folders that hold the decisions, epics, tasks and specs this guide cites.")}\nslug: ${JSON.stringify(recordPointerRoute)}\n${sidebarFrontmatter(recordPointerRoute)}---\n\n${escapeMarkdownInline(lead)}\n\n| Folder | Purpose | Count | Repository |\n|---|---|---|---|\n${rows.join("\n")}\n\n${escapeMarkdownInline(closing)}\n`;
+  return `---\ntitle: ${JSON.stringify(RECORD_POINTER_TITLE)}\ndescription: ${JSON.stringify("The repository folders that hold the decisions, epics, tasks and specs this guide cites.")}\nslug: ${JSON.stringify(recordPointerRoute)}\n${sidebarFrontmatter(recordPointerRoute)}---\n\n${escapeMarkdownInline(lead)}\n\n<div class="portal-record-folders">\n\n| Folder | Purpose | Count | Repository |\n|---|---|---|---|\n${rows.join("\n")}\n\n</div>\n\n${escapeMarkdownInline(closing)}\n`;
 }
 
 function staleStubPage(sourcePath, sourceHash, bytes, error) {
