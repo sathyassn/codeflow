@@ -574,7 +574,11 @@ publication date._
   read with `git config` in the target repository (including `-c` and
   `include.path`); a `!` shell alias or one the guard cannot read blocks.
   `git rebase <upstream> <branch>` is judged by `<branch>`, which it
-  rewrites. This also blocks a commit written inside a
+  rewrites. A checkout or rebase that can fail moves the branch only for
+  commands after `&&`; after `;` or a newline the earlier branch still
+  counts. An alias written earlier in the same command line is not read
+  from disk: the command blocks. A git command inside `for`, `while`, `if`
+  or `case` bodies is judged too. This also blocks a commit written inside a
   subshell such as `(cd <repo> && git commit)`.
 
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
