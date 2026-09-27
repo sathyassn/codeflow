@@ -1620,8 +1620,9 @@ const JUDGED_SUBCOMMANDS: &[&str] = &[
 ];
 
 /// Subcommands that act on the branch checked out where they run. Their
-/// arguments cannot move them to another branch.
-const CURRENT_BRANCH_SUBCOMMANDS: &[&str] = &["commit", "merge", "cherry-pick", "rebase", "reset"];
+/// arguments cannot move them to another branch. `rebase` is not one: its
+/// `<branch>` argument checks that branch out first.
+const CURRENT_BRANCH_SUBCOMMANDS: &[&str] = &["commit", "merge", "cherry-pick", "reset"];
 
 /// Which part of a git invocation a substitution leaves unknown.
 enum Unclassified {
@@ -5621,6 +5622,14 @@ mod tests {
         ] {
             let r = evaluate_report(cmd, &ctx_with_dir_branch(&lax, session, &fixture_resolver));
             assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+        }
+        // A rebase's `<branch>` argument checks that branch out first, so an
+        // unknown rebase argument blocks from a feature branch too.
+        for cmd in [
+            "git rebase feat/y \"$(printf main)\"",
+            "git rebase --onto x y $(printf main)",
+        ] {
+            assert!(blocks(&report(cmd, "feat/s").violations), "{cmd}");
         }
         // With no subcommand at all, the uncertainty still blocks.
         let r = report("git -c \"$(printf alias.x=commit)\"", "feat/s");
