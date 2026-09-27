@@ -947,6 +947,10 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
         ORCHESTRATOR_SKILL,
         &[
             (
+                "escalation reads the operator list",
+                "Before deciding whether to ask the operator, escalate or stop, read \"What belongs to the operator\" in `cf-method/references/autonomy.md`.",
+            ),
+            (
                 "change request runs to readiness",
                 "A change request selects implementation through the readiness report; research, plan or review alone needs a brief that asks for just that.",
             ),
@@ -975,6 +979,10 @@ const FINISH_LINE_PINS: &[(&str, &[(&str, &str)])] = &[
     (
         QUALITY_CONTRACT,
         &[
+            (
+                "blocker classification reads the operator list",
+                "check its \"What belongs to the operator\" list at this point, not from memory.",
+            ),
             (
                 "settled dissent record",
                 "SETTLED_DISSENT: <none | item | both verdicts | evidence | why reversible>",
@@ -1369,6 +1377,14 @@ fn autonomy_reference_keeps_its_owned_parts() {
             ("hard-gate owner", "\"Match the gate to the blast radius\""),
             ("the only full list", "This is the only full list."),
             ("spend gate", "spend, including buying credits;"),
+            (
+                "risk tolerance is operator-owned",
+                "risk tolerance the brief does not fix: how much residual risk to accept",
+            ),
+            (
+                "security boundary is operator-owned",
+                "a material security boundary: where a trust, data or access boundary sits or moves, even when nothing is weakened",
+            ),
             ("outbound gate", "anything sent outside the conversation"),
             (
                 "protected integration glob",

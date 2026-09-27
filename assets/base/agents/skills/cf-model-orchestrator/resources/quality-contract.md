@@ -217,7 +217,8 @@ impediment before escalating it:
 - an external dependency or enforced gate is recorded with the exact evidence
   or input that clears it; and
 - a choice that `cf-method/references/autonomy.md` reserves to the operator
-  goes to them as one question with a recommendation.
+  goes to them as one question with a recommendation; check its "What belongs
+  to the operator" list at this point, not from memory.
 
 Record the last failed attempt and what evidence changed. One bounded
 confirmation of a prior failure is allowed when current provenance or freshness
