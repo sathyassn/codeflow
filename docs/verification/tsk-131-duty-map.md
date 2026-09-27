@@ -12,30 +12,32 @@ only where weaker or duplicated wording made room.
 |---|---|
 | Cap (`READING_CHAIN_CAP_BYTES`, 148 KiB, unchanged) | 151,552 |
 | Chain on the base `2d3d37176` | 151,486 |
-| Chain on this branch | 151,509 |
-| Headroom left | 43 |
+| Chain on this branch | 151,476 |
+| Headroom left | 76 |
 
 The chain files that changed:
 
 | File | Before | After |
 |---|---|---|
-| `cf-model-orchestrator/SKILL.md` | 21,759 | 21,637 |
+| `cf-model-orchestrator/SKILL.md` | 21,759 | 21,664 |
 | `cf-model-orchestrator/resources/quality-contract.md` | 1,864 | 2,035 |
 | `cf-model-orchestrator/resources/quality/design-implementation.md` | 3,407 | 3,401 |
-| `cf-develop/SKILL.md` | 5,091 | 5,071 |
+| `cf-develop/SKILL.md` | 5,091 | 5,011 |
 
 `quality/findings.md` (4,820 bytes) is a conditional read, recorded in
-`CONDITIONAL_READS` from three places with its trigger: the quality index
-row ("when a defect is fixed, or review findings are briefed, written or
-acted on"), the orchestrator's loop invariant ("When review findings are
-acted on") and cf-develop step 5c ("On `changes_requested`"). The blocker
-navigation row's trigger widened to "when a step is blocked or would depart
-from what was approved", because that section now holds the D21 departure
-rule; its `CONDITIONAL_READS` entry was changed to the new text.
+`CONDITIONAL_READS` from each place that links it, with its trigger: the
+quality index row ("when a defect is fixed, or review findings are briefed,
+written or acted on"), the orchestrator's loop invariant ("When review findings
+are acted on") and step 5 ("Any confirmed issue returns to its responsible
+primary"), and cf-develop from step 5a ("When the change fixes a defect") and
+step 5c ("On `changes_requested`"). The blocker navigation row's trigger
+widened to "when a step is blocked or would depart from what was approved",
+because that section now holds the D21 departure rule; its `CONDITIONAL_READS`
+entry was changed to the new text.
 
 Files outside the chain keep their own budgets: `cf-reviewer.md` 9,801 to
 9,820 of 9,856; `cf-consult/SKILL.md` 6,603 to 6,644 of 6,656. The rules
-references have no byte cap: `writing.md` 4,036 to 7,989 and
+references have no byte cap: `writing.md` 4,036 to 8,151 and
 `workflow-discipline.md` 13,108 to 13,517.
 
 ## Duty map
@@ -48,13 +50,16 @@ each of its duties is stated after the change.
 | Orchestrator invariant "Bounded, evidence-moving loops" | "Plan reconciliation and post-review rework are each bounded to at most two rounds." | Plan reconciliation: the same bullet ("bounded to at most two rounds") and step 2 ("If both do not explicitly approve the same version, stop for the human"). Rework: `quality/findings.md`, Review rounds, bounded by change class. |
 | Same | "At the bound, diagnose the persistent constraint and either take an approved-outcome-preserving strategic route with fresh evidence or surface a genuine external/owner block." | Rework: `quality/findings.md` last paragraph. Any tactical cycle: `quality/blockers-and-gates.md` ("When a bounded tactical cycle fails, move up a level"). All tiers: `workflow-discipline.md`, "Navigate blockers". |
 | Same | "A repeated attempt without a new hypothesis or changed evidence is not another round." | Kept in the bullet as "A repeat without ..."; also in `quality/findings.md`. |
-| Orchestrator step 5 | "Rework is bounded to two rounds and requires fresh evidence." | "Rework follows the round bounds above." The fresh-evidence duty is the invariant's "A repeat without a new hypothesis or changed evidence is not another round". |
+| Orchestrator step 5 | "Rework is bounded to two rounds and requires fresh evidence." | "... within the [findings](resources/quality/findings.md) round bounds." (linked directly after Fable's review of d60ce13f0). The fresh-evidence duty is the invariant's "A repeat without a new hypothesis or changed evidence is not another round". |
 | Orchestrator intro | "Staged routes keep startup concise." | No duty: it described the paragraph. |
 | Design and implementation quality | "Coherence includes justified structure, not merely less structure." | The same paragraph's rule that under-design is `changes_requested` and that variants and evidenced cases may require abstraction; `workflow-discipline.md` "Preserve justified structure". |
 | Same | "and review follows [review and degradation](../routing/review.md)" | `routing/review.md` stays a required read from the capability-routing index. |
 | Same | "The `claude-judgment-primary` owns the final quality verdict; helpers may collect evidence but cannot replace that judgment." | Orchestrator invariant "The Claude judgment primary owns integrated Claude judgment" ("owns the final quality verdict") and "workers replace no primary or named reviewer"; `routing/review.md` ("owns the final Claude quality judgment"). |
 | cf-develop step 2 | "note what the change touches" | Strengthened to "name the bounded impact set (quality contract)". |
+| cf-develop step 5c | "with options and a recommendation" and "genuine" at the bound | Blocker navigation ("present verified state, attempts, options with consequences, and a recommendation") and `workflow-discipline.md` at every tier ("include evidence, attempts, real options, consequences, and a recommendation"); "operator-owned decision" (CF-GOV-002 marker) stays. |
 | cf-develop step 5c | "address blocker and major findings, re-review" | `quality/findings.md`, Review rounds (one batch, one apply-and-verify cycle, the finder confirms), named in the step. |
+| cf-develop step 5c | "For a defect that resists a first glance, require one already-run command ... closest executable check." | Moved to step 5a Build, stated for every defect fix with the mechanism and the regression test (Fable review of d60ce13f0). |
+| cf-develop step 5a | "preserve useful types, justify material unchecked/broad bypasses, validate untrusted external values at the boundary", "Do not add redundant wrappers or validators", "existing-stack" | `quality/design-implementation.md`, the rule 5a names ("Preserve useful types; justify unchecked casts ... parse and validate untrusted inputs at trust boundaries", "Do not add wrapper layers, duplicate domain models, validation everywhere"). |
 | Same | "Maximum 3 evidence-moving cycles." | "Maximum 2 evidence-moving cycles for code; docs and records follow that section's bound." This fixes the disagreement with the orchestrator's two-round bound. |
 | Same | "Never repeat the same repair without a new hypothesis or changed evidence." | Orchestrator invariant and `quality/findings.md`. |
 | Same | "At the bound ... take a safe approved-outcome-preserving route when one remains, or surface the genuine external dependency or operator-owned decision with attempts, options, consequences, and a recommendation." | Kept as "take a strategic route that keeps the approved outcome, or surface the genuine external dependency or operator-owned decision with options and a recommendation"; attempts and consequences: `quality/blockers-and-gates.md` ("present verified state, attempts, options with consequences, and a recommendation"). |
@@ -69,7 +74,9 @@ each of its duties is stated after the change.
 
 No duty was deleted and no rule was softened. The review-round bound for
 code changed from three cycles (cf-develop) and two rounds (orchestrator) to
-one bound by change class, as AC-2 requires.
+one bound by change class, as AC-2 requires. At d60ce13f0 that claim was
+wrong for one duty: cf-develop stated the defect-fix duty only after a review
+bounced the change; the D19 develop row records the fix.
 
 ## Classification of the EPC-015 pins
 
@@ -88,7 +95,7 @@ Carried and present rows are pinned in `HOLISTIC_FIX_PINS`.
 | D19 reproduction | carried | Repair |
 | D19 no masking | carried, adapted | Repair; drops "a repair refinement of the swallowed-error rule above", since that rule is in another section here |
 | D19 probe citation | carried, adapted | Repair links the probe in blocker navigation |
-| D19 develop | carried, adapted | cf-develop 5c "A defect fix names its evidenced mechanism" |
+| D19 develop | carried, adapted | cf-develop step 5a Build, for every defect fix: apply Repair in `findings.md`, state the evidenced mechanism, add a regression test that fails before the fix and passes after, and run the symptom probe first when needed. At d60ce13f0 this sat only in 5c under "On `changes_requested`" and omitted the regression test, a narrower trigger this row did not disclose; Fable's review found it and it is fixed |
 | D19 reviewer | carried | cf-reviewer step 7 |
 | D20 candidate set | carried | `quality/findings.md` Change impact; every-task short form in `quality/design-implementation.md` |
 | D20 actual set | carried | Change impact |
@@ -105,7 +112,7 @@ Carried and present rows are pinned in `HOLISTIC_FIX_PINS`.
 | D20 template | dropped | Its host, the PR template's Quality report from D10, is not on this line |
 | D20 agents pointer | present | The rule map's "Prove it where it runs" line ("what it touches upstream and downstream") |
 | D20 develop | carried, adapted | cf-develop step 2 "name the bounded impact set (quality contract)" |
-| D20 develop verify | dropped | cf-develop 5d already applies the quality contract, whose every-task impact rule states it; cf-develop is at 5,071 of 5,120 bytes and in the chain |
+| D20 develop verify | dropped | cf-develop 5d already applies the quality contract, whose every-task impact rule states it; cf-develop is at 5,011 of 5,120 bytes and in the chain |
 | D20 reviewer | carried, adapted | cf-reviewer step 7 "Require the named impact set" |
 | D21 pre-apply | carried | `quality/blockers-and-gates.md` |
 | D21 form | carried, adapted | Same; "departure form" |
@@ -146,9 +153,10 @@ Carried and present rows are pinned in `HOLISTIC_FIX_PINS`.
 | D23 eval kit | carried, adapted | CF-GOV-002 marker "Maximum 2 evidence-moving cycles for code" |
 
 Totals: 2 present, 53 carried (28 of them adapted), 8 dropped with a reason.
-`HOLISTIC_FIX_PINS` holds the 55 present and carried rows plus two pins with
-no EPC-015 row: `D20 every task` (the every-task impact rule) and
-`D21 trigger` (the widened blocker navigation trigger).
+`HOLISTIC_FIX_PINS` holds the 55 present and carried rows plus three pins with
+no EPC-015 row: `D19 develop probe` (the symptom probe in cf-develop Build),
+`D20 every task` (the every-task impact rule) and `D21 trigger` (the widened
+blocker navigation trigger).
 
 ## Working method (AC-2)
 
@@ -173,11 +181,11 @@ resolves in its named source.
 | Words | `rules/workflow-discipline.md` |
 | Titles and headings | `docs/adoption.md` |
 | Leads | `AGENTS.md.tmpl` (the rule map) |
-| Captions | `docs/architecture/present.md` |
+| Captions | `docs/verification/evidence/tsk-006/prototype.html` (a full-sentence caption) |
 | Summaries | ADR-0067 |
 | Bullets and tables | SPC-013 R-118 |
 | Microcopy | `crates/codeflow-present/web/src/chrome.tsx` |
-| Replies | `cf-present/references/document-authoring.md` |
+| Replies | `docs/verification/tsk-014-w3/baselines/p3/chat.md` (a recorded chat reply) |
 
 Reconciled with TSK-073's table: its summary rule said two to four
 sentences, and this line ships "one to three short sentences" (TSK-127), so
