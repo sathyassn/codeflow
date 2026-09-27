@@ -41,6 +41,7 @@
     "crates/codeflow-core/src/**",
     "dist-workspace.toml",
     "docs/adoption.md",
-    "docs/releasing.md"
+    "docs/releasing.md",
+    "project-management/templates/**"
   ]
 }
