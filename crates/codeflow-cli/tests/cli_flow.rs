@@ -559,6 +559,34 @@ fn work_start_proves_a_merged_planning_anchor_without_mutation() {
     assert!(porcelain.stdout.is_empty());
 }
 
+/// Make `remote` a configured remote and `main`'s upstream.
+fn set_upstream(dir: &Path, remote: &str) {
+    git(
+        dir,
+        &["config", &format!("remote.{remote}.url"), "/nowhere"],
+    );
+    git(
+        dir,
+        &[
+            "config",
+            "--replace-all",
+            &format!("remote.{remote}.fetch"),
+            &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+        ],
+    );
+    git(dir, &["config", "branch.main.remote", remote]);
+    git(dir, &["config", "branch.main.merge", "refs/heads/main"]);
+}
+
+fn rev_parse(dir: &Path, rev: &str) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", rev])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
 #[test]
 fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
     // The planning record landed on the remote; local `main` was never
@@ -587,6 +615,33 @@ fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
     );
     git(dir.path(), &["switch", "-c", "task/TSK-001-implement"]);
 
+    // Without a configured upstream, local `main` stays the target.
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("not present at the merge-base"),
+        "{}",
+        stderr(&output)
+    );
+
+    // A fork: `main` tracks `upstream/main`, which lacks the planning. The
+    // fork's newer `origin/main` is not the target.
+    set_upstream(dir.path(), "upstream");
+    let base = rev_parse(dir.path(), "main");
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/upstream/main", &base],
+    );
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        !stderr(&output).contains("anchoring on"),
+        "{}",
+        stderr(&output)
+    );
+
+    // `main` tracks `origin/main`, where the planning landed.
+    set_upstream(dir.path(), "origin");
     let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
     assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
     assert!(
@@ -595,7 +650,8 @@ fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
         stdout(&output)
     );
     assert!(
-        stderr(&output).contains("local branch 'main' is 1 commit(s) behind 'origin/main'"),
+        stderr(&output)
+            .contains("local branch 'main' is 1 commit(s) behind its upstream 'origin/main'"),
         "{}",
         stderr(&output)
     );

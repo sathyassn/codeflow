@@ -76,14 +76,16 @@ publication date._
 <!-- codeflow:release-impact patch -->
 - **Work start past a stale local target.** `codeflow work start` and the
   `codeflow ci` work-start and classification checks resolve a
-  task's integration target, such as `main`, to its local branch or its
-  `origin/` remote-tracking ref. When the local branch is strictly behind
-  the remote-tracking ref, they now anchor on the remote-tracking ref and
+  task's integration target, such as `main`, to its local branch when one
+  exists. When that branch is strictly behind the upstream Git has
+  configured for it (`main@{upstream}`), they now anchor on the upstream and
   print a note saying so, instead of refusing a task whose planning record
   landed upstream but was never pulled. When the two have diverged, they
   refuse and name both sides; reconcile the local branch, or name the ref
-  with `codeflow work start --into`. A local branch that is equal or only
-  ahead is still used.
+  with `codeflow work start --into`. A local branch that is equal, only
+  ahead or has no configured upstream is still used, and another remote's
+  branch of the same name, such as a fork's `origin/main`, never replaces
+  it. Without a local branch, `origin/<name>` is used as before.
 
 <!-- codeflow:release-impact major -->
 - **Effort default on upgrade.** Version 2.1.0 set no reasoning effort, so
