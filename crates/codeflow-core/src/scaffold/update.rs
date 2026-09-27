@@ -608,8 +608,10 @@ fn sync_user_owned_json(
             None => format!("added key {k}"),
         })
         .collect();
+    let migrated_any = !migrated.is_empty();
     notes.extend(migrated);
     notes.extend(recommended);
+    let mut schema_advanced = false;
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
             .and_then(serde_json::Value::as_u64),
@@ -620,15 +622,63 @@ fn sync_user_owned_json(
         if new_sv > user_sv {
             user["schema_version"] = serde_json::Value::from(new_sv);
             notes.push(format!("schema_version advanced {user_sv} -> {new_sv}"));
+            schema_advanced = true;
         }
     }
 
-    let mut next = serde_json::to_string_pretty(&user)?;
-    next.push('\n');
+    // Splice only the added keys into the adopter's bytes; a migrated value
+    // or a layout the splice cannot reproduce falls back to a rewrite.
+    let preserved = if migrated_any {
+        None
+    } else {
+        preserving_edit(&current_text, &user, &added, schema_advanced)
+    };
+    let next = if let Some(text) = preserved {
+        text
+    } else {
+        let mut text = serde_json::to_string_pretty(&user)?;
+        text.push('\n');
+        text
+    };
     write_file(&dest_path, next.as_bytes())?;
     push_diff(diffs, &entry.dest, &current_text, &next);
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
+}
+
+/// The adopter's file with only the `added` keys (and removed deprecated
+/// ones), and an advanced `schema_version`, spliced in, when that reproduces
+/// `user` exactly: every
+/// byte the adopter wrote stays as written (TSK-107 review F6).
+fn preserving_edit(
+    current: &str,
+    user: &serde_json::Value,
+    added: &[String],
+    schema_advanced: bool,
+) -> Option<String> {
+    let mut text = current.to_string();
+    for path in added {
+        // A `-` marks a deprecated key the sync removed.
+        if let Some(gone) = path.strip_prefix('-') {
+            let parts: Vec<&str> = gone.split('.').collect();
+            text = super::json_edit::remove_member_line(&text, &parts)?;
+            continue;
+        }
+        let parts: Vec<&str> = path.split('.').collect();
+        let (key, parent) = parts.split_last()?;
+        let value = user.pointer(&format!("/{}", parts.join("/")))?;
+        text = super::json_edit::insert_member(
+            &text,
+            parent,
+            key,
+            &serde_json::to_string(value).ok()?,
+        )?;
+    }
+    if schema_advanced {
+        let version = user.get("schema_version")?.to_string();
+        text = super::json_edit::replace_value(&text, &["schema_version"], &version)?;
+    }
+    super::json_edit::verified(text, user)
 }
 
 /// Changed shipped defaults that `codeflow update` recommends to an existing

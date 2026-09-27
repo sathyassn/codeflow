@@ -20,7 +20,8 @@ use std::path::Path;
 
 use serde_json::Value;
 
-use super::state::{write_file, InstalledManifest};
+use super::json_edit;
+use super::state::{guard_beneath_root, read_beneath_root, write_beneath_root, InstalledManifest};
 use super::ScaffoldError;
 use crate::hooks::policy::{MappingState, Policy};
 
@@ -94,7 +95,9 @@ pub fn find_kept(
     installed: &InstalledManifest,
 ) -> Option<KeptTemplate> {
     candidates(root).into_iter().find_map(|path| {
-        let text = std::fs::read_to_string(root.join(&path)).ok()?;
+        // Never through a symlink (a linked `.github` or template): the
+        // template must be the repository's own file (TSK-107 review F1).
+        let text = read_beneath_root(root, &path).ok().flatten()?;
         let ours = text == shipped
             || (path == MANAGED_TEMPLATE && installed.files.contains_key(MANAGED_TEMPLATE));
         (!ours).then(|| KeptTemplate {
@@ -199,79 +202,6 @@ pub fn propose(required: &[String], template: &[String]) -> Option<BTreeMap<Stri
     Some(mapping)
 }
 
-/// The byte span of the value of `git.<key>` in `text`, or `None`.
-fn git_value_span(text: &str, key: &str) -> Option<(usize, usize)> {
-    let git_open = git_object_open(text)?;
-    let needle = format!("\"{key}\"");
-    let mut from = git_open;
-    loop {
-        let at = text[from..].find(&needle)? + from;
-        let after = &text[at + needle.len()..];
-        let colon = after.len() - after.trim_start().len();
-        if after.trim_start().starts_with(':') {
-            let value_from = at + needle.len() + colon + 1;
-            let ws = text[value_from..].len() - text[value_from..].trim_start().len();
-            let start = value_from + ws;
-            let mut stream =
-                serde_json::Deserializer::from_str(&text[start..]).into_iter::<Value>();
-            stream.next()?.ok()?;
-            return Some((start, start + stream.byte_offset()));
-        }
-        from = at + needle.len();
-    }
-}
-
-/// The byte offset just after the `{` that opens the top-level `git` object.
-fn git_object_open(text: &str) -> Option<usize> {
-    let re = regex::Regex::new(r#""git"\s*:\s*\{"#).ok()?;
-    re.find(text).map(|m| m.end())
-}
-
-/// Insert `"key": value` as the first member of the `git` object, matching
-/// the file's indentation. `None` when the text has no `git` object.
-fn insert_git_key(text: &str, key: &str, value: &str) -> Option<String> {
-    let open = git_object_open(text)?;
-    let rest = &text[open..];
-    let empty = rest.trim_start().starts_with('}');
-    let indent = rest.strip_prefix('\n').map_or_else(
-        || "    ".to_string(),
-        |r| r.chars().take_while(|c| *c == ' ' || *c == '\t').collect(),
-    );
-    let member = if empty {
-        format!("\n{indent}\"{key}\": {value}\n  ")
-    } else if rest.starts_with('\n') {
-        format!("\n{indent}\"{key}\": {value},")
-    } else {
-        format!("\"{key}\": {value}, ")
-    };
-    Some(format!("{}{member}{}", &text[..open], rest))
-}
-
-/// Remove the whole line that carries `git.<key>` (with its comma), when the
-/// key sits on its own line followed by another member.
-fn remove_git_key_line(text: &str, key: &str) -> Option<String> {
-    let (start, end) = git_value_span(text, key)?;
-    let line_start = text[..start].rfind('\n')? + 1;
-    let after = &text[end..];
-    let comma = after.trim_start_matches([' ', '\t']);
-    let comma = comma.strip_prefix(',')?;
-    let line_end = comma.find('\n')?;
-    let consumed = end + (after.len() - comma.len()) + line_end + 1;
-    if !text[consumed..].trim_start().starts_with('"') {
-        return None;
-    }
-    Some(format!("{}{}", &text[..line_start], &text[consumed..]))
-}
-
-/// Parse `edited` and check it equals `original` with exactly the expected
-/// change to `git`; refuse the edit otherwise.
-fn verified(edited: String, original: &Value, change: impl Fn(&mut Value)) -> Option<String> {
-    let parsed: Value = serde_json::from_str(&edited).ok()?;
-    let mut expected = original.clone();
-    change(&mut expected);
-    (parsed == expected).then_some(edited)
-}
-
 fn mapping_json(state: MappingState, headings: &BTreeMap<String, String>, decided: &str) -> Value {
     serde_json::json!({
         "state": state.to_string(),
@@ -360,13 +290,7 @@ pub fn diagnose(
     kept: &KeptTemplate,
     policy_created: bool,
 ) -> Result<Diagnosis, ScaffoldError> {
-    let path = root.join(POLICY);
-    let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
-    let original: Value = serde_json::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-        what: POLICY.to_string(),
-        detail: e.to_string(),
-    })?;
-    let policy: Policy = serde_json::from_str(&text).unwrap_or_default();
+    let (text, original, policy) = read_policy(root)?;
     if let Some(mapping) = &policy.git.pr_section_mapping {
         return Ok(Diagnosis::Recorded(mapping.state));
     }
@@ -392,31 +316,55 @@ pub fn diagnose(
         .is_some();
     let mut edited = text.clone();
     let mut expected = original.clone();
+    if original.get("git").is_none() {
+        // A sparse policy (`{}`, or sections other than `git`) is valid and
+        // takes every default; the mapping needs a `git` object to live in
+        // (TSK-107 review F5). Nothing else is rewritten.
+        edited = json_edit::insert_member(&edited, &[], "git", "{}")
+            .ok_or_else(|| edit_error("pr_section_mapping"))?;
+        expected["git"] = serde_json::json!({});
+    }
     if policy_created && has_level {
-        edited =
-            remove_git_key_line(&edited, "pr_sections").ok_or_else(|| edit_error("pr_sections"))?;
+        edited = json_edit::remove_member_line(&edited, &["git", "pr_sections"])
+            .ok_or_else(|| edit_error("pr_sections"))?;
         expected["git"]
             .as_object_mut()
             .map(|g| g.remove("pr_sections"));
     } else if !policy_created && !has_level {
         let level = Policy::default().git.pr_sections.to_string();
-        edited = insert_git_key(&edited, "pr_sections", &format!("\"{level}\""))
-            .ok_or_else(|| edit_error("pr_sections"))?;
+        edited =
+            json_edit::insert_member(&edited, &["git"], "pr_sections", &format!("\"{level}\""))
+                .ok_or_else(|| edit_error("pr_sections"))?;
         expected["git"]["pr_sections"] = Value::String(level);
     }
     let value = mapping_json(MappingState::Diagnosed, &mapping, "none");
-    edited = insert_git_key(
+    edited = json_edit::insert_member(
         &edited,
+        &["git"],
         "pr_section_mapping",
         &serde_json::to_string(&value).unwrap_or_default(),
     )
     .ok_or_else(|| edit_error("pr_section_mapping"))?;
-    let edited = verified(edited, &expected, |v| {
-        v["git"]["pr_section_mapping"] = value.clone();
-    })
-    .ok_or_else(|| edit_error("pr_section_mapping"))?;
-    write_file(&path, edited.as_bytes())?;
+    expected["git"]["pr_section_mapping"] = value;
+    let edited =
+        json_edit::verified(edited, &expected).ok_or_else(|| edit_error("pr_section_mapping"))?;
+    write_beneath_root(root, POLICY, edited.as_bytes())?;
     Ok(Diagnosis::Diagnosed { mapping, unmatched })
+}
+
+/// The policy file's text, parsed value and typed view, read without
+/// following a symlink.
+fn read_policy(root: &Path) -> Result<(String, Value, Policy), ScaffoldError> {
+    let text = read_beneath_root(root, POLICY)?.ok_or_else(|| ScaffoldError::InvalidState {
+        what: POLICY.to_string(),
+        detail: "no policy file".to_string(),
+    })?;
+    let original: Value = serde_json::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
+        what: POLICY.to_string(),
+        detail: e.to_string(),
+    })?;
+    let policy: Policy = serde_json::from_str(&text).unwrap_or_default();
+    Ok((text, original, policy))
 }
 
 fn edit_error(key: &str) -> ScaffoldError {
@@ -485,13 +433,7 @@ pub fn record_decision(
     decision: MappingState,
     today: &str,
 ) -> Result<String, ScaffoldError> {
-    let path = root.join(POLICY);
-    let text = std::fs::read_to_string(&path).map_err(|e| ScaffoldError::io(&path, e))?;
-    let original: Value = serde_json::from_str(&text).map_err(|e| ScaffoldError::InvalidState {
-        what: POLICY.to_string(),
-        detail: e.to_string(),
-    })?;
-    let policy: Policy = serde_json::from_str(&text).unwrap_or_default();
+    let (text, original, policy) = read_policy(root)?;
     let mapping = policy
         .git
         .pr_section_mapping
@@ -501,22 +443,21 @@ pub fn record_decision(
             detail: "no diagnosed git.pr_section_mapping to decide".to_string(),
         })?;
     let value = mapping_json(decision, &mapping.headings, today);
-    let (start, end) = git_value_span(&text, "pr_section_mapping")
-        .ok_or_else(|| edit_error("pr_section_mapping"))?;
-    let edited = format!(
-        "{}{}{}",
-        &text[..start],
-        serde_json::to_string(&value).unwrap_or_default(),
-        &text[end..]
-    );
-    let edited = verified(edited, &original, |v| {
-        v["git"]["pr_section_mapping"] = value.clone();
-    })
+    let edited = json_edit::replace_value(
+        &text,
+        &["git", "pr_section_mapping"],
+        &serde_json::to_string(&value).unwrap_or_default(),
+    )
     .ok_or_else(|| edit_error("pr_section_mapping"))?;
-    write_file(&path, edited.as_bytes())?;
+    let mut expected = original;
+    expected["git"]["pr_section_mapping"] = value;
+    let edited =
+        json_edit::verified(edited, &expected).ok_or_else(|| edit_error("pr_section_mapping"))?;
 
-    let mut line =
-        format!("PR template decision recorded: git.pr_section_mapping = {decision} ({today})");
+    // A refusal appends to the template: read it beneath the root first, so
+    // a template reached through a symlink refuses before anything is
+    // recorded (TSK-107 review F1).
+    let mut appended = None;
     if decision == MappingState::Refused {
         let mut required = policy.git.pr_required_sections.clone();
         for code in &policy.git.pr_code_sections {
@@ -529,9 +470,13 @@ pub fn record_decision(
             .filter(|r| !kept.headings.iter().any(|h| h.eq_ignore_ascii_case(r)))
             .collect();
         if !missing.is_empty() {
-            let tpath = root.join(&kept.path);
-            let mut template =
-                std::fs::read_to_string(&tpath).map_err(|e| ScaffoldError::io(&tpath, e))?;
+            guard_beneath_root(root, Path::new(&kept.path))?;
+            let mut template = read_beneath_root(root, &kept.path)?.ok_or_else(|| {
+                ScaffoldError::InvalidState {
+                    what: kept.path.clone(),
+                    detail: "the kept PR template is gone".to_string(),
+                }
+            })?;
             if !template.ends_with('\n') {
                 template.push('\n');
             }
@@ -540,14 +485,20 @@ pub fn record_decision(
                 template.push_str(heading);
                 template.push_str("\n\n<!-- Required by git.pr_required_sections. -->\n");
             }
-            write_file(&tpath, template.as_bytes())?;
             let added = missing
                 .iter()
                 .map(|h| format!("## {h}"))
                 .collect::<Vec<_>>()
                 .join(", ");
-            line = format!("{line}; appended {added} to {}", kept.path);
+            appended = Some((template, added));
         }
+    }
+    write_beneath_root(root, POLICY, edited.as_bytes())?;
+    let mut line =
+        format!("PR template decision recorded: git.pr_section_mapping = {decision} ({today})");
+    if let Some((template, added)) = appended {
+        write_beneath_root(root, &kept.path, template.as_bytes())?;
+        line = format!("{line}; appended {added} to {}", kept.path);
     } else if decision == MappingState::Custom {
         line.push_str(
             "; set git.pr_required_sections and git.pr_code_sections to your template's headings in a reviewed change",
@@ -696,6 +647,55 @@ mod tests {
         let again = diagnose(dir.path(), &kept, false).unwrap();
         assert_eq!(again, Diagnosis::Recorded(MappingState::Diagnosed));
         assert_eq!(read(dir.path(), POLICY), before);
+    }
+
+    /// Codex review F1: a kept template reached through a symlinked
+    /// directory is never found, and a refusal naming one records nothing
+    /// and writes nothing outside the repository.
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_template_is_neither_found_nor_written() {
+        let (dir, _, _) = diagnosed_repo(SHIPPED, false);
+        let outside = tempfile::tempdir().unwrap();
+        std::fs::write(
+            outside.path().join("PULL_REQUEST_TEMPLATE.md"),
+            PROJECT_TEMPLATE,
+        )
+        .unwrap();
+        std::os::unix::fs::symlink(outside.path(), dir.path().join("docs")).unwrap();
+        std::fs::remove_file(dir.path().join(MANAGED_TEMPLATE)).unwrap();
+        assert!(find_kept(dir.path(), "shipped", &InstalledManifest::new("0")).is_none());
+
+        let linked = KeptTemplate {
+            path: "docs/PULL_REQUEST_TEMPLATE.md".into(),
+            headings: headings(PROJECT_TEMPLATE),
+        };
+        let before = read(dir.path(), POLICY);
+        assert!(record_decision(dir.path(), &linked, MappingState::Refused, "2026-09-27").is_err());
+        assert_eq!(read(dir.path(), POLICY), before, "nothing recorded");
+        assert_eq!(
+            std::fs::read_to_string(outside.path().join("PULL_REQUEST_TEMPLATE.md")).unwrap(),
+            PROJECT_TEMPLATE
+        );
+    }
+
+    /// Codex review F5: a sparse policy gains a `git` object in place.
+    #[test]
+    fn a_policy_without_a_git_object_gains_one_in_place() {
+        for prior in ["{}\n", "{\n  \"recall\": {\n    \"share\": false\n  }\n}\n"] {
+            let (dir, _, d) = diagnosed_repo(prior, false);
+            assert!(matches!(d, Diagnosis::Diagnosed { .. }), "{prior}");
+            let v: Value = serde_json::from_str(&read(dir.path(), POLICY)).unwrap();
+            assert_eq!(v["git"]["pr_sections"], "block", "{prior}");
+            assert_eq!(
+                v["git"]["pr_section_mapping"]["state"], "diagnosed",
+                "{prior}"
+            );
+            let before: Value = serde_json::from_str(prior).unwrap();
+            for (key, value) in before.as_object().unwrap() {
+                assert_eq!(&v[key], value, "{prior}");
+            }
+        }
     }
 
     #[test]

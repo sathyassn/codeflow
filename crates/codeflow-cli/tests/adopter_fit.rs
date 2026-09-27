@@ -572,6 +572,148 @@ fn upgrade_keeps_an_explicit_block_equal_to_the_default() {
 }
 
 /// Decide interactively at `init` and return the repository.
+/// Codex review F1: a `.github` linked outside the repository is never the
+/// project's template, and a refusal never appends through the link.
+#[cfg(unix)]
+#[test]
+fn a_template_behind_a_symlinked_github_is_never_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let outside = dir.path().join("external-github");
+    std::fs::create_dir_all(&outside).unwrap();
+    std::fs::write(outside.join("PULL_REQUEST_TEMPLATE.md"), PROJECT_TEMPLATE).unwrap();
+    let repo = dir.path().join("repo");
+    std::fs::create_dir_all(&repo).unwrap();
+    git(&repo, &["init", "-b", "main"]);
+    git(&repo, &["config", "user.email", "t@example.com"]);
+    git(&repo, &["config", "user.name", "t"]);
+    std::os::unix::fs::symlink("../external-github", repo.join(".github")).unwrap();
+    std::fs::write(repo.join("app.rs"), "fn main() {}\n").unwrap();
+    git(&repo, &["add", "."]);
+    git(&repo, &["commit", "-m", "chore: existing project"]);
+
+    let out = codeflow_with_stdin(&repo, &["init", "--minimal"], "\n\n\nrefuse\n");
+    let all = text(&out);
+    assert_eq!(
+        std::fs::read_to_string(outside.join("PULL_REQUEST_TEMPLATE.md")).unwrap(),
+        PROJECT_TEMPLATE,
+        "{all}"
+    );
+    assert_eq!(std::fs::read_dir(&outside).unwrap().count(), 1, "{all}");
+    assert!(!all.contains("PR template decision recorded"), "{all}");
+    assert!(policy_value(&repo)["git"]
+        .get("pr_section_mapping")
+        .is_none());
+}
+
+/// `text` with the inserted member `key` (and the separator the insertion
+/// added) taken out again.
+fn without_member(text: &str, key: &str) -> String {
+    let name = format!("\"{key}\": ");
+    let start = text.find(&name).expect("the member");
+    let value = start + name.len();
+    let mut stream =
+        serde_json::Deserializer::from_str(&text[value..]).into_iter::<serde_json::Value>();
+    stream.next().unwrap().unwrap();
+    let mut end = value + stream.byte_offset();
+    if text[end..].starts_with(',') {
+        end += 1 + text[end + 1..].len() - text[end + 1..].trim_start_matches(' ').len();
+    }
+    let line = text[..start]
+        .rfind('\n')
+        .filter(|at| text[at + 1..start].trim().is_empty());
+    let begin = line.unwrap_or(start);
+    format!("{}{}", &text[..begin], &text[end..])
+}
+
+/// Codex review F5: a valid sparse policy (no `git` object) gains one for
+/// the mapping; nothing else changes and the effective default holds.
+#[test]
+fn a_sparse_prior_policy_gains_a_git_object_for_the_mapping() {
+    for prior in [
+        "{}\n",
+        "{\"schema_version\": 1}\n",
+        "{\n  \"recall\": {\n    \"share\": false\n  }\n}\n",
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        brownfield(dir.path(), Some(prior));
+        let out = codeflow(dir.path(), &["init", "--minimal", "--yes"]);
+        let all = text(&out);
+        assert!(out.status.success(), "{prior}: {all}");
+        let before: serde_json::Value = serde_json::from_str(prior).unwrap();
+        let after = policy_value(dir.path());
+        for (key, value) in before.as_object().unwrap() {
+            assert_eq!(&after[key], value, "{prior}: {all}");
+        }
+        assert_eq!(after["git"]["pr_sections"], "block", "{prior}: {all}");
+        assert_eq!(
+            after["git"]["pr_section_mapping"]["state"], "diagnosed",
+            "{prior}: {all}"
+        );
+        let text_after = std::fs::read_to_string(dir.path().join(".codeflow/policy.json")).unwrap();
+        assert_eq!(without_member(&text_after, "git"), prior, "{text_after}");
+
+        // A later update keeps the recorded decision and every byte.
+        let out = codeflow(dir.path(), &["update"]);
+        let all = text(&out);
+        assert!(out.status.success(), "{prior}: {all}");
+        assert_eq!(
+            policy_value(dir.path())["git"]["pr_section_mapping"]["state"],
+            "diagnosed",
+            "{prior}: {all}"
+        );
+    }
+}
+
+/// Codex review F6: an update from an older shipped policy adds the new
+/// default keys into the adopter's own bytes (here a compact file), and a
+/// kept template's mapping lands the same way; no other byte changes.
+#[test]
+fn an_old_baseline_update_splices_new_keys_into_the_adopter_bytes() {
+    let dir = tempfile::tempdir().unwrap();
+    brownfield(dir.path(), None);
+    let out = codeflow(dir.path(), &["init", "--minimal", "--yes"]);
+    assert!(out.status.success(), "{}", text(&out));
+    // Rewind to a release before `automation_profiles`: the shipped
+    // baseline and the adopter's file both lack it; the adopter keeps a
+    // compact file with its own level, and its template is undecided.
+    let old_baseline = {
+        let mut v = shipped_policy();
+        v["git"]
+            .as_object_mut()
+            .unwrap()
+            .remove("automation_profiles");
+        serde_json::to_string_pretty(&v).unwrap()
+    };
+    std::fs::write(
+        dir.path().join(".codeflow/.baseline/.codeflow/policy.json"),
+        old_baseline,
+    )
+    .unwrap();
+    let mut adopter = policy_value(dir.path());
+    let git_obj = adopter["git"].as_object_mut().unwrap();
+    git_obj.remove("automation_profiles");
+    git_obj.remove("pr_section_mapping");
+    git_obj.insert("pr_sections".to_string(), serde_json::json!("block"));
+    git_obj.insert("commit_format".to_string(), serde_json::json!("warn"));
+    let compact = format!("{}\n", serde_json::to_string(&adopter).unwrap());
+    std::fs::write(dir.path().join(".codeflow/policy.json"), &compact).unwrap();
+
+    let out = codeflow(dir.path(), &["update"]);
+    let all = text(&out);
+    assert!(out.status.success(), "{all}");
+    assert!(all.contains("added key git.automation_profiles"), "{all}");
+    let after = std::fs::read_to_string(dir.path().join(".codeflow/policy.json")).unwrap();
+    let restored = without_member(
+        &without_member(&after, "pr_section_mapping"),
+        "automation_profiles",
+    );
+    assert_eq!(restored, compact, "{after}");
+    let value = policy_value(dir.path());
+    assert_eq!(value["git"]["automation_profiles"], serde_json::json!([]));
+    assert_eq!(value["git"]["commit_format"], "warn");
+    assert_eq!(value["git"]["pr_section_mapping"]["state"], "diagnosed");
+}
+
 fn decided(answer: &str) -> tempfile::TempDir {
     let dir = tempfile::tempdir().unwrap();
     brownfield(dir.path(), None);
