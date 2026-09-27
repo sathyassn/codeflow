@@ -100,7 +100,9 @@ the code.
   and a later ADR wins wherever they differ.
 - **This repo builds the product and is its own first consumer.** `assets/` is
   as much the product as `crates/`: scaffold content is embedded into the
-  binary via rust-embed and held to the charter's section 4.4 size caps.
+  binary via rust-embed. Its reading structure is tested and its sizes are
+  reported against guideline numbers (charter section 4.4): keep the kernel
+  small and move detail behind a trigger, never cut a duty to meet a number.
 - **Wire a managed artifact in the same change you add it.** When you add or
   rename a managed artifact (a skill, agent, resource, or workflow), do it
   end-to-end: add its `assets/base/scaffold-manifest.toml` `[[entry]]`(ies),

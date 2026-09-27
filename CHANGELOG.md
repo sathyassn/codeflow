@@ -292,6 +292,28 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact minor -->
+- **Reading is checked by structure; sizes are reported, not failed.** The
+  shipped instruction files load progressively: a small kernel (the managed
+  `AGENTS.md` block) at session start, and everything else through an index
+  entry or a reviewed trigger at the moment it is needed. CodeFlow's own
+  tests now fail when that structure breaks (a shipped reference nothing
+  reaches, or a conditional read without a trigger) instead of when a file
+  passes a byte number. `codeflow doctor` gains a `reading` check that
+  reports the kernel, the per-task reading chain and each shipped skill
+  against guideline numbers, and warns above one with the step that clears
+  it: move detail behind a trigger. The one size that still fails is the
+  whole generated `AGENTS.md` with a realistic project section against
+  Codex's 32 KiB instruction limit. Passages that earlier byte budgets had
+  cut are restored where they are read: the turn lifecycle adapter now loads
+  on a Grok or other non-Claude host that launches Claude, not only on Codex;
+  `cf-herdr` again says the dangerous-permissions flag needs the operator to
+  name it, that Herdr is not a sandbox, and how agent names look; the Grok
+  host detail is read before a Grok launch; and the git reference explains
+  arming the remote plane. The unreferenced `cf-present` example
+  `assets/review-document.example.json` is retired; `codeflow update` removes
+  an unmodified copy.
+
+<!-- codeflow:release-impact minor -->
 - **A short rule map replaces the long root contract.** Every tier's
   managed `AGENTS.md` block is now a map of about 7 KB (was 28.7 KB at
   standard and full, 16.4 KB at minimal), rendered with `CLAUDE.md` from one
