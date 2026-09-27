@@ -593,8 +593,11 @@ fn codeql_remains_repository_owned_not_a_scaffolded_workflow() {
 /// - the alternate CI wrappers are copy-in-by-hand only — the platform picker
 ///   and their manifest wiring are an explicitly deferred follow-up
 ///   (`assets/base/ci/README.md`, ADR-0017).
-const UNSHIPPED_FILES: [&str; 5] = [
+const UNSHIPPED_FILES: [&str; 6] = [
     "scaffold-manifest.toml",
+    // The rule-map kernel (TSK-127) renders the root AGENTS.md and CLAUDE.md
+    // templates; the binary embeds it, and only the renders ship per file.
+    "rule-map.toml",
     "ci/README.md",
     "ci/.gitlab-ci.yml",
     "ci/bitbucket-pipelines.yml",

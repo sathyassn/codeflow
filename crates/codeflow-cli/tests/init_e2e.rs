@@ -562,3 +562,128 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         assert!(passed, "{tier}: the gate runs once the lock is free");
     }
 }
+
+/// TSK-127: a fresh scaffold at every tier installs the kernel-rendered rule
+/// map, its references and the CLAUDE file through the real binary, and
+/// `codeflow doctor` warns once an AGENTS.md passes Codex's 32 KiB limit.
+#[test]
+fn fresh_scaffolds_install_the_rule_map_at_every_tier() {
+    use codeflow_core::scaffold::rule_map::{managed_block, File, Kernel, OUTPUTS};
+    use codeflow_core::scaffold::Tier;
+
+    let kernel = Kernel::shipped();
+    for (flag, tier) in [
+        ("--minimal", Tier::Minimal),
+        ("--standard", Tier::Standard),
+        ("--full", Tier::Full),
+    ] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir(&root).unwrap();
+        let init = codeflow(&root, &["init", "--yes", flag]);
+        assert!(
+            init.status.success(),
+            "{flag}: init failed: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+
+        let agents = read(&root, "AGENTS.md");
+        let output = OUTPUTS
+            .iter()
+            .find(|output| output.file == File::Agents && output.tier == tier)
+            .unwrap();
+        let rendered = kernel
+            .render(output)
+            .replace("{{SCAFFOLD_VERSION}}", env!("CARGO_PKG_VERSION"));
+        assert_eq!(
+            managed_block(&agents),
+            managed_block(&rendered),
+            "{flag}: installed map is not the kernel render"
+        );
+        for rule in kernel.rules_for(tier) {
+            assert!(
+                agents.contains(&Kernel::render_rule(rule)),
+                "{flag}: rule {} missing",
+                rule.id
+            );
+        }
+        for reference in [
+            "workflow-discipline.md",
+            "git-rules.md",
+            "worktrees.md",
+            "writing.md",
+        ] {
+            assert_eq!(
+                read(&root, &format!(".codeflow/rules/{reference}")),
+                read(&repo_root(), &format!("assets/base/rules/{reference}")),
+                "{flag}: reference {reference} not installed"
+            );
+        }
+        assert!(
+            read(&root, "CLAUDE.md").contains("@AGENTS.md"),
+            "{flag}: CLAUDE.md"
+        );
+
+        let doctor = |label: &str| {
+            let out = codeflow(&root, &["doctor", "--check", "instructions"]);
+            let text = format!(
+                "{}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            );
+            assert!(text.contains("instructions"), "{flag} {label}: {text}");
+            text
+        };
+        let fresh = doctor("fresh");
+        assert!(!fresh.contains("over Codex"), "{flag}: {fresh}");
+
+        let mut grown = agents.clone();
+        grown.push_str("\n## Service conventions\n\n");
+        grown.push_str(
+            &"- Keep the ledger double-entry invariant on every change.\n".repeat(16 * 1024 / 58),
+        );
+        std::fs::write(root.join("AGENTS.md"), &grown).unwrap();
+        assert!(grown.len() <= 32 * 1024, "{flag}: {} bytes", grown.len());
+        let sixteen = doctor("16 KiB section");
+        assert!(!sixteen.contains("over Codex"), "{flag}: {sixteen}");
+
+        grown.push_str(&"x".repeat(32 * 1024));
+        std::fs::write(root.join("AGENTS.md"), &grown).unwrap();
+        let over = doctor("oversized");
+        assert!(over.contains("over Codex"), "{flag}: {over}");
+    }
+}
+
+/// TSK-127 review probe (Codex F1): a nested `AGENTS.md` whose chain passes
+/// Codex's 32 KiB limit warns through the real binary, whether doctor runs
+/// from the project root or from the nested directory.
+#[test]
+fn doctor_warns_for_an_oversized_nested_instruction_chain() {
+    let tmp = tempfile::tempdir().unwrap();
+    let root = tmp.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let init = codeflow(&root, &["init", "--yes", "--minimal"]);
+    assert!(
+        init.status.success(),
+        "init failed: {}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let nested = root.join("nested");
+    std::fs::create_dir(&nested).unwrap();
+    std::fs::write(nested.join("AGENTS.md"), "x".repeat(32 * 1024 + 1)).unwrap();
+
+    for cwd in [&root, &nested] {
+        let out = codeflow(cwd, &["doctor", "--check", "instructions"]);
+        let text = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert!(
+            text.contains("nested/AGENTS.md with its parent instructions")
+                && text.contains("over Codex"),
+            "{}: {text}",
+            cwd.display()
+        );
+    }
+}

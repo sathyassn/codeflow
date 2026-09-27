@@ -53,7 +53,7 @@ example = "docs/decisions/template.md"
 
 [[adopter_facing]]
 member = "managed_instructions"
-patterns = ["AGENTS.md", "CLAUDE.md", ".claude/**", ".agents/**", ".codex/**", ".grok/**"]
+patterns = ["AGENTS.md", "CLAUDE.md", ".claude/**", ".agents/**", ".codex/**", ".grok/**", ".codeflow/rules/**"]
 example = "AGENTS.md"
 
 [[adopter_facing]]

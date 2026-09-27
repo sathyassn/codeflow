@@ -195,6 +195,7 @@ const CHECK_NAMES: &[&str] = &[
     "ci-perimeter",
     "managed-drift",
     "customization",
+    "instructions",
     "test-config",
     "id-registry",
     "adopter-fit",
@@ -226,6 +227,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("ci-perimeter", check_ci_perimeter);
     m.insert("managed-drift", check_managed_drift);
     m.insert("customization", check_customization);
+    m.insert("instructions", check_instructions);
     m.insert("test-config", check_test_config);
     m.insert("id-registry", check_id_registry);
     m.insert("adopter-fit", check_adopter_fit);
@@ -1768,6 +1770,128 @@ fn check_customization(opts: &Options) -> CheckResult {
     }
 }
 
+/// Always-loaded instruction size (TSK-127). Codex concatenates the
+/// instruction file of each directory from the project root down to its
+/// working directory, reads at most 32 KiB of that chain and silently cuts
+/// the rest. The project section sits last in each `AGENTS.md`, so an
+/// oversized chain loses the adopter's own rules first. Every directory that
+/// holds an instruction file is a possible working directory, so each one's
+/// chain is measured. Warns, never fails: the fix is the project's call.
+fn check_instructions(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let limit = crate::scaffold::rule_map::CODEX_INSTRUCTION_LIMIT_BYTES;
+    let root = PathBuf::from(&opts.project_dir);
+    let mut chains = Vec::new();
+    instruction_chains(&root, Path::new(""), 0, 0, &mut chains);
+    let over: Vec<&(String, usize)> = chains.iter().filter(|(_, bytes)| *bytes > limit).collect();
+    let (status, message) = if chains.is_empty() {
+        (
+            Status::Pass,
+            "no AGENTS.md (instruction size check not applicable)".to_string(),
+        )
+    } else if over.is_empty() {
+        let (file, bytes) = chains
+            .iter()
+            .max_by_key(|(_, bytes)| *bytes)
+            .expect("chains is not empty");
+        (
+            Status::Pass,
+            format!(
+                "{} is {bytes} bytes, {} under Codex's {limit}-byte instruction limit",
+                chain_label(file),
+                limit - bytes
+            ),
+        )
+    } else {
+        let listed: Vec<String> = over
+            .iter()
+            .map(|(file, bytes)| format!("{} is {bytes} bytes", chain_label(file)))
+            .collect();
+        (
+            Status::Warn,
+            format!(
+                "{}, over Codex's {limit}-byte instruction limit: Codex cuts the end of the chain, where the project section lives; move project detail into files the section points at",
+                listed.join("; ")
+            ),
+        )
+    };
+    CheckResult {
+        name: "instructions".into(),
+        status,
+        message,
+        duration: start.elapsed(),
+    }
+}
+
+/// Directory depth past which the instruction walk stops.
+const INSTRUCTION_WALK_DEPTH: usize = 16;
+
+/// Collect `(instruction file, chain bytes)` for every directory under
+/// `root` that holds a non-empty instruction file, where the chain is that
+/// file plus the files of its ancestors up to `root`, as Codex loads them.
+/// Hidden directories, build output and nested repositories or worktrees
+/// (a directory holding `.git`) are not part of this project's chain;
+/// symlinked directories are not followed.
+fn instruction_chains(
+    root: &Path,
+    relative: &Path,
+    depth: usize,
+    inherited: usize,
+    chains: &mut Vec<(String, usize)>,
+) {
+    let dir = root.join(relative);
+    let mut total = inherited;
+    if let Some((name, bytes)) = instruction_file(&dir) {
+        total += bytes;
+        chains.push((relative.join(name).to_string_lossy().into_owned(), total));
+    }
+    if depth >= INSTRUCTION_WALK_DEPTH {
+        return;
+    }
+    let Ok(entries) = std::fs::read_dir(&dir) else {
+        return;
+    };
+    let mut children: Vec<_> = entries
+        .filter_map(Result::ok)
+        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+        .map(|entry| entry.file_name())
+        .filter(|name| {
+            let name = name.to_string_lossy();
+            !name.starts_with('.') && !matches!(name.as_ref(), "target" | "node_modules")
+        })
+        .collect();
+    children.sort();
+    for child in children {
+        let child_relative = relative.join(&child);
+        if root.join(&child_relative).join(".git").exists() {
+            continue;
+        }
+        instruction_chains(root, &child_relative, depth + 1, total, chains);
+    }
+}
+
+/// The instruction file Codex reads in `dir`: a non-empty
+/// `AGENTS.override.md` wins over `AGENTS.md`; empty files are skipped.
+fn instruction_file(dir: &Path) -> Option<(&'static str, usize)> {
+    ["AGENTS.override.md", "AGENTS.md"]
+        .into_iter()
+        .find_map(|name| {
+            let bytes = std::fs::metadata(dir.join(name)).ok()?.len();
+            (bytes > 0).then(|| (name, usize::try_from(bytes).unwrap_or(usize::MAX)))
+        })
+}
+
+fn chain_label(file: &str) -> String {
+    if Path::new(file)
+        .parent()
+        .is_some_and(|parent| parent.as_os_str().is_empty())
+    {
+        file.to_string()
+    } else {
+        format!("{file} with its parent instructions")
+    }
+}
+
 /// Generic-testing config health. When `.codeflow/test-config.json` exists,
 /// runs the testing engine's config-health checks (cwd existence, command
 /// parsing, path safety, glob validity, runner probes, …) and WARNS with a
@@ -1879,7 +2003,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 17);
+        assert_eq!(check_names().len(), 18);
     }
 
     #[test]
@@ -2443,6 +2567,75 @@ mod tests {
         opts.project_dir = dir.path().to_string_lossy().into_owned();
         let result = check_customization(&opts);
         assert_eq!(result.status, Status::Pass);
+    }
+
+    #[test]
+    fn test_instructions_warns_past_the_codex_limit() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        assert_eq!(check_instructions(&opts).status, Status::Pass);
+
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(32 * 1024)).unwrap();
+        let at_limit = check_instructions(&opts);
+        assert_eq!(at_limit.status, Status::Pass, "{}", at_limit.message);
+        assert!(at_limit.message.contains("0 under"));
+
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(32 * 1024 + 1)).unwrap();
+        let over = check_instructions(&opts);
+        assert_eq!(over.status, Status::Warn);
+        assert!(over.message.contains("32769 bytes"), "{}", over.message);
+        assert!(over.message.contains("project section"));
+    }
+
+    /// Codex review probe (TSK-127 F1): an 18-byte root file and a
+    /// 32,769-byte `nested/AGENTS.md` must warn, naming the nested chain.
+    #[test]
+    fn test_instructions_measures_nested_chains() {
+        let dir = tempfile::tempdir().unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(18)).unwrap();
+        std::fs::create_dir_all(dir.path().join("nested")).unwrap();
+        std::fs::write(
+            dir.path().join("nested/AGENTS.md"),
+            "x".repeat(32 * 1024 + 1),
+        )
+        .unwrap();
+        let nested = check_instructions(&opts);
+        assert_eq!(nested.status, Status::Warn, "{}", nested.message);
+        assert!(
+            nested
+                .message
+                .contains("nested/AGENTS.md with its parent instructions is 32787 bytes"),
+            "{}",
+            nested.message
+        );
+
+        // The chain is what counts: two files each under the limit.
+        std::fs::write(dir.path().join("AGENTS.md"), "x".repeat(20 * 1024)).unwrap();
+        std::fs::write(dir.path().join("nested/AGENTS.md"), "x".repeat(13 * 1024)).unwrap();
+        assert_eq!(check_instructions(&opts).status, Status::Warn);
+
+        // An override replaces its directory's AGENTS.md in the chain.
+        std::fs::write(dir.path().join("nested/AGENTS.override.md"), "short\n").unwrap();
+        let overridden = check_instructions(&opts);
+        assert_eq!(overridden.status, Status::Pass, "{}", overridden.message);
+
+        // A nested repository or worktree is its own project root.
+        std::fs::remove_file(dir.path().join("nested/AGENTS.override.md")).unwrap();
+        std::fs::create_dir_all(dir.path().join("nested/.git")).unwrap();
+        assert_eq!(check_instructions(&opts).status, Status::Pass);
+
+        // No root file, oversized nested file: still found.
+        std::fs::remove_dir_all(dir.path().join("nested/.git")).unwrap();
+        std::fs::remove_file(dir.path().join("AGENTS.md")).unwrap();
+        std::fs::write(
+            dir.path().join("nested/AGENTS.md"),
+            "x".repeat(32 * 1024 + 1),
+        )
+        .unwrap();
+        assert_eq!(check_instructions(&opts).status, Status::Warn);
     }
 
     /// git in a tempdir, isolated from the host config (mirrors orient's

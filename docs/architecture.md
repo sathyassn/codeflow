@@ -90,10 +90,10 @@ Core modules grouped by responsibility:
   lint, including structural task dependency identity/reference/cycle checks),
   the capability registry parser, FTS5 recall, and the cross-repo registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (17 checks: hooks, claude, codex, grok, config,
+  `error.rs`): the doctor check table (18 checks: hooks, claude, codex, grok, config,
   permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity,
   ci-perimeter, managed-drift,
-  customization, test-config, id-registry, adopter-fit), including bidirectional delegate readiness
+  customization, instructions, test-config, id-registry, adopter-fit), including bidirectional delegate readiness
   (Codex auth/MCP, Claude plugin/MCP, and tmux prerequisites; live interactive
   canaries remain outside the binary) and a sentinel-based consuming-project
   customization nudge, structured settings merge,
@@ -267,8 +267,8 @@ copying their status or dependency graph. Its narrow native allocation checker
 has a separate read-only data boundary; it neither runs the method nor schedules
 work. Minimal receives no method files or automatic planning upgrade.
 
-`cf-model-orchestrator` is the stage-aware harness-neutral default for every
-non-trivial repository task in standard/full scaffolds. Claude Code reaches
+`cf-model-orchestrator` is the stage-aware harness-neutral entry for routed
+work in standard/full scaffolds, decided by touched paths as the root map states. Claude Code reaches
 Codex through the official plugin/app-server; Grok reaches Codex through the
 official `codex` CLI and local app-server daemon (Herdr, tmux degraded); Codex
 reaches Claude through Herdr (tmux degraded) plus schema-v2. Primaries default
@@ -444,7 +444,9 @@ resources for retention, and never deletes. The owner check remains explicit:
 even a clean landed resource is removable only after confirming no active task
 owns it.
 
-`assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates, the
+`assets/base/` holds the shipped scaffold (AGENTS.md/CLAUDE.md templates
+rendered from the `rule-map.toml` kernel by `scaffold::rule_map`, the
+`.codeflow/rules/` references, the
 `claude/` artifacts, policy.json, git-hook shims, docs and pm templates); the
 engine manages it by three ownership classes (charter §4.3): **fully-managed**
 files (agents, skills, hook shims, CI) refresh by hash and 3-way merge from

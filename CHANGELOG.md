@@ -230,6 +230,33 @@ publication date._
 
 ### Changed
 
+<!-- codeflow:release-impact minor -->
+- **A short rule map replaces the long root contract.** Every tier's
+  managed `AGENTS.md` block is now a map of about 7 KB (was 28.7 KB at
+  standard and full, 16.4 KB at minimal), rendered with `CLAUDE.md` from one
+  kernel: at most 12 one-line always rules and a "when you are about to"
+  table (estimate, status, explanation, plan, design, build, review,
+  blocker, branch, ship, consult, instruction change, session start or
+  resume), each pointing one hop away. The
+  doctrine moved unchanged in substance to four references installed at
+  every tier under `.codeflow/rules/` (workflow discipline, git rules,
+  worktrees, writing). Always rules now include: durations for agent work
+  come from cf-estimate, never human weeks, sprints or person-days; replies
+  lead with outcomes in words, IDs after; complex explanations go through
+  cf-present where the harness can show it; and orchestration entry is
+  decided by the paths a task touches. The full tier gets its own map, which
+  alone names `project-management/`. `codeflow update` replaces the managed
+  block and keeps the project section byte for byte, CRLF line breaks and
+  a missing final newline included; `doctor` gains an `instructions` check
+  that warns when the `AGENTS.md` chain Codex loads for any directory, root
+  to nested, passes its 32 KiB limit. Map rows print skill references as
+  paths from the repository root (`.agents/skills/...`).
+  Migration: `codeflow update` never edits the project section, so a
+  project section that cites the old section names ("Git rules", "Worktree
+  doctrine", "Workflow discipline", "Entry points", "Planning and tracking",
+  "Session flow") should point at `.codeflow/rules/git-rules.md`,
+  `worktrees.md` or `workflow-discipline.md`, or at the map, instead.
+
 <!-- codeflow:release-impact patch -->
 - **Work start past a stale local target.** `codeflow work start` and the
   `codeflow ci` work-start and classification checks resolve a

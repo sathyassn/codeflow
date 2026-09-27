@@ -10,7 +10,7 @@ portal is a derived utility, never a second source of truth. Product behavior,
 architecture, capabilities, decisions, specs, epics, tasks, and code remain in
 their established files.
 
-This is a supporting flow inside `cf-model-orchestrator` for non-trivial work.
+This is a supporting flow inside `cf-model-orchestrator` for routed work.
 
 Docs for **this or any consuming repo** reuse the same utility design
 system as `cf-present`: author repository sources; the portal applies

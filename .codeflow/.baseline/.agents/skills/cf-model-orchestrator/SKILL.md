@@ -1,13 +1,13 @@
 ---
 name: cf-model-orchestrator
-description: Coordinate the default Claude+Codex pair for every non-trivial repository task from Claude Code, Codex, or Grok Build. Both families independently research, analyze, and plan; Claude owns design and integrated judgment; the host assigns capable production and author-relative cross-lineage review and reconciles versioned approval with native evidence. Use for material research, planning, design, implementation, review, security, documentation, or verification. Requires native interactive sessions and degrades legibly when a seat is unavailable; never uses headless model execution.
+description: Coordinate the default Claude+Codex pair for routed work from Claude Code, Codex, or Grok Build. Both families independently research, analyze, and plan; Claude owns design and integrated judgment; the host assigns capable production and author-relative cross-lineage review and reconciles versioned approval with native evidence. Use for routed work (a change to an adopter-facing path, research or analysis that will drive one, or plan, design, security or irreversible work); when unsure, route. Requires native interactive sessions and degrades legibly when a seat is unavailable; never uses headless model execution.
 ---
 
 # cf-model-orchestrator — host-neutral development duo
 
-Use the duo for every non-trivial repository task. Harness choice changes
-transport/coordinator, not duties or quality. One obvious local edit needs no
-duo; material judgment, research, multiple surfaces, or deeper evidence does.
+Use the duo for routed work, decided by touched paths as AGENTS.md states;
+when unsure, route. Harness choice changes transport/coordinator, not duties
+or quality. Other edits and conversation need no duo.
 
 Select the outcome mode first. Then **read and follow** the compositional
 transition map at

@@ -22,8 +22,9 @@ const HERDR: &str = "assets/base/agents/skills/cf-herdr/SKILL.md";
 const ORCHESTRATOR: &str = "assets/base/agents/skills/cf-model-orchestrator/SKILL.md";
 const ROUTING: &str =
     "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md";
-const AGENTS_TMPL: &str = "assets/base/AGENTS.md.tmpl";
-const AGENTS_MINIMAL_TMPL: &str = "assets/base/AGENTS.minimal.md.tmpl";
+// TSK-127 moved the always-loaded doctrine one hop away: the workflow
+// reference is installed at every tier.
+const WORKFLOW_DISCIPLINE: &str = "assets/base/rules/workflow-discipline.md";
 const SPEC: &str = "project-management/specs/SPC-002.md";
 
 fn root() -> PathBuf {
@@ -354,19 +355,19 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
         CONSULT,
         &["five-obligation evidence contract (launch/provenance/return/failure/recheck)"],
     );
+    // The entry-point cell's host routes live in the owning skills.
     assert_contains(
-        AGENTS_TMPL,
-        &[
-            "durable lifecycle over interactive Claude",
-            "launch, provenance, return, failure and recheck",
-        ],
+        DELEGATE_SKILL,
+        &["the durable lifecycle over the interactive claude CLI"],
     );
-    // Both templates carry the identical tier-neutral provenance sentence.
+    assert_contains(
+        ORCHESTRATOR,
+        &["evidence contract — launch, provenance, return, failure, recheck"],
+    );
+    // Every tier installs the one tier-neutral provenance sentence.
     let provenance = "Work attributed to another model or harness counts only with native, \
                       recheckable provenance";
-    for template in [AGENTS_TMPL, AGENTS_MINIMAL_TMPL] {
-        assert_contains(template, &[provenance]);
-    }
+    assert_contains(WORKFLOW_DISCIPLINE, &[provenance]);
 }
 
 #[test]
