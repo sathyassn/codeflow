@@ -295,21 +295,23 @@ no per-harness duplication. Headless `codex exec` does not fire project hooks
 (ADR-0008), so this is an interactive-session aid; the `codex_hooks` test pins the
 JSON wiring, while live firing rests on Codex's documented hooks contract.
 
-Rules come back where they were lost or where they apply (TSK-128). When a
-session resumes or restarts after a compaction (source `resume` or
-`compact`), `session-orient` adds a guidance block of at most 1,536 bytes
-after the digest: the always rules by title, the "when you are about to"
-moments with their first pointer, and the tier's skill names, all generated
-from the rule-map kernel. The new `prompt-reminder` hook on
-`UserPromptSubmit` adds one rule line of at most 300 bytes when a prompt asks
-for a duration, a status or a complex explanation, and nothing otherwise. It
-is advisory: `guidance.prompt_reminders` defaults to `warn`, `off` or `allow`
-silences it, and it exits 0 whatever it reads. Claude and Codex wire both
-(the Claude `SessionStart` matcher is now explicit,
-`startup|resume|clear|compact`, as in Codex). Grok Build 1.0.41 ignores the
-stdout of `SessionStart` and its compaction events and discards an allowing
-`UserPromptSubmit` hook's output, so neither text reaches a Grok model; the
-prompt reminder is not wired there.
+Rules come back where they were lost or where they apply (TSK-128). One
+advisory command, `session-orient`, is wired on `SessionStart` and
+`UserPromptSubmit` and reads the event from the payload. After a
+compaction, a resume or a Claude fork (source `compact`, `resume` or
+`fork`) it adds a guidance block after the digest: the always rules by
+title, the "when you are about to" moments with their first pointer, and
+every skill and agent the tier installs, from the rule-map kernel and the
+scaffold manifest. On a prompt that asks for a duration, a status or a
+complex explanation it adds one rule line, and nothing otherwise. Sizes
+are guidelines (about 1.5 KB and 300 bytes). It is advisory:
+`guidance.prompt_reminders` defaults to `warn`, `off` or `allow` silences
+it, and every path exits 0. An older binary receiving the prompt event
+prints its digest and exits 0, so a machine that has not upgraded loses
+the reminder, not the prompt. Claude and Codex carry the text to the
+model. Grok Build 1.0.41 has the events but ignores their output (events
+present, context injection unavailable), so the Grok hook file wires only
+the guards.
 
 `codeflow status` also emits a read-only cleanup inventory for linked
 worktrees and unattached local branches. Against the locally known target it

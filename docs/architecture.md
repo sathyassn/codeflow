@@ -172,12 +172,14 @@ Windows Claude has no equivalent OS sandbox and therefore moves
 high-blast-radius work to WSL2 or a container (ADR-0033). Beyond the
 guards, `session-orient` is wired for Codex `SessionStart` too (ADR-0013), so an
 interactive Codex session opens with — and re-orients after a compaction from —
-the same orientation digest Claude gets. After a compaction or a resume the
-same hook adds a guidance block generated from the rule-map kernel, and the
-advisory `prompt-reminder` hook on `UserPromptSubmit` adds one rule line to a
-prompt that asks for a duration, a status or a complex explanation
-(`hooks/guidance.rs`, TSK-128). Both are Claude and Codex only: Grok Build
-discards the output of those events. PR-content checks (attribution/emoji,
+the same orientation digest Claude gets. The same command is the advisory
+entry for `UserPromptSubmit` too: it reads the payload's event and adds the
+kernel guidance block after a compaction, resume or fork, or one rule line
+to a prompt that asks for a duration, a status or a complex explanation
+(`hooks/guidance.rs`, TSK-128). One command for both events means an older
+binary still exits 0 on a prompt. The guards never pass through it. Grok
+Build ignores these events' output, so it wires only the guards.
+PR-content checks (attribution/emoji,
 `gh pr merge` base) are git-guard/CI concerns by design — git hooks cannot see
 PR creation.
 
