@@ -617,7 +617,7 @@ fn authenticated_tool_configuration_remains_available() {
 /// Privilege-escalation command patterns (TSK-041 defect 2). Claude exposes
 /// two shell tools — `Bash` and `PowerShell` — and a permission rule is keyed
 /// by the tool that carries the command, so `Bash(...)` alone leaves the
-/// Windows/graphical launchers ungated on the PowerShell tool. The shell guard
+/// Windows/graphical launchers ungated on the `PowerShell` tool. The shell guard
 /// matcher (`^(Bash|PowerShell)$`) already covers both; the permission layer
 /// now does too.
 const PRIVILEGE_ESCALATION_PATTERNS: [&str; 8] = [
@@ -644,7 +644,7 @@ fn privilege_escalation_is_asked_for_both_shell_tools() {
             for pattern in PRIVILEGE_ESCALATION_PATTERNS {
                 let rule = format!("{tool}({pattern})");
                 assert!(
-                    ask.iter().any(|entry| *entry == rule),
+                    ask.contains(&rule),
                     "{name}: ask missing {rule:?} — a rule keyed to the other \
                      shell tool does not gate this one"
                 );
@@ -674,6 +674,81 @@ fn privilege_escalation_is_never_promoted_to_allow() {
                      allow — this family is ask-tier only, never allow"
                 );
             }
+        }
+    }
+}
+
+/// Whether any `tool(...)` ask rule covers `command`, using the documented
+/// matcher below; `PowerShell` rules match case-insensitively. Like
+/// `ask_covers`, this models one normalized command, not the harness.
+fn asked(ask: &[String], tool: &str, command: &str) -> bool {
+    let prefix = format!("{tool}(");
+    let fold = |text: &str| {
+        if tool == "PowerShell" {
+            text.to_lowercase()
+        } else {
+            text.to_string()
+        }
+    };
+    ask.iter().any(|rule| {
+        rule.strip_prefix(&prefix)
+            .and_then(|inner| inner.strip_suffix(')'))
+            .is_some_and(|inner| rule_matches(&fold(inner), &fold(command)))
+    })
+}
+
+/// Round 1 review (F1): path-qualified launchers, Windows `.exe` spellings
+/// and `PowerShell` elevation started from the Bash tool must reach the ask
+/// tier too, while ordinary commands that only mention a launcher must not.
+#[test]
+fn privilege_escalation_variants_reach_the_ask_tier() {
+    let positives = [
+        ("Bash", "sudo id"),
+        ("Bash", "/usr/bin/sudo id"),
+        ("Bash", "/usr/bin/pkexec id"),
+        ("Bash", "/bin/su root"),
+        ("Bash", "gsudo whoami"),
+        ("Bash", "runas.exe /user:Administrator cmd"),
+        (
+            "Bash",
+            "/c/Windows/System32/runas.exe /user:Administrator cmd",
+        ),
+        ("Bash", "gsudo.exe whoami"),
+        (
+            "Bash",
+            "powershell.exe -Command \"Start-Process cmd -Verb RunAs\"",
+        ),
+        ("Bash", "pwsh -c 'Start-Process pwsh -verb runas'"),
+        ("PowerShell", "Start-Process cmd -Verb RunAs"),
+        ("PowerShell", "saps cmd -verb runas"),
+        (
+            "PowerShell",
+            "C:\\Windows\\System32\\runas.exe /user:Administrator cmd",
+        ),
+        ("PowerShell", "C:\\tools\\gsudo.exe whoami"),
+    ];
+    let negatives = [
+        ("Bash", "git status"),
+        ("Bash", "echo pkexec"),
+        ("Bash", "cat /etc/sudoers"),
+        ("Bash", "grep -rn runas docs"),
+        ("Bash", "ls tools/gsudo"),
+        ("PowerShell", "Get-ChildItem"),
+        ("PowerShell", "Write-Output runas"),
+    ];
+    for name in preset_files() {
+        let ask = perm_array(&load(&name), "ask");
+        for (tool, command) in positives {
+            assert!(
+                asked(&ask, tool, command),
+                "{name}: {tool} command {command:?} escalates but reaches no ask rule"
+            );
+        }
+        for (tool, command) in negatives {
+            assert!(
+                !asked(&ask, tool, command),
+                "{name}: {tool} command {command:?} does not escalate but is asked"
+            );
         }
     }
 }

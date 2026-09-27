@@ -473,7 +473,7 @@
     ".claude/settings.json": {
       "src": "settings/default.json",
       "ownership": "managed-region",
-      "sha256": "f0945e613e46cfb86b6405716c719187cf03682416e1640fb86af1fd10b1880f",
+      "sha256": "6780ae46f283a5c2c411658022dced9c4288ff3118147f8ca30f704a146219ba",
       "exec": false
     },
     ".claude/skills/cf-consult/SKILL.md": {
