@@ -635,3 +635,176 @@ fn update_moves_an_existing_project_onto_the_map_at_every_tier() {
         drop(rerun);
     }
 }
+
+/// Codex review probe (TSK-127 F2): the migration keeps project-owned bytes
+/// exactly, for a CRLF file and for a project section with no final newline.
+/// The new map adopts the file's own line breaks.
+#[test]
+fn update_keeps_crlf_and_unterminated_project_bytes() {
+    let legacy = legacy_source();
+    let current = assets();
+    let update = |root: &Path| {
+        scaffold::update(
+            &current,
+            root,
+            &UpdateOptions {
+                force: false,
+                binary_version: "3.0.0".to_string(),
+                diff_out: None,
+            },
+        )
+        .expect("update succeeds")
+    };
+    let fresh = scaffold(&current, Tier::Full);
+    let fresh_block = managed_block(&read(&fresh.path().join("AGENTS.md")))
+        .unwrap()
+        .to_string();
+
+    // A CRLF contract with a CRLF project section.
+    let project = scaffold(&legacy, Tier::Full);
+    let agents_path = project.path().join("AGENTS.md");
+    let lf = format!("{}{}", read(&agents_path), project_section(4 * 1024));
+    let crlf = lf.replace('\n', "\r\n");
+    std::fs::write(&agents_path, &crlf).unwrap();
+    let (head_before, _, tail_before) = split_at_block(&crlf);
+    let (head_before, tail_before) = (head_before.to_string(), tail_before.to_string());
+    let report = update(project.path());
+    assert!(!report.to_string().contains("CONFLICT"), "{report}");
+    let after = read(&agents_path);
+    let (head, block, tail) = split_at_block(&after);
+    assert_eq!(head, head_before, "CRLF header bytes changed");
+    assert_eq!(tail, tail_before, "CRLF project section bytes changed");
+    assert_eq!(
+        block,
+        fresh_block.replace('\n', "\r\n"),
+        "block is not the CRLF map"
+    );
+    assert!(
+        !after.replace("\r\n", "").contains('\n'),
+        "the update mixed LF into a CRLF file"
+    );
+    update(project.path());
+    assert_eq!(
+        read(&agents_path),
+        after,
+        "a second update changed the CRLF file"
+    );
+
+    // An LF project section with no final newline.
+    let project = scaffold(&legacy, Tier::Full);
+    let agents_path = project.path().join("AGENTS.md");
+    let unterminated = format!(
+        "{}{}",
+        read(&agents_path),
+        project_section(2 * 1024).trim_end_matches('\n')
+    );
+    std::fs::write(&agents_path, &unterminated).unwrap();
+    let (_, _, tail_before) = split_at_block(&unterminated);
+    let tail_before = tail_before.to_string();
+    update(project.path());
+    let after = read(&agents_path);
+    let (_, block, tail) = split_at_block(&after);
+    assert_eq!(block, fresh_block, "block is not the map");
+    assert_eq!(tail, tail_before, "an unterminated project section changed");
+    assert!(!after.ends_with('\n'), "the update added a final newline");
+}
+
+/// Grok review probe (TSK-127 F2): every path the rendered map prints opens
+/// from the repository root in one hop at its tier. No row may print a
+/// skill-relative path such as `cf-method/references/...`, which only
+/// resolves under a skill tree the reader has to guess.
+#[test]
+fn every_rendered_map_path_opens_from_the_scaffold_root() {
+    let source = assets();
+    for tier in Kernel::tiers() {
+        let project = scaffold(&source, tier);
+        let root = project.path();
+        let agents = read(&root.join("AGENTS.md"));
+        let block = managed_block(&agents).expect("installed managed block");
+        let tokens = path_tokens(block);
+        let skill_relative: Vec<&String> = tokens
+            .iter()
+            .filter(|token| token.starts_with("cf-"))
+            .collect();
+        assert!(
+            skill_relative.is_empty(),
+            "{tier}: map prints skill-relative paths: {skill_relative:?}"
+        );
+        let missing: Vec<&String> = tokens
+            .iter()
+            .filter(|token| !root.join(token.as_str()).exists())
+            .collect();
+        assert!(
+            missing.is_empty(),
+            "{tier}: map paths that do not open from the root: {missing:?}"
+        );
+        for row in ["| plan ", "| build ", "| push, open a PR"] {
+            if let Some(line) = block.lines().find(|line| line.starts_with(row)) {
+                assert!(
+                    tier == Tier::Minimal || line.contains("`.agents/skills/"),
+                    "{tier}: row {row:?} names no root path: {line}"
+                );
+            }
+        }
+        if tier != Tier::Minimal {
+            // One hop further: the references print root paths too.
+            for reference in REFERENCES {
+                let text = read(&root.join(reference));
+                let dangling: Vec<String> = path_tokens(&text)
+                    .into_iter()
+                    .filter(|token| token.starts_with('.') || token.starts_with("cf-"))
+                    .filter(|token| !root.join(token).exists())
+                    .collect();
+                assert!(
+                    dangling.is_empty(),
+                    "{tier}: {reference} prints paths that do not open: {dangling:?}"
+                );
+            }
+        }
+    }
+}
+
+/// Grok review probe (TSK-127 F1): a skill the map points at must not put
+/// back the wider entry rule the map replaced. The orchestrator states the
+/// map's routing, and no shipped skill or root template defaults every
+/// non-trivial task to the duo.
+#[test]
+fn no_skill_entry_widens_the_map_routing_rule() {
+    let skills = repo_root().join("assets/base/agents/skills");
+    let widened = [
+        "every non-trivial repository task",
+        "any non-trivial repository work",
+        "for non-trivial work",
+        "direct non-trivial use",
+        "for non-trivial repository",
+    ];
+    let mut files: Vec<PathBuf> = std::fs::read_dir(&skills)
+        .unwrap()
+        .filter_map(Result::ok)
+        .map(|entry| entry.path().join("SKILL.md"))
+        .filter(|path| path.exists())
+        .collect();
+    for output in OUTPUTS {
+        files.push(repo_root().join("assets/base").join(output.asset));
+    }
+    for file in &files {
+        let text = read(file).to_lowercase().replace('\n', " ");
+        for phrase in widened {
+            assert!(
+                !text.contains(phrase),
+                "{} widens the map's entry rule with {phrase:?}",
+                file.display()
+            );
+        }
+    }
+    let orchestrator = read(&skills.join("cf-model-orchestrator/SKILL.md"));
+    let front_matter = orchestrator.split("---").nth(1).unwrap();
+    assert!(
+        front_matter.contains("Use for routed work (a change to an adopter-facing path"),
+        "the orchestrator description must state the map's routing"
+    );
+    assert!(
+        orchestrator.contains("Use the duo for routed work, decided by touched paths"),
+        "the orchestrator body must defer entry to the map"
+    );
+}
