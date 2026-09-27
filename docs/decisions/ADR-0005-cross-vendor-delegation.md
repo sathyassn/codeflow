@@ -1,5 +1,6 @@
 ---
 id: ADR-0005
+uid: 7d325923-1412-4f94-a820-d351fd709e8a
 title: cross-vendor delegation via harness-boundary composition
 date: 2026-07-02
 status: accepted

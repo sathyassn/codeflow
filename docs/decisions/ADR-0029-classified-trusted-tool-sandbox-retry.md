@@ -1,5 +1,6 @@
 ---
 id: ADR-0029
+uid: 862f675b-9292-45f8-9d44-45470cc5cb67
 title: permit classified sandbox retry for trusted installed tools
 date: 2026-07-18
 status: accepted

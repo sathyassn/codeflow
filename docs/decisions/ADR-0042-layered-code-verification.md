@@ -1,5 +1,6 @@
 ---
 id: ADR-0042
+uid: a080aaa5-734b-49e3-9e54-3feef184094b
 title: combine selected deterministic analyzers with contextual agentic verification
 date: 2026-07-25
 status: accepted

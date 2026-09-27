@@ -1,5 +1,6 @@
 ---
 id: ADR-0052
+uid: ab5f793d-0286-42f5-9bb4-8b2472a667e5
 title: separate cf-present ephemeral runtime from durable state
 date: 2026-08-01
 status: accepted

@@ -1,5 +1,6 @@
 ---
 id: ADR-0026
+uid: 650c8f3b-0968-4eb5-bd04-19c5a0844b56
 title: correct harness credential and destructive-action boundaries
 date: 2026-07-17
 status: accepted

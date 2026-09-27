@@ -1,5 +1,6 @@
 ---
 id: ADR-0035
+uid: 2c4c815c-d63e-4718-a68b-a41066f78481
 title: route duo execution by verified per-task capability
 date: 2026-07-22
 status: accepted

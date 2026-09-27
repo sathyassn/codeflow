@@ -1,5 +1,6 @@
 ---
 id: ADR-0008
+uid: 2266298b-4f1d-45f1-bdcd-cc581db309f5
 title: harness parity and the exec-guard security stage
 date: 2026-07-02
 status: accepted

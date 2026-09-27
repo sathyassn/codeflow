@@ -1,5 +1,6 @@
 ---
 id: ADR-0033
+uid: 07099037-0a5d-40be-ba8e-6ebba1bff410
 title: make the catastrophic-action boundary cross-platform
 date: 2026-07-18
 status: accepted

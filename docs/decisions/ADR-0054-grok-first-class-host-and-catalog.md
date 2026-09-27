@@ -1,5 +1,6 @@
 ---
 id: ADR-0054
+uid: 8c2e907b-5ea1-4b48-acd1-fb16b43375e6
 title: Grok as first-class host and catalog family; standing pair remains the quality floor
 date: 2026-09-01
 status: accepted

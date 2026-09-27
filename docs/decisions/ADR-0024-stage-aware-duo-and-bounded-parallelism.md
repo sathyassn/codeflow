@@ -1,5 +1,6 @@
 ---
 id: ADR-0024
+uid: 1b84af4e-b919-44b8-b0a4-4ed7d2368bf3
 title: stage-aware duo default with bounded parallel worktrees
 date: 2026-07-16
 status: accepted

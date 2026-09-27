@@ -1,5 +1,6 @@
 ---
 id: ADR-0012
+uid: b9105e27-4339-4c5e-a378-c7d69084ba29
 title: version + changelog via git-cliff (replacing release-plz); cargo-dist releases
 date: 2026-07-05
 status: accepted

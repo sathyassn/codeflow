@@ -1,5 +1,6 @@
 ---
 id: ADR-0002
+uid: bcee16fc-2be5-48b6-9915-6933dea96b7c
 title: sync push policy — push_to_protected warn on this repo
 date: 2026-06-12
 status: superseded

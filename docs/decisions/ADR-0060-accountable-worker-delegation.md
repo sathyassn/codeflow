@@ -1,5 +1,6 @@
 ---
 id: ADR-0060
+uid: 3e7538f2-80c6-4087-9857-f91fbd0b760b
 title: separate primary accountability from worker execution
 date: 2026-09-11
 status: accepted

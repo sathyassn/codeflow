@@ -1,5 +1,6 @@
 ---
 id: ADR-0028
+uid: a1560451-1045-46a4-a3e6-e0dceeac0c71
 title: route model effort by evidence and task demand
 date: 2026-07-18
 status: accepted

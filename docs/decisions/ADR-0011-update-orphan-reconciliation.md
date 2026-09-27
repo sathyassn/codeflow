@@ -1,5 +1,6 @@
 ---
 id: ADR-0011
+uid: d3222ffd-7c8a-47f8-9cc4-4d13422b63ce
 title: update reconciles orphaned managed files (prune on upstream rename/removal)
 date: 2026-07-04
 status: accepted

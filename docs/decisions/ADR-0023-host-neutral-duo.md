@@ -1,5 +1,6 @@
 ---
 id: ADR-0023
+uid: adca53dd-9a70-4679-b0e2-f62d2beae7bc
 title: host-neutral Claude+Codex duo with fixed roles and evidence gates
 date: 2026-07-15
 status: accepted

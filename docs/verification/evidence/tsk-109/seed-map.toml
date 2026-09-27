@@ -1,0 +1,59 @@
+# ids seed --map: copies that are one record (SPC-013 R-111).
+# Each set is the same record file (identical added blob): the rewritten
+# pre-flip history (origin/integration/pre-flip-final and its branches)
+# against the current main history, or one ADR added on two lines.
+# TSK-079 and ADR-0027 are NOT mapped: their copies are different records.
+
+[ids."EPC-001"]
+copies = ["38f7eafe6eb77b91bf9cca4fda295dd6225da0fb", "6b76bbbd7b0854b492adeede7901f3fb297106b1"]
+
+[ids."ADR-0001"]
+copies = ["5b54284c36409eaf93a57b7422b89af3618a7be7", "e3a129acf39768eb1147cb385a67ccb09447d95a"]
+
+[ids."ADR-0002"]
+copies = ["2cd76961a086525d7500b894a9596880c3e9612b", "64aaeb31a2c0869fd0de57a3ea1dc519c7fb15dc"]
+
+[ids."ADR-0003"]
+copies = ["cbd09876023c82302f4ee8db6eceb5adf110f40c", "d140a9375997651f10addbfb36c9486146c36c59"]
+
+[ids."ADR-0004"]
+copies = ["6d0629659c69319474da5f85154f70110bb000ab", "958a7e066cca4284484f7200c72839235f0c923d"]
+
+[ids."ADR-0005"]
+copies = ["8676ec39c422d62610b3fd205e7304ad03851c6b", "c4ed1af7f67fc700af638bcf61d381a612028ef1"]
+
+[ids."ADR-0006"]
+copies = ["143464825411ae5c9cbc1610f4caf251c4d804d2", "3170b7464c995dfdfdcc38bc52bd0810cfd7c392"]
+
+[ids."ADR-0007"]
+copies = ["05c1496f62af07a76190820b89c7285b1cd69c37", "a024e855ab1fb7f15c2be7322099a4194975a6f1"]
+
+[ids."ADR-0008"]
+copies = ["a92920fcdab1f600f3b10b7079d29abe6cd6ab60", "c508722fb8270bae1450f95b85b0137d0b6e47b0"]
+
+[ids."ADR-0009"]
+copies = ["0dbcce534e0a244a85a7bec0e9d59e5e14bca5ed", "a803cc2d4b954c355a3572cee831171e2e678912"]
+
+[ids."ADR-0010"]
+copies = ["1b6d2f9de615a5928824ad2d355954829060023a", "8a9b6ce37b7f8e8a456d2ee1b16d125414ec2803"]
+
+[ids."ADR-0011"]
+copies = ["160854a331cb30ac1ecfa6549c00cc9dc3a54acd", "8588d3f1d0340edaaac621f3c99abc5c657750f6"]
+
+[ids."ADR-0012"]
+copies = ["6138e8dae136e86a98dfc27f3adf3dc065e2f5ca", "9c1c3d2c9ebc5c6520fde44b803aa9327cad9bff"]
+
+[ids."ADR-0013"]
+copies = ["ad20e101b8a2bbed6990d676f25d47e74a291561", "ad2320109225f7c6e4ec354197e9f7ac586f6988"]
+
+[ids."ADR-0014"]
+copies = ["391a2c8d8aef1e66efe5f954db0492224613b16d", "963db875ddf249e81cc756515635f98e97553ed8"]
+
+[ids."ADR-0059"]
+copies = ["48457417f9e4646f7a41631cc806572288c55c25", "98498d1191d555ecbcc988891352399e6cfaef13"]
+
+# Same record carried by hand onto integration/EPC-016-visual-guide on
+# 2026-09-27 ("carry TSK-093 onto the guide line"): only the target and the
+# sequencing paragraph changed, so the added blobs differ.
+[ids."TSK-093"]
+copies = ["b2aae5400dfa5b84d930a36f2e43cc1ca0eff58e", "55f2a09e2846b764b99d6faa5147a4b3b8bc488f"]

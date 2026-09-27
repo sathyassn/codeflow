@@ -1,5 +1,6 @@
 ---
 id: ADR-0007
+uid: 5354e7b9-89ae-4e8a-b8b1-364235568792
 title: agent/human merge boundary — protected-branch merge and ref controls
 date: 2026-07-02
 status: accepted

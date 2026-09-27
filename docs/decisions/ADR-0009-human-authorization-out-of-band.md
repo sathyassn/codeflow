@@ -1,5 +1,6 @@
 ---
 id: ADR-0009
+uid: 0b5a60b3-8474-4788-9c39-b217cd437035
 title: human authorization is out-of-band; local guards are the honest-agent floor
 date: 2026-07-02
 status: accepted

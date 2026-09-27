@@ -1,5 +1,6 @@
 ---
 id: ADR-0016
+uid: 8da7bf5c-0db8-4213-a95c-b6a6c44765b2
 title: security / red-team review — dual-vendor adversarial stage plus deterministic scanner floor
 date: 2026-07-10
 status: accepted

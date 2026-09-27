@@ -1,5 +1,6 @@
 ---
 id: ADR-0048
+uid: 1a48fa65-7d23-411b-b4a1-2e1fb99f2da3
 title: isolate portal adoption and verify derived evidence
 date: 2026-08-01
 status: accepted

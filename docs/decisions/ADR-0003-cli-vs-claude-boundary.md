@@ -1,5 +1,6 @@
 ---
 id: ADR-0003
+uid: ac78e1ac-0ea5-48e7-8668-aaedfbe3c56e
 title: CLI vs Claude command boundary
 date: 2026-06-12
 status: accepted

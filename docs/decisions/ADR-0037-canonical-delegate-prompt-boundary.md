@@ -1,5 +1,6 @@
 ---
 id: ADR-0037
+uid: b5f2f8b6-af5a-4ad6-9355-7c754451b3e6
 title: require a canonical delegate prompt boundary
 date: 2026-07-24
 status: accepted

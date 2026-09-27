@@ -1,5 +1,6 @@
 ---
 id: ADR-0061
+uid: 5f3c1939-616a-47ba-b541-03223e97343d
 title: automate release candidates while keeping publication human-authorized
 date: 2026-09-13
 status: accepted

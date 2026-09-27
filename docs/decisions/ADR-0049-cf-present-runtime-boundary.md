@@ -1,5 +1,6 @@
 ---
 id: ADR-0049
+uid: 2317badb-5a08-4c38-904b-8c001e0a3fa8
 title: bounded cf-present runtime and renderer boundary
 date: 2026-08-01
 status: accepted

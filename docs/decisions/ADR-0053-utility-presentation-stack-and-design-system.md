@@ -1,5 +1,6 @@
 ---
 id: ADR-0053
+uid: d0cb2a61-94a7-4414-b539-45abdac66975
 title: utility presentation design system with Preact present chrome and Starlight portal
 date: 2026-08-07
 status: accepted
