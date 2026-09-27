@@ -12,10 +12,11 @@ use std::path::PathBuf;
 /// Every `codeflow hook` subcommand codeflow ships. A command naming anything
 /// else is a typo caught here. (Codex wires a subset — it has no `SessionEnd`
 /// event, so `session-summary` is not expected, but it stays a *known* name.)
-const KNOWN_HOOKS: [&str; 4] = [
+const KNOWN_HOOKS: [&str; 5] = [
     "git-guard",
     "exec-guard",
     "session-orient",
+    "prompt-reminder",
     "session-summary",
 ];
 
@@ -191,4 +192,42 @@ fn dogfood_grok_hooks_share_pretooluse_and_add_compact_events() {
         grok["hooks"]["PreCompact"].is_array() && grok["hooks"]["PostCompact"].is_array(),
         "Grok must wire session-orient on PreCompact/PostCompact"
     );
+}
+
+/// TSK-128 AC-5: Codex wires the prompt reminder on `UserPromptSubmit`,
+/// where plain stdout becomes developer context, with no matcher (Codex
+/// ignores one on this event).
+#[test]
+fn user_prompt_submit_wires_the_prompt_reminder() {
+    let v = hooks_json();
+    let prompt = v["hooks"]["UserPromptSubmit"].clone();
+    let mut commands = Vec::new();
+    collect_hook_commands(&prompt, &mut commands);
+    assert_eq!(commands, vec!["codeflow hook prompt-reminder".to_string()]);
+    assert!(prompt[0].get("matcher").is_none());
+    assert_eq!(
+        v["hooks"]["SessionStart"][0]["matcher"].as_str(),
+        Some("startup|resume|clear|compact")
+    );
+}
+
+/// TSK-128 AC-5: Grok Build ignores the stdout of `SessionStart` and the
+/// compaction events and discards an allowing `UserPromptSubmit` hook's
+/// output (Grok Build 1.0.41 hook reference), so no hook can put a rule in
+/// front of a Grok model. The prompt reminder is not wired there; the
+/// TSK-128 record names Grok as the host that lacks the events.
+#[test]
+fn grok_does_not_wire_the_prompt_reminder_it_would_discard() {
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let grok: serde_json::Value = serde_json::from_str(
+        &std::fs::read_to_string(root.join("assets/base/grok/hooks.json")).unwrap(),
+    )
+    .unwrap();
+    let mut commands = Vec::new();
+    collect_hook_commands(&grok["hooks"], &mut commands);
+    assert!(
+        !commands.iter().any(|c| c.contains("prompt-reminder")),
+        "Grok discards prompt-hook output; wiring it would claim a reminder that never arrives"
+    );
+    assert!(grok["hooks"].get("UserPromptSubmit").is_none());
 }

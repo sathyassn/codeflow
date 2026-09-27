@@ -239,33 +239,23 @@ fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec
             continue;
         };
 
-        // The set of codeflow commands the shipped preset wants for this event.
-        let wanted: Vec<&str> = inc_groups
+        // The codeflow commands the shipped preset wants for this event, each
+        // with the matcher of the group that carries it.
+        let wanted: Vec<(Option<&str>, &str)> = inc_groups
             .iter()
-            .filter_map(|g| g.get("hooks").and_then(Value::as_array))
-            .flatten()
-            .filter_map(hook_command)
-            .filter(|c| is_codeflow_command(c))
+            .flat_map(|g| {
+                let matcher = matcher_of(g);
+                g.get("hooks")
+                    .and_then(Value::as_array)
+                    .into_iter()
+                    .flatten()
+                    .filter_map(hook_command)
+                    .filter(|c| is_codeflow_command(c))
+                    .map(move |c| (matcher, c))
+            })
             .collect();
 
-        // Drop stale codeflow hooks (regenerate-the-keys semantics); never
-        // touch user hooks.
-        for group in cur_groups.iter_mut() {
-            let Some(hooks) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
-                continue;
-            };
-            hooks.retain(|h| {
-                let Some(cmd) = hook_command(h) else {
-                    return true;
-                };
-                if is_codeflow_command(cmd) && !wanted.contains(&cmd) {
-                    report.push(format!("settings: removed stale hook {event}: \"{cmd}\""));
-                    false
-                } else {
-                    true
-                }
-            });
-        }
+        retire_codeflow_hooks(event, cur_groups, &wanted, report);
         cur_groups.retain(|g| {
             g.get("hooks")
                 .and_then(Value::as_array)
@@ -310,6 +300,46 @@ fn merge_hooks(cur: &mut Map<String, Value>, inc_hooks: &Value, report: &mut Vec
                 }
             }
         }
+    }
+}
+
+/// Drop stale codeflow hooks (regenerate-the-keys semantics), and take a
+/// wanted one out of a group whose matcher is not the shipped one, so the
+/// add pass puts it back under the shipped matcher instead of running it
+/// twice; never touch user hooks.
+fn retire_codeflow_hooks(
+    event: &str,
+    cur_groups: &mut [Value],
+    wanted: &[(Option<&str>, &str)],
+    report: &mut Vec<String>,
+) {
+    for group in cur_groups.iter_mut() {
+        let group_matcher = matcher_of(group).map(str::to_string);
+        let Some(hooks) = group.get_mut("hooks").and_then(Value::as_array_mut) else {
+            continue;
+        };
+        hooks.retain(|h| {
+            let Some(cmd) = hook_command(h) else {
+                return true;
+            };
+            if !is_codeflow_command(cmd) {
+                return true;
+            }
+            if !wanted.iter().any(|(_, c)| *c == cmd) {
+                report.push(format!("settings: removed stale hook {event}: \"{cmd}\""));
+                return false;
+            }
+            if wanted
+                .iter()
+                .any(|(m, c)| *c == cmd && *m == group_matcher.as_deref())
+            {
+                return true;
+            }
+            report.push(format!(
+                "settings: moved hook {event}: \"{cmd}\" to the shipped matcher"
+            ));
+            false
+        });
     }
 }
 
@@ -478,6 +508,56 @@ mod tests {
 
         assert_eq!(once, twice);
         assert!(second_report.is_empty());
+    }
+
+    /// A shipped matcher change moves the codeflow hook to the new group
+    /// once; the user's hooks stay where they were (TSK-128).
+    #[test]
+    fn a_matcher_change_moves_the_codeflow_hook_without_a_duplicate() {
+        let user = r#"{
+            "hooks": {
+                "SessionStart": [
+                    {"hooks": [
+                        {"type": "command", "command": "codeflow hook session-orient"},
+                        {"type": "command", "command": "./my-start.sh"}
+                    ]}
+                ]
+            }
+        }"#;
+        let incoming = r#"{
+            "hooks": {
+                "SessionStart": [
+                    {"matcher": "startup|resume|clear|compact", "hooks": [
+                        {"type": "command", "command": "codeflow hook session-orient"}
+                    ]}
+                ]
+            }
+        }"#;
+        let mut report = vec![];
+        let merged = merge_settings(user, incoming, &mut report).unwrap();
+        let v: Value = serde_json::from_str(&merged).unwrap();
+        let groups = v["hooks"]["SessionStart"].as_array().unwrap();
+        let orient: Vec<&Value> = groups
+            .iter()
+            .filter(|g| {
+                g["hooks"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|h| h["command"] == "codeflow hook session-orient")
+            })
+            .collect();
+        assert_eq!(orient.len(), 1, "{merged}");
+        assert_eq!(orient[0]["matcher"], "startup|resume|clear|compact");
+        assert!(groups
+            .iter()
+            .any(|g| g.get("matcher").is_none() && g["hooks"][0]["command"] == "./my-start.sh"));
+        assert!(report.iter().any(|l| l.contains("moved hook SessionStart")));
+
+        let mut again = vec![];
+        let twice = merge_settings(&merged, incoming, &mut again).unwrap();
+        assert_eq!(merged, twice);
+        assert!(again.is_empty(), "{again:?}");
     }
 
     #[test]

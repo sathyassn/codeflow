@@ -13,11 +13,13 @@ use std::path::PathBuf;
 const PRESET_FILES: [&str; 3] = ["default.json", "acceptEdits.json", "bypass-sandboxed.json"];
 
 /// The known hook subcommands wired by the presets (charter §3.3; the
-/// `exec-guard` security stage added in ADR-0008).
-const HOOK_NAMES: [&str; 4] = [
+/// `exec-guard` security stage added in ADR-0008; the prompt reminder of
+/// TSK-128).
+const HOOK_NAMES: [&str; 5] = [
     "git-guard",
     "exec-guard",
     "session-orient",
+    "prompt-reminder",
     "session-summary",
 ];
 
@@ -268,6 +270,45 @@ fn every_hook_command_is_a_known_codeflow_hook() {
                 "{name}: {hook} hook not wired"
             );
         }
+    }
+}
+
+/// TSK-128 AC-2: every preset names the `SessionStart` sources explicitly,
+/// the same list as the Codex hooks file, and wires the prompt reminder on
+/// `UserPromptSubmit` (which takes no matcher in Claude Code).
+#[test]
+fn session_start_matcher_is_explicit_and_matches_codex() {
+    let codex_path = settings_dir().join("../codex/hooks.json");
+    let codex: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&codex_path).unwrap()).unwrap();
+    let codex_matcher = codex["hooks"]["SessionStart"][0]["matcher"]
+        .as_str()
+        .expect("codex SessionStart matcher");
+    assert_eq!(codex_matcher, "startup|resume|clear|compact");
+    for name in preset_files() {
+        let value = load(&name);
+        let groups = value["hooks"]["SessionStart"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{name}: SessionStart missing"));
+        assert_eq!(groups.len(), 1, "{name}: one SessionStart group");
+        assert_eq!(
+            groups[0]["matcher"].as_str(),
+            Some(codex_matcher),
+            "{name}: SessionStart matcher must be explicit and match Codex"
+        );
+        let mut prompt = Vec::new();
+        collect_hook_commands(&value["hooks"]["UserPromptSubmit"], &mut prompt);
+        assert_eq!(
+            prompt,
+            vec!["codeflow hook prompt-reminder".to_string()],
+            "{name}: UserPromptSubmit must wire only the prompt reminder"
+        );
+        assert!(
+            value["hooks"]["UserPromptSubmit"][0]
+                .get("matcher")
+                .is_none(),
+            "{name}: UserPromptSubmit takes no matcher"
+        );
     }
 }
 

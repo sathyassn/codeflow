@@ -1419,3 +1419,150 @@ fn fresh_scaffolds_install_the_holistic_fix_doctrine_and_update_brings_it() {
         );
     }
 }
+
+/// Run one wired hook command (`codeflow hook <name>`) in `dir` with `payload`
+/// on stdin, the way a harness does.
+fn run_wired_hook(dir: &Path, command: &str, payload: &str) -> Output {
+    use std::io::Write as _;
+    let args: Vec<&str> = command
+        .strip_prefix("codeflow ")
+        .unwrap_or_else(|| panic!("not a codeflow hook: {command}"))
+        .split_whitespace()
+        .collect();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(&args)
+        .current_dir(dir)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .expect("codeflow binary runs");
+    child
+        .stdin
+        .as_mut()
+        .unwrap()
+        .write_all(payload.as_bytes())
+        .unwrap();
+    child.wait_with_output().unwrap()
+}
+
+/// The hook commands wired for `event` in a harness hook file, with the
+/// matcher of the group that carries each.
+fn wired_hooks(file: &serde_json::Value, event: &str) -> Vec<(Option<String>, String)> {
+    file["hooks"][event]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|group| {
+            let matcher = group["matcher"].as_str().map(str::to_string);
+            group["hooks"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|hook| hook["command"].as_str())
+                .map(move |command| (matcher.clone(), command.to_string()))
+        })
+        .collect()
+}
+
+/// TSK-128 AC-5 (serves EPC-020 AC-13): a fresh scaffold at every tier
+/// wires the compaction re-injection and the prompt reminder for Claude and
+/// Codex, and the wired commands put the guidance block and the rule line
+/// out through the real binary. Grok Build discards the output of both
+/// events, so its file keeps the prompt reminder unwired.
+#[test]
+fn fresh_scaffolds_wire_rule_reinjection_at_every_tier() {
+    for flag in ["--minimal", "--standard", "--full"] {
+        let tmp = tempfile::tempdir().unwrap();
+        let root = tmp.path().join("proj");
+        std::fs::create_dir(&root).unwrap();
+        let init = codeflow(&root, &["init", "--yes", flag]);
+        assert!(
+            init.status.success(),
+            "{flag}: init failed: {}",
+            String::from_utf8_lossy(&init.stderr)
+        );
+        let claude: serde_json::Value =
+            serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+        let codex: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codex/hooks.json")).unwrap();
+        let grok: serde_json::Value =
+            serde_json::from_str(&read(&root, ".grok/hooks/codeflow.json")).unwrap();
+
+        for (harness, file) in [("claude", &claude), ("codex", &codex)] {
+            let start = wired_hooks(file, "SessionStart");
+            assert_eq!(
+                start,
+                vec![(
+                    Some("startup|resume|clear|compact".to_string()),
+                    "codeflow hook session-orient".to_string()
+                )],
+                "{flag} {harness}: SessionStart wiring"
+            );
+            let prompt = wired_hooks(file, "UserPromptSubmit");
+            assert_eq!(
+                prompt,
+                vec![(None, "codeflow hook prompt-reminder".to_string())],
+                "{flag} {harness}: UserPromptSubmit wiring"
+            );
+
+            let compact = run_wired_hook(
+                &root,
+                &start[0].1,
+                r#"{"hook_event_name":"SessionStart","source":"compact"}"#,
+            );
+            assert_eq!(compact.status.code(), Some(0));
+            let text = String::from_utf8(compact.stdout).unwrap();
+            let Some((_, block)) = text.split_once("\n## Rules after compaction or resume") else {
+                panic!("{flag} {harness}: no guidance block\n{text}");
+            };
+            assert!(
+                block.len() < 1536,
+                "{flag} {harness}: {} bytes",
+                block.len()
+            );
+
+            let reminder = run_wired_hook(
+                &root,
+                &prompt[0].1,
+                r#"{"hook_event_name":"UserPromptSubmit","prompt":"How long will the login page take?"}"#,
+            );
+            assert_eq!(reminder.status.code(), Some(0));
+            let line = String::from_utf8(reminder.stdout).unwrap();
+            assert!(
+                line.starts_with("codeflow reminder: Durations"),
+                "{flag} {harness}: {line}"
+            );
+            let quiet = run_wired_hook(
+                &root,
+                &prompt[0].1,
+                r#"{"hook_event_name":"UserPromptSubmit","prompt":"Rename foo to bar"}"#,
+            );
+            assert_eq!(quiet.status.code(), Some(0));
+            assert!(quiet.stdout.is_empty(), "{flag} {harness}");
+        }
+
+        assert!(
+            wired_hooks(&grok, "UserPromptSubmit").is_empty(),
+            "{flag}: Grok discards prompt-hook output; the reminder stays unwired"
+        );
+        // The key is not written into the file, so an older binary can
+        // still read it; the built-in default (warn) applies.
+        let policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert!(policy.get("guidance").is_none(), "{flag}");
+        let show = codeflow(&root, &["policy", "show"]);
+        let shown = String::from_utf8_lossy(&show.stdout);
+        let line = shown
+            .lines()
+            .find(|line| line.contains("guidance.prompt_reminders"))
+            .unwrap_or_else(|| panic!("{flag}: policy show omits the key\n{shown}"));
+        assert!(line.contains("warn"), "{flag}: {line}");
+    }
+}
