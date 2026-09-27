@@ -94,18 +94,18 @@ for blocks that persist across revisions.
 The first block should give the reader the picture in about five seconds,
 with almost no reading. Pictures that do:
 
-- "Two lanes only meet at settle."
-- "Ship or hold: these two options, this one open risk."
-- "This diff is the whole dispute."
+- “Two lanes only meet at settle.”
+- “Ship or hold: these two options, this one open risk.”
+- “This diff is the whole dispute.”
 
 Ask what the reader holds after those five seconds. If the honest answer is
-"they will need to read the bullets", there is no picture yet: the page is a
+“they will need to read the bullets”, there is no picture yet: the page is a
 memo.
 
-Walk the draft before you encode it. If the walk reads "paragraph, list,
-list, three cards, paragraph", it is chat restyled: stop and choose the
-carrier again. If it reads "figure of the dispute, two options, evidence
-rows, one ask", the structure is doing the work before any JSON exists.
+Read that walk for its shape. If it reads “paragraph, list, list, three
+cards, paragraph”, it is chat restyled: stop and choose the carrier again.
+If it reads “figure of the dispute, two options, evidence rows, one ask”, the
+structure is doing the work before any JSON exists.
 
 ---
 

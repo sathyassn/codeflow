@@ -551,7 +551,7 @@
     ".agents/skills/cf-present/resources/how-presentation-works.md": {
       "src": "agents/skills/cf-present/resources/how-presentation-works.md",
       "ownership": "managed",
-      "sha256": "49ffb642bb25709415fc7815d7784462106f1e463f336701aa42189b7de44591",
+      "sha256": "17956d320f4a8b2fd9a05f298080cc254169b71b74ef3c2288371c54c580dee4",
       "exec": false
     },
     ".agents/skills/cf-present/resources/present-document.example.json": {
@@ -1157,7 +1157,7 @@
     ".claude/skills/cf-present/resources/how-presentation-works.md": {
       "src": "agents/skills/cf-present/resources/how-presentation-works.md",
       "ownership": "managed",
-      "sha256": "49ffb642bb25709415fc7815d7784462106f1e463f336701aa42189b7de44591",
+      "sha256": "17956d320f4a8b2fd9a05f298080cc254169b71b74ef3c2288371c54c580dee4",
       "exec": false
     },
     ".claude/skills/cf-present/resources/present-document.example.json": {
