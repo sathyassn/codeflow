@@ -37,7 +37,11 @@ jobs:
           gh api --paginate --slurp \
             "repos/${GITHUB_REPOSITORY}/actions/workflows/codeflow-ci.yml/runs?branch=main&event=push&head_sha=${GITHUB_SHA}&per_page=100" \
             > /tmp/authority-runs.json
+          gh api --paginate --slurp \
+            "repos/${GITHUB_REPOSITORY}/actions/workflows/codeflow-release.yml/runs?branch=main&event=push&head_sha=${GITHUB_SHA}&per_page=100" \
+            > /tmp/authority-release-runs.json
           python3 scripts/release.py verify-checks --state /tmp/authority-checks.json \
-            --runs-state /tmp/authority-runs.json --source "$GITHUB_SHA"
+            --runs-state /tmp/authority-runs.json \
+            --runs-state /tmp/authority-release-runs.json --source "$GITHUB_SHA"
           python3 scripts/release.py verify-publication --source "$GITHUB_SHA" \
             --main-source "$main_sha" --tag "$REQUESTED_TAG" --drafts-visible
