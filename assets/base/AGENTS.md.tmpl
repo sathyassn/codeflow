@@ -94,11 +94,11 @@ it as non-trivial.
   choice, lifecycle, monorepo, authority, and failure-path contract.
 - Specs are planning inputs, frozen (`status: implemented`) when their consuming
   work ships. Truth then lives in architecture, capabilities, and tests.
-- Before product edits on `task/TSK-NNN-<slug>`, run
-  `codeflow work start TSK-NNN`. It proves from the merge-base that the task,
-  matching non-task target declaration, parent or standalone rationale,
-  approved specs, and completed dependencies are anchored. The CLI, pre-commit,
-  and CI share this read-only rule.
+- Before product edits on `<prefix>/TSK-NNN-<slug>`, run
+  `codeflow work start TSK-NNN`: from the merge-base it proves the task,
+  its target, parent or standalone rationale, approved specs and completed
+  dependencies are anchored. `work start` and CI share this read-only rule.
+  A PR says `Task: TSK-NNN` or `Task: none: <reason>`.
 - Status views are generated (`codeflow status`) — never hand-maintain a dashboard.
 
 ## Git rules

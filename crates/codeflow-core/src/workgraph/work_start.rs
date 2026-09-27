@@ -47,7 +47,7 @@ pub enum WorkStartError {
     Repository(String),
     #[error("target ref '{0}' does not resolve to a commit")]
     Target(String),
-    #[error("current branch '{branch}' is not task/{task_id}-<slug>")]
+    #[error("current branch '{branch}' does not carry {task_id} on a work prefix (<prefix>/{task_id}-<slug>)")]
     Branch { branch: String, task_id: String },
     #[error("no merge-base exists between HEAD and '{0}'")]
     MergeBase(String),
@@ -100,6 +100,8 @@ pub struct WorkStartReport {
     pub epic_id: Option<String>,
     pub specs: Vec<String>,
     pub dependencies: Vec<String>,
+    /// The anchored task's `work_type` (`spike` selects the spike path rule).
+    pub work_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +114,7 @@ struct Record {
     integration_target: Option<String>,
     specs: Vec<String>,
     depends_on: Vec<String>,
+    work_type: Option<String>,
 }
 
 /// The three durable record kinds.
@@ -126,6 +129,7 @@ struct AnchoredTask {
     epic_id: Option<String>,
     specs: Vec<String>,
     dependencies: Vec<String>,
+    work_type: Option<String>,
 }
 
 /// Pick the configured target convention without mutating repository state.
@@ -285,13 +289,31 @@ pub fn declared_work_target(repo_root: &Path, task_id: &str) -> Option<String> {
         .filter(|target| !target.trim().is_empty())
 }
 
-/// Resolve the durable task id represented by a task branch.
+/// Branch prefixes that never carry a task id: planning branches create
+/// records and integration branches carry many tasks.
+const NON_WORK_PREFIXES: [&str; 2] = ["plan/", "integration/"];
+
+/// The part of `branch` after a sanctioned work prefix: any policy branch
+/// prefix except `plan/` and `integration/` (SPC-013 R-110).
+fn work_branch_suffix<'b>(repo_root: &Path, branch: &'b str) -> Option<&'b str> {
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
+    policy
+        .git
+        .branch_prefixes
+        .iter()
+        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
+        .find_map(|prefix| branch.strip_prefix(prefix.as_str()))
+}
+
+/// Resolve the durable task id a work branch carries,
+/// `<prefix>/TSK-NNN-<slug>` on any sanctioned work prefix (`task/`, `fix/`,
+/// `feat/`, `spike/` and the rest of `git.branch_prefixes`).
 ///
 /// The visible workgraph is the source of truth, which avoids baking legacy
 /// or future id shapes into branch parsing.
 #[must_use]
 pub fn task_id_from_branch(repo_root: &Path, branch: &str) -> Option<String> {
-    let suffix = branch.strip_prefix("task/")?;
+    let suffix = work_branch_suffix(repo_root, branch)?;
     let pm_root = repo_root.join("project-management");
     crate::workgraph::layout::task_record_files(&pm_root)
         .into_iter()
@@ -303,6 +325,18 @@ pub fn task_id_from_branch(repo_root: &Path, branch: &str) -> Option<String> {
         .filter(|id| is_valid_task_format_id(id))
         .filter(|id| suffix.starts_with(&format!("{id}-")))
         .max_by_key(String::len)
+}
+
+/// Whether a work branch names a task id by shape (`<prefix>/TSK-<digits>-`),
+/// whether or not a record for it is visible. A branch that claims an id the
+/// workgraph does not hold is refused rather than treated as untracked.
+#[must_use]
+pub fn branch_claims_task_id(repo_root: &Path, branch: &str) -> bool {
+    work_branch_suffix(repo_root, branch).is_some_and(|suffix| {
+        suffix
+            .strip_prefix("TSK-")
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    })
 }
 
 /// Validate that `task_id` is safe to begin on the current branch.
@@ -351,12 +385,36 @@ pub fn check_work_start_for_branch(
             "task id '{task_id}' is malformed"
         )));
     }
-    let expected_prefix = format!("task/{task_id}-");
-    if !branch.starts_with(&expected_prefix) {
+    let expected = format!("{task_id}-");
+    if !work_branch_suffix(repo_root, branch).is_some_and(|suffix| suffix.starts_with(&expected)) {
         return Err(WorkStartError::Branch {
             branch: branch.to_string(),
             task_id: task_id.to_string(),
         });
+    }
+    let mut report = check_work_start_anchored(repo_root, task_id, target)?;
+    report.branch = branch.to_string();
+    Ok(report)
+}
+
+/// Validate a durable task at the merge-base of `HEAD` and `target`, whatever
+/// the branch is called: the pull request context of SPC-013 R-110, where a
+/// `Task: TSK-NNN` line names the task (a `fix/` pull request naming the
+/// release task, for example). The returned report's `branch` is empty.
+///
+/// # Errors
+///
+/// Returns the same errors as [`check_work_start_for_branch`] apart from
+/// branch identity.
+pub fn check_work_start_anchored(
+    repo_root: &Path,
+    task_id: &str,
+    target: &str,
+) -> Result<WorkStartReport, WorkStartError> {
+    if !is_valid_task_format_id(task_id) {
+        return Err(WorkStartError::InvalidGraph(format!(
+            "task id '{task_id}' is malformed"
+        )));
     }
     if !is_stable_work_target(target) {
         return Err(WorkStartError::UnstableTarget(target.to_string()));
@@ -366,12 +424,13 @@ pub fn check_work_start_for_branch(
 
     Ok(WorkStartReport {
         task_id: task_id.to_string(),
-        branch: branch.to_string(),
+        branch: String::new(),
         target: target.to_string(),
         merge_base,
         epic_id: anchored.epic_id,
         specs: anchored.specs,
         dependencies: anchored.dependencies,
+        work_type: anchored.work_type,
     })
 }
 
@@ -471,6 +530,7 @@ fn validate_anchored_task(
         epic_id: task.epic_id.clone(),
         specs,
         dependencies: task.depends_on.clone(),
+        work_type: task.work_type.clone(),
     })
 }
 
@@ -638,6 +698,7 @@ fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
         integration_target: string(&data, "integration_target"),
         specs: strings(&data, "specs")?,
         depends_on: strings_alias(&data, "depends_on", "dependencies")?,
+        work_type: string(&data, "work_type"),
     })
 }
 
@@ -904,6 +965,53 @@ mod tests {
             .unwrap()
             .stdout;
         assert_eq!(before_status, after_status);
+    }
+
+    /// TSK-104 AC-2: the preflight runs on every sanctioned work prefix that
+    /// carries the task id, keyed on that id.
+    #[test]
+    fn preflight_runs_on_every_work_prefix_carrying_the_id() {
+        let dir = fixture();
+        for branch in [
+            "task/TSK-002-work",
+            "fix/TSK-002-repair",
+            "feat/TSK-002-thing",
+            "spike/TSK-002-probe",
+        ] {
+            assert_eq!(
+                task_id_from_branch(dir.path(), branch).as_deref(),
+                Some("TSK-002"),
+                "{branch}"
+            );
+            let report = check_work_start_for_branch(dir.path(), "TSK-002", "main", branch)
+                .unwrap_or_else(|error| panic!("{branch}: {error}"));
+            assert_eq!(report.branch, branch);
+            assert_eq!(report.work_type.as_deref(), Some("feat"));
+        }
+        for branch in ["plan/TSK-002-graph", "integration/TSK-002-line", "fix/typo"] {
+            assert_eq!(task_id_from_branch(dir.path(), branch), None, "{branch}");
+        }
+        assert!(branch_claims_task_id(dir.path(), "fix/TSK-404-ghost"));
+        assert!(!branch_claims_task_id(dir.path(), "fix/typo"));
+        assert!(!branch_claims_task_id(dir.path(), "plan/TSK-404-new"));
+        assert!(matches!(
+            check_work_start_for_branch(dir.path(), "TSK-002", "main", "fix/TSK-001-other"),
+            Err(WorkStartError::Branch { .. })
+        ));
+    }
+
+    /// The pull request context: a `fix/` branch without an id may still
+    /// name a task, whose anchored state is checked all the same.
+    #[test]
+    fn anchored_check_needs_no_branch_identity() {
+        let dir = fixture();
+        git(dir.path(), &["switch", "-c", "fix/release-notes"]);
+        let report = check_work_start_anchored(dir.path(), "TSK-002", "main").unwrap();
+        assert!(report.branch.is_empty());
+        assert!(matches!(
+            check_work_start_anchored(dir.path(), "TSK-001", "main"),
+            Err(WorkStartError::TaskNotStartable { .. })
+        ));
     }
 
     #[test]

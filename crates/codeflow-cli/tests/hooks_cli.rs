@@ -1647,7 +1647,10 @@ fn bootstrap_grace_applies_before_first_commit() {
 }
 
 #[test]
-fn pre_commit_blocks_implementation_when_task_exists_only_on_task_branch() {
+/// The planning anchor is checked once, at `work start` and in CI, never
+/// per commit (the 2026-09-26 audit decision): pre-commit lets the commit
+/// through, and `work start` names the missing anchor.
+fn pre_commit_leaves_the_planning_anchor_to_work_start_and_ci() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
     git(dir.path(), &["switch", "-c", "task/TSK-001-unanchored"]);
@@ -1669,101 +1672,20 @@ fn pre_commit_blocks_implementation_when_task_exists_only_on_task_branch() {
             .current_dir(dir.path()),
         "",
     );
-    assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("task implementation is not ready"), "{err}");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let start = codeflow()
+        .args(["work", "start", "TSK-001"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(start.status.code(), Some(1));
+    let err = String::from_utf8_lossy(&start.stderr);
     assert!(err.contains("not present at the merge-base"), "{err}");
-}
-
-#[test]
-fn pre_commit_blocks_planning_records_created_on_a_task_branch() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path(), "main");
-    git(dir.path(), &["switch", "-c", "task/TSK-001-self-plan"]);
-    let task_dir = dir.path().join("project-management/tasks");
-    std::fs::create_dir_all(&task_dir).unwrap();
-    std::fs::write(
-        task_dir.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: self planning\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nPlanning belongs on plan branches.\n\n## Acceptance Criteria\n- AC-1 planning is anchored\n",
-    )
-    .unwrap();
-    git(dir.path(), &["add", "project-management"]);
-
-    let out = run_with_stdin(
-        codeflow()
-            .args(["git-hook", "pre-commit"])
-            .current_dir(dir.path()),
-        "",
-    );
-    assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("not present at the merge-base"), "{err}");
-}
-
-#[test]
-fn pre_commit_blocks_an_invalid_visible_workgraph_before_task_work() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path(), "main");
-    let task_dir = dir.path().join("project-management/tasks");
-    std::fs::create_dir_all(&task_dir).unwrap();
-    std::fs::write(
-        task_dir.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
-    )
-    .unwrap();
-    git(dir.path(), &["add", "project-management"]);
-    git(dir.path(), &["commit", "-m", "plan: anchor repair task"]);
-    git(dir.path(), &["switch", "-c", "task/TSK-001-repair"]);
-
-    let epic_dir = dir.path().join("project-management/epics");
-    std::fs::create_dir_all(&epic_dir).unwrap();
-    std::fs::write(
-        epic_dir.join("EPC-999.md"),
-        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
-    )
-    .unwrap();
-    git(dir.path(), &["add", "project-management"]);
-
-    let out = run_with_stdin(
-        codeflow()
-            .args(["git-hook", "pre-commit"])
-            .current_dir(dir.path()),
-        "",
-    );
-    assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("workgraph error"), "{err}");
-    assert!(err.contains("EPC-999.md"), "{err}");
-}
-
-#[test]
-fn pre_commit_blocks_task_branch_without_a_visible_task_record() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path(), "main");
-    let state_dir = dir.path().join(".codeflow");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    std::fs::write(
-        state_dir.join("project.toml"),
-        "schema_version = 1\ntier = 'full'\nscaffold_version = '3.0.0'\nstack = 'rust'\nareas = []\npolicy_armed = true\ngit_hooks = 'wired'\npermission_preset = 'strict'\n",
-    )
-    .unwrap();
-    git(dir.path(), &["switch", "-c", "task/TSK-001-missing-record"]);
-    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
-    git(dir.path(), &["add", "implementation.rs"]);
-
-    let out = run_with_stdin(
-        codeflow()
-            .args(["git-hook", "pre-commit"])
-            .current_dir(dir.path()),
-        "",
-    );
-    assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("does not identify a visible durable task record"),
-        "{err}"
-    );
-    assert!(err.contains("before implementation"), "{err}");
 }
 
 #[test]
@@ -1791,39 +1713,9 @@ fn pre_commit_keeps_task_prefix_available_without_durable_work_tracking() {
     );
 }
 
-#[test]
-fn pre_commit_blocks_indeterminate_state_without_a_task_directory() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path(), "main");
-    let state_dir = dir.path().join(".codeflow");
-    std::fs::create_dir_all(&state_dir).unwrap();
-    std::fs::write(state_dir.join("project.toml"), "tier = [invalid").unwrap();
-    git(dir.path(), &["switch", "-c", "task/TSK-001-repair"]);
-    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
-    git(dir.path(), &["add", "implementation.rs"]);
-
-    let out = run_with_stdin(
-        codeflow()
-            .args(["git-hook", "pre-commit"])
-            .current_dir(dir.path()),
-        "",
-    );
-    assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        err.contains("cannot determine durable-work tracking"),
-        "{err}"
-    );
-    assert!(err.contains("cannot read existing CodeFlow state"), "{err}");
-    assert!(
-        !err.contains("[invalid"),
-        "state contents must not be echoed: {err}"
-    );
-}
-
 #[cfg(unix)]
 #[test]
-fn unreadable_state_blocks_both_hook_and_ci() {
+fn unreadable_state_blocks_ci_not_the_commit() {
     use std::io::ErrorKind;
 
     let dir = tempfile::tempdir().unwrap();
@@ -1865,11 +1757,11 @@ permission_preset = "strict"
             .current_dir(dir.path()),
         "",
     );
-    assert_eq!(hook.status.code(), Some(1));
-    let hook_error = String::from_utf8_lossy(&hook.stderr);
-    assert!(
-        hook_error.contains("cannot read existing CodeFlow state"),
-        "{hook_error}"
+    assert_eq!(
+        hook.status.code(),
+        Some(0),
+        "pre-commit leaves the tracking state to work start and CI: {}",
+        String::from_utf8_lossy(&hook.stderr)
     );
 
     git(dir.path(), &["commit", "-m", "feat: add implementation"]);
@@ -1909,7 +1801,7 @@ permission_preset = "strict"
 
 #[cfg(unix)]
 #[test]
-fn unreadable_task_home_blocks_both_hook_and_ci() {
+fn unreadable_task_home_blocks_ci_not_the_commit() {
     use std::io::ErrorKind;
 
     let dir = tempfile::tempdir().unwrap();
@@ -1937,11 +1829,11 @@ fn unreadable_task_home_blocks_both_hook_and_ci() {
             .current_dir(dir.path()),
         "",
     );
-    assert_eq!(hook.status.code(), Some(1));
-    let hook_error = String::from_utf8_lossy(&hook.stderr);
-    assert!(
-        hook_error.contains("cannot inspect CodeFlow task-home inventory"),
-        "{hook_error}"
+    assert_eq!(
+        hook.status.code(),
+        Some(0),
+        "pre-commit leaves the tracking state to work start and CI: {}",
+        String::from_utf8_lossy(&hook.stderr)
     );
 
     git(dir.path(), &["commit", "-m", "feat: add implementation"]);
@@ -1980,33 +1872,7 @@ fn unreadable_task_home_blocks_both_hook_and_ci() {
 }
 
 #[test]
-fn pre_commit_recognizes_nested_only_historical_task() {
-    let dir = tempfile::tempdir().unwrap();
-    init_repo(dir.path(), "main");
-    git(dir.path(), &["switch", "-c", "task/TSK-001-001-unanchored"]);
-    let nested = dir.path().join("project-management/epics/EPC-001/tasks");
-    std::fs::create_dir_all(&nested).unwrap();
-    std::fs::write(
-        nested.join("TSK-001-001.md"),
-        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- AC-1 anchored first\n",
-    )
-    .unwrap();
-    std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();
-    git(dir.path(), &["add", "."]);
-
-    let out = run_with_stdin(
-        codeflow()
-            .args(["git-hook", "pre-commit"])
-            .current_dir(dir.path()),
-        "",
-    );
-    assert_eq!(out.status.code(), Some(1));
-    let err = String::from_utf8_lossy(&out.stderr);
-    assert!(err.contains("not present at the merge-base"), "{err}");
-}
-
-#[test]
-fn task_home_inventory_limit_blocks_both_hook_and_ci() {
+fn task_home_inventory_limit_blocks_ci_not_the_commit() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
     git(dir.path(), &["switch", "-c", "task/TSK-001-overflow"]);
@@ -2024,11 +1890,11 @@ fn task_home_inventory_limit_blocks_both_hook_and_ci() {
             .current_dir(dir.path()),
         "",
     );
-    assert_eq!(hook.status.code(), Some(1));
-    let hook_error = String::from_utf8_lossy(&hook.stderr);
-    assert!(
-        hook_error.contains("inventory exceeds 16384"),
-        "{hook_error}"
+    assert_eq!(
+        hook.status.code(),
+        Some(0),
+        "pre-commit leaves the tracking state to work start and CI: {}",
+        String::from_utf8_lossy(&hook.stderr)
     );
 
     git(dir.path(), &["commit", "-m", "feat: add implementation"]);

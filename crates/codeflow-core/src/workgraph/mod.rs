@@ -26,7 +26,8 @@ pub use format_id::{
 };
 pub use store::{MarkdownStore, RecordStore, StoreError};
 pub use work_start::{
-    check_work_start, check_work_start_for_branch, declared_work_target, default_work_target,
+    branch_claims_task_id, check_work_start, check_work_start_anchored, check_work_start_for_branch,
+    declared_work_target, default_work_target,
     durable_work_tracking_enabled, is_stable_work_target, resolve_work_target, task_id_from_branch,
     work_target_resolves, DurableTrackingError, RecordKind, WorkStartError, WorkStartReport,
 };
