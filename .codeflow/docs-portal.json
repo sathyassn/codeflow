@@ -54,7 +54,7 @@
     },
     "scripts/adapter.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "ffe9a713fbf2545def551556b6bae26ca5a73d7158c088f57b936e023aeea9d5"
+      "pristine_sha256": "00a271c69dbd4e5e29e3ad9ff653ce9c83344519c0a4036015f2055c7b0512ec"
     },
     "scripts/as-is-markdown.mjs": {
       "ownership": "managed",
@@ -198,7 +198,7 @@
     },
     "src/styles/portal.css": {
       "ownership": "managed",
-      "pristine_sha256": "3c8a94d42bf350fff95d8b68c932147a38290e338baf691bcdc43729bcbd5f4f"
+      "pristine_sha256": "ed7364a5efaa50ddcdc40b0a388273a95b7f5480924354cc4177c9e5dc856d6d"
     },
     "src/styles/utility-tokens.css": {
       "ownership": "managed",
@@ -206,7 +206,7 @@
     },
     "tests/adapter.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "18b1733717886eeb1d25ef6f4cda8ec5c4fb93f3864a7e5161d53dc388e62b66"
+      "pristine_sha256": "b6ccb48e24b50197a79de15860b8bbd6102d3c570090ff305039a34fc78e13ab"
     },
     "tests/browser-keyboard.test.mjs": {
       "ownership": "managed",
@@ -222,7 +222,7 @@
     },
     "tests/composition.test.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "37b9624948577df1cff2465ab58bf894323a8e1d8c3f7eaa2d08141a60407c64"
+      "pristine_sha256": "6be9fd10db76d8699d2dabf4e445aaca31fac68c58eb47d4470523f15fd5785c"
     },
     "tests/figure-gate.test.mjs": {
       "ownership": "managed",
