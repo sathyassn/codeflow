@@ -594,7 +594,13 @@ const RETIRED_CAPTURED_SESSION: &str = "c17874f5-9568-45f6-a657-180848fae57d";
 fn schema_registry() -> json_schema::Registry {
     let schemas = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base/present/schemas");
     json_schema::Registry::new(
-        ["document-v1.schema.json", "session-history-v1.schema.json"].map(|name| {
+        [
+            "document-v1.schema.json",
+            "document-v2.schema.json",
+            "session-history-v1.schema.json",
+            "session-history-v2.schema.json",
+        ]
+        .map(|name| {
             serde_json::from_slice::<serde_json::Value>(&fs::read(schemas.join(name)).unwrap())
                 .unwrap()
         }),
@@ -1080,4 +1086,75 @@ fn the_conversion_section_matches_the_runtime_refusal() {
         );
     }
     assert!(!text.contains("| diagram |") && !text.contains("\"type\": \"diagram\""));
+}
+
+fn contract_fixture(name: &str) -> String {
+    fs::read_to_string(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../codeflow-present/tests/fixtures/contract-v2")
+            .join(name),
+    )
+    .unwrap()
+}
+
+#[test]
+fn schema_v2_fixtures_match_the_v2_schemas_and_v1_stays_on_v1() {
+    let registry = schema_registry();
+    let document_v2 = "urn:codeflow:schema:present:document:2";
+    for valid in [
+        "documents/v2-framed.json",
+        "documents/v2-figure-mark-without-id.json",
+    ] {
+        // The schema checks shape; mark ids and references are runtime rules.
+        let value: serde_json::Value = serde_json::from_str(&contract_fixture(valid)).unwrap();
+        assert_eq!(
+            registry.errors(document_v2, &value),
+            Vec::<String>::new(),
+            "{valid}"
+        );
+    }
+    for invalid in [
+        "documents/v2-html-missing-caption.json",
+        "documents/v2-table-missing-title.json",
+    ] {
+        let value: serde_json::Value = serde_json::from_str(&contract_fixture(invalid)).unwrap();
+        assert!(
+            !registry.errors(document_v2, &value).is_empty(),
+            "{invalid}"
+        );
+    }
+    let v1: serde_json::Value =
+        serde_json::from_str(&contract_fixture("documents/v1-html-title.json")).unwrap();
+    assert_eq!(
+        registry.errors("urn:codeflow:schema:present:document:1", &v1),
+        Vec::<String>::new()
+    );
+    assert!(!registry.errors(document_v2, &v1).is_empty());
+}
+
+#[test]
+fn a_v2_session_opens_renders_framing_and_prints_history_v2() {
+    let fixture = setup_project();
+    let document = fixture.project.join("framed.json");
+    fs::write(&document, contract_fixture("documents/v2-framed.json")).unwrap();
+    let (session_id, opened) = open_no_launch(&fixture, &document);
+    let (port, authority, cookie) = bootstrap_cookie(&opened);
+    let page = application_page(port, &authority, &cookie);
+    assert!(
+        page.contains("<span class=\"cf-frame-number\">Figure 2</span>"),
+        "{page}"
+    );
+    assert!(page.contains("data-cf-entity=\"submit-edge\""));
+    let history: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", &session_id],
+    )))
+    .unwrap();
+    assert_eq!(history["schema_version"], 2);
+    assert_eq!(
+        schema_registry().errors("urn:codeflow:schema:present:session-history:2", &history),
+        Vec::<String>::new()
+    );
+    close_and_clear(&fixture, &session_id);
 }

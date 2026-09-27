@@ -30,6 +30,10 @@ pub const MAX_FEEDBACK_BYTES: usize = 256 * 1024;
 pub const MAX_EXCERPT_TEXT_BYTES: usize = 4 * 1024;
 pub const MAX_EXCERPT_IMAGE_BYTES: usize = 24 * 1024;
 pub const MAX_EXCERPT_IMAGE_B64_BYTES: usize = 32 * 1024;
+/// The largest crop the page captures (`web/src/excerpt.ts` `MAX_CROP_*`);
+/// a PNG crop over either bound is refused before anything decodes it.
+pub const MAX_CROP_WIDTH: u32 = 480;
+pub const MAX_CROP_HEIGHT: u32 = 360;
 pub const MAX_EVENTS_PER_RESPONSE: usize = 100;
 pub const MAX_EVENT_RESPONSE_BYTES: usize = 1024 * 1024;
 pub const MAX_EVENT_RECORD_BYTES: u64 = 256 * 1024;
@@ -57,3 +61,31 @@ pub const MAX_SERVICE_BINARY_DELTA_BYTES: u64 = 1_250_000;
 pub const MAX_EXPORT_PAYLOAD_BYTES: u64 = 1_300_000;
 pub const MAX_EXPORT_SHELL_BYTES: u64 = 1_750_000;
 pub const MAX_COMBINED_BINARY_DELTA_BYTES: u64 = 2_600_000;
+
+/// The newest presentation document schema this build reads; it reads every
+/// version from 1 to this one. `SCHEMA_VERSION` above stays the version of
+/// the utility-token configuration.
+pub const MAX_DOCUMENT_SCHEMA_VERSION: u32 = 2;
+/// Entity labels are collapsed and cut to this many characters (SPC-014 B2).
+pub const MAX_ENTITY_LABEL_CHARS: usize = 120;
+/// A `data-cf-for` names at most this many entities.
+pub const MAX_ENTITY_FOR_IDS: usize = 8;
+/// A v2 `html` legend lists 1 to this many entries.
+pub const MAX_LEGEND_ENTRIES: usize = 12;
+/// A v2 `html` description is at most this many characters.
+pub const MAX_DESCRIPTION_CHARS: usize = 2_000;
+/// A v2 document summary is 1 to this many characters.
+pub const MAX_SUMMARY_CHARS: usize = 200;
+/// An entity crop may exceed the entity bounds by this many user units on
+/// every side (SPC-014 B4).
+pub const ENTITY_CROP_TOLERANCE: f64 = 8.0;
+/// The fuzzy quote step runs for quotes up to this many UTF-16 units ...
+pub const MAX_FUZZY_QUOTE_UTF16: usize = 512;
+/// ... inside block texts up to this many (SPC-014 B1).
+pub const MAX_FUZZY_TEXT_UTF16: usize = 65_536;
+/// The score a fuzzy candidate needs to re-anchor a note (SPC-014 B1).
+pub const FUZZY_THRESHOLD: f64 = 0.75;
+/// The edit-distance cells one fuzzy quote search may compute. A search that
+/// needs more stops before scoring and the note shows on its block with a
+/// notice (SPC-014 B1, TSK-118 review round 1).
+pub const FUZZY_WORK_BUDGET: u64 = 32_000_000;

@@ -44,7 +44,11 @@ test("every family validates, renders, keys its drawn states and re-derives its 
     assert.match(html, new RegExp(`^<figure class="cf-fig" data-cf-figure="${declaration.figure.family}"`), name);
     for (const state of declaration.figure.states) assert.match(html, new RegExp(`<li data-state="${state.name}"`), `${name} keys ${state.name}`);
     assert.equal((html.match(/<svg class="cf-fig-svg cf-fig-svg--(?:wide|narrow)"/g) ?? []).length, 2, name);
-    assert.equal((html.match(/<details class="cf-twin"/g) ?? []).length, 1, name);
+    // Framing: the visible title line, then one Details disclosure holding
+    // the description and the table twin.
+    assert.match(html, new RegExp(`<p class="cf-fig-title"><span class="cf-fig-number">Figure</span> · <span class="cf-fig-name">`), name);
+    assert.equal((html.match(/<details class="cf-fig-details"><summary>Details<\/summary><p class="cf-fig-description">/g) ?? []).length, 1, name);
+    assert.equal((html.match(/<table>/g) ?? []).length, 1, name);
     if (bound !== null) assert.ok(drawnValuesMatch(composeFigure(declaration, bound).drawnValues, bound.derived), policy);
   }
 });
