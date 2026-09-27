@@ -6,8 +6,8 @@ description: Create, open, revise, and close a structured local CodeFlow review 
 # cf-present — interactive review documents
 
 Turn substantial session content into one inspectable, feedback-aware document
-from CodeFlow's declarative blocks and bounded local runtime; never a new
-page application per response.
+from CodeFlow's declarative blocks and local runtime; never a new
+page app per response.
 
 Each invocation **reuses the utility design system**. Author **this session's**
 subject into catalog blocks; the runtime owns chrome, themes, and Comment. Do
@@ -84,9 +84,10 @@ as a **shape** (carrier first), not a form to pad.
 3. Use the isolated browser/profile opened by CodeFlow. `--no-launch` is for
    recovery, automation, or an agent sandbox (run in the project tree); it
    never attaches to the operator's browser or active view.
-4. **Handoff:** lead with the single-use **handoff link** CodeFlow printed
-   (unopened in 120 s, the session closes), then session ID, revision and
-   the decision sought; not ports or cookies.
+4. **Handoff:** always give this line first, then the decision sought:
+   `Review: <handoff link> (session <id>, revision <n>)`, with the link
+   CodeFlow printed (single use; the session closes if unopened for 120 s).
+   No ports or cookies.
 5. Do not claim the document was seen or approved until feedback or other
    direct evidence proves it.
 
@@ -145,6 +146,6 @@ or project document. The presentation history is not a second work authority.
 
 ## Completion
 
-Return the session ID, revision, purpose, requested decision, durable outcomes
-promoted, cleanup state, and anything not verified. Keep the chat handoff
-concise; the interactive document carries the detail.
+Return the handoff line, purpose, requested decision, durable outcomes
+promoted, cleanup state, and anything not verified. Keep chat concise; the
+page carries the detail.
