@@ -77,7 +77,7 @@ Homes used below:
 | Work to the outcome | WD; map rule | `rule_map_contract` |
 | Ground it in evidence | WD; map evidence rule | `orchestration_contract` |
 | Navigate blockers | WD | CF-GOV-002, CF-QA-013 |
-| Find broadly; act by materiality | WD; map rule | CF-QA-005 |
+| Find broadly; act by materiality | WD; map rule (broad form); the ranking in the map review moment, which points at `cf-reviewer`, `quality-contract.md` and `verification-selection.md` | CF-QA-005, `rule_map_contract` |
 | Challenge decisions independently | WD; map rule | `orchestration_contract` |
 | Guard your context | WD; CLAUDE "Stay lean by delegating" | none needed |
 | Write only what earns its keep | WD; map build moment | CF-QA-003 |

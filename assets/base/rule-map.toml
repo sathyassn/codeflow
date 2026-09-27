@@ -163,7 +163,7 @@ see = [".codeflow/rules/workflow-discipline.md"]
 [[rule]]
 id = "materiality"
 title = "Find broadly; act by materiality."
-text = "Rank findings by severity, confidence and reach, never by effort; nits stay non-blocking and batched."
+text = "Do not let easy cosmetics displace consequential work; a material issue outside scope gets one tracked item, never silent scope growth."
 see = [".codeflow/rules/workflow-discipline.md"]
 
 [[rule]]
@@ -327,6 +327,20 @@ tiers = ["standard", "full"]
 key = "build"
 when = "build an accepted change"
 action = "the smallest durable change, tests in the same change"
+see = [".codeflow/rules/workflow-discipline.md"]
+tiers = ["minimal"]
+
+[[moment]]
+key = "review"
+when = "review a change or give a verdict"
+action = "read-only; rank findings by severity, confidence and reach, never effort; nits non-blocking and batched"
+see = ["cf-reviewer", "cf-model-orchestrator/resources/quality-contract.md", "cf-model-orchestrator/resources/verification-selection.md"]
+tiers = ["standard", "full"]
+
+[[moment]]
+key = "review"
+when = "review a change or give a verdict"
+action = "read-only; rank findings by severity, confidence and reach, never effort; nits non-blocking and batched"
 see = [".codeflow/rules/workflow-discipline.md"]
 tiers = ["minimal"]
 

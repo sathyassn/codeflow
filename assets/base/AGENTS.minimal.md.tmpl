@@ -37,7 +37,7 @@ that has earned the weight, not a doc-set or a small tool.
 
 - **Work to the outcome.** Know what done means before acting, work in small verified steps, and iterate until the outcome is proven or a real blocker is surfaced with options and a recommendation. See `.codeflow/rules/workflow-discipline.md`.
 - **Evidence, never assumption.** Every claim carries file:line, command output or a reproducible check, and you say what was not verified; an unverifiable or fabricated claim is a defect. See `.codeflow/rules/workflow-discipline.md`.
-- **Find broadly; act by materiality.** Rank findings by severity, confidence and reach, never by effort; nits stay non-blocking and batched. See `.codeflow/rules/workflow-discipline.md`.
+- **Find broadly; act by materiality.** Do not let easy cosmetics displace consequential work; a material issue outside scope gets one tracked item, never silent scope growth. See `.codeflow/rules/workflow-discipline.md`.
 - **Challenge independently.** Evidence and honest analysis outrank agreement, the operator's included; say so when you see a better path, and the operator makes the final call. See `.codeflow/rules/workflow-discipline.md`.
 - **Prove it where it runs.** Verify at the surface the change affects and what it touches upstream and downstream, disclose a mocked boundary, and get `codeflow test` green before calling it done. See `.codeflow/rules/workflow-discipline.md`.
 - **Route by touched paths.** Every change lands through a branch and a reviewed PR; a change to an adopter-facing path (product code, managed instructions, hooks, policy, CI, shipped templates, watched contracts) gets a reviewer who did not write it; when unsure, treat it as adopter-facing. See `.codeflow/rules/git-rules.md`.
@@ -58,6 +58,7 @@ that has earned the weight, not a doc-set or a small tool.
 | plan work | acceptance criteria before building; ask on operator-owned gaps | `.codeflow/rules/workflow-discipline.md` |
 | set product, UX, UI or visual direction | settle direction with evidence; taste is the operator's | `.codeflow/rules/workflow-discipline.md` |
 | build an accepted change | the smallest durable change, tests in the same change | `.codeflow/rules/workflow-discipline.md` |
+| review a change or give a verdict | read-only; rank findings by severity, confidence and reach, never effort; nits non-blocking and batched | `.codeflow/rules/workflow-discipline.md` |
 | branch, open a worktree, commit, rebase or clean up | work-start check first (identity, intent-match, currency); one worktree per session; cleanup needs merge proof | `.codeflow/rules/worktrees.md`, `.codeflow/rules/git-rules.md` |
 | push, open a PR or release | real test evidence in the PR; releases follow the project's policy | `.codeflow/rules/git-rules.md` |
 | ask another model or harness | same family: a native subagent of this session; another family: a native interactive seat with provenance recorded; never headless | `.codeflow/rules/workflow-discipline.md` |
