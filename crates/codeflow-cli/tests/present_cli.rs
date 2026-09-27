@@ -1155,32 +1155,29 @@ fn a_v2_session_opens_renders_framing_and_prints_history_v2() {
 
 /// The annotation matrix in the authoring reference names every block type
 /// of the closed enum, with a text, element and area cell, each "yes" or
-/// "no: <reason>" (TSK-071). A new block type fails to compile here until
-/// the matrix gains its row.
+/// "no: <reason>" (TSK-071). The block types come from the enum itself (its
+/// deserializer names every variant it accepts), with no fixed count, so a
+/// new variant fails here until the fixture and the matrix both carry it.
 #[test]
 fn the_annotation_matrix_names_every_block_type() {
     use codeflow_present::document::Block;
 
-    fn name(block: &Block) -> &'static str {
-        match block {
-            Block::Narrative { .. } => "narrative",
-            Block::Bullets { .. } => "bullets",
-            Block::Callout { .. } => "callout",
-            Block::Comparison { .. } => "comparison",
-            Block::Decision { .. } => "decision",
-            Block::Table { .. } => "table",
-            Block::Status { .. } => "status",
-            Block::Code { .. } => "code",
-            Block::Diff { .. } => "diff",
-            Block::Tree { .. } => "tree",
-            Block::Figure { .. } => "figure",
-            Block::Media { .. } => "media",
-            Block::Disclosure { .. } => "disclosure",
-            Block::Tabs { .. } => "tabs",
-            Block::FeedbackPrompt { .. } => "feedback_prompt",
-            Block::Html { .. } => "html",
-        }
-    }
+    let refusal = serde_json::from_value::<Block>(serde_json::json!({"type": "not-a-block"}))
+        .unwrap_err()
+        .to_string();
+    let listed = refusal
+        .split_once("expected one of ")
+        .map_or("", |(_, rest)| rest);
+    let mut variants: Vec<&str> = listed
+        .split(", ")
+        .map(|name| name.trim().trim_matches('`'))
+        .collect();
+    variants.sort_unstable();
+    assert!(
+        variants.len() > 1 && variants.iter().all(|name| !name.is_empty()),
+        "could not read the block types from {refusal:?}"
+    );
+
     let fixture: serde_json::Value = serde_json::from_str(
         &fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -1190,13 +1187,20 @@ fn the_annotation_matrix_names_every_block_type() {
     )
     .unwrap();
     let blocks: Vec<Block> = serde_json::from_value(fixture["blocks"].clone()).unwrap();
-    let mut types: Vec<&str> = blocks.iter().map(name).collect();
+    let mut types: Vec<String> = blocks
+        .iter()
+        .map(|block| {
+            serde_json::to_value(block).unwrap()["type"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        })
+        .collect();
     types.sort_unstable();
     types.dedup();
     assert_eq!(
-        types.len(),
-        16,
-        "the fixture carries one block of every type"
+        types, variants,
+        "the fixture carries one top-level block of every type"
     );
 
     let text = skill_file("references/document-authoring.md");
@@ -1218,7 +1222,10 @@ fn the_annotation_matrix_names_every_block_type() {
         rows.push(cells[0].trim_matches('`'));
     }
     rows.sort_unstable();
-    assert_eq!(rows, types);
+    assert_eq!(
+        rows, variants,
+        "the matrix has one row for every block type"
+    );
 }
 
 /// QA defect 10: a command's own bad input is named as a bad request, not a
