@@ -400,8 +400,8 @@ tiers = ["minimal"]
 
 [[moment]]
 key = "resume"
-when = "resume after compaction or a break"
-action = "re-read this block and run `codeflow orient`; state lives in records, not chat"
+when = "start a session, or resume after compaction or a break"
+action = "run `codeflow orient` (the session hook does it where wired), then re-read this block; state lives in records, not chat"
 see = [".codeflow/rules/workflow-discipline.md"]
 
 # --- CLAUDE.md --------------------------------------------------------------

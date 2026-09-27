@@ -72,7 +72,7 @@ Homes used below:
 | Cleanup with merge proof, `codeflow status` inventory | WT; map branch moment | CF-GIT-002, CF-GIT-003 |
 | Parallel work, concurrency cap, one owner per worktree | WT | CF-PAR-001 |
 | Integration serialization and combined review | WT | CF-PAR-001 |
-| Session flow: orient digest, summary capture | WD "Sessions and state"; map resume moment | none needed |
+| Session flow: orient digest, summary capture | WD "Sessions and state"; map session moment (start a session or resume: run `codeflow orient`) | `rule_map_contract` |
 | Workflow discipline intro and lifecycle route | WD intro; map build moment | `artifact_budget_contract` |
 | Work to the outcome | WD; map rule | `rule_map_contract` |
 | Ground it in evidence | WD; map evidence rule | `orchestration_contract` |

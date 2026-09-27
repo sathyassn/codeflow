@@ -214,6 +214,7 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "rank findings by severity, confidence and reach, never effort",
         "Prove it where it runs.",
         "never the same retry",
+        "start a session, or resume after compaction",
         "Work to the outcome.",
         "Git floor [enforced].",
         "explicit authenticated human approval",
