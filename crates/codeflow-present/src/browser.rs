@@ -1220,6 +1220,7 @@ mod tests {
         let store = SessionStore::at_root(temp.path().join("project"), "key".to_string()).unwrap();
         let session = store
             .create(ParsedDocument::Supported(PresentationDocument {
+                summary: None,
                 schema_version: 1,
                 title: "Recovery".to_string(),
                 language: None,

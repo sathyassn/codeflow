@@ -43,7 +43,7 @@
         <p class="cf-doc-meta">Subject for the guide page How a change lands</p>
         <section class="cf-block" id="blk-figure" data-cf-block-kind="figure">
 <figure class="cf-fig" data-cf-block-id="fig-landing" data-cf-figure="flow">
-  <span class="cf-fig-kicker">Figure 1 · Two landing paths</span>
+  <p class="cf-fig-title"><span class="cf-fig-number">Figure 1</span> · <span class="cf-fig-name">Two landing paths from a task branch to main</span></p>
   <div class="cf-fig-stage">
     <svg class="cf-fig-svg cf-fig-svg--wide" viewBox="0 0 720 252" role="img" aria-labelledby="f1w-t f1w-d">
       <title id="f1w-t">Two landing paths from a task branch to main</title>
@@ -102,8 +102,9 @@
     <li data-state="stop" data-cf-anchor="legend-stop" data-cf-anchor-label="legend, gate that stops travel"><svg class="cf-key" viewBox="0 0 28 16" aria-hidden="true"><line class="cf-m-stop" x1="14" y1="1" x2="14" y2="15"/></svg>Gate that stops travel</li>
   </ul>
   <figcaption class="cf-fig-caption">One task lands as a pull request; a body of work lands task by task on an integration branch, and both end at a human merge behind green checks.</figcaption>
-  <details class="cf-twin">
-    <summary>Table twin</summary>
+  <details class="cf-fig-details">
+    <summary>Details</summary>
+    <p class="cf-fig-description">Four columns: branch, review, gate, land. Path A runs from a task branch to a pull request, to required checks, to a human merge, all travelled. Path B runs from a task in an epic to codeflow integrate, where agents merge, to the integration branch, then along a path not yet travelled to the same human merge. A gate that stops travel sits in the gate column on both paths.</p>
     <div class="cf-twin-scroll"><table>
       <thead><tr><th scope="col">Path</th><th scope="col">Who opens</th><th scope="col">Who merges</th><th scope="col">What stops it</th></tr></thead>
       <tbody>

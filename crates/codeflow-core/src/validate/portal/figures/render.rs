@@ -19,7 +19,7 @@
     reason = "each function mirrors one grammar module function and its JavaScript number semantics (exact equality, (a + b) / 2, counts as doubles) so both draw the same bytes; restructuring for lint shape would lose the one-to-one reading"
 )]
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write as _;
 use std::sync::LazyLock;
 
@@ -157,6 +157,14 @@ pub(super) fn render_figure(
             .and_then(|state| state.get("mark").and_then(Value::as_str))
             .map(str::to_string)
     };
+    let state_means = |name: &str| -> String {
+        states
+            .iter()
+            .find(|state| state.get("name").and_then(Value::as_str) == Some(name))
+            .and_then(|state| state.get("means").and_then(Value::as_str))
+            .unwrap_or_default()
+            .to_string()
+    };
     let wide_drawn = drawn_states(&wide.draw);
     let narrow_drawn = drawn_states(&narrow.draw);
     let declared: Vec<&str> = states
@@ -259,9 +267,22 @@ pub(super) fn render_figure(
         } else {
             String::new()
         };
+        // Review entities (SPC-014 B2): each authored mark with an id,
+        // labelled within its composition; a layout exposes none.
+        let entities = if figure.contains_key("layout") {
+            BTreeMap::new()
+        } else {
+            mark_entity_labels(&composition.draw, &state_means)
+        };
         let mut body = String::new();
         for item in &composition.draw {
-            body.push_str(&draw_item(item, &state_mark, &hatch_id, &format!("{id}-"))?);
+            body.push_str(&draw_item(
+                item,
+                &state_mark,
+                &hatch_id,
+                &format!("{id}-"),
+                &entities,
+            )?);
         }
         Ok(format!(
             "<svg class=\"cf-fig-svg cf-fig-svg--{variant}\" viewBox=\"0 0 {} {}\" role=\"img\" aria-labelledby=\"{id}-t {id}-d\" data-cf-variant=\"{variant}\"><title id=\"{id}-t\">{}</title><desc id=\"{id}-d\">{}</desc>{defs}{body}</svg>",
@@ -297,22 +318,42 @@ pub(super) fn render_figure(
             ));
         }
         keyed.push((drawing, *name));
+        let entity = format!("legend-{name}");
+        let target = if is_entity_id(&entity) {
+            format!(
+                " data-cf-entity=\"{entity}\" data-cf-entity-label=\"{}\"",
+                escape_attribute(&entity_label(means))
+            )
+        } else {
+            String::new()
+        };
         let _ = write!(
             legend,
-            "<li data-state=\"{}\"{}>{}{}</li>",
+            "<li data-state=\"{}\"{}{target}>{}{}</li>",
             escape_attribute(name),
             if wide_only { " data-cf-wide" } else { "" },
             key,
             escape_text(means)
         );
     }
-    let kicker = str_field("kicker").unwrap_or(title);
+    // The title line (the grammar numbers it only in present), the kicker as
+    // a qualifier, and one Details disclosure with the description and twin.
+    let kicker = str_field("kicker").map_or(String::new(), |kicker| {
+        format!(
+            " <span class=\"cf-fig-kicker\">{}</span>",
+            escape_text(kicker)
+        )
+    });
+    let lead = str_field("description")
+        .or_else(|| str_field("idea"))
+        .unwrap_or_default();
     Ok(format!(
-        "<figure {attributes}><span class=\"cf-fig-kicker\">Figure \u{b7} {}</span>{}{}<ul class=\"cf-legend\" aria-label=\"Legend\">{legend}</ul><figcaption class=\"cf-fig-caption\">{}</figcaption>{}</figure>",
-        escape_text(kicker),
+        "<figure {attributes}><p class=\"cf-fig-title\"><span class=\"cf-fig-number\">Figure</span> \u{b7} <span class=\"cf-fig-name\">{}</span>{kicker}</p>{}{}<ul class=\"cf-legend\" aria-label=\"Legend\">{legend}</ul><figcaption class=\"cf-fig-caption\">{}</figcaption><details class=\"cf-fig-details\"><summary>Details</summary><p class=\"cf-fig-description\">{}</p>{}</details></figure>",
+        escape_text(title),
         svg(&wide, "wide")?,
         svg(&narrow, "narrow")?,
         escape_text(str_field("caption").unwrap_or_default()),
+        escape_text(lead),
         twin_table(figure, &fact_values)?
     ))
 }
@@ -637,11 +678,84 @@ fn describe(figure: &Map<String, Value>) -> String {
     format!("{lead} Key: {key}. Facts: {facts}.")
 }
 
+/// The entity id rule of SPC-014 B2 (the grammar's `ENTITY_ID`): a KEBAB
+/// id of at most 64 characters, never the reserved `none`.
+fn is_entity_id(value: &str) -> bool {
+    value != "none"
+        && value.len() <= 64
+        && value.as_bytes().first().is_some_and(u8::is_ascii_lowercase)
+        && value.split('-').all(|part| {
+            !part.is_empty()
+                && part
+                    .bytes()
+                    .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit())
+        })
+}
+
+/// The label rule of B2 (the grammar's `entityLabel`): whitespace runs
+/// collapse to one space, trimmed, cut to 120 characters.
+fn entity_label(value: &str) -> String {
+    let mut collapsed = String::new();
+    let mut space = false;
+    for character in value.chars() {
+        if matches!(character, '\t' | '\n' | '\u{c}' | '\r' | ' ') {
+            space = true;
+        } else {
+            if space && !collapsed.is_empty() {
+                collapsed.push(' ');
+            }
+            space = false;
+            collapsed.push(character);
+        }
+    }
+    collapsed.chars().take(120).collect()
+}
+
+/// The label of each mark entity in one composition: the text of the draw
+/// items whose `for` lists the mark id, in draw order, joined by one space;
+/// else the drawn state's meaning; else the id.
+fn mark_entity_labels(
+    draw: &[Value],
+    state_means: &dyn Fn(&str) -> String,
+) -> BTreeMap<String, String> {
+    let mut labels = BTreeMap::new();
+    for item in draw {
+        let (Some(state), Some(id)) = (
+            item.get("state").and_then(Value::as_str),
+            item.get("id").and_then(Value::as_str),
+        ) else {
+            continue;
+        };
+        if labels.contains_key(id) || !is_entity_id(id) {
+            continue;
+        }
+        let named = draw
+            .iter()
+            .filter(|text| {
+                text.get("text").is_some()
+                    && text
+                        .get("for")
+                        .and_then(Value::as_array)
+                        .is_some_and(|ids| ids.iter().any(|entry| entry.as_str() == Some(id)))
+            })
+            .map(|text| js_string(&text["text"]))
+            .collect::<Vec<_>>()
+            .join(" ");
+        let label = [entity_label(&named), entity_label(&state_means(state))]
+            .into_iter()
+            .find(|label| !label.is_empty())
+            .unwrap_or_else(|| id.to_string());
+        labels.insert(id.to_string(), label);
+    }
+    labels
+}
+
 fn draw_item(
     item: &Value,
     state_mark: &dyn Fn(&str) -> Option<String>,
     hatch_id: &str,
     id_prefix: &str,
+    entities: &BTreeMap<String, String>,
 ) -> Rendered {
     if let Some(text) = item.get("text") {
         let styles: Vec<&str> = match item.get("style") {
@@ -712,7 +826,16 @@ fn draw_item(
         .get("id")
         .and_then(Value::as_str)
         .map_or(String::new(), |id| {
-            format!(" id=\"{}\"", escape_attribute(&format!("{id_prefix}{id}")))
+            let entity = entities.get(id).map_or(String::new(), |label| {
+                format!(
+                    " data-cf-entity=\"{id}\" data-cf-entity-label=\"{}\"",
+                    escape_attribute(label)
+                )
+            });
+            format!(
+                " id=\"{}\"{entity}",
+                escape_attribute(&format!("{id_prefix}{id}"))
+            )
         });
     let extra = if mark.hatch {
         format!(" fill=\"url(#{hatch_id})\"")
@@ -1480,7 +1603,7 @@ fn twin_table(figure: &Map<String, Value>, fact_values: &[(String, Value)]) -> R
             )
         })
         .collect();
-    Ok(format!("<details class=\"cf-twin\"><summary>Table twin</summary><div class=\"cf-twin-scroll\"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div></details>"))
+    Ok(format!("<div class=\"cf-twin-scroll\"><table><thead><tr>{head}</tr></thead><tbody>{body}</tbody></table></div>"))
 }
 
 /// Backticks mark code in a twin cell; everything else is text. The parts

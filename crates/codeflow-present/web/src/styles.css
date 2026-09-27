@@ -721,6 +721,61 @@ code { font-family: var(--cf-font-mono); }
   --cf-fig-na-alpha: 0.5;
 }
 :root[data-cf-mode-resolved="dark"] { --cf-fig-na-alpha: 0.65; }
+/* Framing (SPC-014 B5): "Figure N · title" above every figure, the caption
+   under it, and one Details disclosure. The service writes these .cf-frame-*
+   parts around a stage or table; a drawn figure's .cf-fig-* parts are
+   styled by the shared figure sheet. */
+.cf-frame { margin: 0; max-inline-size: 100%; }
+.cf-frame-title {
+  margin: 0 0 0.75rem;
+  max-inline-size: var(--cf-reading-measure);
+  color: var(--cf-text);
+  font-size: max(15px, 1rem);
+  font-weight: 600;
+  line-height: 1.35;
+}
+.cf-frame-number {
+  color: var(--cf-text-muted);
+  font-family: var(--cf-font-mono);
+  font-size: 0.86em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.cf-frame-caption {
+  margin: 0.75rem 0 0;
+  max-inline-size: var(--cf-reading-measure);
+  color: var(--cf-text-muted);
+  font-size: max(13px, 0.9rem);
+  line-height: 1.45;
+}
+.cf-frame .cf-legend { margin-block-start: 0.9rem; }
+.cf-frame-details { margin: 10px 0 0; border-top: 1px solid var(--cf-border); }
+.cf-frame-details > summary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 8px;
+  padding: 2px 4px 2px 0;
+  border-radius: 4px;
+  color: var(--cf-text-muted);
+  font-size: max(13.5px, 0.9rem);
+  font-weight: 500;
+  cursor: pointer;
+  list-style: none;
+}
+.cf-frame-details > summary::-webkit-details-marker { display: none; }
+.cf-frame-details > summary::before {
+  content: "";
+  width: 6px;
+  height: 6px;
+  margin: 0 4px 0 2px;
+  border-right: 1.5px solid currentColor;
+  border-bottom: 1.5px solid currentColor;
+  transform: rotate(-45deg);
+}
+.cf-frame-details[open] > summary::before { transform: rotate(45deg); }
+.cf-frame-details > summary:hover { color: var(--cf-text); }
+.cf-frame-description { margin: 8px 0 0; max-inline-size: var(--cf-reading-measure); color: var(--cf-text); }
 .figure-block__title { margin: 0; font-weight: 600; }
 .figure-block__caption { margin: var(--cf-space-2) 0 0; color: var(--cf-text-muted); }
 [data-cf-figure-status] { color: var(--cf-danger); font-size: 0.86rem; }
@@ -1287,6 +1342,23 @@ code { font-family: var(--cf-font-mono); }
   outline: 2px solid var(--cf-accent);
   outline-offset: 3px;
   background: color-mix(in srgb, var(--cf-accent) 14%, transparent);
+}
+
+/* SVG parts draw no outline: the highlight is a glow that follows the
+   shape, thin strokes included, and leaves its fill and dashes alone. */
+svg .cf-hot,
+svg.cf-hot {
+  outline: none;
+  filter: drop-shadow(0 0 1.5px color-mix(in srgb, var(--cf-accent) 85%, transparent)) drop-shadow(0 0 3px color-mix(in srgb, var(--cf-accent) 55%, transparent));
+}
+svg .cf-hot-sel,
+svg.cf-hot-sel {
+  outline: none;
+  background: none;
+  filter: drop-shadow(0 0 1px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent));
+}
+#cf-present-document[data-cf-capture-mode="element"] svg :is(g, path, line, polyline, polygon, rect, circle, ellipse, text):focus {
+  filter: drop-shadow(0 0 1px var(--cf-focus)) drop-shadow(0 0 2.5px var(--cf-focus)) drop-shadow(0 0 2.5px var(--cf-focus));
 }
 
 /* Document: no permanent +; only while Comment armed */

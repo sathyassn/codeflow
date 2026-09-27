@@ -9,7 +9,7 @@
 // so the two cannot drift apart; a state named on a mark or legend entry must
 // be one its figure declares. Identifiers are held to their character set, not
 // a length: the declaration envelope already bounds them.
-import { FAMILIES, SHAPE_CLASSES, TEXT_CLASSES } from "./figure-grammar.mjs";
+import { ENTITY_ID, entityLabel, FAMILIES, SHAPE_CLASSES, TEXT_CLASSES } from "./figure-grammar.mjs";
 
 const HTML = "http://www.w3.org/1999/xhtml";
 const SVG = "http://www.w3.org/2000/svg";
@@ -23,6 +23,9 @@ const IDS = /^[A-Za-z0-9_-]+(?: [A-Za-z0-9_-]+)*$/u;
 const KEBAB = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/u;
 const KEBABS = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*(?: [a-z][a-z0-9]*(?:-[a-z0-9]+)*)*$/u;
 const DECLARED_STATE = "data-state";
+const ENTITY = "data-cf-entity";
+// An entity label is already collapsed and cut (SPC-014 B2), and never empty.
+const ENTITY_LABEL = (value: string): boolean => value.length > 0 && entityLabel(value) === value && !/[\u0000-\u001f\u007f]/u.test(value);
 const PATH_DATA = /^[MLHVCQZz0-9., -]{1,4096}$/u;
 // The grammar sets no point count; the declaration envelope bounds it.
 const POINTS = /^-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?(?: -?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?)*$/u;
@@ -57,11 +60,12 @@ const ALLOWED: Record<string, Record<string, Check>> = {
     "data-cf-facts": json("array"),
     "data-cf-values": json("object"),
   },
-  [`${HTML} span`]: { class: exactly("cf-fig-kicker") },
+  [`${HTML} p`]: { class: exactly("cf-fig-title", "cf-fig-description") },
+  [`${HTML} span`]: { class: exactly("cf-fig-number", "cf-fig-name", "cf-fig-kicker") },
   [`${HTML} ul`]: { class: exactly("cf-legend"), "aria-label": exactly("Legend") },
-  [`${HTML} li`]: { [DECLARED_STATE]: KEBAB, "data-cf-wide": exactly("") },
+  [`${HTML} li`]: { [DECLARED_STATE]: KEBAB, "data-cf-wide": exactly(""), [ENTITY]: ENTITY_ID, "data-cf-entity-label": ENTITY_LABEL },
   [`${HTML} figcaption`]: { class: exactly("cf-fig-caption") },
-  [`${HTML} details`]: { class: exactly("cf-twin") },
+  [`${HTML} details`]: { class: exactly("cf-fig-details") },
   [`${HTML} summary`]: {},
   [`${HTML} div`]: { class: exactly("cf-twin-scroll") },
   [`${HTML} table`]: {},
@@ -89,7 +93,7 @@ const ALLOWED: Record<string, Record<string, Check>> = {
     patternUnits: exactly("userSpaceOnUse"),
     patternTransform: exactly("rotate(45)"),
   },
-  [`${SVG} g`]: { [DECLARED_STATE]: KEBAB, id: ID, "data-cf-value": JS_NUMBER },
+  [`${SVG} g`]: { [DECLARED_STATE]: KEBAB, id: ID, "data-cf-value": JS_NUMBER, [ENTITY]: ENTITY_ID, "data-cf-entity-label": ENTITY_LABEL },
   [`${SVG} text`]: {
     class: textClass,
     ...coordinates("x", "y"),
@@ -124,6 +128,9 @@ export function unsafeFigureNode(root: ParentNode): string | null {
       if (name === LOCAL_FILL && !patterns.has(value.slice(5, -1))) return `a ${name} reference outside the figure on <${tag}>`;
       if (name === "aria-labelledby" && !value.split(" ").every((id) => labels.has(id))) return `an ${name} reference outside the figure on <${tag}>`;
       if (name === DECLARED_STATE && !declared(node).has(value)) return `a ${name} the figure does not declare on <${tag}>`;
+      // A mark entity is the mark's own id; a legend entity names its state.
+      if (name === ENTITY && value !== (tag === "li" ? `legend-${node.getAttribute(DECLARED_STATE) ?? ""}` : node.id.endsWith(`-${value}`) ? value : null)) return `a ${name} that names another element on <${tag}>`;
+      if (name === ENTITY && !node.hasAttribute("data-cf-entity-label")) return `an entity without its label on <${tag}>`;
     }
   }
   return null;

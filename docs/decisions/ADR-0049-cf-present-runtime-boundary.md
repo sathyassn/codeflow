@@ -209,3 +209,18 @@ first release of present, so no released consumer holds a diagram document.
   is broken in any other way keeps its own error.
 - The consequence above that export enhancement covers diagrams no longer
   applies; export enhancement covers syntax highlighting and figures.
+
+## Update 2026-09-26: live html stages are inlined (TSK-117)
+
+The paragraph above on the sandboxed HTML block describes the runtime before
+`eb3718896` (2026-08-15). Since then the live session inlines a validated
+`html` stage into the page, scoped to a host id, so a note can target a node
+or an edge inside it; the stage still passes the same validation (no
+script, event handler, link, embed, form, remote URL or `data-cf-*` name
+outside the closed vocabulary of SPC-014) and runs under the application
+CSP (`script-src 'self'`, `form-action 'none'`). Export keeps a sandboxed
+`iframe` with `srcdoc` and no `allow-scripts` or `allow-same-origin`, since
+an exported file may be opened outside the session CSP. The
+`/sandbox/<revision>/<id>` route is no longer used by the page; TSK-118
+removes it. ADR-0073 records the review contract v2 decisions that build on
+this boundary.

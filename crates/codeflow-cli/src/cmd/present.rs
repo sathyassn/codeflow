@@ -567,7 +567,7 @@ fn deliver_feedback(store: &SessionStore, id: Uuid, follow: bool) -> codeflow_pr
     loop {
         let pending = store.pending_feedback(id)?;
         for envelope in &pending {
-            serde_json::to_writer(&mut output, envelope)?;
+            serde_json::to_writer(&mut output, &envelope.v1_view())?;
             output
                 .write_all(b"\n")
                 .and_then(|()| output.flush())
@@ -683,6 +683,7 @@ fn exit_code(error: &PresentError) -> i32 {
         | PresentError::InvalidDocument(_)
         | PresentError::UnsupportedSchema { .. }
         | PresentError::InvalidSessionId(_)
+        | PresentError::Review { .. }
         | PresentError::Json(_) => 2,
         PresentError::SessionNotFound(_) => 3,
         PresentError::BrowserUnavailable(_) | PresentError::ServiceUnavailable(_) => 4,

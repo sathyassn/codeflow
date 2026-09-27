@@ -1,0 +1,103 @@
+{
+  "schema_version": 2,
+  "title": "Forms fixture",
+  "blocks": [
+    {
+      "type": "form",
+      "id": "store-choice",
+      "title": "Where should answers live?",
+      "markdown": "Pick one store. The recommended option is marked.",
+      "fields": [
+        {
+          "id": "home",
+          "label": "Store",
+          "kind": "choice",
+          "rationale": "optional",
+          "options": [
+            {
+              "value": "local",
+              "label": "Private local store",
+              "recommended": true
+            },
+            {
+              "value": "repo",
+              "label": "Committed JSON Lines",
+              "recommended": true
+            }
+          ]
+        },
+        {
+          "id": "keep-days",
+          "label": "Days to keep",
+          "kind": "integer",
+          "minimum": 1,
+          "maximum": 365
+        },
+        {
+          "id": "share",
+          "label": "Share exports with notes",
+          "kind": "boolean"
+        },
+        {
+          "id": "channels",
+          "label": "Where to show state",
+          "kind": "choices",
+          "min_items": 1,
+          "max_items": 2,
+          "options": [
+            {
+              "value": "rail",
+              "label": "Rail"
+            },
+            {
+              "value": "form",
+              "label": "Form"
+            },
+            {
+              "value": "toast",
+              "label": "Toast"
+            }
+          ]
+        },
+        {
+          "id": "contact",
+          "label": "Follow-up address",
+          "kind": "text",
+          "format": "email",
+          "max_length": 200
+        },
+        {
+          "id": "notes",
+          "label": "Anything else",
+          "kind": "text",
+          "format": "multiline",
+          "min_length": 1,
+          "max_length": 2000,
+          "rationale": "none"
+        }
+      ],
+      "required": [
+        "home",
+        "keep-days"
+      ]
+    },
+    {
+      "type": "decision",
+      "id": "d-scope",
+      "title": "Review scope",
+      "markdown": "Choose the scope of this package.",
+      "options": [
+        {
+          "value": "a",
+          "label": "Match review offerings",
+          "recommended": true
+        },
+        {
+          "value": "b",
+          "label": "Literal parity"
+        }
+      ],
+      "rationale": "optional"
+    }
+  ]
+}

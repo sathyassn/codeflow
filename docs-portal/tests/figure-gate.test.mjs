@@ -299,6 +299,9 @@ test("the mixed fixture renders every class and the gates name only what falls s
         [".cf-fig { clip-path: inset(50%); }", /<figure class="cf-fig[^"]*"> computes clip-path inset\(50%\) where the clean copy computes none/],
         [".cf-fig { filter: opacity(0); }", /<figure class="cf-fig[^"]*"> computes filter opacity\(0\) where the clean copy computes none/],
         [".cf-fig-caption { visibility: hidden; }", /<figcaption class="cf-fig-caption"> computes visibility hidden where the clean copy computes visible/, /the caption is not visible to a reader/],
+        // The title line is part of the figure (SPC-014 B5): hiding it fails
+        // the figure however the rest of the page reads.
+        [".cf-fig-title { visibility: hidden; }", /<p class="cf-fig-title"> computes visibility hidden where the clean copy computes visible/, /the title is not visible to a reader/],
         [".cf-fig { translate: 0 1000px; }", /<figure class="cf-fig[^"]*"> computes translate 0px 1000px where the clean copy computes none/],
         [".cf-fig-svg .cf-m-trans { stroke-dasharray: 0 100000; }", /computes stroke-dasharray 0px, 100000px where the clean copy computes none/],
         [".cf-m-used { translate: 0 1000px; }", /a drawn <rect> has translate 0px 1000px where the kit sheets alone give none/, /the row-0 mark spans y/],
@@ -310,14 +313,14 @@ test("the mixed fixture renders every class and the gates name only what falls s
       }
       // Starlight's content rules reach into a companion that does not opt
       // out of them: the list rule pushes each legend key 10px above its
-      // label and the details rule paints the twin marker as a dot. The clean
+      // label and the details rule paints the Details marker as a dot. The clean
       // copy carries the same site styles, so only the absolute reading of
       // the legend and the marker sees it, at every width and mode.
       const opted = await hostile({ inject: () => { for (const companion of document.querySelectorAll(".cf-companion")) companion.classList.remove("not-content"); }, css: null });
       for (const [width, mode] of [[1440, "light"], [390, "light"], [1440, "dark"], [390, "dark"]]) {
         const where = `docs/guide.md (at reference/guide, ${width}px ${mode}): figure install-steps: `;
         assert.ok(opted.some((failure) => failure.startsWith(where) && /the [a-z-]+ legend key sits \d+(?:\.\d)?px above its label/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
-        assert.ok(opted.some((failure) => failure.startsWith(where) && /the twin marker is not the figure sheet's chevron/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
+        assert.ok(opted.some((failure) => failure.startsWith(where) && /the Details marker is not the figure sheet's chevron/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
       }
 
       // A style attribute on the content, the figure's ancestor, is refused

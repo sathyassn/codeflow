@@ -2511,15 +2511,13 @@ mod tests {
             .any(|issue| issue.contains("does not start after the page title")));
     }
 
-    #[test]
-    fn validate_rejects_companion_text_its_declaration_does_not_draw() {
+    /// The issues for a portal whose companion text `original` is replaced by
+    /// `edited`, with the block, region and page hashes all rewritten to
+    /// match, so only the bound reconstruction of the pinned declaration can
+    /// notice the change.
+    fn companion_tamper_issues(original: &str, edited: &str) -> Vec<String> {
         let portal = illustrated_portal();
-        // The visible caption inside the companion changes; the block, region
-        // and page hashes are all rewritten to match, so only the bound
-        // reconstruction of the pinned declaration can notice.
-        let original = "Run it, then check it.";
-        let edited = "Run it, then skip the check.";
-        assert!(portal.rendered.contains(original));
+        assert!(portal.rendered.contains(original), "{original}");
         let tampered = portal.rendered.replace(original, edited);
         let region = &portal.evidence["pages"][0]["source_region"];
         let offset = usize::try_from(region["output_offset_bytes"].as_u64().unwrap()).unwrap();
@@ -2539,7 +2537,10 @@ mod tests {
         source_region["region_sha256"] = sha256_hex(whole).into();
         source_region["inserts"][0]["block_bytes"] = (block_len + growth).into();
         source_region["inserts"][0]["block_sha256"] = sha256_hex(block).into();
-        let issues = portal.issues(&tampered, &evidence);
+        portal.issues(&tampered, &evidence)
+    }
+
+    fn assert_companion_refused(issues: &[String]) {
         assert!(
             issues
                 .iter()
@@ -2551,6 +2552,33 @@ mod tests {
                 == "reference/guide does not render the figure its declaration figures/steps.json draws"),
             "{issues:?}"
         );
+    }
+
+    #[test]
+    fn validate_rejects_companion_text_its_declaration_does_not_draw() {
+        // The visible caption inside the companion changes.
+        assert_companion_refused(&companion_tamper_issues(
+            "Run it, then check it.",
+            "Run it, then skip the check.",
+        ));
+    }
+
+    #[test]
+    fn validate_rejects_a_tampered_figure_title_or_entity() {
+        // The visible title line (SPC-014 B5) and a review entity's label
+        // (B2) are part of the reconstruction, so neither can be edited.
+        assert_companion_refused(&companion_tamper_issues(
+            "<span class=\"cf-fig-name\">Run, then check</span>",
+            "<span class=\"cf-fig-name\">Run, then skip it</span>",
+        ));
+        assert_companion_refused(&companion_tamper_issues(
+            "data-cf-entity-label=\"run, then check\"",
+            "data-cf-entity-label=\"run, then skip it\"",
+        ));
+        assert_companion_refused(&companion_tamper_issues(
+            "data-cf-entity=\"m1\"",
+            "data-cf-entity=\"m12\"",
+        ));
     }
 
     #[test]
