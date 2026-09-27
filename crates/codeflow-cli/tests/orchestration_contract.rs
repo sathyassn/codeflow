@@ -470,17 +470,17 @@ fn independent_planning_cannot_degrade_to_plan_then_critique() {
         "always-loaded AGENTS contract must expose independent planning"
     );
     assert!(
-        normalize_whitespace(&capabilities).contains("fifteen health checks"),
+        normalize_whitespace(&capabilities).contains("sixteen health checks"),
         "CAP-008 must count the grok doctor check"
     );
     let readme = normalize_whitespace(&read("README.md"));
     let architecture = normalize_whitespace(&read("docs/architecture.md"));
     assert!(
-        readme.contains("Health checks (15): hooks, claude, codex, grok, config"),
+        readme.contains("Health checks (16): hooks, claude, codex, grok, config"),
         "README must list the grok doctor check"
     );
     assert!(
-        architecture.contains("15 checks — hooks, claude, codex, grok, config"),
+        architecture.contains("16 checks: hooks, claude, codex, grok, config"),
         "architecture must list the grok doctor check"
     );
     assert!(
