@@ -5,10 +5,10 @@
     "family": "coverage",
     "binding": "authored",
     "question": "Which plane catches which protected action?",
-    "idea": "Only the in-session guard sees every row, and only CI and the remote plane are authoritative.",
+    "idea": "Only the in-session guard sees every protected action: the remote plane sees only protected-branch actions, CI only commits, and command-level misuse is guard only.",
     "title": "Which plane catches which protected action",
     "kicker": "Plane coverage",
-    "caption": "Every protected action is caught by at least one plane, and the guard alone sees command-level misuse before git runs.",
+    "caption": "Every protected action is seen by at least one plane, and the guard alone sees command-level misuse before git runs.",
     "states": [
       {
         "name": "cov",

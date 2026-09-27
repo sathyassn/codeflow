@@ -5,10 +5,10 @@
     "family": "structure",
     "binding": "authored",
     "question": "Where do my notes go?",
-    "idea": "Your notes go from the isolated browser to a loopback service on your machine, which keeps them in an append-only ledger the agent reads from.",
+    "idea": "Your notes go from the isolated browser to CodeFlow's loopback service on your machine, which keeps them in an append-only ledger that the agent session reads.",
     "title": "Where your notes go",
     "kicker": "The parts of a review",
-    "caption": "Everything a review writes stays on your machine under your user, and nothing from it is committed to the repository.",
+    "caption": "The record stays with CodeFlow on your machine under your user, and nothing from a session is committed.",
     "states": [
       {
         "name": "agentpart",
@@ -18,7 +18,7 @@
       {
         "name": "service",
         "mark": "layer-remote",
-        "means": "Keeps the record"
+        "means": "CodeFlow's service, holds the record"
       },
       {
         "name": "browser",
@@ -61,17 +61,41 @@
           "text": "- Nothing from a session is committed."
         },
         "value": true
+      },
+      {
+        "claim": "the record stays with CodeFlow on your machine",
+        "source": "docs/present-guide.md#architecture",
+        "derive": "the lead sentence",
+        "check": {
+          "kind": "contains",
+          "text": "the record stays with CodeFlow on your"
+        },
+        "value": true
       }
     ],
     "wide": {
       "width": 720,
-      "height": 240,
+      "height": 248,
       "draw": [
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 16,
+          "y": 26,
+          "w": 688,
+          "h": 204
+        },
+        {
+          "text": "your machine, your user only",
+          "x": 32,
+          "y": 46,
+          "style": "head"
+        },
         {
           "state": "agentpart",
           "shape": "rect",
-          "x": 16,
-          "y": 70,
+          "x": 24,
+          "y": 98,
           "w": 150,
           "h": 60,
           "rx": 8,
@@ -79,8 +103,8 @@
         },
         {
           "text": "agent session",
-          "x": 30,
-          "y": 96,
+          "x": 38,
+          "y": 124,
           "style": "strong",
           "for": [
             "a"
@@ -88,34 +112,34 @@
         },
         {
           "text": "writes, then reads",
-          "x": 30,
-          "y": 118,
+          "x": 38,
+          "y": 146,
           "style": "mute",
           "for": [
             "a"
           ]
         },
         {
-          "deco": "rule",
-          "shape": "rect",
-          "x": 190,
-          "y": 26,
-          "w": 514,
-          "h": 196
+          "state": "talks",
+          "shape": "path",
+          "d": "M176 118H204",
+          "head": "end",
+          "id": "e1"
         },
         {
-          "text": "your machine, your user only",
-          "x": 206,
-          "y": 46,
-          "style": "head"
+          "state": "talks",
+          "shape": "path",
+          "d": "M204 138H176",
+          "head": "end",
+          "id": "e2"
         },
         {
           "state": "service",
           "shape": "rect",
           "x": 206,
           "y": 62,
-          "w": 220,
-          "h": 76,
+          "w": 190,
+          "h": 148,
           "rx": 8,
           "cap": "end",
           "id": "s"
@@ -123,7 +147,7 @@
         {
           "text": "loopback service",
           "x": 222,
-          "y": 83,
+          "y": 84,
           "style": "strong",
           "for": [
             "s"
@@ -132,7 +156,7 @@
         {
           "text": "127.0.0.1 only",
           "x": 222,
-          "y": 105,
+          "y": 106,
           "style": "mono",
           "for": [
             "s"
@@ -141,25 +165,75 @@
         {
           "text": "one per session",
           "x": 222,
-          "y": 126,
+          "y": 127,
           "style": "mute",
           "for": [
             "s"
           ]
         },
         {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 214,
+          "y1": 140,
+          "x2": 374,
+          "y2": 140
+        },
+        {
+          "text": "feedback ledger",
+          "x": 222,
+          "y": 164,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "append-only",
+          "x": 222,
+          "y": 186,
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M398 92H494",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "talks",
+          "shape": "path",
+          "d": "M494 112H398",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "text": "your notes",
+          "x": 446,
+          "y": 130,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e4"
+          ]
+        },
+        {
           "state": "browser",
           "shape": "rect",
-          "x": 482,
+          "x": 496,
           "y": 62,
-          "w": 206,
+          "w": 192,
           "h": 76,
           "rx": 8,
           "id": "b"
         },
         {
           "text": "isolated browser",
-          "x": 498,
+          "x": 512,
           "y": 85,
           "style": "strong",
           "for": [
@@ -168,7 +242,7 @@
         },
         {
           "text": "its own profile",
-          "x": 498,
+          "x": 512,
           "y": 107,
           "for": [
             "b"
@@ -176,7 +250,7 @@
         },
         {
           "text": "never your everyday one",
-          "x": 498,
+          "x": 512,
           "y": 128,
           "style": "mute",
           "for": [
@@ -184,74 +258,11 @@
           ]
         },
         {
-          "state": "service",
-          "shape": "rect",
-          "x": 206,
-          "y": 158,
-          "w": 220,
-          "h": 52,
-          "rx": 8,
-          "cap": "end",
-          "id": "l"
-        },
-        {
-          "text": "feedback ledger",
-          "x": 222,
-          "y": 181,
-          "style": "strong",
-          "for": [
-            "l"
-          ]
-        },
-        {
-          "text": "append-only",
-          "x": 222,
-          "y": 202,
-          "style": "mute",
-          "for": [
-            "l"
-          ]
-        },
-        {
-          "state": "talks",
-          "shape": "path",
-          "d": "M168 92H204",
-          "head": "end",
-          "id": "e1"
-        },
-        {
-          "state": "talks",
-          "shape": "path",
-          "d": "M204 112H168",
-          "head": "end",
-          "id": "e2"
-        },
-        {
-          "state": "talks",
-          "shape": "path",
-          "d": "M428 100H480",
-          "head": "end",
-          "id": "e3"
-        },
-        {
-          "state": "talks",
-          "shape": "path",
-          "d": "M480 120H428",
-          "head": "end",
-          "id": "e4"
-        },
-        {
-          "state": "talks",
-          "shape": "path",
-          "d": "M316 142V156",
-          "head": "end",
-          "id": "e5"
-        },
-        {
-          "text": "nothing is committed",
-          "x": 498,
-          "y": 190,
-          "style": "mute"
+          "text": "nothing here is committed",
+          "x": 688,
+          "y": 222,
+          "anchor": "end",
+          "style": "head"
         }
       ]
     },
@@ -260,22 +271,36 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 342,
+      "height": 368,
       "draw": [
         {
-          "state": "agentpart",
+          "deco": "rule",
           "shape": "rect",
           "x": 8,
           "y": 8,
           "w": 344,
+          "h": 352
+        },
+        {
+          "text": "your machine, your user only",
+          "x": 20,
+          "y": 24,
+          "style": "head"
+        },
+        {
+          "state": "agentpart",
+          "shape": "rect",
+          "x": 20,
+          "y": 40,
+          "w": 320,
           "h": 40,
           "rx": 8,
           "id": "a"
         },
         {
           "text": "agent session",
-          "x": 22,
-          "y": 33,
+          "x": 34,
+          "y": 65,
           "style": "strong",
           "for": [
             "a"
@@ -283,8 +308,8 @@
         },
         {
           "text": "writes, then reads",
-          "x": 160,
-          "y": 33,
+          "x": 172,
+          "y": 65,
           "style": "mute",
           "for": [
             "a"
@@ -293,38 +318,24 @@
         {
           "state": "talks",
           "shape": "path",
-          "d": "M60 50V86",
+          "d": "M60 82V106",
           "head": "end",
           "id": "e1"
         },
         {
           "state": "talks",
           "shape": "path",
-          "d": "M100 86V50",
+          "d": "M100 106V82",
           "head": "end",
           "id": "e2"
-        },
-        {
-          "deco": "rule",
-          "shape": "rect",
-          "x": 8,
-          "y": 88,
-          "w": 344,
-          "h": 246
-        },
-        {
-          "text": "your machine, your user only",
-          "x": 120,
-          "y": 106,
-          "style": "head"
         },
         {
           "state": "service",
           "shape": "rect",
           "x": 20,
-          "y": 122,
+          "y": 108,
           "w": 320,
-          "h": 72,
+          "h": 126,
           "rx": 8,
           "cap": "end",
           "id": "s"
@@ -332,7 +343,7 @@
         {
           "text": "loopback service",
           "x": 34,
-          "y": 138,
+          "y": 131,
           "style": "strong",
           "for": [
             "s"
@@ -341,7 +352,7 @@
         {
           "text": "127.0.0.1 only",
           "x": 34,
-          "y": 159,
+          "y": 152,
           "style": "mono",
           "for": [
             "s"
@@ -350,7 +361,33 @@
         {
           "text": "one per session",
           "x": 34,
-          "y": 180,
+          "y": 173,
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "line",
+          "x1": 28,
+          "y1": 184,
+          "x2": 320,
+          "y2": 184
+        },
+        {
+          "text": "feedback ledger",
+          "x": 34,
+          "y": 199,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "append-only",
+          "x": 34,
+          "y": 220,
           "style": "mute",
           "for": [
             "s"
@@ -359,94 +396,60 @@
         {
           "state": "talks",
           "shape": "path",
-          "d": "M60 196V218",
+          "d": "M60 236V274",
           "head": "end",
           "id": "e3"
         },
         {
           "state": "talks",
           "shape": "path",
-          "d": "M100 218V196",
+          "d": "M100 274V236",
           "head": "end",
           "id": "e4"
+        },
+        {
+          "text": "your notes",
+          "x": 112,
+          "y": 259,
+          "style": "mute",
+          "for": [
+            "e4"
+          ]
         },
         {
           "state": "browser",
           "shape": "rect",
           "x": 20,
-          "y": 220,
-          "w": 150,
-          "h": 74,
+          "y": 276,
+          "w": 320,
+          "h": 54,
           "rx": 8,
           "id": "b"
         },
         {
           "text": "isolated browser",
-          "x": 32,
-          "y": 243,
+          "x": 34,
+          "y": 299,
           "style": "strong",
           "for": [
             "b"
           ]
         },
         {
-          "text": "own profile, never",
-          "x": 32,
-          "y": 264,
-          "for": [
-            "b"
-          ]
-        },
-        {
-          "text": "your everyday one",
-          "x": 32,
-          "y": 285,
-          "style": "mute",
-          "for": [
-            "b"
-          ]
-        },
-        {
-          "state": "talks",
-          "shape": "path",
-          "d": "M280 196V218",
-          "head": "end",
-          "id": "e5"
-        },
-        {
-          "state": "service",
-          "shape": "rect",
-          "x": 190,
-          "y": 220,
-          "w": 150,
-          "h": 54,
-          "rx": 8,
-          "cap": "end",
-          "id": "l"
-        },
-        {
-          "text": "feedback ledger",
-          "x": 202,
-          "y": 243,
-          "style": "strong",
-          "for": [
-            "l"
-          ]
-        },
-        {
-          "text": "append-only",
-          "x": 202,
-          "y": 264,
-          "style": "mute",
-          "for": [
-            "l"
-          ]
-        },
-        {
-          "text": "nothing is committed",
-          "x": 20,
+          "text": "its own profile, never your everyday one",
+          "x": 34,
           "y": 320,
-          "style": "mute"
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "nothing here is committed",
+          "x": 340,
+          "y": 355,
+          "anchor": "end",
+          "style": "head"
         }
       ]
     },
