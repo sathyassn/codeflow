@@ -107,10 +107,12 @@ pub fn run(args: &GitHookArgs) -> i32 {
                 }
             };
             let refs = git_hook::parse_push_refs(&stdin);
-            (
-                "pre-push",
-                git_hook::pre_push(&root, &policy.git, &refs, token),
-            )
+            let mut result = git_hook::pre_push(&root, &policy.git, &refs, token);
+            if let Ok(report) = result.as_mut() {
+                let remote = args.args.first().map(String::as_str);
+                super::push_set::run(&root, &policy.git, &refs, remote, report);
+            }
+            ("pre-push", result)
         }
     };
 

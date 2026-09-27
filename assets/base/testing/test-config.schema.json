@@ -88,7 +88,7 @@
         "modes": {
           "type": "object",
           "minProperties": 1,
-          "description": "Mode-specific commands. The public modes are full (CLI default), essential (explicit lighter run), and quick (pre-push name). When quick is requested and no target defines it, CodeFlow aliases quick to essential only when essential is defined; an explicit quick command is honored. At least one mode must be defined.",
+          "description": "Mode-specific commands. The public modes are full (CLI default), essential (explicit lighter run), and quick (the push set). The pre-push hook runs exactly the targets that define quick, so keep it to fast format and lint checks and leave the test suite to full. A manual `codeflow test --mode quick` aliases quick to essential only when no target defines quick. At least one mode must be defined.",
           "properties": {
             "quick": {
               "$ref": "#/$defs/mode_command"

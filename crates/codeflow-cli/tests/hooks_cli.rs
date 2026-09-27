@@ -670,7 +670,15 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("git.push_to_protected"));
 
     // Feature branch with sanctioned prefix passes (test gate note allowed).
-    let stdin = format!("refs/heads/feat/x abc123 refs/heads/feat/x {ZERO}\n");
+    // The push set runs `codeflow ci` on the pushed range, so the local sha
+    // must be a real commit, as it always is under git.
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(dir.path())
+        .output()
+        .expect("git rev-parse");
+    let head = String::from_utf8_lossy(&head.stdout).trim().to_string();
+    let stdin = format!("refs/heads/feat/x {head} refs/heads/feat/x {ZERO}\n");
     let out = run_with_stdin(
         codeflow()
             .args([
@@ -682,7 +690,12 @@ fn pre_push_blocks_protected_and_honors_glob_extension() {
             .current_dir(dir.path()),
         &stdin,
     );
-    assert_eq!(out.status.code(), Some(0));
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
 }
 
 #[test]
@@ -2036,4 +2049,368 @@ fn task_home_inventory_limit_blocks_both_hook_and_ci() {
     let ci_error = String::from_utf8_lossy(&ci.stderr);
     assert!(ci_error.contains("work.tracking_state"), "{ci_error}");
     assert!(ci_error.contains("inventory exceeds 16384"), "{ci_error}");
+}
+
+// ---------------------------------------------------------------------------
+// pre-push push set bound to the pushed commits (TSK-132 review round 1)
+// ---------------------------------------------------------------------------
+
+const ZERO_SHA: &str = "0000000000000000000000000000000000000000";
+
+fn rev(dir: &Path, rev: &str) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", rev])
+        .current_dir(dir)
+        .output()
+        .expect("git rev-parse");
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+fn push_hook(dir: &Path, remote: &str, refs: &[(&str, &str)]) -> (Option<i32>, String) {
+    let stdin = refs
+        .iter()
+        .map(|(branch, sha)| format!("refs/heads/{branch} {sha} refs/heads/{branch} {ZERO_SHA}"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", remote, remote])
+            .current_dir(dir),
+        &stdin,
+    );
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+/// A repo on `main` whose quick target fails when `bad.txt` exists, with a
+/// sibling branch `feat/bad` that commits `bad.txt` and `feat/good` that
+/// does not.
+fn sibling_repo() -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.path().join(".codeflow/test-config.json"),
+        r#"{"schema_version": "1.0", "targets": [
+  {"name": "lint", "runner": "custom", "modes": {"quick": {"command": "test ! -f bad.txt"}}}]}"#,
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(dir.path(), &["commit", "-m", "chore: add a lint target"]);
+    git(dir.path(), &["checkout", "-b", "feat/bad"]);
+    std::fs::write(dir.path().join("bad.txt"), "bad\n").unwrap();
+    git(dir.path(), &["add", "bad.txt"]);
+    git(dir.path(), &["commit", "-m", "feat: add a bad file"]);
+    git(dir.path(), &["checkout", "main"]);
+    git(dir.path(), &["checkout", "-b", "feat/good"]);
+    std::fs::write(dir.path().join("good.txt"), "good\n").unwrap();
+    git(dir.path(), &["add", "good.txt"]);
+    git(dir.path(), &["commit", "-m", "feat: add a good file"]);
+    dir
+}
+
+#[cfg(unix)]
+#[test]
+fn push_set_tree_checks_never_pass_for_a_sibling_ref() {
+    let dir = sibling_repo();
+    let good = rev(dir.path(), "feat/good");
+    let bad = rev(dir.path(), "feat/bad");
+
+    // Multi-ref push from the clean `feat/good` checkout: the tree checks run
+    // for `feat/good` only, and say they did not run for `feat/bad`.
+    let (code, err) = push_hook(
+        dir.path(),
+        "upstream",
+        &[("feat/good", &good), ("feat/bad", &bad)],
+    );
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("quick targets passed on the working checkout (1 target(s)"),
+        "{err}"
+    );
+    assert!(
+        err.contains(
+            "tree checks (`codeflow validate --docs`, quick targets) did not run for 'feat/bad'"
+        ),
+        "{err}"
+    );
+    assert!(err.contains("is not the checked-out commit"), "{err}");
+    assert!(
+        !err.contains("quick targets) did not run for 'feat/good'"),
+        "{err}"
+    );
+
+    // The same bad commit checked out is blocked by its quick target.
+    git(dir.path(), &["checkout", "feat/bad"]);
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("push set failed for: lint"), "{err}");
+
+    // Uncommitted tracked changes cannot stand in for the pushed tree: a
+    // dirty checkout runs no tree checks and says so.
+    std::fs::write(dir.path().join("base.txt"), "edited\n").unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/bad", &bad)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("did not run for 'feat/bad': tracked files differ"),
+        "{err}"
+    );
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+/// Push one ref whose destination currently holds `remote_sha`.
+fn push_hook_onto(
+    dir: &Path,
+    remote: &str,
+    branch: &str,
+    sha: &str,
+    remote_sha: &str,
+) -> (Option<i32>, String) {
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-push", remote, remote])
+            .current_dir(dir),
+        &format!("refs/heads/{branch} {sha} refs/heads/{branch} {remote_sha}\n"),
+    );
+    (
+        out.status.code(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+fn commit_file(dir: &Path, file: &str, body: &str, message: &str) -> String {
+    std::fs::write(dir.join(file), body).unwrap();
+    git(dir, &["add", file]);
+    git(dir, &["commit", "-q", "-m", message]);
+    rev(dir, "HEAD")
+}
+
+#[test]
+fn push_set_by_path_reports_an_unresolved_range_without_borrowing_history() {
+    // T132-2 and R2-2: a first push to an empty bare repository named by its
+    // path, with an unrelated tracking ref and a local `main` at hand. Neither
+    // stands in for the destination's history: the range is unresolved.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    git(dir.path(), &["checkout", "-b", "feat/x"]);
+    let head = commit_file(dir.path(), "x.txt", "x\n", "Not conventional.");
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/seen", &head],
+    );
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "--bare", "-q"]);
+
+    let path = bare.path().to_str().unwrap();
+    let (code, err) = push_hook(dir.path(), path, &[("feat/x", &head)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("`codeflow ci` did not run for 'feat/x': range unresolved"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("codeflow ci --base"),
+        "no local base substituted: {err}"
+    );
+}
+
+/// A bare destination whose only branch is `stable`, holding `commits` made
+/// in a scratch clone, and a local repository with it configured as `dest`.
+fn stable_destination(legacy_subject: &str) -> (tempfile::TempDir, tempfile::TempDir) {
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "--bare", "-q", "-b", "stable"]);
+    let local = tempfile::tempdir().unwrap();
+    init_repo(local.path(), "main");
+    commit_file(local.path(), "legacy.txt", "legacy\n", legacy_subject);
+    let url = bare.path().to_str().unwrap();
+    git(
+        local.path(),
+        &["push", "-q", "--no-verify", url, "main:stable"],
+    );
+    git(local.path(), &["remote", "add", "dest", url]);
+    git(local.path(), &["fetch", "-q", "dest"]);
+    (bare, local)
+}
+
+#[test]
+fn push_set_uses_the_destination_base_not_local_main() {
+    // R2-2 control 1: the destination's default branch is `stable`; local
+    // `main` moves to the bad commit. The destination's own tracking ref is
+    // the base, so the bad commit is checked and blocked.
+    let (_bare, local) = stable_destination("chore: legacy base");
+    git(
+        local.path(),
+        &["checkout", "-q", "-b", "feat/x", "dest/stable"],
+    );
+    let bad = commit_file(local.path(), "x.txt", "x\n", "Not conventional.");
+    git(local.path(), &["branch", "-f", "main", &bad]);
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("push set check failed: `codeflow ci --base"),
+        "{err}"
+    );
+}
+
+#[test]
+fn push_set_ignores_a_stale_local_main() {
+    // R2-2 control 2: the destination already holds a legacy non-conventional
+    // commit; local `main` is behind it. Only the new conventional commit is
+    // in range, so the push passes and ci did run.
+    let (_bare, local) = stable_destination("Legacy subject.");
+    git(
+        local.path(),
+        &["checkout", "-q", "-b", "feat/y", "dest/stable"],
+    );
+    git(local.path(), &["branch", "-f", "main", "HEAD~1"]);
+    let good = commit_file(local.path(), "y.txt", "y\n", "feat: add y");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/y", &good)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("did not run"), "{err}");
+}
+
+#[test]
+fn push_set_checks_only_the_rebased_commits_of_a_rewrite() {
+    // A branch the destination holds is rebased onto a destination commit it
+    // did not have. The old destination sha is not in the new history, so
+    // the range comes from the destination's tracking refs: only the rebased
+    // commits are checked, never the upstream commits the rebase brought in.
+    let (bare, local) = stable_destination("Legacy subject.");
+    git(local.path(), &["checkout", "-q", "-b", "feat/r", "main~1"]);
+    let old = commit_file(local.path(), "r.txt", "r\n", "feat: add r");
+    let url = bare.path().to_str().unwrap();
+    git(local.path(), &["push", "-q", "--no-verify", url, "feat/r"]);
+    git(local.path(), &["fetch", "-q", "dest"]);
+    git(local.path(), &["rebase", "-q", "dest/stable"]);
+    let rebased = rev(local.path(), "HEAD");
+    let (code, err) = push_hook_onto(local.path(), "dest", "feat/r", &rebased, &old);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("did not run"), "ci ran on the rewrite: {err}");
+
+    // A bad commit in the rewrite is still blocked.
+    let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "feat/r", &bad, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("push set check failed: `codeflow ci"), "{err}");
+}
+
+#[test]
+fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
+    // T132-3: a resolved but unrelated base (an orphan pushed over a branch
+    // the destination holds) is a failed check with its diagnostic.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let main = rev(dir.path(), "main");
+    git(dir.path(), &["checkout", "-q", "--orphan", "feat/orphan"]);
+    let orphan = commit_file(dir.path(), "o.txt", "o\n", "chore: start an orphan");
+    let (code, err) = push_hook_onto(dir.path(), "origin", "feat/orphan", &orphan, &main);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("push set check failed: `codeflow ci"), "{err}");
+    assert!(!err.contains("range unresolved"), "{err}");
+
+    // No destination sha and no tracking history: a note, never a pass.
+    let lone = tempfile::tempdir().unwrap();
+    init_repo(lone.path(), "feat/lone");
+    let head = rev(lone.path(), "HEAD");
+    let (code, err) = push_hook(lone.path(), "origin", &[("feat/lone", &head)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("`codeflow ci` did not run for 'feat/lone': range unresolved"),
+        "{err}"
+    );
+}
+
+/// A repo on `feat/t` whose quick target is `command`, committed.
+fn quick_repo(command: &str) -> tempfile::TempDir {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/t");
+    std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+    std::fs::write(
+        dir.path().join(".codeflow/test-config.json"),
+        format!(
+            r#"{{"schema_version": "1.0", "targets": [
+  {{"name": "lint", "runner": "custom", "modes": {{"quick": {{"command": "{command}"}}}}}}]}}"#
+        ),
+    )
+    .unwrap();
+    git(dir.path(), &["add", "."]);
+    git(
+        dir.path(),
+        &["commit", "-q", "-m", "chore: add a lint target"],
+    );
+    dir
+}
+
+#[test]
+fn push_set_untracked_input_is_named_in_the_pass_line() {
+    // R2-1 control 1: an untracked file flips the quick target. The hook
+    // cannot tell, so its pass line says it checked the working checkout.
+    let dir = quick_repo("test -f lint-ignore || test ! -f bad.txt");
+    let head = commit_file(dir.path(), "bad.txt", "bad\n", "feat: add bad");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "complete control blocks: {err}");
+    std::fs::write(dir.path().join("lint-ignore"), "").unwrap();
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("quick targets passed on the working checkout")
+            && err.contains("untracked files there can influence them"),
+        "{err}"
+    );
+}
+
+#[test]
+fn push_set_does_not_run_tree_checks_on_a_sparse_checkout() {
+    // R2-1 control 2.
+    let dir = quick_repo("test ! -f omitted/bad.txt");
+    std::fs::create_dir_all(dir.path().join("omitted")).unwrap();
+    let head = commit_file(dir.path(), "omitted/bad.txt", "bad\n", "feat: add omitted");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "complete control blocks: {err}");
+    git(dir.path(), &["sparse-checkout", "init", "--cone"]);
+    git(dir.path(), &["sparse-checkout", "set", ".codeflow"]);
+    assert!(!dir.path().join("omitted/bad.txt").exists());
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("did not run for 'feat/t': the checkout is sparse"),
+        "{err}"
+    );
+    assert!(!err.contains("quick targets passed"), "{err}");
+}
+
+#[test]
+fn push_set_does_not_run_tree_checks_with_an_uninitialized_submodule() {
+    // R2-1 control 3.
+    let vendor = tempfile::tempdir().unwrap();
+    init_repo(vendor.path(), "main");
+    commit_file(vendor.path(), "bad.txt", "bad\n", "feat: add bad");
+    let dir = quick_repo("test ! -f vendor/bad.txt");
+    let url = vendor.path().to_str().unwrap();
+    git(
+        dir.path(),
+        &[
+            "-c",
+            "protocol.file.allow=always",
+            "submodule",
+            "add",
+            "-q",
+            url,
+            "vendor",
+        ],
+    );
+    git(dir.path(), &["commit", "-q", "-m", "chore: add vendor"]);
+    let head = rev(dir.path(), "HEAD");
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(1), "complete control blocks: {err}");
+    git(dir.path(), &["submodule", "deinit", "-q", "-f", "vendor"]);
+    let (code, err) = push_hook(dir.path(), "upstream", &[("feat/t", &head)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("did not run for 'feat/t': submodule vendor is not initialized"),
+        "{err}"
+    );
+    assert!(!err.contains("quick targets passed"), "{err}");
 }

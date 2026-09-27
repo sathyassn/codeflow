@@ -147,7 +147,7 @@ fn fixture_assets(v2: bool) -> (tempfile::TempDir, DirSource) {
     "commit_to_protected": "block",
     "commit_format": "block",
     "secret_scan": "block",
-    "test_gate_on_push": "warn",
+    "test_gate_on_push": "block",
     "new_gate": "warn"
   },
   "recall": { "share": false }
@@ -1360,6 +1360,52 @@ fn update_adds_new_policy_keys_without_mutating_user_values() {
         .unwrap()
         .notes;
     assert!(notes.iter().any(|n| n.contains("git.new_gate")));
+}
+
+#[test]
+fn update_keeps_test_gate_on_push_and_recommends_block() {
+    // T132-4: a value equal to the old default may still be the adopter's
+    // choice, so update keeps it and recommends the new default.
+    isolate_git();
+    for (value, recommends) in [
+        ("warn", true),
+        ("off", true),
+        ("allow", true),
+        ("block", false),
+    ] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        let mut policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        policy["git"]["test_gate_on_push"] = value.into();
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+
+        let (_a2, assets_v2) = fixture_assets(true);
+        let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(after["git"]["test_gate_on_push"], value, "value kept");
+        let notes = &report
+            .files
+            .iter()
+            .find(|f| f.dest == ".codeflow/policy.json")
+            .unwrap()
+            .notes;
+        let note = notes.iter().find(|n| n.contains("git.test_gate_on_push"));
+        assert_eq!(note.is_some(), recommends, "{value}: {notes:?}");
+        if let Some(note) = note {
+            assert!(
+                note.contains(&format!("kept git.test_gate_on_push = \"{value}\"")),
+                "{note}"
+            );
+            assert!(note.contains("set it to \"block\""), "{note}");
+        }
+    }
 }
 
 #[test]

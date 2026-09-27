@@ -390,6 +390,11 @@ fn init_full_tier_renders_the_real_asset_tree_end_to_end() {
         "working tree not clean after fresh init"
     );
 
+    // TSK-132: the shipped push set blocks by default.
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert_eq!(policy["git"]["test_gate_on_push"], "block");
+
     // Managed-region markers made it through rendering.
     let agents = read(&root, "AGENTS.md");
     assert!(

@@ -16,7 +16,9 @@ and decide; `codeflow` verifies the result deterministically.
    codeflow's shipped test-config templates (`codeflow test setup --list-templates`, then
    `--template <name>`), then tailor: real commands for
    `essential` and `full` modes, real coverage tooling or an empty `coverage`
-   list. Root auto-detection is intentionally non-recursive. For a monorepo,
+   list. Give a `quick` mode only to fast format and lint targets: the
+   pre-push hook runs exactly those and blocks on failure, so the push set
+   stays under a minute and the test suite stays in `full`. Root auto-detection is intentionally non-recursive. For a monorepo,
    add one explicit target and `cwd` per package (`--add-target` or the
    multi-target template). If the file exists, extend — do not clobber working
    targets; `--replace` is only for a reviewed, deliberate template reset.

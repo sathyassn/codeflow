@@ -518,14 +518,10 @@ fn sync_user_owned_json(
         Baseline::read(root, &entry.dest).and_then(|t| serde_json::from_str(&t).ok());
 
     let mut added: Vec<String> = vec![];
-    if old_default.is_some() {
-        add_new_keys(
-            &mut user,
-            old_default.as_ref(),
-            &new_default,
-            "",
-            &mut added,
-        );
+    let mut recommended: Vec<String> = vec![];
+    if let Some(old) = old_default.as_ref() {
+        add_new_keys(&mut user, Some(old), &new_default, "", &mut added);
+        recommended = recommend_defaults(&user, old, &new_default);
     }
 
     let migrated = migrate_policy_values(&entry.dest, &mut user);
@@ -536,6 +532,7 @@ fn sync_user_owned_json(
 
     if added.is_empty() && migrated.is_empty() {
         let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
+        notes.extend(recommended);
         if old_default.is_none() {
             notes.push(
                 "no shipped-default baseline existed; key sync starts from this version"
@@ -550,6 +547,7 @@ fn sync_user_owned_json(
     // keys were added and the user has not customized it past the default.
     let mut notes: Vec<String> = added.iter().map(|k| format!("added key {k}")).collect();
     notes.extend(migrated);
+    notes.extend(recommended);
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
             .and_then(serde_json::Value::as_u64),
@@ -569,6 +567,41 @@ fn sync_user_owned_json(
     push_diff(diffs, &entry.dest, &current_text, &next);
     report.file_with_notes(&entry.dest, Action::KeysAdded, notes);
     Ok(())
+}
+
+/// Changed shipped defaults that `codeflow update` recommends to an existing
+/// install: `(dotted key path, reason)`. The value is never changed: equality
+/// with the old default cannot show whether the adopter chose it.
+const RECOMMENDED_DEFAULTS: &[(&str, &str)] = &[(
+    "git.test_gate_on_push",
+    "the push set now finishes in seconds and blocks a failed push (TSK-132)",
+)];
+
+/// One note per [`RECOMMENDED_DEFAULTS`] key whose shipped default changed
+/// and whose current value differs from the new default.
+fn recommend_defaults(
+    user: &serde_json::Value,
+    old_default: &serde_json::Value,
+    new_default: &serde_json::Value,
+) -> Vec<String> {
+    let mut notes = Vec::new();
+    for (path, reason) in RECOMMENDED_DEFAULTS {
+        let pointer = format!("/{}", path.replace('.', "/"));
+        let (Some(old), Some(new), Some(current)) = (
+            old_default.pointer(&pointer),
+            new_default.pointer(&pointer),
+            user.pointer(&pointer),
+        ) else {
+            continue;
+        };
+        if old != new && current != new {
+            notes.push(format!(
+                "kept {path} = {current}; new installs default to {new}: {reason}. \
+                 To adopt it, set it to {new} in .codeflow/policy.json"
+            ));
+        }
+    }
+    notes
 }
 
 /// Recursively adds keys present in `new_default` but absent from both

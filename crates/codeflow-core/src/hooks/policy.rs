@@ -289,7 +289,7 @@ impl Default for GitPolicy {
             .map(ToString::to_string)
             .collect(),
             secret_scan: PolicyLevel::Block,
-            test_gate_on_push: PolicyLevel::Warn,
+            test_gate_on_push: PolicyLevel::Block,
             security_review: PolicyLevel::Warn,
             dep_audit: PolicyLevel::Warn,
         }
@@ -657,10 +657,10 @@ mod tests {
         assert_eq!(g.branch_naming, PolicyLevel::Block);
         assert_eq!(g.branch_prefixes.len(), 13);
         assert_eq!(g.secret_scan, PolicyLevel::Block);
-        assert_eq!(g.test_gate_on_push, PolicyLevel::Warn);
+        assert_eq!(g.test_gate_on_push, PolicyLevel::Block);
         // Security / red-team gates bootstrap at `warn` (ADR-0016); they
-        // harden to `block` in a later slice, matching the test_gate_on_push
-        // precedent above.
+        // harden to `block` in a later slice, as test_gate_on_push did once
+        // its push set became fast (TSK-132).
         assert_eq!(g.security_review, PolicyLevel::Warn);
         assert_eq!(g.dep_audit, PolicyLevel::Warn);
     }
