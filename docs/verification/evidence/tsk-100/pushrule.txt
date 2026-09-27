@@ -1,0 +1,12 @@
+
+## run at 2026-09-26T22:38:11Z against sathyassn/codeflow-registry-proof
+
+## probe: push ruleset with a file-path restriction on ids/
+$ gh api -X POST repos/sathyassn/codeflow-registry-proof/rulesets  # target push, file_path_restriction ids/**
+{"message":"Validation Failed","errors":["Source public repos cannot have push rules","Source only org-owned repos can have push rules"],"documentation_url":"https://docs.github.com/rest/repos/rules#create-a-repository-ruleset","status":"422"}gh: Validation Failed (HTTP 422)
+
+## probe: branch ruleset with a file-path restriction on codeflow/registry
+$ gh api -X POST repos/sathyassn/codeflow-registry-proof/rulesets  # target branch, file_path_restriction ids/**
+{"message":"Validation Failed","errors":["Invalid rule 'file_path_restriction': "],"documentation_url":"https://docs.github.com/rest/repos/rules#create-a-repository-ruleset","status":"422"}gh: Validation Failed (HTTP 422)
+
+## result: 0 failed assertions

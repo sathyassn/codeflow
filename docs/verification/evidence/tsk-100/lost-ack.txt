@@ -1,0 +1,82 @@
+
+## run at 2026-09-26T22:36:14Z against sathyassn/codeflow-registry-proof
+
+## A issues, and the acknowledgement is lost
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+$ ids $WORK/A check --registry refs/remotes/origin/codeflow/registry
+registry: refs/remotes/origin/codeflow/registry tip 073af20a4b50, 3 commits, 3 ids ever added
+mode: registry history only
+registry check: pass
+[exit 0]
+next TSK: registry history max 003, refs max 001
+$ git push https://github.com/sathyassn/codeflow-registry-proof.git 6c56f614982a:refs/heads/codeflow/registry  # output and exit status dropped
+A's outcome: unclear (no acknowledgement; A's remote-tracking ref not updated)
+A's view of the tip: 073af20a4b50
+
+## B issues on top, so A's commit is an ancestor, not the tip
+issue attempt 1 for uid 0610f923-2ef8-4d78-a4ed-47b672c75e78
+$ git -C $WORK/B fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+registry: refs/remotes/origin/codeflow/registry tip 6c56f614982a, 4 commits, 4 ids ever added
+mode: registry history only
+registry check: pass
+next TSK: registry history max 004, refs max 001
+$ git push --porcelain origin 7347b4621737:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	7347b46217372a31fd71c68c85958f9c49dde53a:refs/heads/codeflow/registry	6c56f61..7347b46
+Done
+[exit 0]
+classified: accepted
+reserved TSK-005 for uid 0610f923-2ef8-4d78-a4ed-47b672c75e78
+
+## A resolves the unclear result by fetch and read back (R-13)
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+read back: TSK-004 bound to ce30d758-36d0-4aa0-a3c2-fd5d88f59e1e on tip 7347b4621737
+reserved: the tip reaches 6c56f614982a, which binds TSK-004 to our uid
+PASS: A's TSK-004 reads back as reserved by uid
+PASS: A's commit is an ancestor of the fetched tip
+PASS: A's commit is not the tip
+
+## fault control: A's push never reaches the host, and B takes the number
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+next TSK: registry history max 005, refs max 001
+A prepared b9cc76b78d98 for TSK-006; the push is dropped before it is sent
+issue attempt 1 for uid 4dfdb2bd-2740-4ba0-bd6a-7ff5a8c4222c
+$ git -C $WORK/B fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+registry: refs/remotes/origin/codeflow/registry tip 7347b4621737, 5 commits, 5 ids ever added
+mode: registry history only
+registry check: pass
+next TSK: registry history max 005, refs max 001
+$ git push --porcelain origin 6d3b5c0769ca:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	6d3b5c0769ca0275700623ef96b50977bcd19b71:refs/heads/codeflow/registry	7347b46..6d3b5c0
+Done
+[exit 0]
+classified: accepted
+reserved TSK-006 for uid 4dfdb2bd-2740-4ba0-bd6a-7ff5a8c4222c
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+read back: TSK-006 bound to 4dfdb2bd-2740-4ba0-bd6a-7ff5a8c4222c on tip 6d3b5c0769ca
+not reserved for uid 3b7d73c1-550a-4124-8787-deedaa0710cd
+PASS: A does not treat TSK-006 as reserved: bound to another uid
+issue attempt 1 for uid 3b7d73c1-550a-4124-8787-deedaa0710cd
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+registry: refs/remotes/origin/codeflow/registry tip 6d3b5c0769ca, 6 commits, 6 ids ever added
+mode: registry history only
+registry check: pass
+next TSK: registry history max 006, refs max 001
+$ git push --porcelain origin 0b915de0e107:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	0b915de0e1075de7bf3e724e7bf48f36fdf79564:refs/heads/codeflow/registry	6d3b5c0..0b915de
+Done
+[exit 0]
+classified: accepted
+reserved TSK-007 for uid 3b7d73c1-550a-4124-8787-deedaa0710cd
+PASS: A then reserves a fresh number
+
+## result: 0 failed assertions

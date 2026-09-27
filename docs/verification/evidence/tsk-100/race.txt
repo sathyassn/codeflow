@@ -1,0 +1,88 @@
+
+## run at 2026-09-26T22:40:46Z against sathyassn/codeflow-registry-proof
+
+## trial 1
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+$ git -C $WORK/B fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+next TSK: registry history max 011, refs max 001
+both push TSK-012 onto 4e8188fecbcb concurrently
+--- A
+$ git push --porcelain origin e344a4e76ab7:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	e344a4e76ab7a823029aa4e48fb367b94faa1930:refs/heads/codeflow/registry	4e8188f..e344a4e
+Done
+[exit 0]
+classified: accepted
+--- B
+$ git push --porcelain origin 174b08517e4f:refs/heads/codeflow/registry
+error: failed to push some refs to 'https://github.com/sathyassn/codeflow-registry-proof.git'
+To https://github.com/sathyassn/codeflow-registry-proof.git
+!	174b08517e4fdefdf381f6234725b482d60a1410:refs/heads/codeflow/registry	[remote rejected] (cannot lock ref 'refs/heads/codeflow/registry': is at e344a4e76ab7a823029aa4e48fb367b94faa1930 but expected 4e8188fecbcb497d7d0ce8deaa047217485fa610)
+Done
+[exit 1]
+classified: moved
+PASS: trial 1: exactly one push of TSK-012 is accepted
+PASS: trial 1: the other is classified as a moved tip, to retry
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+TSK-012 is bound to 904b9fd2-6347-4970-a2e4-f23ff5f60d3b (A 904b9fd2-6347-4970-a2e4-f23ff5f60d3b, B e19af927-6d68-44d5-b783-19765b49f1b6)
+
+## trial 2
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+$ git -C $WORK/B fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+next TSK: registry history max 012, refs max 001
+both push TSK-013 onto e344a4e76ab7 concurrently
+--- A
+$ git push --porcelain origin 5c98387a81f7:refs/heads/codeflow/registry
+error: failed to push some refs to 'https://github.com/sathyassn/codeflow-registry-proof.git'
+To https://github.com/sathyassn/codeflow-registry-proof.git
+!	5c98387a81f7735497805279ac42cdf7ff53c56a:refs/heads/codeflow/registry	[remote rejected] (cannot lock ref 'refs/heads/codeflow/registry': is at 8334d16761c2065040e8e1f208a4fdbb34fcf03c but expected e344a4e76ab7a823029aa4e48fb367b94faa1930)
+Done
+[exit 1]
+classified: moved
+--- B
+$ git push --porcelain origin 8334d16761c2:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	8334d16761c2065040e8e1f208a4fdbb34fcf03c:refs/heads/codeflow/registry	e344a4e..8334d16
+Done
+[exit 0]
+classified: accepted
+PASS: trial 2: exactly one push of TSK-013 is accepted
+PASS: trial 2: the other is classified as a moved tip, to retry
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+TSK-013 is bound to be577d97-fc1d-4457-96c2-be8937341af8 (A da352b9f-6437-49df-b87b-bb12aa5eab19, B be577d97-fc1d-4457-96c2-be8937341af8)
+
+## trial 3
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+$ git -C $WORK/B fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+next TSK: registry history max 013, refs max 001
+both push TSK-014 onto 8334d16761c2 concurrently
+--- A
+$ git push --porcelain origin ef8ad2af8a06:refs/heads/codeflow/registry
+error: failed to push some refs to 'https://github.com/sathyassn/codeflow-registry-proof.git'
+To https://github.com/sathyassn/codeflow-registry-proof.git
+!	ef8ad2af8a068816958b312655592a74a1dcddec:refs/heads/codeflow/registry	[remote rejected] (cannot lock ref 'refs/heads/codeflow/registry': is at b42d92530235e32b308f6fe5a7ff0e72df953c0f but expected 8334d16761c2065040e8e1f208a4fdbb34fcf03c)
+Done
+[exit 1]
+classified: moved
+--- B
+$ git push --porcelain origin b42d92530235:refs/heads/codeflow/registry
+To https://github.com/sathyassn/codeflow-registry-proof.git
+ 	b42d92530235e32b308f6fe5a7ff0e72df953c0f:refs/heads/codeflow/registry	8334d16..b42d925
+Done
+[exit 0]
+classified: accepted
+PASS: trial 3: exactly one push of TSK-014 is accepted
+PASS: trial 3: the other is classified as a moved tip, to retry
+$ git -C $WORK/A fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+[exit 0]
+TSK-014 is bound to 2fa13395-d437-4230-81bf-13360c2dd558 (A c1987340-007f-42f7-8817-9b9f056c79c9, B 2fa13395-d437-4230-81bf-13360c2dd558)
+
+## result: 0 failed assertions
