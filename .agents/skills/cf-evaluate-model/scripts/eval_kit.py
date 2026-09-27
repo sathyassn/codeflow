@@ -277,6 +277,508 @@ def resolve_pack(
     return resolved
 
 
+# Scripted multi-turn cases. The fixture's `script` supplies warm-up turns,
+# the case prompt is the probe, and only the probe turn is graded. The fresh
+# arm sends the probe as turn 1; the after-compaction arm sends the warm-up
+# under a fixture-local auto-compaction window, then the probe.
+SCRIPTED_KIND = "scripted-multi-turn"
+FRESH_ARM = "fresh"
+COMPACTION_ARM = "after-compaction"
+SCRIPTED_ARMS = (FRESH_ARM, COMPACTION_ARM)
+SCRIPTED_GATES = frozenset({"hard", "paired-negative"})
+# The only settings a fixture may set for compaction, with their documented
+# bounds; Claude Code reads this variable, so the arm is Claude-host only.
+COMPACTION_ENV_BOUNDS = {"CLAUDE_CODE_AUTO_COMPACT_WINDOW": (100_000, 1_000_000)}
+COMPACTION_HOSTS = ["claude"]
+COMPACTION_SETTINGS_FILE = ".claude/settings.local.json"
+DETECTOR_KEYS = frozenset({"skill", "command", "text"})
+GUIDANCE_HOOK = "hook session-orient"
+
+
+def scripted_case_errors(
+    cases: dict[str, dict], fixtures: dict[str, dict]
+) -> list[str]:
+    """Validate scripted multi-turn cases, their arms, and their fixtures."""
+
+    errors: list[str] = []
+    arms_by_probe: dict[str, dict[str, dict]] = defaultdict(dict)
+    scripted_fixtures: set[str] = set()
+    for case_id, case in cases.items():
+        session = case.get("session")
+        if session is None:
+            continue
+        if not isinstance(session, dict):
+            errors.append(f"{case_id}: session must be an object")
+            continue
+        unknown = set(session) - {
+            "kind", "arm", "probe", "gate", "pairs_with", "detectors"
+        }
+        if unknown:
+            errors.append(f"{case_id}: unknown session fields: {sorted(unknown)}")
+        if session.get("kind") != SCRIPTED_KIND:
+            errors.append(f"{case_id}: session.kind must be {SCRIPTED_KIND!r}")
+        arm = session.get("arm")
+        if arm not in SCRIPTED_ARMS:
+            errors.append(f"{case_id}: session.arm must be one of {SCRIPTED_ARMS}")
+        probe = session.get("probe")
+        if not isinstance(probe, str) or not SAFE_ID.fullmatch(probe):
+            errors.append(f"{case_id}: session.probe must be a safe id")
+            continue
+        gate = session.get("gate")
+        if gate not in SCRIPTED_GATES:
+            errors.append(f"{case_id}: session.gate must be hard or paired-negative")
+        if (gate == "paired-negative") != ("pairs_with" in session):
+            errors.append(
+                f"{case_id}: a paired negative, and only one, names pairs_with"
+            )
+        errors.extend(detector_errors(case_id, session.get("detectors", {})))
+        if arm in SCRIPTED_ARMS:
+            if arm in arms_by_probe[probe]:
+                errors.append(f"{case_id}: probe {probe!r} repeats the {arm} arm")
+            arms_by_probe[probe][arm] = case
+        if case.get("hosts") != COMPACTION_HOSTS:
+            errors.append(
+                f"{case_id}: scripted cases run on hosts {COMPACTION_HOSTS}, "
+                "where the fixture can set the compaction window"
+            )
+        fixture = fixtures.get(case.get("fixture"))
+        if fixture is None:
+            continue
+        scripted_fixtures.add(fixture["id"])
+        errors.extend(
+            f"{case_id}: {error}" for error in fixture_script_errors(fixture)
+        )
+        script = fixture.get("script")
+        if isinstance(script, dict) and isinstance(case.get("prompt"), str):
+            probe_text = normalized(case["prompt"])
+            if any(
+                isinstance(turn, str) and normalized(turn) == probe_text
+                for turn in script.get("warmup", [])
+            ):
+                errors.append(f"{case_id}: the probe repeats a warm-up turn")
+    for fixture_id, fixture in fixtures.items():
+        if "script" in fixture and fixture_id not in scripted_fixtures:
+            errors.append(f"{fixture_id}: a scripted fixture serves no scripted case")
+
+    # Both arms of one probe differ only in the arm: same fixture, prompt,
+    # expectations, requirements, gate, pairing and detectors.
+    for probe, arms in sorted(arms_by_probe.items()):
+        missing = [arm for arm in SCRIPTED_ARMS if arm not in arms]
+        if missing:
+            errors.append(f"probe {probe!r} lacks arms: {', '.join(missing)}")
+            continue
+        fresh, compacted = arms[FRESH_ARM], arms[COMPACTION_ARM]
+        for field in ("fixture", "prompt", "expected", "requirements", "kind", "category"):
+            if fresh.get(field) != compacted.get(field):
+                errors.append(f"probe {probe!r}: arms differ in {field}")
+        fresh_session = {k: v for k, v in fresh["session"].items() if k != "arm"}
+        compacted_session = {
+            k: v for k, v in compacted["session"].items() if k != "arm"
+        }
+        if fresh_session != compacted_session:
+            errors.append(f"probe {probe!r}: arms differ in session")
+    for probe, arms in sorted(arms_by_probe.items()):
+        session = next(iter(arms.values()))["session"]
+        if session.get("gate") != "paired-negative":
+            continue
+        pairs_with = session.get("pairs_with")
+        paired = arms_by_probe.get(pairs_with) if isinstance(pairs_with, str) else None
+        if not paired or any(
+            case["session"].get("gate") != "hard" for case in paired.values()
+        ):
+            errors.append(f"probe {probe!r}: pairs_with must name a hard probe")
+        elif any(
+            case.get("fixture") != next(iter(paired.values())).get("fixture")
+            for case in arms.values()
+        ):
+            errors.append(f"probe {probe!r}: a paired negative shares its fixture")
+    return errors
+
+
+def detector_errors(case_id: str, detectors: Any) -> list[str]:
+    if not isinstance(detectors, dict):
+        return [f"{case_id}: session.detectors must be an object"]
+    errors: list[str] = []
+    for signal, spec in detectors.items():
+        label = f"{case_id}: detector {signal!r}"
+        if not SAFE_ID.fullmatch(signal) or not isinstance(spec, dict):
+            errors.append(f"{label} must be a safe name with an object spec")
+            continue
+        if not spec or set(spec) - DETECTOR_KEYS:
+            errors.append(f"{label} uses keys from {sorted(DETECTOR_KEYS)} only")
+            continue
+        for key, value in spec.items():
+            if not isinstance(value, str) or not value:
+                errors.append(f"{label}.{key} must be a nonempty string")
+            elif key == "skill" and not SAFE_ID.fullmatch(value):
+                errors.append(f"{label}.skill must be a skill name")
+            elif key != "skill":
+                try:
+                    re.compile(value)
+                except re.error as error:
+                    errors.append(f"{label}.{key} is not a valid pattern: {error}")
+    return errors
+
+
+def fixture_script_errors(fixture: dict) -> list[str]:
+    script = fixture.get("script")
+    if not isinstance(script, dict) or set(script) != {"warmup", "compaction"}:
+        return ["a scripted case's fixture needs script.warmup and script.compaction"]
+    errors: list[str] = []
+    try:
+        string_list(script["warmup"], "script.warmup")
+    except EvalError as error:
+        errors.append(str(error))
+    compaction = script["compaction"]
+    if not isinstance(compaction, dict) or set(compaction) != {"trigger", "env"}:
+        errors.append("script.compaction needs trigger and env")
+        return errors
+    if compaction["trigger"] != "auto":
+        errors.append("script.compaction.trigger must be auto")
+    env = compaction["env"]
+    if not isinstance(env, dict) or set(env) != set(COMPACTION_ENV_BOUNDS):
+        errors.append(
+            "script.compaction.env must set exactly "
+            + ", ".join(sorted(COMPACTION_ENV_BOUNDS))
+        )
+        return errors
+    for name, (low, high) in COMPACTION_ENV_BOUNDS.items():
+        value = env[name]
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9]+", value):
+            errors.append(f"script.compaction.env.{name} must be a plain integer string")
+        elif not low <= int(value) <= high:
+            errors.append(f"script.compaction.env.{name} must be {low} to {high}")
+    files = fixture.get("files")
+    if isinstance(files, dict) and COMPACTION_SETTINGS_FILE in files:
+        errors.append(f"the materializer owns {COMPACTION_SETTINGS_FILE}")
+    return errors
+
+
+def guidance_wiring(root: Path) -> dict[str, bool]:
+    """Report whether a scaffold carries the rule map and re-injection hooks."""
+
+    agents = root / "AGENTS.md"
+    text = agents.read_text(encoding="utf-8") if agents.is_file() else ""
+    settings_path = root / ".claude/settings.json"
+    try:
+        settings = load_json(settings_path) if settings_path.is_file() else {}
+    except EvalError:
+        settings = {}
+    hooks = settings.get("hooks") if isinstance(settings, dict) else None
+    hooks = hooks if isinstance(hooks, dict) else {}
+
+    def matchers(event: str) -> list[str]:
+        found = []
+        for group in hooks.get(event) or []:
+            if not isinstance(group, dict):
+                continue
+            commands = [
+                hook.get("command", "")
+                for hook in group.get("hooks") or []
+                if isinstance(hook, dict)
+            ]
+            if any(
+                isinstance(command, str) and GUIDANCE_HOOK in command
+                for command in commands
+            ):
+                found.append(str(group.get("matcher", "")))
+        return found
+
+    return {
+        "rule_map": "## Always rules" in text and "## When you are about to" in text,
+        "compact_reinjection": any(
+            "compact" in matcher.split("|") for matcher in matchers("SessionStart")
+        ),
+        "prompt_reminder": bool(matchers("UserPromptSubmit")),
+    }
+
+
+def session_plan(case: dict, fixture: dict) -> dict:
+    """The evaluator-only turn plan for one scripted trial."""
+
+    session = case["session"]
+    compacted = session["arm"] == COMPACTION_ARM
+    script = fixture["script"]
+    return {
+        "kind": SCRIPTED_KIND,
+        "arm": session["arm"],
+        "probe": session["probe"],
+        "gate": session["gate"],
+        "warmup": list(script["warmup"]) if compacted else [],
+        "probe_prompt": case["prompt"],
+        "compaction": copy.deepcopy(script["compaction"]) if compacted else None,
+    }
+
+
+def transcript_entries(path: Path) -> list[dict]:
+    """Read a Claude Code session transcript (JSON Lines)."""
+
+    try:
+        lines = path.read_text(encoding="utf-8").splitlines()
+    except OSError as error:
+        raise EvalError(f"cannot read transcript {path}: {error}") from error
+    entries = []
+    for number, line in enumerate(lines, 1):
+        if not line.strip():
+            continue
+        try:
+            entry = json.loads(line)
+        except json.JSONDecodeError as error:
+            raise EvalError(f"transcript line {number} is not JSON: {error}") from error
+        if isinstance(entry, dict):
+            entries.append(entry)
+    return entries
+
+
+def message_text(content: Any) -> str | None:
+    """Text a person typed, or None for tool results and non-text content."""
+
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return None
+    if any(isinstance(block, dict) and block.get("type") == "tool_result" for block in content):
+        return None
+    texts = [
+        block.get("text", "")
+        for block in content
+        if isinstance(block, dict) and block.get("type") == "text"
+    ]
+    return "\n".join(texts) if texts else None
+
+
+def human_turns(entries: list[dict]) -> list[tuple[int, str]]:
+    turns = []
+    for index, entry in enumerate(entries):
+        if entry.get("type") != "user" or entry.get("isSidechain"):
+            continue
+        if entry.get("isMeta") or entry.get("isCompactSummary"):
+            continue
+        message = entry.get("message")
+        text = message_text(message.get("content") if isinstance(message, dict) else None)
+        if text is not None:
+            turns.append((index, text))
+    return turns
+
+
+def tool_arguments(tool: dict) -> dict:
+    arguments = tool.get("input")
+    return arguments if isinstance(arguments, dict) else {}
+
+
+def uses_skill(tool: dict, skill: str) -> bool:
+    """A Skill invocation of `skill`, or any tool event that opens its files."""
+
+    arguments = tool_arguments(tool)
+    named = str(arguments.get("skill", "")).lstrip("/").split(":")[-1]
+    if tool.get("name") == "Skill" and named == skill:
+        return True
+    return f"skills/{skill}/" in json.dumps(arguments, ensure_ascii=False)
+
+
+def detector_fires(spec: dict, excerpt: dict) -> bool:
+    tools = excerpt["tool_uses"]
+    if "skill" in spec and any(uses_skill(tool, spec["skill"]) for tool in tools):
+        return True
+    if "command" in spec and any(
+        tool.get("name") == "Bash"
+        and re.search(spec["command"], str(tool_arguments(tool).get("command", "")))
+        for tool in tools
+    ):
+        return True
+    return "text" in spec and re.search(spec["text"], excerpt["text"]) is not None
+
+
+def run_detectors(detectors: dict, excerpt: dict) -> list[str]:
+    return [
+        signal
+        for signal, spec in sorted(detectors.items())
+        if detector_fires(spec, excerpt)
+    ]
+
+
+def check_session(record: dict, transcript: Path) -> dict:
+    """Check one scripted trial's native transcript against its turn plan.
+
+    Deterministic first: the session must be one session whose typed turns are
+    exactly the plan, compaction must match the arm, and the re-injection hook
+    must run after compaction. Only the probe turn is extracted for grading.
+    """
+
+    plan = record.get("session")
+    if not isinstance(plan, dict) or plan.get("kind") != SCRIPTED_KIND:
+        raise EvalError("trial record has no scripted session plan")
+    _, cases_doc, _ = suite_documents()
+    case = unique_objects(cases_doc["cases"], "cases").get(record.get("case_id"))
+    if case is None or "session" not in case:
+        raise EvalError(f"unknown scripted case {record.get('case_id')!r}")
+    problems: list[tuple[str, str]] = []
+    try:
+        entries = [entry for entry in transcript_entries(transcript) if not entry.get("isSidechain")]
+    except EvalError as error:
+        entries = []
+        problems.append(("missing_trace", str(error)))
+    if not entries and not problems:
+        problems.append(("missing_trace", "the transcript is empty"))
+    sessions = {entry["sessionId"] for entry in entries if isinstance(entry.get("sessionId"), str)}
+    if len(sessions) > 1:
+        problems.append(("reused_session", f"{len(sessions)} sessions in one trial"))
+    expected = [*plan["warmup"], plan["probe_prompt"]]
+    turns = human_turns(entries)
+    typed = [normalized(text) for _, text in turns]
+    if entries and typed != [normalized(turn) for turn in expected]:
+        problems.append(
+            (
+                "retry_contamination",
+                f"typed turns do not match the script ({len(typed)} typed, "
+                f"{len(expected)} scripted)",
+            )
+        )
+    probe_index = turns[-1][0] if turns else len(entries)
+    first_index = turns[0][0] if turns else 0
+    boundaries = [
+        (index, entry.get("compactMetadata") or {})
+        for index, entry in enumerate(entries)
+        if entry.get("type") == "system" and entry.get("subtype") == "compact_boundary"
+    ]
+    before_probe = [item for item in boundaries if item[0] < probe_index]
+    compaction: dict[str, Any] = {"observed": bool(before_probe)}
+    if plan["arm"] == FRESH_ARM and boundaries:
+        problems.append(("broken_fixture", "the fresh arm compacted"))
+    if plan["arm"] == COMPACTION_ARM and entries:
+        auto = [
+            item for item in before_probe
+            if item[0] > first_index and item[1].get("trigger") == "auto"
+        ]
+        if not auto or len(auto) != len(before_probe):
+            problems.append(
+                ("broken_fixture", "no automatic compaction inside the warm-up before the probe")
+            )
+        else:
+            compaction.update(
+                trigger="auto",
+                boundaries=len(auto),
+                pre_tokens=auto[-1][1].get("preTokens"),
+            )
+            hooks = [
+                entry.get("attachment") or {}
+                for entry in entries[auto[0][0]:probe_index]
+                if entry.get("type") == "attachment"
+            ]
+            if not any(
+                hook.get("type") == "hook_success"
+                and hook.get("hookName") == "SessionStart:compact"
+                and GUIDANCE_HOOK in str(hook.get("command", ""))
+                for hook in hooks
+            ):
+                problems.append(
+                    (
+                        "harness_context_mismatch",
+                        "the re-injection hook did not run after compaction",
+                    )
+                )
+    after = entries[probe_index + 1:] if turns else []
+    texts: list[str] = []
+    tool_uses: list[dict] = []
+    for entry in after:
+        message = entry.get("message") if entry.get("type") == "assistant" else None
+        for block in (message or {}).get("content") or []:
+            if not isinstance(block, dict):
+                continue
+            if block.get("type") == "text":
+                texts.append(block.get("text", ""))
+            elif block.get("type") == "tool_use":
+                tool_uses.append({"name": block.get("name"), "input": block.get("input")})
+    excerpt = {
+        "case_id": record.get("case_id"),
+        "arm": plan["arm"],
+        "probe_prompt": plan["probe_prompt"],
+        "text": "\n\n".join(texts),
+        "tool_uses": tool_uses,
+        "prompt_hooks": sorted(
+            {
+                str((entry.get("attachment") or {}).get("hookName"))
+                for entry in after
+                if entry.get("type") == "attachment"
+                and (entry.get("attachment") or {}).get("type") == "hook_success"
+            }
+        ),
+    }
+    return {
+        "valid": not problems,
+        "problems": [message for _, message in problems],
+        "validity_flags": sorted({flag for flag, _ in problems}),
+        "session_ids": sorted(sessions),
+        "arm": plan["arm"],
+        "compaction": compaction,
+        "detected_signals": run_detectors(case["session"].get("detectors", {}), excerpt),
+        "probe_excerpt": excerpt,
+        "probe_excerpt_digest": canonical_digest(excerpt),
+    }
+
+
+def retention_report(document: Any, pack_id: str) -> tuple[str, bool]:
+    """Apply the retention bar to scored scripted trials of one pack.
+
+    Hard probes pass every trial, at least three, in both arms; adherence
+    after compaction is no lower than fresh; paired negatives pass every
+    trial, at least one, in both arms. Statuses are recomputed, never read.
+    """
+
+    if not isinstance(document, dict) or not isinstance(document.get("trials"), list):
+        raise EvalError("retention report needs an object with a trials array")
+    _, cases_doc, _ = suite_documents()
+    cases = unique_objects(cases_doc["cases"], "cases")
+    pack_cases = resolve_pack(pack_id)
+    for case_id in pack_cases:
+        if "session" not in cases[case_id]:
+            raise EvalError(f"{pack_id}: {case_id} is not a scripted case")
+    tally: dict[tuple[str, str], list[str]] = defaultdict(list)
+    failures: list[str] = []
+    seen: set[tuple[str, Any]] = set()
+    for index, trial in enumerate(document["trials"]):
+        case_id = trial.get("case_id") if isinstance(trial, dict) else None
+        if case_id not in pack_cases:
+            raise EvalError(f"trials[{index}] is not a case of {pack_id}: {case_id!r}")
+        if (case_id, trial.get("trial")) in seen:
+            raise EvalError(f"trials[{index}] repeats {case_id} trial {trial.get('trial')!r}")
+        seen.add((case_id, trial.get("trial")))
+        case = cases[case_id]
+        status = computed_trial_status(trial, case)
+        tally[(case["session"]["probe"], case["session"]["arm"])].append(status)
+        if status != "pass" and case["session"]["gate"] == "hard":
+            failures.append(f"{case_id} trial {trial.get('trial')}: {status}")
+    probes = {
+        cases[case_id]["session"]["probe"]: cases[case_id]["session"]["gate"]
+        for case_id in pack_cases
+    }
+    lines = [f"Retention report for {pack_id}", ""]
+    met = True
+    for probe, gate in sorted(probes.items()):
+        minimum = 3 if gate == "hard" else 1
+        rates = {}
+        for arm in SCRIPTED_ARMS:
+            statuses = tally[(probe, arm)]
+            passed = statuses.count("pass")
+            rates[arm] = passed / len(statuses) if statuses else 0.0
+            ok = len(statuses) >= minimum and passed == len(statuses)
+            met &= ok
+            lines.append(
+                f"- {probe} ({gate}), {arm}: {passed} of {len(statuses)} passed"
+                + ("" if ok else f"; needs every trial to pass, at least {minimum}")
+            )
+        if gate == "hard" and rates[COMPACTION_ARM] < rates[FRESH_ARM]:
+            met = False
+            lines.append(f"- {probe}: adherence after compaction is lower than fresh")
+    lines.append("")
+    if failures:
+        lines.append("Hard failures for human review:")
+        lines.extend(f"- {failure}" for failure in failures)
+        lines.append("")
+    lines.append("Retention bar: " + ("met" if met else "not met"))
+    return "\n".join(lines) + "\n", met
+
+
 def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
     errors: list[str] = []
     try:
@@ -618,6 +1120,8 @@ def validate_suite(root: Path, resource_dir: Path = RESOURCE_DIR) -> list[str]:
                     f"{relative}"
                 )
 
+    errors.extend(scripted_case_errors(cases, fixtures))
+
     hard = {
         requirement_id
         for requirement_id, requirement in requirements.items()
@@ -942,6 +1446,15 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     if executable_digest(codeflow_path) != codeflow_sha256:
         raise EvalError("CodeFlow executable changed during materialization")
     remove_grader_material(output)
+    plan = session_plan(case, fixture) if "session" in case else None
+    if plan is not None:
+        wiring = guidance_wiring(output)
+        missing = sorted(name for name, present in wiring.items() if not present)
+        if missing:
+            raise EvalError(
+                "a scripted case needs the candidate's rule map and re-injection "
+                "hooks; the fresh scaffold lacks: " + ", ".join(missing)
+            )
     state = fixture["state"]
     branch = state.get("branch", "fixture/base")
     target_precedes_fixture = state.get("target_precedes_fixture") is True
@@ -949,7 +1462,18 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
         configure_target_before_fixture(output, state["target"], branch)
     for relative, content in fixture["files"].items():
         write_fixture_file(output, relative, content)
-    write_fixture_file(output, "TASK.md", case["prompt"].rstrip() + "\n")
+    if plan is None:
+        write_fixture_file(output, "TASK.md", case["prompt"].rstrip() + "\n")
+    elif plan["compaction"] is not None:
+        # The window applies only to sessions launched in this disposable
+        # fixture; the turns themselves stay outside the subject tree.
+        if (output / COMPACTION_SETTINGS_FILE).exists():
+            raise EvalError(f"the scaffold already has {COMPACTION_SETTINGS_FILE}")
+        write_fixture_file(
+            output,
+            COMPACTION_SETTINGS_FILE,
+            json.dumps({"env": plan["compaction"]["env"]}, indent=2) + "\n",
+        )
     assert_no_grader_material(output)
     post_history_files: dict[str, str] = {}
     for relative in state.get("untracked_files", []):
@@ -986,6 +1510,9 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
             "sha256": codeflow_sha256,
         },
     }
+    if plan is not None:
+        trial_record["session"] = plan
+        trial_record["guidance_wiring"] = wiring
     record_path.parent.mkdir(parents=True, exist_ok=True)
     write_json(record_path, trial_record)
     return trial_record
@@ -1890,6 +2417,15 @@ def parser() -> argparse.ArgumentParser:
     materialize_cmd.add_argument("--trial", required=True, type=int)
     materialize_cmd.add_argument("--codeflow", required=True, type=Path)
 
+    check_session_cmd = sub.add_parser("check-session")
+    check_session_cmd.add_argument("--record", required=True, type=Path)
+    check_session_cmd.add_argument("--transcript", required=True, type=Path)
+    check_session_cmd.add_argument("--output", type=Path)
+
+    retention_cmd = sub.add_parser("retention-report")
+    retention_cmd.add_argument("trials", type=Path)
+    retention_cmd.add_argument("--pack", default="guidance-retention")
+
     validate_result_cmd = sub.add_parser("validate-result")
     validate_result_cmd.add_argument("result", type=Path)
     validate_result_cmd.add_argument("--require-approval", action="store_true")
@@ -1948,6 +2484,16 @@ def main() -> int:
                 )
             )
             return 0
+        if args.command == "check-session":
+            checked = check_session(load_json(args.record), args.transcript)
+            if args.output:
+                write_json_atomic(args.output, checked)
+            print(json.dumps(checked, ensure_ascii=False, indent=2, sort_keys=True))
+            return 0 if checked["valid"] else 1
+        if args.command == "retention-report":
+            report, met = retention_report(load_json(args.trials), args.pack)
+            print(report, end="")
+            return 0 if met else 1
         if args.command == "validate-result":
             errors = validate_result(
                 load_json(args.result), require_approval=args.require_approval

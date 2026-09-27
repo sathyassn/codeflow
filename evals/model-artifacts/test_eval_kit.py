@@ -1382,7 +1382,8 @@ class ResultScoringTests(unittest.TestCase):
                 self.assertEqual([], eval_kit.validate_result(other))
                 with self.assertRaisesRegex(
                     eval_kit.EvalError,
-                    "same host lineage.*baseline only: "
+                    # Other Claude-only cases (TSK-130) may sort first.
+                    "same host lineage.*baseline only: [^;]*"
                     "same-family-worker-runs-as-native-subagent.*candidate only: "
                     "same-family-worker-falls-back-without-native-route",
                 ):

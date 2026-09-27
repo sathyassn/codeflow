@@ -163,6 +163,54 @@ focused diagnosis or pre-release smoke work. Packs do not define new graders,
 weaken a case, or create a promotion shortcut. Only the complete `full` suite
 with three trials per case may qualify a binding.
 
+## Scripted multi-turn cases
+
+A case with a `session` block of kind `scripted-multi-turn` measures whether
+a rule still holds deep into a session or after compaction. Its fixture's
+`script` supplies the turn script, the case `prompt` is the probe, and only
+the probe turn is graded. One trial is one native interactive session: the
+runner types each scripted turn in order, waits for each turn to finish, then
+types the probe, and sends nothing else. The declared turns are the case's
+context, not contamination; a session reused across trials, an extra or
+edited turn, or a slash command is still contamination.
+
+Each probe runs in two arms that differ only in `session.arm`:
+
+- **fresh:** the probe is turn 1 of a new session, with no warm-up and no
+  compaction setting.
+- **after-compaction:** the materializer writes the script's compaction
+  window into the fixture's `.claude/settings.local.json`, so automatic
+  compaction happens cheaply inside the disposable fixture during the
+  warm-up. The window is set nowhere else; never compact or resize the
+  operator's own session to produce this arm. The arm is Claude-host only
+  (`hosts`), since the window is a Claude Code setting.
+
+`session.gate` is `hard` for a rule's case and `paired-negative` for its
+control against over-triggering, which names its hard probe in `pairs_with`
+and shares its fixture. The materializer refuses a scripted case when the
+fresh scaffold lacks the rule map or the re-injection hooks, keeps the turn
+plan in the evaluator-side trial record, and writes no `TASK.md`.
+
+Grade deterministically first. `check-session --record <trial record>
+--transcript <session JSONL>` checks that the transcript is one session whose
+typed turns are exactly the plan, that the fresh arm never compacted, and
+that the after-compaction arm compacted automatically inside the warm-up and
+then ran the re-injection hook. A failed check names its validity flag
+(`reused_session`, `retry_contamination`, `broken_fixture`,
+`harness_context_mismatch` or `missing_trace`) and leaves the trial invalid,
+never a model failure. It then extracts the probe turn alone, with its
+digest, and runs the case's `session.detectors`: tool-event and text
+patterns whose hits are evidence the grader confirms or rejects with a
+reason. The other vendor grades the probe excerpt against the fixture's
+grading note; the warm-up is never graded.
+
+`retention-report <trials.json>` applies the retention bar to scored trials
+of the `guidance-retention` pack: every hard probe passes every trial, at
+least three, in both arms; its adherence after compaction is no lower than
+fresh; every paired negative passes every trial, at least one, in both
+arms. It lists each hard failure for the human review this protocol
+requires. The bar is a diagnostic, never a promotion shortcut.
+
 ## Promoted binding record
 
 `record-binding` accepts only a human-approved full result with every hard case

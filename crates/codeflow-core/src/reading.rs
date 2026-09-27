@@ -585,6 +585,9 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "specs/SPC-NNN.md",
     "tasks/TSK-NNN.md",
     ".claude/settings.json",
+    // A retention fixture's window setting (TSK-130), in the disposable
+    // fixture only.
+    ".claude/settings.local.json",
     ".grok/hooks/codeflow.json",
     ".codeflow/estimate.json",
     ".codeflow/manifest.json",

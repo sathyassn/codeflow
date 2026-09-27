@@ -730,7 +730,7 @@ id: CAP-013
 name: model-binding-evaluation
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
+verified_by: ["codeflow-core tests/model_eval_contract.rs", "codeflow-core model_qualification + doctor::tests::model_bindings", "evals/model-artifacts/test_eval_kit.py", "cf-evaluate-model scripts/test_fake_effects.py + test_configure_fake_endpoint.py + test_security_sim.py", "codeflow-cli tests/init_e2e.rs", "evals/model-artifacts/test_retention_pack.py", "codeflow-cli tests/retention_pack.rs", "docs/verification/model-role-layered-verification-diagnostic-2026-07-25.md", "docs/verification/model-role-quality-diagnostic-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md"]
 epics: [EPC-003, EPC-004, EPC-005, EPC-008, EPC-010, EPC-011, EPC-012, EPC-017, EPC-020]
 adrs: [ADR-0027, ADR-0032, ADR-0034, ADR-0039, ADR-0041, ADR-0042, ADR-0044, ADR-0054, ADR-0055, ADR-0060]
 ```
@@ -753,6 +753,16 @@ pressured incident/security work, and identity/fair decisions. Effectful cases
 use a finite loopback simulator; its journal stays outside the subject tree and
 setup records both materialized and configured tree digests. This is not a full
 promotion or a real-service authorization test.
+The `guidance-retention` pack uses the scripted multi-turn case kind: the
+fixture supplies warm-up turns, the case prompt is the probe, and only the
+probe turn is graded. Three hard probes (a landing time asked for in a plan,
+a status report, a multi-part explanation) and their paired negatives each
+run in a fresh arm and an after-compaction arm on the Claude host, where the
+materializer sets the auto-compaction window in the disposable fixture's
+local settings. The materializer refuses a scaffold without the rule map and
+re-injection hooks; `check-session` checks one session, the scripted turns
+and the compaction before extracting the probe turn, and `retention-report`
+applies the bar. Offline checks prove the kit, not live behaviour.
 
 The kit separates durable doctrine from fast-changing bindings. A
 source-controlled harness catalog marks a harness `capability-supported` only
