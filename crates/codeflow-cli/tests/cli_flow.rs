@@ -559,6 +559,118 @@ fn work_start_proves_a_merged_planning_anchor_without_mutation() {
     assert!(porcelain.stdout.is_empty());
 }
 
+/// Make `remote` a configured remote and `main`'s upstream.
+fn set_upstream(dir: &Path, remote: &str) {
+    git(
+        dir,
+        &["config", &format!("remote.{remote}.url"), "/nowhere"],
+    );
+    git(
+        dir,
+        &[
+            "config",
+            "--replace-all",
+            &format!("remote.{remote}.fetch"),
+            &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+        ],
+    );
+    git(dir, &["config", "branch.main.remote", remote]);
+    git(dir, &["config", "branch.main.merge", "refs/heads/main"]);
+}
+
+fn rev_parse(dir: &Path, rev: &str) -> String {
+    let out = Command::new("git")
+        .args(["rev-parse", rev])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_string()
+}
+
+#[test]
+fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
+    // The planning record landed on the remote; local `main` was never
+    // fast-forwarded. Anchoring on it would miss the record.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    git(dir.path(), &["switch", "-c", "plan/anchor"]);
+    codeflow(dir.path(), &["epic", "new", "Anchored work"]);
+    codeflow(
+        dir.path(),
+        &[
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            "main",
+            "Implement",
+        ],
+    );
+    git(dir.path(), &["add", "project-management"]);
+    git(dir.path(), &["commit", "-m", "plan: anchor durable task"]);
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
+    git(dir.path(), &["switch", "-c", "task/TSK-001-implement"]);
+
+    // Without a configured upstream, local `main` stays the target.
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("not present at the merge-base"),
+        "{}",
+        stderr(&output)
+    );
+
+    // A fork: `main` tracks `upstream/main`, which lacks the planning. The
+    // fork's newer `origin/main` is not the target.
+    set_upstream(dir.path(), "upstream");
+    let base = rev_parse(dir.path(), "main");
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/upstream/main", &base],
+    );
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        !stderr(&output).contains("anchoring on"),
+        "{}",
+        stderr(&output)
+    );
+
+    // `main` tracks `origin/main`, where the planning landed.
+    set_upstream(dir.path(), "origin");
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("-> refs/remotes/origin/main"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("behind its upstream 'refs/remotes/origin/main'"),
+        "{}",
+        stderr(&output)
+    );
+
+    // Local `main` gains a commit the remote lacks: diverged, refused.
+    git(dir.path(), &["switch", "main"]);
+    git(
+        dir.path(),
+        &["commit", "--allow-empty", "-m", "chore: local only"],
+    );
+    git(dir.path(), &["switch", "task/TSK-001-implement"]);
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("'main' and 'refs/remotes/origin/main' have diverged"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn work_start_rejects_an_invalid_visible_workgraph() {
     let dir = tempfile::tempdir().unwrap();

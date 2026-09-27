@@ -2,7 +2,9 @@
 
 use clap::{Args, Subcommand};
 use codeflow_core::validate::validate_workgraph;
-use codeflow_core::workgraph::{check_work_start, declared_work_target, resolve_work_target};
+use codeflow_core::workgraph::{
+    check_work_start, declared_work_target, resolve_work_target_checked,
+};
 
 #[derive(Debug, Args)]
 pub struct WorkArgs {
@@ -39,8 +41,23 @@ pub fn run(args: &WorkArgs) -> i32 {
     let declared = target
         .clone()
         .or_else(|| declared_work_target(&root, task_id));
-    let target =
-        resolve_work_target(&root, declared.as_deref()).unwrap_or_else(|| "main".to_string());
+    let target = match resolve_work_target_checked(&root, declared.as_deref()) {
+        Ok(resolved) => {
+            let resolved =
+                resolved.unwrap_or_else(|| codeflow_core::workgraph::ResolvedWorkTarget {
+                    target: "main".to_string(),
+                    note: None,
+                });
+            if let Some(note) = &resolved.note {
+                eprintln!("work start: note: {note}");
+            }
+            resolved.target
+        }
+        Err(error) => {
+            eprintln!("work start: error: {error}");
+            return 1;
+        }
+    };
     match check_work_start(&root, task_id, &target) {
         Ok(report) => {
             println!(

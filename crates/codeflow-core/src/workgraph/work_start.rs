@@ -89,6 +89,28 @@ pub enum WorkStartError {
     },
     #[error("target '{0}' is not a stable local or remote-tracking non-task branch")]
     UnstableTarget(String),
+    #[error(
+        "local branch '{local}' and '{remote}' have diverged ({ahead} commit(s) only on \
+         '{local}', {behind} only on '{remote}'), so the work target is ambiguous; \
+         reconcile them (fetch, then rebase '{local}' onto '{remote}' or reset it), or \
+         name one with `--into`"
+    )]
+    DivergedTarget {
+        local: String,
+        remote: String,
+        ahead: usize,
+        behind: usize,
+    },
+}
+
+/// A work target resolved to a ref, with a note when a stale local branch was
+/// passed over for its remote-tracking ref.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWorkTarget {
+    /// The target to anchor on (`main`, `origin/main` or a full ref).
+    pub target: String,
+    /// Why the remote-tracking ref was chosen, for the caller to print.
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,29 +172,136 @@ pub fn default_work_target(repo_root: &Path) -> Option<String> {
 /// Resolve a declared target to an available local or remote-tracking ref.
 ///
 /// The declared logical name remains portable (`main`, for example) while CI
-/// checkouts that expose only `origin/main` can verify the same task.
+/// checkouts that expose only `origin/main` can verify the same task. A
+/// diverged local branch resolves to the local branch here; callers that
+/// anchor work use [`resolve_work_target_checked`], which refuses it.
 #[must_use]
 pub fn resolve_work_target(repo_root: &Path, declared: Option<&str>) -> Option<String> {
-    let repo = Repository::discover(repo_root).ok()?;
-    if let Some(target) = declared.filter(|value| !value.trim().is_empty()) {
-        if let Some(candidates) = target_reference_names(target) {
-            for candidate in candidates {
-                if repo
-                    .find_reference(&candidate)
-                    .and_then(|reference| reference.peel_to_commit())
-                    .is_ok()
-                {
-                    return Some(if target.starts_with("refs/") {
-                        candidate
-                    } else {
-                        reference_display_name(&candidate)
-                    });
-                }
-            }
-        }
-        return Some(target.to_string());
+    match resolve_work_target_checked(repo_root, declared) {
+        Ok(resolved) => resolved.map(|resolved| resolved.target),
+        Err(_) => declared.map(str::to_owned),
     }
-    default_work_target(repo_root)
+}
+
+/// Resolve a declared target as [`resolve_work_target`] does, but never
+/// anchor on a stale local branch.
+///
+/// When a bare name (`main`) has a local branch, compared with the upstream
+/// Git has configured for it (`main@{upstream}`):
+/// - no configured upstream, equal, or the local branch ahead (unpushed
+///   commits): the local branch;
+/// - the local branch strictly behind: the upstream, with a note saying so,
+///   since a stale local branch anchors on an old snapshot;
+/// - diverged: an error, since neither is clearly the target.
+///
+/// A same-named branch of another remote is never substituted. Without a
+/// local branch, `origin/<name>` is used, as in a CI clone.
+///
+/// # Errors
+///
+/// Returns [`WorkStartError::DivergedTarget`] when the local branch and its
+/// configured upstream have diverged.
+pub fn resolve_work_target_checked(
+    repo_root: &Path,
+    declared: Option<&str>,
+) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
+    let Some(target) = declared.filter(|value| !value.trim().is_empty()) else {
+        return Ok(
+            default_work_target(repo_root).map(|target| ResolvedWorkTarget { target, note: None })
+        );
+    };
+    let plain = |target: String| Ok(Some(ResolvedWorkTarget { target, note: None }));
+    let Ok(repo) = Repository::discover(repo_root) else {
+        return plain(target.to_string());
+    };
+    let Some(candidates) = target_reference_names(target) else {
+        return plain(target.to_string());
+    };
+    let resolves = |name: &str| {
+        repo.find_reference(name)
+            .and_then(|reference| reference.peel_to_commit())
+            .ok()
+            .map(|commit| commit.id())
+    };
+    // A bare name with a local branch: that branch, unless it is strictly
+    // behind the upstream Git has configured for it.
+    let local_ref = format!("refs/heads/{target}");
+    if candidates.first() == Some(&local_ref) {
+        if let Some(local_id) = resolves(&local_ref) {
+            return local_or_upstream(&repo, target, &local_ref, local_id);
+        }
+    }
+    // Otherwise the first candidate that resolves: an exact full ref, or
+    // `origin/<name>` in a checkout with no local branch (a CI clone).
+    match candidates
+        .iter()
+        .find(|candidate| resolves(candidate).is_some())
+    {
+        Some(found) if target.starts_with("refs/") => plain(found.clone()),
+        Some(found) => plain(reference_display_name(found)),
+        None => plain(target.to_string()),
+    }
+}
+
+/// The local branch `local`, or its configured upstream when the local
+/// branch is strictly behind it. Only the upstream Git has configured
+/// (`branch.<name>.remote` and `.merge`) may replace it: another remote's
+/// same-named branch, such as a fork's `origin/main` beside an
+/// `upstream/main` the branch tracks, is not the integration target. With no
+/// configured upstream the local branch is kept.
+fn local_or_upstream(
+    repo: &Repository,
+    local: &str,
+    local_ref: &str,
+    local_id: git2::Oid,
+) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
+    let keep = || {
+        Ok(Some(ResolvedWorkTarget {
+            target: local.to_string(),
+            note: None,
+        }))
+    };
+    let Some(upstream_ref) = repo
+        .branch_upstream_name(local_ref)
+        .ok()
+        .and_then(|name| name.as_str().ok().map(str::to_owned))
+    else {
+        return keep();
+    };
+    let Some(upstream_id) = repo
+        .find_reference(&upstream_ref)
+        .and_then(|reference| reference.peel_to_commit())
+        .ok()
+        .map(|commit| commit.id())
+    else {
+        return keep();
+    };
+    if upstream_id == local_id {
+        return keep();
+    }
+    // The exact ref compared is the ref anchored on: a shortened name such
+    // as `origin/main` could resolve to a different ref.
+    let upstream = upstream_ref;
+    let (ahead, behind) = repo
+        .graph_ahead_behind(local_id, upstream_id)
+        .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+    match (ahead, behind) {
+        (_, 0) => keep(),
+        (0, behind) => Ok(Some(ResolvedWorkTarget {
+            note: Some(format!(
+                "local branch '{local}' is {behind} commit(s) behind its upstream \
+                 '{upstream}'; anchoring on '{upstream}' (fast-forward '{local}' to \
+                 silence this)"
+            )),
+            target: upstream,
+        })),
+        (ahead, behind) => Err(WorkStartError::DivergedTarget {
+            local: local.to_string(),
+            remote: upstream,
+            ahead,
+            behind,
+        }),
+    }
 }
 
 /// Whether a ref may serve as a stable planning authority.
@@ -1204,6 +1333,230 @@ mod tests {
         let dir = fixture();
         assert_eq!(
             declared_work_target(dir.path(), "TSK-002").as_deref(),
+            Some("main")
+        );
+    }
+
+    /// Configure `remote` with the usual fetch refspec, and optionally make
+    /// it `main`'s upstream.
+    fn add_remote(dir: &Path, remote: &str, upstream_of_main: bool) {
+        git(
+            dir,
+            &["config", &format!("remote.{remote}.url"), "/nowhere"],
+        );
+        git(
+            dir,
+            &[
+                "config",
+                &format!("remote.{remote}.fetch"),
+                &format!("+refs/heads/*:refs/remotes/{remote}/*"),
+            ],
+        );
+        if upstream_of_main {
+            git(dir, &["config", "branch.main.remote", remote]);
+            git(dir, &["config", "branch.main.merge", "refs/heads/main"]);
+        }
+    }
+
+    /// Point `refs/remotes/<remote>/main` one commit past `main`.
+    fn advance_remote_main(dir: &Path, remote: &str) {
+        git(dir, &["checkout", "-q", "-b", "ahead"]);
+        git(dir, &["commit", "-q", "--allow-empty", "-m", remote]);
+        git(
+            dir,
+            &["update-ref", &format!("refs/remotes/{remote}/main"), "HEAD"],
+        );
+        git(dir, &["checkout", "-q", "main"]);
+        git(dir, &["branch", "-q", "-D", "ahead"]);
+    }
+
+    /// A fixture whose `main` tracks `origin/main`, with a commit that only
+    /// one of them has when `local_extra` / `remote_extra` are set.
+    fn tracking_fixture(local_extra: bool, remote_extra: bool) -> tempfile::TempDir {
+        let dir = fixture();
+        add_remote(dir.path(), "origin", true);
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        if remote_extra {
+            advance_remote_main(dir.path(), "origin");
+        }
+        if local_extra {
+            git(
+                dir.path(),
+                &["commit", "-q", "--allow-empty", "-m", "local"],
+            );
+        }
+        dir
+    }
+
+    #[test]
+    fn a_target_without_a_configured_upstream_stays_local() {
+        let dir = fixture();
+        add_remote(dir.path(), "origin", false);
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        advance_remote_main(dir.path(), "origin");
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "main");
+        assert_eq!(resolved.note, None);
+    }
+
+    #[test]
+    fn a_fork_origin_never_replaces_the_configured_upstream() {
+        // SR-1: `main` tracks `upstream/main` (equal); the fork's newer
+        // `origin/main` holds planning that never reached upstream.
+        let dir = fixture();
+        add_remote(dir.path(), "upstream", true);
+        add_remote(dir.path(), "origin", false);
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/upstream/main", "HEAD"],
+        );
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        advance_remote_main(dir.path(), "origin");
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "main");
+        assert_eq!(resolved.note, None);
+    }
+
+    #[test]
+    fn a_local_upstream_is_anchored_by_its_exact_ref() {
+        // SR-2: `main` tracks the local branch `origin/main`
+        // (`branch.main.remote = .`), while a remote `origin/main` exists
+        // too. The ref compared must be the ref anchored on.
+        let dir = fixture();
+        add_remote(dir.path(), "origin", false);
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        advance_remote_main(dir.path(), "origin");
+        git(dir.path(), &["branch", "-q", "origin/main", "main"]);
+        git(dir.path(), &["checkout", "-q", "origin/main"]);
+        git(
+            dir.path(),
+            &["commit", "-q", "--allow-empty", "-m", "local upstream"],
+        );
+        git(dir.path(), &["checkout", "-q", "main"]);
+        git(dir.path(), &["config", "branch.main.remote", "."]);
+        git(
+            dir.path(),
+            &["config", "branch.main.merge", "refs/heads/origin/main"],
+        );
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "refs/heads/origin/main");
+        let repo = Repository::discover(dir.path()).unwrap();
+        let anchored = target_reference(&repo, &resolved.target).unwrap().id();
+        let local_upstream = repo
+            .find_reference("refs/heads/origin/main")
+            .unwrap()
+            .peel_to_commit()
+            .unwrap()
+            .id();
+        assert_eq!(anchored, local_upstream);
+        assert!(is_stable_work_target(&resolved.target));
+    }
+
+    #[test]
+    fn a_target_behind_its_configured_upstream_moves_to_it() {
+        let dir = fixture();
+        add_remote(dir.path(), "upstream", true);
+        add_remote(dir.path(), "origin", false);
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/upstream/main", "HEAD"],
+        );
+        advance_remote_main(dir.path(), "upstream");
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "refs/remotes/upstream/main");
+        assert!(resolved
+            .note
+            .unwrap()
+            .contains("behind its upstream 'refs/remotes/upstream/main'"));
+        assert!(is_stable_work_target(&resolved.target));
+        assert!(work_target_resolves(dir.path(), &resolved.target));
+    }
+
+    #[test]
+    fn a_target_equal_to_its_tracking_ref_resolves_to_the_local_branch() {
+        let dir = tracking_fixture(false, false);
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "main");
+        assert_eq!(resolved.note, None);
+    }
+
+    #[test]
+    fn a_local_target_strictly_behind_resolves_to_the_tracking_ref_and_says_so() {
+        let dir = tracking_fixture(false, true);
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "refs/remotes/origin/main");
+        let note = resolved.note.unwrap();
+        assert!(
+            note.contains("'main' is 1 commit(s) behind its upstream 'refs/remotes/origin/main'"),
+            "{note}"
+        );
+        assert_eq!(
+            resolve_work_target(dir.path(), Some("main")).as_deref(),
+            Some("refs/remotes/origin/main")
+        );
+    }
+
+    #[test]
+    fn a_local_target_only_ahead_resolves_to_the_local_branch() {
+        let dir = tracking_fixture(true, false);
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "main");
+        assert_eq!(resolved.note, None);
+    }
+
+    #[test]
+    fn a_diverged_target_is_refused_naming_both_sides() {
+        let dir = tracking_fixture(true, true);
+        let error = resolve_work_target_checked(dir.path(), Some("main")).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                WorkStartError::DivergedTarget {
+                    ahead: 1,
+                    behind: 1,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("'main' and 'refs/remotes/origin/main' have diverged"),
+            "{message}"
+        );
+        // The unchecked resolver keeps its old answer for non-anchoring callers.
+        assert_eq!(
+            resolve_work_target(dir.path(), Some("main")).as_deref(),
             Some("main")
         );
     }
