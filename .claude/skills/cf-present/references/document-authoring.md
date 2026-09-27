@@ -251,6 +251,37 @@ or rewrite selectors by hand. Pending markers remain visible and numbered while
 notes are edited. Preserve user feedback exactly and treat orphaned annotations
 as visible unresolved context, never as permission to guess a new anchor.
 
+### What a reviewer can mark on each block
+
+With Comment on, a reviewer marks text by selecting words, an element by
+clicking a part, and an area by dragging a box (Shift and drag on words, or
+Tools, Select area). Every block takes an area note. The table says which
+blocks take the other two, and why a cell does not apply. The review chrome
+(top bar, mode strip, chip, composer, markers and notes rail) is the only
+surface that takes no note.
+
+| Block | Text | Element | Area |
+|---|---|---|---|
+| `narrative` | yes: its words | yes: a heading, paragraph or list item | yes |
+| `bullets` | yes: an item's words | yes: an item | yes |
+| `callout` | yes: its title and words | yes: the title or a paragraph | yes |
+| `comparison` | yes: a column's words | yes: a column title or item | yes |
+| `decision` | yes: its title and words | yes: the title or a paragraph | yes |
+| `table` | yes: a cell's words | yes: a cell or header | yes |
+| `status` | yes: a row's label and detail | yes: a row | yes |
+| `code` | yes: its code | yes: one line | yes |
+| `diff` | yes: its lines | yes: one line | yes |
+| `tree` | yes: a node's label | yes: a node | yes |
+| `figure` | no: its words are part labels, so selecting one names the part it labels | yes: a part (its mark id) | yes |
+| `media` | yes: the caption's words, when there is a caption | yes: the image, video or audio | yes |
+| `disclosure` | yes: the summary, and the words of an opened block | yes: the summary, and the parts of an opened block | yes, on what shows |
+| `tabs` | yes: the tab labels, and the words of an opened tab | yes: a tab label, and the parts of an opened tab | yes, on what shows |
+| `feedback_prompt` | yes: the prompt | yes: the prompt | yes |
+| `html` | yes: a stage's visible words | yes: a stage entity, else the shape or element clicked | yes |
+
+An area over a closed disclosure or an unopened tab belongs to that block,
+never to the blocks it hides.
+
 Revision updates change document content only. Feedback lifecycle changes
 through review events. Accepted decisions are summarized to their canonical
 durable home; raw history is not replayed automatically.
