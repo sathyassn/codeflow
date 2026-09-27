@@ -3723,3 +3723,189 @@ fn hook_shims_warn_and_fall_back_when_the_binary_is_older() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// pre-push: the work-record baseline authority of an existing branch
+// ---------------------------------------------------------------------------
+
+const RECORDS_STATE: &str = "schema_version = 1\ntier = \"full\"\n\
+scaffold_version = \"3.0.0\"\nstack = \"rust\"\nareas = []\npolicy_armed = true\n\
+git_hooks = \"unwired\"\npermission_preset = \"default\"\n";
+
+/// A task written under the old rules: complete, checkbox criteria, no
+/// acceptance block. Legacy only while a governing baseline holds it.
+fn legacy_task(id: &str) -> String {
+    format!(
+        "---\nid: {id}\nepic_id: null\nstandalone_reason: \"one change\"\n\
+integration_target: main\ntitle: \"work\"\nstatus: complete\nwork_type: feat\n\
+specs: []\ndepends_on: []\ncreated: 2026-09-26\n---\n\n# {id}: work\n\n\
+## Description\n\nWork.\n\n## Acceptance Criteria\n\n- [x] AC-1 Done.\n\n\
+## Closeout\n\nDone long ago.\n"
+    )
+}
+
+fn set_records_baseline(dir: &Path, commits: &[&str]) -> String {
+    let list = commits
+        .iter()
+        .map(|c| format!("\"{c}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    std::fs::write(
+        dir.join(".codeflow/project.toml"),
+        format!("{RECORDS_STATE}work_records_baseline = [{list}]\n"),
+    )
+    .unwrap();
+    git(dir, &["add", ".codeflow/project.toml"]);
+    git(
+        dir,
+        &["commit", "-q", "-m", "chore: record the records baseline"],
+    );
+    rev(dir, "HEAD")
+}
+
+/// The release history: a destination whose `stable` holds a full-tier seed
+/// with no baseline list, and two lines, each adding a legacy task and then
+/// a list naming that commit. Returns (bare, local, line a's record commit,
+/// line b's record commit); the local checkout is on `stable`'s seed.
+fn two_lines_with_lists() -> (tempfile::TempDir, tempfile::TempDir, String, String) {
+    let bare = tempfile::tempdir().unwrap();
+    git(bare.path(), &["init", "--bare", "-q", "-b", "stable"]);
+    let local = tempfile::tempdir().unwrap();
+    init_repo(local.path(), "main");
+    std::fs::create_dir_all(local.path().join(".codeflow")).unwrap();
+    std::fs::write(local.path().join(".codeflow/project.toml"), RECORDS_STATE).unwrap();
+    git(local.path(), &["add", ".codeflow/project.toml"]);
+    git(local.path(), &["commit", "-q", "-m", "chore: full tier"]);
+    receive(bare.path(), local.path(), "main:stable");
+    git(
+        local.path(),
+        &["remote", "add", "dest", bare.path().to_str().unwrap()],
+    );
+    let mut records = Vec::new();
+    for (line, id) in [("a", "TSK-001"), ("b", "TSK-002")] {
+        git(local.path(), &["checkout", "-q", "-b", line, "main"]);
+        std::fs::create_dir_all(local.path().join("project-management/tasks")).unwrap();
+        let record = commit_file(
+            local.path(),
+            &format!("project-management/tasks/{id}.md"),
+            &legacy_task(id),
+            "docs: add a task under the old rules",
+        );
+        set_records_baseline(local.path(), &[&record]);
+        receive(
+            bare.path(),
+            local.path(),
+            &format!("{line}:integration/line-{line}"),
+        );
+        records.push(record);
+    }
+    git(local.path(), &["checkout", "-q", "main"]);
+    write_policy(
+        local.path(),
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block", "work_records": "block"}}"#,
+    );
+    let b = records.pop().unwrap();
+    let a = records.pop().unwrap();
+    (bare, local, a, b)
+}
+
+/// Merge a line; the lines' differing baseline lists resolve to ours, and
+/// the caller records the list it means.
+fn merge_line(local: &Path, line: &str) {
+    git(
+        local,
+        &[
+            "merge",
+            "-q",
+            "--no-ff",
+            "-X",
+            "ours",
+            "-m",
+            "chore: merge a line",
+            line,
+        ],
+    );
+}
+
+/// Merge both lines into a release checkout and record both baselines.
+fn release_of_both_lines(local: &Path, a: &str, b: &str) -> String {
+    for line in ["a", "b"] {
+        merge_line(local, line);
+    }
+    set_records_baseline(local, &[a, b])
+}
+
+#[test]
+fn push_to_an_existing_branch_without_a_list_is_judged_by_its_own_list() {
+    // The release branch exists on the destination at the list-less seed.
+    // The range is bounded by every destination tip, so its base is a line
+    // tip whose list lacks the other line's records; the branch's own old
+    // tip has no list, so the push introduces the migration and the head's
+    // list governs, every entry printed.
+    let (bare, local, a, b) = two_lines_with_lists();
+    let seed = rev(local.path(), "main");
+    receive(bare.path(), local.path(), "main:integration/release");
+    git(local.path(), &["checkout", "-q", "-b", "release", "main"]);
+    let head = release_of_both_lines(local.path(), &a, &b);
+    let (_, err) = push_hook_onto(local.path(), "dest", "integration/release", &head, &seed);
+    assert!(!err.contains("work.records (block)"), "{err}");
+    assert!(
+        err.contains("introduces work_records_baseline") && err.contains(&a) && err.contains(&b),
+        "{err}"
+    );
+    assert!(err.contains(&format!("--baseline-from {seed}")), "{err}");
+}
+
+#[test]
+fn push_to_an_existing_branch_with_a_list_is_judged_by_that_list() {
+    // The release branch already holds line a with list [a]. The push merges
+    // line b, adds a record of its own and lists everything. The old tip's
+    // list governs: line a's record stays legacy although the range's base
+    // is line b's tip (whose list lacks it), and the push's own record is
+    // new, since a list edit takes effect only after it lands.
+    let (bare, local, a, b) = two_lines_with_lists();
+    git(local.path(), &["checkout", "-q", "-b", "release", "main"]);
+    merge_line(local.path(), "a");
+    let old = rev(local.path(), "HEAD");
+    receive(bare.path(), local.path(), "release:integration/release");
+    merge_line(local.path(), "b");
+    let own = commit_file(
+        local.path(),
+        "project-management/tasks/TSK-003.md",
+        &legacy_task("TSK-003"),
+        "docs: add a task the push wants exempt",
+    );
+    let head = set_records_baseline(local.path(), &[&a, &b, &own]);
+    let (code, err) = push_hook_onto(local.path(), "dest", "integration/release", &head, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("TSK-003.md: a complete record needs an acceptance block"),
+        "{err}"
+    );
+    assert!(!err.contains("TSK-001.md"), "{err}");
+    assert!(!err.contains("TSK-002.md"), "{err}");
+    assert!(
+        err.contains("edits work_records_baseline") && err.contains(&own),
+        "{err}"
+    );
+    assert!(!err.contains("introduces work_records_baseline"), "{err}");
+}
+
+#[test]
+fn a_new_branch_push_keeps_the_range_base_as_the_baseline_authority() {
+    // A first push of the release branch: no old tip, so the range's base
+    // (a line tip with its own list) governs as before, and one line's
+    // record is judged new.
+    let (_bare, local, a, b) = two_lines_with_lists();
+    git(local.path(), &["checkout", "-q", "-b", "release", "main"]);
+    let head = release_of_both_lines(local.path(), &a, &b);
+    let (code, err) = push_hook(local.path(), "dest", &[("integration/release", &head)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("work.records (block)")
+            && err.contains(".md: a complete record needs an acceptance block"),
+        "{err}"
+    );
+    assert!(!err.contains("--baseline-from"), "{err}");
+    assert!(!err.contains("introduces work_records_baseline"), "{err}");
+}
