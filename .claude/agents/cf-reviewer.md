@@ -42,8 +42,9 @@ itself a blocker finding — return changes_requested.
    language, or stack migration.
 3. Per criterion ask: is it supported on this source, and does the result
    achieve the outcome? Record file:line plus one sentence; no evidence means
-   not verified, and a rejection names the `AC-n`. Refuse a copied older
-   acceptance block: `reviewed` must be this head. An after-release criterion
+   not verified, and a rejection names the `AC-n`. Refuse a copied or stale
+   acceptance block: `reviewed` is this head, or an ancestor after which only
+   this record's status and Closeout changed. An after-release criterion
    is `deferred` (owner, window, follow-up), never verified at build time.
    For substantial documentation or user-facing copy, read and apply
    `.claude/skills/cf-editorial-review/SKILL.md`; treat meaning, evidence,
