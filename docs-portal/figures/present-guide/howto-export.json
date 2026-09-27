@@ -152,7 +152,7 @@
         {
           "text": "clear, 30 days",
           "x": 442,
-          "y": 118,
+          "y": 121,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -221,7 +221,7 @@
         {
           "text": "active",
           "x": 83,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "for": [
             "ac"
@@ -237,7 +237,7 @@
         {
           "text": "export",
           "x": 180,
-          "y": 68,
+          "y": 71,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -266,7 +266,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 48V98",
+          "d": "M83 48V97",
           "head": "end",
           "id": "t2"
         },
@@ -301,7 +301,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 138V188",
+          "d": "M83 139V187",
           "head": "end",
           "id": "t3"
         },

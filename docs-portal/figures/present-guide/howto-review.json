@@ -81,7 +81,7 @@
         {
           "text": "Submit review",
           "x": 168,
-          "y": 26,
+          "y": 25,
           "anchor": "middle",
           "style": "strong",
           "for": [
@@ -117,7 +117,7 @@
         {
           "text": "feedback",
           "x": 352,
-          "y": 26,
+          "y": 25,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -252,7 +252,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 346,
+      "height": 347,
       "elongation_max": 1.8,
       "reason": "The review's states stack one per row at phone width, with the two end states side by side.",
       "draw": [
@@ -269,7 +269,7 @@
         {
           "text": "no notes yet",
           "x": 83,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "for": [
             "em"
@@ -278,14 +278,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 48V84",
+          "d": "M83 49V84",
           "head": "end",
           "id": "t0"
         },
         {
           "text": "save a note",
           "x": 96,
-          "y": 70,
+          "y": 71,
           "style": "mute",
           "for": [
             "t0"
@@ -295,7 +295,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 86,
+          "y": 87,
           "w": 150,
           "h": 36,
           "rx": 8,
@@ -304,7 +304,7 @@
         {
           "text": "notes saved",
           "x": 83,
-          "y": 109,
+          "y": 110,
           "anchor": "middle",
           "for": [
             "n"
@@ -313,14 +313,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 124V160",
+          "d": "M83 126V161",
           "head": "end",
           "id": "t1"
         },
         {
           "text": "Submit review",
           "x": 96,
-          "y": 146,
+          "y": 148,
           "style": "strong",
           "for": [
             "t1"
@@ -330,7 +330,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 162,
+          "y": 164,
           "w": 150,
           "h": 36,
           "rx": 8,
@@ -339,7 +339,7 @@
         {
           "text": "received",
           "x": 83,
-          "y": 185,
+          "y": 187,
           "anchor": "middle",
           "for": [
             "rc"
@@ -348,14 +348,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 200V236",
+          "d": "M83 203V238",
           "head": "end",
           "id": "t2"
         },
         {
           "text": "feedback",
           "x": 96,
-          "y": 222,
+          "y": 225,
           "style": "mono",
           "for": [
             "t2"
@@ -365,7 +365,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 238,
+          "y": 241,
           "w": 150,
           "h": 36,
           "rx": 8,
@@ -374,7 +374,7 @@
         {
           "text": "delivered",
           "x": 83,
-          "y": 261,
+          "y": 264,
           "anchor": "middle",
           "for": [
             "dl"
@@ -383,14 +383,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M60 276V298",
+          "d": "M60 280V298",
           "head": "end",
           "id": "t3"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M130 276C130 288 250 286 254 298",
+          "d": "M130 280C130 292 250 290 254 298",
           "head": "end",
           "id": "t4"
         },
@@ -398,7 +398,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 300,
+          "y": 301,
           "w": 150,
           "h": 36,
           "rx": 8,
@@ -407,7 +407,7 @@
         {
           "text": "addressed",
           "x": 83,
-          "y": 323,
+          "y": 324,
           "anchor": "middle",
           "for": [
             "ad"
@@ -417,7 +417,7 @@
           "state": "state",
           "shape": "rect",
           "x": 190,
-          "y": 300,
+          "y": 301,
           "w": 150,
           "h": 36,
           "rx": 8,
@@ -426,7 +426,7 @@
         {
           "text": "dismissed",
           "x": 265,
-          "y": 323,
+          "y": 324,
           "anchor": "middle",
           "for": [
             "di"
@@ -434,8 +434,8 @@
         },
         {
           "text": "resolve",
-          "x": 170,
-          "y": 262,
+          "x": 171,
+          "y": 265,
           "style": "mono",
           "for": [
             "t3",
@@ -445,10 +445,10 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M160 28H290V180H160",
+          "d": "M160 28H290V182H160",
           "cross": {
             "cx": 290,
-            "cy": 104,
+            "cy": 105,
             "size": 12
           },
           "id": "f1"
@@ -466,7 +466,7 @@
         {
           "text": "no note",
           "x": 280,
-          "y": 144,
+          "y": 145,
           "anchor": "end",
           "style": "mute",
           "for": [
