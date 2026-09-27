@@ -1,0 +1,182 @@
+[
+  {
+    "id": "a1",
+    "variant": "narrow",
+    "label": "Travel completed"
+  },
+  {
+    "id": "a2",
+    "variant": "narrow",
+    "label": "Travel completed"
+  },
+  {
+    "id": "a3",
+    "variant": "narrow",
+    "label": "Travel completed"
+  },
+  {
+    "id": "b1",
+    "variant": "narrow",
+    "label": "Travel completed"
+  },
+  {
+    "id": "b2",
+    "variant": "narrow",
+    "label": "Travel completed"
+  },
+  {
+    "id": "b3",
+    "variant": "narrow",
+    "label": "Travel not yet made"
+  },
+  {
+    "id": "n1",
+    "variant": "narrow",
+    "label": "Task branch"
+  },
+  {
+    "id": "n2",
+    "variant": "narrow",
+    "label": "Pull request"
+  },
+  {
+    "id": "n3",
+    "variant": "narrow",
+    "label": "Required checks"
+  },
+  {
+    "id": "n4",
+    "variant": "narrow",
+    "label": "Task in an epic"
+  },
+  {
+    "id": "n5",
+    "variant": "narrow",
+    "label": "codeflow integrate"
+  },
+  {
+    "id": "n6",
+    "variant": "narrow",
+    "label": "Integration branch"
+  },
+  {
+    "id": "n7",
+    "variant": "narrow",
+    "label": "Human merge"
+  },
+  {
+    "id": "s1",
+    "variant": "narrow",
+    "label": "Gate that stops travel"
+  },
+  {
+    "id": "s2",
+    "variant": "narrow",
+    "label": "Gate that stops travel"
+  },
+  {
+    "id": "m1",
+    "variant": "wide",
+    "label": "Travel completed"
+  },
+  {
+    "id": "m10",
+    "variant": "wide",
+    "label": "Agent step"
+  },
+  {
+    "id": "m11",
+    "variant": "wide",
+    "label": "Agent step"
+  },
+  {
+    "id": "m12",
+    "variant": "wide",
+    "label": "Agent step"
+  },
+  {
+    "id": "m13",
+    "variant": "wide",
+    "label": "Agent step"
+  },
+  {
+    "id": "m14",
+    "variant": "wide",
+    "label": "codeflow integrate"
+  },
+  {
+    "id": "m15",
+    "variant": "wide",
+    "label": "Human merge"
+  },
+  {
+    "id": "m2",
+    "variant": "wide",
+    "label": "Travel completed"
+  },
+  {
+    "id": "m3",
+    "variant": "wide",
+    "label": "Travel completed"
+  },
+  {
+    "id": "m4",
+    "variant": "wide",
+    "label": "Travel completed"
+  },
+  {
+    "id": "m5",
+    "variant": "wide",
+    "label": "Travel completed"
+  },
+  {
+    "id": "m6",
+    "variant": "wide",
+    "label": "Travel not yet made"
+  },
+  {
+    "id": "m7",
+    "variant": "wide",
+    "label": "Gate that stops travel"
+  },
+  {
+    "id": "m8",
+    "variant": "wide",
+    "label": "Integration branch"
+  },
+  {
+    "id": "m9",
+    "variant": "wide",
+    "label": "Agent step"
+  },
+  {
+    "id": "legend-agent",
+    "variant": null,
+    "label": "Agent step"
+  },
+  {
+    "id": "legend-done",
+    "variant": null,
+    "label": "Travel completed"
+  },
+  {
+    "id": "legend-human",
+    "variant": null,
+    "label": "Human decision"
+  },
+  {
+    "id": "legend-merge",
+    "variant": null,
+    "label": "Agent merge point"
+  },
+  {
+    "id": "legend-stop",
+    "variant": null,
+    "label": "Gate that stops travel"
+  },
+  {
+    "id": "legend-todo",
+    "variant": null,
+    "label": "Travel not yet made"
+  }
+]

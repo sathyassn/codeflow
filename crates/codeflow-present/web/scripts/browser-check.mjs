@@ -5,8 +5,8 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import axe from "axe-core";
 import { chromium, firefox, webkit } from "playwright-core";
-import { checkSelectionOccurrences } from "./selection-browser-check.mjs";
-import { checkDocumentExcerpts } from "./excerpt-browser-check.mjs";
+import { checkResolverRules, checkSelectionOccurrences } from "./selection-browser-check.mjs";
+import { checkDocumentExcerpts, checkEntityCrops } from "./excerpt-browser-check.mjs";
 import { checkSelectionLifecycle } from "./selection-lifecycle-browser-check.mjs";
 import { checkIframeComments } from "./iframe-comment-browser-check.mjs";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
@@ -114,7 +114,9 @@ try {
     finally { if (chromeBrowser !== browser) await chromeBrowser.close(); }
   }
   await checkSelectionOccurrences(browser);
+  await checkResolverRules(browser);
   await checkDocumentExcerpts(browser);
+  await checkEntityCrops(browser);
   await checkProseLazyPath(browser, origin);
   await checkSelectionLifecycle(browser, origin);
   await checkIframeComments(browser, origin);

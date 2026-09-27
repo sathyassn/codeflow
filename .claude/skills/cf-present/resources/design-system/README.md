@@ -49,7 +49,7 @@ chrome.js   ── behaviour reference ──▶ product runtime
 | `localStorage` keys | `cf.skin`, `cf.theme` (`light`, `dark`, `system`), `cf.typeface`, `cf.scale`, `cf.nav.width` (220 to 360), `cf.nav.open`, `cf.toc.open`, `cf.nav.groups` (JSON of collapsed groups) |
 | Custom properties | `--cf-<role>` for chrome, `--cf-fig-<name>` for figures |
 | Chrome classes | `cf-` prefix throughout, for example `cf-header`, `cf-panel`, `cf-row`, `cf-pill`, `cf-marker` |
-| Figure classes | `cf-fig` and `cf-fig-*` for the frame, `cf-legend` and `cf-key`, `cf-twin`, `cf-m-<mark>` for every mark of the grammar (`cf-m-layer--remote` for layer-remote) and part classes such as `cf-m-cap` and `cf-m-trans-head`, `cf-f-*` for axes, rules, ticks and hit areas, `cf-t` for table twin text |
+| Figure classes | `cf-fig` and `cf-fig-*` for the frame, `cf-legend` and `cf-key`, `cf-fig-title` and `cf-fig-details`, `cf-m-<mark>` for every mark of the grammar (`cf-m-layer--remote` for layer-remote) and part classes such as `cf-m-cap` and `cf-m-trans-head`, `cf-f-*` for axes, rules, ticks and hit areas, `cf-t` for table twin text |
 | Ids and hooks | `cf-main`, `cf-nav`, `cf-toc`, `cf-data` (page data JSON), `cf-present-document`; page hooks: every `data-cf-*` attribute `chrome.js` queries, among them `data-cf-view`, `data-cf-open`, `data-cf-toggle`, `data-cf-sheet`, `data-cf-peek`, `data-cf-section`, `data-cf-document`, `data-cf-block-id`, `data-cf-anchor` and `data-cf-tool`; the reference pages show each one in place |
 | Runtime surface | `window.CF` with `CF.view`, `CF.mount(el)`, `CF.getPref(name)`, `CF.setPref(name, value)` and `CF.toast(msg)`; the `cf:prefs` event fires on every Display change and when the system scheme changes under `system` |
 

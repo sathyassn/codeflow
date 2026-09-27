@@ -7,13 +7,15 @@ last: judgment about structure is settled before it. Encode **this session's**
 subject.
 
 The machine contract is
-`.codeflow/schemas/present/document-v1.schema.json`. The runtime is
+`.codeflow/schemas/present/document-v1.schema.json`, and
+`document-v2.schema.json` for a `schema_version: 2` document (see
+"Schema version 2" below). The runtime is
 authoritative for semantic and byte limits. Schema validity never means the
 page is a good present.
 
 ## Envelope
 
-Every document is a closed version-1 JSON object:
+Every document is a closed JSON object, version 1 or 2:
 
 ```json
 {
@@ -65,7 +67,7 @@ Before authoring, state the question the richer surface must answer better than
 ordinary chat and choose one primary carrier for it. A successful first view
 lets the reader perceive the governing relationship before reading supporting
 paragraphs. A sequence of headings, prose, status pills, and text cards is still
-an illustrated document—not a visual explanation—when their geometry encodes
+an illustrated document, not a visual explanation, when their geometry encodes
 nothing. Use figures, trees, tables, diffs, media, or a justified bounded HTML
 composition only when their position, connection, scale, state, or actual image
 carries meaning. If removing the sentences leaves no useful relationship, the
@@ -153,6 +155,40 @@ Offline exports additionally place authored HTML in a sandboxed frame.
 Never use it as a component SDK, a way around the schema, or a
 place for product runtime code. Prefer a standard block over equivalent custom
 HTML, and never make ASCII stand in for a figure the claim deserves.
+
+## Schema version 2: framing, references and review entities
+
+A `schema_version: 2` document draws every figure and table with its framing,
+so a reviewer can comment on one node or arrow and a reader always sees what a
+figure is. A version 1 document renders as before, except that an `html`
+block's `title` now shows as a visible title line.
+
+- **Framing.** The runtime numbers figures and tables separately, in
+  document order through disclosures and tabs, and draws "Figure N · title"
+  above each. A `figure` block takes its title and caption from its
+  declaration. An `html` block needs `title` and `caption`, and takes an
+  optional `legend` (1 to 12 entries of `label` and `means`) and
+  `description` (at most 2000 characters), shown in one Details disclosure.
+  A `table` needs `title` and takes an optional `caption`. The document may
+  carry a one-line `summary` of at most 200 characters.
+- **References.** In Markdown, `[fig:<id>]` and `[table:<id>]` render as a
+  link reading "Figure N" or "Table N"; each must name a block of that kind.
+- **Figure marks.** Every mark an authored figure draws needs an `id`; it is
+  the mark's review entity. Ids are kebab-case, at most 64 characters, never
+  `none` and never starting `legend-`.
+- **Stage entities.** Inside an `html` stage, name what a reviewer may target
+  with a closed vocabulary; any other `data-cf-` attribute is refused.
+  `data-cf-target="<id>"` makes an element an entity, and
+  `data-cf-target="none"` excludes its subtree. `data-cf-group="<id>"` makes
+  a group one entity, with no target, group or `data-cf-for` inside it.
+  `data-cf-label` names the entity beside it, and `data-cf-for="<ids>"` marks
+  text that labels entities of the same stage. Ids follow the mark id rule
+  and are unique in the stage. The service labels each entity: its
+  `data-cf-label`, else the text that is `data-cf-for` it, else its
+  `aria-label`, else its own text, else its id.
+- **Legend or migrate.** When a stage's marks encode meaning (a colour, a
+  dash, a shape), give it a `legend`. When the stage shows a relationship the
+  figure grammar can draw, migrate it to a `figure` block instead.
 
 ## Converting a diagram block
 

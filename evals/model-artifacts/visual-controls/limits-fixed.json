@@ -1,0 +1,210 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "request-limits",
+    "family": "extent",
+    "binding": "authored",
+    "question": "How large may a request be, and how much room is left under the gateway?",
+    "idea": "The request body limit sits well under the gateway ceiling.",
+    "title": "Request size limits",
+    "caption": "Each bar is a configured limit drawn against the gateway ceiling on one scale.",
+    "states": [
+      {
+        "name": "used",
+        "mark": "used",
+        "means": "Configured limit"
+      },
+      {
+        "name": "limit",
+        "mark": "limit",
+        "means": "Gateway ceiling"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the request body limit is 64 MiB",
+        "source": "config/limits.json",
+        "derive": "http.max_body_mib",
+        "check": {
+          "kind": "json",
+          "select": "http.max_body_mib"
+        },
+        "value": 64
+      },
+      {
+        "claim": "an upload part is at most 16 MiB",
+        "source": "config/limits.json",
+        "derive": "http.max_part_mib",
+        "check": {
+          "kind": "json",
+          "select": "http.max_part_mib"
+        },
+        "value": 16
+      },
+      {
+        "claim": "the gateway ceiling is 100 MiB",
+        "source": "config/limits.json",
+        "derive": "gateway.ceiling_mib",
+        "check": {
+          "kind": "json",
+          "select": "gateway.ceiling_mib"
+        },
+        "value": 100
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 190,
+      "draw": [
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 160,
+          "y1": 150,
+          "x2": 680,
+          "y2": 150
+        },
+        {
+          "text": "Request body",
+          "x": 0,
+          "y": 54
+        },
+        {
+          "state": "used",
+          "shape": "rect",
+          "x": 160,
+          "y": 40,
+          "w": 260.0,
+          "h": 18,
+          "id": "u0"
+        },
+        {
+          "text": "64 MiB",
+          "x": 430.0,
+          "y": 54,
+          "style": "mute",
+          "for": [
+            "u0"
+          ]
+        },
+        {
+          "text": "Upload part",
+          "x": 0,
+          "y": 104
+        },
+        {
+          "state": "used",
+          "shape": "rect",
+          "x": 160,
+          "y": 90,
+          "w": 65.0,
+          "h": 18,
+          "id": "u1"
+        },
+        {
+          "text": "16 MiB",
+          "x": 235.0,
+          "y": 104,
+          "style": "mute",
+          "for": [
+            "u1"
+          ]
+        },
+        {
+          "state": "limit",
+          "shape": "line",
+          "x1": 566.25,
+          "y1": 30,
+          "x2": 566.25,
+          "y2": 140,
+          "id": "l0"
+        },
+        {
+          "text": "gateway ceiling 100 MiB",
+          "x": 566.25,
+          "y": 172,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "l0"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 190,
+      "draw": [
+        {
+          "text": "Request body",
+          "x": 20,
+          "y": 34
+        },
+        {
+          "state": "used",
+          "shape": "rect",
+          "x": 20,
+          "y": 48,
+          "w": 160.0,
+          "h": 16,
+          "id": "v0"
+        },
+        {
+          "text": "64 MiB",
+          "x": 188.0,
+          "y": 61,
+          "style": "mute",
+          "for": [
+            "v0"
+          ]
+        },
+        {
+          "text": "Upload part",
+          "x": 20,
+          "y": 94
+        },
+        {
+          "state": "used",
+          "shape": "rect",
+          "x": 20,
+          "y": 108,
+          "w": 40.0,
+          "h": 16,
+          "id": "v1"
+        },
+        {
+          "text": "16 MiB",
+          "x": 68.0,
+          "y": 121,
+          "style": "mute",
+          "for": [
+            "v1"
+          ]
+        },
+        {
+          "state": "limit",
+          "shape": "line",
+          "x1": 270.0,
+          "y1": 40,
+          "x2": 270.0,
+          "y2": 150,
+          "id": "k0"
+        },
+        {
+          "text": "ceiling 100 MiB",
+          "x": 270.0,
+          "y": 172,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "k0"
+          ]
+        }
+      ]
+    },
+    "twin": "facts"
+  }
+}

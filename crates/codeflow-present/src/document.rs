@@ -1,7 +1,7 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use base64::{engine::general_purpose::STANDARD, Engine as _};
-use pulldown_cmark::{Event, Options, Parser};
+use pulldown_cmark::{CowStr, Event, Options, Parser, Tag, TagEnd};
 use serde::{Deserialize, Serialize};
 
 use crate::{
@@ -21,6 +21,9 @@ pub struct PresentationDocument {
     pub language: Option<String>,
     #[serde(default)]
     pub provenance: Provenance,
+    /// Schema v2: a one-line summary `present list` shows.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub summary: Option<String>,
     pub blocks: Vec<Block>,
 }
 
@@ -69,6 +72,12 @@ pub enum Block {
         id: String,
         columns: Vec<String>,
         rows: Vec<Vec<String>>,
+        /// Schema v2: required; the runtime renders "Table N · title".
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        title: Option<String>,
+        /// Schema v2: optional.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
     },
     Status {
         id: String,
@@ -80,12 +89,19 @@ pub enum Block {
         code: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caption: Option<String>,
+        /// Schema v2: the repository file the snippet was captured from
+        /// (SPC-014 B10); `open` and `update` record its provenance.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<SnapshotSource>,
     },
     Diff {
         id: String,
         diff: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         caption: Option<String>,
+        /// Schema v2, as on `code`.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        source: Option<SnapshotSource>,
     },
     Tree {
         id: String,
@@ -124,7 +140,30 @@ pub enum Block {
         html: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         title: Option<String>,
+        /// Schema v2: required; every v2 stage is a framed figure.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        caption: Option<String>,
+        /// Schema v2: optional, 1 to 12 entries.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        legend: Option<Vec<LegendEntry>>,
+        /// Schema v2: optional, shown in the Details disclosure.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        description: Option<String>,
     },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct SnapshotSource {
+    /// A repository-relative path: no leading slash, no `..`, no backslash.
+    pub path: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct LegendEntry {
+    pub label: String,
+    pub means: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -246,16 +285,16 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParsedDocument> {
                 "schema_version must be a non-negative 32-bit integer".to_string(),
             )
         })?;
-    if version > limits::SCHEMA_VERSION {
+    if version > limits::MAX_DOCUMENT_SCHEMA_VERSION {
         return Ok(ParsedDocument::Unsupported {
             schema_version: version,
             raw: raw.to_string(),
         });
     }
-    if version != limits::SCHEMA_VERSION {
+    if version == 0 {
         return Err(PresentError::UnsupportedSchema {
             found: version,
-            supported: limits::SCHEMA_VERSION,
+            supported: limits::MAX_DOCUMENT_SCHEMA_VERSION,
         });
     }
 
@@ -267,11 +306,31 @@ pub fn parse_document(bytes: &[u8]) -> Result<ParsedDocument> {
 
 impl PresentationDocument {
     pub fn validate(&self) -> Result<()> {
+        let version = self.schema_version;
+        if !(1..=limits::MAX_DOCUMENT_SCHEMA_VERSION).contains(&version) {
+            return Err(PresentError::UnsupportedSchema {
+                found: version,
+                supported: limits::MAX_DOCUMENT_SCHEMA_VERSION,
+            });
+        }
         require_nonempty_bounded("title", &self.title, limits::MAX_TITLE_BYTES)?;
         if let Some(language) = &self.language {
             validate_language(language)?;
         }
         validate_provenance(&self.provenance)?;
+        match (&self.summary, version) {
+            (None, _) => {}
+            (Some(_), 1) => return Err(needs_v2("summary", "the document")),
+            (Some(summary), _) => {
+                let characters = summary.trim().chars().count();
+                if characters == 0 || summary.chars().count() > limits::MAX_SUMMARY_CHARS {
+                    return Err(invalid(format!(
+                        "summary must be 1 to {} characters",
+                        limits::MAX_SUMMARY_CHARS
+                    )));
+                }
+            }
+        }
         if self.blocks.is_empty() {
             return Err(invalid("blocks must not be empty"));
         }
@@ -281,13 +340,249 @@ impl PresentationDocument {
         let mut collection_items = 0;
         validate_blocks(
             &self.blocks,
+            version,
             1,
             &mut count,
             &mut drawn_count,
             &mut collection_items,
             &mut ids,
-        )
+        )?;
+        if version >= 2 {
+            validate_references(self)?;
+        }
+        Ok(())
     }
+
+    /// Every block in document order, depth first through disclosures and
+    /// tabs.
+    #[must_use]
+    pub fn walk(&self) -> Vec<&Block> {
+        let mut output = Vec::new();
+        walk_blocks(&self.blocks, &mut output);
+        output
+    }
+}
+
+fn walk_blocks<'a>(blocks: &'a [Block], output: &mut Vec<&'a Block>) {
+    for block in blocks {
+        output.push(block);
+        match block {
+            Block::Disclosure { blocks, .. } => walk_blocks(blocks, output),
+            Block::Tabs { tabs, .. } => {
+                for tab in tabs {
+                    walk_blocks(&tab.blocks, output);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// What a framed block is numbered as (SPC-014 B5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FrameKind {
+    Figure,
+    Table,
+}
+
+impl FrameKind {
+    #[must_use]
+    pub const fn noun(self) -> &'static str {
+        match self {
+            Self::Figure => "Figure",
+            Self::Table => "Table",
+        }
+    }
+
+    pub(crate) const fn reference_prefix(self) -> &'static str {
+        match self {
+            Self::Figure => "fig",
+            Self::Table => "table",
+        }
+    }
+
+    /// The frame kind a block is numbered as in a v2 document.
+    #[must_use]
+    pub const fn of(block: &Block) -> Option<Self> {
+        match block {
+            Block::Figure { .. } | Block::Html { .. } => Some(Self::Figure),
+            Block::Table { .. } => Some(Self::Table),
+            _ => None,
+        }
+    }
+}
+
+/// The document-level framing a v2 document gets: figure and table numbers
+/// by a depth-first walk, and references resolved to them. A v1 document
+/// has none, so its references stay literal text.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Framing {
+    enabled: bool,
+    numbers: HashMap<String, (FrameKind, usize)>,
+}
+
+impl Framing {
+    #[must_use]
+    pub fn of(document: &PresentationDocument) -> Self {
+        if document.schema_version < 2 {
+            return Self::default();
+        }
+        let mut numbers = HashMap::new();
+        let (mut figures, mut tables) = (0, 0);
+        for block in document.walk() {
+            let number = match FrameKind::of(block) {
+                Some(FrameKind::Figure) => {
+                    figures += 1;
+                    (FrameKind::Figure, figures)
+                }
+                Some(FrameKind::Table) => {
+                    tables += 1;
+                    (FrameKind::Table, tables)
+                }
+                None => continue,
+            };
+            numbers.insert(block.id().to_string(), number);
+        }
+        Self {
+            enabled: true,
+            numbers,
+        }
+    }
+
+    /// Whether this is a v2 document's framing (numbers and references).
+    #[must_use]
+    pub const fn enabled(&self) -> bool {
+        self.enabled
+    }
+
+    #[must_use]
+    pub fn number(&self, block_id: &str) -> Option<(FrameKind, usize)> {
+        self.numbers.get(block_id).copied()
+    }
+
+    /// "Figure N" or "Table N" for a reference, when it resolves.
+    #[must_use]
+    pub fn reference_label(&self, kind: FrameKind, block_id: &str) -> Option<String> {
+        self.number(block_id)
+            .filter(|(numbered, _)| *numbered == kind)
+            .map(|(kind, number)| format!("{} {number}", kind.noun()))
+    }
+}
+
+/// A run of Markdown text split at `[fig:<id>]` and `[table:<id>]`
+/// references.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum TextSegment<'a> {
+    Text(&'a str),
+    Reference { kind: FrameKind, id: &'a str },
+}
+
+pub(crate) fn reference_segments(text: &str) -> Vec<TextSegment<'_>> {
+    let mut segments = Vec::new();
+    let mut literal_start = 0;
+    let mut index = 0;
+    while let Some(offset) = text[index..].find('[') {
+        let open = index + offset;
+        let found = [FrameKind::Figure, FrameKind::Table]
+            .into_iter()
+            .find_map(|kind| {
+                let rest = text[open + 1..].strip_prefix(kind.reference_prefix())?;
+                let rest = rest.strip_prefix(':')?;
+                let close = rest.find(']')?;
+                let id = &rest[..close];
+                valid_block_id(id).then_some((kind, id))
+            });
+        match found {
+            Some((kind, id)) => {
+                if literal_start < open {
+                    segments.push(TextSegment::Text(&text[literal_start..open]));
+                }
+                segments.push(TextSegment::Reference { kind, id });
+                index = open + 1 + kind.reference_prefix().len() + 1 + id.len() + 1;
+                literal_start = index;
+            }
+            None => index = open + 1,
+        }
+    }
+    if literal_start < text.len() {
+        segments.push(TextSegment::Text(&text[literal_start..]));
+    }
+    segments
+}
+
+/// Markdown events with adjacent text runs merged, so a reference the parser
+/// split at its brackets reads as one run. Text inside a link is marked so
+/// references there stay literal.
+pub(crate) fn coalesced_markdown(markdown: &str) -> Vec<(Event<'_>, bool)> {
+    let mut output: Vec<(Event<'_>, bool)> = Vec::new();
+    let mut link_depth = 0_usize;
+    for event in Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH) {
+        match &event {
+            Event::Start(Tag::Link { .. }) => link_depth += 1,
+            Event::End(TagEnd::Link) => link_depth = link_depth.saturating_sub(1),
+            _ => {}
+        }
+        let in_link = link_depth > 0;
+        if let (Event::Text(next), Some((Event::Text(previous), previous_in_link))) =
+            (&event, output.last_mut())
+        {
+            if *previous_in_link == in_link {
+                *previous = CowStr::Boxed(format!("{previous}{next}").into_boxed_str());
+                continue;
+            }
+        }
+        output.push((event, in_link));
+    }
+    output
+}
+
+fn validate_references(document: &PresentationDocument) -> Result<()> {
+    let kinds = document
+        .walk()
+        .into_iter()
+        .map(|block| (block.id(), FrameKind::of(block)))
+        .collect::<HashMap<_, _>>();
+    for block in document.walk() {
+        for markdown in block.markdown_fields() {
+            for (event, in_link) in coalesced_markdown(markdown) {
+                let Event::Text(text) = event else {
+                    continue;
+                };
+                if in_link {
+                    continue;
+                }
+                for segment in reference_segments(&text) {
+                    let TextSegment::Reference { kind, id } = segment else {
+                        continue;
+                    };
+                    let reference = format!("[{}:{id}]", kind.reference_prefix());
+                    match kinds.get(id) {
+                        None => {
+                            return Err(invalid(format!(
+                                "block {}: the reference {reference} names no block",
+                                block.id()
+                            )))
+                        }
+                        Some(found) if *found != Some(kind) => {
+                            return Err(invalid(format!(
+                            "block {}: the reference {reference} names a block that is not a {}",
+                            block.id(),
+                            kind.noun().to_lowercase()
+                        )))
+                        }
+                        Some(_) => {}
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+fn needs_v2(field: &str, owner: &str) -> PresentError {
+    invalid(format!(
+        "{field} on {owner} is a schema_version 2 field; set schema_version 2 or remove it"
+    ))
 }
 
 impl Block {
@@ -313,8 +608,28 @@ impl Block {
         }
     }
 
+    /// The Markdown fields of this block, in which v2 references resolve.
     #[must_use]
-    pub fn canonical_review_text(&self) -> String {
+    pub fn markdown_fields(&self) -> Vec<&str> {
+        match self {
+            Self::Narrative { markdown, .. }
+            | Self::Callout { markdown, .. }
+            | Self::Decision { markdown, .. } => vec![markdown],
+            Self::Bullets { items, .. } => items.iter().map(String::as_str).collect(),
+            Self::Comparison { columns, .. } => columns
+                .iter()
+                .map(|column| column.markdown.as_str())
+                .collect(),
+            Self::Table { rows, .. } => rows.iter().flatten().map(String::as_str).collect(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// The text a text note is anchored in. In a v2 document a reference
+    /// reads as its rendered label ("Figure 1"), as the page shows it.
+    #[must_use]
+    pub fn canonical_review_text(&self, framing: &Framing) -> String {
+        let markdown_text = |markdown: &str| markdown_text(markdown, framing);
         match self {
             Self::Narrative { markdown, .. } => markdown_text(markdown),
             Self::Callout {
@@ -469,6 +784,7 @@ fn truncate_nav_label(label: &str, max_chars: usize) -> String {
 
 fn validate_blocks(
     blocks: &[Block],
+    version: u32,
     depth: usize,
     count: &mut usize,
     drawn_count: &mut usize,
@@ -502,7 +818,15 @@ fn validate_blocks(
         if !ids.insert(block.id().to_string()) {
             return Err(invalid(format!("duplicate block id {}", block.id())));
         }
-        validate_block(block, depth, count, drawn_count, collection_items, ids)?;
+        validate_block(
+            block,
+            version,
+            depth,
+            count,
+            drawn_count,
+            collection_items,
+            ids,
+        )?;
     }
     Ok(())
 }
@@ -510,6 +834,7 @@ fn validate_blocks(
 #[allow(clippy::too_many_lines)]
 fn validate_block(
     block: &Block,
+    version: u32,
     depth: usize,
     count: &mut usize,
     drawn_count: &mut usize,
@@ -556,7 +881,39 @@ fn validate_block(
             require_nonempty_bounded("decision title", title, limits::MAX_TITLE_BYTES)?;
             bounded("decision markdown", markdown, limits::MAX_PROSE_BYTES)
         }
-        Block::Table { columns, rows, .. } => {
+        Block::Table {
+            id,
+            columns,
+            rows,
+            title,
+            caption,
+        } => {
+            if version == 1 {
+                if title.is_some() {
+                    return Err(needs_v2("title", &format!("table block {id}")));
+                }
+                if caption.is_some() {
+                    return Err(needs_v2("caption", &format!("table block {id}")));
+                }
+            } else {
+                let Some(title) = title else {
+                    return Err(invalid(format!(
+                        "table block {id} needs a title: a schema_version 2 table is framed as \"Table N · title\""
+                    )));
+                };
+                require_nonempty_bounded(
+                    &format!("table block {id} title"),
+                    title,
+                    limits::MAX_TITLE_BYTES,
+                )?;
+                if let Some(caption) = caption {
+                    require_nonempty_bounded(
+                        &format!("table block {id} caption"),
+                        caption,
+                        limits::MAX_TITLE_BYTES,
+                    )?;
+                }
+            }
             if columns.is_empty() || columns.len() > limits::MAX_TABLE_COLUMNS {
                 return Err(invalid("table column count is outside the allowed range"));
             }
@@ -595,17 +952,25 @@ fn validate_block(
             Ok(())
         }
         Block::Code {
+            id,
             language,
             code,
             caption,
-            ..
+            source,
         } => {
             require_nonempty_bounded("code language", language, 64)?;
             bounded("code", code, limits::MAX_CODE_BYTES)?;
+            validate_snapshot_source(id, source.as_ref(), version)?;
             optional_bounded("code caption", caption.as_deref(), limits::MAX_TITLE_BYTES)
         }
-        Block::Diff { diff, caption, .. } => {
+        Block::Diff {
+            id,
+            diff,
+            caption,
+            source,
+        } => {
             bounded("diff", diff, limits::MAX_CODE_BYTES)?;
+            validate_snapshot_source(id, source.as_ref(), version)?;
             optional_bounded("diff caption", caption.as_deref(), limits::MAX_TITLE_BYTES)
         }
         Block::Tree { label, nodes, .. } => {
@@ -616,7 +981,13 @@ fn validate_block(
             let mut tree_items = 0;
             validate_tree(nodes, depth + 1, &mut tree_items, collection_items)
         }
-        Block::Figure { declaration, .. } => validate_figure_declaration(declaration),
+        Block::Figure { id, declaration } => {
+            validate_figure_declaration(declaration)?;
+            if version >= 2 {
+                validate_figure_marks(id, declaration)?;
+            }
+            Ok(())
+        }
         Block::Media {
             mime_type,
             data_base64,
@@ -643,7 +1014,15 @@ fn validate_block(
             summary, blocks, ..
         } => {
             require_nonempty_bounded("disclosure summary", summary, limits::MAX_TITLE_BYTES)?;
-            validate_blocks(blocks, depth + 1, count, drawn_count, collection_items, ids)
+            validate_blocks(
+                blocks,
+                version,
+                depth + 1,
+                count,
+                drawn_count,
+                collection_items,
+                ids,
+            )
         }
         Block::Tabs { tabs, .. } => {
             if tabs.is_empty() || tabs.len() > 12 {
@@ -654,6 +1033,7 @@ fn validate_block(
                 require_nonempty_bounded("tab label", &tab.label, limits::MAX_TITLE_BYTES)?;
                 validate_blocks(
                     &tab.blocks,
+                    version,
                     depth + 1,
                     count,
                     drawn_count,
@@ -666,13 +1046,41 @@ fn validate_block(
         Block::FeedbackPrompt { prompt, .. } => {
             require_nonempty_bounded("feedback prompt", prompt, limits::MAX_LABEL_BYTES)
         }
-        Block::Html { html, title, .. } => {
+        Block::Html {
+            id,
+            html,
+            title,
+            caption,
+            legend,
+            description,
+        } => {
             bounded("sandboxed html", html, limits::MAX_HTML_BYTES)?;
-            validate_sandbox_html(html)?;
-            optional_bounded(
-                "sandboxed html title",
+            if version == 1 {
+                validate_sandbox_html(html, version)?;
+                for (field, present) in [
+                    ("caption", caption.is_some()),
+                    ("legend", legend.is_some()),
+                    ("description", description.is_some()),
+                ] {
+                    if present {
+                        return Err(needs_v2(field, &format!("html block {id}")));
+                    }
+                }
+                return optional_bounded(
+                    "sandboxed html title",
+                    title.as_deref(),
+                    limits::MAX_TITLE_BYTES,
+                );
+            }
+            validate_sandbox_html(html, version).map_err(|error| {
+                invalid(format!("html block {id}: {}", document_message(error)))
+            })?;
+            validate_stage_framing(
+                id,
                 title.as_deref(),
-                limits::MAX_TITLE_BYTES,
+                caption.as_deref(),
+                legend.as_deref(),
+                description.as_deref(),
             )
         }
     }
@@ -751,27 +1159,201 @@ fn append_tree_text(nodes: &[TreeNode], output: &mut String, separated: bool) {
     }
 }
 
-fn markdown_text(markdown: &str) -> String {
-    Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH)
-        .filter_map(|event| match event {
-            Event::Text(text) | Event::Code(text) => Some(text.into_string()),
-            Event::SoftBreak | Event::HardBreak => Some("\n".to_string()),
-            _ => None,
-        })
-        .collect()
+fn markdown_text(markdown: &str, framing: &Framing) -> String {
+    if !framing.enabled() {
+        return Parser::new_ext(markdown, Options::ENABLE_STRIKETHROUGH)
+            .filter_map(|event| match event {
+                Event::Text(text) | Event::Code(text) => Some(text.into_string()),
+                Event::SoftBreak | Event::HardBreak => Some("\n".to_string()),
+                _ => None,
+            })
+            .collect();
+    }
+    let mut output = String::new();
+    for (event, in_link) in coalesced_markdown(markdown) {
+        match event {
+            Event::Text(text) if !in_link => {
+                for segment in reference_segments(&text) {
+                    match segment {
+                        TextSegment::Text(text) => output.push_str(text),
+                        TextSegment::Reference { kind, id } => {
+                            if let Some(label) = framing.reference_label(kind, id) {
+                                output.push_str(&label);
+                            } else {
+                                output.push('[');
+                                output.push_str(kind.reference_prefix());
+                                output.push(':');
+                                output.push_str(id);
+                                output.push(']');
+                            }
+                        }
+                    }
+                }
+            }
+            Event::Text(text) | Event::Code(text) => output.push_str(&text),
+            Event::SoftBreak | Event::HardBreak => output.push('\n'),
+            _ => {}
+        }
+    }
+    output
+}
+
+/// The message of a document error without its "invalid presentation
+/// document" prefix, to nest it under a block.
+fn document_message(error: PresentError) -> String {
+    match error {
+        PresentError::InvalidDocument(message) => message,
+        other => other.to_string(),
+    }
+}
+
+/// A v2 snapshot source names a repository-relative file; `open` and
+/// `update` resolve it inside the work tree (SPC-014 B10).
+fn validate_snapshot_source(id: &str, source: Option<&SnapshotSource>, version: u32) -> Result<()> {
+    let Some(source) = source else {
+        return Ok(());
+    };
+    if version == 1 {
+        return Err(needs_v2("source", &format!("block {id}")));
+    }
+    let path = &source.path;
+    let relative = !path.is_empty()
+        && path.len() <= 1024
+        && !path.starts_with('/')
+        && !path.contains('\\')
+        && !path.contains(':')
+        && path
+            .split('/')
+            .all(|part| !part.is_empty() && part != "." && part != "..");
+    if !relative {
+        return Err(invalid(format!(
+            "block {id}: source.path {path:?} must be a repository-relative path without . or .. parts"
+        )));
+    }
+    Ok(())
+}
+
+fn validate_stage_framing(
+    id: &str,
+    title: Option<&str>,
+    caption: Option<&str>,
+    legend: Option<&[LegendEntry]>,
+    description: Option<&str>,
+) -> Result<()> {
+    let Some(title) = title else {
+        return Err(invalid(format!(
+            "html block {id} needs a title: every schema_version 2 stage is a figure framed as \"Figure N · title\""
+        )));
+    };
+    require_nonempty_bounded(
+        &format!("html block {id} title"),
+        title,
+        limits::MAX_TITLE_BYTES,
+    )?;
+    let Some(caption) = caption else {
+        return Err(invalid(format!(
+            "html block {id} needs a caption: every schema_version 2 stage states its takeaway"
+        )));
+    };
+    require_nonempty_bounded(
+        &format!("html block {id} caption"),
+        caption,
+        limits::MAX_TITLE_BYTES,
+    )?;
+    if let Some(legend) = legend {
+        if legend.is_empty() || legend.len() > limits::MAX_LEGEND_ENTRIES {
+            return Err(invalid(format!(
+                "html block {id} legend must list 1 to {} entries",
+                limits::MAX_LEGEND_ENTRIES
+            )));
+        }
+        for entry in legend {
+            require_nonempty_bounded(
+                &format!("html block {id} legend label"),
+                &entry.label,
+                limits::MAX_TITLE_BYTES,
+            )?;
+            require_nonempty_bounded(
+                &format!("html block {id} legend means"),
+                &entry.means,
+                limits::MAX_TITLE_BYTES,
+            )?;
+        }
+    }
+    if let Some(description) = description {
+        if description.trim().is_empty()
+            || description.chars().count() > limits::MAX_DESCRIPTION_CHARS
+        {
+            return Err(invalid(format!(
+                "html block {id} description must be 1 to {} characters",
+                limits::MAX_DESCRIPTION_CHARS
+            )));
+        }
+    }
+    Ok(())
+}
+
+/// Schema v2: every mark an authored figure draws names itself, because an
+/// unnamed mark could only be told apart by its position (B2). A figure
+/// drawn from a layout keys its marks from the layout instead.
+fn validate_figure_marks(id: &str, declaration: &serde_json::Value) -> Result<()> {
+    let Some(figure) = declaration.get("figure") else {
+        return Ok(());
+    };
+    if figure.get("layout").is_some() {
+        return Ok(());
+    }
+    for composition in ["wide", "narrow"] {
+        let Some(draw) = figure
+            .pointer(&format!("/{composition}/draw"))
+            .and_then(serde_json::Value::as_array)
+        else {
+            continue;
+        };
+        let mut seen = HashSet::new();
+        for (index, item) in draw.iter().enumerate() {
+            let Some(state) = item.get("state") else {
+                continue;
+            };
+            let Some(mark) = item.get("id").and_then(serde_json::Value::as_str) else {
+                return Err(invalid(format!(
+                    "figure block {id}: {composition}.draw[{index}] draws the state {state} without an id; a schema_version 2 authored figure names every mark"
+                )));
+            };
+            if !crate::entity::is_entity_id(mark) {
+                return Err(invalid(format!(
+                    "figure block {id}: mark id {mark:?} does not match the entity id grammar (lower-case kebab-case, at most 64 characters)"
+                )));
+            }
+            if mark.starts_with(crate::entity::LEGEND_PREFIX) {
+                return Err(invalid(format!(
+                    "figure block {id}: mark id {mark:?} uses the prefix legend-, which is reserved for legend entries"
+                )));
+            }
+            if !seen.insert(mark) {
+                return Err(invalid(format!(
+                    "figure block {id}: mark id {mark:?} is used twice in the {composition} composition"
+                )));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn validate_id(id: &str) -> Result<()> {
-    if id.is_empty()
-        || id.len() > 64
-        || !id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
-        || !id.as_bytes()[0].is_ascii_alphanumeric()
-    {
+    if !valid_block_id(id) {
         return Err(invalid(format!("invalid block id {id:?}")));
     }
     Ok(())
+}
+
+fn valid_block_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 64
+        && id
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+        && id.as_bytes()[0].is_ascii_alphanumeric()
 }
 
 fn validate_provenance(provenance: &Provenance) -> Result<()> {
@@ -916,6 +1498,7 @@ mod tests {
 
     fn document(blocks: Vec<Block>) -> PresentationDocument {
         PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Review".to_string(),
             language: None,
@@ -949,11 +1532,11 @@ mod tests {
 
     #[test]
     fn newer_schema_is_complete_raw_fallback() {
-        let raw = br#"{"schema_version":2,"title":"Future","blocks":[],"new":true}"#;
+        let raw = br#"{"schema_version":3,"title":"Future","blocks":[],"new":true}"#;
         assert_eq!(
             parse_document(raw).unwrap(),
             ParsedDocument::Unsupported {
-                schema_version: 2,
+                schema_version: 3,
                 raw: String::from_utf8(raw.to_vec()).unwrap()
             }
         );
@@ -978,11 +1561,14 @@ mod tests {
     #[test]
     fn html_canonical_text_includes_visible_stage_labels() {
         let block = Block::Html {
+            caption: None,
+            legend: None,
+            description: None,
             id: "stage".to_string(),
             title: Some("Stage title".to_string()),
             html: "<figure><svg><text>Element · click a figure</text></svg></figure>".to_string(),
         };
-        let canonical = block.canonical_review_text();
+        let canonical = block.canonical_review_text(&crate::document::Framing::default());
         assert!(canonical.contains("Stage title"));
         assert!(
             canonical.contains("Element · click a figure"),
@@ -1078,7 +1664,7 @@ mod tests {
         let block = figure("fig", valid.clone());
         assert_eq!(block.review_label(), "One change on its review path");
         assert_eq!(
-            block.canonical_review_text(),
+            block.canonical_review_text(&crate::document::Framing::default()),
             "One change on its review pathA change passes review before it lands."
         );
 

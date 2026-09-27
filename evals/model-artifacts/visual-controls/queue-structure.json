@@ -1,0 +1,288 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "queue-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What is the queue service, and what is it not?",
+    "idea": "Jobs cross into the service from producers and leave only to a worker or the dead letter queue.",
+    "title": "What the queue service is made of",
+    "caption": "Producers sit outside the service, and a job that fails five times ends in the dead letter queue.",
+    "states": [
+      {
+        "name": "part",
+        "mark": "state",
+        "means": "A part outside the service"
+      },
+      {
+        "name": "service",
+        "mark": "layer-remote",
+        "means": "The service and what it holds"
+      },
+      {
+        "name": "job",
+        "mark": "trans",
+        "means": "A job moves"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the service has producers, a queue, workers and a dead letter queue",
+        "source": "docs/queue-service.md#concept",
+        "derive": "the Concept section",
+        "check": {
+          "kind": "contains",
+          "text": "a dead letter queue"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 210,
+      "draw": [
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 20,
+          "y": 70,
+          "w": 130,
+          "h": 44,
+          "rx": 8,
+          "id": "p0"
+        },
+        {
+          "text": "Producers",
+          "x": 85,
+          "y": 97,
+          "anchor": "middle",
+          "for": [
+            "p0"
+          ]
+        },
+        {
+          "state": "service",
+          "shape": "rect",
+          "x": 220,
+          "y": 20,
+          "w": 480,
+          "h": 170,
+          "rx": 10,
+          "id": "r0"
+        },
+        {
+          "text": "Queue service",
+          "x": 236,
+          "y": 44,
+          "style": "strong",
+          "for": [
+            "r0"
+          ]
+        },
+        {
+          "text": "Queue",
+          "x": 250,
+          "y": 97,
+          "for": [
+            "r0"
+          ]
+        },
+        {
+          "text": "Workers",
+          "x": 410,
+          "y": 97,
+          "for": [
+            "r0"
+          ]
+        },
+        {
+          "text": "Dead letters",
+          "x": 410,
+          "y": 172,
+          "for": [
+            "r0"
+          ]
+        },
+        {
+          "state": "job",
+          "shape": "path",
+          "d": "M152 92H236",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "text": "publish",
+          "x": 186,
+          "y": 80,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e0"
+          ]
+        },
+        {
+          "state": "job",
+          "shape": "path",
+          "d": "M304 92H398",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "job",
+          "shape": "path",
+          "d": "M435 112V146",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "text": "fifth failure",
+          "x": 447,
+          "y": 132,
+          "style": "mute",
+          "for": [
+            "e2",
+            "r0"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 304,
+      "draw": [
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 100,
+          "y": 8,
+          "w": 160,
+          "h": 36,
+          "rx": 8,
+          "id": "q0"
+        },
+        {
+          "text": "Producers",
+          "x": 180,
+          "y": 31,
+          "anchor": "middle",
+          "for": [
+            "q0"
+          ]
+        },
+        {
+          "state": "job",
+          "shape": "path",
+          "d": "M180 46V104",
+          "head": "end",
+          "id": "f0"
+        },
+        {
+          "text": "publish",
+          "x": 192,
+          "y": 70,
+          "style": "mute",
+          "for": [
+            "f0"
+          ]
+        },
+        {
+          "state": "service",
+          "shape": "rect",
+          "x": 20,
+          "y": 84,
+          "w": 320,
+          "h": 212,
+          "rx": 10,
+          "id": "s0"
+        },
+        {
+          "text": "Queue service",
+          "x": 32,
+          "y": 106,
+          "style": "strong",
+          "for": [
+            "s0"
+          ]
+        },
+        {
+          "text": "Queue",
+          "x": 180,
+          "y": 128,
+          "anchor": "middle",
+          "for": [
+            "s0"
+          ]
+        },
+        {
+          "state": "job",
+          "shape": "path",
+          "d": "M180 142V171",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "text": "Workers",
+          "x": 180,
+          "y": 196,
+          "anchor": "middle",
+          "for": [
+            "s0"
+          ]
+        },
+        {
+          "state": "job",
+          "shape": "path",
+          "d": "M180 214V240",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "text": "fifth failure",
+          "x": 192,
+          "y": 230,
+          "style": "mute",
+          "for": [
+            "f2",
+            "s0"
+          ]
+        },
+        {
+          "text": "Dead letters",
+          "x": 180,
+          "y": 266,
+          "anchor": "middle",
+          "for": [
+            "s0"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "When"
+      ],
+      "rows": [
+        [
+          "Producers",
+          "Queue",
+          "publish"
+        ],
+        [
+          "Queue",
+          "Workers",
+          "in order"
+        ],
+        [
+          "Workers",
+          "Dead letters",
+          "fifth failure"
+        ]
+      ]
+    }
+  }
+}

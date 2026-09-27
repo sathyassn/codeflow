@@ -4,14 +4,15 @@
 // then read in a browser, where the class rules and the twelve figure rules
 // are applied to what actually renders.
 import assert from "node:assert/strict";
-import { spawnSync } from "node:child_process";
+import { spawn, spawnSync } from "node:child_process";
 import { createServer } from "node:http";
-import { cp, mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
+import { cp, mkdir, mkdtemp, readdir, readFile, rm, stat, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 import { chromium } from "@playwright/test";
 import { sha256 } from "../scripts/lib.mjs";
-import { figureGateFailures, observePortalPage, pageCssFailures, pinnedBuiltSheets, pinnedDeclarations, pinnedKitSheets, pinnedRuntimeScripts } from "../scripts/browser-verify.mjs";
+import { figureGateFailures, finishTrace, observePortalPage, pageCssFailures, pinnedBuiltSheets, pinnedDeclarations, pinnedKitSheets, pinnedRuntimeScripts } from "../scripts/browser-verify.mjs";
 import { REGENERATE, builtRuntimeScripts } from "../scripts/runtime-scripts.mjs";
 import { drawnValuesMatch } from "../scripts/figure-grammar.mjs";
 import { GitSnapshot } from "../scripts/git-snapshot.mjs";
@@ -294,6 +295,9 @@ test("the mixed fixture renders every class and the gates name only what falls s
         [".cf-fig { clip-path: inset(50%); }", /<figure class="cf-fig[^"]*"> computes clip-path inset\(50%\) where the clean copy computes none/],
         [".cf-fig { filter: opacity(0); }", /<figure class="cf-fig[^"]*"> computes filter opacity\(0\) where the clean copy computes none/],
         [".cf-fig-caption { visibility: hidden; }", /<figcaption class="cf-fig-caption"> computes visibility hidden where the clean copy computes visible/, /the caption is not visible to a reader/],
+        // The title line is part of the figure (SPC-014 B5): hiding it fails
+        // the figure however the rest of the page reads.
+        [".cf-fig-title { visibility: hidden; }", /<p class="cf-fig-title"> computes visibility hidden where the clean copy computes visible/, /the title is not visible to a reader/],
         [".cf-fig { translate: 0 1000px; }", /<figure class="cf-fig[^"]*"> computes translate 0px 1000px where the clean copy computes none/],
         [".cf-fig-svg .cf-m-trans { stroke-dasharray: 0 100000; }", /computes stroke-dasharray 0px, 100000px where the clean copy computes none/],
         [".cf-m-used { translate: 0 1000px; }", /a drawn <rect> has translate 0px 1000px where the kit sheets alone give none/, /the row-0 mark spans y/],
@@ -305,14 +309,14 @@ test("the mixed fixture renders every class and the gates name only what falls s
       }
       // Starlight's content rules reach into a companion that does not opt
       // out of them: the list rule pushes each legend key 10px above its
-      // label and the details rule paints the twin marker as a dot. The clean
+      // label and the details rule paints the Details marker as a dot. The clean
       // copy carries the same site styles, so only the absolute reading of
       // the legend and the marker sees it, at every width and mode.
       const opted = await hostile({ inject: () => { for (const companion of document.querySelectorAll(".cf-companion")) companion.classList.remove("not-content"); }, css: null });
       for (const [width, mode] of [[1440, "light"], [390, "light"], [1440, "dark"], [390, "dark"]]) {
         const where = `docs/guide.md (at reference/guide, ${width}px ${mode}): figure install-steps: `;
         assert.ok(opted.some((failure) => failure.startsWith(where) && /the [a-z-]+ legend key sits \d+(?:\.\d)?px above its label/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
-        assert.ok(opted.some((failure) => failure.startsWith(where) && /the twin marker is not the figure sheet's chevron/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
+        assert.ok(opted.some((failure) => failure.startsWith(where) && /the Details marker is not the figure sheet's chevron/.test(failure)), `${width} ${mode}: ${opted.join("\n")}`);
       }
 
       // A style attribute on the content, the figure's ancestor, is refused
@@ -736,5 +740,86 @@ test("the figure gate matches page motion without accepting changed figure style
     await browser?.close();
     await site?.close();
     await rm(root, { recursive: true, force: true });
+  }
+});
+
+// A fetch the clean copy cannot complete (a socket hang-up under load) fails
+// the check and the verifier still releases what it holds. Each run holds
+// the workflow lease and a tracked preview child, then loads a page from a
+// server that hangs up on every request: through the clean copy's route, the
+// failed fetch is recorded and the navigation fails; through a route with no
+// catch, the lifecycle takes the unhandled rejection as fatal. Either way the
+// process exits 1, with no lock, no lock candidate and no preview left.
+test("a failed clean-copy fetch fails the verifier and releases its lease and preview", { skip: process.platform === "win32", timeout: 120_000 }, async () => {
+  const root = await selfContainedPortalFixture();
+  try {
+    const runner = path.join(root, "fetch-failure-fixture.mjs");
+    await writeFile(runner, `
+      import { spawn } from "node:child_process";
+      import { createServer } from "node:http";
+      import { writeFile } from "node:fs/promises";
+      import path from "node:path";
+      import { chromium } from "@playwright/test";
+      import { cleanDocumentRoute } from "./scripts/browser-verify.mjs";
+      import { withSignalAwareChildLifecycle } from "./scripts/child-lifecycle.mjs";
+      import { hardenedChildEnvironment } from "./scripts/process-environment.mjs";
+      import { withWorkflowLease } from "./scripts/publication.mjs";
+      const root = process.cwd();
+      const guarded = process.argv[2] === "guarded";
+      await withSignalAwareChildLifecycle((lifecycle) => withWorkflowLease(root, async () => {
+        const preview = spawn(process.execPath, ["-e", "process.on('SIGTERM',()=>process.exit(0));setInterval(()=>{},1000)"], { stdio: "ignore" });
+        lifecycle.trackChild(preview);
+        await writeFile(path.join(root, ".preview-pid"), String(preview.pid));
+        const server = createServer((request) => request.socket.destroy());
+        await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
+        lifecycle.addCleanup(() => new Promise((resolve) => server.close(resolve)));
+        const browser = await lifecycle.acquire(chromium.launch({ headless: true, env: hardenedChildEnvironment() }), (late) => late.close());
+        lifecycle.addCleanup(() => browser.close());
+        const page = await browser.newPage();
+        const failures = [];
+        if (guarded) await page.route("**/*", (route) => cleanDocumentRoute(route, "script-src 'none'", failures));
+        else await page.route("**/*", async (route) => { const response = await route.fetch(); await route.fulfill({ response }); });
+        try { await page.goto("http://127.0.0.1:" + server.address().port + "/"); }
+        catch (error) { throw new Error(failures.join("; ") + "; then " + error.message); }
+      }));
+    `);
+    for (const mode of ["guarded", "unguarded"]) {
+      const child = spawn(process.execPath, [runner, mode], { cwd: root, stdio: ["ignore", "ignore", "pipe"] });
+      let stderr = "";
+      child.stderr.on("data", (chunk) => { stderr += chunk; });
+      const outcome = await new Promise((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", (code, signal) => resolve({ code, signal }));
+      });
+      assert.deepEqual(outcome, { code: 1, signal: null }, `${mode}: ${stderr}`);
+      assert.match(stderr, /socket hang up/, mode);
+      if (mode === "guarded") assert.match(stderr, /the clean copy could not load http:\/\/127\.0\.0\.1:\d+\/: .*socket hang up/, stderr);
+      await assert.rejects(readFile(path.join(root, ".portal/workflow.lock")), /ENOENT/, mode);
+      assert.deepEqual((await readdir(path.join(root, ".portal"))).filter((name) => name.startsWith(".workflow-lock")), [], mode);
+      const pid = Number(await readFile(path.join(root, ".preview-pid"), "utf8"));
+      assert.throws(() => process.kill(pid, 0), { code: "ESRCH" }, `${mode}: the preview ${pid} is still running`);
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+// A passing engine is proven by its results and keeps no trace; a failing
+// engine keeps its trace for diagnosis.
+test("a passing engine leaves no trace and a failing one keeps it", { skip: process.platform === "win32", timeout: 60_000 }, async () => {
+  const output = await mkdtemp(path.join(os.tmpdir(), "codeflow-portal-trace-"));
+  const browser = await chromium.launch({ headless: true, env: hardenedChildEnvironment() });
+  try {
+    for (const passed of [true, false]) {
+      const context = await browser.newContext();
+      try {
+        await context.tracing.start({ screenshots: false, snapshots: false, sources: false });
+        await (await context.newPage()).setContent("<p>traced</p>");
+        await finishTrace(context, path.join(output, `${passed ? "passing" : "failing"}-trace.zip`), passed);
+      } finally { await context.close(); }
+    }
+    assert.deepEqual(await readdir(output), ["failing-trace.zip"]);
+    assert.ok((await stat(path.join(output, "failing-trace.zip"))).size > 0);
+  } finally {
+    await browser.close();
+    await rm(output, { recursive: true, force: true });
   }
 });

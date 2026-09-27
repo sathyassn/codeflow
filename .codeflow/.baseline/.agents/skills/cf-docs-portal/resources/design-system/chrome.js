@@ -413,7 +413,7 @@
             add(clean($('figcaption', ch)) + ' Legend: ' + $$('.cf-legend li', ch).map(clean).join(', ') + '.');
             const desc = $('.cf-fig-svg--wide desc', ch);
             if (desc) add(clean(desc));
-            const twin = $('.cf-twin table', ch);
+            const twin = $('.cf-fig-details table', ch);
             if (twin) add('Table twin: ' + $$('tbody tr', twin).map(tr => Array.from(tr.cells).map(clean).join(', ')).join('. '));
           }
         });

@@ -216,7 +216,7 @@ fn generic_claude_relay_never_counts_as_codex() {
     assert_contains(
         ROUTING,
         &[
-            "A relay — plugin, adapter, relay subagent, or transport session — is transport, not author.",
+            "A relay (plugin, adapter, relay subagent, or transport session) is transport, not author.",
             "a relay answering in the other vendor's name is evidence fabrication",
         ],
     );
@@ -347,7 +347,7 @@ fn five_obligation_evidence_contract_is_shared_across_both_adapters() {
     );
     assert_contains(
         ORCHESTRATOR,
-        &["five-obligation evidence contract — launch, provenance, return, failure, recheck"],
+        &["five-obligation evidence contract (launch, provenance, return, failure, recheck)"],
     );
     assert_contains(
         CONSULT,
@@ -480,7 +480,7 @@ fn delegate_prompts_narrow_authority_and_data_without_reasking_safe_handoffs() {
         &[
             "Every delegate prompt narrows authority and data",
             "actions/files/resources/data/processors/destinations/effects",
-            "ambiguity blocks—never guess",
+            "ambiguity blocks; never guess",
             "Send only necessary minimized data to an approved processor",
             "route qualification is not data authority",
             "already-authorized scoped handoff needs no new approval",

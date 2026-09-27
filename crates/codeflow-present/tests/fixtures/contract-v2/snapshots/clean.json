@@ -1,0 +1,18 @@
+{
+  "repository": {
+    "committed": {
+      "src/main.rs": "fn main() {}\n"
+    },
+    "working": {}
+  },
+  "document": "documents/v2-framed.json",
+  "block_id": "snippet",
+  "expect": {
+    "path": "src/main.rs",
+    "commit": "{{head}}",
+    "digest": "sha256 of the block code bytes",
+    "file_digest": "sha256 of src/main.rs in the working tree",
+    "contains": true,
+    "uncommitted": false
+  }
+}

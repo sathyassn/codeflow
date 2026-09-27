@@ -1,7 +1,7 @@
 import { verifyChrome } from "./chrome-verify.mjs";
 import { createHash } from "node:crypto";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, readdir, rm, writeFile } from "node:fs/promises";
+import { lstat, mkdir, mkdtemp, readdir, rename, rm, writeFile } from "node:fs/promises";
 import net from "node:net";
 import os from "node:os";
 import path from "node:path";
@@ -23,6 +23,8 @@ const MAX_SERVER_OUTPUT_BYTES = 64 * 1024;
 const MAX_RESULT_ERROR_BYTES = 16 * 1024;
 const MAX_RESULTS_BYTES = 1024 * 1024;
 const MAX_BROWSER_EVIDENCE_BYTES = 64 * 1024 * 1024;
+const MAX_BROWSER_ARTIFACT_BYTES = 32 * 1024 * 1024;
+const MAX_BROWSER_ARTIFACTS = 64;
 const MAX_RUNTIME_DIAGNOSTICS = 128;
 const MAX_RUNTIME_DIAGNOSTIC_BYTES = 4 * 1024;
 const runId = process.env.PORTAL_BROWSER_RUN ?? "local";
@@ -101,7 +103,6 @@ async function verifyPortal(lifecycle) {
   const afterArtifacts = await collectBuiltArtifacts(path.join(root, "dist"));
   assertArtifactClaims(generated.artifacts, afterArtifacts, "after browser verification");
   if (JSON.stringify(beforeArtifacts) !== JSON.stringify(afterArtifacts)) throw new Error("built artifacts changed during browser verification");
-  const artifacts = await evidenceInventory(output);
   const evidence = {
     schema_version: 1,
     run_id: runId,
@@ -117,16 +118,11 @@ async function verifyPortal(lifecycle) {
     port,
     headless: true,
     results,
-    artifacts,
+    artifacts: null,
     teardown_verified: teardownVerified,
   };
-  const encoded = Buffer.from(`${JSON.stringify(evidence, null, 2)}\n`);
-  const artifactBytes = artifacts.reduce((total, artifact) => total + artifact.bytes, 0);
-  if (encoded.length > MAX_RESULTS_BYTES || artifacts.length + 1 > 64 || artifactBytes + encoded.length > MAX_BROWSER_EVIDENCE_BYTES) {
-    throw new Error("browser evidence result envelope exceeds its file, count, or aggregate byte limit");
-  }
-  await writeFile(path.join(output, "results.json"), encoded, { flag: "wx" });
-  if (!teardownVerified || results.some((result) => result.status !== "passed")) {
+  const artifacts = await writeBrowserEvidence(output, evidence);
+  if (!teardownVerified || results.some((result) => result.status !== "passed") || artifacts.some((artifact) => artifact.status === "failed")) {
     throw new Error(`portal browser verification failed; inspect ${outputRelative}/results.json`);
   }
   console.log(`portal browser verification passed: ${outputRelative}/results.json`);
@@ -155,15 +151,20 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
       requestAnimationFrame(() => { window.__codeflowThemeBeforePaint = document.documentElement.dataset.theme ?? null; });
     });
     // The named review screenshots carry visual evidence. Keep the trace to
-    // action/network metadata so all engines fit the deterministic evidence
-    // envelope instead of duplicating an unbounded screenshot timeline.
+    // action/network metadata, and keep it only for an engine that fails.
     await context.tracing.start({ screenshots: false, snapshots: false, sources: false });
     traceStarted = true;
+    // A route that cannot be continued or aborted is a request failure,
+    // recorded for the isolation check, never a rejection that ends the run.
     await context.route("**/*", async (route) => {
-      const url = new URL(route.request().url());
-      if (["http:", "https:"].includes(url.protocol) && url.origin === origin) return route.continue();
-      pushBoundedDiagnostic(runtime.remote, route.request().url());
-      return route.abort("blockedbyclient");
+      try {
+        const url = new URL(route.request().url());
+        if (["http:", "https:"].includes(url.protocol) && url.origin === origin) return await route.continue();
+        pushBoundedDiagnostic(runtime.remote, route.request().url());
+        return await route.abort("blockedbyclient");
+      } catch (error) {
+        pushBoundedDiagnostic(runtime.request, `${route.request().url()}: ${boundedError(error)}`);
+      }
     });
     const page = context.pages()[0] ?? await context.newPage();
     page.on("console", (message) => { if (message.type() === "error") pushBoundedDiagnostic(runtime.console, message.text()); });
@@ -224,7 +225,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     const runtimeFailures = meaningfulRuntimeDiagnostics(runtime);
     if (Object.values(runtimeFailures).some((items) => items.length)) throw new Error(`${name}: runtime/network isolation failure: ${JSON.stringify(runtimeFailures)}`);
 
-    await context.tracing.stop({ path: trace });
+    await finishTrace(context, trace, true);
     traceStarted = false;
     await context.close();
     removeContextCleanup();
@@ -236,7 +237,7 @@ async function verifyEngine(name, engine, { origin, siteRoot, output, config, ge
     };
   } catch (error) {
     lifecycle.throwIfInterrupted();
-    if (context && traceStarted) await context.tracing.stop({ path: trace }).catch(() => {});
+    if (context && traceStarted) await finishTrace(context, trace, false).catch(() => {});
     return { engine: name, status: "failed", error: boundedError(error) };
   } finally {
     if (context) await context.close().catch(() => {});
@@ -428,7 +429,7 @@ export function pinnedKitSheets(snapshot, commit, portalRelative) {
 //      descendant, pseudo-elements included, equals a clean copy of the same
 //      page: loaded afresh, stripped of any CSS the first check refuses, with
 //      the pinned rendering in place of each figure.
-//   3. Each figure, its caption and its legend are visible at full opacity,
+//   3. Each figure, its title, caption and legend are visible at full opacity,
 //      whatever the clean copy shows, and no ancestor moves, clips, filters
 //      or hides it unless the clean copy's does too.
 export async function figureGateFailures(page, visitRoute, assignments, generated, declarations, kitSheets, inlineScripts) {
@@ -453,11 +454,8 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
   // The clean copy runs only the runtime's scripts: the recorded built
   // scripts by URL and the allowlisted inline scripts by hash.
   let cleanPolicy = null;
-  await clean.route("**/*", async (route) => {
-    if (route.request().resourceType() !== "document" || cleanPolicy === null) return route.fallback();
-    const response = await route.fetch();
-    await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": cleanPolicy } });
-  });
+  const routeFailures = [];
+  await clean.route("**/*", (route) => cleanDocumentRoute(route, cleanPolicy, routeFailures));
   try {
     const recorded = new Map((generated.figures ?? []).map((entry) => [entry.declaration_path, entry]));
     for (const assignment of assignments) {
@@ -549,11 +547,32 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
         });
       }
     }
+  } catch (error) {
+    // An aborted clean copy fails its navigation; name the fetch that failed.
+    if (routeFailures.length) throw new Error(`${routeFailures.join("; ")}; then ${error.message}`, { cause: error });
+    throw error;
   } finally {
     await clean.close();
     await cleanContext?.close();
   }
+  failures.push(...routeFailures);
   return { failures, drawn };
+}
+
+// The clean copy's document route: the document as served, under the pinned
+// script policy once one is set. A fetch that fails (a socket hang-up under
+// load) aborts the route and is recorded as a failure of the check, never
+// left as a rejection, which would end the verifier with its workflow lease
+// and preview server still held.
+export async function cleanDocumentRoute(route, policy, failures) {
+  try {
+    if (route.request().resourceType() !== "document" || policy === null) return await route.fallback();
+    const response = await route.fetch();
+    await route.fulfill({ response, headers: { ...response.headers(), "content-security-policy": policy } });
+  } catch (error) {
+    failures.push(`the clean copy could not load ${route.request().url()}: ${error?.message ?? error}`);
+    await route.abort("failed").catch(() => {});
+  }
 }
 
 // The stylesheets or scripts a build may serve: the files of that kind among
@@ -702,7 +721,7 @@ export async function pageCssFailures(page, pinnedSheets, parser = null) {
     // whatever the tag, so no figure markup (a kit class or a figure data
     // attribute, as validate --portal reads it) may sit on or inside any
     // element with that class.
-    const figureMarkup = (element) => [...element.classList].some((name) => /^(?:cf-companion|cf-fig|cf-m-|cf-f-|cf-t--)/.test(name) || ["cf-t", "cf-legend", "cf-key", "cf-twin", "cf-twin-scroll"].includes(name))
+    const figureMarkup = (element) => [...element.classList].some((name) => /^(?:cf-companion|cf-fig|cf-m-|cf-f-|cf-t--)/.test(name) || ["cf-t", "cf-legend", "cf-key", "cf-twin-scroll"].includes(name))
       || [...element.attributes].some((attribute) => /^data-cf-(?:companion|figure)/.test(attribute.name));
     for (const element of document.querySelectorAll(".expressive-code, .expressive-code *")) if (figureMarkup(element)) { carriers.add("a figure or companion inside a code block"); break; }
     for (const element of scope) {
@@ -801,7 +820,7 @@ async function settle(page) {
 // The legend and the twin as the page lays them out. The clean copy carries
 // the same site styles, so a site rule that reaches into the figure shows in
 // both and only an absolute reading can see it: each legend key centred on
-// its label, and the twin marker the figure sheet's chevron with no fill or
+// its label, and the Details marker the figure sheet's chevron with no fill or
 // mask from the site.
 export function readFigureChrome() {
   return [...document.querySelectorAll("figure.cf-fig")].map((figure) => {
@@ -813,7 +832,7 @@ export function readFigureChrome() {
       const label = range.getBoundingClientRect();
       return { state: item.dataset.state, offset: (key.top + key.height / 2) - (label.top + label.height / 2) };
     });
-    const summary = figure.querySelector(".cf-twin > summary");
+    const summary = figure.querySelector(".cf-fig-details > summary");
     const marker = summary === null ? null : getComputedStyle(summary, "::before");
     return {
       id: figure.dataset.cfFigureId,
@@ -831,7 +850,7 @@ export function figureChromeFailures(figures) {
     }
     const marker = figure.marker;
     if (marker !== null && (!/^(transparent|rgba\(0, 0, 0, 0\))$/.test(marker.background) || marker.image !== "none" || marker.mask !== "none" || marker.width !== "6px" || marker.border !== "solid")) {
-      failures.push(`figure ${figure.id}: the twin marker is not the figure sheet's chevron (${JSON.stringify(marker)})`);
+      failures.push(`figure ${figure.id}: the Details marker is not the figure sheet's chevron (${JSON.stringify(marker)})`);
     }
   }
   return failures;
@@ -870,7 +889,7 @@ export function readFigureContext() {
       styles,
       chain,
       opacity,
-      visible: { figure: visible(figure) && box.width > 0 && box.height > 0, caption: visible(figure.querySelector(".cf-fig-caption")), legend: visible(figure.querySelector(".cf-legend")) },
+      visible: { figure: visible(figure) && box.width > 0 && box.height > 0, title: visible(figure.querySelector(".cf-fig-title .cf-fig-name")), caption: visible(figure.querySelector(".cf-fig-caption")), legend: visible(figure.querySelector(".cf-legend")) },
     };
   });
 }
@@ -1419,21 +1438,55 @@ async function visit(page, url) {
   }
 }
 
-async function evidenceInventory(directory) {
-  const entries = (await readdir(directory)).sort();
-  if (entries.length > 64) throw new Error("browser evidence contains more than 64 artifacts");
+// An engine's trace is kept only when the engine fails: a passing engine is
+// proven by its results, and a full run's traces outgrow the evidence caps.
+export async function finishTrace(context, trace, passed) {
+  if (passed) await context.tracing.stop();
+  else await context.tracing.stop({ path: trace });
+}
+
+// The results are written before the evidence files are inventoried, so a
+// long run never loses them. The inventory then records each file, or a
+// failed artifact where a file is over its cap, would take the evidence past
+// its aggregate cap or cannot be read, and the results are rewritten with it.
+// The caller fails the run on a failed artifact.
+export async function writeBrowserEvidence(output, evidence, limits = {}) {
+  const { artifactBytes = MAX_BROWSER_ARTIFACT_BYTES, totalBytes = MAX_BROWSER_EVIDENCE_BYTES, resultsBytes = MAX_RESULTS_BYTES, count = MAX_BROWSER_ARTIFACTS } = limits;
+  const file = path.join(output, "results.json");
+  const encode = (value) => {
+    const encoded = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+    if (encoded.length > resultsBytes) throw new Error(`browser evidence results exceed ${resultsBytes} bytes`);
+    return encoded;
+  };
+  await writeFile(file, encode(evidence), { flag: "wx" });
+  // The results file is budgeted at its cap, so it and the artifacts always
+  // fit the aggregate.
+  const artifacts = await evidenceInventory(output, { exclude: "results.json", artifactBytes, totalBytes: totalBytes - resultsBytes, count: count - 1 });
+  const encoded = encode({ ...evidence, artifacts });
+  await writeFile(`${file}.partial`, encoded, { flag: "wx" });
+  await rename(`${file}.partial`, file);
+  return artifacts;
+}
+
+async function evidenceInventory(directory, { exclude, artifactBytes, totalBytes, count }) {
+  const entries = (await readdir(directory)).filter((entry) => entry !== exclude).sort();
   const artifacts = [];
   let total = 0;
-  for (const entry of entries) {
+  for (const entry of entries.slice(0, count)) {
     const file = path.join(directory, entry);
-    const remaining = MAX_BROWSER_EVIDENCE_BYTES - total;
-    if (remaining <= 0) throw new Error(`browser evidence exceeds ${MAX_BROWSER_EVIDENCE_BYTES} bytes`);
-    const result = await hashBoundedRegularFile(file, Math.min(32 * 1024 * 1024, remaining), "browser evidence artifact");
-    const artifact = { file: path.basename(file), ...result };
-    total += artifact.bytes;
-    if (total > MAX_BROWSER_EVIDENCE_BYTES) throw new Error(`browser evidence exceeds ${MAX_BROWSER_EVIDENCE_BYTES} bytes: ${total}`);
-    artifacts.push(artifact);
+    const remaining = totalBytes - total;
+    try {
+      const size = (await lstat(file)).size;
+      if (size > artifactBytes) throw new Error(`${size} bytes is over the ${artifactBytes} byte artifact cap`);
+      if (size > remaining) throw new Error(`${size} bytes would take the evidence past its ${totalBytes} byte cap`);
+      const result = await hashBoundedRegularFile(file, Math.min(artifactBytes, remaining), "browser evidence artifact");
+      total += result.bytes;
+      artifacts.push({ file: entry, ...result });
+    } catch (error) {
+      artifacts.push({ file: entry, status: "failed", error: boundedError(error?.message ?? error) });
+    }
   }
+  if (entries.length > count) artifacts.push({ file: null, status: "failed", error: `${entries.length - count} more files past the ${count} artifact limit` });
   return artifacts;
 }
 

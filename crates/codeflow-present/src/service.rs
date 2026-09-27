@@ -32,18 +32,14 @@ use uuid::Uuid;
 
 use crate::{
     config::UtilityTokens,
-    document::Block,
     error::{PresentError, Result},
     limits,
     platform::is_link_like,
-    render::{
-        render_document, render_retired, render_unsupported, sandbox_id, RenderIdentity,
-        RenderOptions,
-    },
+    render::{render_document, render_retired, render_unsupported, RenderIdentity, RenderOptions},
     state::{
-        create_private_dir_all, write_json_atomic, ElementSelector, FeedbackEnvelope,
-        FeedbackExcerpt, FeedbackKind, FeedbackNote, FeedbackVerdict, RegionSelector,
-        RevisionContent, SessionStatus, SessionStore, TextSelector,
+        create_private_dir_all, write_json_atomic, ElementSelector, EntitySelector,
+        FeedbackEnvelope, FeedbackExcerpt, FeedbackKind, FeedbackNote, FeedbackVerdict,
+        RegionSelector, RevisionContent, SessionStatus, SessionStore, TextSelector,
     },
 };
 
@@ -196,6 +192,8 @@ struct ReviewNote {
     #[serde(default)]
     region_selector: Option<RegionSelector>,
     #[serde(default)]
+    entity_selector: Option<EntitySelector>,
+    #[serde(default)]
     excerpt: Option<FeedbackExcerpt>,
 }
 
@@ -287,7 +285,6 @@ pub async fn serve_session(project: PathBuf, session_id: Uuid) -> Result<()> {
         .route("/app/assets/{*path}", get(asset))
         .route("/app/api/reviews", post(submit_review))
         .route("/app/api/events/poll", post(poll_events))
-        .route("/sandbox/{revision}/{id}", get(sandbox))
         .fallback(not_found)
         .layer(DefaultBodyLimit::max(limits::MAX_FEEDBACK_BYTES))
         .with_state(state);
@@ -641,6 +638,7 @@ async fn submit_review(
             selector: note.selector,
             element_selector: note.element_selector,
             region_selector: note.region_selector,
+            entity_selector: note.entity_selector,
             excerpt: note.excerpt,
         });
     }
@@ -682,9 +680,52 @@ async fn submit_review(
                 ],
             )
         }
-        Err(PresentError::SessionClosed(_)) => plain(StatusCode::GONE, "session is closed"),
+        Err(PresentError::SessionClosed(_)) => typed_error(
+            StatusCode::GONE,
+            "session_closed",
+            "session is closed",
+            &serde_json::Value::Null,
+        ),
+        Err(PresentError::Review {
+            code,
+            message,
+            details,
+        }) => typed_error(review_status(code), code, &message, &details),
         Err(error) => plain(StatusCode::BAD_REQUEST, &error.to_string()),
     }
+}
+
+/// The HTTP status of a typed refusal (SPC-014 I3).
+fn review_status(code: &str) -> StatusCode {
+    match code {
+        "stale_revision" | "request_id_conflict" => StatusCode::CONFLICT,
+        "session_closed" => StatusCode::GONE,
+        "answer_too_large" => StatusCode::PAYLOAD_TOO_LARGE,
+        _ => StatusCode::UNPROCESSABLE_ENTITY,
+    }
+}
+
+fn typed_error(
+    status: StatusCode,
+    code: &str,
+    message: &str,
+    details: &serde_json::Value,
+) -> Response<Body> {
+    let body = serde_json::to_vec(&serde_json::json!({
+        "error": code,
+        "message": message,
+        "details": details,
+    }))
+    .unwrap_or_else(|_| b"{}".to_vec());
+    response_with_headers(
+        status,
+        Body::from(body),
+        &[
+            (header::CONTENT_TYPE, "application/json"),
+            (header::CACHE_CONTROL, "no-store"),
+            (HeaderName::from_static("x-content-type-options"), "nosniff"),
+        ],
+    )
 }
 
 async fn poll_events(
@@ -769,39 +810,6 @@ async fn poll_events(
 fn parse_event_cursor(cursor: &str) -> Option<(u64, u64)> {
     let (revision, sequence) = cursor.split_once(':')?;
     Some((revision.parse().ok()?, sequence.parse().ok()?))
-}
-
-async fn sandbox(
-    State(state): State<AppState>,
-    Path((revision, id)): Path<(u64, String)>,
-    headers: HeaderMap,
-) -> Response<Body> {
-    if let Err(response) = require_host(&state, &headers) {
-        return response;
-    }
-    let Ok(revision) = state.store.revision(state.session_id, revision) else {
-        return plain(StatusCode::NOT_FOUND, "sandbox revision not found");
-    };
-    let sandbox = sandbox_blocks(state.session_id, &revision.content);
-    let Some(html) = sandbox.get(&id) else {
-        return plain(StatusCode::NOT_FOUND, "sandbox block not found");
-    };
-    let csp = format!(
-        "default-src 'none'; script-src 'none'; style-src 'unsafe-inline'; img-src data:; media-src data:; connect-src 'none'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors http://{}",
-        state.authority
-    );
-    response_with_headers(
-        StatusCode::OK,
-        Body::from(html.clone()),
-        &[
-            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
-            (header::CACHE_CONTROL, "no-store"),
-            (HeaderName::from_static("content-security-policy"), &csp),
-            (HeaderName::from_static("x-content-type-options"), "nosniff"),
-            (HeaderName::from_static("referrer-policy"), "no-referrer"),
-            (HeaderName::from_static("x-frame-options"), "SAMEORIGIN"),
-        ],
-    )
 }
 
 async fn not_found() -> Response<Body> {
@@ -1027,31 +1035,6 @@ fn validate_manifest(manifest: &AssetManifest) -> Result<()> {
     Ok(())
 }
 
-fn sandbox_blocks(session_id: Uuid, content: &RevisionContent) -> HashMap<String, String> {
-    let mut output = HashMap::new();
-    if let RevisionContent::Supported { document } = content {
-        collect_sandbox(session_id, &document.blocks, &mut output);
-    }
-    output
-}
-
-fn collect_sandbox(session_id: Uuid, blocks: &[Block], output: &mut HashMap<String, String>) {
-    for block in blocks {
-        match block {
-            Block::Html { id, html, .. } => {
-                output.insert(sandbox_id(&session_id.to_string(), id), html.clone());
-            }
-            Block::Disclosure { blocks, .. } => collect_sandbox(session_id, blocks, output),
-            Block::Tabs { tabs, .. } => {
-                for tab in tabs {
-                    collect_sandbox(session_id, &tab.blocks, output);
-                }
-            }
-            _ => {}
-        }
-    }
-}
-
 fn render_bootstrap(authority: &str, capability: &str) -> String {
     let endpoint = format!("http://{authority}/bootstrap");
     format!(
@@ -1251,6 +1234,7 @@ mod tests {
 
     fn parsed_with(block: Block) -> ParsedDocument {
         ParsedDocument::Supported(PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Review".to_string(),
             language: None,
@@ -1264,6 +1248,7 @@ mod tests {
         let store = SessionStore::at_root(temp.path().join("project"), "key".to_string()).unwrap();
         let session = store
             .create(ParsedDocument::Supported(PresentationDocument {
+                summary: None,
                 schema_version: 1,
                 title: "Review".to_string(),
                 language: None,
@@ -1551,76 +1536,6 @@ mod tests {
         let event: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(event["kind"], "revision");
         assert_eq!(event["cursor"], "2:0");
-    }
-
-    #[tokio::test]
-    async fn sandbox_urls_are_bound_to_the_requested_immutable_revision() {
-        let (_temp, state) = app_state();
-        let opaque = sandbox_id(&state.session_id.to_string(), "sample");
-        let revision_two = state
-            .store
-            .update_document(
-                state.session_id,
-                parsed_with(Block::Html {
-                    id: "sample".to_string(),
-                    html: "<p>revision two</p>".to_string(),
-                    title: Some("Sample".to_string()),
-                }),
-            )
-            .unwrap();
-        let revision_three = state
-            .store
-            .update_document(
-                state.session_id,
-                parsed_with(Block::Html {
-                    id: "sample".to_string(),
-                    html: "<p>revision three</p>".to_string(),
-                    title: Some("Sample".to_string()),
-                }),
-            )
-            .unwrap();
-        let revision_four = state
-            .store
-            .update_document(
-                state.session_id,
-                parsed_with(Block::Narrative {
-                    id: "replacement".to_string(),
-                    markdown: "No sandbox here.".to_string(),
-                }),
-            )
-            .unwrap();
-
-        for (revision, expected) in [
-            (revision_two, "revision two"),
-            (revision_three, "revision three"),
-        ] {
-            let response = sandbox(
-                State(state.clone()),
-                Path((revision, opaque.clone())),
-                application_headers(&state, false),
-            )
-            .await;
-            assert_eq!(response.status(), StatusCode::OK);
-            assert!(response
-                .headers()
-                .get("content-security-policy")
-                .unwrap()
-                .to_str()
-                .unwrap()
-                .contains("script-src 'none'"));
-            let body = axum::body::to_bytes(response.into_body(), limits::MAX_HTML_BYTES)
-                .await
-                .unwrap();
-            assert!(std::str::from_utf8(&body).unwrap().contains(expected));
-        }
-
-        let missing = sandbox(
-            State(state.clone()),
-            Path((revision_four, opaque)),
-            application_headers(&state, false),
-        )
-        .await;
-        assert_eq!(missing.status(), StatusCode::NOT_FOUND);
     }
 
     #[test]

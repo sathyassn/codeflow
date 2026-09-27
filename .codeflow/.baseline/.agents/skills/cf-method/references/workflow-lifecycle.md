@@ -68,7 +68,7 @@ consequences forward across affected domains until the load-bearing constraint
 is clear. Compare viable sequential, parallel, short-term, and long-term
 options rather than accepting the first plausible proposal or an operator/model
 assertion without examination. Prefer the durable route; when expedience wins,
-record the tradeoff. This depth is proportional—do not manufacture analysis for
+record the tradeoff. This depth is proportional; do not manufacture analysis for
 an obvious local choice.
 
 An ADR may be drafted and revised while its decision is unresolved and

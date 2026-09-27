@@ -131,7 +131,7 @@ slot. The default shape is a **narrow complete path** that is demoable or
 verifiable on its own (schema through the exercised surface plus tests), not a
 horizontal layer-slice. Wide mechanical refactors are the exception: expand
 the new form beside the old, migrate callers in blast-radius batches, then
-contract the old form — do not force them into a fake vertical slice. Work
+contract the old form; do not force them into a fake vertical slice. Work
 below that threshold is an in-node step. If a supposed step later
 needs a different owner, branch, decision branch, or landing slot, it was a new
 node: amend the plan before proceeding.

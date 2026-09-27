@@ -1,0 +1,373 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "retry-states",
+    "family": "state",
+    "binding": "authored",
+    "question": "What state is a payment in, and what is the only way out of a decline?",
+    "idea": "A payment is in one of seven states.",
+    "title": "States of a payment and the one route out of a decline",
+    "kicker": "Payment states",
+    "caption": "A payment is in one of seven states.",
+    "states": [
+      {
+        "name": "state",
+        "mark": "state",
+        "means": "State"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a declined payment returns to the queue after backoff",
+        "source": "docs/payments-retry.md#retries",
+        "derive": "the Retries section",
+        "check": {
+          "kind": "contains",
+          "text": "returns to the queue after backoff"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 236,
+      "draw": [
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 20,
+          "y": 42,
+          "w": 76,
+          "h": 36,
+          "rx": 8,
+          "id": "m9"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 152,
+          "y": 42,
+          "w": 98,
+          "h": 36,
+          "rx": 8,
+          "id": "m10"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 306,
+          "y": 42,
+          "w": 78,
+          "h": 36,
+          "rx": 8,
+          "id": "m11"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 440,
+          "y": 42,
+          "w": 84,
+          "h": 36,
+          "rx": 8,
+          "id": "m12"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 580,
+          "y": 42,
+          "w": 114,
+          "h": 36,
+          "rx": 8,
+          "id": "m13"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 435,
+          "y": 172,
+          "w": 94,
+          "h": 36,
+          "rx": 8,
+          "id": "m14"
+        },
+        {
+          "state": "state",
+          "shape": "rect",
+          "x": 597,
+          "y": 172,
+          "w": 80,
+          "h": 36,
+          "rx": 8,
+          "id": "m15"
+        },
+        {
+          "text": "queued",
+          "x": 58,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m9"
+          ]
+        },
+        {
+          "text": "charging",
+          "x": 201,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m10"
+          ]
+        },
+        {
+          "text": "charged",
+          "x": 345,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m11"
+          ]
+        },
+        {
+          "text": "settling",
+          "x": 482,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m12"
+          ]
+        },
+        {
+          "text": "confirmed",
+          "x": 637,
+          "y": 65,
+          "anchor": "middle",
+          "for": [
+            "m13"
+          ]
+        },
+        {
+          "text": "declined",
+          "x": 482,
+          "y": 195,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "m14"
+          ]
+        },
+        {
+          "text": "settled",
+          "x": 637,
+          "y": 195,
+          "anchor": "middle",
+          "for": [
+            "m15"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 348,
+      "draw": [
+        {
+          "state": "state",
+          "id": "s1",
+          "shape": "rect",
+          "x": 20,
+          "y": 14,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "queued",
+          "x": 80,
+          "y": 37,
+          "anchor": "middle",
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s2",
+          "shape": "rect",
+          "x": 20,
+          "y": 72,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "charging",
+          "x": 80,
+          "y": 95,
+          "anchor": "middle",
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s3",
+          "shape": "rect",
+          "x": 20,
+          "y": 130,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "charged",
+          "x": 80,
+          "y": 153,
+          "anchor": "middle",
+          "for": [
+            "s3"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s4",
+          "shape": "rect",
+          "x": 20,
+          "y": 188,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "settling",
+          "x": 80,
+          "y": 211,
+          "anchor": "middle",
+          "for": [
+            "s4"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s5",
+          "shape": "rect",
+          "x": 20,
+          "y": 246,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "confirmed",
+          "x": 80,
+          "y": 269,
+          "anchor": "middle",
+          "for": [
+            "s5"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s6",
+          "shape": "rect",
+          "x": 20,
+          "y": 304,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "settled",
+          "x": 80,
+          "y": 327,
+          "anchor": "middle",
+          "for": [
+            "s6"
+          ]
+        },
+        {
+          "state": "state",
+          "id": "s7",
+          "shape": "rect",
+          "x": 210,
+          "y": 188,
+          "w": 120,
+          "h": 36,
+          "rx": 8
+        },
+        {
+          "text": "declined",
+          "x": 270,
+          "y": 211,
+          "anchor": "middle",
+          "style": "strong",
+          "for": [
+            "s7"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "On",
+        "Allowed"
+      ],
+      "rows": [
+        [
+          "queued",
+          "charging",
+          "a worker picks it up",
+          "yes"
+        ],
+        [
+          "charging",
+          "charged",
+          "the card network accepts",
+          "yes"
+        ],
+        [
+          "charged",
+          "settling",
+          "the batch closes",
+          "yes"
+        ],
+        [
+          "settling",
+          "confirmed",
+          "the bank confirms",
+          "yes"
+        ],
+        [
+          "settling",
+          "declined",
+          "the bank declines",
+          "yes"
+        ],
+        [
+          "confirmed",
+          "settled",
+          "the ledger posts",
+          "yes"
+        ],
+        [
+          "declined",
+          "queued",
+          "retry after backoff",
+          "the only route"
+        ],
+        [
+          "declined",
+          "settled",
+          "marked settled by hand",
+          "no"
+        ]
+      ]
+    }
+  }
+}

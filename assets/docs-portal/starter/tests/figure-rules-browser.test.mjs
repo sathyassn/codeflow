@@ -12,9 +12,17 @@ import { specimen, specimens } from "./page-shapes.mjs";
 
 const styles = path.join(path.dirname(fileURLToPath(import.meta.url)), "../src/styles");
 
+// The sheets carry the portal's own faces inline, so text boxes are measured
+// in the fonts a reader gets, not an engine's fallback: Firefox reports a
+// taller box for the portal's faces than for its fallback.
 async function sheet() {
   const parts = await Promise.all(["utility-tokens.css", "portal.css", "figure-roles.css", "figure.css"].map((name) => readFile(path.join(styles, name), "utf8")));
-  return parts.join("\n");
+  let css = parts.join("\n");
+  for (const [reference, file] of [...css.matchAll(/url\("\.\.\/fonts\/([^"]+\.woff2)"\)/g)]) {
+    const font = await readFile(path.join(styles, "../fonts", file));
+    css = css.replace(reference, `url("data:font/woff2;base64,${font.toString("base64")}")`);
+  }
+  return css;
 }
 
 // The committed values a specimen is checked against: its authored facts, and
@@ -35,6 +43,7 @@ async function probe(page, css, html, breakage = null, argument = undefined) {
   for (const [label, width, theme] of [["wide", 1280, "light"], ["narrow", 390, "light"], ["wideDark", 1280, "dark"], ["narrowDark", 390, "dark"]]) {
     await page.setViewportSize({ width, height: 900 });
     await page.setContent(document(theme));
+    await page.evaluate(async () => { await Promise.all([...document.fonts].map((face) => face.load())); await document.fonts.ready; });
     if (breakage) await page.evaluate(breakage, argument);
     observed[label] = (await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx }))[0];
   }
@@ -74,11 +83,17 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
       9: () => { document.querySelector(".cf-fig-caption").textContent = "First sentence. Second sentence."; },
       10: () => document.querySelector(".cf-fig-svg [data-state] *").setAttribute("fill", "#ff0000"),
       11: () => { for (const desc of document.querySelectorAll(".cf-fig-svg desc")) desc.remove(); },
-      12: () => document.querySelector("details.cf-twin").remove(),
+      12: () => document.querySelector("details.cf-fig-details").remove(),
     };
     for (const [rule, breakage] of Object.entries(breakages)) {
       const observed = await probe(page, css, html, breakage);
       assert.ok(rulesOf(observed).includes(Number(rule)), `rule ${rule} (${FIGURE_RULES[rule]}) did not fail: ${JSON.stringify(figureRuleFailures(observed))}`);
+    }
+    // Rule 11 also fails a figure whose title line is not shown (SPC-014 B5),
+    // or shows a name other than the SVG title.
+    for (const hide of [() => { document.querySelector(".cf-fig-title").style.display = "none"; }, () => { document.querySelector(".cf-fig-name").textContent = "Another title"; }]) {
+      const observed = await probe(page, css, html, hide);
+      assert.ok(rulesOf(observed).includes(11), `the title rule did not fail: ${JSON.stringify(figureRuleFailures(observed))}`);
     }
     // Rule 3: the layering specimen with its remote plane declared on the
     // local layer mark, so only the cap tells the two planes apart.
@@ -95,9 +110,10 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
 // Rule 7 is about text in boxes: a coverage cell is a state mark with no text
 // in it, so a grid of cells with no crossed cell is not boxed text, and boxes
 // that each hold a label still are. The narrow coverage composition binds
-// each column label to its cell and budgets its width, so the label clears
-// every cell it does not label (rule 8) at 390 px, on one line or wrapped,
-// in Chromium, WebKit and Firefox.
+// each column label to its cell and budgets its width, and sets the cells a
+// label drop below the row name, so every label clears each cell it does not
+// label (rule 8) at 390 px, on one line or wrapped, in Chromium, WebKit and
+// Firefox.
 const SIGNING = JSON.stringify({ channels: { release: ["binaries", "archives", "images"], nightly: ["binaries", "archives"] } });
 test("a coverage grid is not boxed text and its narrow labels clear the cells they do not label", { skip: process.platform === "win32", timeout: 300_000 }, async () => {
   const css = await sheet();
@@ -113,6 +129,23 @@ test("a coverage grid is not boxed text and its narrow labels clear the cells th
       }
       const boxed = figureRuleFailures(await probe(page, css, renderFigure(await specimen("controls/boxed-text.json"), { idPrefix: "b" })));
       assert.deepEqual(boxed.filter((failure) => failure.rule === 7).map((failure) => failure.message.split(":")[0]), ["wide", "narrow", "wide dark", "narrow dark"], `${engineName}: ${canonicalJson(boxed)}`);
+    } finally { await browser.close(); }
+  }
+});
+
+// A narrow extent row sets its label above the bar and its value past the
+// bar's end. A short bar puts the value under the label, so the two are set
+// a full text box apart and never overprint (rule 8), in Chromium, WebKit
+// and Firefox, whose box for the portal's faces is the tallest.
+test("a short narrow extent bar keeps its value clear of its row label", { skip: process.platform === "win32", timeout: 300_000 }, async () => {
+  const declaration = await specimen("controls/extent-short.json");
+  const css = await sheet();
+  for (const [engineName, engine] of Object.entries({ chromium, webkit, firefox })) {
+    const browser = await engine.launch({ headless: true, env: hardenedChildEnvironment() });
+    try {
+      const page = await browser.newPage();
+      const failures = figureRuleFailures(await probe(page, css, renderFigure(declaration, { idPrefix: "e" })));
+      assert.deepEqual(failures, [], `${engineName}: ${canonicalJson(failures)}`);
     } finally { await browser.close(); }
   }
 });

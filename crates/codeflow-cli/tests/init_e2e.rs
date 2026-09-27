@@ -35,7 +35,9 @@ const PRESENT_SKILL_FILES: &[&str] = &[
 ];
 const PRESENT_SCHEMAS: &[&str] = &[
     "document-v1.schema.json",
+    "document-v2.schema.json",
     "session-history-v1.schema.json",
+    "session-history-v2.schema.json",
     "utility-tokens-v1.schema.json",
 ];
 

@@ -53,7 +53,36 @@ publication date._
   adopted tools and independent version domains, and adds four scoped release
   diagnostics without turning CodeFlow metadata into product version authority.
 
+<!-- codeflow:release-impact minor -->
+- **Comments on one part of a figure, and framed figures (SPC-014).** A
+  `cf-present` reviewer can comment on one node, arrow, label or legend
+  entry: hover, click, touch and the keyboard resolve to the named part,
+  thin strokes take a 6 px hit margin, and "select enclosing" climbs to the
+  part around it and then the block. The service checks each part note
+  against the revision and stores its own label, a PNG crop, and
+  `crop_check: "unverified"` where it cannot measure the part. Earlier notes
+  re-anchor by part, then quote, then block, and say when they moved. A
+  `schema_version: 2` document frames every figure, stage and table as
+  "Figure N · title" or "Table N · title" with a caption, legend and one
+  Details disclosure, resolves `[fig:<id>]` references, and names stage parts
+  with `data-cf-target`, `data-cf-group`, `data-cf-label` and `data-cf-for`.
+  Version 1 documents render as before, except that an `html` title now
+  shows, and the v1 `feedback` stream is unchanged. Drawn figures in present
+  and the portal show their title line and one Details disclosure in place
+  of the kicker and "Table twin"; the portal gate fails a figure whose title
+  is not visible.
+
 ### Changed
+
+<!-- codeflow:release-impact patch -->
+- **Managed skills follow the dash guideline.** Em and en dashes in the
+  shipped skills are rewritten as commas, colons, full stops, hyphens or
+  parentheses with no change of meaning; a dash stays only in a numeric
+  range, a literal record string or text a test pins. The managed contract
+  now states the dash rule as a prose guideline that `git.policy_characters`
+  checks at the level policy sets. `codeflow update` replaces an unmodified
+  swept file; an adopter who edited one gets a 3-way merge, or a `.new`
+  sidecar where the edit conflicts.
 
 <!-- codeflow:release-impact minor -->
 - **Shared portal and present chrome.** Graphite, Slate and Sage use the
@@ -78,10 +107,33 @@ publication date._
   coverage grids bind their column labels and share one set of columns.
 
 <!-- codeflow:release-impact patch -->
-- **Portal altitude tabs and records table.** The Concept, Architecture and
-  Technical tabs sit on one line; before, the second and third tab sat lower.
-  At phone width the records page stacks each folder's row, so the purpose
-  reads as a sentence instead of one word per line.
+- **Narrow figure labels clear their marks in every engine.** A narrow extent
+  row sets its label a full text box above its value, so a short bar's value
+  no longer runs into its label in Firefox, and narrow coverage cells sit
+  clear of their row name. The figure rule checks now measure text in the
+  portal's own typefaces, not an engine's fallback.
+
+<!-- codeflow:release-impact patch -->
+- **Browser verification cleans up after a failed fetch.** A page fetch that
+  fails during the portal figure check fails the check instead of ending the
+  run. The verifier releases its workflow lock and stops its preview server
+  on every exit, including an unexpected error.
+
+<!-- codeflow:release-impact patch -->
+- **Browser verification keeps its results on a long run.** Each engine's
+  trace is kept only when that engine fails, and the results are written
+  before the evidence files are counted. A file over its size cap is recorded
+  as a failed artifact in the results instead of ending the run.
+
+<!-- codeflow:release-impact patch -->
+- **Portal altitude tabs, records table and home reading path.** The
+  Concept, Architecture and Technical tabs sit on one line; before, the
+  second and third tab sat lower. At phone width the records page stacks
+  each folder's row, so the purpose reads as a sentence instead of one word
+  per line. The home page shows every step of the reading path, one row per
+  step from top to bottom, under a tighter title block, and an identifier
+  that opens a table row, such as a skill name, no longer splits at its
+  hyphen.
 
 <!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,

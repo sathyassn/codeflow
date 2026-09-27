@@ -1,0 +1,231 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "merge-concept",
+    "family": "flow",
+    "binding": "authored",
+    "question": "What does the merge policy do with a pull request?",
+    "idea": "A pull request meets the branch rules, then the checks, then lands; a failure stops it.",
+    "title": "How a pull request meets the policy",
+    "caption": "A pull request lands only after it passes the branch rules and every required check.",
+    "states": [
+      {
+        "name": "passes",
+        "mark": "trans",
+        "means": "Passes to the next part"
+      },
+      {
+        "name": "stopped",
+        "mark": "stop",
+        "means": "Stopped when a part fails"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a pull request that fails a branch rule never reaches the checks",
+        "source": "docs/merge-policy.md#architecture",
+        "derive": "the Architecture section",
+        "check": {
+          "kind": "contains",
+          "text": "fails a branch rule never reaches the checks"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 200,
+      "draw": [
+        {
+          "text": "opened",
+          "x": 20,
+          "y": 105
+        },
+        {
+          "text": "rules",
+          "x": 250,
+          "y": 105
+        },
+        {
+          "text": "checks",
+          "x": 460,
+          "y": 105
+        },
+        {
+          "text": "lands",
+          "x": 672,
+          "y": 105
+        },
+        {
+          "state": "passes",
+          "shape": "path",
+          "d": "M84 100H236",
+          "id": "e1",
+          "head": "end"
+        },
+        {
+          "state": "passes",
+          "shape": "path",
+          "d": "M298 100H446",
+          "id": "e2",
+          "head": "end"
+        },
+        {
+          "state": "passes",
+          "shape": "path",
+          "d": "M522 100H658",
+          "id": "e3",
+          "head": "end"
+        },
+        {
+          "state": "stopped",
+          "shape": "line",
+          "x1": 372,
+          "y1": 89,
+          "x2": 372,
+          "y2": 111,
+          "id": "e4"
+        },
+        {
+          "text": "a rule fails",
+          "x": 372,
+          "y": 140,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e4"
+          ]
+        },
+        {
+          "state": "stopped",
+          "shape": "line",
+          "x1": 590,
+          "y1": 89,
+          "x2": 590,
+          "y2": 111,
+          "id": "e5"
+        },
+        {
+          "text": "a check fails",
+          "x": 590,
+          "y": 140,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e5"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 290,
+      "draw": [
+        {
+          "text": "opened",
+          "x": 48,
+          "y": 36
+        },
+        {
+          "text": "rules",
+          "x": 48,
+          "y": 116
+        },
+        {
+          "text": "checks",
+          "x": 48,
+          "y": 196
+        },
+        {
+          "text": "lands",
+          "x": 48,
+          "y": 276
+        },
+        {
+          "state": "passes",
+          "shape": "path",
+          "d": "M30 44V104",
+          "id": "f1",
+          "head": "end"
+        },
+        {
+          "state": "passes",
+          "shape": "path",
+          "d": "M30 124V184",
+          "id": "f2",
+          "head": "end"
+        },
+        {
+          "state": "passes",
+          "shape": "path",
+          "d": "M30 204V264",
+          "id": "f3",
+          "head": "end"
+        },
+        {
+          "state": "stopped",
+          "shape": "line",
+          "x1": 19,
+          "y1": 154,
+          "x2": 41,
+          "y2": 154,
+          "id": "f4"
+        },
+        {
+          "text": "a rule fails",
+          "x": 56,
+          "y": 159,
+          "style": "mute",
+          "for": [
+            "f4"
+          ]
+        },
+        {
+          "state": "stopped",
+          "shape": "line",
+          "x1": 19,
+          "y1": 234,
+          "x2": 41,
+          "y2": 234,
+          "id": "f5"
+        },
+        {
+          "text": "a check fails",
+          "x": 56,
+          "y": 239,
+          "style": "mute",
+          "for": [
+            "f5"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "Stopped when"
+      ],
+      "rows": [
+        [
+          "opened",
+          "rules",
+          "a branch rule fails"
+        ],
+        [
+          "rules",
+          "checks",
+          "a required check fails"
+        ],
+        [
+          "checks",
+          "lands",
+          "never, once every check passes"
+        ]
+      ]
+    }
+  }
+}
