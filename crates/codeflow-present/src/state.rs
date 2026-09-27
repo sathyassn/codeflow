@@ -2885,13 +2885,19 @@ fn reanchor_text(
     block: &crate::document::Block,
     framing: &crate::document::Framing,
 ) -> FeedbackAnchor {
-    if same_revision {
+    let canonical = block.canonical_review_text(framing);
+    // The stored offsets hold only while they still select the quote: a
+    // record made before the review text changed its separators (TSK-071)
+    // continues at the exact, fuzzy and block steps.
+    if same_revision
+        && utf16_slice(&canonical, selector.start_utf16, selector.end_utf16).as_deref()
+            == Some(selector.exact.as_str())
+    {
         return FeedbackAnchor::Anchored {
             start_utf16: selector.start_utf16,
             end_utf16: selector.end_utf16,
         };
     }
-    let canonical = block.canonical_review_text(framing);
     if let Some((start_utf16, end_utf16)) = exact_text_match(selector, &canonical) {
         return FeedbackAnchor::Reanchored {
             start_utf16,
@@ -3050,6 +3056,13 @@ fn region_anchor(selector: &RegionSelector, reanchored: bool) -> FeedbackAnchor 
             height_ppm,
         }
     }
+}
+
+/// The UTF-16 range `start..end` of `text`, when it is one.
+fn utf16_slice(text: &str, start: u32, end: u32) -> Option<String> {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let range = usize::try_from(start).ok()?..usize::try_from(end).ok()?;
+    String::from_utf16(units.get(range)?).ok()
 }
 
 /// The v1 exact rule (unchanged): the quote with its stored prefix before it

@@ -940,3 +940,93 @@ fn a_whole_document_note_survives_a_revision() {
         anchors[1]
     );
 }
+
+/// SPC-014 B1 and C1 across the TSK-071 separator change: a review stored
+/// before the parts of a block were joined with a line break carries offsets
+/// into the old review text ("FirstSecond"). Reopening that same revision
+/// never trusts them blindly: a quote inside one part is found at its new
+/// place, and a quote across two parts is found near it or falls back to its
+/// block, never at stale offsets that select other text.
+#[test]
+fn a_stored_quote_from_before_the_separator_change_reanchors() {
+    const DOCUMENT: &str = include_str!("../tests/fixtures/separator-migration/document.json");
+    // One received review, its offsets taken in the pre-change review text.
+    const EVENTS: &str = include_str!("../tests/fixtures/separator-migration/events.jsonl");
+    const CAPTURED_SESSION: &str = "5e9a7c1e-0d2b-4f5a-9c3e-7b1d2f4a6c80";
+    let document = match parse_document(DOCUMENT.as_bytes()).unwrap() {
+        ParsedDocument::Supported(document) => document,
+        ParsedDocument::Unsupported { .. } => panic!("the fixture parsed as unsupported"),
+    };
+    let framing = crate::document::Framing::default();
+    let current = |id: &str| find(&document, id).canonical_review_text(&framing);
+    assert_eq!(current("intro"), "First\nSecond");
+    assert_eq!(
+        current("checks"),
+        "Linux Chrome run\none crop was a sliver\nmacOS run"
+    );
+    let (_temp, store) = store();
+    let session = store
+        .create(ParsedDocument::Supported(document.clone()))
+        .unwrap();
+    let events = store
+        .root()
+        .join("sessions")
+        .join(session.id.to_string())
+        .join("events.jsonl");
+    std::fs::write(
+        &events,
+        EVENTS.replace(CAPTURED_SESSION, &session.id.to_string()),
+    )
+    .unwrap();
+
+    let snapshot = store.feedback_snapshot(session.id).unwrap();
+    let notes = &snapshot.items[0].notes;
+    let selected = |block: &str, anchor: &FeedbackAnchor| match anchor {
+        FeedbackAnchor::Anchored {
+            start_utf16,
+            end_utf16,
+        }
+        | FeedbackAnchor::Reanchored {
+            start_utf16,
+            end_utf16,
+            ..
+        } => {
+            let units: Vec<u16> = current(block).encode_utf16().collect();
+            Some(String::from_utf16(&units[*start_utf16 as usize..*end_utf16 as usize]).unwrap())
+        }
+        _ => None,
+    };
+    // Inside one part: the old offsets now select "\nSecon" and "r\nmacOS r".
+    for (note, block, quote) in [
+        (&notes[0], "intro", "Second"),
+        (&notes[1], "checks", "macOS run"),
+    ] {
+        assert_eq!(
+            note.quote.as_deref(),
+            Some(quote),
+            "the stored quote survives"
+        );
+        assert_eq!(
+            selected(block, &note.anchor).as_deref(),
+            Some(quote),
+            "{quote}: {:?}",
+            note.anchor
+        );
+    }
+    // Across two parts: the old quote no longer occurs as it was, so the
+    // fuzzy step finds it with its new separator and marks it changed.
+    let across = &notes[2];
+    assert_eq!(across.quote.as_deref(), Some("runone crop"));
+    assert!(
+        matches!(
+            across.anchor,
+            FeedbackAnchor::Reanchored { changed: true, .. }
+        ),
+        "{:?}",
+        across.anchor
+    );
+    assert_eq!(
+        selected("checks", &across.anchor).as_deref(),
+        Some("run\none crop")
+    );
+}
