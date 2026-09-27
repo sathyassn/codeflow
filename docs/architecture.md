@@ -241,7 +241,8 @@ read-only judgements: `ids check`, the merge rule that binds every added
 record to its `uid`, and a uniqueness scan over all refs that holds even
 without a registry. Pre-push and git-guard refuse deletion, force and
 non-additive ranges on the registry; the enforcing CI job runs on
-`pull_request_target` from the target branch's `codeflow-registry` workflow;
+`pull_request_target` (the `codeflow-registry` workflow from the default
+branch) and checks out the pull request's base commit;
 `remote protect` applies the branch's data profile; `doctor` reports damage,
 unplaced ids and host assurance. Claims stay advisory (ADR-0072).
 Documentation validation checks the

@@ -343,9 +343,11 @@ CI pins its binary too. The scaffolded workflows install the release named by
 `scaffold_version` in the target branch's `.codeflow/project.toml` and verify it
 against that release's `sha256.sum`; a missing or wrong checksum fails the job
 and nothing unverified is installed. The commit and PR-body standards run in
-`codeflow-policy.yml` on `pull_request_target`, from the target branch, so a
-pull request cannot edit the job that judges it. An upgrade therefore takes two
-pull requests, in order:
+`codeflow-policy.yml` on `pull_request_target`. GitHub runs that workflow from
+the default branch, so a pull request cannot edit the job that judges it, and
+the job checks out the pull request's base commit, so a pull request into an
+integration branch is judged by that branch's pin and policy, not the default
+branch's. An upgrade therefore takes two pull requests, in order:
 
 1. Install the new binary locally, then land a pull request that raises only
    `scaffold_version`. The target's current binary judges it, and the
