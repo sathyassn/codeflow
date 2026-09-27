@@ -135,7 +135,18 @@ fn epic(status: &str, specs: &str, criteria: &str) -> String {
     )
 }
 
+/// A spec with an empty `open_questions` list unless `extra` sets it.
 fn spec(id: &str, status: &str, extra: &str) -> String {
+    let questions = if extra.contains("open_questions") {
+        ""
+    } else {
+        "open_questions: []\n"
+    };
+    legacy_spec(id, status, &format!("{questions}{extra}"))
+}
+
+/// A spec as written before the `open_questions` field existed.
+fn legacy_spec(id: &str, status: &str, extra: &str) -> String {
     format!(
         "---\nid: {id}\ntitle: \"contract\"\nstatus: {status}\n{extra}---\n\n\
 # {id}\n\n## Summary\n\nS.\n\n## Behavior\n\nB.\n\n## Open questions\n\nNone.\n"
@@ -749,6 +760,132 @@ fn a_spec_is_superseded_only_by_a_revision_that_lists_it() {
         .errors
         .iter()
         .any(|e| e.contains("approved never returns to draft")));
+}
+
+#[test]
+fn approving_a_spec_reads_open_questions_from_the_structured_field() {
+    let repo = Repo::new();
+    let open = "open_questions:\n  - \"Which channel is authoritative?\"\n";
+    repo.write(
+        "project-management/specs/SPC-001.md",
+        &spec("SPC-001", "draft", open),
+    );
+    let base = repo.commit("draft with an open question");
+    let refused = refusal(
+        set_status(
+            repo.root(),
+            RecordKind::Spec,
+            "SPC-001",
+            &change("approved"),
+        )
+        .map(drop),
+    );
+    assert!(
+        refused.contains("still open: Which channel is authoritative?"),
+        "{refused}"
+    );
+
+    repo.write(
+        "project-management/specs/SPC-001.md",
+        &spec("SPC-001", "approved", "open_questions: not a list\n"),
+    );
+    assert!(repo
+        .judge(&base)
+        .errors
+        .iter()
+        .any(|e| e.contains("open_questions must be a list")));
+
+    // The prose section is no longer parsed: a question mark there is
+    // context, and an empty list is what approval reads.
+    let prose = spec("SPC-001", "approved", "open_questions: []\n")
+        .replace("None.\n", "Was this settled? Yes, see Decisions.\n");
+    repo.write("project-management/specs/SPC-001.md", &prose);
+    assert!(repo.judge(&base).is_clean(), "{:?}", repo.judge(&base));
+}
+
+/// TSK-135 review R3: a draft written before the field existed, whose prose
+/// still asks a question, is never approved on a missing field; nor is one
+/// whose list is null. Adding the list migrates it: the question stays open
+/// until it is resolved and the list is empty. An approved spec without the
+/// field stays readable.
+#[test]
+fn approving_needs_the_field_and_a_legacy_approval_stays_readable() {
+    let path = "project-management/specs/SPC-001.md";
+    let asking =
+        |text: String| text.replace("None.\n", "Which recovery channel is authoritative?\n");
+    for (what, spec_text, expected) in [
+        (
+            "missing",
+            asking(legacy_spec("SPC-001", "draft", "")),
+            "needs its `open_questions` frontmatter list",
+        ),
+        (
+            "null",
+            asking(legacy_spec("SPC-001", "draft", "open_questions: null\n")),
+            "open_questions must be a list",
+        ),
+    ] {
+        let repo = Repo::new();
+        repo.write(path, &spec_text);
+        repo.commit("a draft");
+        let refused = refusal(
+            set_status(
+                repo.root(),
+                RecordKind::Spec,
+                "SPC-001",
+                &change("approved"),
+            )
+            .map(drop),
+        );
+        assert!(refused.contains(expected), "{what}: {refused}");
+        assert!(repo.read(path).contains("status: draft"), "{what}");
+    }
+
+    // The one-line migration: the unresolved question moves into the list
+    // and blocks; once resolved, the empty list approves.
+    let repo = Repo::new();
+    repo.write(path, &asking(legacy_spec("SPC-001", "draft", "")));
+    repo.commit("a legacy draft");
+    let migrated = |questions: &str| asking(legacy_spec("SPC-001", "draft", questions));
+    repo.write(
+        path,
+        &migrated("open_questions: [\"Which recovery channel is authoritative?\"]\n"),
+    );
+    repo.commit("migrate the open question");
+    let refused = refusal(
+        set_status(
+            repo.root(),
+            RecordKind::Spec,
+            "SPC-001",
+            &change("approved"),
+        )
+        .map(drop),
+    );
+    assert!(
+        refused.contains("still open: Which recovery channel"),
+        "{refused}"
+    );
+    repo.write(path, &migrated("open_questions: []\n"));
+    repo.commit("resolve the question");
+    set_status(
+        repo.root(),
+        RecordKind::Spec,
+        "SPC-001",
+        &change("approved"),
+    )
+    .unwrap();
+
+    // Read compatibility: an approved spec without the field, unchanged or
+    // edited without a status change, is not refused.
+    let repo = Repo::new();
+    repo.write(path, &legacy_spec("SPC-001", "approved", ""));
+    let base = repo.commit("an approved legacy spec");
+    assert!(validate_lifecycle(repo.root()).is_clean());
+    repo.write(
+        path,
+        &legacy_spec("SPC-001", "approved", "").replace("B.\n", "B, clarified.\n"),
+    );
+    assert!(repo.judge(&base).is_clean(), "{:?}", repo.judge(&base));
 }
 
 #[test]

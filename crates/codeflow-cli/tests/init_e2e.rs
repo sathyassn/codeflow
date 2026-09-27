@@ -996,3 +996,228 @@ fn split_references_install_and_update_replaces_whole_files_at_standard_and_full
         );
     }
 }
+
+fn output_text(out: &Output) -> String {
+    format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+/// TSK-135 AC-4 (journey): in a freshly scaffolded full-tier project the
+/// shipped templates and the checks agree. The PR template names the light
+/// class, and a docs-only pull request with only Summary and Changes passes
+/// `codeflow ci` with no Release impact. The spec template carries the
+/// `open_questions` list, and `spec status approved` reads it: a listed
+/// question is refused, an empty list approves.
+#[test]
+fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let init = codeflow(&root, &["init", "--yes", "--full"]);
+    assert!(init.status.success(), "{}", output_text(&init));
+    let template = read(&root, ".github/pull_request_template.md");
+    assert!(
+        template.contains("A range of only Markdown under")
+            && template.contains("needs Summary and Changes"),
+        "{template}"
+    );
+    assert!(read(&root, "project-management/templates/spec.md").contains("open_questions: []"));
+
+    // A docs-only pull request: Summary and Changes suffice.
+    let target = git_stdout(&root, &["branch", "--show-current"]);
+    let target = target.trim().to_string();
+    git_with_binary(&root, &["switch", "-q", "-c", "docs/guide"]);
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/guide.md"), "# Guide\n\nHow to start.\n").unwrap();
+    git_with_binary(&root, &["add", "docs/guide.md"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "docs: add a starting guide"]);
+    let body = "Task: none: a new guide\n\n## Summary\n\nAdds a starting guide.\n\n\
+                ## Changes\n\n- a guide for new readers\n";
+    let ci = codeflow(
+        &root,
+        &[
+            "ci",
+            "--base",
+            &target,
+            "--head",
+            "HEAD",
+            "--branch",
+            "docs/guide",
+            "--pr-body",
+            body,
+        ],
+    );
+    let stderr = String::from_utf8_lossy(&ci.stderr);
+    assert_eq!(ci.status.code(), Some(0), "{}", output_text(&ci));
+    assert!(
+        !stderr.contains("git.pr_sections") && !stderr.contains("git.pr_release_impact"),
+        "{stderr}"
+    );
+
+    // A spec lists its open questions; approval reads the list.
+    git_with_binary(&root, &["switch", "-q", &target]);
+    git_with_binary(&root, &["switch", "-q", "-c", "plan/contract"]);
+    let epic = codeflow(&root, &["epic", "new", "outcome"]);
+    assert!(epic.status.success(), "{}", output_text(&epic));
+    let spec = codeflow(&root, &["spec", "new", "--for", "EPC-001", "contract"]);
+    assert!(spec.status.success(), "{}", output_text(&spec));
+    let path = root.join("project-management/specs/SPC-001.md");
+    let fresh = std::fs::read_to_string(&path).unwrap();
+    assert!(fresh.contains("open_questions: []"), "{fresh}");
+    std::fs::write(
+        &path,
+        fresh.replace(
+            "open_questions: []",
+            "open_questions: [\"Which store is authoritative?\"]",
+        ),
+    )
+    .unwrap();
+    let refused = codeflow(&root, &["spec", "status", "SPC-001", "approved"]);
+    assert_eq!(refused.status.code(), Some(1), "{}", output_text(&refused));
+    assert!(
+        output_text(&refused).contains("still open: Which store is authoritative?"),
+        "{}",
+        output_text(&refused)
+    );
+    std::fs::write(&path, &fresh).unwrap();
+    let approved = codeflow(&root, &["spec", "status", "SPC-001", "approved"]);
+    assert!(approved.status.success(), "{}", output_text(&approved));
+}
+
+const SPEC_TEMPLATE: &str = "project-management/templates/spec.md";
+
+/// Put the spec template back to how a release before TSK-135 shipped it,
+/// recorded as unmodified (file, baseline and manifest hash agree), and
+/// return the current shipped text.
+fn record_an_older_spec_template(root: &Path) -> String {
+    let current = read(root, SPEC_TEMPLATE);
+    let line = current
+        .lines()
+        .find(|l| l.starts_with("open_questions:"))
+        .expect("shipped template carries open_questions");
+    let older = current.replace(&format!("{line}\n"), "");
+    std::fs::write(root.join(SPEC_TEMPLATE), &older).unwrap();
+    std::fs::write(root.join(".codeflow/.baseline").join(SPEC_TEMPLATE), &older).unwrap();
+    let mut manifest: serde_json::Value =
+        serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap();
+    manifest["files"][SPEC_TEMPLATE]["sha256"] =
+        codeflow_core::scaffold::sha256_hex(older.as_bytes()).into();
+    std::fs::write(
+        root.join(".codeflow/manifest.json"),
+        serde_json::to_string_pretty(&manifest).unwrap(),
+    )
+    .unwrap();
+    current
+}
+
+/// How many PR templates `.github` holds, compared without case: the
+/// shipped name differs from a kept `PULL_REQUEST_TEMPLATE.md` only in case.
+fn pr_templates(root: &Path) -> usize {
+    std::fs::read_dir(root.join(".github"))
+        .unwrap()
+        .filter(|entry| {
+            entry
+                .as_ref()
+                .unwrap()
+                .file_name()
+                .to_string_lossy()
+                .eq_ignore_ascii_case("pull_request_template.md")
+        })
+        .count()
+}
+
+/// TSK-135 AC-4 (update): a full-tier adopter on an older spec template and
+/// a kept PR template with an accepted heading mapping runs `codeflow
+/// update`. The unmodified spec template gains `open_questions`; the kept
+/// template, the mapping and a docs-only body in the template's own
+/// headings all stand.
+#[test]
+fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
+    const KEPT: &str = "## Description\n\n<!-- What and why. -->\n\n## Changes\n\n- \n\n\
+                        ## How has this been tested?\n\n## Release notes\n";
+    const TEMPLATE: &str = ".github/PULL_REQUEST_TEMPLATE.md";
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    for args in [
+        &["init", "-q", "-b", "main"][..],
+        &["config", "user.email", "t@example.com"],
+        &["config", "user.name", "t"],
+    ] {
+        git_with_binary(&root, args);
+    }
+    std::fs::create_dir_all(root.join(".github")).unwrap();
+    std::fs::write(root.join(TEMPLATE), KEPT).unwrap();
+    std::fs::write(root.join("app.rs"), "fn main() {}\n").unwrap();
+    git_with_binary(&root, &["add", "."]);
+    git_with_binary(&root, &["commit", "-q", "-m", "chore: existing project"]);
+    let init = codeflow(&root, &["init", "--yes", "--full"]);
+    assert!(init.status.success(), "{}", output_text(&init));
+    assert_eq!(pr_templates(&root), 1);
+
+    // The adopter accepted the proposed mapping.
+    let policy_path = root.join(".codeflow/policy.json");
+    let mut policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    let mapping = &mut policy["git"]["pr_section_mapping"];
+    assert_eq!(mapping["state"], "diagnosed", "{mapping}");
+    mapping["state"] = "accepted".into();
+    mapping["decided"] = "2026-09-27".into();
+    let accepted = mapping.clone();
+    std::fs::write(
+        &policy_path,
+        format!("{}\n", serde_json::to_string_pretty(&policy).unwrap()),
+    )
+    .unwrap();
+
+    let current = record_an_older_spec_template(&root);
+
+    let update = codeflow(&root, &["update"]);
+    assert!(update.status.success(), "{}", output_text(&update));
+    assert_eq!(
+        read(&root, SPEC_TEMPLATE),
+        current,
+        "the spec template migrates"
+    );
+    assert_eq!(read(&root, TEMPLATE), KEPT, "the kept template stands");
+    assert_eq!(pr_templates(&root), 1);
+    let after: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert_eq!(after["git"]["pr_section_mapping"], accepted);
+
+    // A docs-only body in the template's own headings passes at block.
+    git_with_binary(&root, &["switch", "-q", "-c", "chore/adopt"]);
+    git_with_binary(&root, &["add", "-A"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "chore: adopt codeflow"]);
+    git_with_binary(&root, &["switch", "-q", "-c", "docs/guide"]);
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/guide.md"), "# Guide\n").unwrap();
+    git_with_binary(&root, &["add", "docs/guide.md"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "docs: add a guide"]);
+    let body = "Task: none: a new guide\n\n## Description\n\nAdds a guide.\n\n\
+                ## Changes\n\n- a guide\n";
+    let ci = codeflow(
+        &root,
+        &[
+            "ci",
+            "--base",
+            "chore/adopt",
+            "--head",
+            "HEAD",
+            "--branch",
+            "docs/guide",
+            "--pr-body",
+            body,
+        ],
+    );
+    let all = output_text(&ci);
+    assert_eq!(ci.status.code(), Some(0), "{all}");
+    assert!(all.contains("level pr_sections = block"), "{all}");
+    assert!(
+        !String::from_utf8_lossy(&ci.stderr).contains("git.pr_sections"),
+        "{all}"
+    );
+}

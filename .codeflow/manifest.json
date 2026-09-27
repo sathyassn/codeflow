@@ -1445,7 +1445,7 @@
     ".github/pull_request_template.md": {
       "src": "ci/pull_request_template.md",
       "ownership": "managed",
-      "sha256": "98a7d245ca31bc9bfe1fcd2ade17cecf2b24a5449128f997a1d69edeb913b589",
+      "sha256": "cce5aa3de483d8aab4ca4cb16ba16d6a638bd932656568acfac02b528d29cfac",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {
@@ -1529,7 +1529,7 @@
     "project-management/templates/spec.md": {
       "src": "pm/spec.md.tmpl",
       "ownership": "managed",
-      "sha256": "a660f91e867ba43d020a028b59ef4bf35db34e7bda5b96a927c12a79261b010e",
+      "sha256": "db1cdaffe0589f4857db715fe06291e0072f61c192a67d9ec2a09fa5d5a509a3",
       "exec": false
     },
     "project-management/templates/task.md": {

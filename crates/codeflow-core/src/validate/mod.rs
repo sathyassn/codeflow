@@ -804,92 +804,56 @@ pub fn validate_spec(
     errors.extend(validate_sections(&body, &opts.spec_required_sections));
     errors.extend(validate_array_fields(&data, &["supersedes"]));
 
-    if matches!(
-        get_string_field(&data, "status").as_str(),
-        "approved" | "implemented"
-    ) && section_has_unresolved_questions(&body)
-    {
-        errors.push(ValidationError {
-            field: "body".into(),
-            message: "approved or implemented spec must leave open questions \
-                      blank or use an explicit resolved marker"
-                .into(),
-        });
+    match open_questions(&data) {
+        Err(message) => errors.push(ValidationError {
+            field: "open_questions".into(),
+            message,
+        }),
+        Ok(Some(open))
+            if !open.is_empty()
+                && matches!(
+                    get_string_field(&data, "status").as_str(),
+                    "approved" | "implemented"
+                ) =>
+        {
+            errors.push(ValidationError {
+                field: "open_questions".into(),
+                message: format!(
+                    "an approved or implemented spec lists no open question; still open: {}",
+                    open.join("; ")
+                ),
+            });
+        }
+        Ok(_) => {}
     }
     Ok((errors, warnings))
 }
 
-#[cfg(test)]
-fn section_has_content(body: &[u8], heading: &str) -> bool {
-    !visible_section_text(body, heading).trim().is_empty()
-}
-
-pub(crate) fn section_has_unresolved_questions(body: &[u8]) -> bool {
-    let text = visible_section_text(body, "## Open questions");
-    let marker = text.trim().trim_end_matches(['.', ';']);
-    if marker.is_empty() {
-        return false;
+/// The questions a spec still leaves open, read from its `open_questions`
+/// frontmatter list (TSK-135). `None` when the field is absent: a spec
+/// written before the field existed stays readable, but approving one needs
+/// the list (see the lifecycle judge). The `## Open questions` section is
+/// prose and is never parsed. Null, a scalar, a map or a list item that is
+/// not a non-empty string is an error.
+pub(crate) fn open_questions(
+    data: &HashMap<String, serde_yaml::Value>,
+) -> Result<Option<Vec<String>>, String> {
+    let invalid =
+        || "open_questions must be a list of the questions still open, `[]` when none".to_string();
+    match data.get("open_questions") {
+        None => Ok(None),
+        Some(serde_yaml::Value::Sequence(items)) => items
+            .iter()
+            .map(|item| match item {
+                serde_yaml::Value::String(text) if !text.trim().is_empty() => {
+                    Ok(text.trim().to_string())
+                }
+                _ => Err(invalid()),
+            })
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
+        Some(_) => Err(invalid()),
     }
-    let lower = marker.to_ascii_lowercase();
-    if matches!(
-        lower.as_str(),
-        "none" | "n/a" | "not applicable" | "all resolved"
-    ) {
-        return false;
-    }
-    let contradicts_resolution = marker.contains('?')
-        || [
-            "unresolved",
-            "except",
-            "pending",
-            "remaining",
-            "not resolved",
-        ]
-        .iter()
-        .any(|phrase| lower.contains(phrase));
-    if contradicts_resolution {
-        return true;
-    }
-    let none_with_resolution = lower.strip_prefix("none").is_some_and(|suffix| {
-        let suffix = suffix.trim_start();
-        suffix
-            .chars()
-            .next()
-            .is_some_and(|character| "-—:;".contains(character))
-            && suffix
-                .split(|character: char| !character.is_alphabetic())
-                .any(|word| word == "resolved")
-    });
-    let natural_resolution = ["all resolved", "no open questions", "resolved"]
-        .iter()
-        .any(|prefix| lower.starts_with(prefix));
-    !(none_with_resolution || natural_resolution)
-}
-
-fn visible_section_text(body: &[u8], heading: &str) -> String {
-    let text = String::from_utf8_lossy(body);
-    let Some(start) = text.find(heading) else {
-        return String::new();
-    };
-    let after = &text[start + heading.len()..];
-    let end = after
-        .find("\n## ")
-        .or_else(|| after.find("\r\n## "))
-        .unwrap_or(after.len());
-    let section = &after[..end];
-    let mut visible = String::new();
-    let mut remainder = section;
-    while let Some(comment_start) = remainder.find("<!--") {
-        visible.push_str(&remainder[..comment_start]);
-        let after_open = &remainder[comment_start + "<!--".len()..];
-        let Some(comment_end) = after_open.find("-->") else {
-            remainder = "";
-            break;
-        };
-        remainder = &after_open[comment_end + "-->".len()..];
-    }
-    visible.push_str(remainder);
-    visible
 }
 
 #[cfg(test)]
@@ -1354,59 +1318,67 @@ Criteria
         assert!(!is_field_empty(&data, "filled"));
     }
 
-    #[test]
-    fn section_content_ignores_complete_and_unclosed_html_comments() {
-        assert!(!section_has_content(
-            b"## Open questions\n<!--\nplaceholder\nspans lines\n-->\n## Decisions\nDone\n",
-            "## Open questions"
-        ));
-        assert!(!section_has_content(
-            b"## Open questions\n<!-- unfinished placeholder\nstill a comment\n",
-            "## Open questions"
-        ));
+    fn spec_errors(status: &str, extra: &str, open_section: &str) -> Vec<ValidationError> {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("SPC-001.md");
+        std::fs::write(
+            &path,
+            format!(
+                "---\nid: SPC-001\ntitle: \"contract\"\nstatus: {status}\n{extra}---\n\n\
+                 # SPC-001\n\n## Summary\n\nS.\n\n## Behavior\n\nB.\n\n\
+                 ## Open questions\n\n{open_section}\n"
+            ),
+        )
+        .unwrap();
+        validate_spec(&path, &ValidateOptions::default()).unwrap().0
     }
 
     #[test]
-    fn section_content_detects_text_around_multiple_html_comments() {
-        assert!(section_has_content(
-            b"## Open questions\n<!-- first -->\nMaterial question\n<!-- second -->\n## Decisions\n",
-            "## Open questions"
-        ));
-        assert!(section_has_content(
-            b"## Open questions\n<!-- placeholder --> actual question\n## Decisions\n",
-            "## Open questions"
-        ));
+    fn open_questions_come_from_the_structured_field() {
+        let open = "open_questions:\n  - \"Which channel is authoritative?\"\n";
+        assert!(spec_errors("draft", open, "").is_empty());
+        let approved = spec_errors("approved", open, "");
+        assert!(
+            approved.iter().any(|e| e.field == "open_questions"
+                && e.message
+                    .contains("still open: Which channel is authoritative?")),
+            "{approved:?}"
+        );
+        assert!(!spec_errors("implemented", open, "").is_empty());
+        assert!(spec_errors("approved", "open_questions: []\n", "").is_empty());
     }
 
     #[test]
-    fn resolved_open_question_markers_are_not_unresolved_questions() {
-        for marker in [
-            "",
-            "None",
-            "N/A",
-            "Not applicable.",
-            "All resolved",
-            "All resolved during planning.",
-            "No open questions remain.",
-            "Resolved — see SPC-008.",
-            "None — all resolved during planning.",
+    fn an_existing_spec_without_the_field_stays_readable() {
+        // Reads stay compatible: a spec written before the field existed
+        // validates as it did, whatever its status. Approving a spec without
+        // the list is refused by the lifecycle judge, not here.
+        for status in ["draft", "approved", "implemented"] {
+            let errors = spec_errors(status, "", "None.");
+            assert!(errors.is_empty(), "{status}: {errors:?}");
+        }
+        // The prose is context and is never parsed, in either direction.
+        assert!(spec_errors("approved", "open_questions: []\n", "Settled? Yes.").is_empty());
+    }
+
+    #[test]
+    fn a_malformed_open_questions_value_is_an_error() {
+        for bad in [
+            "open_questions:\n",
+            "open_questions: null\n",
+            "open_questions: \"one question\"\n",
+            "open_questions: [1]\n",
+            "open_questions: [\"\"]\n",
+            "open_questions: {a: b}\n",
         ] {
-            let body =
-                format!("## Open questions\n{marker}\n<!-- placeholder -->\n## Decisions\nDone\n");
+            let errors = spec_errors("draft", bad, "");
             assert!(
-                !section_has_unresolved_questions(body.as_bytes()),
-                "{marker:?} must describe a resolved section"
+                errors
+                    .iter()
+                    .any(|e| e.field == "open_questions" && e.message.contains("must be a list")),
+                "{bad:?}: {errors:?}"
             );
         }
-        assert!(section_has_unresolved_questions(
-            b"## Open questions\nWhich recovery channel is authoritative?\n## Decisions\n"
-        ));
-        assert!(section_has_unresolved_questions(
-            b"## Open questions\nNone are resolved yet.\n## Decisions\n"
-        ));
-        assert!(section_has_unresolved_questions(
-            b"## Open questions\nAll resolved except the recovery channel.\n## Decisions\n"
-        ));
     }
 
     // -- enum consts stay in lockstep with the model enums --

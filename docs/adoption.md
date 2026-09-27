@@ -260,6 +260,12 @@ headings differ from `git.pr_required_sections`, the run records
 | refused | the missing required headings are appended to your template |
 | custom | you set `git.pr_required_sections` and `git.pr_code_sections` yourself in a reviewed change |
 
+Whatever the decision, a pull request that changes only Markdown under
+`docs/` or `project-management/`, outside your product and watched contract
+paths and the other shared contract surfaces, needs just Summary and Changes
+of your required list, under the template's headings when the mapping is
+accepted, and may leave out Release impact.
+
 A run without a terminal (`--yes`, CI) leaves the state `diagnosed`, and
 `codeflow doctor` repeats it. While it is diagnosed the PR-section check runs
 at `warn` only on a fresh install whose policy file `init` created; a

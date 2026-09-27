@@ -50,6 +50,9 @@ pub struct RecordView {
     pub integration_target: Option<String>,
     pub body: String,
     pub criteria: CriteriaList,
+    /// A spec's `open_questions` frontmatter list (`None` when absent), or
+    /// why it is unreadable.
+    pub open_questions: Result<Option<Vec<String>>, String>,
 }
 
 impl RecordView {
@@ -91,6 +94,7 @@ impl RecordView {
         Ok(Self {
             kind,
             criteria: parse_criteria(&body),
+            open_questions: crate::validate::open_questions(&data),
             status: field("status").unwrap_or_default(),
             epic_id: field("epic_id"),
             specs: list("specs"),
@@ -689,6 +693,18 @@ fn transition_problems(before: Option<&RecordView>, after: &RecordView) -> Vec<S
     if after.kind == RecordKind::Task && from == "complete" && to == "todo" {
         problems.extend(reopen_problems(before, after));
     }
+    // Approval attests that the questions were reviewed and settled, so it
+    // reads the structured list and never infers it from a missing field
+    // (TSK-135). A spec approved before the field existed stays readable.
+    if after.kind == RecordKind::Spec
+        && to == "approved"
+        && matches!(after.open_questions, Ok(None))
+    {
+        problems.push(
+            "approving a spec needs its `open_questions` frontmatter list: resolve the questions the `## Open questions` prose still raises, then add `open_questions: []` (or list any that stay open)"
+                .into(),
+        );
+    }
     problems
 }
 
@@ -803,10 +819,15 @@ fn state_problems(record: &RecordView, graph: &Graph, is_new: bool) -> Vec<Strin
         RecordKind::Task => problems.extend(task_state_problems(record, graph)),
         RecordKind::Epic => problems.extend(epic_state_problems(record, graph)),
         RecordKind::Spec => {
-            if record.status == "approved"
-                && crate::validate::section_has_unresolved_questions(record.body.as_bytes())
-            {
-                problems.push("an approved spec leaves no open question".into());
+            match &record.open_questions {
+                Err(message) => problems.push(message.clone()),
+                Ok(Some(open)) if record.status == "approved" && !open.is_empty() => {
+                    problems.push(format!(
+                        "an approved spec leaves no open question; still open: {}",
+                        open.join("; ")
+                    ));
+                }
+                Ok(_) => {}
             }
             if record.status == "implemented" && is_new {
                 problems.push(
