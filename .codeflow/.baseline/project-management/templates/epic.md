@@ -1,5 +1,6 @@
 ---
 id: EPC-{{NNN}}
+uid: {{UID}}              # hidden record identity, written once by `new`; never edit
 title: {{TITLE_YAML}}
 status: draft            # draft | planning | in_progress | blocked | complete | cancelled | archived
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment

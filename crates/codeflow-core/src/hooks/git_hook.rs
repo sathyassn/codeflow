@@ -800,6 +800,12 @@ pub fn pre_push(
         let Some(branch) = r.remote_branch() else {
             continue; // tags and other refs are out of scope
         };
+        if branch == crate::ids::REGISTRY_BRANCH {
+            // The registry is a data branch with its own profile (SPC-013
+            // R-6): no branch naming, no test gate, and the append-only rule.
+            registry_push(root, &repo, r, &mut report);
+            continue;
+        }
         let protected = policy.branch_is_protected(branch);
 
         if r.is_delete() {
@@ -859,7 +865,55 @@ pub fn pre_push(
 
     // The push set (`test_gate_on_push`) is run by the CLI hook, which binds
     // each check to the pushed commits: see `run_push_targets`.
+
     Ok(report)
+}
+
+/// The registry's push rule (SPC-013 R-8, R-108, R-109): never deleted or
+/// force-pushed, and every commit in the pushed range adds new `ids/` files
+/// only or is a typed restore. It blocks whatever the policy says, and a
+/// range that cannot be read blocks too.
+fn registry_push(root: &Path, repo: &Repository, r: &PushRef, report: &mut StageReport) {
+    let block = |message: String| {
+        Violation::new(
+            "registry.append_only",
+            PolicyLevel::Block,
+            message,
+            "issue ids with `codeflow task|epic|spec new`; repair damage with `codeflow ids restore <id>...`".to_string(),
+        )
+    };
+    if r.is_delete() {
+        report.violations.push(block(
+            "push would delete `codeflow/registry`; the registry only grows (R-8)".to_string(),
+        ));
+        return;
+    }
+    if is_force_update(repo, r) {
+        report.violations.push(block(
+            "non-fast-forward (force) push to `codeflow/registry`; the registry only grows (R-8)"
+                .to_string(),
+        ));
+        return;
+    }
+    let git = crate::ids::Git::new(root);
+    let exclude =
+        (!is_zero_sha(&r.remote_sha) && !r.remote_sha.is_empty()).then_some(r.remote_sha.as_str());
+    let findings = crate::ids::Ledger::read(&git, &r.local_sha)
+        .and_then(|ledger| ledger.range_violations(&git, exclude));
+    match findings {
+        Ok(findings) => {
+            for finding in findings {
+                report.violations.push(block(format!(
+                    "registry commit {}: {}",
+                    crate::ids::ledger::short(&finding.commit),
+                    finding.message
+                )));
+            }
+        }
+        Err(error) => report.violations.push(block(format!(
+            "cannot read the pushed registry range: {error}"
+        ))),
+    }
 }
 
 /// `true` when the remote ref exists and the local sha does not descend from

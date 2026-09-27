@@ -5,11 +5,11 @@
 //! `TSK-NNN-NNN` task ids remain visible to allocation so a new id never
 //! collides with an existing legacy namespace.
 //!
-//! Allocation is deliberately Git-native rather than a distributed id
-//! service. A process scans the visible checkout, selects max + 1, and creates
-//! the record exclusively. Same-checkout races fail instead of overwriting;
-//! independent worktree races become visible merge conflicts and are
-//! reallocated during planning.
+//! Every record gets a hidden `uid` (SPC-013 R-1). Where durable work is
+//! tracked, the CLI passes an allocator that issues the id from the shared
+//! registry (`crate::ids`); the default allocator scans the visible checkout
+//! and selects max + 1. Either way the record is created exclusively, so a
+//! same-checkout race fails instead of overwriting.
 
 use std::fmt::Write as _;
 use std::fs;
@@ -24,8 +24,43 @@ use crate::workgraph::store::StoreError;
 pub struct NewRecord {
     /// Stable record id.
     pub id: String,
+    /// The hidden `uid` written into the frontmatter.
+    pub uid: String,
     /// Canonical record path.
     pub path: PathBuf,
+}
+
+/// Chooses a new record's `(id, uid)` once its inputs are validated. The
+/// argument is the record's intended integration target, or `none`.
+pub type Allocator<'a> = dyn FnMut(&str) -> Result<(String, String), StoreError> + 'a;
+
+fn checkout_allocator(
+    next: impl Fn() -> String,
+) -> impl FnMut(&str) -> Result<(String, String), StoreError> {
+    move |_| Ok((next(), crate::ids::new_uid()))
+}
+
+pub(crate) fn planning_target(pm_root: &Path) -> String {
+    crate::workgraph::default_work_target(repository_root(pm_root)).map_or_else(
+        || "none".to_string(),
+        |target| {
+            target
+                .strip_prefix("origin/")
+                .unwrap_or(&target)
+                .to_string()
+        },
+    )
+}
+
+fn repository_root(pm_root: &Path) -> &Path {
+    if pm_root
+        .file_name()
+        .is_some_and(|name| name == "project-management")
+    {
+        pm_root.parent().unwrap_or(pm_root)
+    } else {
+        pm_root
+    }
 }
 
 fn sequence(id: &str, prefix: &str) -> Option<u32> {
@@ -182,8 +217,28 @@ fn write_new(path: &Path, content: &str) -> Result<(), StoreError> {
 ///
 /// Returns an I/O error when the destination cannot be created or written.
 pub fn create_epic(pm_root: &Path, template: &str, title: &str) -> Result<NewRecord, StoreError> {
+    create_epic_with(
+        pm_root,
+        template,
+        title,
+        &mut checkout_allocator(|| next_epic_id(pm_root)),
+    )
+}
+
+/// Scaffold a canonical epic with the id and `uid` `allocate` chooses.
+///
+/// # Errors
+///
+/// Returns the allocator's error, or an I/O error when the destination
+/// cannot be created or written.
+pub fn create_epic_with(
+    pm_root: &Path,
+    template: &str,
+    title: &str,
+    allocate: &mut Allocator<'_>,
+) -> Result<NewRecord, StoreError> {
     let title = record_title(title)?;
-    let id = next_epic_id(pm_root);
+    let (id, uid) = allocate(&planning_target(pm_root))?;
     let nnn = id.strip_prefix("EPC-").unwrap_or(id.as_str());
     let date = today();
     let title_yaml = yaml_string(title);
@@ -191,6 +246,7 @@ pub fn create_epic(pm_root: &Path, template: &str, title: &str) -> Result<NewRec
         template,
         &[
             ("NNN", nnn),
+            ("UID", uid.as_str()),
             ("TITLE", title),
             ("TITLE_YAML", title_yaml.as_str()),
             ("DATE", date.as_str()),
@@ -200,7 +256,7 @@ pub fn create_epic(pm_root: &Path, template: &str, title: &str) -> Result<NewRec
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{id}.md"));
     write_new(&path, &content)?;
-    Ok(NewRecord { id, path })
+    Ok(NewRecord { id, uid, path })
 }
 
 /// Allocate and scaffold a canonical task.
@@ -221,6 +277,32 @@ pub fn create_task(
     integration_target: Option<&str>,
     title: &str,
 ) -> Result<NewRecord, StoreError> {
+    create_task_with(
+        pm_root,
+        template,
+        epic_id,
+        standalone_reason,
+        integration_target,
+        title,
+        &mut checkout_allocator(|| next_task_id(pm_root)),
+    )
+}
+
+/// Scaffold a canonical task with the id and `uid` `allocate` chooses,
+/// after its parentage and integration target are validated.
+///
+/// # Errors
+///
+/// As [`create_task`], plus the allocator's error.
+pub fn create_task_with(
+    pm_root: &Path,
+    template: &str,
+    epic_id: Option<&str>,
+    standalone_reason: Option<&str>,
+    integration_target: Option<&str>,
+    title: &str,
+    allocate: &mut Allocator<'_>,
+) -> Result<NewRecord, StoreError> {
     let title = record_title(title)?;
     match (epic_id, standalone_reason.map(str::trim)) {
         (Some(epic), None | Some("")) if epic_exists(pm_root, epic) => {}
@@ -240,18 +322,9 @@ pub fn create_task(
         }
     }
 
-    let id = next_task_id(pm_root);
-    let nnn = id.strip_prefix("TSK-").unwrap_or(id.as_str());
     let date = today();
     let epic_value = epic_id.unwrap_or("null");
-    let repository_root = if pm_root
-        .file_name()
-        .is_some_and(|name| name == "project-management")
-    {
-        pm_root.parent().unwrap_or(pm_root)
-    } else {
-        pm_root
-    };
+    let repository_root = repository_root(pm_root);
     if integration_target.is_some_and(|target| target.trim().is_empty()) {
         return Err(StoreError::Invalid(
             "integration target cannot be empty".to_string(),
@@ -280,6 +353,8 @@ pub fn create_task(
         .strip_prefix("origin/")
         .unwrap_or(&resolved_target)
         .to_string();
+    let (id, uid) = allocate(&target)?;
+    let nnn = id.strip_prefix("TSK-").unwrap_or(id.as_str());
     let target_value = yaml_string(&target);
     let title_yaml = yaml_string(title);
     let reason_value = standalone_reason
@@ -289,6 +364,7 @@ pub fn create_task(
         template,
         &[
             ("NNN", nnn),
+            ("UID", uid.as_str()),
             ("EPIC_ID", epic_value),
             ("STANDALONE_REASON", reason_value.as_str()),
             ("TITLE", title),
@@ -301,7 +377,7 @@ pub fn create_task(
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{id}.md"));
     write_new(&path, &content)?;
-    Ok(NewRecord { id, path })
+    Ok(NewRecord { id, uid, path })
 }
 
 /// Allocate a spec and link it from an existing epic or task.
@@ -319,10 +395,32 @@ pub fn create_spec(
     work_item_id: &str,
     title: &str,
 ) -> Result<NewRecord, StoreError> {
+    create_spec_with(
+        pm_root,
+        template,
+        work_item_id,
+        title,
+        &mut checkout_allocator(|| next_spec_id(pm_root)),
+    )
+}
+
+/// Scaffold a spec with the id and `uid` `allocate` chooses and link it
+/// from its consuming work item.
+///
+/// # Errors
+///
+/// As [`create_spec`], plus the allocator's error.
+pub fn create_spec_with(
+    pm_root: &Path,
+    template: &str,
+    work_item_id: &str,
+    title: &str,
+    allocate: &mut Allocator<'_>,
+) -> Result<NewRecord, StoreError> {
     let title = record_title(title)?;
     let target = find_work_item_path(pm_root, work_item_id)
         .ok_or_else(|| StoreError::NotFound(format!("work-item:{work_item_id}")))?;
-    let id = next_spec_id(pm_root);
+    let (id, uid) = allocate(&planning_target(pm_root))?;
     let nnn = id.strip_prefix("SPC-").unwrap_or(id.as_str());
     let date = today();
     let title_yaml = yaml_string(title);
@@ -330,6 +428,7 @@ pub fn create_spec(
         template,
         &[
             ("NNN", nnn),
+            ("UID", uid.as_str()),
             ("TITLE", title),
             ("TITLE_YAML", title_yaml.as_str()),
             ("DATE", date.as_str()),
@@ -343,7 +442,7 @@ pub fn create_spec(
         let _ = fs::remove_file(&path);
         return Err(error);
     }
-    Ok(NewRecord { id, path })
+    Ok(NewRecord { id, uid, path })
 }
 
 fn find_work_item_path(pm_root: &Path, id: &str) -> Option<PathBuf> {

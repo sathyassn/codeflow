@@ -196,6 +196,7 @@ const CHECK_NAMES: &[&str] = &[
     "managed-drift",
     "customization",
     "test-config",
+    "id-registry",
 ];
 
 /// Return the ordered list of all available check names.
@@ -225,6 +226,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("managed-drift", check_managed_drift);
     m.insert("customization", check_customization);
     m.insert("test-config", check_test_config);
+    m.insert("id-registry", check_id_registry);
     m
 }
 
@@ -1497,6 +1499,73 @@ fn check_ci_perimeter(opts: &Options) -> CheckResult {
     }
 }
 
+/// The shared id registry (SPC-013 R-10, R-21): damage, ids no ref can
+/// place, and the assurance of the host. Reads fetched refs only; it never
+/// fetches.
+fn check_id_registry(opts: &Options) -> CheckResult {
+    let start = Instant::now();
+    let root = PathBuf::from(&opts.project_dir);
+    let result = |status: Status, message: String| CheckResult {
+        name: "id-registry".into(),
+        status,
+        message,
+        duration: start.elapsed(),
+    };
+    match crate::workgraph::durable_work_tracking_enabled(&root) {
+        Ok(true) => {}
+        Ok(false) => {
+            return result(
+                Status::Pass,
+                "durable work tracking is off; no registry applies".into(),
+            )
+        }
+        // Whether a registry applies is unknown, so it is not applicable
+        // here; the enforcing surfaces (pre-commit, CI) refuse until the
+        // state is repaired, and the warning keeps the cause visible.
+        Err(error) => {
+            return result(
+                Status::Warn,
+                format!("not applicable: durable-work tracking cannot be determined ({error})"),
+            )
+        }
+    }
+    let git = crate::ids::Git::new(&root);
+    let report = match crate::ids::check::check(&git, None) {
+        Ok(report) => report,
+        Err(error) => return result(Status::Fail, format!("cannot read the registry: {error}")),
+    };
+    if !report.blocks.is_empty() {
+        return result(Status::Fail, report.blocks.join("; "));
+    }
+    let mut notes: Vec<String> = report.info.iter().take(1).cloned().collect();
+    notes.extend(report.warns.iter().cloned());
+    let mut status = if report.warns.is_empty() {
+        Status::Pass
+    } else {
+        Status::Warn
+    };
+    if git.has_remote(crate::ids::AUTHORITY) {
+        let state = crate::ids::state::load(&git).unwrap_or_default();
+        let last = state
+            .last_verified
+            .get(crate::ids::AUTHORITY)
+            .map_or("none yet".to_string(), |sha| {
+                crate::ids::ledger::short(sha).to_string()
+            });
+        if state.data_profile.contains_key(crate::ids::AUTHORITY) {
+            notes.push(format!(
+                "host data profile applied; last verified tip {last}"
+            ));
+        } else {
+            status = Status::Warn;
+            notes.push(format!(
+                "reduced assurance: no host rules recorded for codeflow/registry (`codeflow remote protect` applies them); a rewrite is detected only against the last verified tip ({last})"
+            ));
+        }
+    }
+    result(status, notes.join("; "))
+}
+
 /// Where init placed the CI workflow: the installed-file record for the shipped
 /// CI asset (robust to a relocated workflow), else the canonical dest.
 fn ci_workflow_dest(root: &Path) -> String {
@@ -1726,8 +1795,39 @@ mod tests {
     }
 
     #[test]
+    fn id_registry_is_not_applicable_when_project_state_is_unreadable() {
+        let dir = tempfile::tempdir().unwrap();
+        let cf = dir.path().join(".codeflow");
+        std::fs::create_dir_all(&cf).unwrap();
+        // A project.toml without the state fields `init` writes.
+        std::fs::write(cf.join("project.toml"), "tier = \"standard\"\n").unwrap();
+        let opts = Options {
+            project_dir: dir.path().to_string_lossy().into_owned(),
+            ..test_opts()
+        };
+        let result = check_id_registry(&opts);
+        assert_eq!(result.status, Status::Warn, "{}", result.message);
+        assert!(
+            result.message.starts_with("not applicable:"),
+            "{}",
+            result.message
+        );
+    }
+
+    #[test]
+    fn id_registry_passes_when_tracking_is_off() {
+        let dir = tempfile::tempdir().unwrap();
+        let opts = Options {
+            project_dir: dir.path().to_string_lossy().into_owned(),
+            ..test_opts()
+        };
+        let result = check_id_registry(&opts);
+        assert_eq!(result.status, Status::Pass, "{}", result.message);
+    }
+
+    #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 15);
+        assert_eq!(check_names().len(), 16);
     }
 
     #[test]

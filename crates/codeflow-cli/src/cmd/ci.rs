@@ -20,6 +20,7 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
 mod classification;
+mod id_registry;
 mod pr_body;
 mod work_records;
 
@@ -195,8 +196,8 @@ pub fn run(args: &CiArgs) -> i32 {
         None => {}
     }
 
-    // --- work-record transitions (TSK-102) -------------------------------
-    work_records::dispatch(&root, &base_candidates, &head, &mut tagged, &mut ran);
+    // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
+    record_checks(&root, &base_candidates, &head, &mut tagged, &mut ran);
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {
@@ -253,6 +254,19 @@ pub fn run(args: &CiArgs) -> i32 {
     }
 
     report(&tagged, &ran, &skipped)
+}
+
+/// The durable-record rows of the dispatch, in their append-only order
+/// (SPC-013 R-118): transitions, then the id registry's merge rule.
+fn record_checks(
+    root: &Path,
+    base_candidates: &[String],
+    head: &str,
+    tagged: &mut Vec<TaggedViolation>,
+    ran: &mut Vec<&str>,
+) {
+    work_records::dispatch(root, base_candidates, head, tagged, ran);
+    id_registry::dispatch(root, base_candidates, head, tagged, ran);
 }
 
 fn evaluate_pr_checks(

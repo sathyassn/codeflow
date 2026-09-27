@@ -258,6 +258,13 @@ fn each_light_path_takes_one_command_and_one_pull_request() {
         "{text}"
     );
     assert!(text.contains(": Adopt a cache: keep it small\n"), "{text}");
+    // Numbered by the project's registry and bound to its uid (TSK-101).
+    let uid_line = text.lines().find(|line| line.starts_with("uid: ")).unwrap();
+    let bound = git(&root, &["show", "codeflow/registry:ids/ADR/0002.toml"]);
+    assert!(
+        bound.contains(&format!("uid = \"{}\"", &uid_line[5..])),
+        "{bound}"
+    );
     ok(
         &codeflow(&root, &["validate", "--docs"]),
         "validate --docs after adr new",

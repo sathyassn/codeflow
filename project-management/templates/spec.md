@@ -1,5 +1,6 @@
 ---
 id: SPC-{{NNN}}
+uid: {{UID}}              # hidden record identity, written once by `new`; never edit
 title: {{TITLE_YAML}}
 status: draft            # draft | approved | superseded; change it with `codeflow spec status`
 created: {{DATE}}

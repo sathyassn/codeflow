@@ -12,6 +12,7 @@ pub mod estimate;
 pub mod file_lock;
 pub mod git;
 pub mod hooks;
+pub mod ids;
 pub mod integrate;
 pub mod ledger;
 pub mod model_qualification;

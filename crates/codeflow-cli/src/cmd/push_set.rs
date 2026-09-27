@@ -40,9 +40,16 @@ pub(super) fn run(
     remote: Option<&str>,
     report: &mut StageReport,
 ) {
+    // A push of the id registry carries no code: it is judged by its own
+    // rules (SPC-013 R-6), and checking it here would recurse through the
+    // registry sync the hook runs.
     let pushed: Vec<&PushRef> = refs
         .iter()
-        .filter(|r| r.remote_branch().is_some() && !r.is_delete())
+        .filter(|r| {
+            r.remote_branch()
+                .is_some_and(|branch| branch != codeflow_core::ids::REGISTRY_BRANCH)
+                && !r.is_delete()
+        })
         .collect();
     if pushed.is_empty() || !policy.test_gate_on_push.is_active() {
         return;

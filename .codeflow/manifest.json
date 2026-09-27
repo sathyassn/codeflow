@@ -1079,19 +1079,19 @@
     "project-management/templates/epic.md": {
       "src": "pm/epic.md.tmpl",
       "ownership": "managed",
-      "sha256": "e66dbae2380085f477ab8264ce4845785199094a498af58d24db8bfca202dac5",
+      "sha256": "a4d6b6efe1a98c0de1ec6163034b0f1757e1307816db62bb323f0e5604a5d25f",
       "exec": false
     },
     "project-management/templates/spec.md": {
       "src": "pm/spec.md.tmpl",
       "ownership": "managed",
-      "sha256": "0c5fa9b8df9ef551033e2420b393d083dddc084448dee0c8123ce7be9b4ac99d",
+      "sha256": "382dfeec945e4dcd7bc3becd6c1fec489eef803beb1930b879b209271ad7af70",
       "exec": false
     },
     "project-management/templates/task.md": {
       "src": "pm/task.md.tmpl",
       "ownership": "managed",
-      "sha256": "8d4e4e9abd4d5c560eb6d7b03481fa2a277e87b70caaf830e6e25e93d04ec137",
+      "sha256": "622540afa75c56c7457dc08b76c16826ad438945e7f91f73ae74d8a0077d953b",
       "exec": false
     }
   }

@@ -1,5 +1,6 @@
 ---
 id: TSK-{{NNN}}
+uid: {{UID}}              # hidden record identity, written once by `new`; never edit
 epic_id: {{EPIC_ID}}              # EPC-NNN, or null for a justified standalone task
 standalone_reason: {{STANDALONE_REASON}} # required exactly when epic_id is null
 title: {{TITLE_YAML}}

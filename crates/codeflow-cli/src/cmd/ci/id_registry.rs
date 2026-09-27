@@ -1,0 +1,72 @@
+//! The merge rule and the uniqueness scan (TSK-101, SPC-013 R-2, R-14,
+//! R-111): every record the range adds must be bound to its `uid` in the
+//! fetched `codeflow/registry`, no existing `uid` may change, and no other
+//! ref may hold a different record under the same id. Only projects with
+//! durable work tracking run it. The enforcing copy runs from the target
+//! branch's `codeflow-registry` workflow; this row gives the same verdict
+//! in the ordinary PR job.
+
+use std::path::Path;
+
+use codeflow_core::hooks::{PolicyLevel, Violation};
+use codeflow_core::ids::{check, Git};
+use codeflow_core::workgraph::durable_work_tracking_enabled;
+
+const RULE: &str = "work.id_registry";
+
+/// Run the check for `codeflow ci` and record its findings and whether it ran.
+pub(super) fn dispatch(
+    root: &Path,
+    base_candidates: &[String],
+    head: &str,
+    tagged: &mut Vec<super::TaggedViolation>,
+    ran: &mut Vec<&str>,
+) {
+    match durable_work_tracking_enabled(root) {
+        Ok(true) => {}
+        Ok(false) => return,
+        Err(error) => {
+            push(
+                tagged,
+                PolicyLevel::Block,
+                format!("cannot determine durable-work tracking: {error}"),
+            );
+            ran.push("id-registry");
+            return;
+        }
+    }
+    let Some(base) = super::resolve_base(root, base_candidates) else {
+        return;
+    };
+    ran.push("id-registry");
+    match check::merge_rule(&Git::new(root), &base, head) {
+        Ok(report) => {
+            for line in &report.info {
+                println!("codeflow ci: {line}");
+            }
+            for warn in report.warns {
+                push(tagged, PolicyLevel::Warn, warn);
+            }
+            for block in report.blocks {
+                push(tagged, PolicyLevel::Block, block);
+            }
+        }
+        Err(error) => push(
+            tagged,
+            PolicyLevel::Block,
+            format!("cannot judge the record ids of the range: {error}"),
+        ),
+    }
+}
+
+fn push(tagged: &mut Vec<super::TaggedViolation>, level: PolicyLevel, message: String) {
+    tagged.push(super::TaggedViolation {
+        sha: None,
+        violation: Violation::new(
+            RULE,
+            level,
+            message,
+            "issue ids with `codeflow task|epic|spec new`; a maintainer admits a hand-written record with `codeflow ids admit`".to_string(),
+        ),
+    });
+}
