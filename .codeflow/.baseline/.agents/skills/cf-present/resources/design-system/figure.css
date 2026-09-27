@@ -55,8 +55,8 @@
 .cf-m-blocked { fill: none; stroke: var(--cf-fig-line-soft); stroke-width: 1.5; stroke-dasharray: 2 4; stroke-linecap: butt; }
 .cf-m-human { fill: var(--cf-fig-ground); stroke: var(--cf-fig-line); stroke-width: 2.5; }
 .cf-m-agent { fill: var(--cf-fig-accent); stroke: var(--cf-fig-ground); stroke-width: 2; }
-.cf-m-merge { fill: var(--cf-fig-ground); stroke: var(--cf-fig-accent); stroke-width: 2.5; stroke-linejoin: round; }
-.cf-m-stop { stroke: var(--cf-fig-stop); stroke-width: 3; stroke-linecap: butt; fill: none; }
+.cf-m-merge { fill: var(--cf-fig-ground); stroke: var(--cf-fig-accent); stroke-width: 3.5; stroke-linejoin: round; }
+.cf-m-stop { stroke: var(--cf-fig-stop); stroke-width: 4; stroke-linecap: square; fill: none; }
 .cf-m-cross { stroke: var(--cf-fig-stop); stroke-width: 2; stroke-linecap: butt; fill: none; }
 .cf-m-warn { fill: none; stroke: var(--cf-fig-warn); stroke-width: 2; stroke-dasharray: 5 3; stroke-linecap: butt; }
 .cf-m-layer { fill: var(--cf-fig-fill); stroke: var(--cf-fig-line-soft); stroke-width: 1.5; }

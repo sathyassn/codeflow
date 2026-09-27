@@ -70,6 +70,14 @@ publication date._
   No existing CLI or config value is removed.
 
 <!-- codeflow:release-impact patch -->
+- **Figure marks read without colour.** The stop mark is a square-capped bar
+  and the merge diamond an accent stroke, so every mark pair in a figure
+  differs on two channels besides hue. The boxed-text check judges each mark
+  before the figure, so empty shapes no longer hide a figure drawn as
+  labelled boxes, and coverage cells no longer count as boxed text. Narrow
+  coverage grids bind their column labels and share one set of columns.
+
+<!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
   minutes, repairs assertion-red checks without being asked, reports
@@ -181,6 +189,14 @@ publication date._
   or substitution that a shell or any other program can run is still checked.
   A `cd` or `-C` chain that switches to a new branch before committing is
   judged on that branch.
+
+<!-- codeflow:release-impact patch -->
+- **Delegate turns accept a pasted prompt.** Claude Code submits a long or
+  multi-line pasted prompt inside one `<pasted_content id="N">` envelope, so
+  the delegate-turn hook used to reject it as a digest mismatch. The hook now
+  accepts the prompt when its bytes match exactly or when exactly one
+  envelope with matching ids holds the exact armed bytes; every other shape
+  still fails, and `accepted.json` records which delivery matched.
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->
 

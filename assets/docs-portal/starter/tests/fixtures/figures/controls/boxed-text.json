@@ -1,0 +1,222 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "queue-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What is the queue service, and what is it not?",
+    "idea": "The queue service is made of producers, a queue, workers and dead letters.",
+    "title": "What the queue service is made of",
+    "caption": "The queue service has four parts.",
+    "states": [
+      {
+        "name": "part",
+        "mark": "state",
+        "means": "A part of the service"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the service has producers, a queue, workers and a dead letter queue",
+        "source": "docs/queue-service.md#concept",
+        "derive": "the Concept section",
+        "check": {
+          "kind": "contains",
+          "text": "a dead letter queue"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 140,
+      "draw": [
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 20,
+          "y": 50,
+          "w": 140,
+          "h": 44,
+          "rx": 8,
+          "id": "w0"
+        },
+        {
+          "text": "Producers",
+          "x": 90,
+          "y": 77,
+          "anchor": "middle",
+          "for": [
+            "w0"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 200,
+          "y": 50,
+          "w": 140,
+          "h": 44,
+          "rx": 8,
+          "id": "w1"
+        },
+        {
+          "text": "Queue",
+          "x": 270,
+          "y": 77,
+          "anchor": "middle",
+          "for": [
+            "w1"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 380,
+          "y": 50,
+          "w": 140,
+          "h": 44,
+          "rx": 8,
+          "id": "w2"
+        },
+        {
+          "text": "Workers",
+          "x": 450,
+          "y": 77,
+          "anchor": "middle",
+          "for": [
+            "w2"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 560,
+          "y": 50,
+          "w": 140,
+          "h": 44,
+          "rx": 8,
+          "id": "w3"
+        },
+        {
+          "text": "Dead letters",
+          "x": 630,
+          "y": 77,
+          "anchor": "middle",
+          "for": [
+            "w3"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 180,
+      "draw": [
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 20,
+          "y": 20,
+          "w": 150,
+          "h": 44,
+          "rx": 8,
+          "id": "n0"
+        },
+        {
+          "text": "Producers",
+          "x": 95,
+          "y": 47,
+          "anchor": "middle",
+          "for": [
+            "n0"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 190,
+          "y": 20,
+          "w": 150,
+          "h": 44,
+          "rx": 8,
+          "id": "n1"
+        },
+        {
+          "text": "Queue",
+          "x": 265,
+          "y": 47,
+          "anchor": "middle",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 20,
+          "y": 90,
+          "w": 150,
+          "h": 44,
+          "rx": 8,
+          "id": "n2"
+        },
+        {
+          "text": "Workers",
+          "x": 95,
+          "y": 117,
+          "anchor": "middle",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 190,
+          "y": 90,
+          "w": 150,
+          "h": 44,
+          "rx": 8,
+          "id": "n3"
+        },
+        {
+          "text": "Dead letters",
+          "x": 265,
+          "y": 117,
+          "anchor": "middle",
+          "for": [
+            "n3"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Role"
+      ],
+      "rows": [
+        [
+          "Producers",
+          "publish jobs"
+        ],
+        [
+          "Queue",
+          "holds jobs in order"
+        ],
+        [
+          "Workers",
+          "run jobs"
+        ],
+        [
+          "Dead letters",
+          "hold jobs that failed five times"
+        ]
+      ]
+    }
+  }
+}

@@ -81,9 +81,10 @@ async function mixedFixture() {
   steps.figure.id = "install-steps";
   steps.figure.facts = [{ claim: "The install section lists two steps", source: "docs/guide.md#install", derive: "numbered items in the Install section", check: { kind: "count-items" }, value: 2 }];
   await writeFile(path.join(root, "figures/install-steps.json"), `${JSON.stringify(steps, null, 2)}\n`);
-  // The flow specimen draws done and stop apart by shape alone, so it breaks
-  // rule 3 on any page it lands on.
-  const broken = await specimen("01-flow.json");
+  // The layering specimen with its remote plane declared on the local layer
+  // mark: only the cap tells the two planes apart, so it breaks rule 3 on any
+  // page it lands on.
+  const broken = await specimen("controls/one-channel.json");
   broken.figure.facts = [{ claim: "The source says a rule is broken", source: "docs/broken.md", derive: "the source text", check: { kind: "contains", text: "breaks a rule" }, value: true }];
   await writeFile(path.join(root, "figures/broken.json"), `${JSON.stringify(broken, null, 2)}\n`);
   await configureFixture(root, { layers: LAYERS, page_carriers: [], page_classes: PAGE_CLASSES, figures: FIGURES });
@@ -281,7 +282,7 @@ test("the mixed fixture renders every class and the gates name only what falls s
       assert.ok(failures.length > 0);
       for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
       assert.deepEqual(failures.filter((failure) => /served page|page CSS|executable content|clean copy|not visible to a reader|effective opacity|legend key sits|twin marker/.test(failure)), []);
-      assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states done and stop differ on shape, need 2/.test(failure)), failures.join("\n"));
+      assert.ok(failures.some((failure) => /rule 3 \(two channels, never hue alone\): wide: states layer and layer-remote differ on overlay, need 2/.test(failure)), failures.join("\n"));
 
       // Page CSS (R3-2, R4-1, R4-2). Each rule is refused at its source, as a
       // stylesheet that is not a built sheet, and is also seen by the checks

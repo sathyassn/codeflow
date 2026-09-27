@@ -1,0 +1,87 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "check-coverage",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Which checks run on which service?",
+    "idea": "Every service runs unit tests; only checkout runs every check.",
+    "title": "Which checks run on which service",
+    "caption": "Checkout runs every check, and search has not run its browser suite.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Runs"
+      },
+      {
+        "name": "part",
+        "mark": "part",
+        "means": "Runs in part"
+      },
+      {
+        "name": "notrun",
+        "mark": "notrun",
+        "means": "Not run"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "checkout runs every check",
+        "source": "docs/checks.md#coverage",
+        "derive": "the coverage section",
+        "check": {
+          "kind": "contains",
+          "text": "checkout runs every check"
+        },
+        "value": true
+      }
+    ],
+    "layout": {
+      "kind": "coverage",
+      "columns": [
+        "Unit tests",
+        "Integration",
+        "Browser",
+        "Release"
+      ],
+      "rows": [
+        {
+          "label": "Checkout",
+          "cells": [
+            "cov",
+            "cov",
+            "cov",
+            "cov"
+          ]
+        },
+        {
+          "label": "Payments",
+          "cells": [
+            "cov",
+            "part",
+            "cov",
+            "notrun"
+          ]
+        },
+        {
+          "label": "Search",
+          "cells": [
+            "cov",
+            "cov",
+            "notrun",
+            "part"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "elongation_max": 2,
+      "reason": "four column names do not fit one line at the narrow width, so each row lists its checks on two lines"
+    },
+    "twin": "facts"
+  }
+}

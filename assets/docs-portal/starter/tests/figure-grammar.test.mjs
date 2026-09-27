@@ -4,9 +4,9 @@
 import assert from "node:assert/strict";
 import { readFile, writeFile } from "node:fs/promises";
 import test from "node:test";
-import { checkFacts, composeFigure, drawnValuesMatch, FAMILIES, MARKS, markdownSections, MIN_PLOT_WIDTH, renderFigure, SHAPE_CLASSES, slugHeading, TEXT_CLASSES, validateDeclaration } from "../scripts/figure-grammar.mjs";
+import { checkFacts, composeFigure, COVERAGE_COLUMN_CHARACTERS, drawnValuesMatch, FAMILIES, MARKS, markdownSections, MIN_PLOT_WIDTH, renderFigure, SHAPE_CLASSES, slugHeading, TEXT_CLASSES, validateDeclaration } from "../scripts/figure-grammar.mjs";
 
-import { specimens } from "./page-shapes.mjs";
+import { specimen, specimens } from "./page-shapes.mjs";
 
 // A committed source for each fact, written so the fact holds: the anchored
 // section carries the text, the items or the JSON value the fact asserts.
@@ -104,8 +104,11 @@ test("two states that draw the same legend key are refused", async () => {
 // reconstruction of a companion is pinned to the same bytes (see
 // figures/render.rs in codeflow-core). CODEFLOW_UPDATE_FIGURE_FIXTURES=1
 // rewrites them after a deliberate change to the drawing.
+// The two coverage controls pin the narrow coverage layout on one line and
+// wrapped onto a second.
 test("the committed rendered specimens are what the grammar draws", async () => {
-  for (const { name, declaration } of await specimens()) {
+  const controls = await Promise.all(["controls/coverage-derived.json", "controls/coverage-wrapped.json"].map(async (name) => ({ name, declaration: await specimen(name) })));
+  for (const { name, declaration } of [...await specimens(), ...controls]) {
     const bound = declaration.figure.binding === "derived" ? { source: declaration.figure.source, derived: { commit_desc_max_len: 50, commit_subject_max_len: 72 } } : null;
     const html = `${renderFigure(declaration, { idPrefix: "cf-fig-0", bound })}\n`;
     const file = new URL(`./fixtures/figures/rendered/${name.replace(/\.json$/, ".html")}`, import.meta.url);
@@ -171,6 +174,19 @@ test("an extent layout keeps a positive, usable plot width or is refused", async
   assert.throws(() => validateDeclaration(withUnit("milliseconds per successful transaction")), /the extent value labels leave -?[\d.]+ units to plot at the narrow width, under the 160 the layout needs; shorten layout\.unit/);
   const edge = withUnit("chars per line");
   assert.throws(() => composeFigure(edge, bound({ commit_desc_max_len: 50.12, commit_subject_max_len: 72000.25 })), /under the 160 the layout needs/);
+});
+
+// A coverage column name is held to COVERAGE_COLUMN_CHARACTERS, so the
+// longest allowed name still fits one narrow slot inside the 360-unit
+// composition (its label budgeted at 0.65em of 14px a character plus 0.25em
+// of overhang), and a longer name is refused before drawing.
+test("a coverage column name fits the narrow composition or is refused", async () => {
+  const base = await specimen("controls/coverage-wrapped.json");
+  const withColumns = (name) => { const copy = structuredClone(base); copy.figure.layout.columns = copy.figure.layout.columns.map(() => name); return copy; };
+  const longest = "x".repeat(COVERAGE_COLUMN_CHARACTERS);
+  const { narrow } = composeFigure(validateDeclaration(withColumns(longest)));
+  for (const label of narrow.draw.filter((item) => item.text === longest)) assert.ok(label.x + longest.length * 0.65 * 14 + 0.25 * 14 <= narrow.width, JSON.stringify(label));
+  assert.throws(() => validateDeclaration(withColumns(`${longest}x`)), new RegExp(`layout column must be 1 to ${COVERAGE_COLUMN_CHARACTERS} characters of text`));
 });
 
 test("facts re-derive from the anchored section, so a wrong fact under a valid anchor fails", () => {
