@@ -36,7 +36,7 @@ boundary, or irreversible tradeoff; ordinary reversible detail inside an
 approved node remains execution evidence.
 
 - **No workflow** for conversational or trivial changes — answer, edit, done.
-- **Interactive `/cf-model-orchestrator` loop** for routed work — parallel
+- **Interactive `/cf-model-orchestrator` loop** for routed work: parallel
   discovery, versioned joint settlement, then only the stages the outcome needs.
 - **Inline `/cf-develop` loop** supports an orchestrated implementation; used
   alone, it is the recorded solo fallback: build → independent review → verify.
