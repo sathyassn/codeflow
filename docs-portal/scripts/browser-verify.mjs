@@ -473,7 +473,7 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
         await settle(page);
         observed[label] = await page.evaluate(probeFigures, { clearance: THRESHOLDS.labelClearancePx });
         observed[`${label}Dom`] = await page.evaluate(readFigureDom);
-        observed[`${label}Context`] = await page.evaluate(readFigureContext);
+        observed[`${label}Context`] = await figureContext(page);
         for (const failure of figureChromeFailures(await page.evaluate(readFigureChrome))) failures.push(`${assignment.source} (at ${assignment.route}, ${width}px ${mode}): ${failure}`);
         observed[`${label}Url`] = page.url();
         observed[`${label}Root`] = await page.evaluate(() => [...document.documentElement.attributes].filter((attribute) => attribute.name.startsWith("data-")).map((attribute) => [attribute.name, attribute.value]));
@@ -541,7 +541,7 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
         await clean.goto(observed[`${label}Url`], { waitUntil: "networkidle" });
         await clean.evaluate(showForReading, { theme: mode, root: observed[`${label}Root`], strip: pinnedSheets.map((sheet) => sheet.path.slice("dist/".length)), code: codeBlockAssets(pinnedSheets), expected: rendered });
         await settle(clean);
-        const baseline = await clean.evaluate(readFigureContext);
+        const baseline = await figureContext(clean);
         observed[`${label}Context`].forEach((reading, index) => {
           for (const message of figureContextFailures(reading, baseline[index])) failures.push(`${wheres[index] ?? assignment.source}: rule 6 (${FIGURE_RULES[6]}): ${label}: ${message}`);
         });
@@ -872,8 +872,11 @@ export function readFigureContext() {
     const styles = elements.flatMap((element) => {
       const entries = [{ element: name(element), values: computed(element) }];
       for (const pseudo of ["::before", "::after"]) {
-        const values = computed(element, pseudo);
-        if (values.content && values.content !== "none" && values.content !== "normal") entries.push({ element: `${name(element)}${pseudo}`, values });
+        // A pseudo-element is read in full only when it draws; most do not,
+        // and enumerating every property of each empty one was most of the
+        // reading's cost.
+        const content = getComputedStyle(element, pseudo).getPropertyValue("content");
+        if (content && content !== "none" && content !== "normal") entries.push({ element: `${name(element)}${pseudo}`, values: computed(element, pseudo) });
       }
       return entries;
     });
@@ -892,6 +895,13 @@ export function readFigureContext() {
       visible: { figure: visible(figure) && box.width > 0 && box.height > 0, title: visible(figure.querySelector(".cf-fig-title .cf-fig-name")), caption: visible(figure.querySelector(".cf-fig-caption")), legend: visible(figure.querySelector(".cf-legend")) },
     };
   });
+}
+
+// Reads a page's figure context. The reading is several megabytes of computed
+// values, and it crosses from the page as one JSON string, which the driver
+// carries far faster than the same values as a structured result.
+async function figureContext(target) {
+  return JSON.parse(await target.evaluate(`JSON.stringify((${readFigureContext})())`));
 }
 
 // Checks 2 and 3 for one figure, against the clean copy of its page.

@@ -62,7 +62,7 @@
     },
     "scripts/browser-verify.mjs": {
       "ownership": "managed",
-      "pristine_sha256": "5a6a4ae495dbef5d7353378ad7973ec98e918ba53cc218dcee551375360b185f"
+      "pristine_sha256": "ee719382886c746bd44f96f53b84e3103ad814becf76fde7226b962005ab926c"
     },
     "scripts/child-lifecycle.mjs": {
       "ownership": "managed",

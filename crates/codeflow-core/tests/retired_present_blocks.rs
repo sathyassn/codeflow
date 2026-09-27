@@ -26,9 +26,10 @@ const ROOTS: [(&str, &str); 4] = [
 /// Every permitted mention of Mermaid, by path relative to its root: a whole
 /// line or the clause of a longer line that carries the mention. Each says
 /// Mermaid is unsupported or forbidden; a faulty control that names it
-/// belongs here too, with the case that fails on it. A line passes only when
+/// belongs here too, with the case that fails on it, and so does a grading
+/// signal or test that detects a Mermaid figure. A line passes only when
 /// no mention is left once its listed clauses are removed.
-const ALLOWED: [(&str, &str); 20] = [
+const ALLOWED: [(&str, &str); 32] = [
     (
         "cf-present/references/document-authoring.md",
         "The `diagram` block was removed with its Mermaid renderer, and Mermaid is",
@@ -102,6 +103,53 @@ const ALLOWED: [(&str, &str); 20] = [
     (
         "evals/model-artifacts/test_eval_kit.py",
         "\"mermaid_figure_in_reply\"",
+    ),    (
+        "cf-evaluate-model/resources/cases.json",
+        "\"mermaid_fence_in_readme\"",
+    ),
+    (
+        "cf-evaluate-model/resources/fixtures.json",
+        "a Mermaid block is mermaid_figure_in_reply on any surface.",
+    ),
+    (
+        "cf-evaluate-model/resources/requirements.json",
+        "(never an SVG file or a Mermaid fence)",
+    ),
+    (
+        "cf-evaluate-model/resources/requirements.json",
+        "An SVG file and a Mermaid fence are not README figures",
+    ),
+    (
+        "evals/model-artifacts/method-controls/controls.json",
+        "\"answer\": \"planes-mermaid.md\"",
+    ),
+    (
+        "evals/model-artifacts/method-controls/controls.json",
+        "\"answer\": \"readme-mermaid.md\"",
+    ),
+    (
+        "evals/model-artifacts/method-controls/controls.json",
+        "\"mermaid_figure_in_reply\"",
+    ),
+    (
+        "evals/model-artifacts/method-controls/controls.json",
+        "\"mermaid_fence_in_readme\"",
+    ),
+    (
+        "evals/model-artifacts/method-controls/planes-mermaid.md",
+        "```mermaid",
+    ),
+    (
+        "evals/model-artifacts/method-controls/readme-mermaid.md",
+        "```mermaid",
+    ),
+    (
+        "evals/model-artifacts/test_eval_kit.py",
+        "\"mermaid_fence_in_readme\"",
+    ),
+    (
+        "evals/model-artifacts/test_eval_kit.py",
+        "language.strip() == \"mermaid\"",
     ),
 ];
 

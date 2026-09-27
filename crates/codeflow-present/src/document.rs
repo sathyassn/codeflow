@@ -727,6 +727,9 @@ impl Block {
             | Self::Html {
                 title: Some(title), ..
             }
+            | Self::Table {
+                title: Some(title), ..
+            }
             | Self::Decision { title, .. }
             | Self::Tree { label: title, .. } => title.clone(),
             Self::Figure { declaration, .. } => figure_text(declaration).0.to_string(),
@@ -1796,6 +1799,21 @@ mod tests {
             items: Vec::new(),
         };
         assert_eq!(status.review_label(), "Evidence");
+
+        // A v2 table is named by its title; a v1 table has none and keeps
+        // its id.
+        let table = |title: Option<&str>| Block::Table {
+            id: "gates".to_string(),
+            columns: vec!["Check".to_string()],
+            rows: Vec::new(),
+            title: title.map(str::to_string),
+            caption: None,
+        };
+        assert_eq!(
+            table(Some("Where each check runs")).review_label(),
+            "Where each check runs"
+        );
+        assert_eq!(table(None).review_label(), "gates");
     }
 
     #[test]

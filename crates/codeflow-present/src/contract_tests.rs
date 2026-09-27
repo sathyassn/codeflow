@@ -137,6 +137,10 @@ fn a_v2_document_numbers_figures_and_tables_and_resolves_references() {
         }
         assert!(!html.contains("[fig:"), "a reference stayed literal");
     }
+    // The rail and the note label name a framed table by its title, never
+    // its id (AC-13 design review F1); a v1 table keeps the id.
+    assert_eq!(find(&document, "limits").review_label(), "Answer limits");
+    assert!(render(&document, true).contains("data-cf-block-label=\"Answer limits\""));
     let framing = crate::document::Framing::of(&document);
     assert_eq!(
         find(&document, "intro").canonical_review_text(&framing),
