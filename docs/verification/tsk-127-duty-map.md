@@ -3,7 +3,7 @@
 Where each duty of the old root contract lives now that `AGENTS.md` is a
 short rule map. The old text is the standard and full template (28.7 KB),
 the minimal template (16.4 KB) and the two CLAUDE templates at
-`integration/EPC-020-delivery-system` 8cc65c50d. Nothing was deleted: each
+`integration/EPC-020-delivery-system` 8cc65c50d, rebased onto 95e25f514. Nothing was deleted: each
 duty is kept in the map, moved one hop away with a pointer, or enforced by a
 named check. Three duties changed on purpose; they are listed first.
 
@@ -47,6 +47,7 @@ Homes used below:
 | cf-stack, cf-customize rows | Map "Other skills" line | pointer test |
 | cf-evaluate-model row | Map instruction-change moment | pointer test |
 | cf-consult, cf-delegate, cf-herdr row | Map consult moment and "Other skills" line | pointer test |
+| Same-family workers run as native subagents of the host session, never a separate CLI session or Herdr tab (TSK-113, landed after the map was drafted) | Map consult moment; WD "Guard your context"; CLAUDE "Stay lean by delegating"; orchestrator SKILL and `capability-routing.md` | `rule_map_contract` pinned sentences, CF-MM-019 |
 | Mechanics row | Map "Mechanics" line, now with `work next`, `work claim` and `task status` (TSK-103 ruling) | init_e2e render test |
 | Acceptance criteria before building; operator-owned gaps are asked | WD "Planning"; map plan moment | CF-GOV-002 |
 | Native task tools; durable records at full tier; planning PR reaches the integration target; target resolution | WD "Planning"; PO | CF-PM-004, `work start` |

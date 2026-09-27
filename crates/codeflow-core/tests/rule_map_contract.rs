@@ -215,6 +215,7 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "explicit authenticated human approval",
         "self-review is not review",
         "A change to an adopter-facing path",
+        "same family: a native subagent of this session",
     ];
     let method_tiers = [
         "Agent-delivered durations come from `/cf-estimate`",

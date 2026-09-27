@@ -73,7 +73,10 @@ ship. Load only the stage owners the work needs.
   their decision is respected; agreement without examination is a failure
   mode, not deference.
 - **Guard your context.** Retain planning and synthesis; delegate bounded
-  breadth, checks, and routine work at matched effort. Where installed,
+  breadth, checks, and routine work at matched effort. Run a same-family
+  worker as a native subagent of your own session, never as a separate CLI
+  session or Herdr tab; without a native route, the primary keeps the work
+  and records the missing route. Where installed,
   `cf-model-orchestrator/resources/capability-routing.md` governs routing;
   the primary retains judgment and safety, and inspects, integrates and
   accepts delegated work.
