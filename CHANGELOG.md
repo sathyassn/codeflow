@@ -120,9 +120,10 @@ publication date._
   record the repository in `~/.codeflow/registry.json`, and a registry
   this process may not write, as in a sandbox, is skipped without the
   `registry touch failed` warning. exec-guard allows recursive
-  removal strictly below a temp root (`$TMPDIR`, `/tmp`, `/var/tmp` and the
-  macOS per-user `/var/folders/<xx>/<id>/T`, each also under `/private`);
-  the roots themselves and every system directory stay blocked.
+  removal that really lands below a temp root (`/tmp`, `/var/tmp` and the
+  macOS per-user `/var/folders/<xx>/<id>/T`, each also under `/private`),
+  judged after following symlinks; the roots, the configured `$TMPDIR`
+  itself, a link that leads out and every system directory stay blocked.
 
 <!-- codeflow:release-impact major -->
 - **Effort default on upgrade.** Version 2.1.0 set no reasoning effort, so
