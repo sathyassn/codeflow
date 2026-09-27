@@ -305,6 +305,14 @@ impl Baseline {
 }
 
 /// Creates parent directories and atomically writes `bytes` to `path`.
+///
+/// The bytes go to a temp file that is synced before it is renamed over
+/// `path`, so a crash leaves the old content or the new, never a torn or
+/// empty file. Outside a [`SyncBatch`] the content sync is a full flush and
+/// the parent directory is flushed at once, as for any single write. Inside a
+/// batch the content sync is a plain `fsync` (the ordering the rename needs)
+/// and the directory flush waits for [`SyncBatch::finish`], which flushes
+/// each touched directory once and the device cache once per run.
 pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
     let parent = path.parent().ok_or_else(|| {
         ScaffoldError::io(
@@ -318,6 +326,7 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
         .and_then(|name| name.to_str())
         .unwrap_or("file");
     let temp_path = parent.join(format!(".{file_name}.{}.tmp", ulid::Ulid::new()));
+    let batched = sync::batch_active();
 
     let result = (|| {
         use std::io::Write;
@@ -328,10 +337,19 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
             .map_err(|e| ScaffoldError::io(&temp_path, e))?;
         temp.write_all(bytes)
             .map_err(|e| ScaffoldError::io(&temp_path, e))?;
-        temp.sync_all()
-            .map_err(|e| ScaffoldError::io(&temp_path, e))?;
+        sync::content(&temp, !batched).map_err(|e| ScaffoldError::io(&temp_path, e))?;
+        #[cfg(test)]
+        interruption::before_rename(path)?;
         std::fs::rename(&temp_path, path).map_err(|e| ScaffoldError::io(path, e))?;
-        sync_directory(parent)
+        sync::written();
+        #[cfg(test)]
+        interruption::renamed(path, bytes);
+        if batched {
+            sync::defer_directory(parent);
+            Ok(())
+        } else {
+            sync::flush_directories(&[parent.to_path_buf()])
+        }
     })();
     if result.is_err() {
         let _ = std::fs::remove_file(&temp_path);
@@ -339,19 +357,258 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
     result
 }
 
-// Keep atomic scaffold writes on one fallible contract even on targets where
-// Rust does not expose directory fsync.
-#[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
-fn sync_directory(path: &Path) -> Result<(), ScaffoldError> {
-    #[cfg(unix)]
-    {
-        std::fs::File::open(path)
-            .and_then(|dir| dir.sync_all())
-            .map_err(|e| ScaffoldError::io(path, e))?;
+/// One scaffold run's deferred directory flushes (TSK-153).
+///
+/// A run (`init`, `update`, a pull request template decision) opens a batch
+/// before its writes and calls [`SyncBatch::finish`] after them, so the
+/// expensive flush happens once per touched directory and once per run
+/// instead of for every file. A batch opened while another is active on the
+/// same thread joins it: only the outermost one flushes. A batch dropped
+/// without `finish` (an error path) still flushes, ignoring failures.
+#[must_use = "call `finish` so the run's directory flushes happen and report errors"]
+pub struct SyncBatch {
+    outermost: bool,
+    finished: bool,
+}
+
+impl SyncBatch {
+    /// Opens a batch on this thread, or joins the one already open.
+    pub fn begin() -> Self {
+        Self {
+            outermost: sync::open_batch(),
+            finished: false,
+        }
     }
+
+    /// Flushes every directory the batch touched, then the device cache.
+    ///
+    /// # Errors
+    ///
+    /// A directory that cannot be opened or synced.
+    pub fn finish(mut self) -> Result<(), ScaffoldError> {
+        self.finished = true;
+        if self.outermost {
+            sync::flush_directories(&sync::close_batch())
+        } else {
+            Ok(())
+        }
+    }
+}
+
+impl Drop for SyncBatch {
+    fn drop(&mut self) {
+        if self.outermost && !self.finished {
+            let _ = sync::flush_directories(&sync::close_batch());
+        }
+    }
+}
+
+/// Counts of the sync calls made on this thread, for tests and timing notes.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct SyncCounts {
+    /// Managed files written and renamed into place.
+    pub files_written: usize,
+    /// Plain `fsync` of a written file's content.
+    pub content_fsyncs: usize,
+    /// Plain `fsync` of a directory after renames into it.
+    pub directory_fsyncs: usize,
+    /// Device cache flushes: `F_FULLFSYNC` on macOS, or `sync_all` for a
+    /// single write outside a batch.
+    pub full_flushes: usize,
+}
+
+/// The sync calls this thread has made since it started.
+#[must_use]
+pub fn sync_counts() -> SyncCounts {
+    sync::counts()
+}
+
+mod sync {
+    //! The platform sync calls behind [`super::write_file`] and
+    //! [`super::SyncBatch`], with per-thread counts.
+    //!
+    //! On macOS `File::sync_all` is `fcntl(F_FULLFSYNC)`, which also flushes
+    //! the drive's cache and measured about 13 ms a call on an internal SSD,
+    //! while `fsync(2)` hands the data to the drive in under a millisecond.
+    //! On Linux `fsync(2)` already asks the device to flush its cache, so each
+    //! directory flush is a full one and no separate device flush is issued.
+
+    use std::cell::{Cell, RefCell};
+    use std::collections::BTreeSet;
+    use std::fs::File;
+    use std::path::{Path, PathBuf};
+
+    use super::{ScaffoldError, SyncCounts};
+
+    thread_local! {
+        static PENDING: RefCell<Option<BTreeSet<PathBuf>>> = const { RefCell::new(None) };
+        static COUNTS: Cell<SyncCounts> = const {
+            Cell::new(SyncCounts {
+                files_written: 0,
+                content_fsyncs: 0,
+                directory_fsyncs: 0,
+                full_flushes: 0,
+            })
+        };
+    }
+
+    fn bump(update: impl FnOnce(&mut SyncCounts)) {
+        COUNTS.with(|cell| {
+            let mut counts = cell.get();
+            update(&mut counts);
+            cell.set(counts);
+        });
+    }
+
+    pub(super) fn counts() -> SyncCounts {
+        COUNTS.with(Cell::get)
+    }
+
+    pub(super) fn written() {
+        bump(|c| c.files_written += 1);
+    }
+
+    pub(super) fn batch_active() -> bool {
+        PENDING.with(|pending| pending.borrow().is_some())
+    }
+
+    /// Opens a batch; `false` when one is already open (the caller joins it).
+    pub(super) fn open_batch() -> bool {
+        PENDING.with(|pending| {
+            let mut pending = pending.borrow_mut();
+            if pending.is_some() {
+                false
+            } else {
+                *pending = Some(BTreeSet::new());
+                true
+            }
+        })
+    }
+
+    pub(super) fn close_batch() -> Vec<PathBuf> {
+        PENDING.with(|pending| {
+            pending
+                .borrow_mut()
+                .take()
+                .map(|set| set.into_iter().collect())
+                .unwrap_or_default()
+        })
+    }
+
+    pub(super) fn defer_directory(dir: &Path) {
+        PENDING.with(|pending| {
+            if let Some(set) = pending.borrow_mut().as_mut() {
+                set.insert(dir.to_path_buf());
+            }
+        });
+    }
+
+    /// Makes a written file's content durable before its rename: a full
+    /// flush outside a batch, a plain `fsync` inside one.
+    pub(super) fn content(file: &File, full: bool) -> std::io::Result<()> {
+        if full {
+            file.sync_all()?;
+            bump(|c| c.full_flushes += 1);
+        } else {
+            fsync(file)?;
+            bump(|c| c.content_fsyncs += 1);
+        }
+        Ok(())
+    }
+
+    /// Syncs each directory once, then flushes the device cache once where
+    /// `fsync` does not already do it.
+    // Directory sync is a Unix call; other targets keep the fallible contract.
+    #[cfg_attr(not(unix), allow(clippy::unnecessary_wraps))]
+    pub(super) fn flush_directories(dirs: &[PathBuf]) -> Result<(), ScaffoldError> {
+        #[cfg(unix)]
+        {
+            let mut last = None;
+            for dir in dirs {
+                let handle = File::open(dir).map_err(|e| ScaffoldError::io(dir, e))?;
+                fsync(&handle).map_err(|e| ScaffoldError::io(dir, e))?;
+                bump(|c| c.directory_fsyncs += 1);
+                last = Some((dir, handle));
+            }
+            if let Some((dir, handle)) = last {
+                device_flush(&handle).map_err(|e| ScaffoldError::io(dir, e))?;
+            }
+        }
+        #[cfg(not(unix))]
+        let _ = dirs;
+        Ok(())
+    }
+
+    #[cfg(unix)]
+    fn fsync(file: &File) -> std::io::Result<()> {
+        use std::os::unix::io::AsRawFd;
+        // SAFETY: `fsync` only reads the descriptor, which `file` keeps open
+        // for the duration of the call.
+        if unsafe { libc::fsync(file.as_raw_fd()) } == 0 {
+            Ok(())
+        } else {
+            Err(std::io::Error::last_os_error())
+        }
+    }
+
     #[cfg(not(unix))]
-    let _ = path;
-    Ok(())
+    fn fsync(file: &File) -> std::io::Result<()> {
+        file.sync_all()
+    }
+
+    /// One device cache flush on macOS; nothing where `fsync` already
+    /// flushes the device.
+    #[cfg(unix)]
+    fn device_flush(file: &File) -> std::io::Result<()> {
+        if cfg!(target_vendor = "apple") {
+            file.sync_all()?;
+            bump(|c| c.full_flushes += 1);
+        }
+        Ok(())
+    }
+}
+
+/// A test-only interruption point between a file's synced temp copy and its
+/// rename, standing in for a crash at that moment (TSK-153 AC-4).
+#[cfg(test)]
+pub(crate) mod interruption {
+    use std::cell::{Cell, RefCell};
+    use std::path::{Path, PathBuf};
+
+    use super::ScaffoldError;
+
+    thread_local! {
+        static STOP_AT: Cell<Option<usize>> = const { Cell::new(None) };
+        static COMPLETED: RefCell<Vec<(PathBuf, Vec<u8>)>> = const { RefCell::new(Vec::new()) };
+    }
+
+    /// Interrupts the write after `completed` writes have landed on this
+    /// thread; `None` lets every write through. Clears the completed log.
+    pub(crate) fn arm(completed: Option<usize>) {
+        STOP_AT.with(|stop| stop.set(completed));
+        COMPLETED.with(|log| log.borrow_mut().clear());
+    }
+
+    /// The writes that landed since [`arm`], in order.
+    pub(crate) fn completed() -> Vec<(PathBuf, Vec<u8>)> {
+        COMPLETED.with(|log| log.borrow().clone())
+    }
+
+    pub(super) fn before_rename(path: &Path) -> Result<(), ScaffoldError> {
+        let landed = COMPLETED.with(|log| log.borrow().len());
+        // Sticky, like a crash: once reached, no later write lands either.
+        if STOP_AT.with(Cell::get).is_some_and(|stop| landed >= stop) {
+            return Err(ScaffoldError::io(
+                path,
+                std::io::Error::other("test interruption before rename"),
+            ));
+        }
+        Ok(())
+    }
+
+    pub(super) fn renamed(path: &Path, bytes: &[u8]) {
+        COMPLETED.with(|log| log.borrow_mut().push((path.to_path_buf(), bytes.to_vec())));
+    }
 }
 
 /// Resolves `root.join(rel)` while refusing to traverse a symlink.
@@ -659,5 +916,277 @@ mod tests {
             !outside.path().join("evil.txt").exists(),
             "write must not escape the repo via the ancestor symlink"
         );
+    }
+
+    // TSK-153: sync calls per file and per run.
+
+    #[test]
+    fn a_single_write_outside_a_batch_is_fully_flushed_at_once() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = sync_counts();
+        write_file(&dir.path().join("one.txt"), b"one").unwrap();
+        let after = sync_counts();
+        assert_eq!(after.files_written - before.files_written, 1);
+        assert_eq!(
+            after.content_fsyncs, before.content_fsyncs,
+            "content is fully flushed"
+        );
+        assert_eq!(after.directory_fsyncs - before.directory_fsyncs, 1);
+        let device = usize::from(cfg!(target_vendor = "apple"));
+        assert_eq!(after.full_flushes - before.full_flushes, 1 + device);
+    }
+
+    #[test]
+    fn a_batch_syncs_each_file_plainly_and_flushes_once_at_the_end() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = sync_counts();
+        let batch = SyncBatch::begin();
+        for name in ["a/1", "a/2", "a/3", "b/1", "b/2"] {
+            write_file(&dir.path().join(name), name.as_bytes()).unwrap();
+        }
+        let inner = SyncBatch::begin(); // joins the open batch
+        write_file(&dir.path().join("a/4"), b"4").unwrap();
+        inner.finish().unwrap();
+        let mid = sync_counts();
+        assert_eq!(mid.files_written - before.files_written, 6);
+        assert_eq!(
+            mid.content_fsyncs - before.content_fsyncs,
+            6,
+            "one plain sync per file"
+        );
+        assert_eq!(
+            mid.directory_fsyncs, before.directory_fsyncs,
+            "deferred to the end"
+        );
+        assert_eq!(
+            mid.full_flushes, before.full_flushes,
+            "no full flush per file"
+        );
+        batch.finish().unwrap();
+        let after = sync_counts();
+        assert_eq!(
+            after.directory_fsyncs - before.directory_fsyncs,
+            2,
+            "once per directory"
+        );
+        let device = usize::from(cfg!(target_vendor = "apple"));
+        assert_eq!(
+            after.full_flushes - before.full_flushes,
+            device,
+            "once per run"
+        );
+        assert_eq!(std::fs::read(dir.path().join("b/2")).unwrap(), b"b/2");
+    }
+
+    #[test]
+    fn a_batch_dropped_on_an_error_path_still_flushes() {
+        let dir = tempfile::tempdir().unwrap();
+        let before = sync_counts();
+        {
+            let _batch = SyncBatch::begin();
+            write_file(&dir.path().join("x/1"), b"1").unwrap();
+        }
+        let after = sync_counts();
+        assert_eq!(after.directory_fsyncs - before.directory_fsyncs, 1);
+        assert!(!sync::batch_active(), "the dropped batch closed");
+    }
+
+    fn shipped_assets() -> crate::scaffold::DirSource {
+        crate::scaffold::DirSource::new(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets"),
+        )
+    }
+
+    fn init_opts(tier: Tier) -> crate::scaffold::InitOptions {
+        crate::scaffold::InitOptions {
+            tier: Some(tier),
+            force: false,
+            binary_version: "9.9.9".to_string(),
+            answers: crate::scaffold::InitAnswers::default(),
+        }
+    }
+
+    fn force_update() -> crate::scaffold::UpdateOptions {
+        crate::scaffold::UpdateOptions {
+            force: true,
+            binary_version: "9.9.9".to_string(),
+            diff_out: None,
+        }
+    }
+
+    /// Every file under `root` outside `.git`, keyed by its relative path.
+    fn snapshot(root: &Path) -> std::collections::BTreeMap<PathBuf, Vec<u8>> {
+        let mut files = std::collections::BTreeMap::new();
+        let mut stack = vec![root.to_path_buf()];
+        while let Some(dir) = stack.pop() {
+            for entry in std::fs::read_dir(&dir).unwrap() {
+                let path = entry.unwrap().path();
+                if path.file_name().is_some_and(|name| name == ".git") {
+                    continue;
+                }
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let rel = path.strip_prefix(root).unwrap().to_path_buf();
+                    files.insert(rel, std::fs::read(&path).unwrap());
+                }
+            }
+        }
+        files
+    }
+
+    fn copy_tree(from: &Path, to: &Path) {
+        std::fs::create_dir_all(to).unwrap();
+        for entry in std::fs::read_dir(from).unwrap() {
+            let entry = entry.unwrap();
+            let target = to.join(entry.file_name());
+            if entry.file_type().unwrap().is_dir() {
+                copy_tree(&entry.path(), &target);
+            } else {
+                std::fs::copy(entry.path(), target).unwrap();
+            }
+        }
+    }
+
+    /// Hands every managed skill file a local edit, so a forced update
+    /// replaces existing content rather than only adding files.
+    fn edit_managed_skills(root: &Path) -> usize {
+        let mut edited = 0;
+        for (rel, bytes) in snapshot(root) {
+            let text = rel.to_string_lossy();
+            if text.starts_with(".agents/skills/") && text.ends_with("SKILL.md") {
+                let mut bytes = bytes;
+                bytes.extend_from_slice(b"\nlocal edit\n");
+                std::fs::write(root.join(&rel), bytes).unwrap();
+                edited += 1;
+            }
+        }
+        edited
+    }
+
+    #[test]
+    fn init_and_update_flush_the_device_once_per_run() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let device = usize::from(cfg!(target_vendor = "apple"));
+
+        let before = sync_counts();
+        crate::scaffold::init(&shipped_assets(), &root, &init_opts(Tier::Standard)).unwrap();
+        let after = sync_counts();
+        let written = after.files_written - before.files_written;
+        let directories = after.directory_fsyncs - before.directory_fsyncs;
+        assert!(
+            written > 200,
+            "a standard init writes the scaffold: {written}"
+        );
+        assert_eq!(
+            after.content_fsyncs - before.content_fsyncs,
+            written,
+            "one per file"
+        );
+        assert!(
+            directories > 0 && directories < written / 2,
+            "{directories} of {written}"
+        );
+        assert_eq!(
+            after.full_flushes - before.full_flushes,
+            device,
+            "one per run"
+        );
+        println!("init: {written} files, {directories} directories, {device} device flush");
+
+        assert!(edit_managed_skills(&root) > 5);
+        let before = sync_counts();
+        crate::scaffold::update(&shipped_assets(), &root, &force_update()).unwrap();
+        let after = sync_counts();
+        let written = after.files_written - before.files_written;
+        assert!(
+            written > 5,
+            "the forced update rewrites the edited skills: {written}"
+        );
+        assert_eq!(after.content_fsyncs - before.content_fsyncs, written);
+        assert_eq!(after.full_flushes - before.full_flushes, device);
+        println!(
+            "update: {written} files, {} directories",
+            after.directory_fsyncs - before.directory_fsyncs
+        );
+    }
+
+    /// After a run stops at an arbitrary write, each file holds its content
+    /// from before the run or the content of a write that completed: never
+    /// torn, never empty.
+    fn assert_whole_files(
+        root: &Path,
+        before: &std::collections::BTreeMap<PathBuf, Vec<u8>>,
+        stop: usize,
+    ) {
+        let completed = interruption::completed();
+        for (rel, bytes) in snapshot(root) {
+            let hidden = rel.file_name().unwrap().to_string_lossy().starts_with('.');
+            if hidden && rel.extension().is_some_and(|ext| ext == "tmp") {
+                continue; // a temp copy, never a managed path
+            }
+            let landed = completed
+                .iter()
+                .filter(|(path, _)| path.strip_prefix(root).is_ok_and(|r| r == rel))
+                .any(|(_, content)| *content == bytes);
+            let kept = before.get(&rel).is_some_and(|old| *old == bytes);
+            assert!(
+                landed || kept,
+                "stop {stop}: {} is neither its earlier content nor a completed write ({} bytes)",
+                rel.display(),
+                bytes.len()
+            );
+        }
+    }
+
+    #[test]
+    fn an_interrupted_init_or_update_leaves_no_torn_or_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        // A fresh init, stopped at writes spread across the run.
+        interruption::arm(None);
+        crate::scaffold::init(
+            &shipped_assets(),
+            &dir.path().join("whole"),
+            &init_opts(Tier::Standard),
+        )
+        .unwrap();
+        let total = interruption::completed().len();
+        let base = dir.path().join("base");
+        crate::scaffold::init(&shipped_assets(), &base, &init_opts(Tier::Standard)).unwrap();
+        assert!(edit_managed_skills(&base) > 5);
+        let edited = snapshot(&base);
+        interruption::arm(None);
+        copy_tree(&base, &dir.path().join("probe"));
+        crate::scaffold::update(
+            &shipped_assets(),
+            &dir.path().join("probe"),
+            &force_update(),
+        )
+        .unwrap();
+        let update_total = interruption::completed().len();
+
+        for stop in [0, total / 3, 2 * total / 3, total - 1] {
+            let root = dir.path().join(format!("init-{stop}"));
+            interruption::arm(Some(stop));
+            assert!(
+                crate::scaffold::init(&shipped_assets(), &root, &init_opts(Tier::Standard))
+                    .is_err(),
+                "stop {stop} of {total} interrupts the init"
+            );
+            assert_eq!(interruption::completed().len(), stop);
+            assert_whole_files(&root, &std::collections::BTreeMap::new(), stop);
+        }
+        for stop in [0, update_total / 2, update_total - 1] {
+            let root = dir.path().join(format!("update-{stop}"));
+            copy_tree(&base, &root);
+            interruption::arm(Some(stop));
+            assert!(
+                crate::scaffold::update(&shipped_assets(), &root, &force_update()).is_err(),
+                "stop {stop} of {update_total} interrupts the update"
+            );
+            assert_whole_files(&root, &edited, stop);
+        }
+        interruption::arm(None);
     }
 }

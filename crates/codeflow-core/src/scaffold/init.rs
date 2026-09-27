@@ -22,7 +22,7 @@ use super::report::{Action, Report};
 use super::settings_merge::merge_settings;
 use super::state::{
     guard_beneath_root, set_exec, write_file, Baseline, InstalledFile, InstalledManifest,
-    ProjectState, GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
+    ProjectState, SyncBatch, GIT_HOOKS_UNWIRED, GIT_HOOKS_WIRED, PROJECT_TOML,
 };
 use super::template::TemplateContext;
 use super::{gitutil, hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
@@ -57,8 +57,20 @@ pub struct InitOptions {
 /// Fails on unreadable/unwritable project state, an invalid scaffold
 /// manifest, or git plumbing failures. Missing individual assets are NOT
 /// errors — they are skipped and warned in the report.
-#[allow(clippy::too_many_lines)] // linear phase orchestration; splitting hurts legibility
 pub fn init(
+    source: &dyn super::AssetSource,
+    root: &Path,
+    opts: &InitOptions,
+) -> Result<Report, ScaffoldError> {
+    // One run flushes each touched directory and the device once (TSK-153).
+    let batch = SyncBatch::begin();
+    let report = init_writes(source, root, opts)?;
+    batch.finish()?;
+    Ok(report)
+}
+
+#[allow(clippy::too_many_lines)] // linear phase orchestration; splitting hurts legibility
+fn init_writes(
     source: &dyn super::AssetSource,
     root: &Path,
     opts: &InitOptions,

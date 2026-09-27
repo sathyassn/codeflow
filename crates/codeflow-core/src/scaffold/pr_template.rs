@@ -21,7 +21,9 @@ use std::path::Path;
 use serde_json::Value;
 
 use super::json_edit;
-use super::state::{guard_beneath_root, read_beneath_root, write_beneath_root, InstalledManifest};
+use super::state::{
+    guard_beneath_root, read_beneath_root, write_beneath_root, InstalledManifest, SyncBatch,
+};
 use super::ScaffoldError;
 use crate::hooks::policy::{MappingState, Policy};
 
@@ -493,6 +495,8 @@ pub fn record_decision(
             appended = Some((template, added));
         }
     }
+    // Both writes share one run's flushes (TSK-153).
+    let batch = SyncBatch::begin();
     write_beneath_root(root, POLICY, edited.as_bytes())?;
     let mut line =
         format!("PR template decision recorded: git.pr_section_mapping = {decision} ({today})");
@@ -504,6 +508,7 @@ pub fn record_decision(
             "; set git.pr_required_sections and git.pr_code_sections to your template's headings in a reviewed change",
         );
     }
+    batch.finish()?;
     Ok(line)
 }
 

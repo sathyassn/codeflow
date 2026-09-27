@@ -51,7 +51,7 @@ use super::report::{Action, Report};
 use super::settings_merge::merge_settings_from_baseline;
 use super::state::{
     guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file, Baseline,
-    InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
+    InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig, SyncBatch,
 };
 use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 use crate::hooks::policy_schema::DEPRECATED_KEYS;
@@ -77,8 +77,20 @@ pub struct UpdateOptions {
 /// [`ScaffoldError::NotInitialized`] when the project has no
 /// `.codeflow/project.toml`; otherwise IO, JSON, or manifest failures.
 /// Per-file merge conflicts are NOT errors — they are reported.
-#[allow(clippy::too_many_lines)] // linear phase orchestration, as in `init`
 pub fn update(
+    source: &dyn super::AssetSource,
+    root: &Path,
+    opts: &UpdateOptions,
+) -> Result<Report, ScaffoldError> {
+    // One run flushes each touched directory and the device once (TSK-153).
+    let batch = SyncBatch::begin();
+    let report = update_writes(source, root, opts)?;
+    batch.finish()?;
+    Ok(report)
+}
+
+#[allow(clippy::too_many_lines)] // linear phase orchestration, as in `init`
+fn update_writes(
     source: &dyn super::AssetSource,
     root: &Path,
     opts: &UpdateOptions,
