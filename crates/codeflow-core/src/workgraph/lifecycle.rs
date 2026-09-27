@@ -14,6 +14,9 @@
 //! change, a criteria change, a changed acceptance block or a record created
 //! after the baseline applies the rules in full. Relationship errors are never
 //! grandfathered. Without a recorded baseline every record is judged in full.
+//! The baseline counts only when it is an ancestor of the judged commit, and
+//! a range whose base predates it judges older records from their baseline
+//! blobs.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -247,6 +250,10 @@ pub enum Baseline {
     NotRecorded,
     /// Recorded but not in this clone's history (a shallow checkout).
     Unavailable(String),
+    /// Recorded, but not an ancestor of the commit being judged: refused, and
+    /// every record is judged in full, so a change cannot exempt itself by
+    /// pointing the baseline at an unrelated commit.
+    NotAncestor(String),
     Available {
         commit: String,
         graph: Graph,
@@ -254,25 +261,61 @@ pub enum Baseline {
 }
 
 impl Baseline {
-    /// Load the baseline named in `.codeflow/project.toml`.
+    /// Load the baseline named in `.codeflow/project.toml`, judged against
+    /// the checked-out `HEAD`.
     #[must_use]
     pub fn load(repo_root: &Path) -> Self {
+        Self::load_at(repo_root, "HEAD")
+    }
+
+    /// Load the baseline named in `.codeflow/project.toml` for judging the
+    /// commit `head`: the baseline counts only when it is `head` or one of
+    /// its ancestors.
+    #[must_use]
+    pub fn load_at(repo_root: &Path, head: &str) -> Self {
         let Some(commit) = recorded_baseline(repo_root) else {
             return Self::NotRecorded;
         };
-        let graph = Repository::discover(repo_root)
-            .ok()
-            .and_then(|repo| Graph::from_revision(&repo, &format!("{commit}^{{commit}}")).ok());
-        match graph {
-            Some(graph) => Self::Available { commit, graph },
-            None => Self::Unavailable(commit),
+        let Ok(repo) = Repository::discover(repo_root) else {
+            return Self::Unavailable(commit);
+        };
+        let resolve = |revision: &str| {
+            repo.revparse_single(revision)
+                .and_then(|object| object.peel_to_commit())
+                .map(|commit| commit.id())
+                .ok()
+        };
+        let Some(anchor) = resolve(&format!("{commit}^{{commit}}")) else {
+            return Self::Unavailable(commit);
+        };
+        let is_ancestor = resolve(head).is_some_and(|tip| {
+            tip == anchor || repo.graph_descendant_of(tip, anchor).unwrap_or(false)
+        });
+        if !is_ancestor {
+            return Self::NotAncestor(commit);
+        }
+        match Graph::from_revision(&repo, &anchor.to_string()) {
+            Ok(graph) => Self::Available { commit, graph },
+            Err(_) => Self::Unavailable(commit),
+        }
+    }
+
+    /// The refusal of a baseline that is not an ancestor of the judged
+    /// commit.
+    #[must_use]
+    pub fn error(&self) -> Option<String> {
+        match self {
+            Self::NotAncestor(commit) => Some(format!(
+                "work-records migration baseline {commit} is not an ancestor of the commit being judged; the baseline must be a commit this history contains (`codeflow update` records the current HEAD)"
+            )),
+            _ => None,
         }
     }
 
     /// Whether a record was created after the baseline.
     fn is_new(&self, record: &RecordView) -> bool {
         match self {
-            Self::NotRecorded => true,
+            Self::NotRecorded | Self::NotAncestor(_) => true,
             Self::Unavailable(_) => false,
             Self::Available { graph, .. } => !graph.records.contains_key(&record.id),
         }
@@ -291,7 +334,7 @@ impl Baseline {
     /// How fully the rules apply to a record that no transition touched.
     fn mode(&self, record: &RecordView) -> Mode {
         match self {
-            Self::NotRecorded => Mode::Strict,
+            Self::NotRecorded | Self::NotAncestor(_) => Mode::Strict,
             Self::Unavailable(_) => Mode::Lenient,
             Self::Available { graph, .. } => match graph.records.get(&record.id) {
                 None => Mode::Strict,
@@ -1024,14 +1067,29 @@ pub fn judge_change(
 }
 
 /// Judge every record a range changes, from `base` to `head` (a revision, or
-/// the working tree when `None`).
+/// the working tree when `None`). A record `base` lacks but the migration
+/// baseline has is judged from its baseline blob, so a range whose base
+/// predates the baseline treats older records as the baseline does.
 ///
 /// # Errors
 ///
 /// Returns a message when the repository or a revision cannot be read.
 pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
-    let before = Graph::from_revision(&repo, base)?;
+    let baseline = Baseline::load_at(repo_root, head.unwrap_or("HEAD"));
+    let mut before = Graph::from_revision(&repo, base)?;
+    // A base older than the migration baseline lacks records the baseline
+    // has; their state before this change is their baseline blob, so an
+    // unchanged record stays legacy and a later edit is judged as a
+    // transition from its baseline state. Absent from both, a record is new.
+    if let Baseline::Available { graph, .. } = &baseline {
+        for (id, record) in &graph.records {
+            before
+                .records
+                .entry(id.clone())
+                .or_insert_with(|| record.clone());
+        }
+    }
     let after = match head {
         Some(head) => Graph::from_revision(&repo, head)?,
         None => Graph::from_worktree(repo_root),
@@ -1041,9 +1099,9 @@ pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<V
         base: Some(&before),
         changed_paths: Some(&paths),
     };
-    let baseline = Baseline::load(repo_root);
     let mut verdict = Verdict::default();
     verdict.warnings.extend(baseline.warning());
+    verdict.errors.extend(baseline.error());
     for record in after.records.values() {
         let old = before.records.get(&record.id);
         if old.is_some_and(|old| old.content == record.content) {
@@ -1152,6 +1210,7 @@ pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
     let baseline = Baseline::load(repo_root);
     let mut verdict = Verdict::default();
     verdict.warnings.extend(baseline.warning());
+    verdict.errors.extend(baseline.error());
     for record in graph.records.values() {
         verdict.apply(
             baseline.mode(record),

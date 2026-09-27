@@ -1472,3 +1472,155 @@ fn a_record_the_range_adds_is_new_in_a_shallow_clone() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// A range whose base predates the migration baseline (release rehearsal)
+// ---------------------------------------------------------------------------
+
+/// The one release pull request has a base older than the baseline. Records
+/// the base lacks are judged from their baseline blob: unchanged ones stay
+/// legacy, an edit after the baseline is a transition from the baseline
+/// state, and a record absent from both is new and strict.
+#[test]
+fn a_base_older_than_the_baseline_judges_records_from_the_baseline() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", "// before the records\n");
+    let base = repo.commit("old main");
+    repo.git(&["switch", "-q", "-c", "integration/EPC-001-line"]);
+    repo.write(EPIC_PATH, &epic("in_progress", "", "- [x] AC-1 legacy"));
+    let legacy = task("TSK-001", "complete", "- [x] first", "Done long ago.");
+    repo.write(TASK_PATH, &legacy);
+    repo.write(
+        "project-management/tasks/TSK-004.md",
+        &task("TSK-004", "todo", "- [ ] AC-1 checkbox", "Pending."),
+    );
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    let baseline = repo.commit("records under the old rules");
+    repo.set_baseline(&baseline);
+    repo.commit("record the baseline");
+
+    // After the baseline: TSK-004 completes without a block, TSK-002 is new
+    // with a checkbox, TSK-003 is new and valid, and product code changes.
+    repo.write(
+        "project-management/tasks/TSK-004.md",
+        &task("TSK-004", "complete", "- [x] AC-1 checkbox", "Pending."),
+    );
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &task("TSK-002", "todo", "- [ ] AC-1 new checkbox", "Pending."),
+    );
+    repo.write(
+        "project-management/tasks/TSK-003.md",
+        &task(
+            "TSK-003",
+            "todo",
+            "- AC-1 When x, the system shall y.",
+            "Pending.",
+        ),
+    );
+    repo.write("src/lib.rs", "// the release\n");
+    repo.commit("work after the baseline");
+
+    let verdict = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    let errors = verdict.errors.join("\n");
+    assert!(
+        errors.contains("TSK-002.md: new records list criteria"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("TSK-004.md: a complete record needs an acceptance block"),
+        "{errors}"
+    );
+    assert!(
+        !errors.contains("TSK-004.md: new records"),
+        "an edit after the baseline is a transition, not a new record: {errors}"
+    );
+    for untouched in ["TSK-001", "SPC-001", "EPC-001", "TSK-003"] {
+        assert!(!errors.contains(untouched), "{untouched}: {errors}");
+    }
+    assert_eq!(verdict.errors.len(), 2, "{errors}");
+
+    // The same range with the baseline removed judges every record new.
+    repo.write(".codeflow/project.toml", "");
+    repo.commit("drop the baseline");
+    let without = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    assert!(
+        without.errors.iter().any(|e| e.contains("TSK-001.md")),
+        "{without:?}"
+    );
+}
+
+/// A spec approved at the baseline is no transition in a later code range,
+/// so the range passes; a new approval beside code is still refused.
+#[test]
+fn a_spec_approved_at_the_baseline_passes_in_a_code_range() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", "// old\n");
+    let base = repo.commit("old main");
+    repo.write(SPC_1, &spec("SPC-001", "draft", ""));
+    repo.commit("draft");
+    repo.write(SPC_1, &spec("SPC-001", "approved", ""));
+    let baseline = repo.commit("approved in a planning change");
+    repo.set_baseline(&baseline);
+    repo.write("src/lib.rs", "// code\n");
+    repo.commit("code and the baseline");
+    let verdict = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    assert!(verdict.is_clean(), "{verdict:?}");
+
+    // Control: an approval made after the baseline in the same code range.
+    repo.write(
+        "project-management/specs/SPC-002.md",
+        &spec("SPC-002", "approved", ""),
+    );
+    repo.commit("approve a new spec beside code");
+    let refused = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    assert!(
+        refused
+            .errors
+            .iter()
+            .any(|e| e.contains("SPC-002.md") && e.contains("planning-only")),
+        "{refused:?}"
+    );
+}
+
+/// A baseline that is not an ancestor of the judged commit is refused by
+/// the range judge, the tree validator and the verbs.
+#[test]
+fn a_baseline_that_is_not_an_ancestor_is_refused() {
+    let repo = Repo::new();
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", "- [ ] legacy", "Pending."),
+    );
+    let base = repo.commit("records");
+    repo.git(&["switch", "-q", "-c", "side"]);
+    repo.write("elsewhere.txt", "x\n");
+    let side = repo.commit("an unrelated commit");
+    repo.git(&["switch", "-q", "main"]);
+    repo.set_baseline(&side);
+    repo.commit("point the baseline elsewhere");
+    assert!(matches!(
+        Baseline::load(repo.root()),
+        Baseline::NotAncestor(_)
+    ));
+    let needle = "is not an ancestor of the commit being judged";
+    let range = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    assert!(range.errors.iter().any(|e| e.contains(needle)), "{range:?}");
+    let tree = validate_lifecycle(repo.root());
+    assert!(tree.errors.iter().any(|e| e.contains(needle)), "{tree:?}");
+    assert!(
+        tree.errors.iter().any(|e| e.contains("without a checkbox")),
+        "a refused baseline exempts nothing: {tree:?}"
+    );
+    let verb =
+        refusal(set_status(repo.root(), RecordKind::Task, "TSK-001", &blocked_change()).map(drop));
+    assert!(verb.contains(needle), "{verb}");
+
+    // Control: the baseline at HEAD itself counts.
+    let head = repo.git(&["rev-parse", "HEAD"]);
+    repo.set_baseline(&head);
+    assert!(matches!(
+        Baseline::load(repo.root()),
+        Baseline::Available { .. }
+    ));
+}
