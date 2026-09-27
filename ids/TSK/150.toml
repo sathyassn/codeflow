@@ -1,0 +1,11 @@
+id = "TSK-150"
+uid = "e49f78f4-05ff-488f-99fc-f61b358b5aa6"
+kind = "TSK"
+title = "reading checked by structure, sizes reported"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T17:42:42Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
