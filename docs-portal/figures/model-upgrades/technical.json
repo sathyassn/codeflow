@@ -1,0 +1,219 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "model-reproof-coverage",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Which change requires which re-proof?",
+    "idea": "Only a new model, effort policy or harness needs a full native run; the other changes are re-proved by canaries, doctor or regression cases.",
+    "title": "The re-proof each change needs",
+    "kicker": "Re-proof",
+    "caption": "A full native run is the price of a new model or harness, and a harness release pays it only where behavior or settings changed.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Required"
+      },
+      {
+        "name": "part",
+        "mark": "part",
+        "means": "Required where behavior changed"
+      },
+      {
+        "name": "na",
+        "mark": "na",
+        "means": "Not required"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a new model needs a controlled full native evaluation",
+        "source": "docs/model-upgrades.md#architecture",
+        "derive": "the new model row",
+        "check": {
+          "kind": "contains",
+          "text": "| Controlled full native evaluation with requested/observed identity |"
+        },
+        "value": true
+      },
+      {
+        "claim": "a harness release needs full qualification only where behavior or settings changed",
+        "source": "docs/model-upgrades.md#architecture",
+        "derive": "the harness release row",
+        "check": {
+          "kind": "contains",
+          "text": "| Native capability canary plus full binding qualification where behavior or settings changed |"
+        },
+        "value": true
+      },
+      {
+        "claim": "retirement needs degradation canaries",
+        "source": "docs/model-upgrades.md#architecture",
+        "derive": "the retirement row",
+        "check": {
+          "kind": "contains",
+          "text": "| Graceful-degradation and remaining-ensemble canaries |"
+        },
+        "value": true
+      }
+    ],
+    "layout": {
+      "kind": "coverage",
+      "columns": [
+        "full run",
+        "canary",
+        "doctor",
+        "cases",
+        "degrade"
+      ],
+      "rows": [
+        {
+          "label": "new model or effort",
+          "cells": [
+            "cov",
+            "na",
+            "na",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "project model choice",
+          "cells": [
+            "na",
+            "cov",
+            "cov",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "harness release",
+          "cells": [
+            "part",
+            "cov",
+            "na",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "new harness",
+          "cells": [
+            "cov",
+            "cov",
+            "na",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "duty change",
+          "cells": [
+            "na",
+            "na",
+            "na",
+            "cov",
+            "na"
+          ]
+        },
+        {
+          "label": "retirement",
+          "cells": [
+            "na",
+            "na",
+            "na",
+            "na",
+            "cov"
+          ]
+        },
+        {
+          "label": "pack grouping",
+          "cells": [
+            "na",
+            "na",
+            "na",
+            "cov",
+            "na"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "elongation_max": 2.2,
+      "reason": "Seven changes list one under another at phone width, each with its five checks named beside them."
+    },
+    "twin": {
+      "columns": [
+        "Change",
+        "Full native run",
+        "Canary",
+        "Doctor",
+        "Regression cases",
+        "Degradation canary"
+      ],
+      "rows": [
+        [
+          "new model or effort",
+          "yes",
+          "no",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "project model choice",
+          "no",
+          "yes",
+          "yes",
+          "no",
+          "no"
+        ],
+        [
+          "harness release",
+          "where behavior changed",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "new harness",
+          "yes",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "duty change",
+          "no",
+          "no",
+          "no",
+          "yes",
+          "no"
+        ],
+        [
+          "retirement",
+          "no",
+          "no",
+          "no",
+          "no",
+          "yes"
+        ],
+        [
+          "pack grouping",
+          "no",
+          "no",
+          "no",
+          "yes",
+          "no"
+        ]
+      ]
+    }
+  }
+}

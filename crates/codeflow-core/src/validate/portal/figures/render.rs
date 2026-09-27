@@ -240,8 +240,21 @@ pub(super) fn render_figure(
         ),
         ("data-cf-states", declared.join(" ")),
         ("data-cf-elongation-max", js_number(elongation)),
-        ("data-cf-facts", js_stringify(&facts_json)),
     ];
+    // Rule 5 accepts a narrow that draws the wide mark set again only when
+    // the declaration says so (marks "same") and states why.
+    let narrow_declaration = figure.get("narrow");
+    if narrow_declaration
+        .and_then(|narrow| narrow.get("marks"))
+        .and_then(Value::as_str)
+        == Some("same")
+        && narrow_declaration
+            .and_then(|narrow| narrow.get("reason"))
+            .is_some_and(Value::is_string)
+    {
+        attributes.push(("data-cf-same-marks", "declared".to_string()));
+    }
+    attributes.push(("data-cf-facts", js_stringify(&facts_json)));
     if let Some(values) = &drawn_values {
         attributes.push((
             "data-cf-values",
@@ -596,7 +609,7 @@ fn coverage_layout(layout: &Value) -> Result<Composed, String> {
     // and the widest name at the value face's advance), slots LABEL_GAP
     // apart, as many to a line as the width allows, so every line shares the
     // same column positions; each name is bound to its cell.
-    let narrow_cell = 16.0;
+    let narrow_cell = 18.0;
     let narrow_line = 28.0;
     let widest = columns
         .iter()

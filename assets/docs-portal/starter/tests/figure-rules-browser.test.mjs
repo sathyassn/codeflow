@@ -89,6 +89,15 @@ test("each of the twelve rules fails a figure built to break it", { skip: proces
       const observed = await probe(page, css, html, breakage);
       assert.ok(rulesOf(observed).includes(Number(rule)), `rule ${rule} (${FIGURE_RULES[rule]}) did not fail: ${JSON.stringify(figureRuleFailures(observed))}`);
     }
+    // Rule 5 accepts a narrow that draws the wide mark set again only when
+    // the declaration says marks "same" with a reason; the reflow still
+    // fails without it.
+    const permutation = (failures) => failures.some((failure) => failure.rule === 5 && failure.message.includes("permutation"));
+    // Each breakage runs in the page, so it cannot share a helper.
+    const reflow = () => { const [wide, narrow] = document.querySelectorAll(".cf-fig-svg"); narrow.innerHTML = wide.innerHTML; };
+    assert.ok(permutation(figureRuleFailures(await probe(page, css, html, reflow))), "an undeclared reflow fails rule 5");
+    const declared = await probe(page, css, html, () => { const [wide, narrow] = document.querySelectorAll(".cf-fig-svg"); narrow.innerHTML = wide.innerHTML; document.querySelector("figure.cf-fig").setAttribute("data-cf-same-marks", "declared"); });
+    assert.ok(!permutation(figureRuleFailures(declared)), "a declared same mark set with a reason passes the permutation check");
     // Rule 11 also fails a figure whose title line is not shown (SPC-014 B5),
     // or shows a name other than the SVG title.
     for (const hide of [() => { document.querySelector(".cf-fig-title").style.display = "none"; }, () => { document.querySelector(".cf-fig-name").textContent = "Another title"; }]) {

@@ -1,0 +1,534 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "delegation-herdr-steps",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "What does my agent do to host a peer in Herdr?",
+    "idea": "The host creates a tab without taking focus, starts the peer, arms the prompt, sends it, and waits on codeflow for the result the peer's hooks record.",
+    "title": "Hosting a peer in Herdr",
+    "kicker": "How-to",
+    "caption": "Your pane keeps focus throughout, and the answer comes back through codeflow's records, not the tab.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Sends"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Returns"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the tab is created without taking focus",
+        "source": "docs/delegation.md#technical",
+        "derive": "step 3",
+        "check": {
+          "kind": "contains",
+          "text": "--cwd \"$PWD\" --no-focus`."
+        },
+        "value": true
+      },
+      {
+        "claim": "the host waits with delegate wait until terminal",
+        "source": "docs/delegation.md#technical",
+        "derive": "step 5",
+        "check": {
+          "kind": "contains",
+          "text": "`codeflow delegate wait ... --until terminal`."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 374,
+      "draw": [
+        {
+          "text": "host agent",
+          "x": 70,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "Herdr",
+          "x": 263.3,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "peer",
+          "x": 456.7,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "codeflow",
+          "x": 650,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 70,
+          "y1": 34,
+          "x2": 70,
+          "y2": 366
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 263.3,
+          "y1": 34,
+          "x2": 263.3,
+          "y2": 366
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 456.7,
+          "y1": 34,
+          "x2": 456.7,
+          "y2": 366
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 650,
+          "y1": 34,
+          "x2": 650,
+          "y2": 366
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 62H255.3",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "tab create --no-focus",
+          "x": 166.7,
+          "y": 52,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 108H255.3",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "text": "agent start",
+          "x": 166.7,
+          "y": 98,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 154H642",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "text": "delegate arm",
+          "x": 360,
+          "y": 144,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M271.3 200H448.7",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "text": "prompt, Enter",
+          "x": 360,
+          "y": 190,
+          "anchor": "middle",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M464.7 246H642",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "text": "hooks: accepted, result",
+          "x": 553.4,
+          "y": 236,
+          "anchor": "middle",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 292H642",
+          "head": "end",
+          "id": "m6"
+        },
+        {
+          "text": "delegate wait",
+          "x": 360,
+          "y": 282,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m6"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M642 338H78",
+          "open": "end",
+          "id": "m7"
+        },
+        {
+          "text": "result record",
+          "x": 360,
+          "y": 328,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m7"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 432,
+      "draw": [
+        {
+          "text": "host agent",
+          "x": 8,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M100 24H301",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "text": "Herdr",
+          "x": 352,
+          "y": 29,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "tab create --no-focus",
+          "x": 8,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "host agent",
+          "x": 8,
+          "y": 89,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M100 84H301",
+          "head": "end",
+          "id": "c2"
+        },
+        {
+          "text": "Herdr",
+          "x": 352,
+          "y": 89,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "agent start",
+          "x": 8,
+          "y": 112,
+          "style": "mono",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "host agent",
+          "x": 8,
+          "y": 149,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M100 144H276",
+          "head": "end",
+          "id": "c3"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 149,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "delegate arm",
+          "x": 8,
+          "y": 172,
+          "style": "mono",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "Herdr",
+          "x": 8,
+          "y": 209,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M59 204H309",
+          "head": "end",
+          "id": "c4"
+        },
+        {
+          "text": "peer",
+          "x": 352,
+          "y": 209,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "prompt, Enter",
+          "x": 8,
+          "y": 232,
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "peer",
+          "x": 8,
+          "y": 269,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M51 264H276",
+          "head": "end",
+          "id": "c5"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 269,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "hooks: accepted, result",
+          "x": 8,
+          "y": 292,
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "host agent",
+          "x": 8,
+          "y": 329,
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M100 324H276",
+          "head": "end",
+          "id": "c6"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 329,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "delegate wait",
+          "x": 8,
+          "y": 352,
+          "style": "mono",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "codeflow",
+          "x": 8,
+          "y": 389,
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M84 384H260",
+          "open": "end",
+          "id": "c7"
+        },
+        {
+          "text": "host agent",
+          "x": 352,
+          "y": 389,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "result record",
+          "x": 8,
+          "y": 412,
+          "style": "mute",
+          "for": [
+            "c7"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "host agent",
+          "Herdr",
+          "`herdr tab create ... --no-focus`"
+        ],
+        [
+          "2",
+          "host agent",
+          "Herdr",
+          "`herdr agent start`"
+        ],
+        [
+          "3",
+          "host agent",
+          "codeflow",
+          "`codeflow delegate arm`"
+        ],
+        [
+          "4",
+          "Herdr",
+          "peer",
+          "the prompt text, then Enter"
+        ],
+        [
+          "5",
+          "peer",
+          "codeflow",
+          "hook records: accepted, then the result"
+        ],
+        [
+          "6",
+          "host agent",
+          "codeflow",
+          "`codeflow delegate wait --until terminal`"
+        ],
+        [
+          "7",
+          "codeflow",
+          "host agent",
+          "the result record"
+        ]
+      ]
+    }
+  }
+}

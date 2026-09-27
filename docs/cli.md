@@ -9,30 +9,19 @@
 
 **One binary and twenty-two subcommands, grouped by the job each one does.**
 
-```cf-stage
-scaffold | init · update · epic · spec · task · estimate @accent
-->
-enforce | hook · git-hook · ci · policy · remote
-->
-verify | test · validate · integrate · doctor · work
-->
-remember | orient · status · recall
-->
-delegate | delegate: init · arm · wait
-->
-present | portal · present @positive
-caption: the same six jobs the capabilities page uses, read as commands
-```
-
-`codeflow help <command>` lists the same commands this page lists, and
-`codeflow <command> --help` prints the flags. Architecture is the one-line
-purpose of each subcommand and when you reach for it; Technical is the exact
-arguments, flags and exit behavior.
+The jobs are the same six the capabilities page uses. Three commands are never
+typed by hand: the settings presets call `hook`, the git-hook shims call
+`git-hook`, and the scaffolded workflow runs `ci`. `codeflow --help` lists
+the same commands this page lists, and `codeflow <command> --help` prints the
+flags.
 
 ## Architecture
 
-Rows are grouped by the six jobs above, then by the order `codeflow --help`
-prints them within each job. Purposes are derived from the binary's own short
+Every subcommand is parsed in one place and handed to the library that owns
+the work: `init` and `update` run the scaffold directly, `present` hands off to
+the presentation runtime, and every other command goes through its own handler
+into the core library. Rows are grouped by the six jobs, then by the order
+`codeflow --help` prints them within each job. Purposes are derived from the binary's own short
 help, with the long ones shortened and arrows written as words. Nothing here is
 a wrapper around a second implementation: the hooks, CI, and the in-session
 guards all call the same functions through this surface.
@@ -45,7 +34,7 @@ guards all call the same functions through this surface.
 | Scaffold | `spec` | Create a spec: allocate the next SPC-NNN and link its consuming work item | Full tier, when a change agreement needs freezing |
 | Scaffold | `task` | Create an epic-linked or reasoned standalone task | Full tier, planning a unit of work |
 | Scaffold | `estimate` | Check explicit forecast allocations and pinned evidence without writes | Only where the optional cf-estimate method was adopted |
-| Enforce | `hook` | Claude-layer hooks, wired by the settings presets (charter §3.3) | Never by hand: the settings presets invoke it |
+| Enforce | `hook` | Claude-layer hooks, wired by the settings presets | Never by hand: the settings presets invoke it |
 | Enforce | `git-hook` | Git client hook target, the `.codeflow/git-hooks/` shims exec this | Never by hand: the installed shims invoke it |
 | Enforce | `ci` | Verify a commit range + branch name against policy, the portable, binary-sourced CI check | In CI, from the scaffolded workflow |
 | Enforce | `policy` | Inspect `.codeflow/policy.json` | When you need a key's schema or the effective value and its source |
@@ -57,7 +46,7 @@ guards all call the same functions through this surface.
 | Verify | `work` | Durable-work lifecycle checks | Before implementing a durable task |
 | Remember | `orient` | Print the session-start digest (pointers, not content) | At session start; the SessionStart hook runs it for you |
 | Remember | `status` | Generated status view: branch, worktrees, in-flight work, capabilities | When you need the current shape of the repository |
-| Remember | `recall` | Search project memory: ledger, session summaries, ADRs, epics, capabilities | When you need why something was decided |
+| Remember | `recall` | Search project memory: ledger, session summaries, decision records, epics, capabilities | When you need why something was decided |
 | Delegate | `delegate` | Transport-neutral lifecycle for interactive delegate turns | From a host driving a peer harness turn |
 | Present | `portal` | Adopt or reconcile the opt-in documentation portal | Adopting or transferring the documentation portal |
 | Present | `present` | Review this session on the utility presentation surface (catalog JSON, Comment) | When a bounded review surface materially helps |
@@ -79,6 +68,14 @@ brackets.
 | `codeflow spec new <TITLE> --for <EPC-NNN\|TSK-NNN>` | `--for` is required | Allocates the next `SPC-NNN`, scaffolds it, and links the consuming epic or task |
 | `codeflow task new <TITLE>` | `-e`/`--epic <EPC-NNN>`, `--standalone-reason <REASON>`, `--into <BRANCH>` | `--epic` and `--standalone-reason` are mutually exclusive, and a durable task needs one of them. `--into` names the existing local or remote-tracking non-task branch this task will integrate into |
 
+`codeflow estimate check` serves the optional cf-estimate method defined by
+specification SPC-007: an active project-specific offer, confirmed adoption or
+a respected decline, evidence-anchored grades, full-delivery scenarios and
+resource-feasible allocations. Standard and full skills are managed; profiles,
+forecasts and outcomes stay project-owned and link existing authority. The
+checker is read-only. Implementation readiness and predictive usefulness remain
+separate, and nothing here establishes calibrated delivery predictions.
+
 `codeflow update` exits 2 when the scaffold report or the adopted portal report
 contains conflicts, so a caller can distinguish a clean refresh from one that
 left `.new` sidecars behind.
@@ -87,12 +84,12 @@ left `.new` sidecars behind.
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow hook <NAME>` | `--run-id <ID>`, `--result <FILE>`, `--state-dir <DIR>` | `<NAME>` is one of `git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`. The payload is read from stdin. The three flags exist only for `delegate-turn`; the other four names ignore them. `delegate-turn` requires `--run-id` and exactly one of `--result`, which selects the legacy mode, or `--state-dir`, which selects the schema-v2 mode |
+| `codeflow hook <NAME>` | `--run-id <ID>`, `--result <FILE>`, `--state-dir <DIR>` | `<NAME>` is one of `git-guard`, `exec-guard`, `session-orient`, `session-summary`, `delegate-turn`. The payload is read from stdin. The three flags exist only for `delegate-turn`; the other four names ignore them. `delegate-turn` requires `--run-id` and exactly one of `--state-dir`, which selects the lifecycle-directory mode, or `--result`, which selects the result-file mode |
 | `codeflow git-hook <STAGE> [ARGS]...` | `<STAGE>` is one of `pre-commit`, `commit-msg`, `pre-merge-commit`, `reference-transaction`, `pre-push` | `[ARGS]` are the arguments git passes through, for example the commit-msg file path or the pre-push remote name and URL |
 | `codeflow ci` | `--base <REF>`, `--head <REF>`, `--branch <NAME>`, `--pr-body <TEXT>`, `--pr-body-file <FILE>` | Base and head are auto-detected from the CI environment when omitted; branch defaults to the CI-provided or current HEAD branch. `--pr-body` and `--pr-body-file` scan for AI attribution, emoji, and the required section structure |
 | `codeflow policy explain` | no flags | Prints every key's type, default, valid values, and purpose from the schema registry |
 | `codeflow policy show` | no flags | Prints each key's current value, its source (project file or built-in default), and any invalid values |
-| `codeflow remote protect` | `--provider <PROVIDER>` (default `github`), `--dry-run` | Only `github` has an adapter; another provider prints the manual checklist. `--dry-run` prints the intended rules without applying anything |
+| `codeflow remote protect` | `--provider <PROVIDER>` (default `github`), `--dry-run` | Applies the policy's `protected_branches` to the provider: require a PR and green CI, block force-push and deletion, with a legible report of anything the plan tier cannot apply. Only `github` has an adapter (through `gh api`); another provider prints the manual checklist. `--dry-run` prints the intended rules without applying anything |
 
 Each hook name under `codeflow hook` carries its own exit contract, and exit 0
 does not by itself mean enforcement succeeded. `git-guard` exits 0 to allow the
@@ -104,7 +101,7 @@ digest and always exits 0; `session-summary` always exits 0 as well, warning on
 stderr instead, because a failed summary must never fail the session. Read
 stderr, not the exit code, to tell an advisory failure from a clean pass.
 `delegate-turn` is the exception: it exits 1 when `--run-id` is missing and 2
-when a schema-v2 payload cannot be read. `codeflow ci` proceeds when only
+when a lifecycle-directory payload cannot be read. `codeflow ci` proceeds when only
 warnings were raised and reports the count.
 
 ### Verify
@@ -115,18 +112,49 @@ warnings were raised and reports the count.
 | pre-push test gate | not a command | The `pre-push` hook runs the `quick` gate only when the `test_gate_on_push` policy key is active and `.codeflow/test-config.json` exists; without that file it skips. This repository sets the key to `warn`, so a failure reports and the push proceeds. It is fast feedback, never the full verification |
 | `codeflow test setup` | `--list-templates`, `--template <NAME>`, `--replace`, `--add-target` | The three actions are mutually exclusive. `--list-templates` lists the templates embedded in this binary, `--template` writes one by name, `--add-target` appends one target interactively. `--replace` requires `--template` and explicitly replaces an existing config. With no flag, safe root-only auto-detection runs |
 | `codeflow validate [PATH]` | `--docs`, `--portal <DIR>` | `PATH` defaults to `project-management/`. `--docs` adds the doc-graph referential-integrity lint. `--portal` verifies a portal evidence manifest without executing project code and conflicts with `PATH`, so pass one or the other |
-| `codeflow integrate <BRANCH>` | `--into <INTO>` (default `main`) | Rebase, test, then fast-forward, under a flock and a gate-context token |
+| `codeflow integrate <BRANCH>` | `--into <INTO>` (default `main`) | Rebase, test, then fast-forward, under a flock and a gate-context token; details below |
 | `codeflow doctor` | `--check <CHECK>`, `--list` | `--list` prints the available check names; `--check` runs a single named check |
 | `codeflow work start <TASK_ID>` | `--into <REF>` | Verifies that a durable task was planned and anchored before implementation. `--into` names the non-task branch or ref this task will merge into |
 | `codeflow estimate check <FORECAST_PATH>` | `--json` | `<FORECAST_PATH>` is a forecast JSON file, relative to the current directory or absolute. `--json` emits the versioned JSON report |
+
+`codeflow test` runs against configured targets or runtime stack detection.
+With a stack it is a real gate, re-run in CI. File and aggregate coverage
+thresholds all contribute to the verdict; `changed_files` rules are rejected
+until an explicit comparison base is available (architecture decision record
+ADR-0021). Captured stdout and stderr are bounded and report truncation.
+Detection in `test setup` is root-only, monorepos declare package `cwd`
+targets explicitly, populated or malformed configs are never replaced
+automatically, and a malformed configured pre-push gate is a violation rather
+than a skip.
+
+`codeflow integrate` is the sanctioned local landing path for protected
+branches. It rebases the branch onto the target, runs the test gate, then
+advances the target with `git merge --ff-only`, a linear fast-forward that adds
+no merge commit; the target ref moves only when every stage succeeds. The
+sequence runs under a gate-context token the git hooks and git-guard verify, so
+the protected ref advances only through integrate or a human-merged PR, and a
+raw `git merge` or manual ref move stays blocked. A human keeps the local
+override (`CODEFLOW_HUMAN_OVERRIDE=1`), which git-guard never honors for an
+agent. After landing, clean linked worktrees that have the target checked out
+are reset to the tested tip; dirty worktrees and a failed checkout restoration
+are reported as partial-success warnings.
 
 ### Remember
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow orient` | no flags | Prints the session-start digest to stdout |
+| `codeflow orient` | no flags | Prints the session-start digest to stdout: at most 30 lines of pointers, not content, covering the product one-liner, branch and worktree state, work and capability counts, recent decision record (ADR) titles, gate status and paths to read more |
 | `codeflow status` | `--capabilities`, `--delivery` | Default output is counts by status; `--capabilities` shows the full capability table; `--delivery` shows each capability's epics with their open and total task counts and next actionable tasks |
-| `codeflow recall <QUERY>` | `--all`, `--rebuild`, `--limit <LIMIT>` | `--all` searches every repo in the user registry. `--rebuild` drops the index for the searched repos and re-syncs. `--limit` defaults to 20, or `[recall].limit` from `~/.codeflow/config.toml` |
+| `codeflow recall <QUERY>` | `--all`, `--rebuild`, `--limit <LIMIT>` | Searches ledger events, session summaries, ADRs, epics, tasks, frozen specs and capabilities through bundled SQLite full-text search (FTS5), disclosing coverage gaps. `--all` searches every repo in the user registry, `~/.codeflow/registry.json`, a locked registry updated on every command run and read lazily at query time, not a daemon. `--rebuild` drops the index for the searched repos and re-syncs. `--limit` defaults to 20, or `[recall].limit` from `~/.codeflow/config.toml` |
+
+`codeflow status` also emits a read-only cleanup inventory for linked
+worktrees and unattached local branches. Against the locally known target it
+tells clean ancestry or patch-equivalent resources from dirty and unproven
+work; it performs no mutation and never substitutes for an active-owner check
+(ADR-0044). The `session-summary` SessionEnd hook appends a session record to
+the ledger, which is recall's zero-ceremony corpus. Recall's source discovery
+skips directory symlinks and obeys depth and count budgets; reversible path
+encoding supplies index identity, while lossy text is display only.
 
 ### Delegate
 
@@ -155,7 +183,7 @@ run, 124 on timeout, and 130 when interrupted. `delegate init` and
 | `codeflow present feedback <SESSION_ID>` | `--follow` | Delivers pending review envelopes as JSON lines. `--follow` continues until the session closes |
 | `codeflow present resolve <SESSION_ID> <EVENT_ID>` | `--event-version <EVENT_VERSION>` (required), `--status <addressed\|dismissed>` (required) | Marks one delivered feedback event addressed or dismissed. `--event-version` is the current event version printed by the review surface or by `history` |
 | `codeflow present close <SESSION_ID>` | no flags | Repeating close is safe |
-| `codeflow present export <SESSION_ID>` | `--out <FILE>` (required), `--theme <editorial\|instrument\|technical>` (default `editorial`), `--mode <system\|light\|dark>` (default `system`) | Exports a deterministic self-contained read-only HTML artifact |
+| `codeflow present export <SESSION_ID>` | `--out <FILE>` (required), `--theme <graphite\|slate\|sage>` (default `editorial`, which resolves to Slate), `--mode <system\|light\|dark>` (default `system`) | Exports a deterministic self-contained read-only HTML artifact. The older names `editorial`, `instrument`, `technical` and `ink` are still accepted |
 | `codeflow present clear [SESSION_ID]` | `--older-than <OLDER_THAN>` (default `30d`), `--dry-run` | With no session id it removes every eligible closed session older than the window |
 
 ### General exit behavior

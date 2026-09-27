@@ -31,7 +31,11 @@ pub(super) use dom::CodeBlockAssets;
 pub(super) const PAGE_CLASSES: [&str; 3] = ["illustrated", "pass-through", "derived-lookup"];
 pub(super) const PAGE_CLASS_REASONS: [&str; 3] =
     ["accepted-record", "governance", "no-relationship"];
-pub(super) const DERIVED_LOOKUPS: [&str; 1] = ["capability-registry"];
+pub(super) const DERIVED_LOOKUPS: [&str; 3] = [
+    "capability-registry",
+    super::lookups::SKILL_CATALOG,
+    super::lookups::POLICY_REFERENCE,
+];
 const ALTITUDE_PANELS: [&str; 3] = ["concept", "architecture", "technical"];
 const EXPLANATORY: &str = "explanatory";
 const CAPABILITY_REGISTRY: &str = "docs/capabilities.md";
@@ -123,6 +127,88 @@ pub(super) struct Lookup {
     rows: usize,
 }
 
+/// The prose words an explanatory page carries in each altitude panel, as the
+/// adapter counted them; the validator recounts the committed source.
+#[derive(Debug, Default, Deserialize, PartialEq, Eq)]
+#[serde(deny_unknown_fields)]
+pub struct AltitudeWords {
+    pub concept: usize,
+    pub architecture: usize,
+    pub technical: usize,
+}
+
+/// The prose words in each altitude panel of an explanatory source, by the
+/// rule `altitudeWords` in the starter's `scripts/lib.mjs` states: YAML
+/// frontmatter is not prose and is skipped whole; after it, a line
+/// `## Concept`, `## Architecture` or `## Technical` opens that panel and any
+/// other level-two heading closes it; lines inside a fence, inside an HTML
+/// comment (a line starting `<!--` through the line holding `-->`), headings
+/// and table rows are skipped; every other line in a panel adds its ASCII
+/// whitespace-separated tokens.
+#[must_use]
+pub fn altitude_words(text: &str) -> AltitudeWords {
+    static FENCE: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(r"^ {0,3}(`{3,}|~{3,})(.*)$").expect("fence pattern"));
+    let body = source_body(text);
+    let mut words = AltitudeWords::default();
+    let mut panel: Option<&str> = None;
+    let mut fence: Option<(char, usize)> = None;
+    let mut comment = false;
+    for line in body.split('\n') {
+        let marker = FENCE.captures(line);
+        if let Some((character, length)) = fence {
+            if let Some(marker) = &marker {
+                let run = &marker[1];
+                if run.starts_with(character) && run.len() >= length && marker[2].trim().is_empty()
+                {
+                    fence = None;
+                }
+            }
+            continue;
+        }
+        if let Some(marker) = &marker {
+            let run = &marker[1];
+            if !(run.starts_with('`') && marker[2].contains('`')) {
+                fence = Some((run.chars().next().unwrap_or('`'), run.len()));
+                continue;
+            }
+        }
+        let trimmed = line.trim_ascii();
+        if comment {
+            if trimmed.contains("-->") {
+                comment = false;
+            }
+            continue;
+        }
+        if trimmed.starts_with("<!--") {
+            if !trimmed.contains("-->") {
+                comment = true;
+            }
+            continue;
+        }
+        if let Some(label) = line.strip_prefix("## ") {
+            panel = ALTITUDE_PANELS
+                .iter()
+                .copied()
+                .find(|panel| *panel == label.trim_ascii().to_lowercase());
+            continue;
+        }
+        let Some(current) = panel else {
+            continue;
+        };
+        if trimmed.starts_with('#') || trimmed.starts_with('|') {
+            continue;
+        }
+        let count = trimmed.split_ascii_whitespace().count();
+        match current {
+            "concept" => words.concept += count,
+            "architecture" => words.architecture += count,
+            _ => words.technical += count,
+        }
+    }
+    words
+}
+
 pub(super) fn deserialize_figures<'de, D>(
     deserializer: D,
 ) -> Result<Option<Vec<FigureEvidence>>, D::Error>
@@ -204,7 +290,8 @@ impl PageClassEntry {
     }
 }
 
-/// One `figures` binding: a declaration, a route, and a panel or an anchor.
+/// One `figures` binding: a declaration, a route, and a panel, an anchor, or
+/// both (an explanatory section inside its panel).
 #[derive(Clone, Debug)]
 pub(super) struct FigureBinding {
     declaration: String,
@@ -215,10 +302,10 @@ pub(super) struct FigureBinding {
 
 impl FigureBinding {
     fn placement(&self) -> &'static str {
-        if self.panel.is_some() {
-            "panel"
-        } else if self.anchor.is_some() {
+        if self.anchor.is_some() {
             "anchor"
+        } else if self.panel.is_some() {
+            "panel"
         } else {
             "head"
         }
@@ -365,7 +452,6 @@ pub(super) fn configured_figure_bindings(
             .keys()
             .all(|key| ["declaration", "route", "panel", "anchor"].contains(&key.as_str()))
             && object.values().all(serde_json::Value::is_string)
-            && !(panel.is_some() && anchor.is_some())
             && panel
                 .as_deref()
                 .is_none_or(|panel| ALTITUDE_PANELS.contains(&panel))
@@ -418,6 +504,7 @@ pub(super) struct FigureContext<'a> {
     pub bindings: &'a [FigureBinding],
     pub source_blobs: &'a BTreeMap<String, Vec<u8>>,
     pub rendered: &'a BTreeMap<String, String>,
+    pub lookup_inputs: Option<&'a super::LookupInputs<'a>>,
 }
 
 pub(super) fn verify_figures(
@@ -889,6 +976,7 @@ fn verify_page_class(
             || !page.figures.is_empty()
             || page.source_region.is_some()
             || page.lookup.is_some()
+            || page.altitude_words.is_some()
         {
             report
                 .issues
@@ -912,8 +1000,21 @@ fn verify_page_class(
         .iter()
         .filter(|binding| &binding.route == route)
         .collect();
+    let source = context
+        .source_blobs
+        .get(&page.source_path)
+        .and_then(|bytes| std::str::from_utf8(bytes).ok());
+    // Sections are the adapter's: headings of the body after frontmatter.
+    let body = source.map(source_body);
     let allowed = match class {
-        EXPLANATORY => bindings.iter().all(|binding| binding.panel.is_some()),
+        EXPLANATORY => bindings.iter().all(|binding| {
+            binding.panel.is_some()
+                && binding.anchor.as_deref().is_none_or(|anchor| {
+                    body.as_deref()
+                        .and_then(|text| panel_of_anchor(text, anchor))
+                        == binding.panel
+                })
+        }),
         "illustrated" => bindings.iter().all(|binding| binding.panel.is_none()),
         _ => bindings.is_empty(),
     };
@@ -938,11 +1039,12 @@ fn verify_page_class(
             "{route} bound figures do not match the configuration and the pinned declarations"
         ));
     }
+    verify_altitude_words(page, class, source, report);
     let rendered = context.rendered.get(route);
     match class {
         EXPLANATORY => {
             if let Some(output) = rendered {
-                verify_rendered_figures(page, output, true, declarations, report);
+                verify_rendered_figures(page, output, body.as_deref(), declarations, report);
             }
             if page.source_region.is_some() || page.lookup.is_some() {
                 report.issues.push(format!(
@@ -953,13 +1055,13 @@ fn verify_page_class(
         "derived-lookup" => {
             verify_lookup(page, entry, context, report);
             if let Some(output) = rendered {
-                verify_rendered_figures(page, output, false, declarations, report);
+                verify_rendered_figures(page, output, None, declarations, report);
             }
         }
         _ => match (&page.source_region, rendered) {
             (Some(region), Some(output)) => {
                 verify_source_region(page, region, output, context, declarations, report);
-                verify_rendered_figures(page, output, false, declarations, report);
+                verify_rendered_figures(page, output, None, declarations, report);
             }
             (None, _) => report.issues.push(format!(
                 "{route} {class} source records no unchanged source region"
@@ -969,10 +1071,64 @@ fn verify_page_class(
     }
 }
 
+/// An explanatory page records the prose words in each altitude panel, which
+/// must equal a recount of its committed source; any other page records none.
+fn verify_altitude_words(
+    page: &Page,
+    class: &str,
+    source: Option<&str>,
+    report: &mut PortalValidationReport,
+) {
+    let recounted = if class == EXPLANATORY {
+        source.map(altitude_words)
+    } else {
+        None
+    };
+    if page.altitude_words != recounted {
+        report.issues.push(format!(
+            "{} altitude word counts do not match its committed source",
+            page.route
+        ));
+    }
+}
+
+/// The text of an anchored figure's section names exactly one heading of
+/// its panel in the rendered page, the rule the adapter applies when it
+/// places the figure, so a companion matched by that text is under that
+/// section and no other.
+fn verify_section_headings(
+    page: &Page,
+    rendered: &dom::RenderedFigures,
+    section_slugs: &[Option<String>],
+    report: &mut PortalValidationReport,
+) {
+    let route = &page.route;
+    for (figure, slug) in page.figures.iter().zip(section_slugs) {
+        let Some(slug) = slug.as_ref().filter(|slug| !slug.is_empty()) else {
+            continue;
+        };
+        let named = rendered
+            .headings
+            .iter()
+            .filter(|(panel, level, text)| {
+                *level > 2 && *panel == figure.panel && &slug_heading(text) == slug
+            })
+            .count();
+        if named != 1 {
+            report.issues.push(format!(
+                "{route} renders {named} headings named like the section #{} of the {} panel, not one",
+                figure.anchor.as_deref().unwrap_or_default(),
+                figure.panel.as_deref().unwrap_or("page")
+            ));
+        }
+    }
+}
+
 /// Every figure a page puts in front of a reader must be a companion that
 /// equals the reconstruction of a declaration bound to that page, each
-/// binding exactly once, compared as parsed HTML. On an explanatory page each
-/// sits under its declared panel heading. Figure or companion markup anywhere
+/// binding exactly once, compared as parsed HTML. On an explanatory page, whose
+/// committed source is passed, each sits under its declared panel heading and
+/// an anchored one directly under its section heading. Figure or companion markup anywhere
 /// else fails, however it is spelled; a comment renders nothing and text that
 /// names a kit class is not markup. The page content carries no CSS and no
 /// executable content: only the site's own built sheets and runtime may style
@@ -980,12 +1136,31 @@ fn verify_page_class(
 fn verify_rendered_figures(
     page: &Page,
     output: &str,
-    panels: bool,
+    explanatory_source: Option<&str>,
     declarations: &BTreeMap<String, Pinned>,
     report: &mut PortalValidationReport,
 ) {
     let route = &page.route;
+    let panels = explanatory_source.is_some();
+    let sections = explanatory_source
+        .map(markdown_sections)
+        .unwrap_or_default();
+    // The heading an anchored companion must sit under, slugged from its
+    // rendered text; `None` for a figure placed at its panel heading.
+    let section_slugs: Vec<Option<String>> = page
+        .figures
+        .iter()
+        .map(|figure| {
+            figure.anchor.as_ref().map(|anchor| {
+                sections
+                    .iter()
+                    .find(|section| &section.anchor == anchor)
+                    .map_or_else(String::new, |section| slug_heading(&section.text))
+            })
+        })
+        .collect();
     let rendered = dom::rendered_figures(markdown_body(output));
+    verify_section_headings(page, &rendered, &section_slugs, report);
     let mut expected = Vec::new();
     for (index, figure) in page.figures.iter().enumerate() {
         let path = &figure.declaration_path;
@@ -1006,13 +1181,18 @@ fn verify_rendered_figures(
         }
     }
     let mut matched = vec![false; expected.len()];
-    for (panel, companion) in &rendered.companions {
+    for ((panel, companion), under) in rendered.companions.iter().zip(&rendered.sections) {
         let found = expected
             .iter()
             .enumerate()
             .position(|(index, (want, _, text))| {
                 !matched[index]
-                    && (!panels || want == panel)
+                    && (!panels
+                        || (want == panel
+                            && section_slugs[index].as_ref().is_none_or(|slug| {
+                                !slug.is_empty()
+                                    && under.as_deref().map(slug_heading).as_ref() == Some(slug)
+                            })))
                     && text.as_deref() == Some(companion.as_str())
             });
         match found {
@@ -1151,12 +1331,37 @@ fn verify_lookup(
 ) {
     let route = &page.route;
     let derive = entry.and_then(|entry| entry.derive.as_deref());
-    let rows = context
+    let text = context
         .source_blobs
         .get(&page.source_path)
-        .and_then(|bytes| std::str::from_utf8(bytes).ok())
-        .map(|text| parse_capabilities(text).0.len());
-    let valid = page.source_path == CAPABILITY_REGISTRY
+        .and_then(|bytes| std::str::from_utf8(bytes).ok());
+    let rows = match derive {
+        Some("capability-registry") if page.source_path == CAPABILITY_REGISTRY => {
+            text.map(|text| parse_capabilities(text).0.len())
+        }
+        Some(generated @ (super::lookups::SKILL_CATALOG | super::lookups::POLICY_REFERENCE)) => {
+            let Some(inputs) = context.lookup_inputs else {
+                report.issues.push(format!(
+                    "{route} is a {generated} page, which only the codeflow binary can re-derive"
+                ));
+                return;
+            };
+            let normalized = text.map(normalize_markdown_source);
+            match normalized
+                .as_deref()
+                .map(|text| super::lookups::verify_lookup_page(generated, text, inputs))
+            {
+                Some(Ok(rows)) => Some(rows),
+                Some(Err(why)) => {
+                    report.issues.push(format!("{route} {why}"));
+                    return;
+                }
+                None => None,
+            }
+        }
+        _ => None,
+    };
+    let valid = rows.is_some()
         && page.source_region.is_none()
         && page.lookup.as_ref().is_some_and(|lookup| {
             Some(lookup.derive.as_str()) == derive && Some(lookup.rows) == rows
@@ -1400,11 +1605,13 @@ fn title_matches(raw: &str, title: &str) -> bool {
         || (rest(&unprefixed) == rest(&wanted) && first(&unprefixed) == first(&wanted))
 }
 
-/// One ATX heading outside fenced code: its line, level, anchor and the lines
-/// of its section.
+/// One ATX heading outside fenced code: its line, level, anchor, source text
+/// and the lines of its section.
 struct Section {
     line: usize,
+    level: usize,
     anchor: String,
+    text: String,
     body: String,
 }
 
@@ -1419,7 +1626,7 @@ fn markdown_sections(text: &str) -> Vec<Section> {
     let normalized = normalize_markdown_source(text);
     let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
     let lines: Vec<&str> = normalized.split('\n').collect();
-    let mut headings: Vec<(usize, usize, String)> = Vec::new();
+    let mut headings: Vec<(usize, usize, String, String)> = Vec::new();
     let mut seen = BTreeMap::<String, usize>::new();
     let mut fence: Option<(char, usize)> = None;
     for (index, line) in lines.iter().enumerate() {
@@ -1460,23 +1667,71 @@ fn markdown_sections(text: &str) -> Vec<Section> {
             format!("{base}-{count}")
         };
         *count += 1;
-        headings.push((index, level, anchor));
+        headings.push((index, level, anchor, raw.to_string()));
     }
     headings
         .iter()
         .enumerate()
-        .map(|(position, (line, level, anchor))| {
+        .map(|(position, (line, level, anchor, text))| {
             let next = headings[position + 1..]
                 .iter()
-                .find(|(_, candidate, _)| candidate <= level)
-                .map_or(lines.len(), |(next, _, _)| *next);
+                .find(|(_, candidate, _, _)| candidate <= level)
+                .map_or(lines.len(), |(next, _, _, _)| *next);
             Section {
                 line: *line,
+                level: *level,
                 anchor: anchor.clone(),
+                text: text.clone(),
                 body: lines[line + 1..next].join("\n"),
             }
         })
         .collect()
+}
+
+/// The altitude panel an anchored heading sits in: the nearest level-two
+/// heading above it names the panel, and the heading itself is below level
+/// two. `None` when the anchor names no such heading, or when another heading
+/// in that panel has the same text, which the adapter refuses as ambiguous:
+/// the rendered page places a figure by its section's text, so the text must
+/// name one section of the panel.
+fn panel_of_anchor(body: &str, anchor: &str) -> Option<String> {
+    let sections = markdown_sections(body);
+    let target = sections.iter().find(|section| section.anchor == anchor)?;
+    if target.level <= 2 {
+        return None;
+    }
+    let owner = sections
+        .iter()
+        .rev()
+        .find(|section| section.line < target.line && section.level <= 2)?;
+    let label = owner.text.trim().to_lowercase();
+    if owner.level != 2 || !ALTITUDE_PANELS.contains(&label.as_str()) {
+        return None;
+    }
+    let end = sections
+        .iter()
+        .find(|section| section.line > owner.line && section.level <= 2)
+        .map_or(usize::MAX, |section| section.line);
+    let slug = slug_heading(&target.text);
+    let named = sections
+        .iter()
+        .filter(|section| section.line > owner.line && section.line < end)
+        .filter(|section| slug_heading(&section.text) == slug)
+        .count();
+    (named == 1).then_some(label)
+}
+
+/// A committed source's body: the text after its YAML frontmatter, with a
+/// byte order mark and CR line ends normalized the way the adapter reads it.
+/// Frontmatter is metadata, so its lines are never sections or prose.
+fn source_body(text: &str) -> String {
+    let normalized = normalize_markdown_source(text);
+    let normalized = normalized.strip_prefix('\u{feff}').unwrap_or(&normalized);
+    normalized
+        .strip_prefix("---\n")
+        .and_then(|rest| rest.find("\n---\n").map(|end| &rest[end + 5..]))
+        .unwrap_or(normalized)
+        .to_string()
 }
 
 fn slug_heading(raw: &str) -> String {
@@ -1736,7 +1991,8 @@ mod tests {
         let bindings = serde_json::json!([
             { "declaration": "figures/a.json", "route": "orient/product", "panel": "concept" },
             { "declaration": "figures/b.json", "route": "reference/guide", "anchor": "install" },
-            { "declaration": "figures/c.json", "route": "reference/guide" }
+            { "declaration": "figures/c.json", "route": "reference/guide" },
+            { "declaration": "figures/d.json", "route": "orient/adoption", "panel": "technical", "anchor": "install" }
         ]);
         let parsed =
             configured_figure_bindings(Some(&bindings), &mut report).expect("closed bindings");
@@ -1745,12 +2001,11 @@ mod tests {
                 .iter()
                 .map(FigureBinding::placement)
                 .collect::<Vec<_>>(),
-            ["panel", "anchor", "head"]
+            ["panel", "anchor", "head", "anchor"]
         );
         for rejected in [
             serde_json::json!([{ "declaration": "figures/a.md", "route": "x" }]),
             serde_json::json!([{ "declaration": "figures/a.json", "route": "x", "panel": "summary" }]),
-            serde_json::json!([{ "declaration": "figures/a.json", "route": "x", "panel": "concept", "anchor": "a" }]),
             serde_json::json!([{ "declaration": "../a.json", "route": "x" }]),
             serde_json::json!([{ "declaration": "figures/a.json", "route": "x", "anchor": "not an anchor" }]),
             serde_json::json!([{ "declaration": "figures/a.json", "route": "x" }, { "declaration": "figures/a.json", "route": "x" }]),
@@ -1759,6 +2014,223 @@ mod tests {
             assert!(
                 configured_figure_bindings(Some(&rejected), &mut report).is_none(),
                 "{rejected} was accepted"
+            );
+        }
+    }
+
+    const ALTITUDES: &str = "# Adoption\n\n## Concept\n\nWhat it is.\n\n### Scope\n\nWhat it covers.\n\n## Technical\n\nHow it runs.\n\n### Install\n\n1. Run it.\n2. Check it.\n\n### Check\n\nConfirm it.\n\n## Technical notes\n\n### Later\n\nNot a panel.\n";
+
+    /// The starter's `DERIVED_LOOKUPS` equals the derivations this validator
+    /// can check, in both the live and the shipped copy.
+    #[test]
+    fn the_derived_lookups_match_the_starter() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        for copy in [
+            "docs-portal/scripts/page-classes.mjs",
+            "assets/docs-portal/starter/scripts/page-classes.mjs",
+        ] {
+            let source = std::fs::read_to_string(root.join(copy)).unwrap();
+            let line = source
+                .lines()
+                .find(|line| line.starts_with("export const DERIVED_LOOKUPS = Object.freeze(["))
+                .unwrap_or_else(|| panic!("{copy} declares no DERIVED_LOOKUPS"));
+            let list: Vec<&str> = line
+                .split_once('[')
+                .and_then(|(_, rest)| rest.split_once(']'))
+                .map(|(inside, _)| inside)
+                .unwrap()
+                .split(',')
+                .map(|item| item.trim().trim_matches('"'))
+                .collect();
+            assert_eq!(list, DERIVED_LOOKUPS, "{copy}");
+        }
+    }
+
+    /// The shared cases the starter's `altitudeWords` is tested against too.
+    #[test]
+    fn altitude_words_match_the_shared_cases() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../docs-portal/tests/fixtures/altitude-words.json");
+        let fixture: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(path).unwrap()).unwrap();
+        let cases = fixture["cases"].as_array().unwrap();
+        assert!(!cases.is_empty());
+        for case in cases {
+            let words = &case["words"];
+            let expected = AltitudeWords {
+                concept: usize::try_from(words["concept"].as_u64().unwrap()).unwrap(),
+                architecture: usize::try_from(words["architecture"].as_u64().unwrap()).unwrap(),
+                technical: usize::try_from(words["technical"].as_u64().unwrap()).unwrap(),
+            };
+            assert_eq!(
+                altitude_words(case["text"].as_str().unwrap()),
+                expected,
+                "{}",
+                case["name"]
+            );
+        }
+    }
+
+    #[test]
+    fn an_anchor_belongs_to_the_panel_above_it() {
+        assert_eq!(
+            panel_of_anchor(ALTITUDES, "install").as_deref(),
+            Some("technical")
+        );
+        assert_eq!(
+            panel_of_anchor(ALTITUDES, "scope").as_deref(),
+            Some("concept")
+        );
+        // A panel heading itself, a heading under a level-two heading that is
+        // not a panel, the title, and an unknown anchor name no panel section.
+        for anchor in ["technical", "later", "adoption", "missing"] {
+            assert_eq!(panel_of_anchor(ALTITUDES, anchor), None, "{anchor}");
+        }
+    }
+
+    #[test]
+    fn anchors_resolve_on_the_body_after_frontmatter() {
+        // A heading-like line in frontmatter, here inside a block scalar,
+        // neither takes a section's slug nor opens a panel.
+        let stolen = format!("---\nnote: |\n   ## Install\n---\n{ALTITUDES}");
+        assert_eq!(
+            panel_of_anchor(&source_body(&stolen), "install").as_deref(),
+            Some("technical")
+        );
+        let invented = format!("---\ntitle: Adoption\n## Technical\n### Secret\n---\n{ALTITUDES}");
+        assert_eq!(panel_of_anchor(&source_body(&invented), "secret"), None);
+        assert_eq!(
+            source_body("\u{feff}---\r\na: 1\r\n---\r\nBody\r\n"),
+            "Body\n"
+        );
+        // Without a closed frontmatter block the whole text is the body.
+        assert_eq!(source_body("---\na: 1\n"), "---\na: 1\n");
+    }
+
+    #[test]
+    fn an_anchor_names_one_section_of_its_panel() {
+        let twice =
+            "# Adoption\n\n## Technical\n\n### Install\n\nFirst.\n\n### Install\n\nSecond.\n";
+        for anchor in ["install", "install-1"] {
+            assert_eq!(panel_of_anchor(twice, anchor), None, "{anchor}");
+        }
+        let across = "# Adoption\n\n## Concept\n\n### Install\n\nWhy.\n\n## Technical\n\n### Install\n\nHow.\n";
+        assert_eq!(
+            panel_of_anchor(across, "install").as_deref(),
+            Some("concept")
+        );
+        assert_eq!(
+            panel_of_anchor(across, "install-1").as_deref(),
+            Some("technical")
+        );
+    }
+
+    #[test]
+    fn a_companion_sits_under_the_one_section_its_anchor_names() {
+        let twice =
+            "# Adoption\n\n## Technical\n\n### Install\n\nFirst.\n\n### Install\n\nSecond.\n";
+        let ambiguous = "orient/adoption renders 2 headings named like the section #install-1 of the technical panel, not one";
+        for occurrence in [0, 1] {
+            let issues = anchored_issues(twice, "install-1", "### Install", occurrence);
+            assert!(
+                issues.iter().any(|issue| issue == ambiguous),
+                "{occurrence}: {issues:?}"
+            );
+        }
+        // The same text in another panel is a different section.
+        let across = "# Adoption\n\n## Concept\n\n### Install\n\nWhy.\n\n## Technical\n\n### Install\n\nHow.\n";
+        assert_eq!(
+            anchored_issues(across, "install-1", "### Install", 1),
+            Vec::<String>::new()
+        );
+        let issues = anchored_issues(across, "install-1", "### Install", 0);
+        assert!(
+            issues.iter().any(|issue| issue
+                == "orient/adoption does not render the figure its declaration figures/steps.json draws"),
+            "{issues:?}"
+        );
+    }
+
+    /// An explanatory page whose one figure is bound to the Install section
+    /// of its Technical panel, rendered with the companion after `heading`.
+    fn anchored_page_issues(heading: &str) -> Vec<String> {
+        anchored_issues(ALTITUDES, "install", heading, 0)
+    }
+
+    /// An explanatory page built from `source` whose one figure is bound to
+    /// `anchor` in its Technical panel, rendered with the companion after the
+    /// `occurrence`-th line equal to `heading`.
+    fn anchored_issues(
+        source: &str,
+        anchor: &str,
+        heading: &str,
+        occurrence: usize,
+    ) -> Vec<String> {
+        let placement = "anchor";
+        let sha256 = sha256_hex(DECLARATION.as_bytes());
+        let pinned = Pinned {
+            sha256: sha256.clone(),
+            declaration: serde_json::from_str(DECLARATION).unwrap(),
+            derived: None,
+        };
+        let companion = pinned
+            .companion("figures/steps.json", placement, 0)
+            .unwrap();
+        let page: super::super::Page = serde_json::from_value(serde_json::json!({
+            "source_path": "docs/adoption.md",
+            "source_sha256": "0".repeat(64),
+            "built_from_commit": "0".repeat(40),
+            "route": "orient/adoption",
+            "title": "Adoption",
+            "status": null,
+            "output_markdown": "src/content/docs/orient/adoption.md",
+            "output_markdown_sha256": "0".repeat(64),
+            "markdown_twin": "public/markdown/orient/adoption.md",
+            "markdown_twin_sha256": "0".repeat(64),
+            "stale": false,
+            "searchable": true,
+            "ids": [],
+            "relationships": [],
+            "snippets": [],
+            "figures": [{
+                "declaration_path": "figures/steps.json",
+                "declaration_sha256": sha256,
+                "figure_id": "steps",
+                "placement": placement,
+                "panel": "technical",
+                "anchor": anchor
+            }]
+        }))
+        .unwrap();
+        let body = source.strip_prefix("# Adoption\n\n").unwrap();
+        let (at, _) = body
+            .match_indices(&format!("{heading}\n"))
+            .nth(occurrence)
+            .unwrap();
+        let split = at + heading.len();
+        let output = format!(
+            "---\ntitle: \"Adoption\"\n---\n\n{}\n\n{companion}\n{}",
+            &body[..split],
+            &body[split..]
+        );
+        let declarations = BTreeMap::from([("figures/steps.json".to_string(), pinned)]);
+        let mut report = PortalValidationReport::default();
+        verify_rendered_figures(&page, &output, Some(source), &declarations, &mut report);
+        report.issues
+    }
+
+    #[test]
+    fn an_anchored_figure_sits_directly_under_its_section_heading() {
+        assert_eq!(anchored_page_issues("### Install"), Vec::<String>::new());
+        let not_rendered =
+            "orient/adoption does not render the figure its declaration figures/steps.json draws";
+        // At the panel heading, under a sibling section, or in another panel,
+        // the companion is not where its binding places it.
+        for heading in ["## Technical", "### Check", "### Scope"] {
+            let issues = anchored_page_issues(heading);
+            assert!(
+                issues.iter().any(|issue| issue == not_rendered),
+                "{heading}: {issues:?}"
             );
         }
     }
@@ -2599,6 +3071,15 @@ mod tests {
         expect(
             &unbound,
             "reference/guide bound figures do not match the configuration",
+        );
+        // Only an explanatory page carries word counts, recounted from its
+        // committed source; an illustrated page claiming any is refused.
+        let mut counted = portal.evidence.clone();
+        counted["pages"][0]["altitude_words"] =
+            serde_json::json!({ "concept": 0, "architecture": 0, "technical": 4 });
+        expect(
+            &counted,
+            "reference/guide altitude word counts do not match its committed source",
         );
         let mut legacy = portal.evidence.clone();
         legacy.as_object_mut().unwrap().remove("figures");

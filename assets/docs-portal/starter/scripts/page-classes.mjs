@@ -36,8 +36,20 @@ export const PANEL_CARRIER_ALTERNATES = Object.freeze({
 // records the design primary's judgment in a note.
 export const PAGE_CLASS_REASONS = Object.freeze(["accepted-record", "governance", "no-relationship"]);
 
-// The derived lookups the adapter can generate with a fidelity check.
-export const DERIVED_LOOKUPS = Object.freeze(["capability-registry"]);
+// The derived lookups with a fidelity check: the capability registry, which
+// the adapter renders from its fenced records, and the skill catalog and
+// policy reference, whose generated tables `codeflow validate --portal`
+// regenerates from the binary and compares with the committed page.
+export const DERIVED_LOOKUPS = Object.freeze(["capability-registry", "skill-catalog", "policy-reference"]);
+
+// The columns of the tables the binary generates for two of them, in the
+// generator's order (lookups.rs in codeflow-core, which a test pins to this
+// list and to the stylesheet's labels). The adapter wraps each such table in
+// `.portal-lookup` so it stacks at phone width under these labels.
+export const LOOKUP_COLUMNS = Object.freeze({
+  "skill-catalog": ["Skill", "Use it for", "Installed at tiers", "Installed in"],
+  "policy-reference": ["Key", "Type", "Default", "Valid values", "Purpose", "Notes"],
+});
 
 // The generated record pointer page (ADR-0064) is one table of folders. The
 // records themselves are repository files, never portal pages.

@@ -1,0 +1,444 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "adoption-tiers",
+    "family": "extent",
+    "binding": "authored",
+    "question": "What does each tier install, and what stays the same?",
+    "idea": "Every tier installs the same enforcement floor; standard adds the method, full adds durable records, and no tier arms remote protection.",
+    "title": "How far each tier reaches",
+    "kicker": "Adoption tiers",
+    "caption": "Moving up a tier adds working method on top of an identical floor, and remote branch protection is always yours to arm.",
+    "states": [
+      {
+        "name": "floor",
+        "mark": "layer-remote",
+        "means": "Enforcement floor, identical at every tier"
+      },
+      {
+        "name": "method",
+        "mark": "used",
+        "means": "Develop-loop method"
+      },
+      {
+        "name": "records",
+        "mark": "optional",
+        "means": "Durable work records"
+      },
+      {
+        "name": "none",
+        "mark": "denied",
+        "means": "Installed by no tier"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "no tier installs remote branch protection",
+        "source": "docs/adoption.md#concept",
+        "derive": "the remote protection sentence",
+        "check": {
+          "kind": "contains",
+          "text": "and no tier installs remote branch protection."
+        },
+        "value": true
+      },
+      {
+        "claim": "the enforcement floor is the same at all three tiers",
+        "source": "docs/adoption.md#architecture",
+        "derive": "the floor sentence",
+        "check": {
+          "kind": "contains",
+          "text": "superset of the one below, and the enforcement floor is the same at all three"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 210,
+      "draw": [
+        {
+          "text": "enforcement floor",
+          "x": 239,
+          "y": 34,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "method",
+          "x": 400,
+          "y": 34,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "records",
+          "x": 535,
+          "y": 34,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 330,
+          "y1": 44,
+          "x2": 330,
+          "y2": 182
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 470,
+          "y1": 44,
+          "x2": 470,
+          "y2": 182
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 600,
+          "y1": 44,
+          "x2": 600,
+          "y2": 182
+        },
+        {
+          "text": "--minimal",
+          "x": 16,
+          "y": 73,
+          "style": "mono",
+          "for": [
+            "f0"
+          ]
+        },
+        {
+          "state": "floor",
+          "shape": "rect",
+          "x": 150,
+          "y": 56,
+          "w": 178,
+          "h": 24,
+          "rx": 3,
+          "cap": "end",
+          "id": "f0"
+        },
+        {
+          "text": "--standard",
+          "x": 16,
+          "y": 117,
+          "style": "mono",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "state": "floor",
+          "shape": "rect",
+          "x": 150,
+          "y": 100,
+          "w": 178,
+          "h": 24,
+          "rx": 3,
+          "cap": "end",
+          "id": "f1"
+        },
+        {
+          "state": "method",
+          "shape": "rect",
+          "x": 332,
+          "y": 100,
+          "w": 136,
+          "h": 24,
+          "rx": 3,
+          "id": "m1"
+        },
+        {
+          "text": "--full",
+          "x": 16,
+          "y": 161,
+          "style": "mono",
+          "for": [
+            "f2"
+          ]
+        },
+        {
+          "state": "floor",
+          "shape": "rect",
+          "x": 150,
+          "y": 144,
+          "w": 178,
+          "h": 24,
+          "rx": 3,
+          "cap": "end",
+          "id": "f2"
+        },
+        {
+          "state": "method",
+          "shape": "rect",
+          "x": 332,
+          "y": 144,
+          "w": 136,
+          "h": 24,
+          "rx": 3,
+          "id": "m2"
+        },
+        {
+          "state": "records",
+          "shape": "rect",
+          "x": 472,
+          "y": 144,
+          "w": 126,
+          "h": 24,
+          "rx": 3,
+          "id": "r2"
+        },
+        {
+          "state": "none",
+          "shape": "rect",
+          "x": 612,
+          "y": 56,
+          "w": 92,
+          "h": 112,
+          "rx": 3,
+          "cross": {
+            "cx": 658,
+            "cy": 112,
+            "size": 14
+          },
+          "id": "n"
+        },
+        {
+          "text": "remote",
+          "x": 658,
+          "y": 17,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "n"
+          ]
+        },
+        {
+          "text": "protection",
+          "x": 658,
+          "y": 38,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "n"
+          ]
+        },
+        {
+          "text": "no tier installs it",
+          "x": 704,
+          "y": 198,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "n"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 290,
+      "draw": [
+        {
+          "text": "enforcement floor",
+          "x": 78,
+          "y": 20,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "method",
+          "x": 200,
+          "y": 20,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "records",
+          "x": 302,
+          "y": 20,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 149,
+          "y1": 30,
+          "x2": 149,
+          "y2": 200
+        },
+        {
+          "deco": "tick",
+          "shape": "line",
+          "x1": 251,
+          "y1": 30,
+          "x2": 251,
+          "y2": 200
+        },
+        {
+          "text": "--minimal",
+          "x": 8,
+          "y": 50,
+          "style": "mono",
+          "for": [
+            "f0"
+          ]
+        },
+        {
+          "state": "floor",
+          "shape": "rect",
+          "x": 8,
+          "y": 60,
+          "w": 140,
+          "h": 22,
+          "rx": 3,
+          "cap": "end",
+          "id": "f0"
+        },
+        {
+          "text": "--standard",
+          "x": 8,
+          "y": 108,
+          "style": "mono",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "state": "floor",
+          "shape": "rect",
+          "x": 8,
+          "y": 118,
+          "w": 140,
+          "h": 22,
+          "rx": 3,
+          "cap": "end",
+          "id": "f1"
+        },
+        {
+          "state": "method",
+          "shape": "rect",
+          "x": 150,
+          "y": 118,
+          "w": 100,
+          "h": 22,
+          "rx": 3,
+          "id": "m1"
+        },
+        {
+          "text": "--full",
+          "x": 8,
+          "y": 166,
+          "style": "mono",
+          "for": [
+            "f2"
+          ]
+        },
+        {
+          "state": "floor",
+          "shape": "rect",
+          "x": 8,
+          "y": 176,
+          "w": 140,
+          "h": 22,
+          "rx": 3,
+          "cap": "end",
+          "id": "f2"
+        },
+        {
+          "state": "method",
+          "shape": "rect",
+          "x": 150,
+          "y": 176,
+          "w": 100,
+          "h": 22,
+          "rx": 3,
+          "id": "m2"
+        },
+        {
+          "state": "records",
+          "shape": "rect",
+          "x": 252,
+          "y": 176,
+          "w": 100,
+          "h": 22,
+          "rx": 3,
+          "id": "r2"
+        },
+        {
+          "text": "remote branch protection",
+          "x": 8,
+          "y": 224,
+          "style": "mute",
+          "for": [
+            "n"
+          ]
+        },
+        {
+          "state": "none",
+          "shape": "rect",
+          "x": 8,
+          "y": 234,
+          "w": 344,
+          "h": 22,
+          "rx": 3,
+          "cross": {
+            "cx": 334,
+            "cy": 245,
+            "size": 12
+          },
+          "id": "n"
+        },
+        {
+          "text": "no tier installs it",
+          "x": 8,
+          "y": 280,
+          "style": "mute",
+          "for": [
+            "n"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Tier",
+        "Enforcement floor",
+        "Method",
+        "Durable records",
+        "Remote protection"
+      ],
+      "rows": [
+        [
+          "minimal",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "standard",
+          "yes",
+          "yes",
+          "no",
+          "no"
+        ],
+        [
+          "full",
+          "yes",
+          "yes",
+          "yes",
+          "no"
+        ]
+      ]
+    }
+  }
+}

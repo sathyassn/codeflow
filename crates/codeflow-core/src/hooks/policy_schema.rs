@@ -31,7 +31,7 @@ pub const LEVEL_VALUES_TEXT: &str = "off, warn, allow, block";
 pub const LEVEL_LEGEND: &str =
     "block = violations stop the operation; warn = violations are reported \
      and the operation proceeds; allow = explicitly permitted; off = the check \
-     is not run. `allow` and `off` are BOTH inactive — only warn/block enforce.";
+     is not run. `allow` and `off` are BOTH inactive; only warn/block enforce.";
 
 /// The JSON value kind of a policy leaf key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +98,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Enum(&["none"]),
         valid: "none",
         purpose: "Out-of-band human-authorization mode for irreversible actions (ADR-0009).",
-        notes: "Only `none` exists today — an inert seam for future \
+        notes: "Only `none` exists today: an inert seam for future \
                 totp/push/webauthn adapters.",
     },
     // ---- git: protected branches -----------------------------------------
@@ -135,7 +135,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "A force-push to a NON-protected branch.",
-        notes: "The only non-strict default (allow) — it sanctions the \
+        notes: "The only non-strict default (allow); it sanctions the \
                 durability push with --force-with-lease; set block to forbid.",
     },
     KeySpec {
@@ -191,7 +191,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         valid: LEVEL_VALID,
         purpose: "Conventional-commit subject shape: `type(scope): description`.",
         notes: "Governs three checks: commit_types, commit_desc_max_len, and \
-                commit_subject_max_len — off/allow disables all of them.",
+                commit_subject_max_len; off/allow disables all of them.",
     },
     KeySpec {
         path: "git.commit_types",
@@ -204,7 +204,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         path: "git.commit_desc_max_len",
         kind: KeyKind::UInt,
         valid: "a non-negative integer (character count)",
-        purpose: "Max length of the description — the text after `type(scope): `.",
+        purpose: "Max length of the description, the text after `type(scope): `.",
         notes: "Enforced under commit_format.",
     },
     KeySpec {
@@ -221,7 +221,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         valid: LEVEL_VALID,
         purpose: "Shape of the commit body: only `- ` bullets, blank lines, and sanctioned footers.",
         notes: "Governs the whole body family: the bullet caps, footer \
-                tokens, required footers, and ticket trailers — off/allow \
+                tokens, required footers, and ticket trailers; off/allow \
                 disables them all. Merge/revert/fixup/squash commits are exempt.",
     },
     KeySpec {
@@ -269,7 +269,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         valid: LEVEL_VALID,
         purpose: "Whether a matching ticket-reference trailer is REQUIRED on every commit.",
         notes: "Only meaningful when commit_ticket_keys is non-empty; `allow` \
-                behaves like `off` here (inactive) — use warn or block to \
+                behaves like `off` here (inactive); use warn or block to \
                 require. Merge/revert/fixup/squash commits are exempt.",
     },
     KeySpec {
@@ -320,8 +320,8 @@ pub const SCHEMA: [KeySpec; 42] = [
         path: "git.pr_sections",
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
-        purpose: "Required sections in the PR/MR body — the structure check `codeflow ci` runs on a provided PR body.",
-        notes: "Governs pr_required_sections and pr_code_sections — off/allow \
+        purpose: "Required sections in the PR/MR body: the structure check `codeflow ci` runs on a provided PR body.",
+        notes: "Governs pr_required_sections and pr_code_sections; off/allow \
                 disables both. PR events require a non-empty body; local/push runs without one skip. \
                 Presentation and template-remnant checks always warn, never block.",
     },
@@ -355,8 +355,8 @@ pub const SCHEMA: [KeySpec; 42] = [
         valid: "an array of heading names without the leading ## (e.g. Testing)",
         purpose: "Headings required only when the commit range touches non-docs files.",
         notes: "Docs-only = every changed path is *.md, *.txt, LICENSE*, \
-                docs/**, or a .github template; anything else — or a range \
-                whose files could not be resolved — counts as code. Enforced \
+                docs/**, or a .github template; anything else, or a range \
+                whose files could not be resolved, counts as code. Enforced \
                 under pr_sections.",
     },
     KeySpec {
@@ -381,7 +381,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Pre-commit scan for staged secrets and .env files.",
-        notes: "Never suspended by bootstrap grace — but off/allow HERE does \
+        notes: "Never suspended by bootstrap grace, but off/allow HERE does \
                 disable the scan (it is policy, not hardcoded); leave at block.",
     },
     KeySpec {
@@ -419,7 +419,7 @@ pub const SCHEMA: [KeySpec; 42] = [
         kind: KeyKind::Level,
         valid: LEVEL_VALID,
         purpose: "Privilege escalation the exec-guard catches (Unix sudo/su/doas/pkexec, Windows gsudo/runas/elevated PowerShell, LD_PRELOAD/PATH injection).",
-        notes: "Default warn, not block — the harness's ask tier owns sudo \
+        notes: "Default warn, not block: the harness's ask tier owns sudo \
                 prompting; the guard only surfaces in-session feedback.",
     },
 ];

@@ -69,7 +69,8 @@
     "narrow": {
       "recompose": "list",
       "drops": [],
-      "marks": "same"
+      "marks": "same",
+      "reason": "Each row lists its cells as the same marks at phone width, with the column named beside each cell."
     },
     "twin": "facts"
   }

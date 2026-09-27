@@ -57,6 +57,8 @@ const ALLOWED: Record<string, Record<string, Check>> = {
     "data-cf-binding": exactly("authored", "derived"),
     "data-cf-states": KEBABS,
     "data-cf-elongation-max": JS_NUMBER,
+    // Written only when the declaration keeps the wide marks with a reason.
+    "data-cf-same-marks": exactly("declared"),
     "data-cf-facts": json("array"),
     "data-cf-values": json("object"),
   },

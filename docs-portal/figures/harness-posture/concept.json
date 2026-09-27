@@ -1,0 +1,392 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "harness-reach",
+    "family": "extent",
+    "binding": "authored",
+    "question": "How much autonomy does a harness get, and who widens it?",
+    "idea": "Each harness starts at its shipped preset, only the operator widens it, and the catastrophic floor stops every harness at the same place.",
+    "title": "How far each harness may reach",
+    "kicker": "Harness posture",
+    "caption": "The preset is the default, widening is an operator act, and the non-relaxable floor does not move for any harness.",
+    "states": [
+      {
+        "name": "preset",
+        "mark": "used",
+        "means": "Shipped preset"
+      },
+      {
+        "name": "widen",
+        "mark": "optional",
+        "means": "Operator widening"
+      },
+      {
+        "name": "floor",
+        "mark": "limit",
+        "means": "Non-relaxable floor"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "autonomy is fail-closed by default and widened only by the operator",
+        "source": "docs/harness-posture.md#concept",
+        "derive": "the lead sentence",
+        "check": {
+          "kind": "contains",
+          "text": "**Autonomy is fail-closed by default and widened only by the operator.**"
+        },
+        "value": true
+      },
+      {
+        "claim": "the catastrophic classifier is a non-relaxable floor",
+        "source": "docs/harness-posture.md#architecture",
+        "derive": "the classifier sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The catastrophic classifier is a non-relaxable floor"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 238,
+      "draw": [
+        {
+          "text": "shipped preset",
+          "x": 340,
+          "y": 30,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "text": "operator widens",
+          "x": 526,
+          "y": 30,
+          "anchor": "middle",
+          "style": "mute"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 230,
+          "y1": 206,
+          "x2": 704,
+          "y2": 206
+        },
+        {
+          "text": "more autonomy",
+          "x": 704,
+          "y": 228,
+          "anchor": "end",
+          "style": "mute"
+        },
+        {
+          "text": "Claude Code",
+          "x": 16,
+          "y": 59,
+          "style": "strong",
+          "for": [
+            "p0"
+          ]
+        },
+        {
+          "text": "fail-closed OS sandbox",
+          "x": 16,
+          "y": 80,
+          "style": "mute",
+          "for": [
+            "p0"
+          ]
+        },
+        {
+          "state": "preset",
+          "shape": "rect",
+          "x": 230,
+          "y": 52,
+          "w": 220,
+          "h": 26,
+          "rx": 3,
+          "id": "p0"
+        },
+        {
+          "state": "widen",
+          "shape": "rect",
+          "x": 452,
+          "y": 52,
+          "w": 148,
+          "h": 26,
+          "rx": 3,
+          "id": "w0"
+        },
+        {
+          "text": "Codex",
+          "x": 16,
+          "y": 111,
+          "style": "strong",
+          "for": [
+            "p1"
+          ]
+        },
+        {
+          "text": "guarded permission profile",
+          "x": 16,
+          "y": 132,
+          "style": "mute",
+          "for": [
+            "p1"
+          ]
+        },
+        {
+          "state": "preset",
+          "shape": "rect",
+          "x": 230,
+          "y": 104,
+          "w": 220,
+          "h": 26,
+          "rx": 3,
+          "id": "p1"
+        },
+        {
+          "state": "widen",
+          "shape": "rect",
+          "x": 452,
+          "y": 104,
+          "w": 148,
+          "h": 26,
+          "rx": 3,
+          "id": "w1"
+        },
+        {
+          "text": "Grok Build",
+          "x": 16,
+          "y": 163,
+          "style": "strong",
+          "for": [
+            "p2"
+          ]
+        },
+        {
+          "text": "project hooks, once trusted",
+          "x": 16,
+          "y": 184,
+          "style": "mute",
+          "for": [
+            "p2"
+          ]
+        },
+        {
+          "state": "preset",
+          "shape": "rect",
+          "x": 230,
+          "y": 156,
+          "w": 220,
+          "h": 26,
+          "rx": 3,
+          "id": "p2"
+        },
+        {
+          "state": "widen",
+          "shape": "rect",
+          "x": 452,
+          "y": 156,
+          "w": 148,
+          "h": 26,
+          "rx": 3,
+          "id": "w2"
+        },
+        {
+          "state": "floor",
+          "shape": "line",
+          "x1": 616,
+          "y1": 44,
+          "x2": 616,
+          "y2": 194,
+          "id": "f"
+        },
+        {
+          "text": "floor",
+          "x": 628,
+          "y": 106,
+          "style": "strong",
+          "for": [
+            "f"
+          ]
+        },
+        {
+          "text": "catastrophic",
+          "x": 628,
+          "y": 127,
+          "style": "mute",
+          "for": [
+            "f"
+          ]
+        },
+        {
+          "text": "work stops",
+          "x": 628,
+          "y": 148,
+          "style": "mute",
+          "for": [
+            "f"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 276,
+      "draw": [
+        {
+          "text": "preset",
+          "x": 8,
+          "y": 20,
+          "style": "mute"
+        },
+        {
+          "text": "operator widens",
+          "x": 200,
+          "y": 20,
+          "style": "mute"
+        },
+        {
+          "text": "Claude Code",
+          "x": 8,
+          "y": 48,
+          "style": "strong",
+          "for": [
+            "p0"
+          ]
+        },
+        {
+          "state": "preset",
+          "shape": "rect",
+          "x": 8,
+          "y": 58,
+          "w": 190,
+          "h": 24,
+          "rx": 3,
+          "id": "p0"
+        },
+        {
+          "state": "widen",
+          "shape": "rect",
+          "x": 200,
+          "y": 58,
+          "w": 110,
+          "h": 24,
+          "rx": 3,
+          "id": "w0"
+        },
+        {
+          "text": "Codex",
+          "x": 8,
+          "y": 114,
+          "style": "strong",
+          "for": [
+            "p1"
+          ]
+        },
+        {
+          "state": "preset",
+          "shape": "rect",
+          "x": 8,
+          "y": 124,
+          "w": 190,
+          "h": 24,
+          "rx": 3,
+          "id": "p1"
+        },
+        {
+          "state": "widen",
+          "shape": "rect",
+          "x": 200,
+          "y": 124,
+          "w": 110,
+          "h": 24,
+          "rx": 3,
+          "id": "w1"
+        },
+        {
+          "text": "Grok Build",
+          "x": 8,
+          "y": 180,
+          "style": "strong",
+          "for": [
+            "p2"
+          ]
+        },
+        {
+          "state": "preset",
+          "shape": "rect",
+          "x": 8,
+          "y": 190,
+          "w": 190,
+          "h": 24,
+          "rx": 3,
+          "id": "p2"
+        },
+        {
+          "state": "widen",
+          "shape": "rect",
+          "x": 200,
+          "y": 190,
+          "w": 110,
+          "h": 24,
+          "rx": 3,
+          "id": "w2"
+        },
+        {
+          "state": "floor",
+          "shape": "line",
+          "x1": 322,
+          "y1": 52,
+          "x2": 322,
+          "y2": 238,
+          "id": "f"
+        },
+        {
+          "text": "floor: catastrophic work stops",
+          "x": 352,
+          "y": 266,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Harness",
+        "Shipped preset",
+        "Widened by",
+        "Floor"
+      ],
+      "rows": [
+        [
+          "Claude Code",
+          "fail-closed OS sandbox",
+          "the operator only",
+          "catastrophic work stops"
+        ],
+        [
+          "Codex",
+          "guarded permission profile",
+          "the operator only",
+          "catastrophic work stops"
+        ],
+        [
+          "Grok Build",
+          "project hooks, once trusted",
+          "the operator only",
+          "catastrophic work stops"
+        ]
+      ]
+    }
+  }
+}

@@ -55,6 +55,7 @@ const PAGE_CLASSES = [
 ];
 const FIGURES = [
   ...panelBindings("orient/product"),
+  { declaration: "figures/commit-limits.json", route: "orient/product", panel: "technical", anchor: "limits" },
   { declaration: "figures/commit-limits.json", route: "reference/guide" },
   { declaration: "figures/install-steps.json", route: "reference/guide", anchor: "install" },
   { declaration: "figures/broken.json", route: "reference/broken" },
@@ -65,7 +66,7 @@ async function mixedFixture() {
   await rm(path.join(root, "docs/seed.md"));
   await mkdir(path.join(root, "docs/decisions"));
   const sources = {
-    "docs/product.md": COMPOSED_PAGE.replace("The controls, then", `${CODE_FENCE}The controls, then`),
+    "docs/product.md": `${COMPOSED_PAGE.replace("The controls, then", `${CODE_FENCE}The controls, then`)}\n### Limits\n\nThe commit limits a message is held to.\n`,
     "docs/plain.md": SHELL_PAGE,
     "docs/guide.md": GUIDE,
     "docs/bare.md": BARE,
@@ -141,6 +142,9 @@ test("the adapter refuses a figure binding it can prove wrong from committed inp
       [{ figures: [...FIGURES.slice(0, -1), { declaration: "figures/broken.json", route: "reference/guide", anchor: "uninstall" }] }, /anchor #uninstall names no heading in docs\/guide\.md/],
       [{ figures: [...FIGURES, { declaration: "figures/broken.json", route: "system/decisions/ADR-0001-first" }] }, /a pass-through page carries no figure/],
       [{ figures: [...FIGURES, { declaration: "figures/broken.json", route: "reference/plain" }] }, /an explanatory page binds a figure to an altitude panel/],
+      [{ figures: [...FIGURES, { declaration: "figures/broken.json", route: "orient/product", anchor: "limits" }] }, /an explanatory page binds a figure to an altitude panel/],
+      [{ figures: [...FIGURES, { declaration: "figures/broken.json", route: "orient/product", panel: "concept", anchor: "limits" }] }, /anchor #limits is not a section inside the concept panel/],
+      [{ figures: [...FIGURES, { declaration: "figures/broken.json", route: "orient/product", panel: "technical", anchor: "technical" }] }, /anchor #technical is not a section inside the technical panel/],
       [{ figures: [...FIGURES, { declaration: "figures/concept.json", route: "reference/bare", panel: "concept" }] }, /an illustrated source binds a figure to its head or a section anchor, not a panel/],
     ];
     for (const [overrides, expected] of refusals) {
@@ -179,13 +183,13 @@ test("the mixed fixture renders every class and the gates name only what falls s
   const root = await mixedFixture();
   try {
     const adapted = runLocalAdapter(root);
-    assert.match(adapted.stdout, /portal: page classes explanatory 2, illustrated 3, pass-through 1, derived-lookup 0; 6 bound figures from 6 declarations/);
+    assert.match(adapted.stdout, /portal: page classes explanatory 2, illustrated 3, pass-through 1, derived-lookup 0; 7 bound figures from 6 declarations/);
     const evidence = JSON.parse(await readFile(path.join(root, ".portal/generated/evidence.json"), "utf8"));
     const byRoute = new Map(evidence.pages.map((page) => [page.route, page]));
 
     // Every route carries its class, reason and bound figures.
     assert.deepEqual([...evidence.pages].sort((a, b) => (a.route < b.route ? -1 : 1)).map((page) => [page.route, page.page_class, page.class_reason, page.figures.map((figure) => figure.placement)]), [
-      ["orient/product", "explanatory", null, ["panel", "panel", "panel"]],
+      ["orient/product", "explanatory", null, ["panel", "panel", "panel", "anchor"]],
       ["reference/bare", "illustrated", null, []],
       ["reference/broken", "illustrated", null, ["head"]],
       ["reference/guide", "illustrated", null, ["head", "anchor"]],
@@ -275,7 +279,7 @@ test("the mixed fixture renders every class and the gates name only what falls s
       // The clean control: the real build, with the site's own sheets and
       // chrome styles, fails only the figure built to break a rule.
       const { failures, drawn } = await figureGateFailures(page, visitRoute, assignments, built, declarations, kitSheets, inlineScripts);
-      assert.equal(drawn, 6);
+      assert.equal(drawn, 7);
       assert.ok(failures.length > 0);
       for (const failure of failures) assert.match(failure, /^docs\/broken\.md \(at reference\/broken, page head, figures\/broken\.json\): rule \d+ /);
       assert.deepEqual(failures.filter((failure) => /served page|page CSS|executable content|clean copy|not visible to a reader|effective opacity|legend key sits|twin marker/.test(failure)), []);

@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
 import path from "node:path";
 import { paletteSwatchFailures, PALETTE_PILL_GROUPS } from "../scripts/browser-verify.mjs";
 import {
@@ -8,6 +9,10 @@ import {
   assertDeclaredCarriers, assertNoRecordRoutes, assertNoStaleSources, assertPageClassCoverage, classifyPortalPages, declaredCarrierFailures,
   pageClassFailures, recordPointerRoute, recordRouteFailures, staleSourceFailures,
 } from "../scripts/page-classes.mjs";
+import { markdownToHtml } from "satteri";
+import { asIsMarkdownPlugin, DEMOTE_HEADINGS } from "../scripts/as-is-markdown.mjs";
+import { altitudeWords, asIsHeadingsDemoted, asIsRegionStart, insertPanelFigures, wrapLookupTables } from "../scripts/lib.mjs";
+import { LOOKUP_COLUMNS } from "../scripts/page-classes.mjs";
 import { COMPOSED_PAGE, SHELL_PAGE, panelBindings } from "./page-shapes.mjs";
 import { commitFixture, configureFixture, portalFixture, runAdapter } from "./portal-fixture.mjs";
 
@@ -29,6 +34,66 @@ const POINTER_OBSERVATION = Object.freeze({
 });
 const PROSE_PANEL = Object.freeze({ figure: 0, stage: 0, table: 0, list: 0, pre: 0 });
 
+// The Rust validator recounts the same cases (figures.rs), so the two
+// counters cannot drift.
+test("altitude words are counted by the rule the validator recounts", async () => {
+  const fixture = JSON.parse(await readFile(new URL("./fixtures/altitude-words.json", import.meta.url), "utf8"));
+  assert.ok(fixture.cases.length > 0);
+  for (const item of fixture.cases) assert.deepEqual(altitudeWords(item.text), item.words, item.name);
+});
+
+// An as-is page keeps the page title as its only h1: a level-one heading left
+// in the region after the dropped title renders one level lower, with every
+// other heading, through the site's own Markdown step.
+test("an as-is region with a level-one heading left renders every heading one level lower", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "as-is-headings-"));
+  try {
+    const cases = [
+      // A decision record whose heading differs from its frontmatter title.
+      { name: "adr", title: "Keep the ledger append-only", body: "# ADR-0002: Append-only ledger\n\nWhy.\n\n## Context\n\nMore.\n", demoted: true, headings: ["h2", "h3"] },
+      // A title the adapter cannot drop because a comment comes first.
+      { name: "comment", title: "Guide", body: "<!-- Maintained by hand. -->\n\n# Guide\n\n## Step\n\n###### Detail\n", demoted: true, headings: ["h2", "h3", "h6"] },
+      // Three deliberate level-one sections.
+      { name: "sections", title: "Soul", body: "# Identity\n\nWho.\n\n# Voice\n\nHow.\n\n# Limits\n\n## Hard limits\n", demoted: true, headings: ["h2", "h2", "h2", "h3"] },
+      // Levels keep their nesting: the contents list (h2 and h3) then holds
+      // the source's top two levels, and a third level leaves it, as an h4
+      // leaves it on any page.
+      { name: "nested", title: "Soul", body: "# Identity\n\n## Voice\n\n### Tone\n\n# Limits\n", demoted: true, headings: ["h2", "h3", "h4", "h2"] },
+      // A title the adapter drops leaves the rest as written.
+      { name: "titled", title: "Guide", body: "# Guide\n\n## Step\n", demoted: false, headings: ["h2"] },
+    ];
+    for (const item of cases) {
+      const region = item.body.slice(asIsRegionStart(item.body, item.title));
+      assert.equal(asIsHeadingsDemoted(region), item.demoted, item.name);
+      const linksPath = path.join(directory, `${item.name}.json`);
+      await writeFile(linksPath, JSON.stringify({ [item.name]: item.demoted ? { [DEMOTE_HEADINGS]: true } : {} }));
+      const markdown = `<!-- codeflow-source-begin route=${item.name} source_sha256=0 class=pass-through -->\n\n${region}\n<!-- codeflow-source-end -->\n\n## After the region\n`;
+      const { html } = markdownToHtml(markdown, { mdastPlugins: [asIsMarkdownPlugin(linksPath)] });
+      const inRegion = html.slice(0, html.indexOf("codeflow-source-end"));
+      assert.deepEqual([...inRegion.matchAll(/<(h[1-6])>/g)].map((match) => match[1]), item.headings, item.name);
+      assert.match(html, /<h2>After the region<\/h2>/, `${item.name}: headings outside the region keep their level`);
+    }
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("a figure bound to a section of a panel sits directly under that section's heading", () => {
+  const source = [
+    "## Concept", "", "What it is.", "", "### Install", "", "Not the one.", "",
+    "## Technical", "", "How it runs.", "", "### Install", "", "1. Run it.", "", "### Check", "", "Confirm it.", "",
+  ].join("\n");
+  const placed = insertPanelFigures(source, new Map([["technical", ["<div>panel</div>", { value: "<div>section</div>", heading: "Install" }]]]), "docs/a.md");
+  const lines = placed.split("\n").filter((line) => line.trim() !== "");
+  assert.equal(lines[lines.indexOf("## Technical") + 1], "<div>panel</div>");
+  assert.equal(lines.indexOf("<div>section</div>"), lines.lastIndexOf("### Install") + 1);
+  assert.equal(lines.filter((line) => line === "<div>section</div>").length, 1);
+  // A section outside the panel, or one the panel does not hold once, is refused.
+  assert.throws(() => insertPanelFigures(source, new Map([["technical", [{ value: "<div>x</div>", heading: "Scope" }]]]), "docs/a.md"), /names 0 headings there, not one/);
+  const twice = source.replace("### Check", "### Install");
+  assert.throws(() => insertPanelFigures(twice, new Map([["technical", [{ value: "<div>x</div>", heading: "Install" }]]]), "docs/a.md"), /names 2 headings there, not one/);
+});
+
 test("the page-class rules are declared once and enumerate what each class must show", () => {
   assert.deepEqual(ALTITUDE_PANELS, ["concept", "architecture", "technical"]);
   assert.deepEqual(CARRIER_ELEMENTS, ["figure", "stage", "table", "list", "pre"]);
@@ -38,7 +103,7 @@ test("the page-class rules are declared once and enumerate what each class must 
   assert.deepEqual(ALTITUDE_PANELS.map((panel) => PANEL_CARRIERS[panel].requires), [["figure"], ["figure"], ["figure", "table"]]);
   assert.deepEqual(PANEL_CARRIER_ALTERNATES.technical.list, ["figure", "list"]);
   assert.deepEqual(PAGE_CLASS_REASONS, ["accepted-record", "governance", "no-relationship"]);
-  assert.deepEqual(DERIVED_LOOKUPS, ["capability-registry"]);
+  assert.deepEqual(DERIVED_LOOKUPS, ["capability-registry", "skill-catalog", "policy-reference"]);
   assert.deepEqual(Object.keys(PANEL_CARRIER_ALTERNATES), ["technical"]);
   assert.deepEqual(Object.keys(PANEL_CARRIER_ALTERNATES.technical), ["list"]);
   assert.deepEqual(RECORD_POINTER_COLUMNS, ["Folder", "Purpose", "Count", "Repository"]);
@@ -317,6 +382,22 @@ test("palette pills must show the live tokens of the palette they select", () =>
   assert.deepEqual(paletteSwatchFailures({ tokens, groups: [group.slice(0, 2)] }, PALETTE_PILL_GROUPS), [
     "display panel 1 offers graphite, slate, the tokens define graphite, slate, sage",
   ]);
+});
+
+test("a generated lookup table is wrapped to stack at phone width, and only that table", () => {
+  const header = `| ${LOOKUP_COLUMNS["policy-reference"].join(" | ")} |\n|${"---|".repeat(6)}`;
+  const page = `Lead.\n\n## Git keys\n\n${header}\n| \`a\` | b \\| c | d | e | f | g |\n\n## Top-level keys\n\n${header}\n| h | i | j | k | l | m |\n\n\`\`\`\n${header}\n\`\`\`\n\n| Stage | What it checks |\n|---|---|\n| s | t |\n`;
+  const wrapped = wrapLookupTables(page, "policy-reference", "docs/policy-reference.md");
+  assert.equal(wrapped.match(/<div class="portal-lookup" data-cf-lookup="policy-reference">\n\n\| Key /g).length, 2);
+  assert.equal(wrapped.match(/\n\n<\/div>/g).length, 2);
+  // The fenced copy and the authored stage table keep their own layout.
+  assert.match(wrapped, /```\n\| Key /);
+  assert.match(wrapped, /\| s \| t \|\n$/);
+  // The site's Markdown step nests each table inside its wrapper.
+  const { html } = markdownToHtml(wrapped);
+  assert.equal(html.match(/<div class="portal-lookup" data-cf-lookup="policy-reference">\s*<table>/g).length, 2, html);
+  // A lookup page whose generated table lost its columns fails closed.
+  assert.throws(() => wrapLookupTables("| Skill | Notes |\n|---|---|\n| a | b |\n", "skill-catalog", "docs/skills.md"), /docs\/skills\.md: the skill-catalog page carries no table with the generated columns Skill, Use it for, Installed at tiers, Installed in/);
 });
 
 test("the record table's phone labels are the adapter's columns", async () => {

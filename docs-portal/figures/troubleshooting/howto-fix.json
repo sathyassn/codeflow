@@ -1,0 +1,461 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "doctor-fix-steps",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "What are the steps to fix a failing check, and what tells me it worked?",
+    "idea": "Doctor reads the repository and names the fix, you apply it, and rerunning the one check prints ok.",
+    "title": "Fixing a failing check",
+    "kicker": "How-to",
+    "caption": "The fix is yours to apply, and the rerun of the same check is the proof.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Acts on"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Reports back"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "rerun the same check",
+        "source": "docs/troubleshooting.md#technical",
+        "derive": "step 4",
+        "check": {
+          "kind": "contains",
+          "text": "4. Rerun the same check with `codeflow doctor --check <name>`."
+        },
+        "value": true
+      },
+      {
+        "claim": "the fix worked when the check prints ok",
+        "source": "docs/troubleshooting.md#technical",
+        "derive": "the success sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The fix worked when that check prints `ok`"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 328,
+      "draw": [
+        {
+          "text": "you",
+          "x": 70,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "doctor",
+          "x": 360,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "repository",
+          "x": 650,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 70,
+          "y1": 34,
+          "x2": 70,
+          "y2": 320
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 360,
+          "y1": 34,
+          "x2": 360,
+          "y2": 320
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 650,
+          "y1": 34,
+          "x2": 650,
+          "y2": 320
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 62H352",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "doctor",
+          "x": 215,
+          "y": 52,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M368 108H642",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "text": "reads, probes",
+          "x": 505,
+          "y": 98,
+          "anchor": "middle",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M352 154H78",
+          "open": "end",
+          "id": "m3"
+        },
+        {
+          "text": "FAIL line, with its fix",
+          "x": 215,
+          "y": 144,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 200H642",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "text": "apply the fix",
+          "x": 215,
+          "y": 190,
+          "anchor": "middle",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 246H352",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "text": "doctor --check <name>",
+          "x": 215,
+          "y": 236,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M352 292H78",
+          "open": "end",
+          "id": "m6"
+        },
+        {
+          "text": "ok",
+          "x": 215,
+          "y": 282,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m6"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 372,
+      "draw": [
+        {
+          "text": "you",
+          "x": 8,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 24H292",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "text": "doctor",
+          "x": 352,
+          "y": 29,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "doctor",
+          "x": 8,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "doctor",
+          "x": 8,
+          "y": 89,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M68 84H260",
+          "head": "end",
+          "id": "c2"
+        },
+        {
+          "text": "repository",
+          "x": 352,
+          "y": 89,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "reads, probes",
+          "x": 8,
+          "y": 112,
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "doctor",
+          "x": 8,
+          "y": 149,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M68 144H317",
+          "open": "end",
+          "id": "c3"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 149,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "FAIL line, with its fix",
+          "x": 8,
+          "y": 172,
+          "style": "mute",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 209,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 204H260",
+          "head": "end",
+          "id": "c4"
+        },
+        {
+          "text": "repository",
+          "x": 352,
+          "y": 209,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "apply the fix",
+          "x": 8,
+          "y": 232,
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 269,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 264H292",
+          "head": "end",
+          "id": "c5"
+        },
+        {
+          "text": "doctor",
+          "x": 352,
+          "y": 269,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "doctor --check <name>",
+          "x": 8,
+          "y": 292,
+          "style": "mono",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "doctor",
+          "x": 8,
+          "y": 329,
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M68 324H317",
+          "open": "end",
+          "id": "c6"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 329,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "ok",
+          "x": 8,
+          "y": 352,
+          "style": "mute",
+          "for": [
+            "c6"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "you",
+          "doctor",
+          "`codeflow doctor`"
+        ],
+        [
+          "2",
+          "doctor",
+          "repository",
+          "reads and probes, changing nothing"
+        ],
+        [
+          "3",
+          "doctor",
+          "you",
+          "a `FAIL` line naming the fix"
+        ],
+        [
+          "4",
+          "you",
+          "repository",
+          "apply the fix"
+        ],
+        [
+          "5",
+          "you",
+          "doctor",
+          "`codeflow doctor --check <name>`"
+        ],
+        [
+          "6",
+          "doctor",
+          "you",
+          "`ok`"
+        ]
+      ]
+    }
+  }
+}

@@ -9,7 +9,7 @@ requests.
   runs formatting, the workspace suite, warning-free Clippy and rustdoc, the
   90% aggregate line-coverage floor, CI parity, and model-evaluation contracts.
 - Tests ship with the code that needs them, in the same PR.
-- Commits follow the conventional format `type(scope): description` — imperative
+- Commits follow the conventional format `type(scope): description`: imperative
   mood, lower-case type, no trailing period; one logical change per commit.
 - **No AI attribution** in commit messages or PR bodies: no `Co-Authored-By`
   bot trailers, no "Generated with…" lines, no emoji. codeflow's own hooks
@@ -34,15 +34,15 @@ Measure coverage locally with the same `cargo llvm-cov` command CI uses; do
 not leave the numbers for CI to fill in. Write the PR Summary and Changes
 from the whole `base...HEAD` diff, not from the last commit or last review.
 
-The operating contract for this repo is [AGENTS.md](AGENTS.md); the working
-method (planning weight, when an ADR is warranted, the capability registry) is
+The operating contract for this repo is [AGENTS.md](../AGENTS.md); the working
+method (planning weight, when an architecture decision record (ADR) is warranted, the capability registry) is
 in the portable `cf-method` skill under `.agents/skills/`, mirrored for Claude
 Code under `.claude/skills/`.
 
 ## Reporting bugs / requesting features
 
 Open an issue using the templates. For security issues see
-[SECURITY.md](SECURITY.md) — please do not open a public issue.
+[SECURITY.md](SECURITY.md); please do not open a public issue.
 
 ## Releasing
 
@@ -51,11 +51,11 @@ notes, one reviewed impact annotation adjacent to each new entry, and the
 coupled version stamps. Conventional markers are tripwires against an
 understated impact, not a second version calculator. cargo-dist is the sole
 tag, release, and artifact publisher, and publication is a deliberate human
-dispatch. See [docs/releasing.md](docs/releasing.md) for the runbook — and for
+dispatch. See [releasing](releasing.md) for the runbook, and for
 how a project that *consumes* codeflow should handle its own versioning.
 
 ## License
 
 By contributing, you agree that your contributions will be dual-licensed under
-`MIT OR Apache-2.0`, as described in the [README](README.md#license), without any
+`MIT OR Apache-2.0`, as described in the [README](../README.md#license), without any
 additional terms or conditions.

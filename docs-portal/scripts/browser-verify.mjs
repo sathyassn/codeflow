@@ -498,7 +498,7 @@ export async function figureGateFailures(page, visitRoute, assignments, generate
       for (const [index, place] of places.entries()) {
         drawn += 1;
         const binding = assignment.figures.find((candidate) => candidate.declaration === place.declaration);
-        const where = `${assignment.source} (at ${assignment.route}, ${place.altitude ? `${place.altitude} panel` : place.placement === "anchor" ? `#${binding?.anchor}` : "page head"}, ${place.declaration ?? "an unbound figure"})`;
+        const where = `${assignment.source} (at ${assignment.route}, ${place.altitude ? `${place.altitude} panel${place.placement === "anchor" ? `, #${binding?.anchor}` : ""}` : place.placement === "anchor" ? `#${binding?.anchor}` : "page head"}, ${place.declaration ?? "an unbound figure"})`;
         wheres.push(where);
         const entry = recorded.get(place.declaration);
         if (entry === undefined) failures.push(`${where}: the evidence manifest records no such figure`);

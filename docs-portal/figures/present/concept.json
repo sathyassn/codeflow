@@ -1,0 +1,515 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "present-concept",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What is a present session, and what is it not?",
+    "idea": "The agent authors, the Rust service owns every durable byte, and the browser only shows the document and takes your notes.",
+    "title": "Who owns what in a present session",
+    "kicker": "Present sessions",
+    "caption": "Authority stays in the Rust service on your machine, and the browser is a disposable viewer that never holds it.",
+    "states": [
+      {
+        "name": "peer",
+        "mark": "optional",
+        "means": "The agent's own session"
+      },
+      {
+        "name": "owner",
+        "mark": "layer-remote",
+        "means": "Holds every durable byte"
+      },
+      {
+        "name": "viewer",
+        "mark": "layer",
+        "means": "Viewer, never an authority"
+      },
+      {
+        "name": "flows",
+        "mark": "trans",
+        "means": "Passes to"
+      },
+      {
+        "name": "denied",
+        "mark": "denied",
+        "means": "Not something present is"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "Rust owns validation, revisions, feedback, retention, export and the loopback service",
+        "source": "docs/architecture/present.md#technical",
+        "derive": "the Rust ownership row",
+        "check": {
+          "kind": "contains",
+          "text": "validation, immutable revisions, append-only feedback, retention, export, and the per-session loopback service"
+        },
+        "value": true
+      },
+      {
+        "claim": "present is not a resident service, product UI framework or documentation portal",
+        "source": "docs/architecture/present.md#technical",
+        "derive": "the CLI adapter row",
+        "check": {
+          "kind": "contains",
+          "text": "does not become a resident service, product UI framework, or documentation portal"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 244,
+      "draw": [
+        {
+          "state": "peer",
+          "shape": "rect",
+          "x": 16,
+          "y": 70,
+          "w": 140,
+          "h": 76,
+          "rx": 8,
+          "id": "a"
+        },
+        {
+          "text": "agent session",
+          "x": 30,
+          "y": 96,
+          "style": "strong",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "text": "authors the",
+          "x": 30,
+          "y": 117,
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "text": "catalog JSON",
+          "x": 30,
+          "y": 138,
+          "style": "mono",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 196,
+          "y": 26,
+          "w": 508,
+          "h": 150
+        },
+        {
+          "text": "owner-private, this machine",
+          "x": 212,
+          "y": 46,
+          "style": "head"
+        },
+        {
+          "state": "owner",
+          "shape": "rect",
+          "x": 212,
+          "y": 62,
+          "w": 214,
+          "h": 96,
+          "rx": 8,
+          "cap": "end",
+          "id": "s"
+        },
+        {
+          "text": "Rust service",
+          "x": 226,
+          "y": 88,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "validates and keeps",
+          "x": 226,
+          "y": 111,
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "revisions, notes, export",
+          "x": 226,
+          "y": 132,
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "viewer",
+          "shape": "rect",
+          "x": 534,
+          "y": 62,
+          "w": 156,
+          "h": 96,
+          "rx": 8,
+          "id": "b"
+        },
+        {
+          "text": "isolated browser",
+          "x": 548,
+          "y": 88,
+          "style": "strong",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "shows it, takes",
+          "x": 548,
+          "y": 111,
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "your notes",
+          "x": 548,
+          "y": 132,
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M158 92H210",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M428 92H532",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M532 128H428",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M210 140C186 140 182 150 158 150",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "text": "notes back",
+          "x": 480,
+          "y": 152,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e3"
+          ]
+        },
+        {
+          "text": "reads the notes",
+          "x": 16,
+          "y": 174,
+          "style": "mute",
+          "for": [
+            "e4"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 16,
+          "y": 196,
+          "w": 212,
+          "h": 34,
+          "rx": 6,
+          "cross": {
+            "cx": 210,
+            "cy": 213,
+            "size": 12
+          },
+          "id": "n1"
+        },
+        {
+          "text": "not durable docs",
+          "x": 108,
+          "y": 218,
+          "anchor": "middle",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 254,
+          "y": 196,
+          "w": 212,
+          "h": 34,
+          "rx": 6,
+          "cross": {
+            "cx": 448,
+            "cy": 213,
+            "size": 12
+          },
+          "id": "n2"
+        },
+        {
+          "text": "not a product UI",
+          "x": 346,
+          "y": 218,
+          "anchor": "middle",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 492,
+          "y": 196,
+          "w": 212,
+          "h": 34,
+          "rx": 6,
+          "cross": {
+            "cx": 686,
+            "cy": 213,
+            "size": 12
+          },
+          "id": "n3"
+        },
+        {
+          "text": "not a resident service",
+          "x": 584,
+          "y": 218,
+          "anchor": "middle",
+          "for": [
+            "n3"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 439,
+      "elongation_max": 1.9,
+      "reason": "The three parts and the three non-goals stack in one column at phone width instead of sharing two rows.",
+      "draw": [
+        {
+          "state": "peer",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 50,
+          "rx": 8,
+          "id": "a"
+        },
+        {
+          "text": "agent session",
+          "x": 22,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "text": "authors the catalog JSON",
+          "x": 22,
+          "y": 50,
+          "for": [
+            "a"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M60 66V98",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M120 98V66",
+          "head": "end",
+          "id": "e4"
+        },
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 8,
+          "y": 100,
+          "w": 344,
+          "h": 227
+        },
+        {
+          "text": "owner-private, this machine",
+          "x": 20,
+          "y": 126,
+          "style": "head"
+        },
+        {
+          "state": "owner",
+          "shape": "rect",
+          "x": 20,
+          "y": 142,
+          "w": 320,
+          "h": 66,
+          "rx": 8,
+          "cap": "end",
+          "id": "s"
+        },
+        {
+          "text": "Rust service",
+          "x": 34,
+          "y": 166,
+          "style": "strong",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "validates, keeps revisions",
+          "x": 34,
+          "y": 190,
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M60 210V249",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "flows",
+          "shape": "path",
+          "d": "M120 249V210",
+          "head": "end",
+          "id": "e3"
+        },
+        {
+          "text": "notes back",
+          "x": 136,
+          "y": 235,
+          "style": "mute",
+          "for": [
+            "e3"
+          ]
+        },
+        {
+          "state": "viewer",
+          "shape": "rect",
+          "x": 20,
+          "y": 251,
+          "w": 320,
+          "h": 66,
+          "rx": 8,
+          "id": "b"
+        },
+        {
+          "text": "isolated browser",
+          "x": 34,
+          "y": 275,
+          "style": "strong",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "text": "shows it, takes your notes",
+          "x": 34,
+          "y": 299,
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "denied",
+          "shape": "rect",
+          "x": 8,
+          "y": 341,
+          "w": 344,
+          "h": 88,
+          "rx": 6,
+          "cross": {
+            "cx": 326,
+            "cy": 385,
+            "size": 12
+          },
+          "id": "n1"
+        },
+        {
+          "text": "not durable docs",
+          "x": 24,
+          "y": 365,
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "text": "not a product UI",
+          "x": 24,
+          "y": 389,
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "text": "not a resident service",
+          "x": 24,
+          "y": 413,
+          "for": [
+            "n1"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Holds",
+        "Role"
+      ],
+      "rows": [
+        [
+          "agent session",
+          "the catalog JSON it authors",
+          "author"
+        ],
+        [
+          "Rust service",
+          "validation, revisions, feedback, retention, export",
+          "the only durable authority"
+        ],
+        [
+          "isolated browser",
+          "a disposable profile and cache",
+          "viewer that takes your notes"
+        ]
+      ]
+    }
+  }
+}

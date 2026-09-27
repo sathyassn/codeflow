@@ -1,0 +1,489 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "release-version-derivation",
+    "family": "derivation",
+    "binding": "authored",
+    "question": "How is the version made, and what checks it?",
+    "idea": "The latest public version is bumped once by the highest pending impact, the stamps must match it, and check-pr compares them on every PR and main push.",
+    "title": "How the release version is made",
+    "kicker": "Version",
+    "caption": "The version comes only from reviewed impact annotations, so a commit label can flag a mismatch but never set the version.",
+    "states": [
+      {
+        "name": "source",
+        "mark": "layer-remote",
+        "means": "Input"
+      },
+      {
+        "name": "step",
+        "mark": "merge",
+        "means": "One bump by the highest impact"
+      },
+      {
+        "name": "output",
+        "mark": "state",
+        "means": "What must agree"
+      },
+      {
+        "name": "derives",
+        "mark": "trans",
+        "means": "Produces"
+      },
+      {
+        "name": "compares",
+        "mark": "todo",
+        "means": "Checked against"
+      },
+      {
+        "name": "check",
+        "mark": "human",
+        "means": "The release-state check"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the target is the latest verified public version bumped once by the highest pending impact",
+        "source": "docs/releasing.md#architecture",
+        "derive": "the cumulative target bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- The cumulative target is the latest verified public version, bumped once by"
+        },
+        "value": true
+      },
+      {
+        "claim": "conventional markers do not calculate a second version",
+        "source": "docs/releasing.md#architecture",
+        "derive": "the tripwire bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- Conventional markers are conservative mismatch tripwires. They do not"
+        },
+        "value": true
+      },
+      {
+        "claim": "cargo-dist is the only tag publisher",
+        "source": "docs/releasing.md#architecture",
+        "derive": "the publisher bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- cargo-dist is the only tag, release and artifact publisher."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 230,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 36,
+          "w": 206,
+          "h": 44,
+          "rx": 4,
+          "cap": "end",
+          "id": "s1"
+        },
+        {
+          "text": "impact annotations",
+          "x": 30,
+          "y": 63,
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 16,
+          "y": 96,
+          "w": 206,
+          "h": 44,
+          "rx": 4,
+          "cap": "end",
+          "id": "s2"
+        },
+        {
+          "text": "latest public version",
+          "x": 30,
+          "y": 123,
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M224 58C256 58 262 84 282 88",
+          "head": "end",
+          "id": "d1"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M224 118C256 118 262 96 282 92",
+          "head": "end",
+          "id": "d2"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 306,
+          "cy": 90,
+          "r": 22,
+          "id": "b"
+        },
+        {
+          "text": "bump once",
+          "x": 306,
+          "y": 136,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M330 90H372",
+          "head": "end",
+          "id": "d3"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 374,
+          "y": 68,
+          "w": 150,
+          "h": 44,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "target version",
+          "x": 388,
+          "y": 95,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M526 80C556 80 560 52 584 52",
+          "head": "end",
+          "id": "d4"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M526 100C556 100 560 128 584 128",
+          "head": "end",
+          "id": "d5"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 586,
+          "y": 30,
+          "w": 118,
+          "h": 44,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "stamps",
+          "x": 600,
+          "y": 57,
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 586,
+          "y": 106,
+          "w": 118,
+          "h": 44,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "tag, by cargo",
+          "x": 600,
+          "y": 133,
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M449 114V176",
+          "square": "end",
+          "id": "c"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 449,
+          "cy": 190,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "text": "release.py check-pr",
+          "x": 431,
+          "y": 195,
+          "anchor": "end",
+          "style": "mono",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "rechecked on every main push",
+          "x": 431,
+          "y": 217,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 264,
+      "draw": [
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 190,
+          "h": 38,
+          "rx": 4,
+          "cap": "end",
+          "id": "s1"
+        },
+        {
+          "text": "impact annotations",
+          "x": 20,
+          "y": 34,
+          "for": [
+            "s1"
+          ]
+        },
+        {
+          "state": "source",
+          "shape": "rect",
+          "x": 8,
+          "y": 58,
+          "w": 190,
+          "h": 38,
+          "rx": 4,
+          "cap": "end",
+          "id": "s2"
+        },
+        {
+          "text": "latest public version",
+          "x": 20,
+          "y": 82,
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M200 29C240 29 256 42 266 46",
+          "head": "end",
+          "id": "d1"
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M200 77C240 77 256 64 266 60",
+          "head": "end",
+          "id": "d2"
+        },
+        {
+          "state": "step",
+          "shape": "diamond",
+          "cx": 288,
+          "cy": 53,
+          "r": 20,
+          "id": "b"
+        },
+        {
+          "text": "bump once",
+          "x": 288,
+          "y": 18,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "b"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M288 75V118H150V136",
+          "head": "end",
+          "id": "d3"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 8,
+          "y": 138,
+          "w": 184,
+          "h": 36,
+          "rx": 4,
+          "id": "o1"
+        },
+        {
+          "text": "target version",
+          "x": 20,
+          "y": 160,
+          "for": [
+            "o1"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M186 156H214",
+          "head": "end",
+          "id": "d4"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 216,
+          "y": 138,
+          "w": 136,
+          "h": 36,
+          "rx": 4,
+          "id": "o2"
+        },
+        {
+          "text": "stamps",
+          "x": 228,
+          "y": 161,
+          "for": [
+            "o2"
+          ]
+        },
+        {
+          "state": "derives",
+          "shape": "path",
+          "d": "M164 176V212H214",
+          "head": "end",
+          "id": "d5"
+        },
+        {
+          "state": "output",
+          "shape": "rect",
+          "x": 216,
+          "y": 194,
+          "w": 136,
+          "h": 36,
+          "rx": 4,
+          "id": "o3"
+        },
+        {
+          "text": "tag, by cargo",
+          "x": 228,
+          "y": 217,
+          "for": [
+            "o3"
+          ]
+        },
+        {
+          "state": "compares",
+          "shape": "path",
+          "d": "M60 176V196",
+          "square": "end",
+          "id": "c"
+        },
+        {
+          "state": "check",
+          "shape": "circle",
+          "cx": 60,
+          "cy": 210,
+          "r": 12,
+          "tick": true,
+          "id": "k"
+        },
+        {
+          "text": "check-pr",
+          "x": 80,
+          "y": 215,
+          "style": "mono",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "rechecked on",
+          "x": 80,
+          "y": 237,
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        },
+        {
+          "text": "every main push",
+          "x": 80,
+          "y": 258,
+          "style": "mute",
+          "for": [
+            "k"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "Step",
+        "To",
+        "Checked by"
+      ],
+      "rows": [
+        [
+          "impact annotations beside pending CHANGELOG entries, and the latest public version",
+          "one bump by the highest pending impact",
+          "the target version",
+          "`scripts/release.py check-pr`"
+        ],
+        [
+          "the target version",
+          "stamping",
+          "`Cargo.toml`, the lock and scaffold stamps",
+          "`check-pr`, repeated on every main push"
+        ],
+        [
+          "the target version",
+          "explicit human dispatch",
+          "the tag, created by cargo-dist",
+          "the authority job"
+        ]
+      ]
+    }
+  }
+}

@@ -8,7 +8,8 @@ import remarkParse from "remark-parse";
 import remarkStringify from "remark-stringify";
 import { unified } from "unified";
 import YAML from "yaml";
-import { ALTITUDE_PANELS, DERIVED_LOOKUPS, PAGE_CLASS_REASONS, PANEL_CARRIER_ALTERNATES } from "./page-classes.mjs";
+import { slugHeading } from "./figure-grammar.mjs";
+import { ALTITUDE_PANELS, DERIVED_LOOKUPS, LOOKUP_COLUMNS, PAGE_CLASS_REASONS, PANEL_CARRIER_ALTERNATES } from "./page-classes.mjs";
 
 export const sha256 = (value) => createHash("sha256").update(value).digest("hex");
 
@@ -648,6 +649,11 @@ export function withBase(base, route) {
   return `${validateBase(base)}${encodedRoute}/`.replace(/^\/\//, "/");
 }
 
+// The themes a configuration may name: the three skins, then the two earlier
+// names kept as aliases (signal is graphite, folio is sage). The Rust
+// validator holds the same list and a parity test compares them.
+export const PORTAL_THEMES = Object.freeze(["graphite", "slate", "sage", "signal", "folio"]);
+
 export function validatePortalConfig(value) {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("portal.config.json: expected an object");
   const allowed = new Set(["schema_version", "title", "description", "theme", "repository_url", "repository_root", "release_version", "primitive_tokens", "source_roots", "exclude", "layers", "records", "page_carriers", "page_classes", "figures", "base"]);
@@ -655,7 +661,7 @@ export function validatePortalConfig(value) {
   if (value.schema_version !== 1) throw new Error("portal.config.json: unsupported schema_version");
   boundedString(value.title, "title", 1, 120);
   boundedString(value.description, "description", 1, 400);
-  if (!["graphite", "slate", "sage", "signal", "folio"].includes(value.theme)) throw new Error("portal.config.json: theme must be graphite, slate or sage (signal and folio remain aliases)");
+  if (!PORTAL_THEMES.includes(value.theme)) throw new Error("portal.config.json: theme must be graphite, slate or sage (signal and folio remain aliases)");
   if (value.repository_url !== null) {
     boundedString(value.repository_url, "repository_url", 1, 2048);
     if (!validRepositoryUrl(value.repository_url)) throw new Error("repository_url: expected an HTTPS repository URL with an ASCII or punycode host and without credentials, query, or fragment");
@@ -720,8 +726,9 @@ function validatePageClasses(value) {
 }
 
 // Every figure is bound to its page here, by route and by an altitude panel
-// or a section anchor of an illustrated source, never by a marker inside a
-// source. The declaration file is a committed repository input.
+// (optionally narrowed to a section anchor inside that panel) or a section
+// anchor of an illustrated source, never by a marker inside a source. The
+// declaration file is a committed repository input.
 function validateFigureBindings(value) {
   if (value === undefined) return [];
   if (!Array.isArray(value) || value.length > 512) throw new Error("portal.config.json: figures must be an array of at most 512 bindings");
@@ -732,7 +739,6 @@ function validateFigureBindings(value) {
     safeRelative(binding.declaration, "figures declaration");
     if (!binding.declaration.endsWith(".json")) throw new Error(`portal.config.json: figure declaration ${binding.declaration} must be a JSON file`);
     safeRelative(binding.route, "figures route");
-    if (binding.panel !== undefined && binding.anchor !== undefined) throw new Error(`portal.config.json: figure ${binding.declaration} binds a panel or an anchor, not both`);
     if (binding.panel !== undefined && !ALTITUDE_PANELS.includes(binding.panel)) throw new Error(`portal.config.json: figure ${binding.declaration} panel must be one of ${ALTITUDE_PANELS.join(", ")}`);
     if (binding.anchor !== undefined && (typeof binding.anchor !== "string" || !/^[\p{L}\p{N}_-]{1,200}$/u.test(binding.anchor))) throw new Error(`portal.config.json: figure ${binding.declaration} anchor must be a heading slug`);
     const key = `${binding.route}\u0000${binding.declaration}`;
@@ -950,6 +956,57 @@ export function asIsRegionStart(body, title) {
   return offset;
 }
 
+// The prose words in each altitude panel of an explanatory source, counted by
+// a rule simple enough that the Rust validator recounts it byte for byte: YAML
+// frontmatter is not prose and is skipped whole; after it, a line
+// `## Concept`, `## Architecture` or `## Technical`
+// opens that panel and any other level-two heading closes it; lines inside a
+// fence (the markdownSections fence rule), inside an HTML comment (from a line
+// starting `<!--` through the line holding `-->`), headings (`#`) and table
+// rows (`|`) are skipped; every other line in a panel adds its ASCII
+// whitespace-separated tokens.
+export function altitudeWords(text) {
+  const words = { concept: 0, architecture: 0, technical: 0 };
+  const trim = (line) => line.replace(/^[\t\n\f\r ]+|[\t\n\f\r ]+$/g, "");
+  let panel = null;
+  let fence = null;
+  let comment = false;
+  const normalized = String(text).replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n");
+  const end = normalized.startsWith("---\n") ? normalized.indexOf("\n---\n", 4) : -1;
+  const body = end < 0 ? normalized : normalized.slice(end + 5);
+  for (const line of body.split("\n")) {
+    const marker = line.match(/^ {0,3}(`{3,}|~{3,})(.*)$/);
+    if (fence !== null) {
+      if (marker && marker[1][0] === fence.char && marker[1].length >= fence.length && marker[2].trim() === "") fence = null;
+      continue;
+    }
+    if (marker && !(marker[1][0] === "`" && marker[2].includes("`"))) { fence = { char: marker[1][0], length: marker[1].length }; continue; }
+    const trimmed = trim(line);
+    if (comment) { if (trimmed.includes("-->")) comment = false; continue; }
+    if (trimmed.startsWith("<!--")) { if (!trimmed.includes("-->")) comment = true; continue; }
+    const level2 = line.match(/^## (.*)$/);
+    if (level2) { const label = trim(level2[1]).toLowerCase(); panel = Object.hasOwn(words, label) ? label : null; continue; }
+    if (panel === null || trimmed.startsWith("#") || trimmed.startsWith("|")) continue;
+    words[panel] += trimmed.split(/[\t\n\f\r ]+/).filter(Boolean).length;
+  }
+  return words;
+}
+
+// The body rows of every table on a page: the row count a generated lookup
+// records, which the validator compares with the rows it regenerates.
+export function tableRowCount(markdown) {
+  return markdownNodes(markdownTree(markdown), "table").reduce((total, table) => total + Math.max(table.children.length - 1, 0), 0);
+}
+
+// Whether an as-is region still carries a level-one heading once the title
+// the adapter drops is gone: a second title, a title under a leading comment,
+// or deliberate h1 sections. The site's Markdown step then renders every
+// heading in the region one level lower (h6 stays h6), so the page title is
+// the only h1 and the source keeps its structure; the bytes never change.
+export function asIsHeadingsDemoted(source) {
+  return markdownNodes(markdownTree(source), "heading").some((node) => node.depth === 1);
+}
+
 export function asIsTitleMatches(raw, title) {
   const visible = String(raw).replace(/[`*_]/g, "").trim();
   const wanted = String(title).replace(/[`*_]/g, "").trim();
@@ -992,6 +1049,10 @@ export function resolveAsIsLinks(markdown, options) {
 // A figure bound to an altitude panel sits directly under that panel's
 // heading. The heading must exist: a binding to a panel the source does not
 // author is a configuration error, never a silent drop.
+// Each block is a companion string placed directly under its panel heading,
+// or { value, heading } placed directly under the one heading inside that
+// panel whose slug equals the slug of `heading`, the source text of the
+// anchored heading the adapter already proved lies inside the panel.
 export function insertPanelFigures(markdown, blocksByPanel, sourcePath) {
   if (!blocksByPanel.size) return markdown;
   const tree = markdownTree(markdown);
@@ -1004,8 +1065,28 @@ export function insertPanelFigures(markdown, blocksByPanel, sourcePath) {
   for (const panel of blocksByPanel.keys()) {
     if (!found.has(panel)) throw new Error(`${sourcePath}: a figure is bound to the ${panel} panel, but the source has no "## ${panel[0].toUpperCase()}${panel.slice(1)}" section`);
   }
-  for (const [panel, index] of [...found].sort((left, right) => right[1] - left[1])) {
-    tree.children.splice(index + 1, 0, ...blocksByPanel.get(panel).map((value) => ({ type: "html", value })));
+  const inserts = [];
+  for (const [panel, index] of found) {
+    const next = tree.children.findIndex((node, position) => position > index && node.type === "heading" && node.depth <= 2);
+    const end = next === -1 ? tree.children.length : next;
+    const atPanel = [];
+    for (const block of blocksByPanel.get(panel)) {
+      if (typeof block === "string") { atPanel.push(block); continue; }
+      const want = slugHeading(block.heading);
+      const matches = [];
+      for (let position = index + 1; position < end; position += 1) {
+        const node = tree.children[position];
+        if (node.type === "heading" && node.depth > 2 && slugHeading(visibleNodeText(node)) === want) matches.push(position);
+      }
+      if (matches.length !== 1) throw new Error(`${sourcePath}: a figure is bound to the section "${block.heading}" of the ${panel} panel, which names ${matches.length} headings there, not one`);
+      inserts.push({ at: matches[0], values: [block.value] });
+    }
+    if (atPanel.length) inserts.push({ at: index, values: atPanel });
+  }
+  const merged = new Map();
+  for (const insert of inserts) merged.set(insert.at, [...(merged.get(insert.at) ?? []), ...insert.values]);
+  for (const [at, values] of [...merged].sort((left, right) => right[0] - left[0])) {
+    tree.children.splice(at + 1, 0, ...values.map((value) => ({ type: "html", value })));
   }
   return stringifyMarkdown(tree);
 }
@@ -1015,4 +1096,34 @@ export function insertPanelFigures(markdown, blocksByPanel, sourcePath) {
 // block, so no open fence or raw HTML block in the source can swallow them.
 export function topLevelHtmlBlocks(markdown) {
   return markdownTree(markdown).children.filter((node) => node.type === "html").map((node) => node.value.trim());
+}
+
+// A generated lookup's tables, each wrapped so the starter's stylesheet
+// stacks it at phone width under its column labels. Only a table whose
+// header is the generator's column list is wrapped (an authored table on the
+// same page keeps its own layout), and a page with no such table fails, since
+// its generated region has lost its shape.
+export function wrapLookupTables(markdown, derive, sourcePath) {
+  const columns = LOOKUP_COLUMNS[derive].join("\u0000");
+  const lines = markdown.split("\n");
+  const out = [];
+  let fence = null;
+  let wrapped = 0;
+  for (let index = 0; index < lines.length;) {
+    const line = lines[index];
+    const marker = line.match(/^\s*(`{3,}|~{3,})/);
+    if (marker !== null && (fence === null || marker[1].startsWith(fence))) fence = fence === null ? marker[1] : null;
+    if (fence !== null || !line.startsWith("|")) { out.push(line); index += 1; continue; }
+    let end = index;
+    while (end < lines.length && lines[end].startsWith("|")) end += 1;
+    const block = lines.slice(index, end);
+    const header = block[0].replace(/^\||\|$/g, "").split("|").map((cell) => cell.trim()).join("\u0000");
+    if (header === columns) {
+      out.push(`<div class="portal-lookup" data-cf-lookup="${derive}">`, "", ...block, "", "</div>");
+      wrapped += 1;
+    } else out.push(...block);
+    index = end;
+  }
+  if (wrapped === 0) throw new Error(`${sourcePath}: the ${derive} page carries no table with the generated columns ${LOOKUP_COLUMNS[derive].join(", ")}`);
+  return out.join("\n");
 }

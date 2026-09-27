@@ -1,0 +1,404 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "delegation-herdr",
+    "family": "structure",
+    "binding": "authored",
+    "question": "Where does the peer run, and what tells the host a turn finished?",
+    "idea": "The peer runs in its own named Herdr tab beside your pane, its hooks write lifecycle records, and the host reads completion from those records, never from Herdr's status.",
+    "title": "How a peer is hosted in Herdr",
+    "kicker": "Herdr",
+    "caption": "Herdr only hosts the tab; the turn is complete when the lifecycle records say so.",
+    "states": [
+      {
+        "name": "pane",
+        "mark": "layer",
+        "means": "Your pane"
+      },
+      {
+        "name": "tab",
+        "mark": "optional",
+        "means": "A peer's named tab"
+      },
+      {
+        "name": "records",
+        "mark": "layer-remote",
+        "means": "Lifecycle records"
+      },
+      {
+        "name": "sends",
+        "mark": "trans",
+        "means": "Sends or writes"
+      },
+      {
+        "name": "waits",
+        "mark": "return",
+        "means": "Read back by the host"
+      },
+      {
+        "name": "notdone",
+        "mark": "blocked",
+        "means": "Not a completion signal"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "a Herdr idle or done status is not turn completion",
+        "source": "docs/delegation.md#architecture",
+        "derive": "the status bullet",
+        "check": {
+          "kind": "contains",
+          "text": "- A Herdr `idle` or `done` status is not turn completion."
+        },
+        "value": true
+      },
+      {
+        "claim": "each peer tab is labelled cf/<repo>/<work>/<kind>/<nn>",
+        "source": "docs/delegation.md#architecture",
+        "derive": "the Herdr bullet",
+        "check": {
+          "kind": "contains",
+          "text": "labelled `cf/<repo>/<work>/<kind>/<nn>`"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 236,
+      "draw": [
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 16,
+          "y": 26,
+          "w": 424,
+          "h": 150
+        },
+        {
+          "text": "Herdr workspace",
+          "x": 32,
+          "y": 47,
+          "style": "head"
+        },
+        {
+          "state": "pane",
+          "shape": "rect",
+          "x": 32,
+          "y": 62,
+          "w": 180,
+          "h": 52,
+          "rx": 8,
+          "id": "y"
+        },
+        {
+          "text": "your pane",
+          "x": 46,
+          "y": 81,
+          "style": "strong",
+          "for": [
+            "y"
+          ]
+        },
+        {
+          "text": "keeps focus",
+          "x": 46,
+          "y": 102,
+          "style": "mute",
+          "for": [
+            "y"
+          ]
+        },
+        {
+          "state": "tab",
+          "shape": "rect",
+          "x": 252,
+          "y": 62,
+          "w": 172,
+          "h": 52,
+          "rx": 8,
+          "id": "tb"
+        },
+        {
+          "text": "peer tab",
+          "x": 266,
+          "y": 80,
+          "style": "strong",
+          "for": [
+            "tb"
+          ]
+        },
+        {
+          "text": "one per peer",
+          "x": 266,
+          "y": 101,
+          "style": "mute",
+          "for": [
+            "tb"
+          ]
+        },
+        {
+          "state": "sends",
+          "shape": "path",
+          "d": "M214 88H250",
+          "head": "end",
+          "id": "s1"
+        },
+        {
+          "state": "notdone",
+          "shape": "path",
+          "d": "M357 116V160",
+          "cross": {
+            "cx": 357,
+            "cy": 140,
+            "size": 10
+          },
+          "id": "nd"
+        },
+        {
+          "text": "idle or done is not completion",
+          "x": 345,
+          "y": 145,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "nd"
+          ]
+        },
+        {
+          "state": "records",
+          "shape": "rect",
+          "x": 530,
+          "y": 62,
+          "w": 174,
+          "h": 52,
+          "rx": 8,
+          "cap": "end",
+          "id": "r"
+        },
+        {
+          "text": "lifecycle records",
+          "x": 544,
+          "y": 81,
+          "style": "strong",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "text": "owner-only state",
+          "x": 544,
+          "y": 102,
+          "style": "mute",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "sends",
+          "shape": "path",
+          "d": "M426 76H528",
+          "head": "end",
+          "id": "s2"
+        },
+        {
+          "text": "hooks write",
+          "x": 477,
+          "y": 66,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "waits",
+          "shape": "path",
+          "d": "M617 118V200H122V118",
+          "open": "end",
+          "id": "w"
+        },
+        {
+          "text": "delegate wait reads the result",
+          "x": 370,
+          "y": 224,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "w"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 266,
+      "draw": [
+        {
+          "deco": "rule",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 344,
+          "h": 180
+        },
+        {
+          "text": "Herdr workspace",
+          "x": 20,
+          "y": 30,
+          "style": "head"
+        },
+        {
+          "state": "pane",
+          "shape": "rect",
+          "x": 20,
+          "y": 46,
+          "w": 150,
+          "h": 40,
+          "rx": 8,
+          "id": "y"
+        },
+        {
+          "text": "your pane",
+          "x": 34,
+          "y": 71,
+          "style": "strong",
+          "for": [
+            "y"
+          ]
+        },
+        {
+          "state": "tab",
+          "shape": "rect",
+          "x": 190,
+          "y": 46,
+          "w": 150,
+          "h": 40,
+          "rx": 8,
+          "id": "tb"
+        },
+        {
+          "text": "peer tab",
+          "x": 204,
+          "y": 71,
+          "style": "strong",
+          "for": [
+            "tb"
+          ]
+        },
+        {
+          "state": "sends",
+          "shape": "path",
+          "d": "M172 66H188",
+          "head": "end",
+          "id": "s1"
+        },
+        {
+          "state": "notdone",
+          "shape": "path",
+          "d": "M300 88V124",
+          "cross": {
+            "cx": 300,
+            "cy": 106,
+            "size": 10
+          },
+          "id": "nd"
+        },
+        {
+          "text": "idle or done is not completion",
+          "x": 318,
+          "y": 150,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "nd"
+          ]
+        },
+        {
+          "state": "sends",
+          "shape": "path",
+          "d": "M334 88V214",
+          "head": "end",
+          "id": "s2"
+        },
+        {
+          "text": "hooks write",
+          "x": 322,
+          "y": 190,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s2"
+          ]
+        },
+        {
+          "state": "records",
+          "shape": "rect",
+          "x": 150,
+          "y": 216,
+          "w": 202,
+          "h": 40,
+          "rx": 8,
+          "cap": "end",
+          "id": "r"
+        },
+        {
+          "text": "lifecycle records",
+          "x": 164,
+          "y": 241,
+          "style": "strong",
+          "for": [
+            "r"
+          ]
+        },
+        {
+          "state": "waits",
+          "shape": "path",
+          "d": "M148 236H60V88",
+          "open": "end",
+          "id": "w"
+        },
+        {
+          "text": "delegate wait",
+          "x": 70,
+          "y": 196,
+          "style": "mute",
+          "for": [
+            "w"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Part",
+        "Role"
+      ],
+      "rows": [
+        [
+          "your pane",
+          "your agent; keeps focus"
+        ],
+        [
+          "peer tab",
+          "a named Herdr tab `cf/<repo>/<work>/<kind>/<nn>` running the peer"
+        ],
+        [
+          "lifecycle records",
+          "written by the peer's hooks in an owner-only state directory"
+        ],
+        [
+          "`codeflow delegate wait`",
+          "reads completion from the records"
+        ],
+        [
+          "Herdr `idle` or `done`",
+          "not a completion signal"
+        ]
+      ]
+    }
+  }
+}

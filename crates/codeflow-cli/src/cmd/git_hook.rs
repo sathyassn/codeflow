@@ -26,6 +26,17 @@ pub enum StageName {
     PrePush,
 }
 
+/// The stage names the dispatcher accepts, as git and the shims spell them.
+/// The generated policy reference is checked against exactly this set.
+pub fn stage_names() -> Vec<String> {
+    use clap::ValueEnum;
+    StageName::value_variants()
+        .iter()
+        .filter_map(clap::ValueEnum::to_possible_value)
+        .map(|value| value.get_name().to_string())
+        .collect()
+}
+
 #[derive(Debug, Args)]
 pub struct GitHookArgs {
     /// Hook stage (receives git's standard hook arguments).

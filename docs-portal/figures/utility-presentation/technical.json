@@ -1,0 +1,333 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "utility-rule-coverage",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Which figure rules does the gate measure, and which does a person review?",
+    "idea": "The grammar module measures ten of the twelve rules whole and two in part, and whether a figure has one idea or leans on boxes is a person's judgment.",
+    "title": "Who decides each figure rule",
+    "kicker": "Figure rules",
+    "caption": "Ten rules are measured whole by the shared module, two only in part, and whether a figure carries one idea or leans on boxes stays with a person looking at it.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Decides or declares this rule"
+      },
+      {
+        "name": "part",
+        "mark": "part",
+        "means": "Measures one part of this rule"
+      },
+      {
+        "name": "na",
+        "mark": "na",
+        "means": "No part in this rule"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "rule 1 is decided by rendered review",
+        "source": "assets/base/agents/skills/cf-docs-portal/resources/figure-grammar.md#2-twelve-rules",
+        "derive": "the rule 1 row",
+        "check": {
+          "kind": "contains",
+          "text": "| the design primary's rendered review and the evaluation kit |"
+        },
+        "value": true
+      },
+      {
+        "claim": "rule 7 is decided by review",
+        "source": "assets/base/agents/skills/cf-docs-portal/resources/figure-grammar.md#2-twelve-rules",
+        "derive": "the rule 7 row",
+        "check": {
+          "kind": "contains",
+          "text": "(W5 gate G7) | the design primary's review and the evaluation kit |"
+        },
+        "value": true
+      },
+      {
+        "claim": "rule 4 splits between the token sheet and the grammar module",
+        "source": "assets/base/agents/skills/cf-docs-portal/resources/figure-grammar.md#2-twelve-rules",
+        "derive": "the rule 4 row",
+        "check": {
+          "kind": "contains",
+          "text": "| text floor: token sheet (micro 12.5); mark floor: grammar module |"
+        },
+        "value": true
+      },
+      {
+        "claim": "rule 5 takes a per-figure ceiling from the portal configuration",
+        "source": "assets/base/agents/skills/cf-docs-portal/resources/figure-grammar.md#2-twelve-rules",
+        "derive": "the rule 5 row",
+        "check": {
+          "kind": "contains",
+          "text": "| break and ceiling: grammar module; a per-figure ceiling: portal configuration |"
+        },
+        "value": true
+      },
+      {
+        "claim": "rule 10 names roles in the token sheet and lints in the grammar module",
+        "source": "assets/base/agents/skills/cf-docs-portal/resources/figure-grammar.md#2-twelve-rules",
+        "derive": "the rule 10 row",
+        "check": {
+          "kind": "contains",
+          "text": "| token sheet names the roles; grammar module lints |"
+        },
+        "value": true
+      },
+      {
+        "claim": "the module measures rules 1 and 7 only in part",
+        "source": "assets/base/agents/skills/cf-docs-portal/resources/explanation-method.md#a-gates-coverage-of-surfaces",
+        "derive": "the relationship line of the worked decision",
+        "check": {
+          "kind": "contains",
+          "text": "measures rules 1 and 7 only in part"
+        },
+        "value": true
+      },
+      {
+        "claim": "the module fails a figure with no grammar family",
+        "source": "docs-portal/scripts/figure-grammar.mjs",
+        "derive": "the rule 1 failure message",
+        "check": {
+          "kind": "contains",
+          "text": "the figure declares no grammar family"
+        },
+        "value": true
+      },
+      {
+        "claim": "the module fails labels in boxes with nothing drawn between them",
+        "source": "docs-portal/scripts/figure-grammar.mjs",
+        "derive": "the rule 7 failure message",
+        "check": {
+          "kind": "contains",
+          "text": "labels sit in boxes with nothing drawn between them"
+        },
+        "value": true
+      }
+    ],
+    "layout": {
+      "kind": "coverage",
+      "columns": [
+        "module",
+        "tokens",
+        "config",
+        "review"
+      ],
+      "rows": [
+        {
+          "label": "1 one idea",
+          "cells": [
+            "part",
+            "na",
+            "na",
+            "cov"
+          ]
+        },
+        {
+          "label": "2 every mark keyed",
+          "cells": [
+            "cov",
+            "na",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "3 two channels",
+          "cells": [
+            "cov",
+            "na",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "4 legible",
+          "cells": [
+            "cov",
+            "cov",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "5 narrow recomposes",
+          "cells": [
+            "cov",
+            "na",
+            "cov",
+            "na"
+          ]
+        },
+        {
+          "label": "6 facts derived",
+          "cells": [
+            "cov",
+            "na",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "7 no text boxes",
+          "cells": [
+            "part",
+            "na",
+            "na",
+            "cov"
+          ]
+        },
+        {
+          "label": "8 no overprint",
+          "cells": [
+            "cov",
+            "na",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "9 one-line caption",
+          "cells": [
+            "cov",
+            "na",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "10 token colour",
+          "cells": [
+            "cov",
+            "cov",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "11 a description",
+          "cells": [
+            "cov",
+            "na",
+            "na",
+            "na"
+          ]
+        },
+        {
+          "label": "12 a table twin",
+          "cells": [
+            "cov",
+            "na",
+            "na",
+            "na"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "elongation_max": 2.4,
+      "reason": "Twelve rules list one under another at phone width, each with its four owners named beside them."
+    },
+    "twin": {
+      "columns": [
+        "Rule",
+        "Grammar module",
+        "Token sheet",
+        "Portal config",
+        "Review"
+      ],
+      "rows": [
+        [
+          "1 one idea",
+          "part: fails a missing family",
+          "no",
+          "no",
+          "yes"
+        ],
+        [
+          "2 every mark keyed",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "3 two channels",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "4 legible",
+          "yes",
+          "yes",
+          "no",
+          "no"
+        ],
+        [
+          "5 narrow recomposes",
+          "yes",
+          "no",
+          "yes",
+          "no"
+        ],
+        [
+          "6 facts derived",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "7 no text boxes",
+          "part: fails boxes with nothing drawn between them",
+          "no",
+          "no",
+          "yes"
+        ],
+        [
+          "8 no overprint",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "9 one-line caption",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "10 token colour",
+          "yes",
+          "yes",
+          "no",
+          "no"
+        ],
+        [
+          "11 a description",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ],
+        [
+          "12 a table twin",
+          "yes",
+          "no",
+          "no",
+          "no"
+        ]
+      ]
+    }
+  }
+}

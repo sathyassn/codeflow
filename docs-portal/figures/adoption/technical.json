@@ -1,0 +1,588 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "adoption-sequence",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "In what order do the adoption commands run, and who acts?",
+    "idea": "You run init, the harness fills in the project's facts through customize, the hooks call codeflow from then on, and update refreshes by class.",
+    "title": "Adopting a repository, in order",
+    "kicker": "Adoption sequence",
+    "caption": "After init the repository calls codeflow on its own, through its hooks, and you only return to it to update.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "Acts on"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "Reports back"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "init prints a report ending with the next step",
+        "source": "docs/adoption.md#technical",
+        "derive": "the report sentence",
+        "check": {
+          "kind": "contains",
+          "text": "The printed report lists every file written and ends with the next step."
+        },
+        "value": true
+      },
+      {
+        "claim": "customize runs at standard or full",
+        "source": "docs/adoption.md#technical",
+        "derive": "step 6",
+        "check": {
+          "kind": "contains",
+          "text": "6. At standard or full, run `/cf-customize`."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 420,
+      "draw": [
+        {
+          "text": "you",
+          "x": 70,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "codeflow",
+          "x": 263.3,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "repository",
+          "x": 456.7,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "harness",
+          "x": 650,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 70,
+          "y1": 34,
+          "x2": 70,
+          "y2": 412
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 263.3,
+          "y1": 34,
+          "x2": 263.3,
+          "y2": 412
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 456.7,
+          "y1": 34,
+          "x2": 456.7,
+          "y2": 412
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 650,
+          "y1": 34,
+          "x2": 650,
+          "y2": 412
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 62H255.3",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "init --standard",
+          "x": 166.7,
+          "y": 52,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M271.3 108H448.7",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "text": "scaffold, hooks, policy",
+          "x": 360,
+          "y": 98,
+          "anchor": "middle",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M255.3 154H78",
+          "open": "end",
+          "id": "m3"
+        },
+        {
+          "text": "report, next step",
+          "x": 166.7,
+          "y": 144,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 200H642",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "text": "/cf-customize",
+          "x": 360,
+          "y": 190,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M642 246H464.7",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "text": "project facts",
+          "x": 553.4,
+          "y": 236,
+          "anchor": "middle",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M448.7 292H271.3",
+          "head": "end",
+          "id": "m6"
+        },
+        {
+          "text": "hooks call it",
+          "x": 360,
+          "y": 282,
+          "anchor": "middle",
+          "for": [
+            "m6"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M78 338H255.3",
+          "head": "end",
+          "id": "m7"
+        },
+        {
+          "text": "update",
+          "x": 166.7,
+          "y": 328,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m7"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M271.3 384H448.7",
+          "head": "end",
+          "id": "m8"
+        },
+        {
+          "text": "refresh by class",
+          "x": 360,
+          "y": 374,
+          "anchor": "middle",
+          "for": [
+            "m8"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 492,
+      "draw": [
+        {
+          "text": "you",
+          "x": 8,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 24H276",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 29,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "init --standard",
+          "x": 8,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "codeflow",
+          "x": 8,
+          "y": 89,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M84 84H260",
+          "head": "end",
+          "id": "c2"
+        },
+        {
+          "text": "repository",
+          "x": 352,
+          "y": 89,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "scaffold, hooks, policy",
+          "x": 8,
+          "y": 112,
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "codeflow",
+          "x": 8,
+          "y": 149,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M84 144H317",
+          "open": "end",
+          "id": "c3"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 149,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "report, next step",
+          "x": 8,
+          "y": 172,
+          "style": "mute",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 209,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 204H284",
+          "head": "end",
+          "id": "c4"
+        },
+        {
+          "text": "harness",
+          "x": 352,
+          "y": 209,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "/cf-customize",
+          "x": 8,
+          "y": 232,
+          "style": "mono",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "harness",
+          "x": 8,
+          "y": 269,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M76 264H260",
+          "head": "end",
+          "id": "c5"
+        },
+        {
+          "text": "repository",
+          "x": 352,
+          "y": 269,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "project facts",
+          "x": 8,
+          "y": 292,
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "repository",
+          "x": 8,
+          "y": 329,
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M100 324H276",
+          "head": "end",
+          "id": "c6"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 329,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "hooks call it",
+          "x": 8,
+          "y": 352,
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 389,
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 384H276",
+          "head": "end",
+          "id": "c7"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 389,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "update",
+          "x": 8,
+          "y": 412,
+          "style": "mono",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "codeflow",
+          "x": 8,
+          "y": 449,
+          "style": "strong",
+          "for": [
+            "c8"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M84 444H260",
+          "head": "end",
+          "id": "c8"
+        },
+        {
+          "text": "repository",
+          "x": 352,
+          "y": 449,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c8"
+          ]
+        },
+        {
+          "text": "refresh by class",
+          "x": 8,
+          "y": 472,
+          "for": [
+            "c8"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To",
+        "What"
+      ],
+      "rows": [
+        [
+          "1",
+          "you",
+          "codeflow",
+          "`codeflow init --standard`"
+        ],
+        [
+          "2",
+          "codeflow",
+          "repository",
+          "the scaffold, hooks and policy"
+        ],
+        [
+          "3",
+          "codeflow",
+          "you",
+          "the report and the next step"
+        ],
+        [
+          "4",
+          "you",
+          "harness",
+          "`/cf-customize`"
+        ],
+        [
+          "5",
+          "harness",
+          "repository",
+          "the project's facts, for you to review"
+        ],
+        [
+          "6",
+          "repository",
+          "codeflow",
+          "hooks call codeflow at commit and push"
+        ],
+        [
+          "7",
+          "you",
+          "codeflow",
+          "`codeflow update`"
+        ],
+        [
+          "8",
+          "codeflow",
+          "repository",
+          "a refresh by ownership class"
+        ]
+      ]
+    }
+  }
+}

@@ -1,0 +1,388 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "harness-configuration",
+    "family": "structure",
+    "binding": "authored",
+    "question": "Which configuration governs each harness, and what do they share?",
+    "idea": "Each harness reads its own settings files, and all three send the same payload to the same git-guard and exec-guard handler.",
+    "title": "Where each harness is configured",
+    "kicker": "Configuration",
+    "caption": "The settings differ per harness, but the guards are one binary reading one payload, so a rule is enforced the same way in each.",
+    "states": [
+      {
+        "name": "harness",
+        "mark": "layer",
+        "means": "Harness and its settings files"
+      },
+      {
+        "name": "guard",
+        "mark": "layer-remote",
+        "means": "The shared guard handler"
+      },
+      {
+        "name": "payload",
+        "mark": "trans",
+        "means": "Sends the hook payload"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "Grok Build wires the same guard payload in .grok/hooks/codeflow.json",
+        "source": "docs/harness-posture.md#architecture",
+        "derive": "the Grok Build row",
+        "check": {
+          "kind": "contains",
+          "text": "| Grok Build | Project hooks wired in `.grok/hooks/codeflow.json`, the same `git-guard` and `exec-guard` payload |"
+        },
+        "value": true
+      },
+      {
+        "claim": "Codex's hook payload is byte-compatible with Claude's",
+        "source": "docs/harness-posture.md#technical",
+        "derive": "the payload sentence",
+        "check": {
+          "kind": "contains",
+          "text": "Codex's hook payload is byte-compatible with Claude's"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 262,
+      "draw": [
+        {
+          "state": "harness",
+          "shape": "rect",
+          "x": 16,
+          "y": 16,
+          "w": 300,
+          "h": 72,
+          "rx": 8,
+          "id": "cl"
+        },
+        {
+          "text": "Claude Code",
+          "x": 32,
+          "y": 40,
+          "style": "strong",
+          "for": [
+            "cl"
+          ]
+        },
+        {
+          "text": ".claude/settings.json",
+          "x": 32,
+          "y": 62,
+          "style": "mono",
+          "for": [
+            "cl"
+          ]
+        },
+        {
+          "state": "payload",
+          "shape": "path",
+          "d": "M318 52C400 52 410 138 470 138",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "state": "harness",
+          "shape": "rect",
+          "x": 16,
+          "y": 100,
+          "w": 300,
+          "h": 72,
+          "rx": 8,
+          "id": "cx"
+        },
+        {
+          "text": "Codex",
+          "x": 32,
+          "y": 124,
+          "style": "strong",
+          "for": [
+            "cx"
+          ]
+        },
+        {
+          "text": ".codex/config.toml",
+          "x": 32,
+          "y": 145,
+          "style": "mono",
+          "for": [
+            "cx"
+          ]
+        },
+        {
+          "text": ".codex/hooks.json",
+          "x": 32,
+          "y": 166,
+          "style": "mono",
+          "for": [
+            "cx"
+          ]
+        },
+        {
+          "state": "payload",
+          "shape": "path",
+          "d": "M318 136C400 136 410 138 470 138",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "harness",
+          "shape": "rect",
+          "x": 16,
+          "y": 184,
+          "w": 300,
+          "h": 72,
+          "rx": 8,
+          "id": "gk"
+        },
+        {
+          "text": "Grok Build",
+          "x": 32,
+          "y": 208,
+          "style": "strong",
+          "for": [
+            "gk"
+          ]
+        },
+        {
+          "text": ".grok/hooks/codeflow.json",
+          "x": 32,
+          "y": 230,
+          "style": "mono",
+          "for": [
+            "gk"
+          ]
+        },
+        {
+          "state": "payload",
+          "shape": "path",
+          "d": "M318 220C400 220 410 138 470 138",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "guard",
+          "shape": "rect",
+          "x": 472,
+          "y": 100,
+          "w": 232,
+          "h": 76,
+          "rx": 8,
+          "cap": "end",
+          "id": "g"
+        },
+        {
+          "text": "codeflow hook",
+          "x": 488,
+          "y": 126,
+          "style": "mono",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "git-guard, exec-guard",
+          "x": 488,
+          "y": 147,
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "one handler, same payload",
+          "x": 488,
+          "y": 168,
+          "style": "mute",
+          "for": [
+            "g"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 364,
+      "draw": [
+        {
+          "state": "harness",
+          "shape": "rect",
+          "x": 8,
+          "y": 10,
+          "w": 270,
+          "h": 70,
+          "rx": 8,
+          "id": "cl"
+        },
+        {
+          "text": "Claude Code",
+          "x": 22,
+          "y": 32,
+          "style": "strong",
+          "for": [
+            "cl"
+          ]
+        },
+        {
+          "text": ".claude/settings.json",
+          "x": 22,
+          "y": 54,
+          "style": "mono",
+          "for": [
+            "cl"
+          ]
+        },
+        {
+          "state": "payload",
+          "shape": "path",
+          "d": "M280 45H320",
+          "id": "e0"
+        },
+        {
+          "state": "harness",
+          "shape": "rect",
+          "x": 8,
+          "y": 92,
+          "w": 270,
+          "h": 70,
+          "rx": 8,
+          "id": "cx"
+        },
+        {
+          "text": "Codex",
+          "x": 22,
+          "y": 114,
+          "style": "strong",
+          "for": [
+            "cx"
+          ]
+        },
+        {
+          "text": ".codex/config.toml",
+          "x": 22,
+          "y": 135,
+          "style": "mono",
+          "for": [
+            "cx"
+          ]
+        },
+        {
+          "text": ".codex/hooks.json",
+          "x": 22,
+          "y": 156,
+          "style": "mono",
+          "for": [
+            "cx"
+          ]
+        },
+        {
+          "state": "payload",
+          "shape": "path",
+          "d": "M280 127H320",
+          "id": "e1"
+        },
+        {
+          "state": "harness",
+          "shape": "rect",
+          "x": 8,
+          "y": 174,
+          "w": 270,
+          "h": 70,
+          "rx": 8,
+          "id": "gk"
+        },
+        {
+          "text": "Grok Build",
+          "x": 22,
+          "y": 196,
+          "style": "strong",
+          "for": [
+            "gk"
+          ]
+        },
+        {
+          "text": ".grok/hooks/codeflow.json",
+          "x": 22,
+          "y": 218,
+          "style": "mono",
+          "for": [
+            "gk"
+          ]
+        },
+        {
+          "state": "payload",
+          "shape": "path",
+          "d": "M280 209H320",
+          "id": "e2"
+        },
+        {
+          "state": "payload",
+          "shape": "path",
+          "d": "M320 45V296",
+          "head": "end",
+          "id": "bus"
+        },
+        {
+          "state": "guard",
+          "shape": "rect",
+          "x": 8,
+          "y": 298,
+          "w": 344,
+          "h": 56,
+          "rx": 8,
+          "cap": "end",
+          "id": "g"
+        },
+        {
+          "text": "codeflow hook",
+          "x": 22,
+          "y": 322,
+          "style": "mono",
+          "for": [
+            "g"
+          ]
+        },
+        {
+          "text": "git-guard, exec-guard",
+          "x": 22,
+          "y": 344,
+          "for": [
+            "g"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Harness",
+        "Configuration",
+        "Guards"
+      ],
+      "rows": [
+        [
+          "Claude Code",
+          "`.claude/settings.json`",
+          "`git-guard`, `exec-guard`"
+        ],
+        [
+          "Codex",
+          "`.codex/config.toml`, `.codex/hooks.json`",
+          "`git-guard`, `exec-guard`, once the layer is trusted"
+        ],
+        [
+          "Grok Build",
+          "`.grok/hooks/codeflow.json`",
+          "`git-guard`, `exec-guard`, once trusted"
+        ]
+      ]
+    }
+  }
+}

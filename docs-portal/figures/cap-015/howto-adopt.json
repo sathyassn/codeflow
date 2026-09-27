@@ -1,0 +1,563 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "portal-adopt",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "What do I run to adopt the portal, and what tells me it worked?",
+    "idea": "Setup comes from codeflow, the install, check and build run in the portal folder, and a clean validate report is the proof.",
+    "title": "Adopting and building the portal",
+    "kicker": "How-to",
+    "caption": "The last step is the proof: a clean validate report means every byte of the build was re-derived.",
+    "states": [
+      {
+        "name": "trans",
+        "mark": "trans",
+        "means": "You run"
+      },
+      {
+        "name": "return",
+        "mark": "return",
+        "means": "You get back"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the first step is portal setup",
+        "source": "docs/capabilities/CAP-015-opt-in-documentation-portal.md#technical",
+        "derive": "step 1",
+        "check": {
+          "kind": "contains",
+          "text": "1. Run `codeflow portal setup --path docs-portal`."
+        },
+        "value": true
+      },
+      {
+        "claim": "the last step is validate --portal",
+        "source": "docs/capabilities/CAP-015-opt-in-documentation-portal.md#technical",
+        "derive": "step 6",
+        "check": {
+          "kind": "contains",
+          "text": "6. From the repository root, run `codeflow validate --portal docs-portal`."
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 420,
+      "draw": [
+        {
+          "text": "codeflow",
+          "x": 70,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "you",
+          "x": 360,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "npm",
+          "x": 650,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 70,
+          "y1": 34,
+          "x2": 70,
+          "y2": 412
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 360,
+          "y1": 34,
+          "x2": 360,
+          "y2": 412
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 650,
+          "y1": 34,
+          "x2": 650,
+          "y2": 412
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M352 62H78",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "portal setup --path docs-portal",
+          "x": 215,
+          "y": 52,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M78 108H352",
+          "open": "end",
+          "id": "m2"
+        },
+        {
+          "text": "managed runtime, one root",
+          "x": 215,
+          "y": 98,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M368 154H642",
+          "head": "end",
+          "id": "m3"
+        },
+        {
+          "text": "run deps:install",
+          "x": 505,
+          "y": 144,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M368 200H642",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "text": "run check",
+          "x": 505,
+          "y": 190,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M368 246H642",
+          "head": "end",
+          "id": "m5"
+        },
+        {
+          "text": "run build",
+          "x": 505,
+          "y": 236,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m5"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M642 292H368",
+          "open": "end",
+          "id": "m6"
+        },
+        {
+          "text": "pages and evidence",
+          "x": 505,
+          "y": 282,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m6"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M352 338H78",
+          "head": "end",
+          "id": "m7"
+        },
+        {
+          "text": "validate --portal docs-portal",
+          "x": 215,
+          "y": 328,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m7"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M78 384H352",
+          "open": "end",
+          "id": "m8"
+        },
+        {
+          "text": "clean report",
+          "x": 215,
+          "y": 374,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m8"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 492,
+      "draw": [
+        {
+          "text": "you",
+          "x": 8,
+          "y": 29,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 24H276",
+          "head": "end",
+          "id": "c1"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 29,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "portal setup --path docs-portal",
+          "x": 8,
+          "y": 52,
+          "style": "mono",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "codeflow",
+          "x": 8,
+          "y": 89,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M84 84H317",
+          "open": "end",
+          "id": "c2"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 89,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "managed runtime, one root",
+          "x": 8,
+          "y": 112,
+          "style": "mute",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 149,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 144H317",
+          "head": "end",
+          "id": "c3"
+        },
+        {
+          "text": "npm",
+          "x": 352,
+          "y": 149,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "run deps:install",
+          "x": 8,
+          "y": 172,
+          "style": "mono",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 209,
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 204H317",
+          "head": "end",
+          "id": "c4"
+        },
+        {
+          "text": "npm",
+          "x": 352,
+          "y": 209,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "run check",
+          "x": 8,
+          "y": 232,
+          "style": "mono",
+          "for": [
+            "c4"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 269,
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 264H317",
+          "head": "end",
+          "id": "c5"
+        },
+        {
+          "text": "npm",
+          "x": 352,
+          "y": 269,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "run build",
+          "x": 8,
+          "y": 292,
+          "style": "mono",
+          "for": [
+            "c5"
+          ]
+        },
+        {
+          "text": "npm",
+          "x": 8,
+          "y": 329,
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M43 324H317",
+          "open": "end",
+          "id": "c6"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 329,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "pages and evidence",
+          "x": 8,
+          "y": 352,
+          "style": "mute",
+          "for": [
+            "c6"
+          ]
+        },
+        {
+          "text": "you",
+          "x": 8,
+          "y": 389,
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M43 384H276",
+          "head": "end",
+          "id": "c7"
+        },
+        {
+          "text": "codeflow",
+          "x": 352,
+          "y": 389,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "validate --portal docs-portal",
+          "x": 8,
+          "y": 412,
+          "style": "mono",
+          "for": [
+            "c7"
+          ]
+        },
+        {
+          "text": "codeflow",
+          "x": 8,
+          "y": 449,
+          "style": "strong",
+          "for": [
+            "c8"
+          ]
+        },
+        {
+          "state": "return",
+          "shape": "path",
+          "d": "M84 444H317",
+          "open": "end",
+          "id": "c8"
+        },
+        {
+          "text": "you",
+          "x": 352,
+          "y": 449,
+          "anchor": "end",
+          "style": "strong",
+          "for": [
+            "c8"
+          ]
+        },
+        {
+          "text": "clean report",
+          "x": 8,
+          "y": 472,
+          "style": "mute",
+          "for": [
+            "c8"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "Run",
+        "In",
+        "What you get"
+      ],
+      "rows": [
+        [
+          "1",
+          "`codeflow portal setup --path docs-portal`",
+          "the repository root",
+          "a managed runtime at one adopted root"
+        ],
+        [
+          "2",
+          "`npm run deps:install`",
+          "`docs-portal`",
+          "a locked install with dependency scripts off"
+        ],
+        [
+          "3",
+          "`npm run check`",
+          "`docs-portal`",
+          "adapter tests, derivation and Astro check"
+        ],
+        [
+          "4",
+          "`npm run build`",
+          "`docs-portal`",
+          "pages and evidence"
+        ],
+        [
+          "5",
+          "`codeflow validate --portal docs-portal`",
+          "the repository root",
+          "a clean report"
+        ]
+      ]
+    }
+  }
+}

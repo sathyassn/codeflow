@@ -14,13 +14,12 @@ and any fix or mitigation is coordinated before public disclosure.
 
 ## Supported versions
 
-Only the latest released major line is supported. Older major lines are
-unmaintained, including the archived `1.x` implementation kept at tag
-`v1-final` on branch `archive/v1`.
+Only the latest released major line is supported; older major lines are
+unmaintained.
 
 ## A note on the enforcement model
 
-codeflow enforces repository discipline across four planes — local git hooks, an
+codeflow enforces repository discipline across four planes: local git hooks, an
 in-session guard, CI, and remote branch protection. **By design, the local
 planes are fast feedback, not a hard boundary** against a determined actor who
 shares the host; the authoritative perimeter is remote branch protection + CI.

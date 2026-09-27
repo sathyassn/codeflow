@@ -1,13 +1,13 @@
 ---
 name: cf-method
-description: The CodeFlow working method — how to plan an epic, when an ADR is warranted, capability registry discipline, spec lifecycle, graduation rules, and anti-patterns. Use when planning work, making a Tier-3 decision (new dependency, schema change, boundary change), shipping an epic, or deciding how much process a change needs.
+description: The CodeFlow working method, covering how to plan an epic, when an ADR is warranted, capability registry discipline, spec lifecycle, graduation rules, and anti-patterns. Use when planning work, making a Tier-3 decision (new dependency, schema change, boundary change), shipping an epic, or deciding how much process a change needs.
 ---
 
-# cf-method — the discipline guide
+# cf-method: the discipline guide
 
 The model in one line: **clarity in → light rails through → verification out.**
 The scarce resources are clear inputs and verified outputs, not supervised
-middles. Instructions tell, workflows do, gates verify — and a gate exists only
+middles. Instructions tell, workflows do, gates verify, and a gate exists only
 where a mistake is irreversible or invisible.
 
 For every non-trivial task, read
@@ -35,8 +35,8 @@ authority, acceptance/interface, dependency or decision graph, security
 boundary, or irreversible tradeoff; ordinary reversible detail inside an
 approved node remains execution evidence.
 
-- **No workflow** for conversational or trivial changes — answer, edit, done.
-- **Interactive `/cf-model-orchestrator` loop** for non-trivial work — parallel
+- **No workflow** for conversational or trivial changes: answer, edit, done.
+- **Interactive `/cf-model-orchestrator` loop** for non-trivial work: parallel
   discovery, versioned joint settlement, then only the stages the outcome needs.
 - **Inline `/cf-develop` loop** supports an orchestrated implementation; used
   alone, it is the recorded solo fallback: build → independent review → verify.
@@ -44,10 +44,10 @@ approved node remains execution evidence.
   unattended, batch, or parallel fan-out runs. Its assurance preset is
   explicitly single-vendor; it never claims the interactive duo's dual approval.
   (Workflows are a Claude-Code runtime; on another harness this rung is
-  unavailable—use that harness's native task composition.)
+  unavailable; use that harness's native task composition.)
 - **Custom ad-hoc workflow** (Claude Code) for genuinely novel orchestration,
   not a shortcut around review.
-- **Integration-branch flow** for a multi-task body of work — an epic of serial
+- **Integration-branch flow** for a multi-task body of work: an epic of serial
   and/or parallel tasks lands task-by-task on a shared `integration/<epic>`
   branch, not on `main`, and the human reviews one final PR. See "Managing a
   body of work" below.
@@ -59,22 +59,22 @@ approved node remains execution evidence.
 An epic exists to make one question answerable before any code is written:
 *what does done look like, verifiably?*
 
-**An epic is optional — reach for one only when the work needs it.** Warrant an
+**An epic is optional: reach for one only when the work needs it.** Warrant an
 epic for a body of work that is **more than one PR**, **more than one session**,
 or **spans multiple capabilities**. Anything smaller is a single task with
 acceptance criteria and no epic; an epic never gates a single task. The clarity
-checklist below applies either way — to the epic when there is one, otherwise to
+checklist below applies either way: to the epic when there is one, otherwise to
 the task.
 
-Input clarity checklist — do not draft until you can state all four:
+Input clarity checklist: do not draft until you can state all four:
 
 1. **Problem and audience.** What hurts, for whom, in one or two sentences.
-2. **Scope boundary.** What is in, and — more important — what is explicitly
+2. **Scope boundary.** What is in, and (more important) what is explicitly
    out. Check `docs/product.md` non-goals; an epic that violates a non-goal is
    a conversation with the human, not a workaround.
 3. **Acceptance criteria.** Testable statements, preferably in **EARS** ("When
    <trigger>, the system shall <response>") or **Given/When/Then** form. Each
-   one must name a concrete, machine-verifiable check — a command, a test path
+   one must name a concrete, machine-verifiable check: a command, a test path
    or tag, or an observable with a threshold.
 4. **Touched surface.** Which areas and which existing capabilities
    (`docs/capabilities.md`) this creates or changes.
@@ -91,7 +91,7 @@ ID, `codeflow validate --docs` shall exit non-zero in CI."
 Bad criterion: "validation works correctly" (not testable, no check named), or a
 14-item list restating the implementation plan (that is design, not acceptance).
 
-Right-size the epic for one coherent delivery cycle—normally a small number of
+Right-size the epic for one coherent delivery cycle, normally a small number of
 agent sessions or PRs after its load-bearing questions are settled. Estimate
 from dependencies, remaining discovery, implementation complexity, integration,
 and verification rather than translating a human staffing calendar. If the
@@ -132,7 +132,7 @@ durable outcome and direct dependencies. A batch may yield several epics,
 standalone tasks, or both; it is not itself a reason to share a branch. Apply
 the flow below independently to each coherent multi-task epic.
 
-When an epic is a multi-task body — serial chains and/or parallel tasks — do
+When an epic is a multi-task body (serial chains and/or parallel tasks), do
 **not** land each task on `main`. Land them on a shared **integration branch**
 so agents proceed autonomously and the human reviews **one** final PR. Every
 other gate (commit standards, secret scan, destructive-op rules, the test gate)
@@ -155,7 +155,7 @@ decision points. The final combined-diff review is an additional integration
 layer for cross-task and emergent behavior, not a substitute for those reviews.
 
 1. **Integration branch.** Cut `integration/<epic-id>-<slug>` off the current
-   protected target and push it. It is **non-protected** — agents merge into it
+   protected target and push it. It is **non-protected**; agents merge into it
    freely.
    Establish this stable target before task allocation; an implementation task
    cannot target a missing branch.
@@ -179,10 +179,10 @@ layer for cross-task and emergent behavior, not a substitute for those reviews.
    optional when its coordination cost exceeds its critical-path gain.
 4. **Land a reviewed task** only after its producer evidence and cross-lineage
    review are complete, using one of two sanctioned modes:
-   - **Local** — `codeflow integrate <task-branch> --into integration/<…>`:
+   - **Local**: `codeflow integrate <task-branch> --into integration/<…>`:
      flock-serialized (safe for parallel agents), rebases the task branch, runs
      the full test gate, fast-forward-merges. Preferred for tight loops.
-   - **PR** — open a PR with base = the integration branch; CI runs (the
+   - **PR**: open a PR with base = the integration branch; CI runs (the
      `pull_request` trigger fires regardless of base) and the agent merges on
      green, because the base is non-protected.
    Land tasks in a valid topological order and run affected gates after each
@@ -190,7 +190,7 @@ layer for cross-task and emergent behavior, not a substitute for those reviews.
    guard, ownership, acceptance/interface, or safety mutation creates Plan
    vN+1; another valid linearization under unchanged constraints does not.
 5. **Drift control** (long-running epics): periodically **merge** `origin/main`
-   *into* the integration branch. Merge only — never rebase a shared branch;
+   *into* the integration branch. Merge only; never rebase a shared branch;
    rebase only task branches.
 6. **Finish.** After the last task lands, run the ship flow *on the integration
    branch* (full suite, `validate --docs`, capability/doc/epic-record updates as
@@ -203,13 +203,13 @@ layer for cross-task and emergent behavior, not a substitute for those reviews.
    entry from `git cherry` before branch force-delete.
 
 Boundaries are unchanged: `main` and every protected branch stay
-human-merge-only. The integration branch is not a backdoor — its content reaches
+human-merge-only. The integration branch is not a backdoor: its content reaches
 `main` only through that final reviewed PR.
 
 ## Why the git boundary is remote
 
 The git standards are enforced in layers, and the layers are not equal. Local git
-hooks and the `git-guard` PreToolUse hook are **fast feedback** — they catch the
+hooks and the `git-guard` PreToolUse hook are **fast feedback**: they catch the
 normal ways work goes wrong in-session, before a push, but an agent on the local host
 can edit or skip them. Required CI and remote rules form a server-side boundary
 only when configured and enforced for the actor's permissions.
@@ -225,18 +225,18 @@ when remote protection is unavailable. Report the missing boundary, retain the
 project's safety and review duties, and do not imply local checks replace
 server-side enforcement.
 
-## When an ADR is warranted — Tier-3 triggers
+## When an ADR is warranted: Tier-3 triggers
 
 Accepted ADRs are append-only and finalized at the moment of decision, when context is
-loaded — the cheapest possible "why" capture, and the best-value reading for a
+loaded: the cheapest possible "why" capture, and the best-value reading for a
 fresh session. But ADR over-production is its own swamp. Write one only at a
 **Tier-3 decision point**:
 
-- **New dependency** — a crate, package, service, or external tool joins the
+- **New dependency**: a crate, package, service, or external tool joins the
   project.
-- **Schema change** — a persisted format, config shape, or API contract
+- **Schema change**: a persisted format, config shape, or API contract
   changes meaning.
-- **Boundary change** — responsibility moves between modules, layers, or
+- **Boundary change**: responsibility moves between modules, layers, or
   systems; something is split, merged, or re-owned.
 
 Choosing a variable name, an internal refactor, an obvious bug fix: no ADR.
@@ -245,7 +245,7 @@ When in doubt, ask: "would a fresh session six months from now need to know
 
 Use `docs/decisions/template.md`: context (the constraint, 2–5 sentences),
 decision (stated as fact), consequences (honest about costs), and
-`architecture_impact`. The impact field is load-bearing — when it is not
+`architecture_impact`. The impact field is load-bearing: when it is not
 `none`, update `docs/architecture.md` **in the same PR**. ADRs are never edited
 after acceptance; a reversal is a new ADR plus `superseded_by` on the old one.
 An unpublished draft may be revised while its decision is unresolved; it gains
@@ -254,26 +254,26 @@ an accepted decision.
 
 ## Capability registry discipline
 
-`docs/capabilities.md` is the agent's index of what the system actually does —
+`docs/capabilities.md` is the agent's index of what the system actually does,
 the first thing to consult before building ("does this exist? what does it
 touch?") and the artifact that makes the system legible without reading all
 the code.
 
 Entry fields: `id` (CAP-###), `name`, `area`, `status`
 (planned → building → shipped → deprecated), `verified_by` (test tags),
-`epics[]`, `adrs[]` — plus exactly one paragraph of prose.
+`epics[]`, `adrs[]`, plus exactly one paragraph of prose.
 
 Rules:
 
-- One entry per user-meaningful capability — what the system *does*, not how.
+- One entry per user-meaningful capability: what the system *does*, not how.
   "Secret scanning at commit time" is a capability; "the regex module" is not.
-- The entry is updated in the same PR that ships the work — the discipline is
+- The entry is updated in the same PR that ships the work; the discipline is
   the ship flow itself, not a blocking gate; `validate --docs` does not gate an
   epic from closing.
 - `verified_by` names the real test tags that prove the capability. `validate
   --docs` requires a shipped entry to carry a non-empty `verified_by`, but it
-  does not resolve the tags — a stale tag is a lie only the reviewer will catch.
-- Deprecate, never delete — the ID spine must stay resolvable.
+  does not resolve the tags, so a stale tag is a lie only the reviewer will catch.
+- Deprecate, never delete; the ID spine must stay resolvable.
 - At roughly 15 entries, graduate the single file to `docs/capabilities/`
   (one CAP-*.md each); the registry file becomes an index.
 
@@ -288,7 +288,7 @@ Specs are **inputs to work, not living documents.**
   `codeflow work start`.
 - Consumed during `/cf-develop`.
 - **Frozen at ship:** `status: implemented` when the epic completes. After
-  that, truth lives in architecture, capabilities, and tests — the spec is
+  that, truth lives in architecture, capabilities, and tests; the spec is
   allowed to be historical. Never "update" a frozen spec to match later
   reality; that is what architecture.md is for.
 - A spec's open-questions section must be empty before building starts.
@@ -325,13 +325,13 @@ Downgrade is never destructive: stop managing, do not delete.
   contemporaneous evidence remain owned by their applicable stages and do not
   require a fictional code change.
 - **Speculative artifacts.** New agents, skills, commands, or templates are
-  added when usage proves the need — never because they might help.
+  added when usage proves the need, never because they might help.
 - **Assumption-driven building.** Guessing an operator-owned outcome or safety
   decision, or asking the operator to rediscover a fact the agent could verify.
-- **Agent-merging a protected branch.** An agent never merges into protected —
+- **Agent-merging a protected branch.** An agent never merges into protected:
   a human merges the PR, or `codeflow integrate` lands it. Override envs
   (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) are human-only; setting them
-  in-session is laundering — blocked wherever a PreToolUse guard binds (Claude
+  in-session is laundering, blocked wherever a PreToolUse guard binds (Claude
   Code always; interactive codex after the one-time `/hooks` trust), while the
   git-hook plane honors the env by design as the sanctioned human path; the
   remote perimeter is the hard line. Never `gh pr merge --delete-branch`.
