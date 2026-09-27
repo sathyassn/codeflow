@@ -266,4 +266,15 @@ fn registry_touch_skips_hooks_and_is_silent_in_a_read_only_home() {
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(!stderr.contains("registry touch failed"), "{stderr}");
     assert!(!read_only.join("registry.json").exists());
+
+    // A home used before keeps a writable lock; the denial then comes from
+    // the atomic registry write, and is just as quiet (T137-4).
+    fs::set_permissions(home.path(), fs::Permissions::from_mode(0o555)).unwrap();
+    assert!(home.path().join("registry.json.lock").exists());
+    let before = fs::read_to_string(&registry).unwrap();
+    let out = run_in(repo.path(), home.path(), &["recall", "anything"]);
+    fs::set_permissions(home.path(), fs::Permissions::from_mode(0o755)).unwrap();
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains("registry touch failed"), "{stderr}");
+    assert_eq!(fs::read_to_string(&registry).unwrap(), before);
 }

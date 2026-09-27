@@ -19,7 +19,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::file_lock::{locked_read, locked_rmw_typed};
+use crate::file_lock::{locked_read, locked_rmw_typed_io};
 
 /// Registry schema version written by this binary.
 pub const REGISTRY_SCHEMA_VERSION: u32 = 1;
@@ -209,12 +209,6 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
     if !is_initialized(repo_root) {
         return Ok(false);
     }
-    if let Err(error) = crate::file_lock::probe_lock_writable(&registry_path(home)) {
-        if is_denied(&error) {
-            return Ok(false);
-        }
-    }
-
     let canonical = std::fs::canonicalize(repo_root)
         .map_err(|e| format!("canonicalize {}: {e}", repo_root.display()))?;
     let info = read_project_info(&canonical);
@@ -226,7 +220,7 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
         last_activity: rfc3339_now(),
     };
 
-    locked_rmw_typed(&registry_path(home), Registry::default, |reg| {
+    let written = locked_rmw_typed_io(&registry_path(home), Registry::default, |reg| {
         reg.schema_version = REGISTRY_SCHEMA_VERSION;
         // Prune stale rows: a cheap existence check per entry, inside the
         // same lock so concurrent touches never resurrect a pruned path.
@@ -241,9 +235,13 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
             None => reg.repos.push(entry.clone()),
         }
         Ok(())
-    })?;
-
-    Ok(true)
+    });
+    match written {
+        Ok(()) => Ok(true),
+        // Any step, from the lock to the atomic write, may be denied.
+        Err(error) if error.io().is_some_and(is_denied) => Ok(false),
+        Err(error) => Err(error.to_string()),
+    }
 }
 
 /// A permission denial or a read-only file system: the registry is not this
