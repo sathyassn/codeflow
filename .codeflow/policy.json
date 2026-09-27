@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "git": {
+    "work_planning": "block",
     "product_paths": [
       "assets/**",
       "crates/**"
