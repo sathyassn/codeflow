@@ -22,6 +22,26 @@ erratum below, never an edit of the section.
 _Staging evidence: this section was first staged on 2026-08-02; that was not a
 publication date._
 
+> **Upgrading from 2.1.0.** Take these steps in order; the entries below give
+> the detail.
+>
+> 1. On a planning branch, make the repairs in the breaking migrations list
+>    under Changed (coverage scopes, test modes,
+>    `security.dangerous_commands`, and what `codeflow validate --docs`
+>    reports), and merge them before updating.
+> 2. Install the 3.0.0 `codeflow` on `PATH`. The hooks run that binary, and
+>    an older one rejects the new policy keys and blocks every commit.
+> 3. Land a pull request that raises only `scaffold_version` in
+>    `.codeflow/project.toml`, so CI installs the pinned, checksum-verified
+>    3.0.0 binary.
+> 4. Run `codeflow update` on a new branch and review what it proposes.
+>    Reasoning effort now defaults to high. A project with a remote and
+>    existing records runs `codeflow ids seed` once.
+> 5. With durable work tracking, a pull request carries `Task: TSK-NNN` or
+>    `Task: none: <reason>` unless its branch names the task.
+> 6. A project that adopted the bundled portal follows the ownership table
+>    in `docs/releasing.md` before its next portal update.
+
 ### Added
 
 <!-- codeflow:release-impact minor -->
@@ -296,6 +316,26 @@ publication date._
   prompt instead of a reminder, and the prompt goes through; upgrading
   replaces the digest with the reminder. `codeflow hook prompt-reminder`
   prints the line alone for manual use and is never wired.
+
+<!-- codeflow:release-impact minor -->
+- **Release state checked before the pull request.** In a project that
+  adopted CodeFlow's release calculator (`release.backend = "codeflow"` with
+  `scripts/release.py`, as CodeFlow's own repository does), the pre-push
+  hook runs `release.py preflight` for each pushed branch. It checks the
+  release tree against the recorded baseline and local tags and says that it
+  was not checked against the host. It warns when the range touches
+  behaviour paths with no pending entry and no `Impact: none` in the draft
+  that `CODEFLOW_PR_DRAFT` names, and it blocks only a push that breaks a
+  release tree its base kept valid. `codeflow integrate` runs the same
+  structural check in its test stage. `codeflow ci` now reads the Release
+  impact block as `release.py` does, so a placeholder Rationale or the
+  template's Migration choices left in place are reported. The
+  adopter-facing path set now includes `.codeflow/policy.json`,
+  `.codeflow/project.toml` and the record schema, so a pull request that
+  changes them needs a journey criterion, as other adopter-facing changes
+  do. `release.py` identifies each pending entry by its bold label (a
+  duplicate blocks), accepts a typed repair of a base whose release state is
+  invalid, and takes errata as dated notes in a `## Errata` block.
 
 ### Changed
 
