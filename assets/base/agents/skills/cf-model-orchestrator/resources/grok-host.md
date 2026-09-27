@@ -35,7 +35,7 @@ the flag; the Grok Build user guide names `workspace` / `read-only` /
 
 A Grok host reaches Claude through Herdr (`claude` + schema-v2). It reaches
 Codex through the official `codex` CLI, which talks to the local app-server
-daemon — start `codex app-server daemon start` when the socket is missing,
+daemon: start `codex app-server daemon start` when the socket is missing,
 then Herdr `codex` (tmux degraded). If the daemon cannot start, keep the
 interactive CLI in Herdr. Do not install third-party Grok Codex plugins. The
 Claude-Code `codex-plugin-cc` is not a Grok-host lane.
@@ -53,7 +53,7 @@ Host is not duty. Apply the canonical responsibility-versus-execution and route
 status rules in `capability-routing.md`; this adapter does not redefine them.
 The Claude design owner produces direction and real design execution in its
 native session unless Plan vN records an explicit task-specific operator
-override—Claude absence alone is not one. A Grok high host stays the
+override; Claude absence alone is not one. A Grok high host stays the
 orchestrator and may use its own permitted routes. Catalog Grok may execute or
 take named extra-family review when a documented trigger fires and it is
 available; actual authored lineage determines independent review, and the

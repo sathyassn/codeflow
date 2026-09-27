@@ -299,12 +299,12 @@ requalification.
 
 ## References
 
-- Anthropic, “Demystifying evals for AI agents” — tasks/trials/graders/traces,
+- Anthropic, “Demystifying evals for AI agents”: tasks/trials/graders/traces,
   repeated trials, deterministic+model+human layers, regression versus
   capability suites, transcript inspection, and long-term maintenance.
-- OpenAI, “A shared playbook for trustworthy third-party evaluations” — record
+- OpenAI, “A shared playbook for trustworthy third-party evaluations”: record
   the claim, harness, tool access, resource budget, elicitation method, and
   validity threats; harness choice is part of the evaluated system.
-- OpenAI, “How evals drive the next chapter in AI for businesses” — define
+- OpenAI, “How evals drive the next chapter in AI for businesses”: define
   contextual success, include costly edge cases, and retain expert calibration
   of automated graders.

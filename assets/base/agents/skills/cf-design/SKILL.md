@@ -3,7 +3,7 @@ name: cf-design
 description: Establish and settle proportionate product, UX, interaction, composition, and visual-design intent before implementing or materially reshaping a user-facing surface. Use for web, mobile, tablet, desktop, native, or other interfaces when work changes experience direction, hierarchy, composition, interaction, brand expression, typography, colour, layout, imagery, or motion, and for fidelity review against an accepted direction. Conform without ceremony for bounded changes and skip cosmetic edits with explicit design intent.
 ---
 
-# cf-design — design direction before implementation
+# cf-design: design direction before implementation
 
 Produce the design intent that the quality contract later verifies, grounded in
 the creator, audience, context, subject, and systems in force. Design is a
@@ -23,10 +23,10 @@ Choose the lightest path that resolves material uncertainty:
 
 ```text
 cosmetic or exact local correction
-  -> DESIGN_INTENT: N/A — accepted direction is unchanged
+  -> DESIGN_INTENT: N/A (accepted direction is unchanged)
 
 bounded change inside an established system
-  -> DESIGN_INTENT: conform — <system or approved surface>
+  -> DESIGN_INTENT: conform (<system or approved surface>)
 
 new or reshaped surface whose direction and primary composition follow
 from accepted evidence
@@ -111,7 +111,7 @@ before sections 4 to 6. It carries the working detail and stopping rules.
 ## 4. Model the subject before choosing form
 
 Direction states what a surface is for, not what it must show. Before choosing
-a layout, template, component, chart, or diagram, model the **subject** — real
+a layout, template, component, chart, or diagram, model the **subject**: real
 objects, data, artefacts, vocabulary; the **governing idea** a viewer must take
 away; the **user action** it serves; the actual **relationships and states**;
 the **hierarchy and depth** separating the at-rest idea, mechanics, and
@@ -119,7 +119,7 @@ evidence; and the target **platform and medium**.
 
 Then choose form from the relationship it must expose. Remove the sentences
 from a candidate: if the remaining structure no longer expresses the
-relationship, the structure was furniture. Earn every container — a card,
+relationship, the structure was furniture. Earn every container: a card,
 table, panel, tab, badge, chip, or step marker is right when it represents a
 real object, boundary, grouping, state, or action, and wrong when it
 manufactures hierarchy the content lacks. Keep the at-rest view carrying the
@@ -137,7 +137,7 @@ composition, never a compressed copy of another.
 
 When the direction, primary composition, or experience is materially open,
 compare two or three candidates that differ in what they encode, and render the
-ones a reviewer or the operator must judge instead of describing them — a
+ones a reviewer or the operator must judge instead of describing them; a
 described composition is no evidence that it reads. Use the lightest medium
 that shows the behavior at issue, with the product's real content, at
 representative viewports and applicable modes, including the intermediate ones
@@ -153,7 +153,7 @@ what loss. A compound question is decomposed, or the part the direction
 optimises and what carries the other are both named.
 
 When the carrier verdict is negative for most candidates, the open decision is
-the **contract**, not the composition, and it is settled first — at its own
+the **contract**, not the composition, and it is settled first, at its own
 altitude, on its own compared alternatives. The reference owns that rung.
 
 A declaration constrains a drawing only while it stays the declaration that
@@ -165,8 +165,8 @@ cannot be shown from the artefacts, say so where it will be read.
 A rendered candidate is evidence only if the render carries what its page
 contains. A still frame has no interaction, so a scroll container is a silent
 crop, not an affordance. Measure hidden overflow, out-of-frame drawing,
-document overflow and the smallest rendered type — in the units the reader
-loses, off the rendered page — rather than trusting the eye; judge nothing from
+document overflow and the smallest rendered type (in the units the reader
+loses, off the rendered page) rather than trusting the eye; judge nothing from
 a render that fails. Key every information-bearing mark where the reader can see
 it and in the accessible description, and let every non-neutral colour name what
 it encodes.
@@ -192,7 +192,7 @@ localization, and fidelity controls. Follow the reference's evidence and
 stopping rules; neither abstract one consumer nor hard-code a recurring pattern.
 
 Mine rejected candidates for transferable primitives. But convergence between
-candidates is a **hypothesis, not recurrence** — test it against subject
+candidates is a **hypothesis, not recurrence**: test it against subject
 independence, whether those surfaces will really coexist and last, and a reuse
 need in accepted product surfaces. Convergence alone earns nothing: shipped
 recurrence still decides, and the evidence still stops where it stops. If a
@@ -251,13 +251,13 @@ conformance feedback stays in the normal task record.
 The Claude judgment primary produces design intent and direction in its
 native session. Codex challenges the choice. Both standing primaries approve
 the exact Plan vN before implementation. Extra-family review, when a trigger
-fires and it is available, is evidence — never a silent third vote.
+fires and it is available, is evidence, never a silent third vote.
 
 The same Claude owner authors and implements real design and retains fidelity
 judgment under the orchestrator's canonical routing contract, including its
 same-Claude fallback. Until a matching evidenced tuple is scoped-qualified, the
 primary executes; candidates run only disposable fixtures. Another family needs
-an explicit task-specific operator override recorded in Plan vN—Claude absence
+an explicit task-specific operator override recorded in Plan vN; Claude absence
 is not one. Turning settled product/UX/UI into components, layout, styles, or
 interactions is design implementation; plumbing, asset transfer, and evidence
 are non-design only when they realize no design decision. Scoped routes gain no
@@ -275,9 +275,9 @@ hands it back to the author or the operator.
 Apply the reference protocols that fit: five-second governing idea,
 thirty-second mechanics, form match, primary-form inventory, progressive depth,
 and no-box where a figure is the primary explanatory form. For a surface family
-or richer medium, add sibling distinctiveness — observed with titles and
+or richer medium, add sibling distinctiveness (observed with titles and
 captions masked, so identification comes from content-bearing structure and not
-from the words — and plain-baseline differential. Where the surface adapts, add
+from the words) and plain-baseline differential. Where the surface adapts, add
 adaptation, which tests idea survival rather than information presence. Observed
 results decide these gates, never numeric scores; semantic containers remain
 valid.

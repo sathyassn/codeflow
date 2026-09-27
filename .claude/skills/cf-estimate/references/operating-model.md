@@ -122,8 +122,8 @@ predictive calibration or a delivery guarantee.
 These sources inform uncertainty, local comparability and schedule checking;
 they do not validate this rubric's points or promise agent productivity:
 
-- [SHELF](https://shelf.sites.sheffield.ac.uk/) — structured judgment when evidence is sparse.
-- [COSMIC](https://cosmic-sizing.org/cosmic-sizing/estimating-with-software-size/) — environment-specific size/effort relationships, not transferable human productivity coefficients.
-- [GAO Schedule Assessment Guide](https://www.gao.gov/assets/gao-16-89g.pdf) — dependency and resource realism.
-- [NIST censored observations](https://www.itl.nist.gov/div898/handbook/apr/section1/apr131.htm) — incomplete observations need explicit treatment; software modeling adds assumptions.
-- [Forecast distribution accuracy](https://otexts.com/fpp3/distaccuracy.html) — uncertainty and useful interval width, only when probability definitions warrant those metrics.
+- [SHELF](https://shelf.sites.sheffield.ac.uk/): structured judgment when evidence is sparse.
+- [COSMIC](https://cosmic-sizing.org/cosmic-sizing/estimating-with-software-size/): environment-specific size/effort relationships, not transferable human productivity coefficients.
+- [GAO Schedule Assessment Guide](https://www.gao.gov/assets/gao-16-89g.pdf): dependency and resource realism.
+- [NIST censored observations](https://www.itl.nist.gov/div898/handbook/apr/section1/apr131.htm): incomplete observations need explicit treatment; software modeling adds assumptions.
+- [Forecast distribution accuracy](https://otexts.com/fpp3/distaccuracy.html): uncertainty and useful interval width, only when probability definitions warrant those metrics.

@@ -11,7 +11,7 @@ You are not “filling a schema.” You are staging **what a human will see** wh
 the review surface opens. The JSON is only the handoff format. The operator
 never reads it. They see a page: chrome above, document column in the middle,
 optional Comment rail when armed. **Whatever structure you choose in JSON is
-exactly the structure of that page**—calm utility styling, no magic upgrade.
+exactly the structure of that page**: calm utility styling, no magic upgrade.
 
 If the JSON is a chat dump in blocks, the page is a chat dump with better type.
 That is a failed present.
@@ -20,7 +20,7 @@ That is a failed present.
 
 ## 1. What the human actually encounters
 
-Imagine the window after open—not the file on disk.
+Imagine the window after open, not the file on disk.
 
 - **Top:** title of the review, appearance, **Comment**. Quiet. Not content.
 - **Left (wide layouts):** a thin route of block labels. Those labels come from
@@ -30,7 +30,7 @@ Imagine the window after open—not the file on disk.
   between them. The first screenful is almost the whole argument for many
   people. Later blocks are for those who scroll.
 - **Comment (when armed):** mode strip + notes rail. Humans mark **what is on
-  the page**—figures, lines of a diff, a status row—not your JSON keys.
+  the page** (figures, lines of a diff, a status row), not your JSON keys.
 
 So: **order of `blocks[]` = order of attention.** First block owns the fold.
 A long narrative first means they start by reading. A structural figure first
@@ -61,7 +61,7 @@ Think in jobs, not tags:
 | Inspect exact change | Monospace change surface | **diff** / **code** | Paraphrase hides the line they need to mark |
 | Hold one decision | Named choice + state | **decision** | Buried ask in a closing paragraph |
 | Absorb continuity | Short reading band | **narrative** | Fine *after* the figure; fatal as the only carrier of structure |
-| Enumerate peer points | Equal list items | **bullets** | Everything same weight—no hierarchy, no spine |
+| Enumerate peer points | Equal list items | **bullets** | Everything same weight: no hierarchy, no spine |
 | Signal risk / exception | One edged callout | **callout** | If everything is a callout, nothing is |
 | Ask for a verdict | One clear closing demand | **feedback_prompt** | Vague “thoughts?” wastes the surface |
 
@@ -117,7 +117,7 @@ in the road, **comparison** beats a numbered list.
 
 Comment exists so humans can pin **what they see**. Prefer carriers with
 durable visual targets: a node, a row, a diff line, a column. A soup of prose
-forces them to select sentences—and trains you to dump more sentences.
+forces them to select sentences and trains you to dump more sentences.
 
 ### “Utility craft is quiet on purpose”
 
