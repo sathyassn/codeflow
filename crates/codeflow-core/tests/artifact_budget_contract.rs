@@ -703,7 +703,8 @@ const TURN_ADAPTER_READ_EDGES: &[(&str, &str)] = &[
         "agents/skills/cf-model-orchestrator/SKILL.md",
         "On a Codex, Grok or other non-Claude host, before every Claude worker or \
          same-session reviewer launch through the delegated lifecycle, load the \
-         `claude-turn-completion.md` foreground-return contract.",
+         `.claude/skills/cf-delegate/resources/claude-turn-completion.md` \
+         foreground-return contract.",
     ),
     (
         "agents/skills/cf-model-orchestrator/resources/routing/effort.md",
@@ -856,16 +857,22 @@ fn skill_trees() -> SkillFiles {
     files
 }
 
-/// Every structural fault in `files` under `inventory`: chain errors, then
-/// orphans.
+/// Every structural fault in `files` under `inventory`, from the one
+/// implementation doctor shares.
 fn structure_faults(files: &SkillFiles, inventory: &Inventory<'_>) -> Vec<String> {
-    let mut faults = reading::reading_chain(files, inventory).errors;
-    faults.extend(
-        reading::orphans(files)
-            .into_iter()
-            .map(|path| format!("{path} is orphaned: no index entry or trigger reaches it")),
-    );
-    faults
+    reading::structure_faults(files, inventory)
+}
+
+/// The kernel a method-tier session loads at start: the managed block of
+/// `agents` and the Claude contract.
+fn method_kernel(agents: &str) -> String {
+    let root = repo_root();
+    let agents = read_text(&root.join("assets/base").join(agents));
+    format!(
+        "{}\n{}",
+        managed_block(&agents).expect("managed markers"),
+        read_text(&root.join("assets/base/CLAUDE.md.tmpl"))
+    )
 }
 
 /// The size report doctor gives, printed as information. Never asserted.
@@ -918,26 +925,9 @@ fn reading_structure_holds_and_sizes_are_reported() {
 
     // The kernel a method-tier session loads at start names each entry point
     // of the per-task chain, so every read starts from the kernel.
-    let root = repo_root();
-    for (agents, claude) in [
-        ("AGENTS.md.tmpl", "CLAUDE.md.tmpl"),
-        ("AGENTS.full.md.tmpl", "CLAUDE.md.tmpl"),
-    ] {
-        let agents = read_text(&root.join("assets/base").join(agents));
-        let kernel = format!(
-            "{}\n{}",
-            managed_block(&agents).expect("managed markers"),
-            read_text(&root.join("assets/base").join(claude))
-        );
-        for (stage, entry) in reading::CHAIN_ENTRY_POINTS {
-            let (skill, file) = entry.split_once('/').expect("skill-relative entry");
-            let named = if file == "SKILL.md" {
-                kernel.contains(&format!("/{skill}`")) || kernel.contains(&format!("{skill}/"))
-            } else {
-                kernel.contains(Path::new(file).file_name().unwrap().to_str().unwrap())
-            };
-            assert!(named, "the kernel does not name the {stage} entry {entry}");
-        }
+    for agents in ["AGENTS.md.tmpl", "AGENTS.full.md.tmpl"] {
+        let unnamed = reading::unnamed_entry_points(&method_kernel(agents), &Inventory::SHIPPED);
+        assert!(unnamed.is_empty(), "{agents}: {}", unnamed.join("\n"));
     }
     println!(
         "reading sizes against guideline numbers:\n{}",
@@ -1216,4 +1206,146 @@ fn restored_audit_passages_stay_where_they_are_read() {
     for (path, clauses) in pins {
         assert_contains_all(path, clauses);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Review probes as fault fixtures (TSK-150 review, Codex T150-C1 to C3)
+// ---------------------------------------------------------------------------
+
+/// T150-C1: a pointer in a tilde fence or an HTML comment is no read, so it
+/// cannot rescue an orphan.
+#[test]
+fn a_fenced_or_commented_pointer_does_not_rescue_an_orphan() {
+    for pointer in [
+        "\n<!-- [Retired pointer](resources/codex-hidden.md) -->\n",
+        "\n~~~markdown\nRead [example](resources/codex-hidden.md).\n~~~\n",
+        "\n````\n```\nRead [example](resources/codex-hidden.md).\n````\n",
+    ] {
+        let mut files = skill_trees();
+        files
+            .get_mut("cf-herdr/SKILL.md")
+            .expect("cf-herdr")
+            .push_str(pointer);
+        files.insert(
+            "cf-herdr/resources/codex-hidden.md".into(),
+            "An unreachable duty.".into(),
+        );
+        let faults = structure_faults(&files, &Inventory::SHIPPED);
+        assert_eq!(
+            faults,
+            vec![
+                "cf-herdr/resources/codex-hidden.md is orphaned: no index entry or trigger reaches it"
+                    .to_string()
+            ],
+            "{pointer:?}"
+        );
+    }
+}
+
+/// T150-C2: an index row with an empty classification is a fault, never a
+/// silent required read.
+#[test]
+fn an_index_row_without_a_classification_fails() {
+    let mut files = skill_trees();
+    files
+        .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
+        .expect("quality index")
+        .push_str("\n| [New conditional section](quality/codex-new.md) | |\n");
+    files.insert(
+        format!("{ORCH}/resources/quality/codex-new.md"),
+        "A duty needing a load trigger.".into(),
+    );
+    let faults = structure_faults(&files, &Inventory::SHIPPED);
+    assert!(
+        faults.contains(&format!(
+            "{ORCH}/resources/quality-contract.md: the index row for \
+             {ORCH}/resources/quality/codex-new.md has no load classification"
+        )),
+        "{faults:?}"
+    );
+}
+
+/// T150-C2: a new conditional classification needs a reviewed read.
+#[test]
+fn an_index_row_with_an_unreviewed_classification_fails() {
+    let mut files = skill_trees();
+    files
+        .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
+        .expect("quality index")
+        .push_str("\n| [New conditional section](quality/codex-new.md) | when it rains |\n");
+    files.insert(
+        format!("{ORCH}/resources/quality/codex-new.md"),
+        "A duty needing a load trigger.".into(),
+    );
+    let faults = structure_faults(&files, &Inventory::SHIPPED);
+    assert!(
+        faults.iter().any(|fault| fault.contains(
+            "quality/codex-new.md is classified `when it rains` but no reviewed conditional read records it"
+        )),
+        "{faults:?}"
+    );
+}
+
+/// T150-C2: a dangling link inside a conditional target fails, though the
+/// target is outside the measured chain.
+#[test]
+fn a_dangling_link_below_a_conditional_section_fails() {
+    let mut files = skill_trees();
+    files
+        .get_mut(&format!("{ORCH}/resources/quality/findings.md"))
+        .expect("findings")
+        .push_str("\nBefore repairing a defect, read [the safety procedure](codex-missing.md).\n");
+    let faults = structure_faults(&files, &Inventory::SHIPPED);
+    assert!(
+        faults.iter().any(|fault| fault.starts_with(&format!(
+            "{ORCH}/resources/quality/findings.md names `codex-missing.md`, which is no shipped file"
+        ))),
+        "{faults:?}"
+    );
+}
+
+/// TSK-150 review (Fable finding 4): the Grok host detail is a reviewed
+/// conditional read; dropping its moment fails the structure test.
+#[test]
+fn the_grok_host_detail_keeps_its_trigger() {
+    let mut files = skill_trees();
+    let hosts = files
+        .get_mut(&format!("{ORCH}/references/other-hosts.md"))
+        .expect("other hosts");
+    *hosts = hosts.replace("Before a Grok preflight or launch, also read", "Also read");
+    let faults = structure_faults(&files, &Inventory::SHIPPED);
+    assert!(
+        faults.iter().any(|fault| fault.contains(&format!(
+            "{ORCH}/resources/grok-host.md without a reviewed trigger"
+        ))),
+        "{faults:?}"
+    );
+}
+
+/// T150-C3: the kernel names an entry only by its invocation or exact path.
+/// A removed entry, a child reference and a same-named file elsewhere fail.
+#[test]
+fn the_kernel_check_rejects_a_removed_entry_or_a_wrong_target() {
+    let kernel = method_kernel("AGENTS.md.tmpl");
+    assert!(reading::unnamed_entry_points(&kernel, &Inventory::SHIPPED).is_empty());
+
+    let removed = kernel.replace("`/cf-plan`", "planning");
+    assert_eq!(
+        reading::unnamed_entry_points(&removed, &Inventory::SHIPPED),
+        vec!["the kernel does not name the plan entry cf-plan/SKILL.md".to_string()]
+    );
+
+    let child = "Run `/cf-model-orchestrator`, `/cf-delegate`, `/cf-plan`, `/cf-develop`, \
+                 `/cf-ship`. Read `.agents/skills/cf-method/references/project-organization.md` \
+                 and `.claude/skills/cf-other/resources/current-ensemble.json`.";
+    let unnamed = reading::unnamed_entry_points(child, &Inventory::SHIPPED);
+    assert_eq!(
+        unnamed,
+        vec![
+            "the kernel does not name the orient and route entry cf-method/references/workflow-lifecycle.md"
+                .to_string(),
+            "the kernel does not name the before launch entry cf-model-orchestrator/resources/current-ensemble.json"
+                .to_string(),
+        ]
+    );
 }

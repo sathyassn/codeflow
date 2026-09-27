@@ -11,9 +11,16 @@
 //!   for one full implementation task, walked from [`CHAIN_ENTRY_POINTS`];
 //! - the inventory of conditional reads, each with the trigger text of the
 //!   sentence that holds it ([`CONDITIONAL_READS`]);
+//! - the whole reachable graph, audited apart from the chain: every skill
+//!   entry and every conditional target, with each index row classified and
+//!   every link resolved to a shipped file or a recorded project reference;
 //! - the orphan check: every shipped Markdown or JSON file under a skill is
 //!   reachable from that skill's `SKILL.md` or another reached file;
+//! - the kernel check: the kernel names each chain entry point exactly;
 //! - the guideline numbers sizes are reported against.
+//!
+//! Only active Markdown counts as a read: fenced code (backtick or tilde
+//! fences) and HTML comments are examples or retired text, never a pointer.
 //!
 //! Structure is the test's failure. Size is a reported measure with a
 //! guideline number, never a failure: the one byte check that still fails is
@@ -37,11 +44,9 @@ pub type SkillFiles = BTreeMap<String, String>;
 // Guideline numbers
 // ---------------------------------------------------------------------------
 
-/// Guideline for the per-task reading chain. It sits 50,000 bytes or more
-/// below the 214,816-byte chain measured at the TSK-129 start (`95e25f514`),
-/// when every section of the quality contract, capability routing and the
-/// whole delegate skill were read on every task. Reported, never a failure.
-pub const READING_CHAIN_GUIDELINE_BYTES: usize = 148 * KIB;
+/// Guideline for the per-task reading chain: what one full implementation
+/// task reads after the kernel. Reported, never a failure.
+pub const READING_CHAIN_GUIDELINE_BYTES: usize = 150 * KIB;
 
 /// Guideline for a skill that owns cross-lineage routing or orchestration.
 pub const ROUTING_SKILL_GUIDELINE_BYTES: usize = 29 * KIB;
@@ -52,12 +57,13 @@ pub const OTHER_SKILL_GUIDELINE_BYTES: usize = 24 * KIB;
 /// The skills measured against [`ROUTING_SKILL_GUIDELINE_BYTES`].
 pub const ROUTING_SKILLS: &[&str] = &["cf-delegate", "cf-model-orchestrator"];
 
-/// Each shipped skill's guideline for its `SKILL.md`: the former reviewed
-/// byte ratchets, kept as the numbers doctor reports against. A skill above
-/// its number is a prompt to move detail behind a trigger, never to cut a
-/// duty.
+/// Each shipped skill's guideline for its `SKILL.md`, the numbers doctor
+/// reports against. Every shipped file sits within its number, so a fresh
+/// install reports clean; a change that moves a shipped file past its number
+/// sets the new number in the same change. A skill above its number is a
+/// prompt to move detail behind a trigger, never to cut a duty.
 pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
-    ("cf-consult", 6 * KIB + 512),
+    ("cf-consult", 7 * KIB),
     ("cf-customize", 22 * KIB),
     ("cf-delegate", 20 * KIB + 512),
     ("cf-design", 19 * KIB + 512),
@@ -66,7 +72,7 @@ pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
     ("cf-editorial-review", 6 * KIB),
     ("cf-estimate", 6 * KIB),
     ("cf-evaluate-model", 9 * KIB + 256),
-    ("cf-herdr", 8 * KIB),
+    ("cf-herdr", 9 * KIB),
     ("cf-method", 19 * KIB + 512),
     ("cf-model-orchestrator", 29 * KIB),
     ("cf-plan", 9 * KIB),
@@ -80,7 +86,7 @@ pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
 pub const ARTIFACT_GUIDELINES: &[(&str, usize)] = &[
     ("CLAUDE.md.tmpl", 6 * KIB),
     ("CLAUDE.minimal.md.tmpl", 3 * KIB),
-    ("claude/agents/cf-reviewer.md", 9 * KIB + 640),
+    ("claude/agents/cf-reviewer.md", 10 * KIB),
     ("claude/agents/cf-security-reviewer.md", 12 * KIB),
 ];
 
@@ -158,15 +164,20 @@ pub fn skill_measures(files: &SkillFiles) -> Vec<Measure> {
 // ---------------------------------------------------------------------------
 
 /// Where the per-task chain starts: the skills and files the kernel names
-/// for one full implementation task on a Claude host.
+/// for one full implementation task on a Claude host, each exactly as the
+/// kernel names it ([`kernel_entries`]).
 /// - orient and route: the routing rule invokes `cf-model-orchestrator`, and
-///   the kernel says to read and follow `cf-method`'s workflow lifecycle;
+///   the kernel says to read and follow `cf-method`'s workflow lifecycle
+///   reference (it names that file, never the `cf-method` skill itself);
 /// - before launch: `CLAUDE.md` names `current-ensemble.json`, and the
 ///   orchestrator names `cf-delegate`;
 /// - plan, build and ship: `cf-plan`, `cf-develop` and `cf-ship`.
 pub const CHAIN_ENTRY_POINTS: &[(&str, &str)] = &[
     ("orient and route", "cf-model-orchestrator/SKILL.md"),
-    ("orient and route", "cf-method/SKILL.md"),
+    (
+        "orient and route",
+        "cf-method/references/workflow-lifecycle.md",
+    ),
     (
         "before launch",
         "cf-model-orchestrator/resources/current-ensemble.json",
@@ -256,6 +267,14 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         "cf-model-orchestrator/references/other-hosts.md",
         "Grok, when a Grok seat is used",
         "only when a Grok seat is used",
+    ),
+    // TSK-150 (audit row H24): the Grok host detail is read before a Grok
+    // preflight or launch.
+    conditional(
+        "cf-model-orchestrator/references/other-hosts.md",
+        "cf-model-orchestrator/resources/grok-host.md",
+        "Before a Grok preflight or launch, also read",
+        "only before a Grok preflight or launch",
     ),
     conditional(
         ORCH_SKILL,
@@ -526,8 +545,9 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
 ];
 
 /// References that name project files, not shipped instructions: an
-/// adopter's docs and settings, read as the task needs them and outside the
-/// per-task chain.
+/// adopter's docs, settings, records and runtime files, read as the task
+/// needs them and never measured. Every other reference in the reachable
+/// graph must resolve to a shipped file.
 pub const PROJECT_REFERENCES: &[&str] = &[
     ".codeflow/model-selection.json",
     ".codeflow/docs-portal.json",
@@ -539,6 +559,31 @@ pub const PROJECT_REFERENCES: &[&str] = &[
     "docs/architecture.md",
     "docs/architecture/<area>.md",
     "docs/decisions/template.md",
+    // Named by skills and references off the per-task chain (TSK-150 graph
+    // audit): project settings, records and runtime files, never shipped
+    // instructions.
+    "AGENTS.md",
+    "CLAUDE.md",
+    "TASK.md",
+    "index.md",
+    "portal.config.json",
+    "epics/EPC-NNN.md",
+    "specs/SPC-NNN.md",
+    "tasks/TSK-NNN.md",
+    ".claude/settings.json",
+    ".grok/hooks/codeflow.json",
+    ".codeflow/estimate.json",
+    ".codeflow/manifest.json",
+    ".codeflow/policy.json",
+    ".codeflow/test-config.json",
+    ".codeflow/schemas/present/document-v1.schema.json",
+    ".codeflow/schemas/present/utility-tokens-v1.schema.json",
+    "${CODEFLOW_HOME:-$HOME/.codeflow}/herdr-runs/<repo>.json",
+    "DIR/settings.json",
+    "result.json",
+    "turns/<turn>/continuations/<task-id>/accepted.json",
+    "~/.codex/auth.json",
+    "~/.gemini/config/hooks.json",
 ];
 
 /// The inventory the chain walk checks against. The shipped one is
@@ -648,22 +693,75 @@ fn path_references(sentence: &str) -> Vec<String> {
     found
 }
 
-/// Markdown outside fenced code, split into sentences within each paragraph,
-/// list item and table row.
+/// The opening or closing fence a line carries: its character (backtick or
+/// tilde) and length, at least three.
+fn fence(line: &str) -> Option<(char, usize)> {
+    let trimmed = line.trim_start();
+    let first = trimmed.chars().next().filter(|c| *c == '`' || *c == '~')?;
+    let length = trimmed.chars().take_while(|c| *c == first).count();
+    (length >= 3).then_some((first, length))
+}
+
+/// The active Markdown of `text`, one output line per input line: fenced
+/// code blocks and HTML comments are blanked, so an example or a retired
+/// pointer is never a read. A fence closes only on the same character, at
+/// least as long, with nothing after it; an unclosed fence runs to the end.
+fn active_markdown(text: &str) -> Vec<String> {
+    let mut active = Vec::new();
+    let mut open: Option<(char, usize)> = None;
+    let mut in_comment = false;
+    for line in text.lines() {
+        if let Some((character, length)) = open {
+            let closes = fence(line).is_some_and(|(c, l)| {
+                c == character
+                    && l >= length
+                    && line.trim_start()[l * c.len_utf8()..].trim().is_empty()
+            });
+            if closes {
+                open = None;
+            }
+            active.push(String::new());
+            continue;
+        }
+        if !in_comment {
+            if let Some(found) = fence(line) {
+                open = Some(found);
+                active.push(String::new());
+                continue;
+            }
+        }
+        let mut kept = String::new();
+        let mut rest = line;
+        loop {
+            if in_comment {
+                let Some(end) = rest.find("-->") else {
+                    break;
+                };
+                rest = &rest[end + 3..];
+                in_comment = false;
+            } else {
+                let Some(start) = rest.find("<!--") else {
+                    kept.push_str(rest);
+                    break;
+                };
+                kept.push_str(&rest[..start]);
+                rest = &rest[start + 4..];
+                in_comment = true;
+            }
+        }
+        active.push(kept);
+    }
+    active
+}
+
+/// Active Markdown, split into sentences within each paragraph, list item
+/// and table row.
 fn reference_sentences(text: &str) -> Vec<String> {
+    let active = active_markdown(text);
     let mut blocks: Vec<Vec<&str>> = Vec::new();
     let mut current: Vec<&str> = Vec::new();
-    let mut fenced = false;
-    for line in text.lines() {
+    for line in &active {
         let trimmed = line.trim_start();
-        if trimmed.starts_with("```") {
-            fenced = !fenced;
-            blocks.push(std::mem::take(&mut current));
-            continue;
-        }
-        if fenced {
-            continue;
-        }
         let item = trimmed.starts_with("- ")
             || trimmed.starts_with("* ")
             || trimmed.starts_with("| ")
@@ -674,7 +772,7 @@ fn reference_sentences(text: &str) -> Vec<String> {
             blocks.push(std::mem::take(&mut current));
         }
         if !trimmed.is_empty() {
-            current.push(line);
+            current.push(line.as_str());
         }
     }
     blocks.push(current);
@@ -800,51 +898,44 @@ fn inventory_faults(inventory: &Inventory<'_>) -> Vec<String> {
     faults
 }
 
-/// Faults found after the walk: a reviewed read or project reference the
-/// shipped text no longer carries, and a conditional target a required edge
-/// also reaches.
-fn stale_faults(
-    inventory: &Inventory<'_>,
-    used: &[bool],
-    used_project: &BTreeSet<String>,
-    conditional_targets: &BTreeSet<String>,
-    chain: &[(String, String)],
-) -> Vec<String> {
-    let mut faults = Vec::new();
-    for (read, used) in inventory.conditional.iter().zip(used) {
-        if !used && !read.trigger.trim().is_empty() {
-            faults.push(format!(
-                "stale conditional read {} -> {} (trigger `{}`)",
-                read.from, read.to, read.trigger
-            ));
-        }
-    }
-    for reference in inventory.project {
-        if !used_project.contains(*reference) {
-            faults.push(format!("stale project reference `{reference}`"));
-        }
-    }
-    for target in conditional_targets {
-        if chain.iter().any(|(_, p)| p == target) {
-            faults.push(format!(
-                "{target} is recorded as conditional but a required edge reaches it"
-            ));
-        }
-    }
-    faults
+/// The reviewed conditional reads for the edge `from` to `to`.
+fn recorded<'a>(
+    inventory: &'a Inventory<'_>,
+    from: &str,
+    to: &str,
+) -> Vec<(usize, &'a ConditionalRead)> {
+    inventory
+        .conditional
+        .iter()
+        .enumerate()
+        .filter(|(_, read)| read.from == from && read.to == to)
+        .collect()
+}
+
+/// The recorded read whose trigger `sentence` carries, if any.
+fn reviewed_read(recorded: &[(usize, &ConditionalRead)], sentence: &str) -> Option<usize> {
+    recorded.iter().find_map(|(index, read)| {
+        let trigger = normalized(read.trigger);
+        (!trigger.is_empty() && sentence.contains(&trigger)).then_some(*index)
+    })
+}
+
+fn untriggered(path: &str, resolved: &str, sentence: &str) -> String {
+    format!(
+        "{path} names {resolved} without a reviewed trigger; \
+         review the read and its conditional-read entry: {sentence}"
+    )
 }
 
 /// Walk the per-task chain in `files` from the inventory's entry points. An
 /// edge is required unless the inventory records it as conditional with the
 /// trigger text of the sentence that holds it; a required edge adds its
-/// target to the chain. So a new pointer is counted, a changed trigger fails
-/// until reviewed, and a reference that names no shipped file must be a
-/// recorded project reference.
+/// target to the chain. So a new pointer is counted and a changed trigger
+/// fails until reviewed. The chain is the mandatory reading and is measured;
+/// [`graph_faults`] audits everything else a session can reach.
 #[must_use]
 pub fn reading_chain(files: &SkillFiles, inventory: &Inventory<'_>) -> ReadingChain {
     let mut errors = inventory_faults(inventory);
-    let mut used = vec![false; inventory.conditional.len()];
-    let mut used_project = BTreeSet::new();
     let mut conditional_targets = BTreeSet::new();
     let mut chain: Vec<(String, String)> = Vec::new();
     let mut queue: VecDeque<(String, String)> = inventory
@@ -867,56 +958,29 @@ pub fn reading_chain(files: &SkillFiles, inventory: &Inventory<'_>) -> ReadingCh
         for (sentence, target) in edges(text) {
             let resolved = match resolve_reference(files, &path, &target) {
                 Ok(Some(resolved)) => resolved,
-                Ok(None) => {
-                    if inventory.project.contains(&target.as_str()) {
-                        used_project.insert(target);
-                    } else {
-                        errors.push(format!(
-                            "{path} names `{target}`, which is no shipped file; \
-                             record it as a project reference if it is a project file"
-                        ));
-                    }
-                    continue;
-                }
+                Ok(None) => continue,
                 Err(error) => {
                     errors.push(error);
                     continue;
                 }
             };
-            let recorded: Vec<usize> = inventory
-                .conditional
-                .iter()
-                .enumerate()
-                .filter(|(_, c)| c.from == path && c.to == resolved)
-                .map(|(index, _)| index)
-                .collect();
+            let recorded = recorded(inventory, &path, &resolved);
             if recorded.is_empty() {
                 queue.push_back((stage.clone(), resolved));
-                continue;
-            }
-            let reviewed = recorded.iter().find(|index| {
-                let trigger = normalized(inventory.conditional[**index].trigger);
-                !trigger.is_empty() && sentence.contains(&trigger)
-            });
-            match reviewed {
-                Some(index) => {
-                    used[*index] = true;
-                    conditional_targets.insert(resolved);
-                }
-                None => errors.push(format!(
-                    "{path} names {resolved} without a reviewed trigger; \
-                     review the read and its conditional-read entry: {sentence}"
-                )),
+            } else if reviewed_read(&recorded, &sentence).is_some() {
+                conditional_targets.insert(resolved);
+            } else {
+                errors.push(untriggered(&path, &resolved, &sentence));
             }
         }
     }
-    errors.extend(stale_faults(
-        inventory,
-        &used,
-        &used_project,
-        &conditional_targets,
-        &chain,
-    ));
+    for target in &conditional_targets {
+        if chain.iter().any(|(_, p)| p == target) {
+            errors.push(format!(
+                "{target} is recorded as conditional but a required edge reaches it"
+            ));
+        }
+    }
     let files: Vec<ChainFile> = chain
         .into_iter()
         .map(|(stage, path)| {
@@ -933,25 +997,150 @@ pub fn reading_chain(files: &SkillFiles, inventory: &Inventory<'_>) -> ReadingCh
 }
 
 // ---------------------------------------------------------------------------
-// Orphans
+// The whole reachable graph
 // ---------------------------------------------------------------------------
 
-/// Every Markdown or JSON file in `files` that no reading edge reaches. Each
-/// `<skill>/SKILL.md` is an index entry the harness loads by its
-/// description; from there every link or backticked path, required or
-/// conditional, reaches its target. A file nothing reaches is never read at
-/// the moment it is needed, so it is either dead or missing its trigger.
+/// The load classification that makes an index row a required read.
+const EVERY_TASK: &str = "every task";
+
+/// An index row: a two-cell table row whose first cell is exactly one link
+/// to a reading file. Returns the link target and the classification cell.
+fn index_row(line: &str) -> Option<(String, String)> {
+    let row = line.trim().strip_prefix('|')?.strip_suffix('|')?;
+    let cells: Vec<&str> = row.split('|').map(str::trim).collect();
+    let [section, classification] = cells.as_slice() else {
+        return None;
+    };
+    let (_, rest) = section.strip_prefix('[')?.split_once("](")?;
+    let target = rest.strip_suffix(')')?;
+    let target = target.split('#').next().unwrap_or_default();
+    is_reading_file(target).then(|| (target.to_string(), (*classification).to_string()))
+}
+
+/// Index rows in `path`: each needs a classification, and one other than
+/// "every task" needs a reviewed conditional read, so an empty or new
+/// classification is never silently read as required.
+fn index_faults(files: &SkillFiles, inventory: &Inventory<'_>, path: &str) -> Vec<String> {
+    let mut faults = Vec::new();
+    for line in active_markdown(&files[path]) {
+        let Some((target, classification)) = index_row(&line) else {
+            continue;
+        };
+        let Ok(Some(resolved)) = resolve_reference(files, path, &target) else {
+            continue;
+        };
+        if classification.is_empty() {
+            faults.push(format!(
+                "{path}: the index row for {resolved} has no load classification"
+            ));
+        } else if classification != EVERY_TASK && recorded(inventory, path, &resolved).is_empty() {
+            faults.push(format!(
+                "{path}: the index row for {resolved} is classified `{classification}` \
+                 but no reviewed conditional read records it"
+            ));
+        }
+    }
+    faults
+}
+
+/// Audit everything a session can reach, apart from measuring the chain:
+/// every skill entry, the chain entry points and every conditional target
+/// below them. Each link resolves to a shipped file or a recorded project
+/// reference, each recorded conditional read carries its trigger, each index
+/// row is classified, and no recorded read or project reference is stale.
 #[must_use]
-pub fn orphans(files: &SkillFiles) -> Vec<String> {
+pub fn graph_faults(files: &SkillFiles, inventory: &Inventory<'_>) -> Vec<String> {
+    let mut faults = Vec::new();
+    let mut used = vec![false; inventory.conditional.len()];
+    let mut used_project = BTreeSet::new();
     let mut reached: BTreeSet<String> = BTreeSet::new();
-    let mut queue: VecDeque<String> = files
+    let mut queue: VecDeque<String> = skill_entries(files)
+        .chain(
+            inventory
+                .entry_points
+                .iter()
+                .map(|(_, path)| (*path).to_string()),
+        )
+        .collect();
+    while let Some(path) = queue.pop_front() {
+        if !reached.insert(path.clone()) || !has_extension(&path, "md") {
+            continue;
+        }
+        let Some(text) = files.get(&path) else {
+            continue;
+        };
+        faults.extend(index_faults(files, inventory, &path));
+        for (sentence, target) in edges(text) {
+            let resolved = match resolve_reference(files, &path, &target) {
+                Ok(Some(resolved)) => resolved,
+                Ok(None) => {
+                    if inventory.project.contains(&target.as_str()) {
+                        used_project.insert(target);
+                    } else {
+                        faults.push(format!(
+                            "{path} names `{target}`, which is no shipped file; \
+                             record it as a project reference if it is a project file"
+                        ));
+                    }
+                    continue;
+                }
+                Err(error) => {
+                    faults.push(error);
+                    continue;
+                }
+            };
+            let recorded = recorded(inventory, &path, &resolved);
+            if !recorded.is_empty() {
+                match reviewed_read(&recorded, &sentence) {
+                    Some(index) => used[index] = true,
+                    None => faults.push(untriggered(&path, &resolved, &sentence)),
+                }
+            }
+            queue.push_back(resolved);
+        }
+    }
+    for (read, used) in inventory.conditional.iter().zip(&used) {
+        if !used && !read.trigger.trim().is_empty() {
+            faults.push(format!(
+                "stale conditional read {} -> {} (trigger `{}`)",
+                read.from, read.to, read.trigger
+            ));
+        }
+    }
+    for reference in inventory.project {
+        if !used_project.contains(*reference) {
+            faults.push(format!("stale project reference `{reference}`"));
+        }
+    }
+    faults
+}
+
+/// Every `<skill>/SKILL.md` in `files`: the index entries the harness loads
+/// by their descriptions.
+fn skill_entries(files: &SkillFiles) -> impl Iterator<Item = String> + '_ {
+    files
         .keys()
         .filter(|path| {
             path.strip_suffix("/SKILL.md")
                 .is_some_and(|skill| !skill.contains('/'))
         })
         .cloned()
-        .collect();
+}
+
+// ---------------------------------------------------------------------------
+// Orphans
+// ---------------------------------------------------------------------------
+
+/// Every Markdown or JSON file in `files` that no active reading edge
+/// reaches. Each `<skill>/SKILL.md` is an index entry the harness loads by
+/// its description; from there every active link or backticked path,
+/// required or conditional, reaches its target. A file nothing reaches is
+/// never read at the moment it is needed, so it is either dead or missing its
+/// trigger. A pointer in fenced code or an HTML comment reaches nothing.
+#[must_use]
+pub fn orphans(files: &SkillFiles) -> Vec<String> {
+    let mut reached: BTreeSet<String> = BTreeSet::new();
+    let mut queue: VecDeque<String> = skill_entries(files).collect();
     while let Some(path) = queue.pop_front() {
         if !reached.insert(path.clone()) || !has_extension(&path, "md") {
             continue;
@@ -968,6 +1157,70 @@ pub fn orphans(files: &SkillFiles) -> Vec<String> {
         .keys()
         .filter(|path| is_reading_file(path) && !reached.contains(*path))
         .cloned()
+        .collect()
+}
+
+/// Every structural fault in `files` under `inventory`, each once: chain
+/// faults, graph faults, then orphans.
+#[must_use]
+pub fn structure_faults(files: &SkillFiles, inventory: &Inventory<'_>) -> Vec<String> {
+    let mut faults = reading_chain(files, inventory).errors;
+    faults.extend(graph_faults(files, inventory));
+    faults.extend(
+        orphans(files)
+            .into_iter()
+            .map(|path| format!("{path} is orphaned: no index entry or trigger reaches it")),
+    );
+    let mut seen = BTreeSet::new();
+    faults.retain(|fault| seen.insert(fault.clone()));
+    faults
+}
+
+// ---------------------------------------------------------------------------
+// The kernel
+// ---------------------------------------------------------------------------
+
+/// The entry points the kernel text names in active Markdown, keyed like
+/// [`SkillFiles`]: a skill invocation `` `/cf-x` `` names `cf-x/SKILL.md`,
+/// and an installed path `` `.claude/skills/<path>` `` or
+/// `` `.agents/skills/<path>` `` names `<path>` exactly. A child path never
+/// names its skill, and a basename names nothing.
+#[must_use]
+pub fn kernel_entries(kernel: &str) -> BTreeSet<String> {
+    let mut named = BTreeSet::new();
+    for line in active_markdown(kernel) {
+        for (index, span) in line.split('`').enumerate() {
+            if index % 2 == 0 {
+                continue;
+            }
+            if let Some(skill) = span.strip_prefix('/') {
+                if !skill.is_empty()
+                    && skill
+                        .chars()
+                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+                {
+                    named.insert(format!("{skill}/SKILL.md"));
+                }
+            }
+            for installed in [".claude/skills/", ".agents/skills/"] {
+                if let Some(path) = span.strip_prefix(installed) {
+                    named.insert(path.to_string());
+                }
+            }
+        }
+    }
+    named
+}
+
+/// The chain entry points in `inventory` that `kernel` does not name.
+#[must_use]
+pub fn unnamed_entry_points(kernel: &str, inventory: &Inventory<'_>) -> Vec<String> {
+    let named = kernel_entries(kernel);
+    inventory
+        .entry_points
+        .iter()
+        .filter(|(_, entry)| !named.contains(*entry))
+        .map(|(stage, entry)| format!("the kernel does not name the {stage} entry {entry}"))
         .collect()
 }
 
@@ -1106,8 +1359,87 @@ mod tests {
     }
 
     #[test]
+    fn fenced_code_and_comments_are_not_reads() {
+        let text = "Read [a](a.md).\n~~~markdown\nRead [b](b.md).\n```\nstill fenced [c](c.md)\n~~~\n\
+                    ````\n[d](d.md)\n```\n````\nx <!-- [e](e.md) --> [f](f.md)\n<!--\n[g](g.md)\n-->\n";
+        let targets: Vec<String> = edges(text).into_iter().map(|(_, t)| t).collect();
+        assert_eq!(targets, vec!["a.md".to_string(), "f.md".to_string()]);
+    }
+
+    #[test]
+    fn an_index_row_is_one_link_and_a_classification() {
+        assert_eq!(
+            index_row("| [Plan](quality/plan.md) | every task |"),
+            Some(("quality/plan.md".into(), "every task".into()))
+        );
+        assert_eq!(
+            index_row("| [New](quality/new.md) | |"),
+            Some(("quality/new.md".into(), String::new()))
+        );
+        assert_eq!(index_row("| Section | Read |"), None);
+        assert_eq!(index_row("| [a](a.md) | b | c |"), None);
+    }
+
+    #[test]
+    fn an_unclassified_index_row_and_a_dangling_link_are_graph_faults() {
+        let tree = files(&[
+            ("a/SKILL.md", "Read [the index](index.md).\n"),
+            (
+                "a/index.md",
+                "| Section | Read |\n|---|---|\n| [One](one.md) | every task |\n\
+                 | [Two](two.md) | |\n| [Three](three.md) | when it rains |\n",
+            ),
+            (
+                "a/one.md",
+                "Before a repair, read [the procedure](missing.md).\n",
+            ),
+            ("a/two.md", "x"),
+            ("a/three.md", "x"),
+        ]);
+        let faults = graph_faults(&tree, &EMPTY);
+        assert!(
+            faults.contains(
+                &"a/index.md: the index row for a/two.md has no load classification".to_string()
+            ),
+            "{faults:?}"
+        );
+        assert!(
+            faults.iter().any(|f| f.starts_with(
+                "a/index.md: the index row for a/three.md is classified `when it rains`"
+            )),
+            "{faults:?}"
+        );
+        assert!(
+            faults
+                .iter()
+                .any(|f| f.starts_with("a/one.md names `missing.md`, which is no shipped file")),
+            "{faults:?}"
+        );
+    }
+
+    #[test]
+    fn the_kernel_names_an_entry_only_by_invocation_or_exact_path() {
+        let kernel =
+            "Run `/cf-plan`. Read `.agents/skills/cf-method/references/workflow-lifecycle.md` \
+                      and `.claude/skills/cf-x/resources/current-ensemble.json`. \
+                      <!-- `/cf-ship` -->";
+        let named = kernel_entries(kernel);
+        assert!(named.contains("cf-plan/SKILL.md"));
+        assert!(named.contains("cf-method/references/workflow-lifecycle.md"));
+        assert!(
+            !named.contains("cf-method/SKILL.md"),
+            "a child path never names its skill"
+        );
+        assert!(!named.contains("cf-model-orchestrator/resources/current-ensemble.json"));
+        assert!(
+            !named.contains("cf-ship/SKILL.md"),
+            "a commented invocation is not active"
+        );
+    }
+
+    #[test]
     fn skills_measure_against_their_own_or_class_guideline() {
-        assert_eq!(skill_guideline("cf-herdr"), 8 * KIB);
+        assert_eq!(skill_guideline("cf-herdr"), 9 * KIB);
         assert_eq!(
             skill_guideline("cf-new-routing"),
             OTHER_SKILL_GUIDELINE_BYTES
@@ -1121,10 +1453,10 @@ mod tests {
         assert!(!measures[0].over());
         let big = Measure {
             subject: "cf-herdr".into(),
-            bytes: 8 * KIB + 1,
-            guideline: 8 * KIB,
+            bytes: 9 * KIB + 1,
+            guideline: 9 * KIB,
         };
         assert!(big.over());
-        assert_eq!(big.to_string(), "cf-herdr 8193 of 8192 bytes");
+        assert_eq!(big.to_string(), "cf-herdr 9217 of 9216 bytes");
     }
 }
