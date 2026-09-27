@@ -127,16 +127,27 @@ observed_exit() {
 # ---------------------------------------------------------------------------
 #
 # A freshly scaffolded sample carries its own .claude/settings.json, so the
-# Claude session the canary starts asks a human to trust the folder before it
-# takes any prompt. No agent may answer that question, so the harness waits for
-# the operator instead of recording the whole delegate lane unavailable.
+# Claude session the canary starts asks whether to trust the folder before it
+# takes any prompt. The trust prompt rule (cf-method/references/autonomy.md,
+# and the workspace rule of 2026-09-22) lets an agent answer for a folder its
+# own task created: when the prompt names the sample this run created, the
+# harness answers it. Any other folder stays the operator's to answer, so the
+# harness waits for the operator instead of recording the whole delegate lane
+# unavailable.
 #
 # Everything here fails closed. A pane the harness cannot read is never read as
 # an answer: the run would otherwise record a failed delegate lane on evidence
 # that only says herdr stopped replying.
 
-# The line Claude Code paints while it waits for that answer.
+# The question Claude Code paints while it waits for that answer. A narrow
+# pane wraps it, so it is matched with line breaks and runs of blanks folded
+# into single spaces (asks_trust).
 TRUST_PROMPT_MATCH='Is this a project you created or one you trust'
+
+# asks_trust - true when the screen on stdin shows the trust question.
+asks_trust() {
+  tr -s '\n ' '  ' | grep -qF -- "$TRUST_PROMPT_MATCH"
+}
 
 # How often the pane is re-read while waiting.
 TRUST_POLL_SECONDS=5
@@ -206,7 +217,7 @@ trust_prompt_showing() {
 
   if [ "$_tps_read" != 0 ] || [ ! -s "$_tps_file" ]; then
     _tps_seen=$TRUST_UNREADABLE
-  elif grep -qF -- "$TRUST_PROMPT_MATCH" "$_tps_file"; then
+  elif asks_trust <"$_tps_file"; then
     _tps_seen=$TRUST_SHOWING
   else
     _tps_seen=$TRUST_GONE
@@ -287,12 +298,108 @@ except Exception:
     pass' 2>/dev/null
 }
 
+# What trust_dialog_names found, returned as an exit status.
+TRUST_NAMES_SAMPLE=0
+TRUST_NAMES_OTHER=1
+TRUST_NAMES_UNREADABLE=2
+
+# The option the dialog's cursor was on at the last read: yes, no or empty.
+TRUST_SELECTED=""
+
+# How long the prompt gets to clear after the harness answers it.
+TRUST_SELF_ANSWER_SECONDS=30
+
+# trust_dialog <screen-file> - print "<path>\t<selected>" when the screen is
+# the Claude Code 2.1.283 workspace-trust dialog, exit 1 for any other screen:
+#
+#    Accessing workspace:
+#    /the/folder/path            one or more lines; a long path wraps
+#    Quick safety check: Is this a project you created or one ...
+#    ...
+#    ❯ No, exit                   exactly one option carries the cursor
+#      Yes, I trust this folder
+#    Enter to confirm · Esc to cancel
+#
+# The path is the lines between the two headings joined with nothing between
+# them, each with its surrounding blanks removed; blank lines add nothing. A path that has a blank at a wrap point
+# therefore does not compare equal, and the harness leaves it to the operator.
+trust_dialog() {
+  LC_ALL=C awk '
+    function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
+    { line[NR] = trim($0) }
+    line[NR] == "Accessing workspace:" { heads++; head = NR }
+    index(line[NR], "Quick safety check: Is this a project you created or one") == 1 { checks++; check = NR }
+    line[NR] == "Enter to confirm · Esc to cancel" { confirms++ }
+    line[NR] ~ /^(❯ )?No, exit$/ { nos++; if (index(line[NR], "❯") == 1) cursor = cursor "no" }
+    line[NR] ~ /^(❯ )?Yes, I trust this folder$/ { yeses++; if (index(line[NR], "❯") == 1) cursor = cursor "yes" }
+    END {
+      if (heads != 1 || checks != 1 || confirms != 1 || nos != 1 || yeses != 1) exit 1
+      if (cursor != "no" && cursor != "yes") exit 1
+      for (i = head + 1; i < check; i++) path = path line[i]
+      if (index(path, "/") != 1) exit 1
+      printf "%s\t%s", path, cursor
+    }
+  ' "$1"
+}
+
+# same_folder <a> <b> - true when both name an existing directory with the
+# same real path. A sibling, a parent or a symlink to another folder differs.
+same_folder() {
+  python3 -c 'import os, sys
+a, b = sys.argv[1], sys.argv[2]
+sys.exit(0 if os.path.isdir(a) and os.path.isdir(b)
+         and os.path.realpath(a) == os.path.realpath(b) else 1)' "$1" "$2"
+}
+
+# trust_dialog_names <pane-id> <sample-dir> - one bounded read of the screen.
+#
+# Returns TRUST_NAMES_SAMPLE only when the screen is the trust dialog and the
+# folder it names is this run's own sample by real path, and sets
+# TRUST_SELECTED to the option under the cursor. Returns TRUST_NAMES_OTHER for
+# a dialog about any other folder or any screen that is not the dialog, and
+# TRUST_NAMES_UNREADABLE when the pane cannot be read.
+trust_dialog_names() {
+  TRUST_SELECTED=""
+  _tdn_file=${TMPDIR:-/tmp}/cf-trust-dialog.$$
+  pane_read_visible "$1" "$_tdn_file" "$TRUST_READ_TIMEOUT" && _tdn_read=0 || _tdn_read=$?
+  if [ "$_tdn_read" != 0 ] || [ ! -s "$_tdn_file" ]; then
+    set -- "$TRUST_NAMES_UNREADABLE"
+  elif _tdn_found=$(trust_dialog "$_tdn_file") &&
+    same_folder "${_tdn_found%%$(printf '\t')*}" "$2"; then
+    TRUST_SELECTED=${_tdn_found##*$(printf '\t')}
+    set -- "$TRUST_NAMES_SAMPLE"
+  else
+    set -- "$TRUST_NAMES_OTHER"
+  fi
+  rm -f "$_tdn_file"
+  unset _tdn_file _tdn_read _tdn_found
+  return "$1"
+}
+
+# answer_own_trust_prompt <pane-id> <sample-dir> - answer yes for our sample.
+#
+# Keys go only to a screen just read as the trust dialog for this run's own
+# sample. The cursor starts on "No, exit"; the harness moves it down one
+# option, reads the screen again, and presses Enter only when the same dialog
+# for the same folder now has the cursor on "Yes, I trust this folder". Any
+# other screen at either read sends nothing more. Returns 0 once Enter is sent.
+answer_own_trust_prompt() {
+  trust_dialog_names "$1" "$2" || return 1
+  if [ "$TRUST_SELECTED" = no ]; then
+    herdr pane send-keys "$1" down >>"$TRANSCRIPT" 2>&1 || return 1
+    sleep 1
+    trust_dialog_names "$1" "$2" || return 1
+  fi
+  [ "$TRUST_SELECTED" = yes ] || return 1
+  herdr pane send-keys "$1" Enter >>"$TRANSCRIPT" 2>&1 || return 1
+}
+
 # What resolve_trust_prompt decided, and why.
 TRUST_OUTCOME=""
 TRUST_REASON=""
 TRUST_OWNER=""
 
-TRUST_OWNER_OPERATOR="a human operator, who alone may answer the workspace-trust prompt"
+TRUST_OWNER_OPERATOR="the operator, because the trust prompt does not name the sample this run created"
 TRUST_OWNER_ENVIRONMENT="operator environment"
 
 # resolve_trust_prompt <pane> <tab> <dir> <budget> <agent> <settings-file>
@@ -307,7 +414,7 @@ TRUST_OWNER_ENVIRONMENT="operator environment"
 # caller to record. TRUST_OUTCOME is one of:
 #
 #   ready       a live session is proven on this pane; the run may continue
-#   disabled    the wait was switched off with --trust-wait-seconds 0
+#   disabled    the operator wait was switched off with --trust-wait-seconds 0
 #   unanswered  the budget ended with the question still on screen
 #   unreadable  the budget ended without a readable pane
 #   unproven    the question cleared but no session could be proven
@@ -321,16 +428,31 @@ resolve_trust_prompt() {
   TRUST_OUTCOME=""
   TRUST_REASON=""
   TRUST_OWNER=""
+  TRUST_ANSWERED_BY=""
 
-  if [ "$_rtp_budget" -eq 0 ]; then
+  # A prompt that names this run's own sample is the harness's to answer. It
+  # is recorded as such, and the session is then proven like any other answer.
+  if answer_own_trust_prompt "$_rtp_pane" "$_rtp_dir"; then
+    TRUST_ANSWERED_BY="the harness, because the prompt named this run's own sample $_rtp_dir"
+    printf 'trust prompt answered by %s\n' "$TRUST_ANSWERED_BY" | tee -a "$TRANSCRIPT"
+    wait_for_trust_answer "$_rtp_pane" "$TRUST_SELF_ANSWER_SECONDS" && _rtp_wait=0 || _rtp_wait=$?
+    if [ "$_rtp_wait" = "$TRUST_WAIT_ANSWERED" ]; then
+      resolve_trust_session "$_rtp_pane" "$_rtp_tab" "$_rtp_agent" "$_rtp_settings"
+    else
+      TRUST_OUTCOME=unproven
+      TRUST_OWNER=$TRUST_OWNER_ENVIRONMENT
+      TRUST_REASON="the harness answered the trust prompt for its own sample, but the prompt was still on screen or unreadable $TRUST_SELF_ANSWER_SECONDS seconds later"
+    fi
+  elif [ "$_rtp_budget" -eq 0 ]; then
     TRUST_OUTCOME=disabled
     TRUST_OWNER=$TRUST_OWNER_OPERATOR
-    TRUST_REASON="the wait for an answer was disabled by --trust-wait-seconds 0"
+    TRUST_REASON="the prompt did not name this run's own sample, and the operator wait was disabled by --trust-wait-seconds 0"
   else
     # The operator is watching stdout, not the transcript file, so the ask goes
     # there and names the tab, the pane and the folder being trusted.
     printf '\n%s\n' '=================================================================='
-    printf 'ACTION NEEDED: a human must answer the Claude Code trust prompt.\n'
+    printf 'ACTION NEEDED: the operator must answer the Claude Code trust prompt;\n'
+    printf '  it does not name the sample this run created, so the harness does not.\n'
     printf '  Herdr tab:  %s\n' "$_rtp_tab"
     printf '  Herdr pane: %s\n' "$_rtp_pane"
     printf '  sample:     %s\n' "$_rtp_dir"
@@ -344,7 +466,7 @@ resolve_trust_prompt() {
     if [ "$_rtp_wait" = "$TRUST_WAIT_TIMEOUT" ]; then
       TRUST_OUTCOME=unanswered
       TRUST_OWNER=$TRUST_OWNER_OPERATOR
-      TRUST_REASON="the operator did not answer the trust prompt within $_rtp_budget seconds (--trust-wait-seconds)"
+      TRUST_REASON="the prompt did not name this run's own sample, and the operator did not answer it within $_rtp_budget seconds (--trust-wait-seconds)"
     elif [ "$_rtp_wait" = "$TRUST_WAIT_UNREADABLE" ]; then
       TRUST_OUTCOME=unreadable
       TRUST_OWNER=$TRUST_OWNER_ENVIRONMENT

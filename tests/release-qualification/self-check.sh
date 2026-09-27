@@ -56,7 +56,8 @@ TRANSCRIPT="$STUB_DIR/transcript"
 #   proc-out               what `pane process-info` prints; with exit-on-keys
 #                          present, any send-keys swaps in proc-shell
 #   pane-text-directive    swapped into pane-text when the directive is typed
-#   pane-text-after-enter  swapped into pane-text on any send-keys
+#   pane-text-after-down   swapped into pane-text when the key is `down`
+#   pane-text-after-enter  swapped into pane-text on any other send-keys
 {
   printf '#!/bin/sh\n'
   printf 'D=%s\n' "$STUB_DIR"
@@ -75,6 +76,10 @@ TRANSCRIPT="$STUB_DIR/transcript"
   printf '    esac\n'
   printf '    exit 0 ;;\n'
   printf '  "pane send-keys")\n'
+  printf '    case "$*" in *" down")\n'
+  printf '      [ -f "$D/pane-text-after-down" ] && cp "$D/pane-text-after-down" "$D/pane-text"\n'
+  printf '      exit 0 ;;\n'
+  printf '    esac\n'
   printf '    [ -f "$D/exit-on-keys" ] && cp "$D/proc-shell" "$D/proc-out"\n'
   printf '    [ -f "$D/pane-text-after-enter" ] && cp "$D/pane-text-after-enter" "$D/pane-text"\n'
   printf '    n=$(($(cat "$D/enters") + 1)); printf "%%s" "$n" >"$D/enters"\n'
@@ -99,7 +104,8 @@ stub_herdr() {
   printf '0' >"$STUB_DIR/enters"
   printf '99' >"$STUB_DIR/accept-at"
   rm -f "$STUB_DIR/accepted" "$STUB_DIR/exit-on-keys" \
-    "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter"
+    "$STUB_DIR/pane-text-directive" "$STUB_DIR/pane-text-after-enter" \
+    "$STUB_DIR/pane-text-after-down"
   printf '%s\n' "$PROC_AGENT" >"$STUB_DIR/proc-out"
   printf '%s\n' "$PROC_SHELL" >"$STUB_DIR/proc-shell"
 }
@@ -279,14 +285,147 @@ ok resolve_trust_prompt.unanswered "an unanswered prompt names the operator" \
   "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = unanswered ] &&
      [ "$TRUST_OWNER" = "$TRUST_OWNER_OPERATOR" ] && echo 0 || echo 1)"
 
-# The wait switched off: say so, ask nobody, read nothing.
+# The operator wait switched off: say so, ask nobody, send nothing. The one
+# read that remains is the check for this run's own sample.
 stub_herdr "$BLOCKED_PANE"
 run_resolve 0
 ok resolve_trust_prompt.disabled "a zero budget says the wait was disabled by the flag" \
   "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = disabled ] &&
      printf '%s' "$TRUST_REASON" | grep -qF -- '--trust-wait-seconds 0' && echo 0 || echo 1)"
-ok resolve_trust_prompt.disabled "a zero budget neither asks the operator nor reads the pane" \
-  "$([ ! -s "$STUB_DIR/banner" ] && [ ! -s "$STUB_DIR/calls" ] && echo 0 || echo 1)"
+ok resolve_trust_prompt.disabled "a zero budget neither asks the operator nor sends a key" \
+  "$([ ! -s "$STUB_DIR/banner" ] && ! grep -qF 'send-keys' "$STUB_DIR/calls" && echo 0 || echo 1)"
+
+# ---------------------------------------------------------------------------
+# The trust prompt for this run's own sample is the harness's to answer
+# ---------------------------------------------------------------------------
+#
+# The screens follow a live Claude Code 2.1.283 capture of the dialog: the
+# folder under "Accessing workspace:", wrapped at the pane width, the cursor on
+# "No, exit". Every folder below exists, so only identity decides.
+
+OWN="$STUB_DIR/sample"
+SIBLING="$STUB_DIR/sample-b"
+ELSEWHERE="$STUB_DIR/other-folder"
+mkdir -p "$OWN" "$SIBLING" "$ELSEWHERE"
+ln -s "$ELSEWHERE" "$STUB_DIR/link-elsewhere"
+ln -s "$OWN" "$STUB_DIR/link-own"
+
+# trust_screen <folder> <no|yes> [width] - the dialog as the pane shows it.
+trust_screen() {
+  _ts_path=$1
+  printf '%s\n' '────────────────────────────────────────────────────────────'
+  printf ' Accessing workspace:\n\n'
+  while [ -n "$_ts_path" ]; do
+    _ts_line=$(printf '%s' "$_ts_path" | cut -c1-"${3:-400}")
+    printf ' %s\n' "$_ts_line"
+    _ts_path=${_ts_path#"$_ts_line"}
+  done
+  printf '\n Quick safety check: Is this a project you created or one\n'
+  printf ' you trust? (Like your own code, a well-known open source\n'
+  printf ' project, or work from your team). If not, take a moment to\n'
+  printf " review what's in this folder first.\n\n"
+  printf " Claude Code'll be able to read, edit, and execute files\n here.\n\n"
+  printf ' Security guide\n\n'
+  if [ "$2" = no ]; then
+    printf ' ❯ No, exit\n   Yes, I trust this folder\n'
+  else
+    printf '   No, exit\n ❯ Yes, I trust this folder\n'
+  fi
+  printf '\n Enter to confirm · Esc to cancel\n'
+  unset _ts_path _ts_line
+}
+
+# A pane narrower than the question wraps it; it is still the question.
+stub_herdr "$(trust_screen "$OWN" no 60)"
+trust_prompt_showing p1 && _r=0 || _r=$?
+ok trust_prompt_showing.wrapped "a question wrapped by a narrow pane is still showing" \
+  "$([ "$_r" = "$TRUST_SHOWING" ] && echo 0 || echo 1)"
+
+# run_own <budget> <folder shown> <cursor after down> [width] - the dialog
+# names <folder shown>; this run's sample is always $OWN.
+run_own() {
+  stub_herdr "$(trust_screen "$2" no "${4:-}")"
+  trust_screen "$2" "$3" "${4:-}" >"$STUB_DIR/pane-text-after-down"
+  printf '%s\n' "$TRUSTED_PANE" >"$STUB_DIR/pane-text-after-enter"
+  printf '0' >"$STUB_DIR/start-rc"
+  resolve_trust_prompt p1 t1 "$OWN" "$1" cf-selfcheck-cl01 \
+    /tmp/state/settings.json >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+}
+
+# keys_sent - the keys the harness pressed, in order, on one line.
+keys_sent() {
+  sed -n 's/^pane send-keys p1 //p' "$STUB_DIR/calls" | tr '\n' ' '
+}
+
+run_own 0 "$OWN" yes
+ok trust_own.answered "the prompt for this run's own sample is answered with no operator wait" \
+  "$([ "$RESOLVE_RC" = 0 ] && [ "$TRUST_OUTCOME" = ready ] &&
+     [ "$(keys_sent)" = "down Enter " ] && echo 0 || echo 1)"
+ok trust_own.answered "the harness says it answered, and why; no operator banner" \
+  "$(printf '%s' "$TRUST_ANSWERED_BY" | grep -qF "own sample $OWN" &&
+     grep -qF "trust prompt answered by the harness" "$STUB_DIR/banner" &&
+     ! grep -qF 'ACTION NEEDED' "$STUB_DIR/banner" && echo 0 || echo 1)"
+
+run_own 0 "$OWN" yes 60
+ok trust_own.wrapped "a path wrapped at a 60-column pane is still read as the sample" \
+  "$([ "$RESOLVE_RC" = 0 ] && [ "$(keys_sent)" = "down Enter " ] && echo 0 || echo 1)"
+
+run_own 0 "$STUB_DIR/link-own" yes
+ok trust_own.symlink "a symlink that resolves to the sample is the sample" \
+  "$([ "$RESOLVE_RC" = 0 ] && [ "$(keys_sent)" = "down Enter " ] && echo 0 || echo 1)"
+
+# Negative controls: each must leave the pane without a single key and hand
+# the prompt to the operator with a reason that says so.
+for _case in "sibling:$SIBLING" "parent:$STUB_DIR" "symlink-elsewhere:$STUB_DIR/link-elsewhere" \
+  "missing:$STUB_DIR/not-there" "prefix:$OWN-b"; do
+  run_own 3 "${_case#*:}" yes
+  ok "trust_other.${_case%%:*}" "a prompt for another folder gets no key and waits for the operator" \
+    "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "" ] &&
+       [ "$TRUST_OUTCOME" = unanswered ] && [ "$TRUST_OWNER" = "$TRUST_OWNER_OPERATOR" ] &&
+       [ -z "$TRUST_ANSWERED_BY" ] && grep -qF 'ACTION NEEDED' "$STUB_DIR/banner" &&
+       printf '%s' "$TRUST_REASON" | grep -qF "did not name this run's own sample" &&
+       echo 0 || echo 1)"
+done
+unset _case
+
+# The cursor did not reach "Yes" after the move: no Enter is pressed.
+run_own 3 "$OWN" no
+ok trust_own.no_enter "Enter is pressed only with the cursor on Yes" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "down " ] && echo 0 || echo 1)"
+
+# The screen after the move names another folder: no Enter either.
+stub_herdr "$(trust_screen "$OWN" no)"
+trust_screen "$SIBLING" yes >"$STUB_DIR/pane-text-after-down"
+resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
+  >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+ok trust_own.changed "a dialog that changes folder between reads gets no Enter" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$(keys_sent)" = "down " ] && echo 0 || echo 1)"
+
+# Answered, but the dialog never clears: not a session, and not the operator's.
+stub_herdr "$(trust_screen "$OWN" no)"
+trust_screen "$OWN" yes >"$STUB_DIR/pane-text-after-down"
+_saved=$TRUST_SELF_ANSWER_SECONDS
+TRUST_SELF_ANSWER_SECONDS=2
+resolve_trust_prompt p1 t1 "$OWN" 3 cf-selfcheck-cl01 /tmp/state/settings.json \
+  >"$STUB_DIR/banner" 2>&1 && RESOLVE_RC=0 || RESOLVE_RC=$?
+TRUST_SELF_ANSWER_SECONDS=$_saved
+ok trust_own.stuck "an answered prompt that stays on screen is unproven, owned by the environment" \
+  "$([ "$RESOLVE_RC" != 0 ] && [ "$TRUST_OUTCOME" = unproven ] &&
+     [ "$TRUST_OWNER" = "$TRUST_OWNER_ENVIRONMENT" ] && echo 0 || echo 1)"
+unset _saved
+
+# Mutation probe: with the identity check removed, the sibling prompt is
+# answered, so the negative controls above are what stop that bug.
+MUTANT_ID="$STUB_DIR/lib-identity.sh"
+sed 's#^same_folder() {$#same_folder() { return 0#' "$SCRIPT_DIR/lib.sh" >"$MUTANT_ID"
+run_own 3 "$SIBLING" yes
+_real_keys=$(keys_sent)
+_mutant_keys=$(sh -c '. "$1"; TRANSCRIPT=$2/transcript; resolve_trust_prompt p1 t1 "$3" 3 cf-selfcheck-cl01 /tmp/s.json >/dev/null 2>&1
+  sed -n "s/^pane send-keys p1 //p" "$2/calls" | tr "\n" " "' sh "$MUTANT_ID" "$STUB_DIR" "$OWN" 2>/dev/null)
+ok mutation.identity "without the identity check a sibling's prompt would be answered" \
+  "$([ "$(grep -c '^same_folder() { return 0' "$MUTANT_ID")" = 1 ] &&
+     [ "$_real_keys" = "" ] && [ -n "$_mutant_keys" ] && echo 0 || echo 1)"
+unset _real_keys _mutant_keys
 
 # ---------------------------------------------------------------------------
 # Mutation probe
