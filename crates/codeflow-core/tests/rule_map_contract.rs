@@ -214,7 +214,7 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "Git floor [enforced].",
         "explicit authenticated human approval",
         "self-review is not review",
-        "A change to an adopter-facing path",
+        "a change to an adopter-facing path (product code, managed instructions",
         "same family: a native subagent of this session",
     ];
     let method_tiers = [
@@ -225,7 +225,6 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
         "when unsure, route",
         "fresh-context independent review",
         "otherwise a separate read-only pass",
-        "Review verdicts require `cf-reviewer`",
     ];
     for tier in Kernel::tiers() {
         let block = normalized(
@@ -236,12 +235,27 @@ fn the_failed_in_practice_rules_are_pinned_always_rules() {
             .copied()
             .filter(|needle| !block.to_lowercase().contains(&needle.to_lowercase()))
             .collect();
-        if tier != Tier::Minimal {
-            missing.extend(method_tiers.iter().copied().filter(|needle| {
-                // The review sentence lives in the reference; the
-                // map carries its one-line form.
-                *needle != "Review verdicts require `cf-reviewer`" && !block.contains(needle)
-            }));
+        if tier == Tier::Minimal {
+            // The minimal tier has no orchestrator: nothing goes direct, and
+            // every change still lands through a branch and a reviewed PR.
+            for needle in [
+                "Every change lands through a branch and a reviewed PR",
+                "gets a reviewer who did not write it",
+            ] {
+                if !block.contains(needle) {
+                    missing.push(needle);
+                }
+            }
+            if block.contains("go direct") {
+                missing.push("(the minimal map must not say anything goes direct)");
+            }
+        } else {
+            missing.extend(
+                method_tiers
+                    .iter()
+                    .copied()
+                    .filter(|needle| !block.contains(needle)),
+            );
         }
         assert!(
             missing.is_empty(),

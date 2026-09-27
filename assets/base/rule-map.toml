@@ -189,7 +189,7 @@ see = ["cf-model-orchestrator"]
 id = "route"
 tiers = ["minimal"]
 title = "Route by touched paths."
-text = "A change to an adopter-facing path (product code, managed instructions, hooks, policy, CI, shipped templates, watched contracts) goes on a branch with a reviewed PR; other edits go direct; when unsure, treat it as adopter-facing."
+text = "Every change lands through a branch and a reviewed PR; a change to an adopter-facing path (product code, managed instructions, hooks, policy, CI, shipped templates, watched contracts) gets a reviewer who did not write it; when unsure, treat it as adopter-facing."
 see = [".codeflow/rules/git-rules.md"]
 
 [[rule]]
