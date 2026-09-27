@@ -1074,6 +1074,35 @@ fn hidden_or_example_acceptance_does_not_complete_a_task() {
     }
 }
 
+/// Round 3: text that reads `## Closeout` inside inline HTML is a paragraph,
+/// not the Closeout heading, so the fence after it proves nothing.
+#[test]
+fn an_inline_tag_heading_is_not_the_closeout() {
+    let visible = fenced(&block(&["AC-1", "AC-2"], "none | no journey criterion"));
+    for (heading, clean) in [
+        ("<span hidden>## Closeout</span>", false),
+        ("## Closeout <!-- note -->", true),
+        ("## Closeout", true),
+    ] {
+        let (repo, base) = project();
+        let content =
+            task("TSK-001", "complete", CRITERIA, &visible).replace("## Closeout", heading);
+        repo.write(TASK_PATH, &content);
+        repo.commit("complete by hand");
+        let verdict = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+        assert_eq!(verdict.is_clean(), clean, "{heading}: {verdict:?}");
+        if !clean {
+            assert!(
+                verdict
+                    .errors
+                    .iter()
+                    .any(|e| e.contains("needs an acceptance block")),
+                "{verdict:?}"
+            );
+        }
+    }
+}
+
 /// R1: a Blocker section inside a comment does not satisfy a blocked task.
 #[test]
 fn a_commented_blocker_does_not_block_a_task() {

@@ -105,6 +105,10 @@ pub(crate) struct ScannedLine {
     pub marker: u8,
     /// The info string of a `FenceOpen` line.
     pub info: String,
+    /// The text of a level-two ATX heading the parser found on this line
+    /// (`## <text>`); `None` on every other line, including a line whose
+    /// `## ` is only text inside a paragraph or inline HTML.
+    pub heading: Option<String>,
 }
 
 impl ScannedLine {
@@ -114,6 +118,7 @@ impl ScannedLine {
             visible: visible.to_string(),
             marker: 0,
             info: String::new(),
+            heading: None,
         }
     }
 }
@@ -142,7 +147,7 @@ fn fence_marker(line: &str) -> Option<(u8, usize, &str)> {
 /// (an inline comment, a tag) is removed from visible text, and a code span
 /// stays text, whatever it contains.
 pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
-    use pulldown_cmark::{CodeBlockKind, Event, Options, Parser, Tag, TagEnd};
+    use pulldown_cmark::{CodeBlockKind, Event, HeadingLevel, Options, Parser, Tag, TagEnd};
 
     let lines: Vec<&str> = lines
         .iter()
@@ -165,9 +170,23 @@ pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
     let mut opens: Vec<(usize, u8, String)> = Vec::new();
     let mut hidden_bytes = vec![false; text.len()];
     let mut containers = 0usize;
+    let mut headings: Vec<(usize, String)> = Vec::new();
+    let mut open_heading: Option<(usize, String)> = None;
     for (event, range) in Parser::new_ext(&text, Options::empty()).into_offset_iter() {
         match event {
             Event::Start(Tag::List(_) | Tag::Item | Tag::BlockQuote(_)) => containers += 1,
+            Event::Start(Tag::Heading { level, .. }) => {
+                let line = line_of(range.start);
+                let atx = lines[line].starts_with("## ");
+                open_heading = (level == HeadingLevel::H2 && containers == 0 && atx)
+                    .then(|| (line, String::new()));
+            }
+            Event::End(TagEnd::Heading(_)) => headings.extend(open_heading.take()),
+            Event::Text(text) | Event::Code(text) => {
+                if let Some((_, collected)) = open_heading.as_mut() {
+                    collected.push_str(&text);
+                }
+            }
             Event::End(TagEnd::List(_) | TagEnd::Item | TagEnd::BlockQuote(_)) => {
                 containers = containers.saturating_sub(1);
             }
@@ -223,6 +242,9 @@ pub(crate) fn scan(lines: &[&str]) -> Vec<ScannedLine> {
                 scanned.marker = *marker;
                 scanned.info.clone_from(info);
             }
+            if let Some((_, text)) = headings.iter().find(|(at, _)| *at == index) {
+                scanned.heading = Some(text.trim().to_string());
+            }
             scanned
         })
         .collect()
@@ -245,18 +267,19 @@ pub(crate) fn scan_record(lines: &[&str]) -> Vec<ScannedLine> {
     scanned
 }
 
-/// Line index range `[start, end)` of the level-two section `heading`,
-/// heading included. Only a visible text line opens or ends a section.
+/// Line index range `[start, end)` of the level-two section `heading`
+/// (`## Closeout`), heading included. Only a heading the Markdown parser
+/// reports opens or ends a section, never text that merely reads `## `.
 pub(crate) fn section_span(lines: &[ScannedLine], heading: &str) -> Option<(usize, usize)> {
-    let is_text = |line: &ScannedLine| line.kind == LineKind::Text;
+    let name = heading.strip_prefix("## ")?.trim();
     let start = lines
         .iter()
-        .position(|line| is_text(line) && line.visible.trim_end() == heading)?;
+        .position(|line| line.heading.as_deref() == Some(name))?;
     let end = lines
         .iter()
         .enumerate()
         .skip(start + 1)
-        .find(|(_, line)| is_text(line) && line.visible.starts_with("## "))
+        .find(|(_, line)| line.heading.is_some())
         .map_or(lines.len(), |(index, _)| index);
     Some((start, end))
 }
@@ -1122,6 +1145,16 @@ mod tests {
         assert!(!has_section("<!--\n## Blocker\n-->\n", "## Blocker"));
         assert!(!has_section("<!-- ## Blocker -->\n", "## Blocker"));
         assert!(has_section("## Blocker <!-- note -->\n", "## Blocker"));
+        // Inline HTML never manufactures a heading, nor does text in a list.
+        assert!(!has_section(
+            "<span hidden>## Blocker</span>\n",
+            "## Blocker"
+        ));
+        assert!(!has_section("- ## Blocker\n", "## Blocker"));
+        assert!(
+            !has_section("Blocker\n--\n", "## Blocker"),
+            "ATX headings only"
+        );
         let criteria = parse_criteria(
             "## Acceptance Criteria\n\n<!--\n- AC-9 hidden\n-->\n- AC-1 shown\n```text\n- AC-8 example\n```\n",
         );
