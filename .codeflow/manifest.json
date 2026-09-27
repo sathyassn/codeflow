@@ -221,7 +221,7 @@
     ".agents/skills/cf-estimate/examples/forecast.json": {
       "src": "agents/skills/cf-estimate/examples/forecast.json",
       "ownership": "managed",
-      "sha256": "24a22e7e696f039a74ac0d636f9843a271a5464e21ec0b3bdc8d0e9b60fe177a",
+      "sha256": "91e9d0fd5e985bedc737aec88b863387bab89497961172348d0f6e1113ae3f76",
       "exec": false
     },
     ".agents/skills/cf-estimate/examples/profile.md": {
@@ -245,7 +245,7 @@
     ".agents/skills/cf-estimate/references/rubric.md": {
       "src": "agents/skills/cf-estimate/references/rubric.md",
       "ownership": "managed",
-      "sha256": "8c2f28412f98ec794b36cc45fe27056951b424b9bbf1c73d16e963602a9744c1",
+      "sha256": "c3c795bad66d940ca6247de682074ef5a858c31132d1dc7e33c0ec52494b415d",
       "exec": false
     },
     ".agents/skills/cf-estimate/references/worked-example.md": {
@@ -275,7 +275,7 @@
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "a51e0b959f464e76eaf8d0ce56c0ef30ef7cf023facf6b71d61f61c30b479089",
+      "sha256": "b301f9634b3b83bae54ecbc7c7a27d28b8eba02cbee964fa0ebe35024b44ba87",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -827,7 +827,7 @@
     ".claude/skills/cf-estimate/examples/forecast.json": {
       "src": "agents/skills/cf-estimate/examples/forecast.json",
       "ownership": "managed",
-      "sha256": "24a22e7e696f039a74ac0d636f9843a271a5464e21ec0b3bdc8d0e9b60fe177a",
+      "sha256": "91e9d0fd5e985bedc737aec88b863387bab89497961172348d0f6e1113ae3f76",
       "exec": false
     },
     ".claude/skills/cf-estimate/examples/profile.md": {
@@ -851,7 +851,7 @@
     ".claude/skills/cf-estimate/references/rubric.md": {
       "src": "agents/skills/cf-estimate/references/rubric.md",
       "ownership": "managed",
-      "sha256": "8c2f28412f98ec794b36cc45fe27056951b424b9bbf1c73d16e963602a9744c1",
+      "sha256": "c3c795bad66d940ca6247de682074ef5a858c31132d1dc7e33c0ec52494b415d",
       "exec": false
     },
     ".claude/skills/cf-estimate/references/worked-example.md": {
@@ -881,7 +881,7 @@
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "a51e0b959f464e76eaf8d0ce56c0ef30ef7cf023facf6b71d61f61c30b479089",
+      "sha256": "b301f9634b3b83bae54ecbc7c7a27d28b8eba02cbee964fa0ebe35024b44ba87",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/harness-evidence.md": {

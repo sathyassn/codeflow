@@ -48,7 +48,7 @@ conformance testing and operational cost still belong in the duration estimate.
 | C: consequential act | Performs audience publication/activation, destructive erasure, custody/authority change or stored-data migration? | 2; consumed/read-only behavior or non-production restoration alone does not qualify |
 | X: specific security mechanic | Implements a named approval, revocation, disclosure or erasure mechanism on its own path? | 1; boilerplate security applicability is not a mechanic |
 | T: experimental technique | Defined acceptance requires establishing technique/model/tolerance/threshold by experiment during delivery? | 2; uncertainty about an unapproved budget or an evidence disclaimer alone is insufficient |
-| R: distinct refusal/safeguard obligations | How many semantically distinct, explicit acceptance obligations govern refusal or safeguarding? | 0 for at most 3; 1 for 4–7; 2 for 8 or more |
+| R: distinct refusal/safeguard obligations | How many semantically distinct, explicit acceptance obligations govern refusal or safeguarding? | 0 for at most 3; 1 for 4 to 7; 2 for 8 or more |
 
 For R, enumerate each obligation and its anchor. Count semantics, not headings:
 the same required behavior counts whether phrased as an error, safeguard, edge
