@@ -461,6 +461,98 @@ fn a_profile_added_by_the_head_itself_is_not_trusted() {
     assert!(!all.contains("applies (actor"), "{all}");
 }
 
+/// Codex review F3: the enforcing job runs from the target checkout. A head
+/// whose policy carries a key this binary cannot read fails there with the
+/// two-step upgrade order, even though the rules are judged by the target's
+/// policy and the head's own workflow no longer validates anything.
+#[test]
+fn a_head_policy_this_binary_cannot_read_fails_from_the_target_checkout() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path();
+    git(root, &["init", "-b", "main"]);
+    git(root, &["config", "user.email", "t@example.com"]);
+    git(root, &["config", "user.name", "t"]);
+    std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+    std::fs::create_dir_all(root.join(".github/workflows")).unwrap();
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&shipped_policy()).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".github/workflows/codeflow-ci.yml"),
+        include_str!("../../../assets/base/ci/codeflow-ci.yml"),
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "chore: init"]);
+    git(root, &["checkout", "-b", "feat/unknown-policy"]);
+    let mut raised = shipped_policy();
+    raised["git"]["future_policy_key"] = serde_json::json!("block");
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&raised).unwrap(),
+    )
+    .unwrap();
+    std::fs::write(
+        root.join(".github/workflows/codeflow-ci.yml"),
+        "name: codeflow-ci\non: pull_request\njobs:\n  gates:\n    runs-on: ubuntu-24.04\n    steps:\n      - run: echo validated\n",
+    )
+    .unwrap();
+    git(root, &["add", "."]);
+    git(root, &["commit", "-m", "feat: adopt a future policy key"]);
+    git(root, &["checkout", "main"]);
+
+    let out = codeflow(
+        root,
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "feat/unknown-policy",
+            "--branch",
+            "feat/unknown-policy",
+            "--pr-body",
+            SHIPPED_BODY,
+        ],
+    );
+    let all = text(&out);
+    assert_eq!(out.status.code(), Some(2), "{all}");
+    assert!(
+        all.contains("head policy error: unknown key git.future_policy_key"),
+        "{all}"
+    );
+    assert!(all.contains("Upgrades take two pull requests"), "{all}");
+
+    // The same range with a head the binary reads is judged normally.
+    git(root, &["checkout", "feat/unknown-policy"]);
+    std::fs::write(
+        root.join(".codeflow/policy.json"),
+        serde_json::to_string_pretty(&shipped_policy()).unwrap(),
+    )
+    .unwrap();
+    git(root, &["commit", "-am", "fix: drop the future key"]);
+    git(root, &["checkout", "main"]);
+    let out = codeflow(
+        root,
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "feat/unknown-policy",
+            "--branch",
+            "feat/unknown-policy",
+            "--pr-body",
+            SHIPPED_BODY,
+        ],
+    );
+    let all = text(&out);
+    assert_ne!(out.status.code(), Some(2), "{all}");
+    assert!(!all.contains("head policy error"), "{all}");
+}
+
 #[test]
 fn a_planted_secret_is_blocked_on_a_bot_branch() {
     // The profile never reaches the secret scan: the pre-commit scan has no

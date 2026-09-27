@@ -225,13 +225,18 @@ pub fn release_backend(root: &Path) -> Result<ReleaseBackend, String> {
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(ReleaseBackend::None),
         Err(e) => return Err(format!("{}: {e}", path.display())),
     };
+    release_backend_str(&text, &path.display().to_string())
+}
+
+/// [`release_backend`] of project-state text, `name` naming its source in
+/// errors (a path, or `<commit>:.codeflow/project.toml`).
+///
+/// # Errors
+/// As [`release_backend`].
+pub fn release_backend_str(text: &str, name: &str) -> Result<ReleaseBackend, String> {
     // The parse error is not echoed: it quotes file content.
-    let table: toml::Table = toml::from_str(&text).map_err(|_| {
-        format!(
-            "{} does not parse; release.backend unreadable",
-            path.display()
-        )
-    })?;
+    let table: toml::Table = toml::from_str(text)
+        .map_err(|_| format!("{name} does not parse; release.backend unreadable"))?;
     let Some(release) = table.get("release") else {
         return Ok(ReleaseBackend::None);
     };

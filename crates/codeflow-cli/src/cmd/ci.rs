@@ -167,6 +167,9 @@ pub fn run(args: &CiArgs) -> i32 {
         .clone()
         .map(|b| (vec![b], "explicit --base flag".to_string()));
     let head = args.head.clone().unwrap_or_else(|| detected.head.clone());
+    if let Some(code) = adopter::check_head_config(&root, &head) {
+        return code;
+    }
 
     let (base_candidates, range_source) = match base_spec {
         Some((cands, src)) => (cands, src),

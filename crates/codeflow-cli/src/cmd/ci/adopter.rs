@@ -207,6 +207,49 @@ fn target_profiles(root: &Path, base: &str) -> Vec<AutomationProfile> {
         .unwrap_or_default()
 }
 
+/// Validate the head's own policy and project state as data (SPC-013 R-113;
+/// TSK-107 review F3). The rules are judged by the target's policy, but a
+/// head that raises the policy past what this binary reads fails here with
+/// the two-step upgrade order, even when the checkout is the target and the
+/// head's own workflow no longer validates it. `Some(2)` stops the run.
+pub(super) fn check_head_config(root: &Path, head: &str) -> Option<i32> {
+    let show = |path: &str| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(root)
+            .args(["show", &format!("{head}:{path}")])
+            .output()
+            .ok()?;
+        out.status
+            .success()
+            .then(|| String::from_utf8_lossy(&out.stdout).to_string())
+    };
+    let mut failed = false;
+    if let Some(text) = show(".codeflow/policy.json") {
+        if let Err(errors) = policy_schema::validate_policy_str(&text) {
+            for e in &errors {
+                eprintln!("codeflow ci: head policy error: {e}");
+            }
+            eprintln!(
+                "codeflow ci: error: the head's .codeflow/policy.json is not valid for this codeflow; nothing was verified"
+            );
+            if let Some(hint) =
+                policy_schema::upgrade_order_hint(&errors, env!("CARGO_PKG_VERSION"))
+            {
+                eprintln!("codeflow ci: {hint}");
+            }
+            failed = true;
+        }
+    }
+    if let Some(text) = show(".codeflow/project.toml") {
+        if let Err(e) = adoption::release_backend_str(&text, "the head's .codeflow/project.toml") {
+            eprintln!("codeflow ci: error: {e}");
+            failed = true;
+        }
+    }
+    failed.then_some(2)
+}
+
 /// Which optional checks this run includes.
 #[derive(Clone, Copy)]
 struct Ran {
