@@ -1013,7 +1013,7 @@
     ".github/pull_request_template.md": {
       "src": "ci/pull_request_template.md",
       "ownership": "managed",
-      "sha256": "f60efe6631848c2a580cbab8e9428473031e6aa005f2d27a8a95cd7be0d73bb9",
+      "sha256": "98a7d245ca31bc9bfe1fcd2ade17cecf2b24a5449128f997a1d69edeb913b589",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {

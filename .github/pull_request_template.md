@@ -5,6 +5,9 @@
      for an epic; never drop evidence to fit. A figure here is a fenced
      ASCII block, never Mermaid. -->
 
+<!-- With durable work tracking: the task this delivers, or why it is a direct change. -->
+Task: `TSK-NNN | none: <reason>`
+
 ## Summary
 
 <!-- One to three short sentences of context: what this is, why, and the
