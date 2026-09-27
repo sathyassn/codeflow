@@ -305,7 +305,7 @@
     ".agents/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "3b9b56129feeb923bf798961a4caf6814e534036219b7acb5ed9badbf8bc9573",
+      "sha256": "c5453d95146a7d8b0ca1348610f3436fb0495b514be4f728f92b0a3fdcd5918c",
       "exec": false
     },
     ".agents/skills/cf-method/references/project-organization.md": {
@@ -329,7 +329,7 @@
     ".agents/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "7e8c8de7042c8836a6cca72eb96b94ddb1576a73e5f241710843a9a82870f107",
+      "sha256": "f023c3d25c9aca02e90ee23e22d3046796bae6c441058741481f3631e23ef5f6",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/capability-routing.md": {
@@ -353,7 +353,7 @@
     ".agents/skills/cf-model-orchestrator/resources/quality-contract.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
       "ownership": "managed",
-      "sha256": "201c7ea2155846172f0f0fe0925689c09a6666af48b62baa8fd1f86379c66d72",
+      "sha256": "0619c3ed32784d857b70fbe567ab67f24ecac485c3aa01dee2bd076bad6cbad9",
       "exec": false
     },
     ".agents/skills/cf-model-orchestrator/resources/routing-policy.json": {
@@ -785,7 +785,7 @@
     ".claude/skills/cf-method/references/autonomy.md": {
       "src": "claude/skills/cf-method/references/autonomy.md",
       "ownership": "managed",
-      "sha256": "3b9b56129feeb923bf798961a4caf6814e534036219b7acb5ed9badbf8bc9573",
+      "sha256": "c5453d95146a7d8b0ca1348610f3436fb0495b514be4f728f92b0a3fdcd5918c",
       "exec": false
     },
     ".claude/skills/cf-method/references/project-organization.md": {
@@ -809,7 +809,7 @@
     ".claude/skills/cf-model-orchestrator/SKILL.md": {
       "src": "agents/skills/cf-model-orchestrator/SKILL.md",
       "ownership": "managed",
-      "sha256": "7e8c8de7042c8836a6cca72eb96b94ddb1576a73e5f241710843a9a82870f107",
+      "sha256": "f023c3d25c9aca02e90ee23e22d3046796bae6c441058741481f3631e23ef5f6",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/capability-routing.md": {
@@ -833,7 +833,7 @@
     ".claude/skills/cf-model-orchestrator/resources/quality-contract.md": {
       "src": "agents/skills/cf-model-orchestrator/resources/quality-contract.md",
       "ownership": "managed",
-      "sha256": "201c7ea2155846172f0f0fe0925689c09a6666af48b62baa8fd1f86379c66d72",
+      "sha256": "0619c3ed32784d857b70fbe567ab67f24ecac485c3aa01dee2bd076bad6cbad9",
       "exec": false
     },
     ".claude/skills/cf-model-orchestrator/resources/routing-policy.json": {
