@@ -2,7 +2,7 @@
 id: ADR-0073
 title: Present review contract v2
 date: 2026-09-26
-status: proposed
+status: accepted
 superseded_by: null
 architecture_impact: "docs/architecture/present.md: live html stages are inlined, entity anchors are checked by the service, and answers join the private session ledger"
 ---
