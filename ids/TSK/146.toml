@@ -1,0 +1,11 @@
+id = "TSK-146"
+uid = "19880eb7-367b-4875-978e-7beb6e1923eb"
+kind = "TSK"
+title = "SPC-013 split by area with stable requirement ids"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T17:23:02Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
