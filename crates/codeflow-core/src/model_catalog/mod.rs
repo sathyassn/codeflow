@@ -18,7 +18,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use crate::model_qualification::RouteEffort as Effort;
-pub use inputs::{load_catalog_document, CatalogInputs};
+pub use inputs::{load_catalog, CatalogInputs};
 pub use operator::{anchored_override, parse_override_route};
 pub use overlay::{CandidateAddition, PersonalOverlay};
 pub use resolve::{
@@ -26,29 +26,6 @@ pub use resolve::{
     Resolution, ResolveRequest, ResolvedAlternative, ResolvedParticipant,
 };
 pub use selection::{BindingReference, ProjectSelection};
-
-/// Transitional loader keeps schema 4 available until TSK-085 migrates assets.
-#[derive(Debug)]
-pub enum CatalogDocument {
-    Legacy(BTreeMap<String, crate::model_qualification::EnsembleBinding>),
-    Current(Box<Catalog>),
-}
-
-impl CatalogDocument {
-    /// Load either supported schema with strict JSON parsing.
-    ///
-    /// # Errors
-    /// Returns an error for malformed input or unsupported schema versions.
-    pub fn parse(bytes: &[u8]) -> Result<Self, String> {
-        let value: serde_json::Value =
-            crate::strict_json::parse_strict_json(bytes).map_err(|error| error.to_string())?;
-        match value["schema_version"].as_u64() {
-            Some(4) => crate::model_qualification::parse_legacy_ensemble(bytes).map(Self::Legacy),
-            Some(5) => Catalog::parse(bytes).map(Box::new).map(Self::Current),
-            _ => Err("unsupported model catalog schema".into()),
-        }
-    }
-}
 
 /// Managed schema 5 data. Load through [`Catalog::parse`] before resolving.
 #[derive(Debug, Clone, Deserialize, Serialize)]

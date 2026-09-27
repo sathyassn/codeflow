@@ -1119,29 +1119,29 @@ fn exact_tuple_matrix_never_reuses_design_evidence() {
     }
 }
 #[test]
-fn schema_four_transition_reader_accepts_fictional_models() {
-    let binding = |role: &str, seat: &str, lineage: &str, provider: &str, harness: &str| {
-        json!({
-            "role":role,"seat":seat,"lineage":lineage,"provider":provider,"model_class":"fictional-latest",
-            "native_selectors":{harness:"fictional-pin"},"default_effort":"high","escalation_effort":"xhigh",
-            "responsibilities":["planning"],"internal_routes":[]
-        })
-    };
+fn schema_four_is_rejected_after_the_managed_switch() {
     let value = json!({
         "schema_version":4,"policy_id":"claude-codex-duo",
         "standing_roles":["claude-judgment-primary","codex-engineering-primary"],
-        "design_execution_owner":"claude-judgment-primary",
-        "bindings":[binding("claude-judgment-primary","orchid-seat","claude","anthropic","claude-code"),binding("codex-engineering-primary","quartz-seat","codex","openai","codex-cli")],
+        "design_execution_owner":"claude-judgment-primary","bindings":[],
         "high_triggers":["material"],"xhigh_triggers":["deep"],"rules":["Use pinned identities."]
     });
-    assert!(matches!(
-        CatalogDocument::parse(&serde_json::to_vec(&value).unwrap()).unwrap(),
-        CatalogDocument::Legacy(_)
-    ));
-    assert!(matches!(
-        CatalogDocument::parse(&serde_json::to_vec(&fixture()).unwrap()).unwrap(),
-        CatalogDocument::Current(_)
-    ));
+    assert!(parse(&value).is_err());
+    let mut five = fixture();
+    five["schema_version"] = json!(4);
+    assert_eq!(
+        parse(&five).unwrap_err(),
+        "unsupported model catalog schema 4"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir
+        .path()
+        .join(".agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
+    std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+    std::fs::write(&path, serde_json::to_vec(&value).unwrap()).unwrap();
+    assert!(load_catalog(dir.path())
+        .unwrap_err()
+        .ends_with("installed model catalog predates schema 5; run `codeflow update`"));
 }
 
 #[test]

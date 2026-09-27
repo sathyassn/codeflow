@@ -1,7 +1,7 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
-use super::{Catalog, CatalogDocument, Effort, Exclusion, PersonalOverlay, ProjectSelection};
+use super::{Catalog, Effort, Exclusion, PersonalOverlay, ProjectSelection};
 
 const EMBEDDED: &[u8] = include_bytes!(concat!(
     env!("CARGO_MANIFEST_DIR"),
@@ -12,14 +12,38 @@ const RESOURCE: &str = "skills/cf-model-orchestrator/resources/current-ensemble.
 /// Read the installed managed catalog, falling back to the shipped catalog.
 ///
 /// # Errors
-/// Rejects unreadable or invalid catalogs; never falls back past invalid data.
-pub fn load_catalog_document(root: &Path) -> Result<CatalogDocument, String> {
+/// Rejects unreadable or invalid catalogs, including any schema other than 5;
+/// never falls back past invalid data.
+pub fn load_catalog(root: &Path) -> Result<Catalog, String> {
     for prefix in [".agents", ".claude"] {
-        if let Some(bytes) = optional_file(&root.join(prefix).join(RESOURCE))? {
-            return CatalogDocument::parse(&bytes);
+        let path = root.join(prefix).join(RESOURCE);
+        if let Some(bytes) = optional_file(&path)? {
+            return Catalog::parse(&bytes).map_err(|error| {
+                let schema = serde_json::from_slice::<serde_json::Value>(&bytes)
+                    .ok()
+                    .and_then(|value| value["schema_version"].as_u64());
+                if schema.is_some_and(|version| version < 5) {
+                    format!(
+                        "{}: installed model catalog predates schema 5; run `codeflow update`",
+                        path.display()
+                    )
+                } else {
+                    error
+                }
+            });
         }
     }
-    CatalogDocument::parse(EMBEDDED)
+    Catalog::parse(EMBEDDED)
+}
+
+/// Repository content: refuse symlinks and oversized files like binding records.
+fn project_selection(root: &Path) -> Result<Option<Vec<u8>>, String> {
+    let path = root.join(".codeflow/model-selection.json");
+    match std::fs::symlink_metadata(&path) {
+        Ok(_) => crate::model_qualification::read_bounded_json(&path, "model selection").map(Some),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(format!("stat {}: {error}", path.display())),
+    }
 }
 
 pub(super) fn optional_file(path: &Path) -> Result<Option<Vec<u8>>, String> {
@@ -41,22 +65,24 @@ pub struct CatalogInputs {
 
 impl CatalogInputs {
     /// Load local additions, exclusions, binding records and project references.
-    /// `home` is the user-owned `CodeFlow` directory, not the project directory.
+    /// `home` is the user-owned `CodeFlow` directory (overlay and canary record),
+    /// not the project directory. `bindings` is the qualified-binding record
+    /// directory, passed explicitly so its location is never inferred from home.
     ///
     /// # Errors
     /// An invalid input rejects the entire configuration without partial use.
-    pub fn load(mut catalog: Catalog, root: &Path, home: Option<&Path>) -> Result<Self, String> {
+    pub fn load(
+        mut catalog: Catalog,
+        root: &Path,
+        home: Option<&Path>,
+        bindings: Option<&Path>,
+    ) -> Result<Self, String> {
         let mut exclusions = Vec::new();
         let mut canary_observations = BTreeMap::new();
         if let Some(home) = home {
             if let Some(bytes) = optional_file(&home.join("model-catalog.local.json"))? {
                 (catalog, exclusions) = PersonalOverlay::parse(&bytes)?.apply(&catalog)?;
             }
-            catalog
-                .bindings
-                .extend(crate::model_qualification::load_bindings(
-                    &home.join("qualified-bindings"),
-                )?);
             if let Some(bytes) = optional_file(&home.join("model-canary.json"))? {
                 #[derive(serde::Deserialize)]
                 #[serde(deny_unknown_fields)]
@@ -77,8 +103,13 @@ impl CatalogInputs {
                 canary_observations = canary.observed_ids;
             }
         }
+        if let Some(directory) = bindings {
+            catalog
+                .bindings
+                .extend(crate::model_qualification::load_bindings(directory)?);
+        }
         catalog.validate()?;
-        if let Some(bytes) = optional_file(&root.join(".codeflow/model-selection.json"))? {
+        if let Some(bytes) = project_selection(root)? {
             let selection = ProjectSelection::parse(&bytes)?;
             // Validate even an empty selection, and every selected tuple before
             // resolving any duty. An unrelated bad entry must not be ignored.

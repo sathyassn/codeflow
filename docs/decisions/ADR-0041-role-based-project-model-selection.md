@@ -75,3 +75,12 @@ workers.
   evaluation and human-approval concerns.
 - Project overrides for internal workers: they couple CodeFlow to private
   harness scheduling without transferring primary responsibility.
+
+## Note (2026-09-25)
+
+The concrete bindings named above give way to the catalog roster in
+ADR-0069. `.codeflow/model-selection.json` stays at schema 1: it references
+approved binding ids for exact roles and harnesses, and is checked against the
+schema 5 catalog, which stays fully managed. A personal overlay,
+`~/.codeflow/model-catalog.local.json`, may add candidate versions or exclude
+versions on one machine; it cannot designate a seat or claim evidence.

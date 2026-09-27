@@ -1,4 +1,4 @@
-//! Catalog-derived scans. Callers opt in; the real tree switches in TSK-085.
+//! Catalog-derived scans, run over fixture trees and the real tree.
 
 use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};

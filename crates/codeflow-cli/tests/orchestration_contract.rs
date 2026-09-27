@@ -6,6 +6,11 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::PathBuf;
 
+use codeflow_core::model_catalog::{
+    Adoption, Alternative, Catalog, Effort, EligibilityRequest, Lifecycle, ParticipantLabel,
+    Resolution, ResolveRequest, Target,
+};
+
 fn repo_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../..")
 }
@@ -18,67 +23,329 @@ fn normalize_whitespace(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn assert_internal_routes(
-    role: &str,
-    binding: &serde_json::Value,
-    selectors: &serde_json::Map<String, serde_json::Value>,
-) {
-    let mut route_ids = BTreeSet::new();
-    for route in binding["internal_routes"]
-        .as_array()
-        .expect("internal routes")
-    {
-        let route_id = route["route_id"].as_str().expect("route id");
-        assert!(
-            route_ids.insert(route_id),
-            "duplicate route {role}/{route_id}"
-        );
-        assert_eq!(route["status"], "candidate");
-        assert!(route["evidence"].as_array().expect("evidence").is_empty());
-        let efforts = route["efforts"].as_array().expect("efforts");
-        assert!(!efforts.is_empty());
-        assert!(efforts.contains(&route["default_effort"]));
-        assert!(!route["workloads"].as_array().expect("workloads").is_empty());
-        for harness in route["native_selectors"]
-            .as_object()
-            .expect("route native selectors")
-            .keys()
-        {
-            assert!(
-                selectors.contains_key(harness),
-                "route {role}/{route_id} escapes its parent harnesses"
-            );
+#[path = "../../codeflow-core/tests/support/catalog_fixture.rs"]
+mod fixture_data;
+
+const CATALOG: &str =
+    "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json";
+/// The operator's seat designation of the managed roster (EPC-018 Q2).
+const OPERATOR_DESIGNATION: &str = "2026-09-23";
+const AUTHORS: [Option<&str>; 4] = [None, Some("claude"), Some("codex"), Some("grok")];
+
+fn managed_catalog() -> Catalog {
+    Catalog::parse(read(CATALOG).as_bytes()).expect("managed catalog validates")
+}
+
+fn fictional_catalog() -> Catalog {
+    let mut catalog =
+        Catalog::parse(fixture_data::fixture().to_string().as_bytes()).expect("fictional catalog");
+    // TSK-079's fixture keeps a design-implementation duty that is open until
+    // scoped evidence exists; the managed catalog defines no such duty.
+    catalog.duties.remove("design-implementation");
+    catalog
+}
+
+fn lineage_of_seat<'a>(catalog: &'a Catalog, seat: &str) -> &'a str {
+    let family = &catalog
+        .seats
+        .iter()
+        .find(|s| s.id == seat)
+        .expect("seat")
+        .family;
+    &catalog
+        .families
+        .iter()
+        .find(|f| &f.id == family)
+        .expect("family")
+        .lineage
+}
+
+fn hosts(catalog: &Catalog) -> Vec<&str> {
+    catalog
+        .families
+        .iter()
+        .flat_map(|family| family.harnesses.iter().map(String::as_str))
+        .collect()
+}
+
+fn resolve(catalog: &Catalog, duty: &str, host: &str, author: Option<&str>) -> Resolution {
+    let observed = BTreeMap::new();
+    catalog
+        .resolve(&ResolveRequest {
+            duty,
+            task: "",
+            host_harness: host,
+            author_lineage: author,
+            exclusions: &[],
+            observed_ids: &observed,
+            trigger_facts: &[],
+            requested_override: None,
+            operator_override: None,
+        })
+        .unwrap_or_else(|error| panic!("{duty} on {host}: {error}"))
+}
+
+/// Every line a seat lists has a version that can hold that seat at high.
+fn every_seat_line_can_be_eligible(catalog: &Catalog) -> Result<(), String> {
+    let observed = BTreeMap::new();
+    for seat in &catalog.seats {
+        for id in &seat.lines {
+            let line = catalog
+                .lines
+                .iter()
+                .find(|l| &l.id == id)
+                .ok_or(id.clone())?;
+            let eligible = line.versions.iter().any(|version| {
+                version.selectors.keys().any(|harness| {
+                    catalog
+                        .eligible(&EligibilityRequest {
+                            duty: "orchestrate",
+                            line: &line.id,
+                            version: &version.id,
+                            seat: Some(&seat.id),
+                            harness,
+                            effort: Effort::High,
+                            exclusions: &[],
+                            observed_ids: &observed,
+                        })
+                        .is_ok()
+                })
+            });
+            if !eligible {
+                return Err(format!(
+                    "seat {} line {id} has no eligible version",
+                    seat.id
+                ));
+            }
         }
+    }
+    Ok(())
+}
+
+/// Every duty is filled on at least one supported host for some author.
+fn every_duty_resolves_on_some_host(catalog: &Catalog) -> Result<(), String> {
+    for duty in catalog.duties.keys() {
+        let filled = hosts(catalog).into_iter().any(|host| {
+            AUTHORS
+                .iter()
+                .any(|author| !resolve(catalog, duty, host, *author).is_open())
+        });
+        if !filled {
+            return Err(format!("duty {duty} resolves on no supported host"));
+        }
+    }
+    Ok(())
+}
+
+/// Claude-authored units owe a Codex reviewer on every host.
+fn unit_review_owes_codex_for_claude(catalog: &Catalog) -> Result<(), String> {
+    for host in hosts(catalog) {
+        let result = resolve(catalog, "unit-review", host, Some("claude"));
+        let reviewers: Vec<_> = result
+            .participants
+            .iter()
+            .filter(|p| p.label == ParticipantLabel::Required)
+            .map(|p| p.lineage.as_str())
+            .collect();
+        if result.is_open() || !reviewers.contains(&"codex") || reviewers.contains(&"claude") {
+            return Err(format!("unit-review on {host} owes {reviewers:?}"));
+        }
+    }
+    Ok(())
+}
+
+/// The combined body is reviewed by both standing seats.
+fn body_review_owes_both_standing_seats(catalog: &Catalog) -> Result<(), String> {
+    for host in hosts(catalog) {
+        let result = resolve(catalog, "body-review", host, None);
+        let seats: BTreeSet<_> = result
+            .participants
+            .iter()
+            .filter_map(|p| p.seat.as_deref())
+            .collect();
+        let owed: BTreeSet<_> = catalog.standing_seats.iter().map(String::as_str).collect();
+        if result.is_open() || !owed.is_subset(&seats) {
+            return Err(format!("body-review on {host} owes {seats:?}"));
+        }
+    }
+    Ok(())
+}
+
+/// The design owner is the standing Claude seat and design uses its first line.
+fn design_owner_is_claude(catalog: &Catalog) -> Result<(), String> {
+    let owner = &catalog.design_owner;
+    if lineage_of_seat(catalog, owner) != "claude" || !catalog.standing_seats.contains(owner) {
+        return Err(format!(
+            "design owner {owner} is not the standing Claude seat"
+        ));
+    }
+    let first = &catalog
+        .seats
+        .iter()
+        .find(|s| &s.id == owner)
+        .expect("owner")
+        .lines[0];
+    let design = resolve(catalog, "design", "claude-code", None);
+    match design.participants.as_slice() {
+        [p] if p.seat.as_deref() == Some(owner) && &p.line == first => Ok(()),
+        other => Err(format!("design resolved to {other:?}")),
+    }
+}
+
+/// Only non-retired versions in seat-listed lines carry the operator's
+/// designation; qualification starts empty everywhere.
+fn designations_match_seat_lines(catalog: &Catalog) -> Result<(), String> {
+    for line in &catalog.lines {
+        let seats: Vec<_> = catalog
+            .seats
+            .iter()
+            .filter(|seat| seat.lines.contains(&line.id))
+            .map(|seat| seat.id.as_str())
+            .collect();
+        for version in &line.versions {
+            let expected: Vec<_> = if version.lifecycle == Lifecycle::Retired {
+                Vec::new()
+            } else {
+                seats.clone()
+            };
+            let actual: Vec<_> = version
+                .designations
+                .iter()
+                .map(|d| d.seat.as_str())
+                .collect();
+            if actual != expected
+                || version
+                    .designations
+                    .iter()
+                    .any(|d| d.date != OPERATOR_DESIGNATION || d.record.trim().is_empty())
+            {
+                return Err(format!(
+                    "{} designated {actual:?}, expected {expected:?} dated {OPERATOR_DESIGNATION}",
+                    version.id
+                ));
+            }
+            if !version.qualification.is_empty() {
+                return Err(format!("{} carries qualification evidence", version.id));
+            }
+        }
+    }
+    Ok(())
+}
+
+type StructuralCheck = fn(&Catalog) -> Result<(), String>;
+
+const STRUCTURAL_CHECKS: [(&str, StructuralCheck); 6] = [
+    ("seat lines", every_seat_line_can_be_eligible),
+    ("duties", every_duty_resolves_on_some_host),
+    ("unit review", unit_review_owes_codex_for_claude),
+    ("body review", body_review_owes_both_standing_seats),
+    ("design owner", design_owner_is_claude),
+    ("designations", designations_match_seat_lines),
+];
+
+#[test]
+fn managed_catalog_passes_every_structural_check() {
+    let catalog = managed_catalog();
+    for (name, check) in STRUCTURAL_CHECKS {
+        check(&catalog).unwrap_or_else(|error| panic!("{name}: {error}"));
+    }
+    // The fictional fixture used below is itself a valid control.
+    let fixture = fictional_catalog();
+    for (name, check) in STRUCTURAL_CHECKS {
+        check(&fixture).unwrap_or_else(|error| panic!("fixture {name}: {error}"));
     }
 }
 
 #[test]
-fn current_ensemble_uses_only_capability_supported_harnesses() {
-    let ensemble: serde_json::Value = serde_json::from_str(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
-    ))
-    .expect("current ensemble JSON");
+fn each_structural_check_fails_on_a_catalog_that_breaks_it() {
+    type Break = fn(&mut Catalog);
+    let breaks: [(&str, Break); 8] = [
+        ("seat lines", |c| {
+            c.lines[1].versions[0].designations.clear();
+        }),
+        ("duties", |c| {
+            // Parses, but no light-execution worker supports the medium entry effort.
+            let line = c
+                .lines
+                .iter_mut()
+                .find(|l| l.id == "quartz-worker")
+                .unwrap();
+            line.versions[0].efforts = vec![Effort::High];
+        }),
+        ("unit review", |c| {
+            let review = c.duties.get_mut("unit-review").unwrap();
+            review.required[0]
+                .alternatives
+                .retain(|a| a.target != Target::Seat("quartz-seat".into()));
+            review.required[0].alternatives.insert(
+                0,
+                Alternative {
+                    target: Target::Seat("cinder-seat".into()),
+                    harness: None,
+                    effort: Effort::High,
+                },
+            );
+        }),
+        ("body review", |c| {
+            c.duties.get_mut("body-review").unwrap().required.pop();
+        }),
+        ("design owner", |c| c.design_owner = "quartz-seat".into()),
+        ("designations", |c| {
+            // A worker-only line designated for a seat that does not list it.
+            let designations = c.lines[2].versions[0].designations.clone();
+            let line = c
+                .lines
+                .iter_mut()
+                .find(|l| l.id == "quartz-worker")
+                .unwrap();
+            line.versions[0].designations = designations;
+        }),
+        ("designations", |c| {
+            let mut retired = c.lines[2].versions[0].clone();
+            retired.id = "quartz-retired".into();
+            retired.pinned_id = "quartz-retired-pin".into();
+            retired.lifecycle = Lifecycle::Retired;
+            c.lines[2].versions.insert(0, retired);
+        }),
+        ("designations", |c| {
+            c.lines[0].versions[0].qualification = c.lines[0].versions[0]
+                .designations
+                .iter()
+                .map(|_| {
+                    serde_json::from_value(serde_json::json!({
+                        "harness": "claude-code", "selector": "orchid-one-pin",
+                        "effort": "high", "duty": "orchestrate",
+                        "record": "record.md", "evidence": ["evidence.json"]
+                    }))
+                    .unwrap()
+                })
+                .collect();
+        }),
+    ];
+    for (name, mutate) in breaks {
+        let mut catalog = fictional_catalog();
+        mutate(&mut catalog);
+        let (_, check) = STRUCTURAL_CHECKS
+            .iter()
+            .find(|(check, _)| *check == name)
+            .unwrap();
+        assert!(check(&catalog).is_err(), "{name} accepted a broken catalog");
+    }
+}
+
+#[test]
+fn managed_catalog_uses_only_capability_supported_harnesses() {
+    let catalog = managed_catalog();
     let harnesses: serde_json::Value = serde_json::from_str(&read(
         "assets/base/agents/skills/cf-evaluate-model/resources/harnesses.json",
     ))
     .expect("harness catalog JSON");
-    assert_eq!(ensemble["schema_version"], 4);
-    assert_eq!(
-        ensemble["design_execution_owner"],
-        "claude-judgment-primary"
-    );
-    assert!(ensemble["rules"].as_array().unwrap().iter().any(|rule| {
-        rule.as_str() == Some("High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker.")
-    }), "high reasoning floor must not mandate redundant escalation");
     let supported: BTreeMap<&str, (&str, &str)> = harnesses["harnesses"]
         .as_array()
         .expect("harnesses")
         .iter()
         .map(|harness| {
-            assert_eq!(
-                harness["status"], "capability-supported",
-                "ensemble harnesses require catalog capability support"
-            );
+            assert_eq!(harness["status"], "capability-supported");
             (
                 harness["id"].as_str().expect("harness id"),
                 (
@@ -88,65 +355,47 @@ fn current_ensemble_uses_only_capability_supported_harnesses() {
             )
         })
         .collect();
-    let standing: BTreeSet<&str> = ensemble["standing_roles"]
-        .as_array()
-        .expect("standing_roles")
-        .iter()
-        .map(|role| role.as_str().expect("standing role"))
-        .collect();
-    assert_eq!(
-        standing,
-        BTreeSet::from(["claude-judgment-primary", "codex-engineering-primary"])
-    );
-    let bindings = ensemble["bindings"].as_array().expect("bindings");
-    assert!(
-        bindings.len() >= 2,
-        "the current ensemble must include the standing pair"
-    );
-    let mut seats = BTreeSet::new();
-    let mut lineages = BTreeSet::new();
-    let mut roles = BTreeSet::new();
-    for binding in bindings {
-        let role = binding["role"].as_str().expect("role");
-        let seat = binding["seat"].as_str().expect("seat");
-        let provider = binding["provider"].as_str().expect("provider");
-        let lineage = binding["lineage"].as_str().expect("lineage");
-        assert!(roles.insert(role), "duplicate ensemble role {role}");
-        assert!(seats.insert(seat), "duplicate ensemble seat {seat}");
-        assert!(
-            lineages.insert(lineage),
-            "duplicate primary lineage {lineage}"
-        );
-        assert!(!binding["responsibilities"]
-            .as_array()
-            .expect("responsibilities")
-            .is_empty());
-        let selectors = binding["native_selectors"]
-            .as_object()
-            .expect("native selectors");
-        assert!(!selectors.is_empty(), "{seat} has no native selector");
-        for (harness, selector) in selectors {
-            assert!(
-                !selector.as_str().unwrap_or_default().is_empty(),
-                "{seat} has an empty selector for {harness}"
-            );
+    for family in &catalog.families {
+        for harness in &family.harnesses {
             assert_eq!(
                 supported.get(harness.as_str()),
-                Some(&(provider, lineage)),
-                "{seat} selects an unsupported or mismatched harness {harness}"
+                Some(&(family.provider.as_str(), family.lineage.as_str())),
+                "{} selects an unsupported or mismatched harness {harness}",
+                family.id
             );
         }
-        assert_internal_routes(role, binding, selectors);
     }
-    assert!(lineages.contains("claude") && lineages.contains("codex"));
-    assert!(lineages.contains("grok"), "catalog family grok is missing");
-    assert!(roles.contains("claude-judgment-primary"));
-    assert!(roles.contains("codex-engineering-primary"));
-    assert!(roles.contains("grok-engineering-primary"));
-    assert!(!ensemble["xhigh_triggers"]
-        .as_array()
-        .expect("xhigh triggers")
-        .is_empty());
+    let lineages: BTreeSet<&str> = catalog
+        .standing_seats
+        .iter()
+        .map(|seat| lineage_of_seat(&catalog, seat))
+        .collect();
+    assert_eq!(lineages, BTreeSet::from(["claude", "codex"]));
+    assert!(catalog.families.iter().any(|f| f.lineage == "grok"));
+    let roles: BTreeSet<&str> = catalog.seats.iter().map(|s| s.role.as_str()).collect();
+    for role in [
+        "claude-judgment-primary",
+        "codex-engineering-primary",
+        "grok-engineering-primary",
+    ] {
+        assert!(roles.contains(role), "missing standing role {role}");
+    }
+    assert!(!catalog.xhigh_triggers.is_empty());
+    assert!(catalog.rules.iter().any(|rule| {
+        rule == "High triggers set a minimum reasoning level for a unit, not an instruction to escalate a primary already at high or spawn a redundant high worker."
+    }), "high reasoning floor must not mandate redundant escalation");
+    // The Grok trigger policy is today's routing policy until the operator answers Q4.
+    let policy: serde_json::Value = serde_json::from_str(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
+    ))
+    .expect("routing policy");
+    let triggers: Vec<String> =
+        serde_json::from_value(policy["extra_family_review"]["triggers"].clone()).unwrap();
+    assert_eq!(catalog.named_policies["extra-family-review"], triggers);
+    assert!(catalog
+        .lines
+        .iter()
+        .all(|line| line.adoption == Adoption::Manual));
 }
 
 #[test]
@@ -247,32 +496,15 @@ fn cross_family_entry_preserves_receiving_primary_ownership() {
 }
 
 #[test]
-fn current_ensemble_and_routing_pin_grok_catalog() {
+fn catalog_rules_and_routing_policy_keep_extra_family_review() {
     let routing = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-    ));
-    let ensemble = normalize_whitespace(&read(
-        "assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json",
     ));
     let policy = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/routing-policy.json",
     ));
+    let rules = managed_catalog().rules.join(" ");
     for required in [
-        "\"seat\": \"claude-primary\"",
-        "\"role\": \"claude-judgment-primary\"",
-        "\"model_class\": \"latest-fable\"",
-        "\"model_class\": \"latest-opus\"",
-        "\"seat\": \"codex-primary\"",
-        "\"role\": \"codex-engineering-primary\"",
-        "\"model_class\": \"latest-astra-coding\"",
-        "\"model_class\": \"latest-sol\"",
-        "\"model_class\": \"latest-terra\"",
-        "\"seat\": \"grok-primary\"",
-        "\"role\": \"grok-engineering-primary\"",
-        "\"model_class\": \"latest-grok-coding\"",
-        "\"grok-cli\": \"grok-4.6\"",
-        "\"default_effort\": \"high\"",
-        "\"escalation_effort\": \"xhigh\"",
         "Primary seats retain independent planning and approval duties.",
         "The standing pair is the usual quality floor; extra catalog families never vote silently.",
         "Internal workers never replace a primary or named cross-lineage reviewer.",
@@ -284,8 +516,8 @@ fn current_ensemble_and_routing_pin_grok_catalog() {
         "Name the extra catalog family when a routing-policy trigger fires and it is available; its output is evidence, never a silent vote.",
     ] {
         assert!(
-            ensemble.contains(required),
-            "current ensemble lost binding marker: {required}"
+            rules.contains(required),
+            "managed catalog lost rule: {required}"
         );
     }
 
@@ -349,11 +581,20 @@ fn orchestrator_skill_avoids_superseded_roles_and_model_pins() {
             "orchestrator retained superseded fixed-role marker: {superseded}"
         );
     }
-    for stale_pin in ["Fable 5", "gpt-5.6-sol"] {
-        assert!(
-            !skill.contains(stale_pin),
-            "orchestrator must not hard-code model pin {stale_pin}"
-        );
+    // Catalog-derived: no alias, pinned id or selector of any catalog version.
+    let catalog = managed_catalog();
+    for version in catalog.lines.iter().flat_map(|line| &line.versions) {
+        for token in std::iter::once(&version.alias)
+            .chain(std::iter::once(&version.pinned_id))
+            .chain(version.selectors.values())
+        {
+            assert!(
+                !skill
+                    .split(|c: char| !(c.is_alphanumeric() || "-_.".contains(c)))
+                    .any(|word| word.trim_end_matches('.') == token),
+                "orchestrator must not hard-code model {token}"
+            );
+        }
     }
 }
 
@@ -682,8 +923,6 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
     // Git may materialize text assets with CRLF on Windows. This contract
     // pins the authored line break, not the checkout's newline convention.
     let claude = read("assets/base/CLAUDE.md.tmpl").replace("\r\n", "\n");
-    let ensemble =
-        read("assets/base/agents/skills/cf-model-orchestrator/resources/current-ensemble.json");
     let capability_routing = normalize_whitespace(&read(
         "assets/base/agents/skills/cf-model-orchestrator/resources/capability-routing.md",
     ));
@@ -730,19 +969,6 @@ fn every_non_trivial_task_is_stage_aware_and_uses_effective_autonomy() {
             "Claude turn-completion contract lost autonomy marker: {required}"
         );
     }
-    for required in [
-        "\"default_effort\": \"high\"",
-        "\"escalation_effort\": \"xhigh\"",
-        "\"claude-code\": \"fable\"",
-        "\"codex-cli\": \"gpt-6-astra\"",
-        "\"grok-cli\": \"grok-4.6\"",
-    ] {
-        assert!(
-            ensemble.contains(required),
-            "current ensemble lost effective binding marker: {required}"
-        );
-    }
-
     for required in [
         "Every non-trivial repository task **must begin with**",
         "`/cf-model-orchestrator`",

@@ -309,6 +309,18 @@
         "foreign-folder-trust-is-refused",
         "seat-disagreement-on-public-behavior-is-asked"
       ]
+    },
+    {
+      "id": "catalog-routing",
+      "description": "Focused diagnostics for catalog seats and duties: the design owner's first line, the labeled second opinion, worker limits on fidelity, the reduced-assurance seat fallback with task-specific overrides, and identity drift. Registration proves nothing about live behaviour.",
+      "includes": [],
+      "cases": [
+        "design-first-line-with-labeled-second-opinion",
+        "design-proceeds-without-second-opinion",
+        "candidate-worker-refused-fidelity-approval",
+        "design-open-when-first-line-unavailable",
+        "drift-inherits-nothing"
+      ]
     }
   ]
 }

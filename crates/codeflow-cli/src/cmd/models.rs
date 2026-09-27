@@ -4,9 +4,10 @@ use std::collections::BTreeMap;
 
 use clap::{Args, Subcommand};
 use codeflow_core::model_catalog::{
-    anchored_override, load_catalog_document, parse_override_route, Catalog, CatalogDocument,
-    CatalogInputs, Exclusion, ExclusionScope, ParticipantLabel, Resolution, ResolveRequest,
+    anchored_override, load_catalog, parse_override_route, Catalog, CatalogInputs, Exclusion,
+    ExclusionScope, ParticipantLabel, Resolution, ResolveRequest,
 };
+use codeflow_core::registry;
 
 #[derive(Debug, Args)]
 pub struct ModelsArgs {
@@ -84,9 +85,7 @@ fn resolve(args: &ResolveArgs) -> Result<Resolution, String> {
         return Err("--override requires --task".into());
     }
     let root = super::repo_root();
-    let CatalogDocument::Current(catalog) = load_catalog_document(&root)? else {
-        return Err("models resolve requires managed catalog schema 5; schema 4 remains supported by doctor".into());
-    };
+    let catalog = load_catalog(&root)?;
     if args.duty == "test-authoring" {
         return Err(
             "test-authoring is not resolved separately; use the unit's implementation duty".into(),
@@ -95,8 +94,9 @@ fn resolve(args: &ResolveArgs) -> Result<Resolution, String> {
     if !catalog.duties.contains_key(&args.duty) {
         return Err(format!("unknown duty {}", args.duty));
     }
-    let home = codeflow_core::registry::codeflow_home();
-    let mut inputs = CatalogInputs::load(*catalog, &root, home.as_deref())?;
+    let home = registry::codeflow_home();
+    let bindings = home.as_deref().map(registry::qualified_bindings_path);
+    let mut inputs = CatalogInputs::load(catalog, &root, home.as_deref(), bindings.as_deref())?;
     if !inputs
         .catalog
         .families

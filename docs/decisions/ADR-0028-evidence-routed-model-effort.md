@@ -70,3 +70,12 @@ ADR-0055 amends the default: primaries start at medium and escalate to high
 then xhigh on recorded complexity/difficulty triggers. The rest of this
 decision (primary-owned internals, no worker replacing a primary, qualification
 before a binding change) stands.
+
+## Note (2026-09-25)
+
+ADR-0069 makes the models named here catalog data. The Claude seat and its
+workers are resolved per duty from `current-ensemble.json` schema 5. An xhigh
+trigger adds an `xhigh-reasoning` worker obligation in the seat's own family
+while the seat stays at high and keeps approval (ADR-0056); with no eligible
+worker the obligation stays open and the trigger is unmet. The current roster
+and its designation date are in ADR-0069.
