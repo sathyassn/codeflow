@@ -868,7 +868,7 @@
         {
           "path": ".agents/skills/cf-develop/SKILL.md",
           "markers": [
-            "Maximum 3 evidence-moving cycles",
+            "Maximum 2 evidence-moving cycles for code",
             "operator-owned decision"
           ]
         }
