@@ -135,9 +135,9 @@ Example, from CodeFlow's `assets/base/AGENTS.md.tmpl`:
 A caption is one sentence that states the takeaway. It does not repeat the
 title or explain the legend.
 
-Example, from CodeFlow's `docs/architecture/present.md`:
+Example, from CodeFlow's `docs/verification/evidence/tsk-006/prototype.html`:
 
-> revisions and feedback are the only quota-governed history
+> Only dependency-free nodes share a time window; branch tips follow predecessor landings.
 
 ### Summaries
 
@@ -175,8 +175,9 @@ A simple answer stays simple: no figure, no headings, no recap, and a
 one-line answer stays one line. A longer reply leads with the outcome in
 words, follows the summary rule, carries a figure when a relationship carries
 the point, puts tabular facts in a table, and gives the exact link a tool
-printed. Never add a sentence about the reply's own format.
+printed. Never add a sentence about the reply's own format. The example is
+a recorded chat reply's opening line, which leads into its table.
 
-Example, from CodeFlow's `assets/base/agents/skills/cf-present/references/document-authoring.md`:
+Example, from CodeFlow's `docs/verification/tsk-014-w3/baselines/p3/chat.md`:
 
-> The migration is ready for review.
+> Eight rounds of exact review over the qualification harness produced seven findings:

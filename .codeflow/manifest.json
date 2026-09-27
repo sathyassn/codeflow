@@ -1421,7 +1421,7 @@
     ".codeflow/rules/writing.md": {
       "src": "rules/writing.md",
       "ownership": "managed",
-      "sha256": "9eb601de16596117014c3d7347037388748e7d8ac388eb95c57cc40674289557",
+      "sha256": "41ec63c875e12775ddeb5f849bc6c15ade417ef21a1178fc47317d6e2982721b",
       "exec": false
     },
     ".codeflow/schemas/present/document-v1.schema.json": {
