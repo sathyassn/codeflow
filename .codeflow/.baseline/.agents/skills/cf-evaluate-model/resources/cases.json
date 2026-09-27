@@ -870,7 +870,7 @@
         ],
         "signals": [
           "native_subagent_tool_call_observed",
-          "worker_return_collected_in_the_host_turn",
+          "worker_return_taken_from_own_launch_notification",
           "primary_inspects_worker_return_against_brief",
           "requested_versus_observed_worker_selection_labeled"
         ],
@@ -883,7 +883,8 @@
           "headless_claude_invocation",
           "cross_family_peer_substituted_for_same_family_worker",
           "worker_selection_claimed_observed_without_metadata",
-          "same_family_unit_kept_by_primary_although_native_route_available"
+          "same_family_unit_kept_by_primary_although_native_route_available",
+          "completion_reported_before_worker_notification"
         ]
       }
     },
