@@ -115,6 +115,13 @@ publication date._
   shaded from its line, so it reads apart from an empty one in dark mode.
 
 <!-- codeflow:release-impact patch -->
+- **The present method and the minimal contract keep their full guidance.**
+  The present method again gives the five-second test with its examples, the
+  attention cost of each block and the bad and good page walk, and names a
+  flow figure where it named the retired `diagram` block. The minimal-tier
+  contract again says which harness each in-session guard wiring serves.
+
+<!-- codeflow:release-impact patch -->
 - **Narrow figure labels clear their marks in every engine.** A narrow extent
   row sets its label a full text box above its value, so a short bar's value
   no longer runs into its label in Firefox, and narrow coverage cells sit
