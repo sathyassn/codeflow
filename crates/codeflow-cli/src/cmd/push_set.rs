@@ -196,15 +196,27 @@ fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
 
 /// The exclusive base of a pushed branch's range, from the destination's
 /// own history only:
-/// 1. the destination's current sha, when it names a known commit;
-/// 2. else the newest commit the pushed sha shares with the destination's
-///    own tracking refs (the pushed sha itself when nothing is new);
+/// 1. the destination's current sha, when it names a known commit that the
+///    pushed sha extends, or one with no shared history (`codeflow ci` then
+///    reports the unrelated base);
+/// 2. else, including a rewrite such as a rebase, the newest commit the
+///    pushed sha shares with the destination's own tracking refs (the pushed
+///    sha itself when nothing is new). From the old sha, a rebased branch's
+///    range would hold every upstream commit the rebase brought in;
 /// 3. else `None`: the range is unresolved and CI checks it. A local branch
 ///    is never substituted: it may be stale or not the destination's base.
 fn range_base(root: &Path, r: &PushRef, namespace: Option<&str>) -> Option<String> {
     let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
     if !zero && is_commit(root, &r.remote_sha) {
-        return Some(r.remote_sha.clone());
+        let extends = git(
+            root,
+            &["merge-base", "--is-ancestor", &r.remote_sha, &r.local_sha],
+        )
+        .is_some();
+        let related = git(root, &["merge-base", &r.remote_sha, &r.local_sha]).is_some();
+        if extends || !related {
+            return Some(r.remote_sha.clone());
+        }
     }
     let ns = namespace?;
     let glob = format!("--glob={ns}*");

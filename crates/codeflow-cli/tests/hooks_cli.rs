@@ -2272,6 +2272,31 @@ fn push_set_ignores_a_stale_local_main() {
 }
 
 #[test]
+fn push_set_checks_only_the_rebased_commits_of_a_rewrite() {
+    // A branch the destination holds is rebased onto a destination commit it
+    // did not have. The old destination sha is not in the new history, so
+    // the range comes from the destination's tracking refs: only the rebased
+    // commits are checked, never the upstream commits the rebase brought in.
+    let (bare, local) = stable_destination("Legacy subject.");
+    git(local.path(), &["checkout", "-q", "-b", "feat/r", "main~1"]);
+    let old = commit_file(local.path(), "r.txt", "r\n", "feat: add r");
+    let url = bare.path().to_str().unwrap();
+    git(local.path(), &["push", "-q", "--no-verify", url, "feat/r"]);
+    git(local.path(), &["fetch", "-q", "dest"]);
+    git(local.path(), &["rebase", "-q", "dest/stable"]);
+    let rebased = rev(local.path(), "HEAD");
+    let (code, err) = push_hook_onto(local.path(), "dest", "feat/r", &rebased, &old);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(!err.contains("did not run"), "ci ran on the rewrite: {err}");
+
+    // A bad commit in the rewrite is still blocked.
+    let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
+    let (code, err) = push_hook_onto(local.path(), "dest", "feat/r", &bad, &old);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(err.contains("push set check failed: `codeflow ci"), "{err}");
+}
+
+#[test]
 fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     // T132-3: a resolved but unrelated base (an orphan pushed over a branch
     // the destination holds) is a failed check with its diagnostic.
