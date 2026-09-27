@@ -11,4 +11,4 @@ scaffold_version = "3.0.0"
 schema_version = 1
 stack = "rust"
 tier = "full"
-work_records_baseline = "a3a157dbe3a2be874b9ec66af8e9003d784d614e"
+work_records_baseline = "375c68585cbeb3a1ffe6c28c8e4945c3d892e8db"
