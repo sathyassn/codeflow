@@ -1373,10 +1373,22 @@ const CONDITIONAL_READS: &[ConditionalRead] = &[
         "only when review findings are acted on"
     ),
     conditional!(
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "Any confirmed issue returns to its responsible primary",
+        "only when review confirms an issue"
+    ),
+    conditional!(
         "agents/skills/cf-develop/SKILL.md",
         "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
         "On `changes_requested`",
         "only when a review returns changes requested"
+    ),
+    conditional!(
+        "agents/skills/cf-develop/SKILL.md",
+        "agents/skills/cf-model-orchestrator/resources/quality/findings.md",
+        "When the change fixes a defect",
+        "only when the change fixes a defect"
     ),
 ];
 

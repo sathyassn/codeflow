@@ -1193,7 +1193,8 @@ const HOLISTIC_FIX_PINS: &[(&str, &str, &str)] = &[
     ("D19 reproduction", "reproduce safely where feasible, otherwise record the strongest evidence and the reproduction limit", TSK131_FINDINGS),
     ("D19 no masking", "Never mask a violated contract to make a check pass: a catch, fallback, weakened or skipped test, or retry is a fix only when it implements the contract's required failure behavior.", TSK131_FINDINGS),
     ("D19 probe citation", "For a defect that resists a first glance, run the probe in [blocker navigation](blockers-and-gates.md) before hypothesising.", TSK131_FINDINGS),
-    ("D19 develop", "A defect fix names its evidenced mechanism", TSK131_DEVELOP),
+    ("D19 develop", "When the change fixes a defect, apply Repair in `cf-model-orchestrator/resources/quality/findings.md`: state the evidenced mechanism and add a regression test that fails before the fix and passes after", TSK131_DEVELOP),
+    ("D19 develop probe", "for a defect that resists a first glance, first run one command that fails on the exact reported symptom", TSK131_DEVELOP),
     ("D19 reviewer", "the mechanism sentence and a regression test that fails before the fix and passes after", TSK131_REVIEWER),
     ("D20 every task", "Before selecting a fix or a design, name the bounded impact set (callers, consumers, inputs, effects, same-mechanism siblings, data, configuration, tests, docs)", TSK131_DESIGN),
     ("D20 adjacent", "verify the adjacent behavior the change could disturb as well as the changed path.", TSK131_DESIGN),
@@ -1298,7 +1299,7 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
         "Use the duo for routed work, decided by touched paths as AGENTS.md states; when unsure, route.",
         "Plan reconciliation is bounded to at most two rounds.",
         "When review findings are acted on, a round runs every reviewer in parallel and [findings](resources/quality/findings.md) bounds rounds by change class.",
-        "Rework follows the round bounds above.",
+        "within the [findings](resources/quality/findings.md) round bounds.",
     ] {
         assert!(
             orchestrator.contains(required),
@@ -1311,6 +1312,24 @@ fn working_method_rounds_agree_across_the_shipped_skills() {
         ),
         "cf-develop lost the change-class bound"
     );
+    // Fable review of d60ce13f0: the defect-fix duty is stated where every
+    // build happens, not only after a review bounces the change.
+    let develop = normalize_whitespace(&read(TSK131_DEVELOP));
+    let build = develop
+        .split_once("a. **Build**")
+        .and_then(|(_, rest)| rest.split_once("b. **Review**"))
+        .map(|(build, _)| build)
+        .expect("cf-develop step 5a");
+    for required in [
+        "When the change fixes a defect",
+        "a regression test that fails before the fix and passes after",
+        "exact reported symptom",
+    ] {
+        assert!(
+            build.contains(required),
+            "cf-develop Build lost the defect-fix duty: {required}"
+        );
+    }
     assert!(
         normalize_whitespace(&read(TSK131_DISCIPLINE)).contains(
             "Run one review round at a time with every reviewer in parallel; a reviewer whose blocker or major finding was fixed confirms it, and a fix for a minor finding needs no new round."

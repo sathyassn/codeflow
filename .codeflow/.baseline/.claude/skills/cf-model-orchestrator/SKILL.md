@@ -318,8 +318,8 @@ coverage.
 A Codex host runs this test-running review as [Codex host](references/codex-host.md)
 sets out.
 
-Any confirmed issue returns to its responsible primary and designated executor.
-Rework follows the round bounds above. A deterministic
+Any confirmed issue returns to its responsible primary and designated executor
+within the [findings](resources/quality/findings.md) round bounds. A deterministic
 failure or unverified criterion blocks
 completion. If the selected Claude judgment primary is unavailable, record the
 fallback and reduced assurance;

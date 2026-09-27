@@ -30,15 +30,18 @@ records the required interactive seat unavailable and the reduced assurance.
 5. Run the loop:
    a. **Build**: implement the smallest clear, idiomatic, durable scoped change
       with tests through the plan's named interfaces first, and internal unit
-      tests where they carry the risk; preserve
-      justified reuse, modular boundaries, and explicit
-      failure handling while adding no speculative behavior, abstraction, or
-      dependency. Apply the quality contract's existing-stack typed-interface
-      and runtime trust-boundary rule: preserve useful types, justify material
-      unchecked/broad bypasses, validate untrusted external values at the
-      boundary, and test accepted invalid-input behavior. Do not add redundant
-      wrappers or validators or force a stricter compiler, dependency, language,
-      or stack migration merely for compliance. Use small
+      tests where they carry the risk; preserve justified reuse, modular
+      boundaries, and explicit failure handling while adding no speculative
+      behavior, abstraction, or dependency. Apply the quality contract's
+      typed-interface and runtime trust-boundary rule and test accepted
+      invalid-input behavior; never force a stricter compiler, dependency,
+      language, or stack migration merely for compliance. When the change fixes
+      a defect, apply Repair in
+      `cf-model-orchestrator/resources/quality/findings.md`: state the
+      evidenced mechanism and add a regression test that fails before the fix
+      and passes after; for a defect that resists a first glance, first run one
+      command that fails on the exact reported symptom (a cheap local failing
+      test, else the closest executable check). Use small
       conventional commits. When a remote
       is configured, push the branch after each committed unit so work survives a
       machine failure — backup, not a merge (`--force-with-lease` if you rewrote
@@ -59,14 +62,10 @@ records the required interactive seat unavailable and the reduced assurance.
       review.
    c. On `changes_requested`, act on the round's findings as
       `cf-model-orchestrator/resources/quality/findings.md` sets out: one
-      batch, one apply-and-verify cycle, confirmed by each finder.
-      Maximum 2 evidence-moving cycles for code; docs and records follow that
-      section's bound. At the bound, take a strategic route that keeps the
-      approved outcome, or surface the genuine external dependency or
-      operator-owned decision with options and a recommendation. A defect fix
-      names its evidenced mechanism; for one that resists a first glance, first
-      run one command that fails on the exact reported symptom (a cheap local
-      failing test, else the closest executable check).
+      batch, one apply-and-verify cycle, confirmed by each finder. Maximum 2
+      evidence-moving cycles for code; docs and records follow that section's
+      bound. At the bound, take a strategic route that keeps the approved
+      outcome or surface the external dependency or operator-owned decision.
    d. **Verify**: `codeflow test` and `codeflow validate --docs` green. Apply
       the orchestrator's verification-selection resource: run any property,
       mutation, or architecture fitness check earned by the plan's trigger
