@@ -197,6 +197,7 @@ const CHECK_NAMES: &[&str] = &[
     "customization",
     "test-config",
     "id-registry",
+    "adopter-fit",
 ];
 
 /// Return the ordered list of all available check names.
@@ -227,6 +228,7 @@ fn check_registry() -> HashMap<&'static str, CheckFn> {
     m.insert("customization", check_customization);
     m.insert("test-config", check_test_config);
     m.insert("id-registry", check_id_registry);
+    m.insert("adopter-fit", check_adopter_fit);
     m
 }
 
@@ -1466,6 +1468,56 @@ fn parse_worktree_list(porcelain: &str) -> Vec<WorktreeEntry> {
 /// workflow is present (the CI workflow ships from --minimal up, so this is a
 /// repo that opted out via `[scaffold] ignore` or predates it). WARN only,
 /// never a block.
+/// Adopter fit (SPC-013 R-84, R-97, R-115): the effective PR-section level
+/// and its origin, a kept PR template's pending decision, and the release
+/// backend with any release tool that owns versions. WARN while a decision
+/// is pending, while policy provenance is unreadable, or while the release
+/// backend and a detected tool disagree; FAIL on an invalid backend.
+fn check_adopter_fit(opts: &Options) -> CheckResult {
+    use crate::hooks::adoption;
+    let start = Instant::now();
+    let root = PathBuf::from(&opts.project_dir);
+    let raw = adoption::raw_policy(&root);
+    let policy = crate::hooks::Policy::load(&root);
+    let level = adoption::pr_sections_effective(&raw, &policy.git);
+    let mut parts = vec![format!(
+        "git.pr_sections effective level {} ({})",
+        level.level, level.origin
+    )];
+    let mut status = Status::Pass;
+    if let Err(error) = &raw {
+        status = Status::Warn;
+        parts.push(format!(
+            "policy provenance unreadable ({error}); the configured level stands and any kept PR template mapping is unresolved"
+        ));
+    }
+    if let Some(pending) = adoption::pending_decision(&policy.git) {
+        status = Status::Warn;
+        parts.push(pending);
+    }
+    match adoption::release_backend(&root) {
+        Ok(backend) => {
+            parts.push(format!("release.backend {backend}"));
+            if let Some(finding) =
+                adoption::release_backend_finding(backend, &adoption::detect_release_tools(&root))
+            {
+                status = Status::Warn;
+                parts.push(finding);
+            }
+        }
+        Err(error) => {
+            status = Status::Fail;
+            parts.push(error);
+        }
+    }
+    CheckResult {
+        name: "adopter-fit".into(),
+        status,
+        message: parts.join("; "),
+        duration: start.elapsed(),
+    }
+}
+
 fn check_ci_perimeter(opts: &Options) -> CheckResult {
     let start = Instant::now();
     let root = PathBuf::from(&opts.project_dir);
@@ -1827,7 +1879,7 @@ mod tests {
 
     #[test]
     fn test_check_names_count() {
-        assert_eq!(check_names().len(), 16);
+        assert_eq!(check_names().len(), 17);
     }
 
     #[test]

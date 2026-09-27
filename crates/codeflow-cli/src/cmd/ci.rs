@@ -19,6 +19,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod adopter;
 mod classification;
 mod id_registry;
 mod pr_body;
@@ -62,6 +63,13 @@ pub struct CiArgs {
     /// Read the PR/MR body from a file (scanned like `--pr-body`).
     #[arg(long, value_name = "FILE")]
     pub pr_body_file: Option<PathBuf>,
+
+    /// The actor or app id that opened or updated the pull request, as the
+    /// CI workflow passes it for trusted automation profiles (SPC-013 R-82).
+    /// The workflow passes `unknown` on fork pull requests; locally it is
+    /// `unknown` unless given.
+    #[arg(long, value_name = "ACTOR", default_value = "unknown")]
+    pub actor: String,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -123,12 +131,7 @@ struct AddedLine {
 /// offending key) when it is invalid; deprecated keys are warned about.
 fn policy_verifiable(root: &Path) -> bool {
     if let Err(errors) = policy_schema::validate_policy(root) {
-        for e in &errors {
-            eprintln!("codeflow ci: policy error: {e}");
-        }
-        eprintln!(
-            "codeflow ci: error: .codeflow/policy.json is invalid — nothing was verified (see `codeflow policy explain`)"
-        );
+        report_invalid_policy(&errors);
         return false;
     }
     for warning in policy_schema::deprecation_warnings(root) {
@@ -137,6 +140,7 @@ fn policy_verifiable(root: &Path) -> bool {
     true
 }
 
+#[allow(clippy::too_many_lines)] // linear check dispatch; each check lives in its own module
 pub fn run(args: &CiArgs) -> i32 {
     let root = super::repo_root();
     // An invalid policy cannot verify the consumer's intent — fail loudly,
@@ -150,12 +154,12 @@ pub fn run(args: &CiArgs) -> i32 {
     // moot here: the pre-first-commit window cannot occur in CI, which always
     // has history — CI is the authoritative, always-armed perimeter.
     let (policy, _armed) = Policy::load_effective(&root);
-    let git = &policy.git;
+    let configured = &policy.git;
 
     // --- resolve the range ------------------------------------------------
     let detected = detect_range(
         |k| std::env::var(k).ok().filter(|v| !v.is_empty()),
-        &git.protected_branches,
+        &configured.protected_branches,
     );
     let base_spec = args
         .base
@@ -186,13 +190,32 @@ pub fn run(args: &CiArgs) -> i32 {
     };
 
     print_source_banner(&root);
+    let mut tagged: Vec<TaggedViolation> = Vec::new();
+    let adoption = adopter::resolve(
+        &root,
+        configured,
+        resolve_base(&root, &base_candidates).as_deref(),
+        &args.actor,
+        &branch,
+        pr_body.is_some(),
+    );
+    let git = &adoption.git;
+    tagged.extend(
+        adoption
+            .violations
+            .iter()
+            .cloned()
+            .map(|violation| TaggedViolation {
+                sha: None,
+                violation,
+            }),
+    );
 
     // Track what actually executed — the summary must not claim more.
     let mut ran: Vec<&str> = Vec::new();
     let mut skipped: Vec<&str> = Vec::new();
 
     // --- commit-range checks ---------------------------------------------
-    let mut tagged: Vec<TaggedViolation> = Vec::new();
     // Every path the range touches, for the PR-structure docs-only test.
     // `None` = the range could not be resolved (unknown = code, conservative).
     let range = evaluate_commit_range(&root, &base_candidates, &head, &range_source, git);
@@ -255,9 +278,10 @@ pub fn run(args: &CiArgs) -> i32 {
         skipped.push("PR-body");
     }
     if let Some(body) = &pr_body {
+        let body = adopter::supply_sections(adoption.profile.as_ref(), body);
         tagged.extend(evaluate_pr_checks(
             git,
-            body,
+            &body,
             range.files.as_deref(),
             range.breaking_commit,
             epic_into_main(&branch, args.base.as_deref(), |key| std::env::var(key).ok()),
@@ -279,6 +303,20 @@ fn record_checks(
 ) {
     work_records::dispatch(root, base_candidates, head, tagged, ran);
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
+}
+
+/// Name every invalid policy key and, when a key is unknown to this binary,
+/// the two-step upgrade order (SPC-013 R-113).
+fn report_invalid_policy(errors: &[policy_schema::PolicyError]) {
+    for e in errors {
+        eprintln!("codeflow ci: policy error: {e}");
+    }
+    eprintln!(
+        "codeflow ci: error: .codeflow/policy.json is invalid — nothing was verified (see `codeflow policy explain`)"
+    );
+    if let Some(hint) = policy_schema::upgrade_order_hint(errors, env!("CARGO_PKG_VERSION")) {
+        eprintln!("codeflow ci: {hint}");
+    }
 }
 
 fn evaluate_pr_checks(
