@@ -73,30 +73,36 @@ breaking.
 ## Typed repair mutation run
 
 Each check was removed in turn, and the typed repair, entry edit, entry
-identity and pull request tests (55) were run against the mutant from a
-snapshot of the script. Rows M7 to M15 were added after review round 1.
+identity and pull request tests (61) were run against the mutant from a
+snapshot of the script. Rows M7 to M13 came with review round 1 and M14 to
+M20 with round 2.
 
 | Mutant | Result | Killed by |
 |---|---|---|
-| M0 none (control) | 55 pass | |
+| M0 none (control) | 61 pass | |
 | M1 configuration path check removed | killed | `test_a_repair_cannot_change_the_release_configuration` |
 | M2 head configuration comparison removed | killed | `test_the_repair_is_judged_with_the_base_configuration` |
 | M3 allowed path check removed | killed | `test_a_broken_base_blocks_ordinary_work` |
 | M4 stamp comparison removed | killed | `test_a_repair_that_changes_more_than_a_stamp_is_refused` |
 | M5 manifest hash check removed | killed | the stale hash and manifest hash tests |
 | M6 repair judged with the head's configuration | killed | `test_the_repair_is_judged_with_the_base_configuration` |
-| M7 baseline stamp check removed | killed | the stamp off the release and baseline left behind tests |
-| M8 baseline consistency never checked | killed | four baseline tests |
+| M7 baseline stamp check removed | killed | three baseline tests |
+| M8 baseline consistency never checked | killed | five baseline tests |
 | M9 baselines checked only when the manifest changes | killed | `test_a_baseline_changed_without_the_manifest_is_refused` |
 | M10 lazy continuation dropped from an entry | killed | the continuation and extent tests |
-| M11 a repair may edit an entry | killed | `test_a_repair_cannot_rewrite_an_existing_entry` |
-| M12 `none` turns a same-impact rewrite into wording | killed | seven edit tests |
-| M13 rewrapping counted as an edit | killed | the two rewrap tests |
-| M14 base judged by the pull request's configuration | killed | `test_the_repair_is_judged_with_the_base_configuration` |
-| M15 an unreadable base configuration refused | killed | the configuration fallback test |
+| M11 a repair may edit an entry | killed | the repair rewrite and code reindent tests |
+| M12 `none` turns a same-impact rewrite into wording | killed | eight edit tests |
+| M13 rewrapping counted as an edit | killed | the three rewrap tests |
+| M14 base judged by the pull request's configuration | killed | the base configuration and frozen pin tests |
+| M15 an unreadable base configuration yields to the PR's | killed | the unreadable and corroboration tests |
+| M16 a derived tree without the tag's corroboration | killed | `test_a_derived_tree_needs_the_tag_to_corroborate_the_commit` |
+| M17 code compared as prose | killed | the code indentation tests |
+| M18 spacing inside a code span collapsed | killed | `test_only_prose_rewrapping_is_not_an_edit` |
+| M19 paragraph breaks ignored | killed | `test_only_prose_rewrapping_is_not_an_edit` |
+| M20 hard line breaks compared as prose | killed | `test_only_prose_rewrapping_is_not_an_edit` |
 
-M9 first survived: every baseline test also changed the manifest. The
-baseline-only test was added, and the rerun killed it.
+M9 first survived in round 1: every baseline test also changed the
+manifest. The baseline-only test was added, and the rerun killed it.
 
 ## Review round 1
 
@@ -115,12 +121,31 @@ Codex requested four changes; the fixes are in the checker and its tests.
   version and the manifest must record its exact hash.
 - **Base configuration.** Replaying the line's landing on `main` showed that
   `main`'s configuration predates the line's schema, so judging every base by
-  its own configuration refused the line. A base whose configuration this
-  checker cannot read is now judged with the pull request's, and the output
-  says so; a readable one is still used.
+  its own configuration refused the line. Round 1 let the pull request's
+  configuration stand in; round 2 replaced that (see below).
 - **Preflight on a broken base.** Kept as designed: on a base that is
   already invalid the preflight warns, and the pull request job judges the
   change. The runbook says so rather than claiming it catches every new break.
+
+## Review round 2
+
+Codex confirmed F2 and F3, the replay and the kept preflight rule, and found
+two remaining gaps.
+
+- **Frozen history authority (F5).** Round 1's fallback let a pull request's
+  configuration replace a base configuration the checker could not read, so
+  a PR could re-pin already corrupted published history. The base is now
+  always judged by the configuration it carries. The one older shape in use,
+  a bootstrap record without its comparison tree (`main`'s), is read by
+  deriving the tree from the recorded comparison commit once the tag carries
+  the same tree; every other unreadable configuration refuses the PR. Codex's
+  corrupted-base probes (missing tree and invalid JSON) are refused.
+- **Code whitespace (F4, residual).** Round 1 collapsed all whitespace, so
+  moving `publish()` out of an `if approved:` block in a fenced example
+  passed as rewrapping. Only prose is rewrapped now: an entry is compared by
+  its paragraphs with spacing collapsed outside code spans, and an entry
+  that holds code, nested structure or a hard break is compared byte for
+  byte. Codex's probe is a failing fixture for an ordinary PR and a repair.
 
 ## Landing replay (F1)
 
@@ -128,7 +153,8 @@ Each step was run the way its GitHub job runs it: the job's
 `scripts/release.py` and `.release/config.json` come from the pull request's
 merge commit (or the pushed commit), with live host state read through `gh`
 for `sathyassn/codeflow-archive`. Merge commits were built as unreferenced
-objects; nothing was pushed. Line tip `e4ff8eb4e`, `main` `2c9c77f5c`. The
+objects; nothing was pushed. Line tip `6302bfc88`, `main` `2c9c77f5c`, repair
+commit `42304708f` (the same change as `bb122bbd9`, rebased). The
 script is `replay-tsk106.sh` in the session scratchpad.
 
 | Step | Checker | Result |
@@ -139,7 +165,7 @@ script is `replay-tsk106.sh` in the session scratchpad.
 | Line after PR 1, release state | the tip's | ok, 3.0.0 |
 | PR 2, the task on the repaired line | this task's | ok, minor, one entry added |
 | Line after PR 2, release state | this task's | ok, 3.0.0 |
-| The line onto `main` | this task's | ok, `main`'s configuration named as unreadable |
+| The line onto `main` | this task's | ok, `main`'s comparison tree derived from its commit |
 | `main` after, release state | this task's | ok, 3.0.0 |
 
 No first pull request can pass its own release job on this line. The job
