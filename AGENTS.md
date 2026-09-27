@@ -404,27 +404,24 @@ load only relevant stage owners.
 
 <!-- Everything below is yours. `codeflow update` never touches it. -->
 
-- **Plan of record:** `docs/plan/v2/00-charter.md`. The charter is the historical
-  plan of record; where a later ADR supersedes it, the ADR wins. Execution state:
-  `docs/plan/v2/01-execution-status.md`.
+- **Where truth lives:** `docs/product.md` (why), `docs/capabilities.md`
+  (what), `docs/architecture.md` and the ADRs in `docs/decisions/` (how and
+  why this way), `project-management/` (planned work). The v2 charter
+  (`docs/plan/v2/00-charter.md`) is historical; some docs cite its sections,
+  and a later ADR wins wherever they differ.
 - **This repo builds the product and is its own first consumer.** `assets/` is
-  as much the product as `crates/` — scaffold content is held to the charter's
-  §4.4 size caps and is embedded into the binary via rust-embed.
+  as much the product as `crates/`: scaffold content is embedded into the
+  binary via rust-embed and held to the charter's section 4.4 size caps.
 - **Wire a managed artifact in the same change you add it.** When you add or
   rename a managed artifact (a skill, agent, resource, or workflow), do it
   end-to-end: add its `assets/base/scaffold-manifest.toml` `[[entry]]`(ies),
   mirror any skill byte-identically across `.claude/skills` and `.agents/skills`,
   and resync the managed baseline. The `manifest_consistency` test
-  (`crates/codeflow-core/tests/`) enforces the first two — an asset missing from
+  (`crates/codeflow-core/tests/`) enforces the first two; an asset missing from
   the manifest or a drifted mirror fails the build.
 - **Areas:** `engine` = `crates/codeflow-core` + `crates/codeflow-cli` +
   `crates/codeflow-present`;
   `scaffold` = `assets/` (base scaffold + stack profiles); `docs` = `docs/`.
-- **v1 is a quarry, not a source tree** (charter D22). It lives on the
-  `archive/v1` branch — no archive folder in the working tree; retrieve files
-  via `git checkout archive/v1 -- <path>`. Code crosses only via a deliberate
-  keep-decision, trimmed and re-tested; docs, templates, and Claude artifacts
-  are always re-authored from scratch — never copied.
 - **Rust gates:** `cargo fmt --all -- --check`, `cargo test --workspace`,
   `cargo clippy --workspace --all-targets -- -D warnings`, and
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` must be green
@@ -435,8 +432,9 @@ load only relevant stage owners.
   `codeflow integrate` remains shipped for offline use, not this
   repo's daily path. Keep release state in each work PR; see
   `docs/releasing.md`. Tasks never publish or move tags.
-- **Remote branch protection is unavailable here and not pursued** (private +
-  GitHub Free → `codeflow remote protect` returns 403). The operative boundary on
-  this repo is server-side CI plus the local git-hook / git-guard plane plus
-  human-merged PRs — not armed remote protection. Do not treat remote protection
-  as active here (ADR-0002, superseded by ADR-0006).
+- **Remote protection on `main`:** pull requests are required and force
+  pushes and deletion are blocked. Whether CI is a required status check and
+  whether the rules bind administrators are repository settings that can
+  change, so read the live rules before relying on them
+  (`gh api repos/sathyassn/codeflow/branches/main/protection`). Where CI is not
+  required, the human who merges confirms that CI is green; never merge on red.

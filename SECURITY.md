@@ -5,8 +5,12 @@
 Please **do not** open a public issue for security vulnerabilities.
 
 Report privately through GitHub's built-in **private vulnerability reporting**:
-the repository's **Security** tab → **Report a vulnerability**. This opens an
-advisory visible only to the maintainers.
+the repository's **Security** tab, then **Report a vulnerability**. This opens
+an advisory visible only to the maintainers.
+
+If the **Report a vulnerability** button is not shown, open a public issue
+titled "Security contact request" that contains no details of the problem. A
+maintainer will reply there with a private way to send the report.
 
 Where possible, include: a description of the issue, the affected version(s) or
 commit, reproduction steps, and the impact. You will receive an acknowledgement,
@@ -15,7 +19,7 @@ and any fix or mitigation is coordinated before public disclosure.
 ## Supported versions
 
 Only the latest released major line is supported. Older major lines, including
-the archived `1.x` implementation at tag `v1-final`, are unmaintained.
+`1.x`, are unmaintained.
 
 ## A note on the enforcement model
 
