@@ -153,8 +153,9 @@ Each step was run the way its GitHub job runs it: the job's
 `scripts/release.py` and `.release/config.json` come from the pull request's
 merge commit (or the pushed commit), with live host state read through `gh`
 for `sathyassn/codeflow-archive`. Merge commits were built as unreferenced
-objects; nothing was pushed. Line tip `6302bfc88`, `main` `2c9c77f5c`, repair
-commit `42304708f` (the same change as `bb122bbd9`, rebased). The
+objects; nothing was pushed. The line moves often, so each pull request body
+names the line tip, repair commit and head its final replay used; `main` was
+`2c9c77f5c` throughout. The
 script is `replay-tsk106.sh` in the session scratchpad.
 
 | Step | Checker | Result |
