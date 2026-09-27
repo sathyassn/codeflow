@@ -321,8 +321,9 @@ TRUST_SELF_ANSWER_SECONDS=30
 #    Enter to confirm · Esc to cancel
 #
 # The path is the lines between the two headings joined with nothing between
-# them, each with its surrounding blanks removed; blank lines add nothing. A path that has a blank at a wrap point
-# therefore does not compare equal, and the harness leaves it to the operator.
+# them, each with its surrounding blanks removed; blank lines add nothing. A
+# path with a blank at a wrap point therefore does not compare equal, and the
+# harness leaves that prompt to the operator.
 trust_dialog() {
   LC_ALL=C awk '
     function trim(s) { sub(/^[[:space:]]+/, "", s); sub(/[[:space:]]+$/, "", s); return s }
