@@ -608,7 +608,99 @@ pub fn validate_task(
         });
     }
 
+    let repo_root = record_repo_root(path);
+    errs.extend(awaiting_selection_errors(
+        &data,
+        &body_text,
+        repo_root.as_deref(),
+    ));
+    if epic_id.is_empty() && get_string_field(&data, "status") == "complete" {
+        if let Some(root) = repo_root.as_deref() {
+            let pulls = landed_pull_requests(root, &id);
+            if pulls > 1 {
+                warns.push(ValidationWarning {
+                    field: "standalone_reason".into(),
+                    message: format!(
+                        "standalone task {id} was completed by {pulls} pull requests; a standalone task is one reviewable pull request (SPC-013 R-66)"
+                    ),
+                });
+            }
+        }
+    }
+
     Ok((errs, warns))
+}
+
+/// The repository root of a record under `project-management/`.
+fn record_repo_root(record: &Path) -> Option<std::path::PathBuf> {
+    record
+        .ancestors()
+        .find(|dir| dir.file_name().is_some_and(|name| name == "project-management"))
+        .and_then(Path::parent)
+        .map(Path::to_path_buf)
+}
+
+/// A join awaiting selection (SPC-013 R-43) is a valid record that no
+/// context starts: it is `blocked` with the reason "awaiting selection" and
+/// the referenced plan or decision path as its revisit event, and that path
+/// exists.
+fn awaiting_selection_errors(
+    data: &std::collections::HashMap<String, serde_yaml::Value>,
+    body: &str,
+    repo_root: Option<&Path>,
+) -> Vec<ValidationError> {
+    let path = get_string_field(data, "awaiting_selection");
+    if path.trim().is_empty() {
+        return Vec::new();
+    }
+    let mut errs = Vec::new();
+    let mut fail = |message: String| {
+        errs.push(ValidationError {
+            field: "awaiting_selection".into(),
+            message,
+        });
+    };
+    if get_string_field(data, "status") != "blocked" {
+        fail("a join awaiting selection is `blocked`".into());
+    }
+    let blocker = crate::workgraph::record_text::parse_blocker(body).unwrap_or_default();
+    if blocker.reason != "awaiting selection" {
+        fail("its `## Blocker` reason is `awaiting selection`".into());
+    }
+    if blocker.revisit.trim_matches('`') != path {
+        fail(format!("its `## Blocker` revisit event is `{path}`"));
+    }
+    if let Some(root) = repo_root {
+        let relative = Path::new(&path);
+        if relative.is_absolute()
+            || relative
+                .components()
+                .any(|part| matches!(part, std::path::Component::ParentDir))
+            || !root.join(relative).exists()
+        {
+            fail(format!("`{path}` must be a path that exists in the repository"));
+        }
+    }
+    errs
+}
+
+/// How many merged pull requests landed a branch carrying `task_id`, counted
+/// from merge commit subjects (`Merge pull request #N from <prefix>/TSK-NNN-...`
+/// or `Merge branch '<prefix>/TSK-NNN-...'`). Zero when git is unavailable.
+fn landed_pull_requests(repo_root: &Path, task_id: &str) -> usize {
+    let Ok(out) = std::process::Command::new("git")
+        .arg("-C")
+        .arg(repo_root)
+        .args(["log", "--merges", "--format=%s", "HEAD"])
+        .output()
+    else {
+        return 0;
+    };
+    let needle = format!("/{task_id}-");
+    String::from_utf8_lossy(&out.stdout)
+        .lines()
+        .filter(|subject| subject.starts_with("Merge") && subject.contains(&needle))
+        .count()
 }
 
 // ---------------------------------------------------------------------------

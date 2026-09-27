@@ -533,25 +533,13 @@ fn parse_task_graph_record(
         .and_then(|field| find_line(&content, &format!("{field}:")))
         .unwrap_or(1);
     let field_name = field.unwrap_or("depends_on");
-    let depends_on = match value {
-        None => Vec::new(),
-        Some(serde_yaml::Value::Sequence(values)) => values
-            .iter()
-            .map(|value| value.as_str().map(str::to_owned))
-            .collect::<Option<Vec<_>>>()
-            .or_else(|| {
-                report.issues.push(DocsLintIssue {
-                    file: rel.clone(),
-                    line: dependency_line,
-                    message: format!("task {id} {field_name} must contain only task-id strings"),
-                });
-                None
-            })?,
-        Some(_) => {
+    let depends_on = match crate::workgraph::deps::parse_dependencies(value) {
+        Ok(deps) => deps.into_iter().map(|dep| dep.id).collect(),
+        Err(error) => {
             report.issues.push(DocsLintIssue {
                 file: rel.clone(),
                 line: dependency_line,
-                message: format!("task {id} {field_name} must be a YAML list"),
+                message: format!("task {id} {field_name}: {error}"),
             });
             return None;
         }
