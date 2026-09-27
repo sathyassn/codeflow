@@ -5582,6 +5582,49 @@ mod tests {
         for cmd in forms {
             assert!(blocks(&report(cmd, "main").violations), "{cmd}");
         }
+        // A warning from the uncertainty never ends the judgment: the
+        // `--no-verify` check on a protected branch still blocks.
+        let mut w = default_policy();
+        w.commit_to_protected = PolicyLevel::Warn;
+        w.local_ref_protection = PolicyLevel::Off;
+        for cmd in [
+            "git commit --no-verify --author=\"$(printf 'X <x@example.com>')\" -m x",
+            "git commit $(printf '') --no-verify -m x",
+        ] {
+            let r = evaluate_report(cmd, &ctx_with_dir_branch(&w, "main", &fixture_resolver));
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.rule == "git.no_verify_bypass" && v.level == PolicyLevel::Block),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        // The uncertainty is judged under each candidate target's policy,
+        // and the strictest of them wins.
+        let mut lax = default_policy();
+        for level in [
+            &mut lax.commit_to_protected,
+            &mut lax.merge_to_protected,
+            &mut lax.push_to_protected,
+            &mut lax.force_push_protected,
+            &mut lax.delete_protected,
+            &mut lax.hard_reset_protected,
+            &mut lax.local_ref_protection,
+            &mut lax.hook_integrity,
+        ] {
+            *level = PolicyLevel::Warn;
+        }
+        for (cmd, session) in [
+            ("git -C /scratch-main $(printf '') commit -m x", "feat/s"),
+            ("cd /scratch-main; git $(printf '') commit -m x", "main"),
+        ] {
+            let r = evaluate_report(cmd, &ctx_with_dir_branch(&lax, session, &fixture_resolver));
+            assert!(blocks(&r.violations), "{cmd}: {:?}", r.violations);
+        }
+        // With no subcommand at all, the uncertainty still blocks.
+        let r = report("git -c \"$(printf alias.x=commit)\"", "feat/s");
+        assert!(blocks(&r.violations), "{:?}", r.violations);
     }
 
     // Regression: the path held in a variable used to fall back to the
