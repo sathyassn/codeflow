@@ -93,8 +93,11 @@ publication date._
 - **Pull request classification and light planning paths.** With durable
   work tracking on, `codeflow ci` gives every pull request one class: tracked
   (`Task: TSK-NNN`, or the task id its branch carries), direct change
-  (`Task: none: <reason>`), planning-only, an epic integration line, or an
-  automation profile, and blocks an unclassified one. A direct change is
+  (`Task: none: <reason>`), planning-only, an epic's integration line
+  landing on the default target with only merges on it, or an automation
+  profile, and blocks an unclassified one. The range is read as one diff
+  from the merge-base, and tracking is read at the target as well as the
+  head, so a pull request cannot classify itself lighter. A direct change is
   refused on policy, hooks, managed instructions, CI files, manifests, the
   record schema and the project's product code, named by the new
   `git.product_paths` policy key: `init` writes a default for the detected

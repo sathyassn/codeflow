@@ -486,7 +486,10 @@ per-commit hook no longer does. It proves validated planning is present on the
 declared stable target. With tracking on, `codeflow ci` classifies every pull
 request: tracked (`Task: TSK-NNN`, or the id the branch carries), direct change
 (`Task: none: <reason>`), planning-only (records and `docs/plan/` only), an
-epic integration line, or an automation profile; an unclassified one, a
+epic's integration line (a task of the epic targets it, it lands on the
+default target, and it holds only merges), or an automation profile. The
+range is one diff from the merge-base, and tracking is read at the target
+as well as the head. An unclassified one, a
 mismatched `Task:` line, a pull request that adds the record it claims, and a
 spike that lands anything but `docs/research/` findings and its own record
 block. A direct change is refused on the floor of one embedded path table
