@@ -220,20 +220,20 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 272,
+      "height": 276,
       "draw": [
         {
           "state": "you",
           "shape": "circle",
           "cx": 24,
-          "cy": 24,
+          "cy": 22,
           "r": 10,
           "id": "y"
         },
         {
           "text": "you",
           "x": 44,
-          "y": 29,
+          "y": 27,
           "style": "strong",
           "for": [
             "y"
@@ -242,7 +242,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M24 36V70",
+          "d": "M24 34V72",
           "head": "end",
           "id": "f1"
         },
@@ -259,7 +259,7 @@
           "state": "step",
           "shape": "rect",
           "x": 30,
-          "y": 72,
+          "y": 74,
           "w": 190,
           "h": 36,
           "rx": 8,
@@ -268,7 +268,7 @@
         {
           "text": "codeflow doctor",
           "x": 42,
-          "y": 95,
+          "y": 96,
           "style": "mono",
           "for": [
             "d"
@@ -277,14 +277,14 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M80 110V142",
+          "d": "M80 113V149",
           "head": "end",
           "id": "f2"
         },
         {
           "text": "prints",
           "x": 92,
-          "y": 131,
+          "y": 136,
           "style": "mute",
           "for": [
             "f2"
@@ -294,7 +294,7 @@
           "state": "step",
           "shape": "rect",
           "x": 30,
-          "y": 144,
+          "y": 152,
           "w": 190,
           "h": 36,
           "rx": 8,
@@ -303,7 +303,7 @@
         {
           "text": "one line a check",
           "x": 42,
-          "y": 167,
+          "y": 175,
           "for": [
             "r"
           ]
@@ -311,7 +311,7 @@
         {
           "state": "flows",
           "shape": "path",
-          "d": "M80 182V206",
+          "d": "M80 191V210",
           "head": "end",
           "id": "f3"
         },
@@ -319,14 +319,14 @@
           "state": "you",
           "shape": "circle",
           "cx": 80,
-          "cy": 220,
+          "cy": 224,
           "r": 10,
           "id": "fx"
         },
         {
           "text": "you apply the fix",
           "x": 100,
-          "y": 225,
+          "y": 229,
           "style": "strong",
           "for": [
             "fx"
@@ -335,14 +335,14 @@
         {
           "state": "again",
           "shape": "path",
-          "d": "M68 220H12V32",
+          "d": "M68 224H12V30",
           "open": "end",
           "id": "a"
         },
         {
           "text": "run again",
           "x": 8,
-          "y": 262,
+          "y": 266,
           "style": "mute",
           "for": [
             "a"
@@ -351,10 +351,10 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M222 90H300V160",
+          "d": "M222 92H300V168",
           "cross": {
             "cx": 300,
-            "cy": 125,
+            "cy": 130,
             "size": 11
           },
           "id": "x"

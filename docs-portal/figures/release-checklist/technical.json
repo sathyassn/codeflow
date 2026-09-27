@@ -81,7 +81,7 @@
         {
           "text": "evidence linked",
           "x": 198,
-          "y": 50,
+          "y": 47,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -117,7 +117,7 @@
         {
           "text": "human approves",
           "x": 455,
-          "y": 50,
+          "y": 47,
           "anchor": "middle",
           "style": "mute",
           "for": [
@@ -186,7 +186,7 @@
         {
           "text": "open",
           "x": 83,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "for": [
             "op"
@@ -195,7 +195,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 48V96",
+          "d": "M83 48V95",
           "head": "end",
           "id": "t1"
         },
@@ -230,7 +230,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M83 136V184",
+          "d": "M83 137V183",
           "head": "end",
           "id": "t2"
         },

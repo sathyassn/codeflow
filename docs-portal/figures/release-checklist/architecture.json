@@ -333,8 +333,8 @@
         },
         {
           "text": "link or paste",
-          "x": 310,
-          "y": 150,
+          "x": 306,
+          "y": 153,
           "anchor": "end",
           "style": "mute",
           "for": [
