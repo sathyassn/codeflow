@@ -29,10 +29,12 @@ mod work_records;
 use clap::Args;
 use codeflow_core::hooks::policy::{Policy, PolicySource};
 use codeflow_core::hooks::{
-    any_blocking, git_hook, policy_schema, repo, standards, GitPolicy, PolicyLevel, Violation,
+    adoption, any_blocking, git_hook, policy_schema, repo, standards, GitPolicy, PolicyLevel,
+    Violation,
 };
 use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
+use codeflow_core::workgraph::classify::is_planning_path;
 use codeflow_core::workgraph::{
     branch_claims_task_id, check_work_start_for_branch, declared_work_target,
     durable_work_tracking_enabled, resolve_work_target_checked, task_id_from_branch,
@@ -392,7 +394,15 @@ fn evaluate_pr_checks(
     findings.extend(evaluate_pr_body(git, body));
     findings.extend(evaluate_pr_structure(git, body, files));
     findings.extend(pr_body::presentation(git, body, epic_into_main));
-    findings.extend(pr_body::release(git, body, breaking_commit));
+    // A light range with no breaking commit and no Release impact section
+    // declares no release impact (TSK-135); a section that is present is
+    // still checked.
+    let no_impact = light_range(files)
+        && !breaking_commit
+        && find_section(body, "Release impact") == SectionState::Missing;
+    if !no_impact {
+        findings.extend(pr_body::release(git, body, breaking_commit));
+    }
     findings
         .into_iter()
         .map(|violation| TaggedViolation {
@@ -872,14 +882,15 @@ enum SectionState {
     Duplicate,
 }
 
-/// Enforce the PR-body structure policy (`git.pr_sections`): the
-/// `pr_required_sections` headings must be present and non-empty in every PR
-/// body, the `pr_code_sections` headings additionally when the commit range
-/// touches non-docs files, and template remnants (leftover placeholders from
-/// the shipped PR template) draw a WARN — always warn-only, never a block,
-/// whatever the level says. `range_files` is every path the range touches;
-/// `None` means the range could not be resolved — treated as a code change
-/// (conservative: unknown = code).
+/// Enforce the PR-body structure policy (`git.pr_sections`), scaled to the
+/// change class (TSK-135). A code range needs the `pr_required_sections`
+/// headings plus the `pr_code_sections` ones; a light range (docs or planning
+/// only, see [`light_range`]) needs only Summary and Changes, under their
+/// mapped headings and only where the project still requires them. Template
+/// remnants (leftover placeholders from the shipped PR template) draw a WARN,
+/// never a block, whatever the level says. `range_files` is every path the
+/// range touches; `None` means the range could not be resolved and is
+/// treated as code (conservative: unknown = code).
 fn evaluate_pr_structure(
     git: &GitPolicy,
     body: &str,
@@ -892,12 +903,15 @@ fn evaluate_pr_structure(
 
     // (section, why it is required) — code sections carry the reason so the
     // finding explains itself; dedupe so a heading in both lists reports once.
+    let light = light_range(range_files);
+    let light_sections = adoption::mapped_sections(git, &LIGHT_SECTIONS.map(String::from));
     let mut required: Vec<(&str, &str)> = git
         .pr_required_sections
         .iter()
+        .filter(|s| !light || light_sections.iter().any(|l| l.eq_ignore_ascii_case(s)))
         .map(|s| (s.as_str(), ""))
         .collect();
-    if !docs_only(range_files) {
+    if !light {
         for s in &git.pr_code_sections {
             if !required
                 .iter()
@@ -945,17 +959,27 @@ fn evaluate_pr_structure(
     out
 }
 
-/// `true` when the range is known and every touched path is documentation:
-/// Recognized prose, inert documentation images, license text, or GitHub issue
-/// forms. A docs directory alone does not make executable content documentation.
-/// `None` (unresolved range) and an empty file list are both treated
-/// as code — the conservative direction, so a range whose files could not be
-/// listed still requires the code sections.
-fn docs_only(range_files: Option<&[String]>) -> bool {
-    range_files.is_some_and(|files| !files.is_empty() && files.iter().all(|f| is_docs_path(f)))
+/// The only sections a light range's PR body needs (TSK-135 AC-1).
+const LIGHT_SECTIONS: [&str; 2] = ["Summary", "Changes"];
+
+/// `true` when the range is known and every touched path is documentation
+/// ([`is_docs_path`]) or a planning record ([`is_planning_path`]): the light
+/// change class, whose PR body needs only Summary and Changes and may omit
+/// Release impact (TSK-135). `None` (unresolved range) and an empty file list
+/// are both treated as code, the conservative direction.
+fn light_range(range_files: Option<&[String]>) -> bool {
+    range_files.is_some_and(|files| {
+        !files.is_empty()
+            && files
+                .iter()
+                .all(|f| is_docs_path(f) || is_planning_path(f.trim()))
+    })
 }
 
-/// Whether one changed path counts as documentation for [`docs_only`].
+/// Whether one changed path counts as documentation for [`light_range`]:
+/// recognized prose, inert documentation images, license text, or GitHub
+/// issue forms. A docs directory alone does not make executable content
+/// documentation.
 /// Everything unrecognized — code, config, CI yml, `Cargo.*`, `src/` — is a
 /// code change; in particular `.github/workflows/**` is CI config, not docs.
 fn is_docs_path(path: &str) -> bool {
@@ -2138,6 +2162,102 @@ mod tests {
         assert_eq!(v.len(), 1, "unknown range must require the code sections");
     }
 
+    /// The shipped required list: a light range keeps only Summary and
+    /// Changes of it (TSK-135 AC-1).
+    fn shipped_git() -> GitPolicy {
+        GitPolicy {
+            pr_required_sections: vec![
+                "Summary".into(),
+                "Changes".into(),
+                "Reviews".into(),
+                "Release impact".into(),
+            ],
+            pr_release_impact: PolicyLevel::Block,
+            ..GitPolicy::default()
+        }
+    }
+
+    const LIGHT_BODY: &str = "## Summary\n\n- reword a guide\n\n## Changes\n\n- docs/guide.md\n";
+
+    #[test]
+    fn a_light_range_needs_only_summary_and_changes() {
+        for files in [
+            vec!["docs/guide.md".to_string()],
+            vec!["project-management/tasks/TSK-001.md".to_string()],
+            vec![
+                "docs/plan/v2/plan.json".to_string(),
+                "README.md".to_string(),
+            ],
+        ] {
+            let v = evaluate_pr_structure(&shipped_git(), LIGHT_BODY, Some(&files));
+            assert!(v.is_empty(), "{files:?}: {v:?}");
+            let v = evaluate_pr_structure(&shipped_git(), "## Summary\n\n- x\n", Some(&files));
+            assert_eq!(v.len(), 1, "{v:?}");
+            assert!(v[0].message.contains("'## Changes'"), "{}", v[0].message);
+        }
+        // A code range is unchanged: every configured section plus Testing.
+        let v = evaluate_pr_structure(&shipped_git(), LIGHT_BODY, Some(&code_files()));
+        let named: Vec<_> = v.iter().map(|x| x.message.as_str()).collect();
+        for section in ["Reviews", "Release impact", "Testing"] {
+            assert!(
+                named.iter().any(|m| m.contains(&format!("'## {section}'"))),
+                "{section}: {named:?}"
+            );
+        }
+        // One code path makes the whole range code.
+        let mixed = vec!["docs/guide.md".to_string(), "src/lib.rs".to_string()];
+        assert!(!light_range(Some(&mixed)));
+        // The record templates are schema, not planning; a non-Markdown one
+        // is code.
+        assert!(!light_range(Some(&[
+            "project-management/templates/spec.json".to_string()
+        ])));
+    }
+
+    #[test]
+    fn a_light_range_keeps_the_projects_own_required_list_and_mapping() {
+        // A project that dropped Changes is not asked for it.
+        let g = GitPolicy {
+            pr_required_sections: vec!["Summary".into(), "Reviews".into()],
+            ..shipped_git()
+        };
+        let docs = vec!["docs/guide.md".to_string()];
+        assert!(evaluate_pr_structure(&g, "## Summary\n\n- x\n", Some(&docs)).is_empty());
+        // An accepted mapping checks the template's own headings.
+        let mapping = codeflow_core::hooks::policy::PrSectionMapping {
+            state: codeflow_core::hooks::policy::MappingState::Accepted,
+            headings: [("Summary".to_string(), "What".to_string())].into(),
+            decided: "2026-09-27".into(),
+        };
+        let mapped = GitPolicy {
+            pr_required_sections: vec!["What".into(), "Changes".into(), "Reviews".into()],
+            pr_section_mapping: Some(mapping),
+            ..shipped_git()
+        };
+        let body = "## What\n\n- reword\n\n## Changes\n\n- docs/guide.md\n";
+        let v = evaluate_pr_structure(&mapped, body, Some(&docs));
+        assert!(v.is_empty(), "{v:?}");
+    }
+
+    #[test]
+    fn a_light_range_reads_an_absent_release_impact_as_none() {
+        let docs = vec!["docs/guide.md".to_string()];
+        let release = |body: &str, files: &[String], breaking: bool| {
+            evaluate_pr_checks(&shipped_git(), body, Some(files), breaking, false)
+                .into_iter()
+                .filter(|t| t.violation.rule == "git.pr_release_impact")
+                .count()
+        };
+        assert_eq!(release(LIGHT_BODY, &docs, false), 0);
+        // A code range still needs the section.
+        assert_eq!(release(LIGHT_BODY, &code_files(), false), 1);
+        // A breaking commit is never read as no impact.
+        assert_eq!(release(LIGHT_BODY, &docs, true), 1);
+        // A section that is present is still checked.
+        let declared = format!("{LIGHT_BODY}\n## Release impact\n\n- Impact: sometimes\n");
+        assert!(release(&declared, &docs, false) > 0);
+    }
+
     #[test]
     fn pr_structure_empty_section_counts_as_missing() {
         // Summary exists but holds only the template's comment and bare bullet.
@@ -2258,9 +2378,9 @@ mod tests {
             assert!(!docs(executable), "executable path: {executable}");
         }
         // Unknown or empty ranges are conservatively code.
-        assert!(!docs_only(None));
-        assert!(!docs_only(Some(&[])));
-        assert!(docs_only(Some(&["docs/a.md".to_string()])));
+        assert!(!light_range(None));
+        assert!(!light_range(Some(&[])));
+        assert!(light_range(Some(&["docs/a.md".to_string()])));
     }
 
     #[test]
@@ -2280,7 +2400,7 @@ mod tests {
             "custom-agent/skills/explain/SKILL.md",
         ] {
             let files = vec![path.to_string()];
-            assert!(!docs_only(Some(&files)), "behavioral contract: {path}");
+            assert!(!light_range(Some(&files)), "behavioral contract: {path}");
             let violations =
                 evaluate_pr_structure(&git(), "## Summary\nChange guidance\n", Some(&files));
             assert!(

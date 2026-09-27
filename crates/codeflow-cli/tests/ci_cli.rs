@@ -347,6 +347,62 @@ fn ci_docs_only_range_does_not_require_code_sections() {
     );
 }
 
+/// TSK-135 AC-1: the PR body a range needs is scaled to its change class.
+/// The shipped required list is configured and Release impact is set to
+/// block, so an absent section would fail the run.
+#[test]
+fn ci_scales_the_pr_body_sections_to_the_change_class() {
+    const LIGHT: &str = "## Summary\n\n- reword the guide\n\n## Changes\n\n- one file\n";
+    let blocking = |dir: &Path| {
+        let cf = dir.join(".codeflow");
+        std::fs::create_dir_all(&cf).unwrap();
+        std::fs::write(
+            cf.join("policy.json"),
+            r#"{"schema_version":1,"git":{"pr_release_impact":"block","pr_required_sections":["Summary","Changes","Reviews","Release impact"]}}"#,
+        )
+        .unwrap();
+    };
+    let planning = |dir: &Path| {
+        repo_with_range(dir, "docs");
+        git(dir, &["reset", "-q", "--hard", "main"]);
+        std::fs::create_dir_all(dir.join("docs/plan")).unwrap();
+        std::fs::write(dir.join("docs/plan/roadmap.json"), "{}\n").unwrap();
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-m", "docs(plan): add the roadmap"]);
+    };
+    // Docs-only and planning-only ranges: Summary and Changes suffice, and
+    // an absent Release impact reads as none.
+    for (class, setup) in [
+        (
+            "docs-only",
+            &(|dir: &Path| repo_with_range(dir, "docs")) as &dyn Fn(&Path),
+        ),
+        ("planning-only", &planning),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        setup(dir.path());
+        blocking(dir.path());
+        let out = ci_with_body(dir.path(), LIGHT);
+        let all = combined(&out);
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert_eq!(out.status.code(), Some(0), "{class}: {all}");
+        assert!(!stderr.contains("git.pr_sections"), "{class}: {all}");
+        assert!(!stderr.contains("git.pr_release_impact"), "{class}: {all}");
+    }
+    // A code range is unchanged: every configured section, Testing, and a
+    // Release impact declaration.
+    let dir = tempfile::tempdir().unwrap();
+    repo_with_range(dir.path(), "code");
+    blocking(dir.path());
+    let out = ci_with_body(dir.path(), LIGHT);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(1), "{stderr}");
+    for section in ["'## Reviews'", "'## Release impact'", "'## Testing'"] {
+        assert!(stderr.contains(section), "{section}: {stderr}");
+    }
+    assert!(stderr.contains("git.pr_release_impact"), "{stderr}");
+}
+
 #[test]
 fn ci_executable_documentation_requires_testing_for_the_entire_range() {
     let dir = tempfile::tempdir().unwrap();
