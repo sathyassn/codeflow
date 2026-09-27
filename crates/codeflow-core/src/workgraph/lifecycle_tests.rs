@@ -1279,7 +1279,10 @@ fn stale_words_warn() {
         "{warnings}"
     );
     assert!(warnings.contains("in_progress with no active branch carrying TSK-002"));
-    assert!(warnings.contains("approved spec whose consumers are all accepted"));
+    assert!(
+        !warnings.contains("SPC-001"),
+        "an approved spec whose consumers are done is healthy: {warnings}"
+    );
 
     repo.git(&["branch", "task/TSK-002-work"]);
     repo.git(&["switch", "-q", "task/TSK-002-work"]);
@@ -1346,6 +1349,43 @@ fn an_unreadable_baseline_treats_no_record_as_new() {
         !warnings.contains("refused as a written value"),
         "{warnings}"
     );
+}
+
+/// An approved spec whose consumers are all done is the healthy state:
+/// `implemented` is derived and never written (R-32, R-51), so nothing
+/// warns; the states that disagree with the consumers still do.
+#[test]
+fn an_approved_spec_with_done_consumers_is_healthy_and_real_mismatches_warn() {
+    const SPEC_PATH: &str = "project-management/specs/SPC-001.md";
+    let repo = Repo::new();
+    repo.write(SPEC_PATH, &spec("SPC-001", "approved", ""));
+    repo.write(TASK_PATH, &consumer("TSK-001", "complete", "SPC-001"));
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &consumer("TSK-002", "cancelled", "SPC-001"),
+    );
+    let base = repo.commit("approved spec, consumers done");
+    assert_eq!(
+        spec_state(&Graph::from_worktree(repo.root()), "SPC-001"),
+        Some(SpecState::Implemented)
+    );
+    let healthy = validate_lifecycle(repo.root());
+    assert!(
+        healthy.is_clean() && healthy.warnings.is_empty(),
+        "{healthy:?}"
+    );
+
+    // Every consumer cancelled: no delivering consumer still warns.
+    repo.write(TASK_PATH, &consumer("TSK-001", "cancelled", "SPC-001"));
+    assert!(validate_lifecycle(repo.root())
+        .warnings
+        .iter()
+        .any(|w| w.contains("no delivering consumer")));
+
+    // A written `implemented` with an open consumer is refused as ever.
+    repo.write(TASK_PATH, &consumer("TSK-001", "todo", "SPC-001"));
+    repo.write(SPEC_PATH, &spec("SPC-001", "implemented", ""));
+    assert!(!repo.judge(&base).is_clean());
 }
 
 #[test]

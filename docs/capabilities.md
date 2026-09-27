@@ -551,7 +551,12 @@ error (TSK-135).
 The verbs are safe editors, not the only writers: one core judge rules on a
 verb's proposal, on a hand edit (`validate --docs --since <ref>`) and on each
 record a pull request changes (`codeflow ci`). No verb writes `in_progress`,
-and spec `implemented` is derived from the consumers. Epic close needs every
+and spec `implemented` is derived from the consumers, so an approved spec
+whose consumers are done is healthy and draws no warning. A Closeout item
+`- acceptance: historical evidence unavailable; ...` that names the landing
+merge stands in for the acceptance block of a task completed before the
+migration baseline and never reopened since
+(SPC-013 R-101). Epic close needs every
 task terminal, every criterion verified and every consumed spec implemented
 or still consumed. New records list criteria as `- AC-n` without a checkbox.
 The rules apply from the `work_records_baseline` commit in project config,

@@ -1732,11 +1732,10 @@ fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<String> {
             }
             RecordKind::Spec => {
                 let state = derived_spec_state(record, graph, None);
+                // An approved spec whose consumers are all done is healthy:
+                // `implemented` is its derived state, never written (R-32,
+                // R-51). Only states that disagree with the consumers warn.
                 match (record.status.as_str(), state) {
-                    ("approved", SpecState::Implemented) => warnings.push(format!(
-                        "{}: stale status: approved spec whose consumers are all accepted; its derived state is implemented",
-                        record.path
-                    )),
                     ("approved", SpecState::NoDeliveringConsumer) => {
                         warnings.push(format!("{}: no delivering consumer", record.path));
                     }
