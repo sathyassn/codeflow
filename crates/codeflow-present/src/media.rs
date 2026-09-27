@@ -23,6 +23,126 @@ fn valid_png(bytes: &[u8]) -> bool {
         && &bytes[bytes.len() - 8..bytes.len() - 4] == b"IEND"
 }
 
+/// A PNG crop as the page writes it: the signature, an IHDR of the crop's
+/// bounded size first, whole chunks whose CRCs match, at least one IDAT, and
+/// IEND as the last bytes. The size bound caps what any reader decodes, so a
+/// small file cannot declare a huge raster.
+pub(crate) fn crop_png_refusal(bytes: &[u8]) -> Option<&'static str> {
+    const SIGNATURE: &[u8] = b"\x89PNG\r\n\x1a\n";
+    if !bytes.starts_with(SIGNATURE) {
+        return Some("is not a PNG");
+    }
+    let mut offset = SIGNATURE.len();
+    let mut first = true;
+    let mut data = false;
+    loop {
+        let (Some(length), Some(kind)) = (be_u32(bytes, offset), bytes.get(offset + 4..offset + 8))
+        else {
+            return Some("is a truncated PNG");
+        };
+        let Ok(length) = usize::try_from(length) else {
+            return Some("is a truncated PNG");
+        };
+        let end = offset + 8 + length;
+        let Some(stored) = be_u32(bytes, end) else {
+            return Some("is a truncated PNG");
+        };
+        if crc32(&bytes[offset + 4..end]) != stored {
+            return Some("is a PNG with a damaged chunk");
+        }
+        if first {
+            if kind != b"IHDR" || length != 13 {
+                return Some("is a PNG without its header first");
+            }
+            let (Some(width), Some(height)) =
+                (be_u32(bytes, offset + 8), be_u32(bytes, offset + 12))
+            else {
+                return Some("is a truncated PNG");
+            };
+            if width == 0
+                || height == 0
+                || width > limits::MAX_CROP_WIDTH
+                || height > limits::MAX_CROP_HEIGHT
+            {
+                return Some("is larger than a crop may be");
+            }
+            first = false;
+        } else if kind == b"IHDR" {
+            return Some("is a PNG with two headers");
+        }
+        data |= kind == b"IDAT";
+        offset = end + 4;
+        if kind == b"IEND" {
+            return if offset != bytes.len() {
+                Some("carries bytes after its PNG end")
+            } else if data {
+                None
+            } else {
+                Some("is a PNG with no image data")
+            };
+        }
+    }
+}
+
+/// A minimal valid PNG of the given size (one stored zlib block of grey
+/// scanlines), for tests of the crop rule.
+#[cfg(test)]
+pub(crate) fn test_png(width: u32, height: u32) -> Vec<u8> {
+    fn chunk(out: &mut Vec<u8>, kind: &[u8], data: &[u8]) {
+        out.extend_from_slice(&u32::try_from(data.len()).unwrap().to_be_bytes());
+        let start = out.len();
+        out.extend_from_slice(kind);
+        out.extend_from_slice(data);
+        let crc = crc32(&out[start..]);
+        out.extend_from_slice(&crc.to_be_bytes());
+    }
+    let mut out = b"\x89PNG\r\n\x1a\n".to_vec();
+    let mut header = Vec::new();
+    header.extend_from_slice(&width.to_be_bytes());
+    header.extend_from_slice(&height.to_be_bytes());
+    header.extend_from_slice(&[8, 0, 0, 0, 0]);
+    chunk(&mut out, b"IHDR", &header);
+    // Scanlines of filter byte 0 and grey 128 pixels, stored (not deflated).
+    let row = usize::try_from(width).unwrap() + 1;
+    let raw: Vec<u8> = (0..usize::try_from(height).unwrap())
+        .flat_map(|_| std::iter::once(0).chain(std::iter::repeat_n(128, row - 1)))
+        .collect();
+    let mut zlib = vec![0x78, 0x01];
+    for (index, block) in raw.chunks(65_535).enumerate() {
+        let last = index == raw.len().div_ceil(65_535) - 1;
+        let length = u16::try_from(block.len()).unwrap();
+        zlib.push(u8::from(last));
+        zlib.extend_from_slice(&length.to_le_bytes());
+        zlib.extend_from_slice(&(!length).to_le_bytes());
+        zlib.extend_from_slice(block);
+    }
+    let (mut a, mut b) = (1_u32, 0_u32);
+    for byte in &raw {
+        a = (a + u32::from(*byte)) % 65_521;
+        b = (b + a) % 65_521;
+    }
+    zlib.extend_from_slice(&((b << 16) | a).to_be_bytes());
+    chunk(&mut out, b"IDAT", &zlib);
+    chunk(&mut out, b"IEND", &[]);
+    out
+}
+
+/// CRC-32 (ISO-HDLC), as PNG chunks carry it.
+pub(crate) fn crc32(bytes: &[u8]) -> u32 {
+    let mut crc = u32::MAX;
+    for byte in bytes {
+        crc ^= u32::from(*byte);
+        for _ in 0..8 {
+            crc = if crc & 1 == 1 {
+                (crc >> 1) ^ 0xedb8_8320
+            } else {
+                crc >> 1
+            };
+        }
+    }
+    !crc
+}
+
 fn valid_jpeg(bytes: &[u8]) -> bool {
     bytes.len() >= 4
         && bytes.starts_with(b"\xff\xd8\xff")
@@ -279,6 +399,45 @@ mod tests {
                 assert!(!matches_declared_media(&mime, &bytes));
             }
         }
+    }
+
+    #[test]
+    fn a_crop_png_is_whole_and_crop_sized() {
+        assert_eq!(crop_png_refusal(&test_png(1, 1)), None);
+        assert_eq!(crop_png_refusal(&test_png(480, 360)), None);
+        let valid = test_png(4, 3);
+        let mut damaged = valid.clone();
+        damaged[40] ^= 0xff;
+        let mut trailing = valid.clone();
+        trailing.push(0);
+        let without_data = {
+            let mut png = test_png(1, 1);
+            // Drop the IDAT chunk: header ends at 33, IEND is the last 12.
+            png.drain(33..png.len() - 12);
+            png
+        };
+        for (bytes, expected) in [
+            (b"\x89PNG\r\n\x1a\n".to_vec(), "is a truncated PNG"),
+            (valid[..valid.len() - 5].to_vec(), "is a truncated PNG"),
+            (damaged, "is a PNG with a damaged chunk"),
+            (trailing, "carries bytes after its PNG end"),
+            (without_data, "is a PNG with no image data"),
+            (test_png(481, 1), "is larger than a crop may be"),
+            (test_png(1, 361), "is larger than a crop may be"),
+            (b"GIF89a".to_vec(), "is not a PNG"),
+        ] {
+            assert_eq!(crop_png_refusal(&bytes), Some(expected));
+        }
+        // A small file declaring a huge raster: 8192 by 8192 in 60 bytes.
+        let mut huge = test_png(1, 1);
+        huge[16..20].copy_from_slice(&8192_u32.to_be_bytes());
+        huge[20..24].copy_from_slice(&8192_u32.to_be_bytes());
+        let crc = crc32(&huge[12..29]);
+        huge[29..33].copy_from_slice(&crc.to_be_bytes());
+        assert_eq!(
+            crop_png_refusal(&huge),
+            Some("is larger than a crop may be")
+        );
     }
 
     #[test]

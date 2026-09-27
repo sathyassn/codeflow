@@ -2438,20 +2438,16 @@ fn validate_feedback_excerpt(
                 "feedback excerpt image exceeds its decoded bound".to_string(),
             ));
         }
-        let signature_matches = if image.media_type == "image/png" {
-            decoded.starts_with(b"\x89PNG\r\n\x1a\n")
-        } else {
-            decoded.len() >= 3 && decoded[0] == 0xff && decoded[1] == 0xd8
-        };
-        if !signature_matches {
-            return Err(PresentError::InvalidDocument(format!(
-                "feedback excerpt image is not a {}",
-                if image.media_type == "image/png" {
-                    "PNG"
-                } else {
-                    "JPEG"
-                }
-            )));
+        if image.media_type == "image/png" {
+            if let Some(refusal) = crate::media::crop_png_refusal(&decoded) {
+                return Err(PresentError::InvalidDocument(format!(
+                    "feedback excerpt image {refusal}"
+                )));
+            }
+        } else if decoded.len() < 3 || decoded[0] != 0xff || decoded[1] != 0xd8 {
+            return Err(PresentError::InvalidDocument(
+                "feedback excerpt image is not a JPEG".to_string(),
+            ));
         }
         bytes += image.data_base64.len();
     }
@@ -4925,7 +4921,7 @@ mod tests {
             text: None,
             image: Some(FeedbackImage {
                 media_type: "image/png".to_string(),
-                data_base64: STANDARD.encode(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"),
+                data_base64: STANDARD.encode(crate::media::test_png(4, 3)),
             }),
         });
         assert!(store.append_feedback(envelope.clone()).is_err());

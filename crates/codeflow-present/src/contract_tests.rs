@@ -582,7 +582,7 @@ fn an_entity_note_accepts_a_png_crop_that_the_v1_view_drops() {
         1,
         &document,
     );
-    let png = base64::engine::general_purpose::STANDARD.encode(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR");
+    let png = base64::engine::general_purpose::STANDARD.encode(crate::media::test_png(40, 20));
     envelope.notes[0].excerpt = Some(crate::state::FeedbackExcerpt {
         text: Some("Proposal".to_string()),
         image: Some(crate::state::FeedbackImage {
@@ -751,4 +751,52 @@ fn unreadable_path_data_leaves_the_part_unverified() {
             .crop_check,
         Some(CropCheck::Unverified)
     );
+}
+
+/// A PNG crop is checked whole on an entity note: a signature alone, a
+/// truncated file and a file declaring a huge raster are refused (T118-4).
+#[test]
+fn an_entity_note_refuses_a_broken_or_oversized_png_crop() {
+    use base64::Engine as _;
+    let document = supported("documents/v2-framed.json");
+    let (_temp, store) = store();
+    let session = store
+        .create(ParsedDocument::Supported(document.clone()))
+        .unwrap();
+    let valid = crate::media::test_png(40, 20);
+    let mut huge = crate::media::test_png(1, 1);
+    huge[16..20].copy_from_slice(&8192_u32.to_be_bytes());
+    huge[20..24].copy_from_slice(&8192_u32.to_be_bytes());
+    let crc = crate::media::crc32(&huge[12..29]);
+    huge[29..33].copy_from_slice(&crc.to_be_bytes());
+    assert_eq!(
+        crate::media::crop_png_refusal(&huge),
+        Some("is larger than a crop may be")
+    );
+    for bytes in [
+        b"\x89PNG\r\n\x1a\n".to_vec(),
+        valid[..valid.len() - 5].to_vec(),
+        huge,
+        crate::media::test_png(481, 10),
+    ] {
+        let mut envelope = envelope_from(
+            &fixture_json("anchors/entity-valid-figure.json"),
+            session.id,
+            1,
+            &document,
+        );
+        envelope.notes[0].excerpt = Some(crate::state::FeedbackExcerpt {
+            text: None,
+            image: Some(crate::state::FeedbackImage {
+                media_type: "image/png".to_string(),
+                data_base64: base64::engine::general_purpose::STANDARD.encode(&bytes),
+            }),
+        });
+        assert!(
+            store.append_feedback(envelope).is_err(),
+            "{} bytes",
+            bytes.len()
+        );
+    }
+    assert!(store.pending_feedback(session.id).unwrap().is_empty());
 }

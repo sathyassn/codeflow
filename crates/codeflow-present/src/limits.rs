@@ -30,6 +30,10 @@ pub const MAX_FEEDBACK_BYTES: usize = 256 * 1024;
 pub const MAX_EXCERPT_TEXT_BYTES: usize = 4 * 1024;
 pub const MAX_EXCERPT_IMAGE_BYTES: usize = 24 * 1024;
 pub const MAX_EXCERPT_IMAGE_B64_BYTES: usize = 32 * 1024;
+/// The largest crop the page captures (`web/src/excerpt.ts` `MAX_CROP_*`);
+/// a PNG crop over either bound is refused before anything decodes it.
+pub const MAX_CROP_WIDTH: u32 = 480;
+pub const MAX_CROP_HEIGHT: u32 = 360;
 pub const MAX_EVENTS_PER_RESPONSE: usize = 100;
 pub const MAX_EVENT_RESPONSE_BYTES: usize = 1024 * 1024;
 pub const MAX_EVENT_RECORD_BYTES: u64 = 256 * 1024;
