@@ -245,7 +245,12 @@ pub fn create_adr(repo_root: &Path, template: &str, title: &str) -> Result<NewRe
         .create_new(true)
         .open(&path)?;
     std::io::Write::write_all(&mut file, content.as_bytes())?;
-    Ok(NewRecord { id, path })
+    // ADRs are not registry records and carry no hidden uid (SPC-013 R-12).
+    Ok(NewRecord {
+        id,
+        uid: String::new(),
+        path,
+    })
 }
 
 /// The generated ADR must parse and carry what was asked for, before it is

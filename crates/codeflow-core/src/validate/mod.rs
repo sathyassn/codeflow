@@ -476,6 +476,15 @@ pub(crate) fn canonical_identity(
         }
         String::new()
     };
+    // The hidden record identity (SPC-013 R-1): optional until a line's
+    // backfill, and a lower-case UUIDv4 whenever present.
+    let uid = get_string_field(data, "uid");
+    if !uid.is_empty() && !crate::ids::is_uid(&uid) {
+        errors.push(ValidationError {
+            field: "uid".into(),
+            message: "must be the lower-case UUIDv4 `new` wrote; a uid is never edited".into(),
+        });
+    }
     let base = path
         .file_stem()
         .map(|s| s.to_string_lossy().to_string())

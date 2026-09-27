@@ -1,14 +1,21 @@
 //! Durable work-record creation and status verbs. The CLI writes independent
 //! `EPC-NNN`, `SPC-NNN`, and `TSK-NNN` ids in the canonical flat layout, and
 //! changes a record's status only through the lifecycle judge (SPC-013 R-34).
+//! Where durable work is tracked, each id is issued from the shared registry
+//! with the record's hidden `uid` (SPC-013 R-12).
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 
 use clap::{Args, Subcommand, ValueEnum};
+use codeflow_core::ids::issue::{self, Request};
+use codeflow_core::ids::{Kind, RegId, Standing};
 use codeflow_core::scaffold::AssetSource;
 use codeflow_core::workgraph::light_paths;
 use codeflow_core::workgraph::status_verb::{set_status, StatusChange};
-use codeflow_core::workgraph::{allocate, is_valid_epic_format_id, NewRecord, RecordKind};
+use codeflow_core::workgraph::{
+    allocate, durable_work_tracking_enabled, is_valid_epic_format_id, NewRecord, RecordKind,
+    StoreError,
+};
 
 use crate::embedded::EmbeddedAssets;
 
@@ -116,8 +123,12 @@ pub enum TaskCommand {
             conflicts_with_all = ["epic", "standalone_reason", "integration_target"]
         )]
         follow_up_of: Option<String>,
+        /// Write the record of a reservation whose write was interrupted.
+        #[arg(long, value_name = "TSK-NNN", conflicts_with_all = ["epic", "standalone_reason", "integration_target", "follow_up_of", "title"])]
+        resume: Option<String>,
         /// Task title.
-        title: String,
+        #[arg(required_unless_present = "resume")]
+        title: Option<String>,
     },
     /// Change a task's status through the transition rules.
     Status {
@@ -177,17 +188,27 @@ pub fn run_epic(args: &EpicArgs) -> i32 {
             return run_status(RecordKind::Epic, id, target, details, None);
         }
     };
-    let pm = super::repo_root().join("project-management");
+    let root = super::repo_root();
+    let pm = root.join("project-management");
     let Some(template) = load_template("base/pm/epic.md.tmpl") else {
         eprintln!("error: epic template unavailable");
         return 1;
     };
-    let rec = match allocate::create_epic(&pm, &template, title) {
-        Ok(rec) => rec,
-        Err(e) => {
-            eprintln!("error: {e}");
-            return 1;
-        }
+    let Some(mut issuer) = Issuer::new(
+        &root,
+        Kind::Epc,
+        title,
+        serde_json::json!({ "kind": "epic", "title": title }),
+    ) else {
+        return 1;
+    };
+    let result = if issuer.registry {
+        allocate::create_epic_with(&pm, &template, title, &mut |target| issuer.allocate(target))
+    } else {
+        allocate::create_epic(&pm, &template, title)
+    };
+    let Some(rec) = issuer.settle(result) else {
+        return 1;
     };
     report(&rec);
     if !integration {
@@ -221,14 +242,22 @@ pub fn run_task(args: &TaskArgs) -> i32 {
             follow_up_of: Some(source),
             title,
             ..
-        } => return run_follow_up(source, title),
+        } => return run_follow_up(source, title.as_deref().unwrap_or_default()),
+        TaskCommand::New {
+            resume: Some(id), ..
+        } => return resume_task(id),
         TaskCommand::New {
             epic,
             standalone_reason,
             integration_target,
             title,
             ..
-        } => (epic, standalone_reason, integration_target, title),
+        } => (
+            epic.clone(),
+            standalone_reason.clone(),
+            integration_target.clone(),
+            title.clone().unwrap_or_default(),
+        ),
         TaskCommand::Status {
             id,
             status,
@@ -264,7 +293,8 @@ pub fn run_task(args: &TaskArgs) -> i32 {
         }
         _ => {}
     }
-    let pm = super::repo_root().join("project-management");
+    let root = super::repo_root();
+    let pm = root.join("project-management");
     if epic
         .as_deref()
         .is_some_and(|value| !allocate::epic_exists(&pm, value))
@@ -280,17 +310,86 @@ pub fn run_task(args: &TaskArgs) -> i32 {
         eprintln!("error: task template unavailable");
         return 1;
     };
-    match allocate::create_task(
+    let request = serde_json::json!({
+        "kind": "task",
+        "epic": epic,
+        "standalone_reason": standalone_reason,
+        "into": integration_target,
+        "title": title,
+    });
+    let Some(mut issuer) = Issuer::new(&root, Kind::Tsk, &title, request) else {
+        return 1;
+    };
+    let result = if issuer.registry {
+        allocate::create_task_with(
+            &pm,
+            &template,
+            epic.as_deref(),
+            standalone_reason.as_deref(),
+            integration_target.as_deref(),
+            &title,
+            &mut |target| issuer.allocate(target),
+        )
+    } else {
+        allocate::create_task(
+            &pm,
+            &template,
+            epic.as_deref(),
+            standalone_reason.as_deref(),
+            integration_target.as_deref(),
+            &title,
+        )
+    };
+    issuer.finish(result)
+}
+
+/// `task new --resume TSK-NNN` (SPC-013 R-18): write the record of a
+/// reservation whose write was interrupted, only when this clone issued it
+/// and the registry binds it to the same `uid`.
+fn resume_task(id: &str) -> i32 {
+    let Some(parsed) = RegId::parse(id).filter(|parsed| parsed.kind() == Kind::Tsk) else {
+        eprintln!("error: '{id}' is not a task id (TSK-NNN)");
+        return 2;
+    };
+    let root = super::repo_root();
+    let unwritten = match issue::resume(&root, &parsed) {
+        Ok(unwritten) => unwritten,
+        Err(error) => {
+            eprintln!("error: {error}");
+            return 1;
+        }
+    };
+    let field = |key: &str| {
+        unwritten
+            .request
+            .get(key)
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+    };
+    let Some(template) = load_template("base/pm/task.md.tmpl") else {
+        eprintln!("error: task template unavailable");
+        return 1;
+    };
+    let pm = root.join("project-management");
+    let (record_id, uid) = (unwritten.id.clone(), unwritten.uid.clone());
+    let result = allocate::create_task_with(
         &pm,
         &template,
-        epic.as_deref(),
-        standalone_reason.as_deref(),
-        integration_target.as_deref(),
-        title,
-    ) {
-        Ok(rec) => report(&rec),
-        Err(e) => {
-            eprintln!("error: {e}");
+        field("epic").as_deref(),
+        field("standalone_reason").as_deref(),
+        field("into").as_deref(),
+        &field("title").unwrap_or_default(),
+        &mut |_| Ok((record_id.clone(), uid.clone())),
+    );
+    match result {
+        Ok(record) => {
+            if let Err(error) = issue::written(&root, &parsed) {
+                eprintln!("warning: {error}");
+            }
+            report(&record)
+        }
+        Err(error) => {
+            eprintln!("error: {error}");
             1
         }
     }
@@ -353,6 +452,83 @@ pub fn run_adr(args: &AdrArgs) -> i32 {
     }
 }
 
+/// How a new record gets its id: from the shared registry where durable
+/// work is tracked, else from the visible checkout.
+struct Issuer<'a> {
+    root: &'a Path,
+    kind: Kind,
+    title: String,
+    request: serde_json::Value,
+    registry: bool,
+    reserved: Option<(RegId, Standing, Option<String>)>,
+}
+
+impl<'a> Issuer<'a> {
+    fn new(root: &'a Path, kind: Kind, title: &str, request: serde_json::Value) -> Option<Self> {
+        let registry = match durable_work_tracking_enabled(root) {
+            Ok(tracked) => tracked,
+            Err(error) => {
+                eprintln!("error: cannot determine durable-work tracking: {error}");
+                return None;
+            }
+        };
+        Some(Issuer {
+            root,
+            kind,
+            title: title.to_string(),
+            request,
+            registry,
+            reserved: None,
+        })
+    }
+
+    fn allocate(&mut self, target: &str) -> Result<(String, String), StoreError> {
+        let mut request = Request::issue(self.kind, &self.title, target);
+        request.resume = Some(self.request.clone());
+        let reservation = issue::reserve(self.root, &request)?;
+        self.reserved = Some((
+            reservation.id.clone(),
+            reservation.standing,
+            reservation.note.clone(),
+        ));
+        Ok((reservation.id.to_string(), reservation.uid))
+    }
+
+    /// Settle the reservation against the write: report the registry
+    /// standing on success, or the reserved-but-unwritten number on failure.
+    fn settle(self, result: Result<NewRecord, StoreError>) -> Option<NewRecord> {
+        match (result, self.reserved) {
+            (Ok(record), reserved) => {
+                if let Some((id, standing, note)) = reserved {
+                    if let Err(error) = issue::written(self.root, &id) {
+                        eprintln!("warning: {error}");
+                    }
+                    eprintln!("registry: {id} {}", standing.describe());
+                    if let Some(note) = note {
+                        eprintln!("registry: {note}");
+                    }
+                }
+                Some(record)
+            }
+            (Err(error), Some((id, _, _))) => {
+                eprintln!("error: {error}");
+                eprintln!(
+                    "{id} is reserved but its record was not written; fix the cause and run `codeflow task new --resume {id}` (tasks), or leave the number as a gap"
+                );
+                None
+            }
+            (Err(error), None) => {
+                eprintln!("error: {error}");
+                None
+            }
+        }
+    }
+
+    fn finish(self, result: Result<NewRecord, StoreError>) -> i32 {
+        self.settle(result).map_or(1, |record| report(&record))
+    }
+}
+
 /// Run `codeflow spec`.
 pub fn run_spec(args: &SpecArgs) -> i32 {
     let (work_item, title) = match &args.command {
@@ -371,7 +547,8 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
             );
         }
     };
-    let pm = super::repo_root().join("project-management");
+    let root = super::repo_root();
+    let pm = root.join("project-management");
     if !allocate::work_item_exists(&pm, work_item) {
         eprintln!(
             "error: work item {work_item} not found under {}",
@@ -383,13 +560,18 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
         eprintln!("error: spec template unavailable");
         return 1;
     };
-    match allocate::create_spec(&pm, &template, work_item, title) {
-        Ok(rec) => report(&rec),
-        Err(error) => {
-            eprintln!("error: {error}");
-            1
-        }
-    }
+    let request = serde_json::json!({ "kind": "spec", "for": work_item, "title": title });
+    let Some(mut issuer) = Issuer::new(&root, Kind::Spc, title, request) else {
+        return 1;
+    };
+    let result = if issuer.registry {
+        allocate::create_spec_with(&pm, &template, work_item, title, &mut |target| {
+            issuer.allocate(target)
+        })
+    } else {
+        allocate::create_spec(&pm, &template, work_item, title)
+    };
+    issuer.finish(result)
 }
 
 /// Run one status verb: exit 0 when written, 1 when refused or failed.

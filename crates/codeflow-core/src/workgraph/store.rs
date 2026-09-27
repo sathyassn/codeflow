@@ -28,6 +28,9 @@ pub enum StoreError {
 
     #[error("invalid work record: {0}")]
     Invalid(String),
+
+    #[error("{0}")]
+    Registry(#[from] crate::ids::IdsError),
 }
 
 /// Minimal persistence surface for workgraph records.
