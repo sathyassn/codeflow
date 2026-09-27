@@ -12,9 +12,11 @@ const KIB: usize = 1024;
 // from one kernel (`assets/base/rule-map.toml`); the doctrine moved one hop
 // away into `.codeflow/rules/`. The map leaves an adopter at least 16 KiB of
 // project section under Codex's 32 KiB project-doc limit. The semantic tests
-// below pin each duty in its new home, map or reference.
+// below pin each duty in its new home, map or reference. The method-tier cap
+// was raised from 8 KiB by the TSK-127 design review, which added the review,
+// blocker and session-start moments.
 const ROOT_AGENTS_MAX_BYTES: usize = 16 * KIB;
-const STANDARD_AGENTS_MAX_BYTES: usize = 8 * KIB;
+const STANDARD_AGENTS_MAX_BYTES: usize = 9 * KIB;
 const MINIMAL_AGENTS_MAX_BYTES: usize = 7 * KIB;
 const STANDARD_CLAUDE_MAX_BYTES: usize = 6 * KIB;
 const MINIMAL_CLAUDE_MAX_BYTES: usize = 3 * KIB;
