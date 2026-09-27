@@ -79,8 +79,10 @@ publication date._
   automation profiles (`git.automation_profiles`) let a named bot's pull
   requests skip branch naming and the commit message shape rules, and supply
   the PR sections its body omits; `codeflow ci --actor` passes the actor, the
-  profile is read from the target branch, and a local run or a fork pull
-  request is `unknown`, so nothing applies. A kept PR template is never
+  profile is read from the target branch, and the actor is trusted only in a
+  same-repository GitHub Actions pull request event, so a local run, another
+  CI or a fork pull request is `unknown` and nothing applies. A kept PR
+  template is never
   shadowed: `init` and `update` record `git.pr_section_mapping` as
   `diagnosed` with a proposed heading mapping, an interactive run asks for
   accepted, refused or custom, and the check runs at `warn` only while a
@@ -89,9 +91,11 @@ publication date._
   an `adopter-fit` check. `release.backend` in `.codeflow/project.toml`
   (`none` by default, `external`, `codeflow`) names who owns versions, and
   release-please, Changesets, semantic-release, cargo-release and GoReleaser
-  are recognised. `epic new`, `spec new` and `task new` use a valid project
-  template from `project-management/templates/`, and the shipped record and
-  PR templates carry no em or en dash.
+  are recognised. Policy edits and the keys `update` adds are spliced into
+  the adopter's bytes. `epic new`, `spec new` and `task new` use a project
+  template from `project-management/templates/` when a record rendered from
+  it carries the allocated id, uid, title, parent and target, and the
+  shipped record and PR templates carry no em or en dash.
 
 <!-- codeflow:release-impact minor -->
 - **Pinned, checksum-verified CI binary.** The scaffolded workflows install
@@ -103,7 +107,9 @@ publication date._
   it. Upgrade in this order: install the new binary, land a pull request
   that raises only `scaffold_version`, then run `codeflow update` on a new
   branch. Hook shims now warn when the `codeflow` on `PATH` is older than
-  they are, and a policy with keys the binary cannot read names this order.
+  they are, and a policy with keys the binary cannot read names this order,
+  including a pull request's own policy judged from the target branch. The
+  `codeflow-registry` workflow installs its binary the same way.
 
 <!-- codeflow:release-impact patch -->
 - **Commit subject separator.** The commit-msg hook and `codeflow ci` now

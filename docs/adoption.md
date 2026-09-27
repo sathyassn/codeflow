@@ -243,8 +243,10 @@ states it, so a pull request cannot add a profile for itself. It skips branch
 naming and the commit message shape rules. Tests, the secret scan, AI
 attribution, emoji, the dash rule and the release declaration still run, and
 PR sections are still checked at their configured level: `sections` only
-supplies the headings the bot body leaves out. On a fork pull request and in
-a local run the actor is `unknown` and no profile applies.
+supplies the headings the bot body leaves out. The actor is trusted only in a
+GitHub Actions pull request event from the same repository, and only as that
+event's own actor. In a local run, in another CI and on a fork pull request
+the actor is `unknown`, whatever `--actor` says, and no profile applies.
 
 **A PR template you already have.** `init` keeps it and installs no second
 template; `update` never merges into it or writes a `.new` beside it. When its
@@ -263,7 +265,11 @@ A run without a terminal (`--yes`, CI) leaves the state `diagnosed`, and
 at `warn` only on a fresh install whose policy file `init` created; a
 `pr_sections` value already in your policy file stays in force, even when it
 equals the default. `codeflow ci` prints each check's effective level and
-where it comes from (`configured`, `shipped default` or `diagnosed`).
+where it comes from (`configured`, `shipped default` or `diagnosed`). These
+policy edits, and the keys `codeflow update` adds, are spliced into the file
+as you wrote it, so no other byte changes; a policy with no `git` object
+gains one. A template reached through a symlink out of the repository is
+never read or written.
 
 **Release tools.** `release.backend` in `.codeflow/project.toml` names who owns
 the version of each release unit:
@@ -348,7 +354,8 @@ pull requests, in order:
    new binary judges them.
 
 A pull request that adds policy keys before step 1 has landed fails with a
-message naming this order. The git hook shims check the binary first and warn
+message naming this order: the enforcing job reads the head's policy as data
+and fails when the pinned binary cannot read it. The git hook shims check the binary first and warn
 when it is older than they are, then run the checks it has.
 
 Work records follow the same order. `codeflow update` adds
