@@ -1508,6 +1508,40 @@ class EntryEditTests(unittest.TestCase):
         result = self.check(base, head, self.repo.body("none"))
         self.assertEqual((result["added"], result["edited"], result["withdrawn"]), ([], [], []))
 
+    def test_code_indentation_is_never_rewrapping(self) -> None:
+        # F4 residual (Codex round 2 probe): the same words, but `publish()`
+        # leaves the `if` block, so publication no longer needs approval.
+        fence = "```"
+        before = f"Run:\n  {fence}python\n  if approved:\n      audit()\n      publish()\n  {fence}"
+        self.repo.pending("2.1.0", [("minor", "Publication", before)])
+        base = self.repo.commit("feat: publication")
+        text = (self.repo.root / "CHANGELOG.md").read_text()
+        self.repo.write("CHANGELOG.md", text.replace("      publish()", "  publish()"))
+        head = self.repo.commit("docs: reindent the example")
+        with self.assertRaisesRegex(release.ReleaseError, r"must equal .*\(minor\)"):
+            self.check(base, head, self.repo.body("none"))
+        self.assertEqual(self.check(base, head, self.repo.body("minor"))["edited"], ["Publication."])
+
+    def test_only_prose_rewrapping_is_not_an_edit(self) -> None:
+        entry = "- **A.** run `x  y` now"
+        same = {
+            "- **A.** run\n  `x  y`   now",
+            "- **A.** run `x\n  y` now".replace("`x\n  y`", "`x  y`"),
+        }
+        different = {
+            "- **A.** run `x y` now": "spacing inside a code span",
+            "- **A.** run\n\n  `x  y` now": "a new paragraph",
+            "- **A.** run\n  - `x  y` now": "a nested list",
+            "- **A.** run  \n  `x  y` now": "a hard line break",
+        }
+        for text in same:
+            with self.subTest(text=text):
+                self.assertEqual(release.entry_words(text), release.entry_words(entry))
+        for text, why in different.items():
+            with self.subTest(why=why):
+                self.assertNotEqual(release.entry_words(text), release.entry_words(entry))
+        self.assertEqual(release.entry_words("- **A.** `a\n  b`"), release.entry_words("- **A.** `a b`"))
+
     def test_lazy_continuation_text_belongs_to_the_entry(self) -> None:
         # F3: an unindented line that continues the bullet's paragraph renders
         # as part of the entry, so changing or deleting it is an edit.
@@ -1823,22 +1857,73 @@ class TypedRepairTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
             self.check(head, self.repo.body("patch"))
 
-    def test_a_base_configuration_this_checker_cannot_read_yields_to_the_pull_requests(self) -> None:
+    def older_base(self, older: str | None = None, *, published: str | None = None) -> dict[str, object]:
+        """Commit a base whose configuration lacks the comparison tree (the
+        older shape `main` carries), or holds `older` bytes; return the
+        current configuration for the head to carry."""
+        current = json.loads(self.repo.config.read_text())
+        if older is None:
+            value = json.loads(json.dumps(current))
+            del value["bootstrap"]["comparison"]["tree"]
+            older = json.dumps(value, indent=2) + "\n"
+        self.repo.write(".release/config.json", older)
+        if published is not None:
+            text = (self.repo.root / "CHANGELOG.md").read_text()
+            self.repo.write("CHANGELOG.md", text.replace("- public", published))
+        self.base = self.repo.commit("chore: an older configuration")
+        return current
+
+    def test_an_older_base_configuration_is_read_with_its_derived_tree(self) -> None:
         # A whole line landing on a target whose configuration predates the
-        # line's schema: the base is judged with the line's configuration,
-        # and the output says so.
+        # line's schema: the base keeps its own pins, and the missing tree
+        # comes from its recorded comparison commit, corroborated by the tag.
         self.repo.pending("2.0.1", [("patch", "Fix a crash")])
         self.repo.write_stamps("2.0.1")
-        current = json.loads(self.repo.config.read_text())
-        older = json.loads(json.dumps(current))
-        del older["bootstrap"]["comparison"]["tree"]
-        self.repo.write(".release/config.json", json.dumps(older, indent=2) + "\n")
-        self.base = self.repo.commit("fix: a crash")
+        current = self.older_base()
         self.repo.write(".release/config.json", json.dumps(current, indent=2) + "\n")
         head = self.repo.commit("chore(release): migrate the configuration")
         result = self.check(head)
         self.assertNotIn("repair", result)
-        self.assertIn("the base's predates this checker", result["base_configuration"])
+        self.assertIn("derived from the recorded comparison commit", result["base_configuration"])
+
+    def test_a_pull_request_never_replaces_the_base_frozen_history_pin(self) -> None:
+        # F5: the older base already holds a changed published section. The
+        # pull request fills the missing tree, re-pins the published digest
+        # to the changed bytes and adds unrelated work.
+        self.repo.pending("2.0.1", [("patch", "Fix a crash")])
+        self.repo.write_stamps("2.0.1")
+        current = self.older_base(published="- corrupted published history")
+        text = (self.repo.root / "CHANGELOG.md").read_text()
+        current["bootstrap"]["published"]["changelog_sha256"] = release.hashlib.sha256(
+            release.published_snapshot(text, "2.0.0").encode()
+        ).hexdigest()
+        self.repo.write(".release/config.json", json.dumps(current, indent=2) + "\n")
+        self.repo.write("src/tool.rs", "fn unrelated_change() {}\n")
+        head = self.repo.commit("chore(release): migrate the configuration")
+        with self.assertRaisesRegex(release.ReleaseError, "published changelog sections differ"):
+            self.check(head)
+
+    def test_an_unreadable_base_configuration_refuses_the_pull_request(self) -> None:
+        # F5: invalid JSON is not an older shape; nothing replaces it.
+        self.repo.pending("2.0.1", [("patch", "Fix a crash")])
+        self.repo.write_stamps("2.0.1")
+        current = self.older_base("{bad json\n")
+        self.repo.write(".release/config.json", json.dumps(current, indent=2) + "\n")
+        head = self.repo.commit("chore(release): replace the configuration")
+        with self.assertRaisesRegex(release.ReleaseError, "cannot be read, and a pull request never replaces it"):
+            self.check(head)
+
+    def test_a_derived_tree_needs_the_tag_to_corroborate_the_commit(self) -> None:
+        self.repo.pending("2.0.1", [("patch", "Fix a crash")])
+        self.repo.write_stamps("2.0.1")
+        value = json.loads(self.repo.config.read_text())
+        del value["bootstrap"]["comparison"]["tree"]
+        value["bootstrap"]["comparison"]["commit"] = self.repo.target
+        current = self.older_base(json.dumps(value, indent=2) + "\n")
+        self.repo.write(".release/config.json", json.dumps(current, indent=2) + "\n")
+        head = self.repo.commit("chore(release): migrate the configuration")
+        with self.assertRaisesRegex(release.ReleaseError, "does not corroborate tag v2.0.0"):
+            self.check(head)
 
     def test_a_readable_base_configuration_is_the_one_used(self) -> None:
         self.repo.pending("2.0.1", [("patch", "Fix a crash")])
@@ -1847,6 +1932,20 @@ class TypedRepairTests(unittest.TestCase):
         self.repo.write("product.txt", "work\n")
         head = self.repo.commit("chore: work")
         self.assertNotIn("base_configuration", self.check(head))
+
+    def test_a_repair_cannot_reindent_code_in_an_entry(self) -> None:
+        # F4 residual: the code probe inside a typed repair.
+        fence = "```"
+        before = f"Run:\n  {fence}python\n  if approved:\n      audit()\n      publish()\n  {fence}"
+        self.repo.pending("2.0.1", [("patch", "Fix a crash", before)])
+        self.repo.write_stamps("2.0.0")
+        self.base = self.repo.commit("fix: a crash")
+        text = (self.repo.root / "CHANGELOG.md").read_text()
+        self.repo.write("CHANGELOG.md", text.replace("      publish()", "  publish()"))
+        self.repo.write_stamps("2.0.1")
+        head = self.repo.commit("chore(release): sync stamps")
+        with self.assertRaisesRegex(release.ReleaseError, "keeps every existing pending entry"):
+            self.check(head)
 
     def test_a_repair_may_rewrap_an_existing_entry(self) -> None:
         text = (self.repo.root / "CHANGELOG.md").read_text()

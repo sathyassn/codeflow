@@ -744,10 +744,52 @@ def entry_extent(text: str) -> str:
     return "\n".join(kept).strip()
 
 
+# A code span: a backtick run, its content, and the same run again.
+CODE_SPAN = re.compile(r"(?<!`)(`+)(?!`)(.+?)(?<!`)\1(?!`)", re.S)
+
+
+def prose_only(text: str) -> bool:
+    """Whether an entry is paragraphs of prose, where line breaks and spacing
+    never change what renders: no nested block (list, quote, heading, fence,
+    rule, table, marker), no indented code and no hard line break."""
+    lines = text.splitlines()
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if line.endswith(("  ", "\\")) and stripped:
+            return False
+        if index == 0 or not stripped:
+            continue
+        if BLOCK_START.match(stripped) or stripped.startswith("|"):
+            return False
+        indent = len(line) - len(line.lstrip())
+        if indent >= 6 and not lines[index - 1].strip():
+            return False
+    return True
+
+
+def prose_words(paragraph: str) -> str:
+    """A prose paragraph with spacing and line breaks collapsed outside code
+    spans. Inside a code span only a line break with its indentation is
+    spacing; every other space is literal text."""
+    pieces, last = [], 0
+    for span in CODE_SPAN.finditer(paragraph):
+        pieces.append(re.sub(r"\s+", " ", paragraph[last : span.start()]))
+        pieces.append(span.group(1) + re.sub(r"\n[ \t]*", " ", span.group(2)) + span.group(1))
+        last = span.end()
+    pieces.append(re.sub(r"\s+", " ", paragraph[last:]))
+    return "".join(pieces).strip()
+
+
 def entry_words(text: str) -> str:
-    """An entry's text with line wrapping removed: rewrapping an entry is the
-    one change that is not an edit."""
-    return " ".join(text.split())
+    """The form in which two versions of an entry compare equal exactly when
+    one only rewraps the other's prose (R-92). A prose entry keeps its
+    paragraphs and code spans and loses its line breaks; any other entry, one
+    holding code or nested structure, is compared byte for byte, so a change
+    of indentation there is an edit."""
+    if not prose_only(text):
+        return text
+    paragraphs = re.split(r"\n[ \t]*\n", text.strip())
+    return "\n\n".join(prose_words(paragraph) for paragraph in paragraphs)
 
 
 def pending_items(section: ChangelogSection, config: dict[str, Any]) -> dict[str, PendingItem]:
@@ -1102,20 +1144,43 @@ def check_pr(args: argparse.Namespace) -> None:
 def carried_config(
     base: str, config: dict[str, Any], *, cwd: Path
 ) -> tuple[dict[str, Any], str | None]:
-    """The configuration the base is judged by (R-95): the one it carries, so
-    a pull request cannot redefine the baseline it is checked against. A base
-    whose configuration this checker cannot read (a line that migrated the
-    schema, as a whole line landing on its target shows) is judged with the
-    pull request's configuration, and the output says so; the change is a
-    watched path for review. A repair still may not change the configuration."""
+    """The configuration the base is judged by (R-95): always the one it
+    carries, so a pull request never supplies the authority for the history
+    it is judged against. One older shape is read: a bootstrap record
+    without its comparison tree, whose tree is derived from the recorded
+    comparison commit once the tag corroborates it. Any other configuration
+    this checker cannot read refuses the pull request. A base with no
+    configuration has no authority to replace; the pull request adopts one."""
     if file_at_optional(base, CONFIG_PATH, cwd=cwd) is None:
-        return config, "the pull request's; the base carries none"
+        return config, "the pull request's; the base carries none, so this pull request adopts it"
     try:
         carried = config_at_ref(base, cwd=cwd)
+        note = None
+        comparison = carried["bootstrap"].get("comparison")
+        if isinstance(comparison, dict) and "tree" not in comparison:
+            carried = with_comparison_tree(carried, cwd=cwd)
+            note = "the base's, its comparison tree derived from the recorded comparison commit"
         bootstrap_shape(carried)
     except ReleaseError as error:
-        return config, f"the pull request's; the base's predates this checker ({error})"
-    return carried, None
+        fail(f"the base's release configuration cannot be read, and a pull request never replaces it: {error}")
+    return carried, note
+
+
+def with_comparison_tree(config: dict[str, Any], *, cwd: Path) -> dict[str, Any]:
+    """`config` with the tree of its recorded comparison commit, when that
+    commit exists and the recorded tag carries the same tree."""
+    comparison = config["bootstrap"]["comparison"]
+    commit, tag = comparison.get("commit"), comparison.get("tag")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit) or not isinstance(tag, str):
+        fail("bootstrap records neither a comparison tree nor a comparison commit and tag")
+    found = run(["git", "rev-parse", "--verify", "--quiet", f"{commit}^{{tree}}"], cwd=cwd, check=False)
+    tagged = run(["git", "rev-parse", "--verify", "--quiet", f"{tag}^{{tree}}"], cwd=cwd, check=False)
+    tree = found.stdout.strip()
+    if found.returncode != 0 or tagged.returncode != 0 or tagged.stdout.strip() != tree:
+        fail(f"bootstrap comparison commit {commit[:12]} does not corroborate tag {tag}")
+    migrated = json.loads(json.dumps(config))
+    migrated["bootstrap"]["comparison"]["tree"] = tree
+    return migrated
 
 
 def pending_section(text: str, baseline: Baseline, *, repair: bool) -> ChangelogSection | None:
@@ -1145,8 +1210,8 @@ def entry_change(
 ) -> EntryChange:
     """Pending entries matched by identity (R-92): a label new to the section
     is an addition, a label gone is a withdrawal, and a changed body or impact
-    under a kept label is an edit of that item. Only rewrapping, which leaves
-    every word in place, is no change."""
+    under a kept label is an edit of that item. Only rewrapping prose is no
+    change (see `entry_words`)."""
     added = [
         item
         for key, item in after.items()
