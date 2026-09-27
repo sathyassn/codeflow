@@ -42,8 +42,13 @@ publication date._
   `codeflow ci` judge hand edits with the same rules. New records list
   criteria as `- AC-n` without a checkbox, spec `implemented` is derived,
   `in_progress` is no longer written, and the producerless work-graph ledger
-  events are retired. The rules apply from a `work_records_baseline` that
-  `codeflow update` records once for projects with existing records. The new
+  events are retired. The rules apply from a `work_records_baseline`:
+  `codeflow update` to 3.0.0 records your current `HEAD` once when the
+  project has records, so every existing record is legacy and only records
+  added or changed afterwards follow the new rules. The baseline counts only
+  when it is an ancestor of the commit being judged, and a pull request whose
+  base is older than the baseline judges older records from their baseline
+  copy rather than as new. The new
   `git.work_records` key accepts `block` or `warn`; upgrade the `codeflow` on
   `PATH` before `codeflow update`, since an older binary rejects the key.
 
