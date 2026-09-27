@@ -91,9 +91,15 @@ fn headless_violation(level: PolicyLevel, run: &HeadlessRun) -> Violation {
         "security.headless_peer_runs",
         level,
         format!(
-            "headless peer run `{}`: peer seats run interactively, so a headless run has no \
+            "headless peer run `{}`{}: peer seats run interactively, so a headless run has no \
              verified native session, task tools or recheckable thread",
-            run.form
+            run.form,
+            if run.parsed {
+                ""
+            } else {
+                " (the line could not be fully parsed; its text names the peer with a \
+                 headless flag)"
+            }
         ),
         format!(
             "delegate through an interactive seat instead: Claude Code to Codex through the \

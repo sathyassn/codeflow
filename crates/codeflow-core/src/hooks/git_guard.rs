@@ -401,6 +401,28 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
     report
 }
 
+/// The argument vector of every simple command in `command`, read the way
+/// git-guard reads them (TSK-136): subshells, groups, control-structure
+/// bodies, `$(…)`, backticks, `bash -c`/`eval` strings and script heredoc
+/// bodies unwrapped; quotes and escapes removed; redirections, leading
+/// reserved words (`!`, `time`, `do`, …), assignments and the `env`,
+/// `command`, `builtin` and `exec` launchers stripped. The first element is
+/// the program as written, which may still hold a substitution.
+pub(crate) fn simple_commands(command: &str) -> Vec<Vec<String>> {
+    expand_commands(command)
+        .iter()
+        .filter_map(|segment| {
+            let mut words = command_argv(segment);
+            strip_reserved_words(&mut words);
+            let (program, args) = strip_launchers(&words)?;
+            let mut command = Vec::with_capacity(args.len() + 1);
+            command.push(program.to_string());
+            command.extend(args.iter().cloned());
+            Some(command)
+        })
+        .collect()
+}
+
 /// Shell reserved words that can open a segment of a control structure
 /// (`do git commit`, `then git push`) or prefix a command (`! git commit`,
 /// `time git commit`). The command after them runs all the same.
