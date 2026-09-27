@@ -440,6 +440,100 @@ fn minimal_floor_blocks_a_non_conventional_commit() {
     );
 }
 
+/// Runs `git` and asserts success, naming the step on failure.
+fn git_ok(dir: &Path, args: &[&str], what: &str) {
+    let out = git(dir, args);
+    assert!(
+        out.status.success(),
+        "{what} failed:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// Commits one file on a new branch cut from `from`.
+fn commit_on_branch(root: &Path, from: &str, branch: &str, file: &str, body: &str, msg: &[&str]) {
+    git_ok(root, &["checkout", "-q", from], "checkout base");
+    git_ok(root, &["checkout", "-q", "-b", branch], "checkout branch");
+    std::fs::write(root.join(file), body).unwrap();
+    git_ok(root, &["add", file], "add");
+    let mut args = vec!["commit", "-q"];
+    args.extend_from_slice(msg);
+    git_ok(root, &args, "commit");
+}
+
+/// Pushes a branch and returns (success, stderr).
+fn push(root: &Path, branch: &str) -> (bool, String) {
+    let out = git(root, &["push", "-q", "origin", branch]);
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+/// TSK-132: at every tier a fresh scaffold ships `test_gate_on_push` at
+/// block, and a real `git push` runs the fast push set: `codeflow ci` on the
+/// pushed range blocks a commit that slipped past commit-msg, a failing
+/// `quick` target blocks, and a clean push goes through with a timing note.
+#[test]
+fn push_set_blocks_a_bad_push_at_every_tier() {
+    for tier in ["--minimal", "--standard", "--full"] {
+        let (tmp, root) = project();
+        init(&root, tier);
+        let policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(
+            policy["git"]["test_gate_on_push"], "block",
+            "{tier}: fresh scaffold must block on a failed push set"
+        );
+        let remote = tmp.path().join("remote.git");
+        git_ok(
+            tmp.path(),
+            &["init", "--bare", "-q", "remote.git"],
+            "bare init",
+        );
+        git_ok(
+            &root,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+            "remote add",
+        );
+        let head = git(&root, &["branch", "--show-current"]);
+        let start = String::from_utf8_lossy(&head.stdout).trim().to_string();
+
+        // `init` already committed the scaffold; add one reviewed change.
+        let good = ["-m", "chore: add a base file"];
+        commit_on_branch(&root, &start, "feat/base", "base.txt", "base\n", &good);
+        let (ok, err) = push(&root, "feat/base");
+        assert!(ok, "{tier}: clean push blocked:\n{err}");
+        assert!(err.contains("push set finished in"), "{tier}: {err}");
+
+        // A commit that skipped commit-msg is caught by `codeflow ci` on the
+        // pushed range.
+        let bad = ["--no-verify", "-m", "Not conventional."];
+        commit_on_branch(&root, "feat/base", "feat/bad", "a.txt", "a\n", &bad);
+        let (ok, err) = push(&root, "feat/bad");
+        assert!(!ok, "{tier}: bad push went through");
+        assert!(
+            err.contains("git.test_gate_on_push") && err.contains("codeflow ci"),
+            "{tier}: block did not name the push set check:\n{err}"
+        );
+
+        // A failing `quick` target blocks too.
+        let config = r#"{"schema_version": "1.0", "targets": [
+  {"name": "lint", "runner": "custom", "modes": {"quick": {"command": "false"}, "full": {"command": "true"}}}
+]}"#;
+        let msg = ["-m", "chore: add a failing lint target"];
+        let cfg = ".codeflow/test-config.json";
+        commit_on_branch(&root, "feat/base", "feat/quick-fails", cfg, config, &msg);
+        let (ok, err) = push(&root, "feat/quick-fails");
+        assert!(!ok, "{tier}: failing quick target pushed");
+        assert!(
+            err.contains("push set failed for: lint"),
+            "{tier}: block did not name the failing target:\n{err}"
+        );
+    }
+}
+
 /// The restored v1 commit standard (ADR-0020) is enforced by the floor: after
 /// `init --minimal`, the commit-msg hook rejects a story-body commit — a
 /// conventional subject followed by a prose paragraph — both as a direct hook

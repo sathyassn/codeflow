@@ -147,7 +147,7 @@ fn fixture_assets(v2: bool) -> (tempfile::TempDir, DirSource) {
     "commit_to_protected": "block",
     "commit_format": "block",
     "secret_scan": "block",
-    "test_gate_on_push": "warn",
+    "test_gate_on_push": "block",
     "new_gate": "warn"
   },
   "recall": { "share": false }
@@ -1360,6 +1360,76 @@ fn update_adds_new_policy_keys_without_mutating_user_values() {
         .unwrap()
         .notes;
     assert!(notes.iter().any(|n| n.contains("git.new_gate")));
+}
+
+#[test]
+fn update_moves_test_gate_on_push_from_the_old_default_to_block() {
+    isolate_git();
+    let (_p, root) = project_dir();
+    let _v1 = init_v1(&root);
+    let before: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert_eq!(before["git"]["test_gate_on_push"], "warn");
+
+    let (_a2, assets_v2) = fixture_assets(true);
+    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+    let after: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert_eq!(
+        after["git"]["test_gate_on_push"], "block",
+        "a value equal to the recorded baseline moves to the new default"
+    );
+    assert_eq!(after["git"]["commit_format"], "block");
+    let notes = &report
+        .files
+        .iter()
+        .find(|f| f.dest == ".codeflow/policy.json")
+        .unwrap()
+        .notes;
+    assert!(
+        notes
+            .iter()
+            .any(|n| n.contains("moved default git.test_gate_on_push") && n.contains("warn")),
+        "{notes:?}"
+    );
+}
+
+#[test]
+fn update_keeps_an_explicit_test_gate_on_push() {
+    isolate_git();
+    for explicit in ["off", "allow"] {
+        let (_p, root) = project_dir();
+        let _v1 = init_v1(&root);
+        let mut policy: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        policy["git"]["test_gate_on_push"] = explicit.into();
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+
+        let (_a2, assets_v2) = fixture_assets(true);
+        let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
+
+        let after: serde_json::Value =
+            serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+        assert_eq!(
+            after["git"]["test_gate_on_push"], explicit,
+            "an explicit adopter value is kept"
+        );
+        let notes = &report
+            .files
+            .iter()
+            .find(|f| f.dest == ".codeflow/policy.json")
+            .unwrap()
+            .notes;
+        assert!(
+            !notes.iter().any(|n| n.contains("moved default")),
+            "{notes:?}"
+        );
+    }
 }
 
 #[test]
