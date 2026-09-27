@@ -194,8 +194,10 @@ detected is a loud no-op (exit 0) so the bootstrap/early-setup path stays green;
 (CI, the pipeline verify gate) where "ran nothing" must not read as a pass. With a
 stack it is a real gate, re-run in CI. The pre-push hook runs the push set (the
 targets with a `quick` mode) plus `codeflow validate --docs` and `codeflow ci` on
-the pushed range, blocking by default under `test_gate_on_push`; the test suite
-belongs to the full gate. File and aggregate coverage thresholds all contribute to the gate
+the pushed range, blocking by default under `test_gate_on_push`. It blocks on
+what it can see and names what it left to CI (an unresolved range, a sibling
+ref, a dirty, sparse or submodule-incomplete checkout); the test suite belongs
+to the full gate. File and aggregate coverage thresholds all contribute to the gate
 verdict; `changed_files` rules are rejected until an explicit comparison base is
 available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
 `codeflow test setup` safely fills absent/empty root-detected configs, lists and
