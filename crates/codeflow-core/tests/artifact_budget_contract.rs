@@ -1250,7 +1250,7 @@ fn an_index_row_without_a_classification_fails() {
     files
         .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
         .expect("quality index")
-        .push_str("\n| [New conditional section](quality/codex-new.md) | |\n");
+        .push_str("| [New conditional section](quality/codex-new.md) | |\n");
     files.insert(
         format!("{ORCH}/resources/quality/codex-new.md"),
         "A duty needing a load trigger.".into(),
@@ -1272,7 +1272,7 @@ fn an_index_row_with_an_unreviewed_classification_fails() {
     files
         .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
         .expect("quality index")
-        .push_str("\n| [New conditional section](quality/codex-new.md) | when it rains |\n");
+        .push_str("| [New conditional section](quality/codex-new.md) | when it rains |\n");
     files.insert(
         format!("{ORCH}/resources/quality/codex-new.md"),
         "A duty needing a load trigger.".into(),
@@ -1302,6 +1302,121 @@ fn a_dangling_link_below_a_conditional_section_fails() {
         ))),
         "{faults:?}"
     );
+}
+
+/// T150-R2-1: a pointer in an indented code block, or in a fence inside a
+/// blockquote, is an example; it does not rescue an orphan.
+#[test]
+fn an_indented_or_quoted_code_pointer_does_not_rescue_an_orphan() {
+    for pointer in [
+        "\n    [Hidden](resources/codex-hidden.md)\n",
+        "\n> ~~~md\n> [Hidden](resources/codex-hidden.md)\n> ~~~\n",
+    ] {
+        let mut files = skill_trees();
+        files
+            .get_mut("cf-herdr/SKILL.md")
+            .expect("cf-herdr")
+            .push_str(pointer);
+        files.insert(
+            "cf-herdr/resources/codex-hidden.md".into(),
+            "An unreachable duty.".into(),
+        );
+        let faults = structure_faults(&files, &Inventory::SHIPPED);
+        assert_eq!(
+            faults,
+            vec![
+                "cf-herdr/resources/codex-hidden.md is orphaned: no index entry or trigger reaches it"
+                    .to_string()
+            ],
+            "{pointer:?}"
+        );
+    }
+}
+
+/// T150-R2-2: table cells come from the parser, so an escaped pipe in a
+/// link label or a stray extra cell cannot hide an empty classification.
+#[test]
+fn an_escaped_pipe_or_extra_cell_does_not_hide_an_empty_classification() {
+    for row in [
+        "| [Versioned \\| codex contract](quality/codex-new.md) | |\n",
+        "| [New conditional section](quality/codex-new.md) | | stray |\n",
+    ] {
+        let mut files = skill_trees();
+        files
+            .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
+            .expect("quality index")
+            .push_str(row);
+        files.insert(
+            format!("{ORCH}/resources/quality/codex-new.md"),
+            "A duty needing a load trigger.".into(),
+        );
+        let faults = structure_faults(&files, &Inventory::SHIPPED);
+        assert!(
+            faults.contains(&format!(
+                "{ORCH}/resources/quality-contract.md: the index row for \
+                 {ORCH}/resources/quality/codex-new.md has no load classification"
+            )),
+            "{row:?}: {faults:?}"
+        );
+    }
+}
+
+/// T150-R2-2: a row of a `Read` index table that is not one section link and
+/// its classification fails instead of being skipped.
+#[test]
+fn a_malformed_index_row_fails() {
+    let mut files = skill_trees();
+    files
+        .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
+        .expect("quality index")
+        .push_str("| See [codex](quality/codex-new.md) too | every task |\n");
+    files.insert(
+        format!("{ORCH}/resources/quality/codex-new.md"),
+        "A duty.".into(),
+    );
+    let faults = structure_faults(&files, &Inventory::SHIPPED);
+    assert!(
+        faults.contains(&format!(
+            "{ORCH}/resources/quality-contract.md: the index row \
+             `| See [codex](quality/codex-new.md) too | every task |` is not one section \
+             link and its load classification"
+        )),
+        "{faults:?}"
+    );
+}
+
+/// T150-R2-3: a reference-style link, a link with a title and an
+/// angle-bracket destination to a missing file each fail like an inline link.
+#[test]
+fn every_link_form_to_a_missing_file_fails() {
+    for (instruction, target) in [
+        (
+            "\nBefore repairing a defect, read [the missing procedure][procedure].\n\n\
+             [procedure]: codex-missing.md\n",
+            "codex-missing.md",
+        ),
+        (
+            "\nBefore repairing a defect, read [the missing procedure](codex-missing.md \"Guide\").\n",
+            "codex-missing.md",
+        ),
+        (
+            "\nBefore repairing a defect, read [the missing procedure](<codex missing.md>).\n",
+            "codex missing.md",
+        ),
+    ] {
+        let mut files = skill_trees();
+        files
+            .get_mut(&format!("{ORCH}/resources/quality/findings.md"))
+            .expect("findings")
+            .push_str(instruction);
+        let faults = structure_faults(&files, &Inventory::SHIPPED);
+        assert!(
+            faults.iter().any(|fault| fault.starts_with(&format!(
+                "{ORCH}/resources/quality/findings.md names `{target}`, which is no shipped file"
+            ))),
+            "{instruction:?}: {faults:?}"
+        );
+    }
 }
 
 /// TSK-150 review (Fable finding 4): the Grok host detail is a reviewed

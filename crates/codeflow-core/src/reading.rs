@@ -19,8 +19,12 @@
 //! - the kernel check: the kernel names each chain entry point exactly;
 //! - the guideline numbers sizes are reported against.
 //!
-//! Only active Markdown counts as a read: fenced code (backtick or tilde
-//! fences) and HTML comments are examples or retired text, never a pointer.
+//! Markdown is read by a standard Markdown parser (`pulldown_cmark`, with
+//! tables), as a harness renders it. Only active content counts as a read: a link (inline,
+//! reference-style, titled or angle-bracketed) or a code span naming a
+//! reading file. Code blocks (fenced, indented or quoted), raw HTML and HTML
+//! comments are examples or retired text, never a pointer. Index rows come
+//! from the parser's table cells.
 //!
 //! Structure is the test's failure. Size is a reported measure with a
 //! guideline number, never a failure: the one byte check that still fails is
@@ -34,6 +38,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::path::Path;
+
+use pulldown_cmark::{Event, LinkType, Options, Parser, Tag, TagEnd};
 
 const KIB: usize = 1024;
 
@@ -653,134 +659,290 @@ fn normalized(value: &str) -> String {
     value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-/// The sentences of `text`, whitespace-normalized: split on blank lines,
-/// then after each ". ".
-fn sentences(text: &str) -> Vec<String> {
-    let mut found = Vec::new();
-    for paragraph in text.split("\n\n") {
-        let paragraph = normalized(paragraph);
-        for sentence in paragraph.split_inclusive(". ") {
-            found.push(sentence.trim().to_string());
-        }
-    }
-    found
+/// Whether a code span names a reading file: one token, no scheme.
+fn is_code_path(span: &str) -> bool {
+    !span.is_empty()
+        && !span.chars().any(char::is_whitespace)
+        && !span.contains("://")
+        && is_reading_file(span)
 }
 
-/// Link targets and backticked paths ending in `.md` or `.json`.
-fn path_references(sentence: &str) -> Vec<String> {
-    let is_path = |target: &str| {
-        !target.is_empty()
-            && !target.chars().any(char::is_whitespace)
-            && !target.contains("://")
-            && is_reading_file(target)
-    };
-    let mut found = Vec::new();
-    let mut rest = sentence;
-    while let Some(start) = rest.find("](") {
-        let after = &rest[start + 2..];
-        let end = after.find(')').unwrap_or(after.len());
-        let target = after[..end].split('#').next().unwrap_or_default();
-        if is_path(target) {
-            found.push(target.to_string());
-        }
-        rest = &after[end..];
+/// The reading file a link destination names, without its fragment, or
+/// `None` for an external, mail or same-page link or another kind of file.
+fn link_path(destination: &str) -> Option<String> {
+    if destination.contains("://") || destination.starts_with("mailto:") {
+        return None;
     }
-    for (index, span) in sentence.split('`').enumerate() {
-        if index % 2 == 1 && is_path(span) {
-            found.push(span.to_string());
-        }
-    }
-    found
+    let path = destination.split('#').next().unwrap_or_default();
+    (!path.is_empty() && is_reading_file(path)).then(|| path.to_string())
 }
 
-/// The opening or closing fence a line carries: its character (backtick or
-/// tilde) and length, at least three.
-fn fence(line: &str) -> Option<(char, usize)> {
-    let trimmed = line.trim_start();
-    let first = trimmed.chars().next().filter(|c| *c == '`' || *c == '~')?;
-    let length = trimmed.chars().take_while(|c| *c == first).count();
-    (length >= 3).then_some((first, length))
+/// The sentence of `block` that holds byte `at`, whitespace-normalized: a
+/// sentence ends after a full stop followed by whitespace.
+fn sentence_at(block: &str, at: usize) -> String {
+    let bytes = block.as_bytes();
+    let at = at.min(bytes.len());
+    let ends = |i: usize| bytes[i] == b'.' && bytes.get(i + 1).is_some_and(u8::is_ascii_whitespace);
+    let start = (0..at).rev().find(|&i| ends(i)).map_or(0, |i| i + 1);
+    let end = (at..bytes.len())
+        .find(|&i| ends(i))
+        .map_or(bytes.len(), |i| i + 1);
+    normalized(&block[start..end])
 }
 
-/// The active Markdown of `text`, one output line per input line: fenced
-/// code blocks and HTML comments are blanked, so an example or a retired
-/// pointer is never a read. A fence closes only on the same character, at
-/// least as long, with nothing after it; an unclosed fence runs to the end.
-fn active_markdown(text: &str) -> Vec<String> {
-    let mut active = Vec::new();
-    let mut open: Option<(char, usize)> = None;
-    let mut in_comment = false;
-    for line in text.lines() {
-        if let Some((character, length)) = open {
-            let closes = fence(line).is_some_and(|(c, l)| {
-                c == character
-                    && l >= length
-                    && line.trim_start()[l * c.len_utf8()..].trim().is_empty()
+/// A reading pointer in active Markdown: the sentence that holds it, as
+/// written, and the target it names.
+type Pointer = (String, String);
+
+/// A row of an index table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum IndexRow {
+    /// One section link and its load classification cell, as written.
+    Row {
+        target: String,
+        classification: String,
+    },
+    /// A row of a `Read` index table that is not one link and a
+    /// classification, as written.
+    Malformed(String),
+}
+
+/// What a Markdown file says, as the Markdown parser (with tables) reads
+/// it: its reading pointers, its index rows and its code spans. Code
+/// blocks (fenced, indented or quoted), raw HTML and HTML comments are
+/// inactive, so an example or a retired pointer is never a read.
+#[derive(Debug, Default)]
+struct Scan {
+    pointers: Vec<Pointer>,
+    rows: Vec<IndexRow>,
+    code_spans: Vec<String>,
+}
+
+/// A block whose source holds the sentences of the pointers inside it.
+struct Frame {
+    start: usize,
+    end: usize,
+    /// Where a list item's own text stops: its first nested block.
+    cut: Option<usize>,
+    item: bool,
+    found: Vec<(usize, String)>,
+}
+
+#[derive(Default)]
+struct Cell {
+    raw: String,
+    /// Each top-level link: the reading file it names, if any.
+    links: Vec<Option<String>>,
+    /// Content outside a link.
+    other: bool,
+}
+
+#[derive(Default)]
+struct TableScan {
+    header: Vec<Cell>,
+    row: Vec<Cell>,
+    in_cell: bool,
+    link_depth: usize,
+}
+
+struct Scanner<'t> {
+    text: &'t str,
+    frames: Vec<Frame>,
+    table: Option<TableScan>,
+    found: Vec<(usize, String, String)>,
+    scan: Scan,
+}
+
+/// Whether `tag` is inline, so it never ends a list item's own text.
+const fn is_inline(tag: &Tag<'_>) -> bool {
+    matches!(
+        tag,
+        Tag::Emphasis
+            | Tag::Strong
+            | Tag::Strikethrough
+            | Tag::Superscript
+            | Tag::Subscript
+            | Tag::Link { .. }
+            | Tag::Image { .. }
+    )
+}
+
+const fn is_frame(tag: &Tag<'_>) -> bool {
+    matches!(
+        tag,
+        Tag::Paragraph | Tag::Heading { .. } | Tag::Item | Tag::TableHead | Tag::TableRow
+    )
+}
+
+const fn ends_frame(tag: TagEnd) -> bool {
+    matches!(
+        tag,
+        TagEnd::Paragraph
+            | TagEnd::Heading(_)
+            | TagEnd::Item
+            | TagEnd::TableHead
+            | TagEnd::TableRow
+    )
+}
+
+impl<'t> Scanner<'t> {
+    fn new(text: &'t str) -> Self {
+        Self {
+            text,
+            frames: Vec::new(),
+            table: None,
+            found: Vec::new(),
+            scan: Scan::default(),
+        }
+    }
+
+    fn run(mut self) -> Scan {
+        let parser = Parser::new_ext(self.text, Options::ENABLE_TABLES);
+        for (event, range) in parser.into_offset_iter() {
+            match event {
+                Event::Start(tag) => self.start(&tag, range),
+                Event::End(tag) => self.end(tag, range),
+                Event::Code(code) => {
+                    self.content(true);
+                    if is_code_path(&code) {
+                        self.pointer(range, code.to_string());
+                    }
+                    self.scan.code_spans.push(code.to_string());
+                }
+                Event::Text(text) => self.content(!text.trim().is_empty()),
+                _ => {}
+            }
+        }
+        self.found.sort_by_key(|(at, _, _)| *at);
+        self.scan.pointers = self
+            .found
+            .into_iter()
+            .map(|(_, sentence, target)| (sentence, target))
+            .collect();
+        self.scan
+    }
+
+    /// Content at the top level of a table cell, outside any link.
+    fn content(&mut self, present: bool) {
+        if let Some(table) = self.table.as_mut() {
+            if present && table.in_cell && table.link_depth == 0 {
+                if let Some(cell) = table.row.last_mut() {
+                    cell.other = true;
+                }
+            }
+        }
+    }
+
+    fn pointer(&mut self, range: std::ops::Range<usize>, target: String) {
+        if let Some(frame) = self.frames.last_mut() {
+            frame.found.push((range.start, target));
+        } else {
+            let sentence = normalized(&self.text[range.clone()]);
+            self.found.push((range.start, sentence, target));
+        }
+    }
+
+    fn start(&mut self, tag: &Tag<'_>, range: std::ops::Range<usize>) {
+        if !is_inline(tag) {
+            if let Some(top) = self.frames.last_mut() {
+                if top.item && top.cut.is_none() {
+                    top.cut = Some(range.start);
+                }
+            }
+        }
+        if is_frame(tag) {
+            self.frames.push(Frame {
+                start: range.start,
+                end: range.end,
+                cut: None,
+                item: matches!(tag, Tag::Item),
+                found: Vec::new(),
             });
-            if closes {
-                open = None;
-            }
-            active.push(String::new());
-            continue;
         }
-        if !in_comment {
-            if let Some(found) = fence(line) {
-                open = Some(found);
-                active.push(String::new());
-                continue;
+        match tag {
+            Tag::Table(_) => self.table = Some(TableScan::default()),
+            Tag::TableCell => {
+                if let Some(table) = self.table.as_mut() {
+                    let raw = self.text[range].trim().trim_matches('|').trim();
+                    table.row.push(Cell {
+                        raw: raw.to_string(),
+                        ..Cell::default()
+                    });
+                    table.in_cell = true;
+                }
             }
-        }
-        let mut kept = String::new();
-        let mut rest = line;
-        loop {
-            if in_comment {
-                let Some(end) = rest.find("-->") else {
-                    break;
+            Tag::Link {
+                link_type,
+                dest_url,
+                ..
+            } => {
+                let target = if matches!(link_type, LinkType::Email) {
+                    None
+                } else {
+                    link_path(dest_url)
                 };
-                rest = &rest[end + 3..];
-                in_comment = false;
-            } else {
-                let Some(start) = rest.find("<!--") else {
-                    kept.push_str(rest);
-                    break;
-                };
-                kept.push_str(&rest[..start]);
-                rest = &rest[start + 4..];
-                in_comment = true;
+                if let Some(table) = self.table.as_mut().filter(|t| t.in_cell) {
+                    if table.link_depth == 0 {
+                        if let Some(cell) = table.row.last_mut() {
+                            cell.links.push(target.clone());
+                        }
+                    }
+                    table.link_depth += 1;
+                }
+                if let Some(target) = target {
+                    self.pointer(range, target);
+                }
             }
+            _ => {}
         }
-        active.push(kept);
     }
-    active
+
+    fn end(&mut self, tag: TagEnd, range: std::ops::Range<usize>) {
+        if ends_frame(tag) {
+            if let Some(frame) = self.frames.pop() {
+                let block = &self.text[frame.start..frame.cut.unwrap_or(frame.end)];
+                for (at, target) in frame.found {
+                    let sentence = sentence_at(block, at.saturating_sub(frame.start));
+                    self.found.push((at, sentence, target));
+                }
+            }
+        }
+        let Some(table) = self.table.as_mut() else {
+            return;
+        };
+        match tag {
+            TagEnd::Link if table.in_cell => table.link_depth = table.link_depth.saturating_sub(1),
+            TagEnd::TableCell => table.in_cell = false,
+            TagEnd::TableHead => table.header = std::mem::take(&mut table.row),
+            TagEnd::TableRow => {
+                let row = std::mem::take(&mut table.row);
+                let read_table =
+                    table.header.len() == 2 && table.header[1].raw.eq_ignore_ascii_case("read");
+                let target = row
+                    .first()
+                    .filter(|cell| !cell.other && cell.links.len() == 1)
+                    .and_then(|cell| cell.links[0].clone());
+                match (target, row.as_slice()) {
+                    (Some(target), [_, classification]) => self.scan.rows.push(IndexRow::Row {
+                        target,
+                        classification: classification.raw.clone(),
+                    }),
+                    _ if read_table => self
+                        .scan
+                        .rows
+                        .push(IndexRow::Malformed(normalized(&self.text[range]))),
+                    _ => {}
+                }
+            }
+            TagEnd::Table => self.table = None,
+            _ => {}
+        }
+    }
 }
 
-/// Active Markdown, split into sentences within each paragraph, list item
-/// and table row.
-fn reference_sentences(text: &str) -> Vec<String> {
-    let active = active_markdown(text);
-    let mut blocks: Vec<Vec<&str>> = Vec::new();
-    let mut current: Vec<&str> = Vec::new();
-    for line in &active {
-        let trimmed = line.trim_start();
-        let item = trimmed.starts_with("- ")
-            || trimmed.starts_with("* ")
-            || trimmed.starts_with("| ")
-            || trimmed
-                .split_once(". ")
-                .is_some_and(|(n, _)| !n.is_empty() && n.chars().all(|c| c.is_ascii_digit()));
-        if trimmed.is_empty() || item {
-            blocks.push(std::mem::take(&mut current));
-        }
-        if !trimmed.is_empty() {
-            current.push(line.as_str());
-        }
-    }
-    blocks.push(current);
-    blocks
-        .iter()
-        .filter(|block| !block.is_empty())
-        .flat_map(|block| sentences(&block.join("\n")))
-        .collect()
+/// Parse `text` as standard Markdown with tables.
+fn scan(text: &str) -> Scan {
+    Scanner::new(text).run()
 }
 
 fn join_path(dir: &str, target: &str) -> String {
@@ -829,18 +991,10 @@ fn resolve_reference(
     }
 }
 
-/// Every reading edge out of the Markdown file `path`: the sentence that
-/// holds it and the target it names, as written.
-fn edges(text: &str) -> Vec<(String, String)> {
-    reference_sentences(text)
-        .into_iter()
-        .flat_map(|sentence| {
-            path_references(&sentence)
-                .into_iter()
-                .map(move |target| (sentence.clone(), target))
-                .collect::<Vec<_>>()
-        })
-        .collect()
+/// Every reading edge out of the Markdown `text`: the sentence that holds it
+/// and the target it names, as written.
+fn edges(text: &str) -> Vec<Pointer> {
+    scan(text).pointers
 }
 
 // ---------------------------------------------------------------------------
@@ -1003,30 +1157,33 @@ pub fn reading_chain(files: &SkillFiles, inventory: &Inventory<'_>) -> ReadingCh
 /// The load classification that makes an index row a required read.
 const EVERY_TASK: &str = "every task";
 
-/// An index row: a two-cell table row whose first cell is exactly one link
-/// to a reading file. Returns the link target and the classification cell.
-fn index_row(line: &str) -> Option<(String, String)> {
-    let row = line.trim().strip_prefix('|')?.strip_suffix('|')?;
-    let cells: Vec<&str> = row.split('|').map(str::trim).collect();
-    let [section, classification] = cells.as_slice() else {
-        return None;
-    };
-    let (_, rest) = section.strip_prefix('[')?.split_once("](")?;
-    let target = rest.strip_suffix(')')?;
-    let target = target.split('#').next().unwrap_or_default();
-    is_reading_file(target).then(|| (target.to_string(), (*classification).to_string()))
-}
-
-/// Index rows in `path`: each needs a classification, and one other than
-/// "every task" needs a reviewed conditional read, so an empty or new
-/// classification is never silently read as required.
-fn index_faults(files: &SkillFiles, inventory: &Inventory<'_>, path: &str) -> Vec<String> {
+/// Index rows in `path` (see [`Scan`]): a row of a `Read` table must be one
+/// section link and its classification; each needs a classification, and
+/// one other than "every task" needs a reviewed conditional read, so an
+/// empty, malformed or new classification is never silently read as
+/// required.
+fn index_faults(
+    files: &SkillFiles,
+    inventory: &Inventory<'_>,
+    path: &str,
+    rows: &[IndexRow],
+) -> Vec<String> {
     let mut faults = Vec::new();
-    for line in active_markdown(&files[path]) {
-        let Some((target, classification)) = index_row(&line) else {
-            continue;
+    for row in rows {
+        let (target, classification) = match row {
+            IndexRow::Row {
+                target,
+                classification,
+            } => (target, classification),
+            IndexRow::Malformed(row) => {
+                faults.push(format!(
+                    "{path}: the index row `{row}` is not one section link and its \
+                     load classification"
+                ));
+                continue;
+            }
         };
-        let Ok(Some(resolved)) = resolve_reference(files, path, &target) else {
+        let Ok(Some(resolved)) = resolve_reference(files, path, target) else {
             continue;
         };
         if classification.is_empty() {
@@ -1069,8 +1226,9 @@ pub fn graph_faults(files: &SkillFiles, inventory: &Inventory<'_>) -> Vec<String
         let Some(text) = files.get(&path) else {
             continue;
         };
-        faults.extend(index_faults(files, inventory, &path));
-        for (sentence, target) in edges(text) {
+        let scanned = scan(text);
+        faults.extend(index_faults(files, inventory, &path, &scanned.rows));
+        for (sentence, target) in scanned.pointers {
             let resolved = match resolve_reference(files, &path, &target) {
                 Ok(Some(resolved)) => resolved,
                 Ok(None) => {
@@ -1136,7 +1294,8 @@ fn skill_entries(files: &SkillFiles) -> impl Iterator<Item = String> + '_ {
 /// its description; from there every active link or backticked path,
 /// required or conditional, reaches its target. A file nothing reaches is
 /// never read at the moment it is needed, so it is either dead or missing its
-/// trigger. A pointer in fenced code or an HTML comment reaches nothing.
+/// trigger. A pointer in a code block, raw HTML or an HTML comment reaches
+/// nothing.
 #[must_use]
 pub fn orphans(files: &SkillFiles) -> Vec<String> {
     let mut reached: BTreeSet<String> = BTreeSet::new();
@@ -1180,7 +1339,7 @@ pub fn structure_faults(files: &SkillFiles, inventory: &Inventory<'_>) -> Vec<St
 // The kernel
 // ---------------------------------------------------------------------------
 
-/// The entry points the kernel text names in active Markdown, keyed like
+/// The entry points the kernel text names in active code spans, keyed like
 /// [`SkillFiles`]: a skill invocation `` `/cf-x` `` names `cf-x/SKILL.md`,
 /// and an installed path `` `.claude/skills/<path>` `` or
 /// `` `.agents/skills/<path>` `` names `<path>` exactly. A child path never
@@ -1188,24 +1347,19 @@ pub fn structure_faults(files: &SkillFiles, inventory: &Inventory<'_>) -> Vec<St
 #[must_use]
 pub fn kernel_entries(kernel: &str) -> BTreeSet<String> {
     let mut named = BTreeSet::new();
-    for line in active_markdown(kernel) {
-        for (index, span) in line.split('`').enumerate() {
-            if index % 2 == 0 {
-                continue;
+    for span in scan(kernel).code_spans {
+        if let Some(skill) = span.strip_prefix('/') {
+            if !skill.is_empty()
+                && skill
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+            {
+                named.insert(format!("{skill}/SKILL.md"));
             }
-            if let Some(skill) = span.strip_prefix('/') {
-                if !skill.is_empty()
-                    && skill
-                        .chars()
-                        .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
-                {
-                    named.insert(format!("{skill}/SKILL.md"));
-                }
-            }
-            for installed in [".claude/skills/", ".agents/skills/"] {
-                if let Some(path) = span.strip_prefix(installed) {
-                    named.insert(path.to_string());
-                }
+        }
+        for installed in [".claude/skills/", ".agents/skills/"] {
+            if let Some(path) = span.strip_prefix(installed) {
+                named.insert(path.to_string());
             }
         }
     }
@@ -1358,26 +1512,87 @@ mod tests {
         assert_eq!(orphans(&tree), vec!["a/resources/lost.md".to_string()]);
     }
 
+    fn targets(text: &str) -> Vec<String> {
+        edges(text).into_iter().map(|(_, target)| target).collect()
+    }
+
     #[test]
-    fn fenced_code_and_comments_are_not_reads() {
+    fn code_blocks_raw_html_and_comments_are_not_reads() {
         let text = "Read [a](a.md).\n~~~markdown\nRead [b](b.md).\n```\nstill fenced [c](c.md)\n~~~\n\
-                    ````\n[d](d.md)\n```\n````\nx <!-- [e](e.md) --> [f](f.md)\n<!--\n[g](g.md)\n-->\n";
-        let targets: Vec<String> = edges(text).into_iter().map(|(_, t)| t).collect();
-        assert_eq!(targets, vec!["a.md".to_string(), "f.md".to_string()]);
+                    ````\n[d](d.md)\n```\n````\nx <!-- [e](e.md) --> [f](f.md)\n<!--\n[g](g.md)\n-->\n\
+                    \n    [h](h.md) indented code\n\n> ~~~md\n> [i](i.md)\n> ~~~\n\n\
+                    <div>\n[j](j.md)\n</div>\n\nA `k.md` span and ``l.md`` too.\n";
+        assert_eq!(targets(text), ["a.md", "f.md", "k.md", "l.md"]);
+    }
+
+    #[test]
+    fn every_link_form_names_its_target() {
+        let text = "Read [ref][r], [collapsed][], [shortcut], [titled](t.md \"Guide\"), \
+                    [angled](<a b.md>), [anchored](x.md#part) and `code/path.md`.\n\
+                    Not [external](https://example.com/x.md), [mail](mailto:x@y.md), \
+                    [same page](#x), `two words.md` or [a script](run.sh).\n\n\
+                    [r]: ref.md\n[collapsed]: collapsed.md\n[shortcut]: <short.md> \"t\"\n\
+                    [unused]: unused.md\n";
+        assert_eq!(
+            targets(text),
+            [
+                "ref.md",
+                "collapsed.md",
+                "short.md",
+                "t.md",
+                "a b.md",
+                "x.md",
+                "code/path.md"
+            ]
+        );
+    }
+
+    #[test]
+    fn a_pointer_keeps_the_sentence_that_holds_it() {
+        let text = "First. When it fails, read\n[notes](n.md). Last.\n\n\
+                    - Before a launch, read [launch](l.md)\n  - Nested, see [child](c.md).\n\n\
+                    | Section | Read |\n|---|---|\n| [Plan](p.md) | when planning |\n";
+        let found = edges(text);
+        let sentence = |target: &str| {
+            found
+                .iter()
+                .find(|(_, t)| t == target)
+                .map(|(s, _)| s.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(sentence("n.md"), "When it fails, read [notes](n.md).");
+        assert_eq!(sentence("l.md"), "- Before a launch, read [launch](l.md)");
+        assert_eq!(sentence("c.md"), "- Nested, see [child](c.md).");
+        assert_eq!(sentence("p.md"), "| [Plan](p.md) | when planning |");
     }
 
     #[test]
     fn an_index_row_is_one_link_and_a_classification() {
+        let text = "| Section | Read |\n|---|---|\n\
+                    | [Plan](quality/plan.md) | every task |\n\
+                    | [New](quality/new.md) | |\n\
+                    | [Versioned \\| plan](quality/v.md) | |\n\
+                    | [Extra](quality/e.md) | | stray |\n\
+                    | [Short](quality/s.md) |\n\
+                    | Plain text | every task |\n\
+                    | [Two](a.md) [links](b.md) | every task |\n\n\
+                    | File | Purpose | When |\n|---|---|---|\n| [a](a.md) | b | c |\n";
+        let row = |target: &str, classification: &str| IndexRow::Row {
+            target: target.into(),
+            classification: classification.into(),
+        };
         assert_eq!(
-            index_row("| [Plan](quality/plan.md) | every task |"),
-            Some(("quality/plan.md".into(), "every task".into()))
+            scan(text).rows,
+            [
+                row("quality/plan.md", "every task"),
+                row("quality/new.md", ""),
+                row("quality/v.md", ""),
+                row("quality/e.md", ""),
+                row("quality/s.md", ""),
+                IndexRow::Malformed("| Plain text | every task |".into()),
+                IndexRow::Malformed("| [Two](a.md) [links](b.md) | every task |".into()),
+            ]
         );
-        assert_eq!(
-            index_row("| [New](quality/new.md) | |"),
-            Some(("quality/new.md".into(), String::new()))
-        );
-        assert_eq!(index_row("| Section | Read |"), None);
-        assert_eq!(index_row("| [a](a.md) | b | c |"), None);
     }
 
     #[test]
@@ -1458,5 +1673,74 @@ mod tests {
         };
         assert!(big.over());
         assert_eq!(big.to_string(), "cf-herdr 9217 of 9216 bytes");
+    }
+    /// Shipped files frozen as they stood when the scanner moved to the
+    /// Markdown parser, keyed as they install.
+    const CORPUS: &[(&str, &str)] = &[
+        (
+            "cf-model-orchestrator/SKILL.md",
+            include_str!("../tests/fixtures/reading-corpus/cf-model-orchestrator--SKILL.md"),
+        ),
+        (
+            "cf-model-orchestrator/resources/quality-contract.md",
+            include_str!(
+                "../tests/fixtures/reading-corpus/cf-model-orchestrator--resources--quality-contract.md"
+            ),
+        ),
+        (
+            "cf-model-orchestrator/resources/capability-routing.md",
+            include_str!(
+                "../tests/fixtures/reading-corpus/cf-model-orchestrator--resources--capability-routing.md"
+            ),
+        ),
+        (
+            "cf-model-orchestrator/resources/grok-host.md",
+            include_str!(
+                "../tests/fixtures/reading-corpus/cf-model-orchestrator--resources--grok-host.md"
+            ),
+        ),
+        (
+            "cf-model-orchestrator/resources/routing/hosts.md",
+            include_str!(
+                "../tests/fixtures/reading-corpus/cf-model-orchestrator--resources--routing--hosts.md"
+            ),
+        ),
+    ];
+
+    /// The switch to the parser changed no shipped reading: on the frozen
+    /// corpus it finds every edge with the sentence that holds it, every index
+    /// row and every kernel entry that the line scanner it replaced found
+    /// (`expected.tsv`, recorded from that scanner). The whole shipped tree
+    /// matched the same way at the switch; this corpus keeps the proof.
+    #[test]
+    fn the_parser_reads_the_frozen_corpus_as_the_line_scanner_did() {
+        let kernel = include_str!("../tests/fixtures/reading-corpus/AGENTS.md.tmpl");
+        let expected = include_str!("../tests/fixtures/reading-corpus/expected.tsv");
+        let mut found = Vec::new();
+        for (path, text) in CORPUS {
+            let scanned = scan(text);
+            for (sentence, target) in scanned.pointers {
+                found.push(format!("EDGE\t{path}\t{target}\t{sentence}"));
+            }
+            for row in scanned.rows {
+                let IndexRow::Row {
+                    target,
+                    classification,
+                } = row
+                else {
+                    panic!("{path}: malformed index row {row:?}");
+                };
+                found.push(format!("ROW\t{path}\t{target}\t{classification}"));
+            }
+        }
+        for entry in kernel_entries(kernel) {
+            found.push(format!("KERNEL\t{entry}"));
+        }
+        // Order carries no meaning: the line scanner listed a sentence's links
+        // before its code spans, the parser lists them by position.
+        found.sort();
+        let mut expected: Vec<&str> = expected.lines().collect();
+        expected.sort_unstable();
+        assert_eq!(found, expected);
     }
 }
