@@ -115,6 +115,8 @@ pub fn check(git: &Git, registry: Option<&str>) -> Result<Report, IdsError> {
 /// Reconcile every ref's records with the registry (R-21).
 fn reconcile(git: &Git, ledger: &Ledger, report: &mut Report) -> Result<(), IdsError> {
     let mut intro_cache: HashMap<String, BTreeMap<RegId, String>> = HashMap::new();
+    let mut landing_cache: HashMap<(RegId, String), Option<String>> = HashMap::new();
+    let tips = inventory::landing_tips(git)?;
     let mut unplaced: BTreeMap<String, Vec<String>> = BTreeMap::new();
     for records in inventory::on_every_ref(git)? {
         let name = branch_name(&records.refname).to_string();
@@ -141,8 +143,8 @@ fn reconcile(git: &Git, ledger: &Ledger, report: &mut Report) -> Result<(), IdsE
                             inventory::introductions(git, &records.sha)?,
                         );
                     }
-                    let intro = intro_cache[&records.sha].get(&copy.id);
-                    let known = intro.is_some_and(|intro| {
+                    let intro = intro_cache[&records.sha].get(&copy.id).cloned();
+                    let known = intro.as_ref().is_some_and(|intro| {
                         entry.introduced_sha() == Some(intro.as_str())
                             || entry.mapped.iter().any(|sha| sha == intro)
                             || entry.landed_sha() == Some(intro.as_str())
@@ -150,10 +152,29 @@ fn reconcile(git: &Git, ledger: &Ledger, report: &mut Report) -> Result<(), IdsE
                     if known {
                         continue;
                     }
+                    // R-111: a copy whose own nonempty landing equals the
+                    // entry's nonempty `landed` is a replica, the same join
+                    // seed made (a cherry-pick or rewrite of the landed file).
+                    if let (Some(intro), Some(landed)) = (&intro, entry.landed_sha()) {
+                        let key = (copy.id.clone(), intro.clone());
+                        if !landing_cache.contains_key(&key) {
+                            let found = inventory::landed_among(
+                                git,
+                                &tips,
+                                &copy.id,
+                                intro,
+                                &mut intro_cache,
+                            )?;
+                            landing_cache.insert(key.clone(), found);
+                        }
+                        if landing_cache[&key].as_deref() == Some(landed) {
+                            continue;
+                        }
+                    }
                     format!(
                         "{} on {name} has no uid and its introduction {} matches neither `introduced`, `mapped` nor `landed` of the registry entry",
                         copy.id,
-                        intro.map_or("unknown", |sha| short(sha))
+                        intro.as_deref().map_or("unknown", short)
                     )
                 }
             };

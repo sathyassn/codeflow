@@ -153,6 +153,7 @@ pub fn set_status(
         ChangeContext {
             base: base.as_ref(),
             changed_paths: paths.as_deref(),
+            reopened: None,
         },
     );
     if !verdict.is_clean() {

@@ -538,6 +538,49 @@ pub fn parse_cancellation(body: &str) -> Cancellation {
     }
 }
 
+/// The phrase R-101 requires where evidence is gone.
+pub const HISTORICAL_EVIDENCE_UNAVAILABLE: &str = "historical evidence unavailable";
+
+/// The landing merge named by the historical acceptance form of R-101, for
+/// a task completed before the migration baseline: a Closeout item
+/// `- acceptance: historical evidence unavailable; ...` (it may wrap) that
+/// names the merge that landed the work as ``merge `<sha>` ``. `None` when
+/// the Closeout has no such item. The form is structural, as R-60 is: it
+/// does not resolve the merge.
+#[must_use]
+pub fn historical_acceptance(body: &str) -> Option<String> {
+    let lines = section_text(body, "## Closeout")?;
+    let mut items: Vec<String> = Vec::new();
+    for line in &lines {
+        let trimmed = line.trim_start();
+        if let Some(item) = trimmed.strip_prefix("- ") {
+            items.push(item.to_string());
+        } else if line.starts_with(char::is_whitespace) && !trimmed.is_empty() {
+            if let Some(last) = items.last_mut() {
+                last.push(' ');
+                last.push_str(trimmed);
+            }
+        } else {
+            items.push(String::new());
+        }
+    }
+    items.iter().find_map(|item| {
+        let (key, value) = item.split_once(':')?;
+        if !key.trim().eq_ignore_ascii_case("acceptance")
+            || !value.contains(HISTORICAL_EVIDENCE_UNAVAILABLE)
+        {
+            return None;
+        }
+        value.split("merge `").skip(1).find_map(|rest| {
+            let sha = rest.split('`').next()?;
+            (rest.contains('`')
+                && (7..=40).contains(&sha.len())
+                && sha.chars().all(|c| c.is_ascii_hexdigit()))
+            .then(|| sha.to_string())
+        })
+    })
+}
+
 /// The reopen reasons of a Closeout: `- reopened: <reason>` lines, written
 /// when a task completed before the migration (no acceptance block) reopens.
 #[must_use]

@@ -18,15 +18,15 @@
 //! a range whose base predates it judges older records from their baseline
 //! blobs.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use git2::{Repository, TreeWalkMode, TreeWalkResult};
 
 use super::record_text::{
-    acceptance_blocks, check_acceptance, check_block, outcome_word, parse_blocker,
-    parse_cancellation, parse_criteria, reopen_reasons, AcceptanceBlock, CriteriaList, Criterion,
-    FencedAcceptance,
+    acceptance_blocks, check_acceptance, check_block, historical_acceptance, outcome_word,
+    parse_blocker, parse_cancellation, parse_criteria, reopen_reasons, AcceptanceBlock,
+    CriteriaList, Criterion, FencedAcceptance,
 };
 use super::work_start::{record_kind_for_tree_path, RecordKind};
 use super::{is_legacy_task_format_id, is_valid_epic_format_id, is_valid_spec_format_id};
@@ -377,15 +377,22 @@ impl Baseline {
             .collect()
     }
 
-    /// Whether the record's bytes equal its copy in any listed baseline.
+    /// Whether the record's bytes equal its copy in any listed baseline,
+    /// before or after `ids backfill` added its `uid` line. The backfill is
+    /// part of the migration (R-3, R-25): it brings the record under the uid
+    /// checks, which judge that line on their own (R-2), and leaves the
+    /// exception bound to the rest of the blob (R-83).
     fn is_legacy_blob(&self, record: &RecordView) -> bool {
         match self {
-            Self::Available { graphs, .. } => graphs.iter().any(|graph| {
-                graph
-                    .records
-                    .get(&record.id)
-                    .is_some_and(|old| old.content == record.content)
-            }),
+            Self::Available { graphs, .. } => {
+                let backfilled = without_backfilled_uid(&record.content);
+                graphs.iter().any(|graph| {
+                    graph.records.get(&record.id).is_some_and(|old| {
+                        old.content == record.content
+                            || backfilled.as_deref() == Some(old.content.as_str())
+                    })
+                })
+            }
             _ => false,
         }
     }
@@ -397,6 +404,33 @@ impl Baseline {
             Self::Refused(reasons) => reasons.clone(),
             _ => Vec::new(),
         }
+    }
+
+    /// Whether a baseline copy of the record is already complete: a task
+    /// completed before the migration (R-83), whose Closeout may carry the
+    /// historical form of R-101 instead of an acceptance block.
+    fn completed_before(&self, record: &RecordView) -> bool {
+        self.copies(&record.id)
+            .iter()
+            .any(|old| old.status == "complete")
+    }
+
+    /// Completed before the migration and reopened since. A reopen of a
+    /// record without an acceptance block adds a `- reopened:` line (R-30),
+    /// so more reopen lines than every complete baseline copy has means a
+    /// reopen after the baseline: its re-completion applies the new rules
+    /// in full (R-83).
+    fn reopened_since(&self, record: &RecordView) -> bool {
+        let reopens = reopen_reasons(&record.body).len();
+        let copies: Vec<&RecordView> = self
+            .copies(&record.id)
+            .into_iter()
+            .filter(|old| old.status == "complete")
+            .collect();
+        !copies.is_empty()
+            && copies
+                .iter()
+                .all(|old| reopen_reasons(&old.body).len() < reopens)
     }
 
     /// Whether a record was created after every baseline.
@@ -435,6 +469,30 @@ impl Baseline {
             }
         }
     }
+}
+
+/// `content` without the frontmatter `uid:` line `ids backfill` writes, or
+/// `None` when its frontmatter has no such line.
+fn without_backfilled_uid(content: &str) -> Option<String> {
+    let mut lines = content.split_inclusive('\n');
+    let first = lines.next()?;
+    if first.trim_end() != "---" {
+        return None;
+    }
+    let mut out = String::from(first);
+    let (mut removed, mut closed) = (false, false);
+    for line in lines {
+        if !closed {
+            if line.trim_end() == "---" {
+                closed = true;
+            } else if !removed && line.starts_with("uid:") {
+                removed = true;
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    (removed && closed).then_some(out)
 }
 
 fn resolve_commit(repo: &Repository, revision: &str) -> Option<git2::Oid> {
@@ -629,6 +687,10 @@ impl Verdict {
 pub struct ChangeContext<'a> {
     pub base: Option<&'a Graph>,
     pub changed_paths: Option<&'a [String]>,
+    /// Records whose status left `complete` at some commit of the range,
+    /// judged per commit so a reopen and re-completion inside one range is
+    /// still seen (R-83).
+    pub reopened: Option<&'a BTreeSet<String>>,
 }
 
 /// Paths a planning-only change may touch (R-70).
@@ -805,7 +867,15 @@ fn same_block_content(old: &FencedAcceptance, new: &FencedAcceptance) -> bool {
 // ---------------------------------------------------------------------------
 
 /// What the record's current status requires (R-30, R-32, R-33, R-50, R-60).
-fn state_problems(record: &RecordView, graph: &Graph, is_new: bool) -> Vec<String> {
+///
+/// `historical` says the record was already complete at the migration
+/// baseline and has had no transition or criteria change since (R-83).
+fn state_problems(
+    record: &RecordView,
+    graph: &Graph,
+    is_new: bool,
+    historical: bool,
+) -> Vec<String> {
     let mut problems = Vec::new();
     if !record.is_legacy() && record.kind != RecordKind::Spec {
         problems.extend(record.criteria.errors.iter().cloned());
@@ -816,7 +886,7 @@ fn state_problems(record: &RecordView, graph: &Graph, is_new: bool) -> Vec<Strin
         }
     }
     match record.kind {
-        RecordKind::Task => problems.extend(task_state_problems(record, graph)),
+        RecordKind::Task => problems.extend(task_state_problems(record, graph, historical)),
         RecordKind::Epic => problems.extend(epic_state_problems(record, graph)),
         RecordKind::Spec => {
             match &record.open_questions {
@@ -840,7 +910,7 @@ fn state_problems(record: &RecordView, graph: &Graph, is_new: bool) -> Vec<Strin
     problems
 }
 
-fn task_state_problems(task: &RecordView, graph: &Graph) -> Vec<String> {
+fn task_state_problems(task: &RecordView, graph: &Graph, historical: bool) -> Vec<String> {
     let mut problems = Vec::new();
     match task.status.as_str() {
         "blocked" => match parse_blocker(&task.body) {
@@ -855,7 +925,7 @@ fn task_state_problems(task: &RecordView, graph: &Graph) -> Vec<String> {
         },
         "cancelled" => problems.extend(cancellation_problems(task)),
         "complete" if !task.is_legacy() => {
-            problems.extend(completion_problems(task));
+            problems.extend(completion_problems(task, historical));
             for (spec, successor) in superseded_specs(task, graph) {
                 problems.push(format!(
                     "acceptance cannot cite superseded spec {spec}; move the task to {successor}"
@@ -885,10 +955,18 @@ fn cancellation_problems(record: &RecordView) -> Vec<String> {
 }
 
 /// A complete task carries one active acceptance block that passes the
-/// structural rules of R-60.
-fn completion_problems(record: &RecordView) -> Vec<String> {
+/// structural rules of R-60. A task completed before the migration baseline
+/// may instead carry the historical form of R-101: its evidence is gone, so
+/// the Closeout says so and names the landing merge, and nothing is
+/// reconstructed.
+fn completion_problems(record: &RecordView, historical: bool) -> Vec<String> {
     let active = record.active_blocks();
     match active.as_slice() {
+        [] if historical && historical_acceptance(&record.body).is_some() => Vec::new(),
+        [] if historical => vec![
+            "a complete record needs an acceptance block in its Closeout, or, completed before the migration baseline, an item `- acceptance: historical evidence unavailable; ...` that names the landing merge as merge `<sha>`"
+                .into(),
+        ],
         [] => vec!["a complete record needs an acceptance block in its Closeout".into()],
         [block] => match &block.parsed {
             Ok(parsed) => check_acceptance(parsed, &record.criteria.items),
@@ -1283,7 +1361,11 @@ pub fn judge_change(
         &after.path,
         context_problems(before, after, context),
     );
-    let mode = if before.is_none_or(|old| significant_change(old, after)) {
+    let reopened = baseline.reopened_since(after)
+        || context
+            .reopened
+            .is_some_and(|reopened| reopened.contains(&after.id));
+    let mode = if reopened || before.is_none_or(|old| significant_change(old, after)) {
         Mode::Strict
     } else {
         baseline.mode(after)
@@ -1292,7 +1374,12 @@ pub fn judge_change(
         mode,
         &after.path,
         // A record the change adds is new whatever history the checkout has.
-        state_problems(after, graph, before.is_none() || baseline.is_new(after)),
+        state_problems(
+            after,
+            graph,
+            before.is_none() || baseline.is_new(after),
+            mode != Mode::Strict && baseline.completed_before(after),
+        ),
     );
     verdict.apply(
         Mode::Strict,
@@ -1346,9 +1433,11 @@ fn judge_range_against(
         }
     }
     let paths = changed_paths(&repo, base, head)?;
+    let reopened = reopened_in_range(&repo, base, head, &after, &base_graph);
     let context = ChangeContext {
         base: Some(&before),
         changed_paths: Some(&paths),
+        reopened: Some(&reopened),
     };
     let mut verdict = Verdict {
         notices,
@@ -1377,6 +1466,69 @@ fn judge_range_against(
     }
     verdict.sort();
     Ok(verdict)
+}
+
+/// The complete tasks without an acceptance block whose status was not
+/// `complete` at some commit between `base` and `head` (or `HEAD` for the
+/// working tree): each commit is read, not only the range's endpoints, so
+/// a reopen and a re-completion inside one range cannot pass as the
+/// historical form of R-101. Only candidates for that form are walked.
+fn reopened_in_range(
+    repo: &Repository,
+    base: &str,
+    head: Option<&str>,
+    after: &Graph,
+    base_graph: &Graph,
+) -> BTreeSet<String> {
+    let candidates: Vec<&RecordView> = after
+        .records
+        .values()
+        .filter(|record| record.kind == RecordKind::Task && record.status == "complete")
+        .filter(|record| record.active_blocks().is_empty())
+        .filter(|record| {
+            base_graph
+                .records
+                .get(&record.id)
+                .is_none_or(|old| old.content != record.content)
+        })
+        .collect();
+    let mut reopened = BTreeSet::new();
+    if candidates.is_empty() {
+        return reopened;
+    }
+    let (Some(base), Some(tip)) = (
+        resolve_commit(repo, base),
+        resolve_commit(repo, head.unwrap_or("HEAD")),
+    ) else {
+        return reopened;
+    };
+    let Ok(mut walk) = repo.revwalk() else {
+        return reopened;
+    };
+    if walk.push(tip).is_err() || walk.hide(base).is_err() {
+        return reopened;
+    }
+    for oid in walk.flatten() {
+        let Ok(tree) = repo.find_commit(oid).and_then(|commit| commit.tree()) else {
+            continue;
+        };
+        for record in &candidates {
+            let status = tree
+                .get_path(Path::new(&record.path))
+                .and_then(|entry| entry.to_object(repo))
+                .ok()
+                .and_then(|object| object.into_blob().ok())
+                .and_then(|blob| {
+                    let text = String::from_utf8_lossy(blob.content()).into_owned();
+                    RecordView::parse(record.kind, &record.path, &text).ok()
+                })
+                .map(|view| view.status);
+            if status.is_some_and(|status| status != "complete") {
+                reopened.insert(record.id.clone());
+            }
+        }
+    }
+    reopened
 }
 
 /// Every path a change touches, from `base` to `head` (a revision), or to
@@ -1501,10 +1653,22 @@ pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
     verdict.warnings.extend(baseline.warning());
     verdict.errors.extend(baseline.errors());
     for record in graph.records.values() {
+        // A reopen after the baseline is a transition: the record is judged
+        // in full from then on (R-83).
+        let mode = if baseline.reopened_since(record) {
+            Mode::Strict
+        } else {
+            baseline.mode(record)
+        };
         verdict.apply(
-            baseline.mode(record),
+            mode,
             &record.path,
-            state_problems(record, &graph, baseline.is_new(record)),
+            state_problems(
+                record,
+                &graph,
+                baseline.is_new(record),
+                mode != Mode::Strict && baseline.completed_before(record),
+            ),
         );
         verdict.apply(
             Mode::Strict,
@@ -1568,11 +1732,10 @@ fn stale_warnings(repo_root: &Path, graph: &Graph) -> Vec<String> {
             }
             RecordKind::Spec => {
                 let state = derived_spec_state(record, graph, None);
+                // An approved spec whose consumers are all done is healthy:
+                // `implemented` is its derived state, never written (R-32,
+                // R-51). Only states that disagree with the consumers warn.
                 match (record.status.as_str(), state) {
-                    ("approved", SpecState::Implemented) => warnings.push(format!(
-                        "{}: stale status: approved spec whose consumers are all accepted; its derived state is implemented",
-                        record.path
-                    )),
                     ("approved", SpecState::NoDeliveringConsumer) => {
                         warnings.push(format!("{}: no delivering consumer", record.path));
                     }

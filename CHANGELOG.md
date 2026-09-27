@@ -192,6 +192,18 @@ publication date._
   `git.work_records` key accepts `block` or `warn`; upgrade the `codeflow` on
   `PATH` before `codeflow update`, since an older binary rejects the key.
 
+<!-- codeflow:release-impact patch -->
+- **Record checks without false alarms.** `validate` no longer warns on an
+  approved spec whose consumers are all done: `implemented` is its derived
+  state and is never written, so that is the healthy state; a spec with no
+  delivering consumer, or a written `implemented` the consumers do not
+  show, still warns. A task completed before the `work_records_baseline`,
+  and not reopened since, may carry a Closeout item
+  `- acceptance: historical evidence unavailable; ...` naming its landing
+  merge in place of an acceptance block. `ids check` judges a copy of a
+  record on a branch that never landed by where that copy landed, and a
+  backfilled `uid` alone no longer costs a record its baseline exemption.
+
 <!-- codeflow:release-impact minor -->
 - **cf-present from the agent sandbox.** The Claude settings presets add
   one sandbox write root, the per-user `codeflow present` state directory

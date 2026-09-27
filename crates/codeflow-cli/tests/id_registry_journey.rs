@@ -703,3 +703,126 @@ fn ci_refuses_a_different_record_that_reuses_a_registered_number() {
         text(&range)
     );
 }
+
+fn write_task(root: &Path, title: &str) {
+    let task = root.join("project-management/tasks/TSK-001.md");
+    std::fs::create_dir_all(task.parent().unwrap()).unwrap();
+    std::fs::write(
+        &task,
+        format!("---\nid: TSK-001\ntitle: \"{title}\"\nstatus: todo\n---\n\n# {title}\n"),
+    )
+    .unwrap();
+}
+
+/// TSK-109, through the CLI: a shallow clone neither seeds nor checks until
+/// it is unshallowed (R-111), and after the seed `ids check` accepts a
+/// rewritten copy of the landed record by its landing, as seed joined it,
+/// while a different record under the id warns off a landing line and
+/// fails the check on one.
+#[test]
+fn a_shallow_clone_is_refused_and_ids_check_judges_copies_by_their_landing() {
+    let dir = tempfile::tempdir().unwrap();
+    let bare = dir.path().join("remote.git");
+    git(
+        dir.path(),
+        &["init", "-q", "--bare", "-b", "main", "remote.git"],
+    );
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    git(&root, &["remote", "add", "origin", bare.to_str().unwrap()]);
+    std::fs::write(root.join("readme"), "seed\n").unwrap();
+    commit(&root, "chore: root");
+    let root_commit = git(&root, &["rev-parse", "HEAD"]);
+    write_task(&root, "landed");
+    commit(&root, "docs: land the record");
+    write_task(&root, "landed and edited");
+    commit(&root, "docs: edit the record");
+    git(&root, &["push", "-q", "origin", "main"]);
+
+    // A depth-one clone would take the edit for the introduction: refused.
+    let url = format!("file://{}", bare.display());
+    git(
+        dir.path(),
+        &["clone", "-q", "--depth", "1", &url, "shallow"],
+    );
+    let shallow = dir.path().join("shallow");
+    let seed = codeflow(&shallow, &["ids", "seed"]);
+    assert!(!seed.status.success(), "{}", text(&seed));
+    assert!(
+        text(&seed).contains("git fetch --unshallow"),
+        "{}",
+        text(&seed)
+    );
+    assert!(
+        !run_git(
+            &bare,
+            &[
+                "rev-parse",
+                "--verify",
+                "-q",
+                "refs/heads/codeflow/registry"
+            ]
+        )
+        .status
+        .success(),
+        "a shallow seed wrote nothing"
+    );
+    let check = codeflow(&shallow, &["ids", "check"]);
+    assert!(!check.status.success(), "{}", text(&check));
+    assert!(
+        text(&check).contains("git fetch --unshallow"),
+        "{}",
+        text(&check)
+    );
+
+    // The full clone seeds; a rewritten copy of the landed file on another
+    // commit is the same record, judged by its landing.
+    ok(&codeflow(&root, &["ids", "seed"]), "ids seed");
+    git(
+        &root,
+        &["switch", "-q", "-c", "feat/rewritten", &root_commit],
+    );
+    write_task(&root, "landed");
+    commit(&root, "docs: the record, rewritten");
+    git(&root, &["switch", "-q", "main"]);
+    let check = ok(&codeflow(&root, &["ids", "check"]), "ids check");
+    assert!(!check.contains("collision"), "{check}");
+
+    // A different record under the id warns off a landing line ...
+    git(&root, &["switch", "-q", "-c", "feat/other", &root_commit]);
+    write_task(&root, "other work");
+    commit(&root, "docs: other work");
+    git(&root, &["switch", "-q", "main"]);
+    let check = ok(&codeflow(&root, &["ids", "check"]), "ids check");
+    assert!(
+        check.contains("collision: TSK-001 on feat/other"),
+        "{check}"
+    );
+    assert!(!check.contains("feat/rewritten"), "{check}");
+    // ... and fails the check on one.
+    git(&root, &["branch", "-q", "integration/other", "feat/other"]);
+    let check = codeflow(&root, &["ids", "check"]);
+    assert!(!check.status.success(), "{}", text(&check));
+    assert!(
+        text(&check).contains("collision: TSK-001 on integration/other"),
+        "{}",
+        text(&check)
+    );
+
+    // Unshallowed, the clone checks like any other.
+    git(&shallow, &["fetch", "-q", "--unshallow"]);
+    git(
+        &shallow,
+        &[
+            "fetch",
+            "-q",
+            "origin",
+            "refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry",
+        ],
+    );
+    ok(
+        &codeflow(&shallow, &["ids", "check"]),
+        "ids check after unshallow",
+    );
+}
