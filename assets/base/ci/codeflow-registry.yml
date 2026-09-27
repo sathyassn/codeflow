@@ -1,0 +1,78 @@
+# codeflow registry: the enforcing check of the shared id registry
+# (CodeFlow SPC-013 R-14, R-20, R-109; ADR-0072). Written by `codeflow init`
+# and managed by `codeflow update`.
+#
+# Why pull_request_target: GitHub then runs this workflow as it is on the
+# TARGET branch, so a pull request cannot edit, skip or replace the check
+# that judges it (under `pull_request` a PR that rewrote this step went green
+# on a damaged registry). The job reads the PR head only as git data: it
+# never checks it out, builds it or runs anything from it. The token is read
+# only and no secret is used. Build and test jobs stay in codeflow-ci.yml on
+# `pull_request`.
+#
+# With durable work tracking off, `codeflow ids check` passes with a note.
+#
+# The "Install codeflow" step is a PLACEHOLDER like the one in codeflow-ci.yml:
+# until it installs the target-pinned codeflow release, this check fails RED
+# by design.
+name: codeflow-registry
+
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened]
+  push:
+    branches: [main, master, "integration/**"]
+  schedule:
+    - cron: "23 4 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  registry:
+    name: id registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      # The target branch (never the PR head): its policy and this workflow.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install codeflow
+        run: |
+          # PLACEHOLDER: install the codeflow release pinned by the target branch.
+          echo "::error::codeflow install step is an unwired PLACEHOLDER: the registry check below fails RED until you replace this with the real installer. The perimeter is intentionally not armed."
+
+      # The registry is fetched explicitly with full history, never forced
+      # (R-20); the PR head is fetched as data only.
+      - name: Fetch the registry and the pull request head
+        env:
+          EVENT: ${{ github.event_name }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+        run: |
+          if git ls-remote --exit-code --heads origin codeflow/registry >/dev/null; then
+            git fetch --no-tags origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
+          else
+            echo "codeflow/registry is not on origin; the check reports it when records are tracked"
+          fi
+          if [ "$EVENT" = pull_request_target ]; then
+            git fetch --no-tags origin "refs/pull/${PR_NUMBER}/head:refs/remotes/pr/head"
+          fi
+
+      - name: codeflow ids check
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if ! command -v codeflow >/dev/null 2>&1; then
+            echo "::error::codeflow not installed, so the registry check cannot run. The perimeter is not armed; failing red. Wire the Install codeflow step above."
+            exit 1
+          fi
+          if [ "$EVENT" = pull_request_target ]; then
+            codeflow ids check --base "$BASE_SHA" --head refs/remotes/pr/head
+          else
+            codeflow ids check
+          fi

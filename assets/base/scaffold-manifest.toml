@@ -1180,6 +1180,12 @@ ownership = "managed"
 tiers = ["minimal", "standard", "full"]
 
 [[entry]]
+src = "ci/codeflow-registry.yml"
+dest = ".github/workflows/codeflow-registry.yml"
+ownership = "managed"
+tiers = ["minimal", "standard", "full"]
+
+[[entry]]
 src = "ci/pull_request_template.md"
 dest = ".github/pull_request_template.md"
 ownership = "managed"
