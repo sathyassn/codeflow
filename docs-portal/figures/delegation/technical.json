@@ -287,9 +287,20 @@
           "id": "p3"
         },
         {
-          "text": "restart, resume, compaction, stray event",
-          "x": 380,
+          "text": "restart, resume, compaction,",
+          "x": 397,
           "y": 154,
+          "style": "mute",
+          "for": [
+            "p1",
+            "p2",
+            "p3"
+          ]
+        },
+        {
+          "text": "stray event, interrupted wait",
+          "x": 397,
+          "y": 175,
           "style": "mute",
           "for": [
             "p1",
@@ -324,7 +335,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 316,
+      "height": 337,
       "draw": [
         {
           "state": "state",
@@ -426,14 +437,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M60 217V255",
+          "d": "M60 217V276",
           "head": "end",
           "id": "t4"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M130 217V243H265V255",
+          "d": "M130 217V264H265V276",
           "head": "end",
           "id": "t5"
         },
@@ -441,7 +452,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 258,
+          "y": 279,
           "w": 150,
           "h": 50,
           "rx": 8,
@@ -450,7 +461,7 @@
         {
           "text": "completed",
           "x": 83,
-          "y": 281,
+          "y": 302,
           "anchor": "middle",
           "for": [
             "co"
@@ -459,7 +470,7 @@
         {
           "text": "exit 0",
           "x": 83,
-          "y": 302,
+          "y": 323,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -470,7 +481,7 @@
           "state": "state",
           "shape": "rect",
           "x": 190,
-          "y": 258,
+          "y": 279,
           "w": 150,
           "h": 50,
           "rx": 8,
@@ -479,7 +490,7 @@
         {
           "text": "failed",
           "x": 265,
-          "y": 281,
+          "y": 302,
           "anchor": "middle",
           "for": [
             "fa"
@@ -488,7 +499,7 @@
         {
           "text": "exit 10",
           "x": 265,
-          "y": 302,
+          "y": 323,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -568,9 +579,20 @@
           ]
         },
         {
-          "text": "stray event",
+          "text": "stray event,",
           "x": 212,
           "y": 227,
+          "style": "mute",
+          "for": [
+            "p1",
+            "p2",
+            "p3"
+          ]
+        },
+        {
+          "text": "interrupted wait",
+          "x": 212,
+          "y": 248,
           "style": "mute",
           "for": [
             "p1",
@@ -639,9 +661,9 @@
           "10"
         ],
         [
-          "any",
+          "ready, armed or accepted",
           "poisoned",
-          "a restarted, resumed or compacted session, or an unmatched event",
+          "a restarted, resumed or compacted session, an unmatched event, or a wait interrupted after acceptance",
           "11"
         ],
         [

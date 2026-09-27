@@ -121,7 +121,7 @@
         {
           "text": "close",
           "x": 198,
-          "y": 100,
+          "y": 77,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -341,9 +341,9 @@
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M136 48V56H236V208H150",
+          "d": "M136 48V56H222V208H150",
           "cross": {
-            "cx": 236,
+            "cx": 222,
             "cy": 124,
             "size": 12
           },
@@ -351,7 +351,7 @@
         },
         {
           "text": "clear an",
-          "x": 250,
+          "x": 236,
           "y": 117,
           "style": "mute",
           "for": [
@@ -360,7 +360,7 @@
         },
         {
           "text": "active session",
-          "x": 250,
+          "x": 236,
           "y": 138,
           "style": "mute",
           "for": [
