@@ -312,7 +312,10 @@ publication date._
   downloads nothing, even in a partial clone), plus the commit it
   advertises for an existing branch. A branch cut from an integration line,
   or rebased onto one and force-pushed, is checked for its own commits, and
-  a rewrite notes how many commits are checked. When the destination
+  a rewrite notes how many commits are checked. For an existing branch,
+  the work-record check reads `work_records_baseline` from that branch's
+  current tip on the destination, not from the range's base, and prints
+  the notice naming each entry a push introduces. When the destination
   cannot be asked, the hook says why: an existing branch is then bounded
   by its advertised commit alone, so after a rebase the range also holds
   the commits the rebase brought in, and a new branch by the tracking refs
