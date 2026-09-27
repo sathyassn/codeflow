@@ -210,6 +210,24 @@ publication date._
 
 ### Changed
 
+<!-- codeflow:release-impact minor -->
+- **A short rule map replaces the long root contract.** Every tier's
+  managed `AGENTS.md` block is now a map of about 7 KB (was 28.7 KB at
+  standard and full, 16.4 KB at minimal), rendered with `CLAUDE.md` from one
+  kernel: at most 12 one-line always rules and a "when you are about to"
+  table (estimate, status, explanation, plan, design, build, branch, ship,
+  consult, instruction change, resume), each pointing one hop away. The
+  doctrine moved unchanged in substance to four references installed at
+  every tier under `.codeflow/rules/` (workflow discipline, git rules,
+  worktrees, writing). Always rules now include: durations for agent work
+  come from cf-estimate, never human weeks, sprints or person-days; replies
+  lead with outcomes in words, IDs after; complex explanations go through
+  cf-present where the harness can show it; and orchestration entry is
+  decided by the paths a task touches. The full tier gets its own map, which
+  alone names `project-management/`. `codeflow update` replaces the managed
+  block and keeps the project section; `doctor` gains an `instructions`
+  check that warns when `AGENTS.md` passes Codex's 32 KiB limit.
+
 <!-- codeflow:release-impact patch -->
 - **Work start past a stale local target.** `codeflow work start` and the
   `codeflow ci` work-start and classification checks resolve a
