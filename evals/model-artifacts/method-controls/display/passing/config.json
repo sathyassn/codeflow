@@ -1,0 +1,15 @@
+{
+  "figures": [
+    {
+      "declaration": "docs/figures/first-paint.json",
+      "route": "system/display",
+      "anchor": "first-paint"
+    }
+  ],
+  "page_classes": [
+    {
+      "source": "docs/display.md",
+      "class": "illustrated"
+    }
+  ]
+}

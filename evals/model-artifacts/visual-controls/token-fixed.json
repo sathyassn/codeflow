@@ -1,0 +1,361 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "token-exchange",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "Who asks whom for what when a user signs in?",
+    "idea": "The browser carries the code, and only the app exchanges it for a token.",
+    "title": "The exchanges of a sign in",
+    "caption": "The browser only carries the code, and the app alone trades it for an access token.",
+    "states": [
+      {
+        "name": "call",
+        "mark": "trans",
+        "means": "Request"
+      },
+      {
+        "name": "answer",
+        "mark": "return",
+        "means": "Response"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the app exchanges the code for a token",
+        "source": "docs/auth.md#sign-in",
+        "derive": "the Sign in section",
+        "check": {
+          "kind": "contains",
+          "text": "the app exchanges the code for an access token"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 250,
+      "draw": [
+        {
+          "text": "Browser",
+          "x": 100,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "App",
+          "x": 360,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "Auth server",
+          "x": 620,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 100,
+          "y1": 34,
+          "x2": 100,
+          "y2": 244
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 360,
+          "y1": 34,
+          "x2": 360,
+          "y2": 244
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 620,
+          "y1": 34,
+          "x2": 620,
+          "y2": 244
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M108 64H352",
+          "head": "end",
+          "id": "m1"
+        },
+        {
+          "text": "sign in",
+          "x": 230,
+          "y": 54,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M368 104H612",
+          "head": "end",
+          "id": "m2"
+        },
+        {
+          "text": "authorize request",
+          "x": 490,
+          "y": 94,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "answer",
+          "shape": "path",
+          "d": "M612 144H108",
+          "open": "end",
+          "id": "m3"
+        },
+        {
+          "text": "code via redirect",
+          "x": 230,
+          "y": 134,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M368 184H612",
+          "head": "end",
+          "id": "m4"
+        },
+        {
+          "text": "code for token",
+          "x": 490,
+          "y": 174,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "answer",
+          "shape": "path",
+          "d": "M612 224H368",
+          "open": "end",
+          "id": "m5"
+        },
+        {
+          "text": "access token",
+          "x": 490,
+          "y": 214,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m5"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 340,
+      "draw": [
+        {
+          "text": "Browser",
+          "x": 20,
+          "y": 18,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 20,
+          "y1": 30,
+          "x2": 20,
+          "y2": 150
+        },
+        {
+          "text": "sign in",
+          "x": 36,
+          "y": 48,
+          "style": "mono",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "state": "call",
+          "id": "c1",
+          "shape": "path",
+          "d": "M28 58H206",
+          "head": "end"
+        },
+        {
+          "text": "App",
+          "x": 216,
+          "y": 63,
+          "style": "strong",
+          "for": [
+            "c1"
+          ]
+        },
+        {
+          "text": "code via redirect",
+          "x": 40,
+          "y": 96,
+          "style": "mute",
+          "for": [
+            "r1"
+          ]
+        },
+        {
+          "state": "answer",
+          "id": "r1",
+          "shape": "path",
+          "d": "M206 128H30",
+          "open": "end"
+        },
+        {
+          "text": "Auth server",
+          "x": 216,
+          "y": 133,
+          "style": "strong",
+          "for": [
+            "r1"
+          ]
+        },
+        {
+          "text": "App",
+          "x": 20,
+          "y": 178,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 20,
+          "y1": 190,
+          "x2": 20,
+          "y2": 330
+        },
+        {
+          "text": "authorize request",
+          "x": 36,
+          "y": 208,
+          "style": "mono",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "state": "call",
+          "id": "c2",
+          "shape": "path",
+          "d": "M28 218H206",
+          "head": "end"
+        },
+        {
+          "text": "Auth server",
+          "x": 216,
+          "y": 223,
+          "style": "strong",
+          "for": [
+            "c2"
+          ]
+        },
+        {
+          "text": "code for token",
+          "x": 36,
+          "y": 256,
+          "style": "mono",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "state": "call",
+          "id": "c3",
+          "shape": "path",
+          "d": "M28 266H206",
+          "head": "end"
+        },
+        {
+          "text": "Auth server",
+          "x": 216,
+          "y": 271,
+          "style": "strong",
+          "for": [
+            "c3"
+          ]
+        },
+        {
+          "text": "access token",
+          "x": 40,
+          "y": 300,
+          "style": "mute",
+          "for": [
+            "r2"
+          ]
+        },
+        {
+          "state": "answer",
+          "id": "r2",
+          "shape": "path",
+          "d": "M206 312H30",
+          "open": "end"
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To"
+      ],
+      "rows": [
+        [
+          "sign in",
+          "browser",
+          "app"
+        ],
+        [
+          "authorize request",
+          "app",
+          "auth server"
+        ],
+        [
+          "code via redirect",
+          "auth server",
+          "browser"
+        ],
+        [
+          "code for token",
+          "app",
+          "auth server"
+        ],
+        [
+          "access token",
+          "auth server",
+          "app"
+        ]
+      ]
+    }
+  }
+}

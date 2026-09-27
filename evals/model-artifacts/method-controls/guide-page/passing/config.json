@@ -1,0 +1,20 @@
+{
+  "figures": [
+    {
+      "declaration": "docs/figures/merge-concept.json",
+      "route": "system/merge-policy",
+      "panel": "concept"
+    },
+    {
+      "declaration": "docs/figures/merge-architecture.json",
+      "route": "system/merge-policy",
+      "panel": "architecture"
+    },
+    {
+      "declaration": "docs/figures/merge-technical.json",
+      "route": "system/merge-policy",
+      "panel": "technical"
+    }
+  ],
+  "page_classes": []
+}

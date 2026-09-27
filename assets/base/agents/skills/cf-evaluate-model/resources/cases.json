@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-24-summary-and-figure-v1",
+  "cases_version": "2026-09-25-visual-doctrine-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -6299,6 +6299,567 @@
           "bare_acronym_index_label_kept",
           "acronym_expansion_invented",
           "security_link_broken"
+        ]
+      }
+    },
+    {
+      "id": "checks-page-figure-matches-its-question",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-checks-by-surface",
+      "requirements": [
+        "CF-FIG-001"
+      ],
+      "prompt": "Readers of the checks page in the guide keep asking which check runs where. Draw that for the page from docs/checks.md so it can go out with the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "coverage_family_declared",
+          "one_cell_per_check_and_place_from_source",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "docs/checks.md"
+        ],
+        "must_not": [
+          "flow_family_for_set_against_set",
+          "table_redrawn_without_marks",
+          "fact_invented"
+        ]
+      }
+    },
+    {
+      "id": "release-handoffs-drawn-as-exchanges",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-release-handoffs",
+      "requirements": [
+        "CF-FIG-001"
+      ],
+      "prompt": "Release managers keep asking who hands what to whom during a release. Add a drawing to the releasing page in the guide from docs/releasing.md. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "sequence_family_declared",
+          "participants_and_exchanges_in_step_order",
+          "refusal_stops_before_registry",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "docs/releasing.md"
+        ],
+        "must_not": [
+          "grid_family_for_ordered_exchanges",
+          "step_table_reprinted_as_drawing",
+          "fact_invented"
+        ]
+      }
+    },
+    {
+      "id": "queue-concept-draws-the-relationship",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-queue-concept-cards",
+      "requirements": [
+        "CF-FIG-002"
+      ],
+      "prompt": "Finish the opening drawing of the queue service page; a teammate's draft is in docs/figures/queue-concept.json. It has to be ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "relationship_drawn_between_parts",
+          "dead_letter_route_drawn",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "docs/queue-service.md",
+          "docs/figures/queue-concept.json"
+        ],
+        "must_not": [
+          "labelled_boxes_kept_as_figure",
+          "facts_dropped_to_simplify"
+        ]
+      }
+    },
+    {
+      "id": "retry-state-figure-survives-a-review-note",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-retry-states-review-note",
+      "requirements": [
+        "CF-FIG-002"
+      ],
+      "prompt": "Deal with the open review note on the payments guide before the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "state_boxes_with_transitions_kept",
+          "return_and_forbidden_routes_kept",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "REVIEW.md",
+          "docs/figures/retry-states.json"
+        ],
+        "must_not": [
+          "valid_state_figure_reworked_away",
+          "transitions_removed"
+        ]
+      }
+    },
+    {
+      "id": "deploy-flow-states-read-without-hue",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-deploy-flow-draft",
+      "requirements": [
+        "CF-FIG-003"
+      ],
+      "prompt": "Get the deploy drawing in docs/figures/deploy-flow.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "every_state_pair_differs_on_two_rendered_channels",
+          "freeze_stop_still_drawn",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "docs/figures/deploy-flow.json",
+          "docs/deploys.md"
+        ],
+        "must_not": [
+          "state_pair_differs_on_one_rendered_channel",
+          "declared_channels_trusted_over_render"
+        ]
+      }
+    },
+    {
+      "id": "planes-figure-fits-a-small-screen",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-planes-narrow-draft",
+      "requirements": [
+        "CF-FIG-004"
+      ],
+      "prompt": "Get the planes drawing in docs/figures/enforcement-planes.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "narrow_declares_own_mark_set_and_drops",
+          "narrow_within_declared_ceiling",
+          "shared_axis_kept_at_both_widths",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "docs/figures/enforcement-planes.json"
+        ],
+        "must_not": [
+          "narrow_reflows_wide_mark_set",
+          "narrow_elongated_without_reason"
+        ]
+      }
+    },
+    {
+      "id": "token-exchange-labels-stay-clear",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-token-exchange-draft",
+      "requirements": [
+        "CF-FIG-005"
+      ],
+      "prompt": "Get the sign in drawing in docs/figures/token-exchange.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "no_text_over_text_or_mark_at_both_widths",
+          "every_message_still_labelled",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "docs/figures/token-exchange.json",
+          "docs/auth.md"
+        ],
+        "must_not": [
+          "label_overprints_label_or_mark",
+          "message_labels_dropped"
+        ]
+      }
+    },
+    {
+      "id": "access-grid-marks-read-at-small-size",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-access-grid-draft",
+      "requirements": [
+        "CF-FIG-006"
+      ],
+      "prompt": "Get the access drawing in docs/figures/access-grid.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "every_inner_mark_at_least_nine_px_at_both_widths",
+          "not_claimed_cells_still_crossed",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "docs/figures/access-grid.json"
+        ],
+        "must_not": [
+          "inner_mark_under_floor_at_narrow",
+          "not_claimed_cells_recoded_as_empty"
+        ]
+      }
+    },
+    {
+      "id": "limits-figure-draws-todays-value",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-limits-stale-value",
+      "requirements": [
+        "CF-FIG-007"
+      ],
+      "prompt": "The limits drawing in docs/figures/request-limits.json goes out with the next guide build. Make it ready. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "every_fact_rederives_from_its_source",
+          "drawn_body_limit_matches_config",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "config/limits.json",
+          "docs/figures/request-limits.json"
+        ],
+        "must_not": [
+          "drawn_value_differs_from_source_today",
+          "fact_check_weakened_to_pass",
+          "page_prose_treated_as_source",
+          "source_value_edited_to_match_drawing"
+        ]
+      }
+    },
+    {
+      "id": "planes-figure-claims-only-what-the-repository-holds",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-planes-remote-claim",
+      "requirements": [
+        "CF-FIG-007"
+      ],
+      "prompt": "Get the planes drawing in docs/figures/planes-here.json ready for the next guide build. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "every_fact_rederives_from_its_source",
+          "remote_plane_not_drawn_as_armed",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "CONTRIBUTING.md",
+          "docs/figures/planes-here.json"
+        ],
+        "must_not": [
+          "fact_asserts_what_source_does_not_hold",
+          "fact_check_weakened_to_pass"
+        ]
+      }
+    },
+    {
+      "id": "key-rotation-section-is-drawn",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-signing-key-rotation",
+      "requirements": [
+        "CF-FIG-008"
+      ],
+      "prompt": "Get docs/signing.md ready for the next guide build; the key rotation part was added last week. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "rotation_figure_in_sequence_state_or_extent",
+          "rotation_figure_bound_to_technical_panel_or_section",
+          "steps_stay_a_numbered_list",
+          "success_signal_kept",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "docs/signing.md"
+        ],
+        "must_not": [
+          "rotation_section_left_without_figure",
+          "rotation_figure_family_outside_contract",
+          "rotation_steps_rewritten_as_prose"
+        ]
+      }
+    },
+    {
+      "id": "edge-cache-opening-says-what-it-is-not",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "figure-edge-cache-opening",
+      "requirements": [
+        "CF-FIG-008"
+      ],
+      "prompt": "The opening panel of the edge cache page in the guide is not ready. Finish it from docs/edge-cache.md. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "opening_family_structure_flow_or_extent",
+          "opening_says_who_it_is_for_and_what_it_is_not",
+          "later_panels_do_not_repeat_it",
+          "render_holds_every_rule"
+        ],
+        "references": [
+          "docs/edge-cache.md"
+        ],
+        "must_not": [
+          "opening_panel_drawn_as_request_sequence",
+          "what_it_is_not_left_outside_the_opening"
+        ]
+      }
+    },
+    {
+      "id": "guide-page-from-a-policy-source",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "guide-merge-policy-source",
+      "requirements": [
+        "CF-METH-001",
+        "CF-METH-002"
+      ],
+      "prompt": "Write the guide page for docs/merge-policy.md. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "each_altitude_answers_its_reader_question",
+          "concept_says_who_it_is_for_and_what_it_is_not",
+          "panel_family_matches_its_relationship",
+          "lead_above_and_caption_below_each_figure",
+          "twin_present_for_each_figure",
+          "command_table_kept_as_lookup"
+        ],
+        "references": [
+          "docs/merge-policy.md"
+        ],
+        "must_not": [
+          "source_reprinted_under_altitudes_with_box_stage",
+          "altitudes_repeat_each_other"
+        ]
+      }
+    },
+    {
+      "id": "enforcement-planes-answered-in-chat",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "repo-planes-contract",
+      "requirements": [
+        "CF-METH-002",
+        "CF-OUT-003"
+      ],
+      "prompt": "I'm new to this repository. What enforces the git rules here, and which of those are actually active?",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "layering_figure_in_the_form_the_surface_calls_for",
+          "each_plane_placed_at_its_moments",
+          "ci_plane_shown_not_active_here",
+          "remote_plane_shown_armed_at_merge",
+          "legend_present",
+          "one_caption_sentence",
+          "short_prose_around_figure"
+        ],
+        "references": [
+          "CONTRIBUTING.md"
+        ],
+        "must_not": [
+          "commit_flow_figure_for_planes_question",
+          "ci_plane_marked_active",
+          "remote_plane_marked_unarmed",
+          "fact_invented",
+          "unrendered_figure_on_plain_text_surface",
+          "mermaid_figure_in_reply"
+        ]
+      }
+    },
+    {
+      "id": "display-panel-and-first-paint-take-different-carriers",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "guide-display-panel-app",
+      "requirements": [
+        "CF-METH-002"
+      ],
+      "prompt": "Document two things in the guide: the Display panel, and how the theme is applied before first paint. The guide does not build in this checkout; docs-portal/README.md explains.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "display_panel_image_committed_with_skin_mode_and_scale_named",
+          "display_panel_alt_text_names_surface_and_state",
+          "display_panel_image_annotated_by_numbered_markers_only",
+          "first_paint_drawn_in_sequence_family",
+          "first_paint_has_no_image"
+        ],
+        "references": [
+          "app/index.html",
+          "app/boot.js"
+        ],
+        "must_not": [
+          "display_panel_drawn_as_ascii_art",
+          "first_paint_shown_as_screenshot",
+          "arrows_drawn_on_screenshot"
+        ]
+      }
+    },
+    {
+      "id": "readme-figure-uses-the-text-form",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "readme-service-architecture",
+      "requirements": [
+        "CF-METH-002"
+      ],
+      "prompt": "Add an architecture figure to README.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "fenced_text_figure_in_readme",
+          "figure_in_a_named_family_with_legend_and_caption",
+          "figure_matches_documented_parts"
+        ],
+        "references": [
+          "docs/architecture.md"
+        ],
+        "must_not": [
+          "svg_file_linked_from_readme",
+          "mermaid_fence_in_readme",
+          "raster_image_for_a_relationship"
+        ]
+      }
+    },
+    {
+      "id": "three-unrelated-rules-take-the-smallest-carrier",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "landing-rules-contributing",
+      "requirements": [
+        "CF-METH-003",
+        "CF-OUT-003"
+      ],
+      "prompt": "Explain the three landing rules to me.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "every_rule_stated",
+          "no_figure",
+          "bullets_or_small_table"
+        ],
+        "references": [
+          "CONTRIBUTING.md"
+        ],
+        "must_not": [
+          "figure_for_unrelated_facts",
+          "rule_dropped_or_invented"
+        ]
+      }
+    },
+    {
+      "id": "migration-review-leads-with-the-picture",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "migration-options-review",
+      "requirements": [
+        "CF-METH-004",
+        "CF-PRES-004"
+      ],
+      "prompt": "Open a review of the two migration options for me.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-present"
+        ],
+        "signals": [
+          "governing_comparison_is_first_block",
+          "comparison_carries_downtime_cost_and_evidence",
+          "one_ask",
+          "unverified_peak_load_stated"
+        ],
+        "references": [
+          "OPTIONS.md",
+          "EVIDENCE.md"
+        ],
+        "must_not": [
+          "narrative_first_text_cards_ask_last",
+          "more_than_one_ask",
+          "fact_invented"
         ]
       }
     }

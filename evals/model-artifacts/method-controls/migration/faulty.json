@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "title": "Migration options for the orders table",
+  "language": "en",
+  "blocks": [
+    {
+      "type": "narrative",
+      "id": "story",
+      "markdown": "We looked at two ways to move the orders table. Both were rehearsed, and each has a cost."
+    },
+    {
+      "type": "callout",
+      "id": "dual-write",
+      "tone": "info",
+      "title": "Dual write, then backfill",
+      "markdown": "No downtime; two weeks of double writes and a reconciliation job."
+    },
+    {
+      "type": "callout",
+      "id": "snapshot",
+      "tone": "info",
+      "title": "Snapshot, then cutover",
+      "markdown": "One 20 minute window; the rehearsal took 17 minutes."
+    },
+    {
+      "type": "feedback_prompt",
+      "id": "ask-choice",
+      "prompt": "Which option do you prefer?"
+    },
+    {
+      "type": "feedback_prompt",
+      "id": "ask-window",
+      "prompt": "Should we also book a maintenance window now?"
+    }
+  ]
+}

@@ -1,0 +1,148 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "checks-travel",
+    "family": "flow",
+    "binding": "authored",
+    "question": "Which check runs where?",
+    "idea": "A change passes the hook, then CI, then the release job.",
+    "title": "How a change moves through the checks",
+    "caption": "A change meets the hook first and the release job last.",
+    "states": [
+      {
+        "name": "passed",
+        "mark": "trans",
+        "means": "The change moves on"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "checks run at the hook, in CI and at release",
+        "source": "docs/checks.md#architecture",
+        "derive": "the Architecture section",
+        "check": {
+          "kind": "contains",
+          "text": "A change moves from the hook to CI to"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 200,
+      "draw": [
+        {
+          "text": "hook",
+          "x": 20,
+          "y": 105
+        },
+        {
+          "text": "CI",
+          "x": 250,
+          "y": 105
+        },
+        {
+          "text": "release job",
+          "x": 470,
+          "y": 105
+        },
+        {
+          "text": "released",
+          "x": 680,
+          "y": 105
+        },
+        {
+          "state": "passed",
+          "shape": "path",
+          "d": "M72 100H236",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "state": "passed",
+          "shape": "path",
+          "d": "M288 100H456",
+          "head": "end",
+          "id": "e2"
+        },
+        {
+          "state": "passed",
+          "shape": "path",
+          "d": "M562 100H666",
+          "head": "end",
+          "id": "e3"
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "rotate",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 290,
+      "draw": [
+        {
+          "text": "hook",
+          "x": 48,
+          "y": 36
+        },
+        {
+          "text": "CI",
+          "x": 48,
+          "y": 116
+        },
+        {
+          "text": "release job",
+          "x": 48,
+          "y": 196
+        },
+        {
+          "text": "released",
+          "x": 48,
+          "y": 276
+        },
+        {
+          "state": "passed",
+          "shape": "path",
+          "d": "M30 44V104",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "state": "passed",
+          "shape": "path",
+          "d": "M30 124V184",
+          "head": "end",
+          "id": "f2"
+        },
+        {
+          "state": "passed",
+          "shape": "path",
+          "d": "M30 204V264",
+          "head": "end",
+          "id": "f3"
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To"
+      ],
+      "rows": [
+        [
+          "hook",
+          "CI"
+        ],
+        [
+          "CI",
+          "release job"
+        ],
+        [
+          "release job",
+          "released"
+        ]
+      ]
+    }
+  }
+}

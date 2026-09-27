@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "edge-cache-opening",
+    "family": "structure",
+    "binding": "authored",
+    "question": "What is the edge cache, who is it for, and what is it not?",
+    "idea": "The edge cache answers reads in each region and never holds the record; prices are written at the origin.",
+    "title": "Where the edge cache sits",
+    "caption": "The cache answers reads near the client, and only the origin holds the record.",
+    "states": [
+      {
+        "name": "part",
+        "mark": "state",
+        "means": "A part outside the region"
+      },
+      {
+        "name": "region",
+        "mark": "optional",
+        "means": "A region and what it holds"
+      },
+      {
+        "name": "read",
+        "mark": "trans",
+        "means": "A read"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the cache is not a store of record",
+        "source": "docs/edge-cache.md#architecture",
+        "derive": "the Architecture section",
+        "check": {
+          "kind": "contains",
+          "text": "not a store of record"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 200,
+      "draw": [
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 20,
+          "y": 70,
+          "w": 130,
+          "h": 44,
+          "rx": 8,
+          "id": "p0"
+        },
+        {
+          "text": "Clients",
+          "x": 85,
+          "y": 97,
+          "anchor": "middle",
+          "for": [
+            "p0"
+          ]
+        },
+        {
+          "state": "region",
+          "shape": "rect",
+          "x": 230,
+          "y": 30,
+          "w": 200,
+          "h": 124,
+          "rx": 10,
+          "id": "r0"
+        },
+        {
+          "text": "Every region",
+          "x": 246,
+          "y": 54,
+          "style": "strong",
+          "for": [
+            "r0"
+          ]
+        },
+        {
+          "text": "Edge cache",
+          "x": 330,
+          "y": 97,
+          "anchor": "middle",
+          "for": [
+            "r0"
+          ]
+        },
+        {
+          "state": "read",
+          "shape": "path",
+          "d": "M152 92H274",
+          "head": "end",
+          "id": "e0"
+        },
+        {
+          "text": "read",
+          "x": 190,
+          "y": 80,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e0"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 540,
+          "y": 70,
+          "w": 160,
+          "h": 44,
+          "rx": 8,
+          "id": "p2"
+        },
+        {
+          "text": "Pricing origin",
+          "x": 620,
+          "y": 97,
+          "anchor": "middle",
+          "for": [
+            "p2"
+          ]
+        },
+        {
+          "state": "read",
+          "shape": "path",
+          "d": "M384 92H538",
+          "head": "end",
+          "id": "e1"
+        },
+        {
+          "text": "miss",
+          "x": 485,
+          "y": 80,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "e1"
+          ]
+        },
+        {
+          "text": "prices are written only here",
+          "x": 620,
+          "y": 140,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "p2"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 296,
+      "draw": [
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 100,
+          "y": 8,
+          "w": 160,
+          "h": 36,
+          "rx": 8,
+          "id": "q0"
+        },
+        {
+          "text": "Clients",
+          "x": 180,
+          "y": 31,
+          "anchor": "middle",
+          "for": [
+            "q0"
+          ]
+        },
+        {
+          "state": "read",
+          "shape": "path",
+          "d": "M180 46V96",
+          "head": "end",
+          "id": "f0"
+        },
+        {
+          "text": "read",
+          "x": 192,
+          "y": 70,
+          "style": "mute",
+          "for": [
+            "f0"
+          ]
+        },
+        {
+          "state": "region",
+          "shape": "rect",
+          "x": 40,
+          "y": 84,
+          "w": 280,
+          "h": 100,
+          "rx": 10,
+          "id": "s0"
+        },
+        {
+          "text": "Every region",
+          "x": 52,
+          "y": 106,
+          "style": "strong",
+          "for": [
+            "s0"
+          ]
+        },
+        {
+          "text": "Edge cache",
+          "x": 180,
+          "y": 150,
+          "anchor": "middle",
+          "for": [
+            "s0"
+          ]
+        },
+        {
+          "state": "read",
+          "shape": "path",
+          "d": "M180 164V222",
+          "head": "end",
+          "id": "f1"
+        },
+        {
+          "text": "miss",
+          "x": 192,
+          "y": 209,
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "state": "part",
+          "shape": "rect",
+          "x": 100,
+          "y": 226,
+          "w": 160,
+          "h": 36,
+          "rx": 8,
+          "id": "q2"
+        },
+        {
+          "text": "Pricing origin",
+          "x": 180,
+          "y": 249,
+          "anchor": "middle",
+          "for": [
+            "q2"
+          ]
+        },
+        {
+          "text": "prices are written only here",
+          "x": 180,
+          "y": 284,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "q2"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "From",
+        "To",
+        "When"
+      ],
+      "rows": [
+        [
+          "Clients",
+          "Edge cache",
+          "read"
+        ],
+        [
+          "Edge cache",
+          "Pricing origin",
+          "miss"
+        ]
+      ]
+    }
+  }
+}

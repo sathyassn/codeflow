@@ -1,0 +1,448 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "release-handoffs",
+    "family": "sequence",
+    "binding": "authored",
+    "question": "Who hands what to whom during a release?",
+    "idea": "CI carries the release between the signing service and the registry, and a refusal stops it.",
+    "title": "The handoffs of a release",
+    "caption": "CI moves the release through signing to the registry, and nothing reaches the registry after a refusal.",
+    "states": [
+      {
+        "name": "call",
+        "mark": "trans",
+        "means": "Hands over"
+      },
+      {
+        "name": "answer",
+        "mark": "return",
+        "means": "Hands back"
+      },
+      {
+        "name": "stop",
+        "mark": "stop",
+        "means": "A refusal stops the release"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the release has five handoffs",
+        "source": "docs/releasing.md#handoffs",
+        "derive": "the Handoffs table",
+        "check": {
+          "kind": "contains",
+          "text": "| 5 | Registry | Release manager | the published version |"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 330,
+      "draw": [
+        {
+          "text": "Release manager",
+          "x": 80,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "CI",
+          "x": 280,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "Signing service",
+          "x": 480,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "text": "Registry",
+          "x": 660,
+          "y": 22,
+          "anchor": "middle",
+          "style": "strong"
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 80,
+          "y1": 34,
+          "x2": 80,
+          "y2": 300
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 280,
+          "y1": 34,
+          "x2": 280,
+          "y2": 300
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 480,
+          "y1": 34,
+          "x2": 480,
+          "y2": 300
+        },
+        {
+          "deco": "axis",
+          "shape": "line",
+          "x1": 660,
+          "y1": 34,
+          "x2": 660,
+          "y2": 300
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M88 70H272",
+          "id": "m0",
+          "head": "end"
+        },
+        {
+          "text": "the release tag",
+          "x": 180.0,
+          "y": 60,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m0"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M288 126H472",
+          "id": "m1",
+          "head": "end"
+        },
+        {
+          "text": "the built artifacts",
+          "x": 380.0,
+          "y": 116,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m1"
+          ]
+        },
+        {
+          "state": "answer",
+          "shape": "path",
+          "d": "M472 182H288",
+          "id": "m2",
+          "open": "end"
+        },
+        {
+          "text": "the signatures",
+          "x": 380.0,
+          "y": 172,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m2"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M288 238H652",
+          "id": "m3",
+          "head": "end"
+        },
+        {
+          "text": "the signed artifacts",
+          "x": 470.0,
+          "y": 228,
+          "anchor": "middle",
+          "style": "mono",
+          "for": [
+            "m3"
+          ]
+        },
+        {
+          "state": "answer",
+          "shape": "path",
+          "d": "M652 294H88",
+          "id": "m4",
+          "open": "end"
+        },
+        {
+          "text": "the published version",
+          "x": 370.0,
+          "y": 284,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "m4"
+          ]
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 269,
+          "y1": 206,
+          "x2": 291,
+          "y2": 206,
+          "id": "s0"
+        },
+        {
+          "text": "a refusal stops CI here",
+          "x": 258,
+          "y": 211,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s0"
+          ]
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "stack",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 324,
+      "draw": [
+        {
+          "text": "Release manager",
+          "x": 20,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "n0"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M150 29H226",
+          "id": "n0",
+          "head": "end"
+        },
+        {
+          "text": "CI",
+          "x": 236,
+          "y": 34,
+          "style": "strong",
+          "for": [
+            "n0"
+          ]
+        },
+        {
+          "text": "the release tag",
+          "x": 20,
+          "y": 56,
+          "style": "mono",
+          "for": [
+            "n0"
+          ]
+        },
+        {
+          "text": "CI",
+          "x": 20,
+          "y": 88,
+          "style": "strong",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M150 83H226",
+          "id": "n1",
+          "head": "end"
+        },
+        {
+          "text": "Signing service",
+          "x": 236,
+          "y": 88,
+          "style": "strong",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "text": "the built artifacts",
+          "x": 20,
+          "y": 110,
+          "style": "mono",
+          "for": [
+            "n1"
+          ]
+        },
+        {
+          "text": "Signing service",
+          "x": 20,
+          "y": 142,
+          "style": "strong",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "state": "answer",
+          "shape": "path",
+          "d": "M226 137H150",
+          "id": "n2",
+          "open": "end"
+        },
+        {
+          "text": "CI",
+          "x": 236,
+          "y": 142,
+          "style": "strong",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "text": "the signatures",
+          "x": 20,
+          "y": 164,
+          "style": "mute",
+          "for": [
+            "n2"
+          ]
+        },
+        {
+          "state": "stop",
+          "shape": "line",
+          "x1": 20,
+          "y1": 184,
+          "x2": 42,
+          "y2": 184,
+          "id": "t0"
+        },
+        {
+          "text": "a refusal stops CI here",
+          "x": 52,
+          "y": 189,
+          "style": "mute",
+          "for": [
+            "t0"
+          ]
+        },
+        {
+          "text": "CI",
+          "x": 20,
+          "y": 220,
+          "style": "strong",
+          "for": [
+            "n3"
+          ]
+        },
+        {
+          "state": "call",
+          "shape": "path",
+          "d": "M150 215H226",
+          "id": "n3",
+          "head": "end"
+        },
+        {
+          "text": "Registry",
+          "x": 236,
+          "y": 220,
+          "style": "strong",
+          "for": [
+            "n3"
+          ]
+        },
+        {
+          "text": "the signed artifacts",
+          "x": 20,
+          "y": 242,
+          "style": "mono",
+          "for": [
+            "n3"
+          ]
+        },
+        {
+          "text": "Registry",
+          "x": 20,
+          "y": 274,
+          "style": "strong",
+          "for": [
+            "n4"
+          ]
+        },
+        {
+          "state": "answer",
+          "shape": "path",
+          "d": "M226 269H150",
+          "id": "n4",
+          "open": "end"
+        },
+        {
+          "text": "Release manager",
+          "x": 236,
+          "y": 274,
+          "style": "strong",
+          "for": [
+            "n4"
+          ]
+        },
+        {
+          "text": "the published version",
+          "x": 20,
+          "y": 296,
+          "style": "mute",
+          "for": [
+            "n4"
+          ]
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To",
+        "What passes"
+      ],
+      "rows": [
+        [
+          "1",
+          "Release manager",
+          "CI",
+          "the release tag"
+        ],
+        [
+          "2",
+          "CI",
+          "Signing service",
+          "the built artifacts"
+        ],
+        [
+          "3",
+          "Signing service",
+          "CI",
+          "the signatures"
+        ],
+        [
+          "4",
+          "CI",
+          "Registry",
+          "the signed artifacts"
+        ],
+        [
+          "5",
+          "Registry",
+          "Release manager",
+          "the published version"
+        ]
+      ]
+    }
+  }
+}

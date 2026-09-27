@@ -1,0 +1,3 @@
+- Start every branch name with a type prefix, such as `feat/` or `fix/`.
+- Sign each commit with your SSH key.
+- Link the ticket a pull request closes in its description.
