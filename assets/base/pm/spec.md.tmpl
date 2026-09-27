@@ -3,7 +3,7 @@ id: SPC-{{NNN}}
 uid: {{UID}}              # hidden record identity, written once by `new`; never edit
 title: {{TITLE_YAML}}
 status: draft            # draft | approved | superseded; change it with `codeflow spec status`
-open_questions: []       # each question still open, one string per item; approval needs []
+open_questions: []       # each question still open, one string per item; approval needs this line, empty
 created: {{DATE}}
 ---
 

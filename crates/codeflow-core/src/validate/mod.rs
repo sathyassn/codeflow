@@ -809,7 +809,7 @@ pub fn validate_spec(
             field: "open_questions".into(),
             message,
         }),
-        Ok(open)
+        Ok(Some(open))
             if !open.is_empty()
                 && matches!(
                     get_string_field(&data, "status").as_str(),
@@ -830,17 +830,18 @@ pub fn validate_spec(
 }
 
 /// The questions a spec still leaves open, read from its `open_questions`
-/// frontmatter list (TSK-135). Absent or null means none, so a spec written
-/// before the field existed validates unchanged; the `## Open questions`
-/// section is prose and is not parsed. A value that is not a list of
-/// non-empty strings is an error.
+/// frontmatter list (TSK-135). `None` when the field is absent: a spec
+/// written before the field existed stays readable, but approving one needs
+/// the list (see the lifecycle judge). The `## Open questions` section is
+/// prose and is never parsed. Null, a scalar, a map or a list item that is
+/// not a non-empty string is an error.
 pub(crate) fn open_questions(
     data: &HashMap<String, serde_yaml::Value>,
-) -> Result<Vec<String>, String> {
+) -> Result<Option<Vec<String>>, String> {
     let invalid =
         || "open_questions must be a list of the questions still open, `[]` when none".to_string();
     match data.get("open_questions") {
-        None | Some(serde_yaml::Value::Null) => Ok(Vec::new()),
+        None => Ok(None),
         Some(serde_yaml::Value::Sequence(items)) => items
             .iter()
             .map(|item| match item {
@@ -849,7 +850,8 @@ pub(crate) fn open_questions(
                 }
                 _ => Err(invalid()),
             })
-            .collect(),
+            .collect::<Result<Vec<_>, _>>()
+            .map(Some),
         Some(_) => Err(invalid()),
     }
 }
@@ -1347,23 +1349,23 @@ Criteria
     }
 
     #[test]
-    fn a_spec_without_the_field_validates_unchanged() {
-        // Legacy prose markers, including ones the keyword matcher refused,
-        // are context now; only the frontmatter list is read.
-        for prose in [
-            "None.",
-            "Resolved — see SPC-008.",
-            "Which recovery channel is authoritative?",
-            "All resolved except the recovery channel.",
-        ] {
-            let errors = spec_errors("approved", "", prose);
-            assert!(errors.is_empty(), "{prose:?}: {errors:?}");
+    fn an_existing_spec_without_the_field_stays_readable() {
+        // Reads stay compatible: a spec written before the field existed
+        // validates as it did, whatever its status. Approving a spec without
+        // the list is refused by the lifecycle judge, not here.
+        for status in ["draft", "approved", "implemented"] {
+            let errors = spec_errors(status, "", "None.");
+            assert!(errors.is_empty(), "{status}: {errors:?}");
         }
+        // The prose is context and is never parsed, in either direction.
+        assert!(spec_errors("approved", "open_questions: []\n", "Settled? Yes.").is_empty());
     }
 
     #[test]
     fn a_malformed_open_questions_value_is_an_error() {
         for bad in [
+            "open_questions:\n",
+            "open_questions: null\n",
             "open_questions: \"one question\"\n",
             "open_questions: [1]\n",
             "open_questions: [\"\"]\n",
@@ -1377,7 +1379,6 @@ Criteria
                 "{bad:?}: {errors:?}"
             );
         }
-        assert!(spec_errors("draft", "open_questions: null\n", "").is_empty());
     }
 
     // -- enum consts stay in lockstep with the model enums --

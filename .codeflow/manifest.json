@@ -1529,7 +1529,7 @@
     "project-management/templates/spec.md": {
       "src": "pm/spec.md.tmpl",
       "ownership": "managed",
-      "sha256": "4550a145686c28c5b43ee1293e8fbff725516768187c95790c1ed65b44cbbd03",
+      "sha256": "db1cdaffe0589f4857db715fe06291e0072f61c192a67d9ec2a09fa5d5a509a3",
       "exec": false
     },
     "project-management/templates/task.md": {
