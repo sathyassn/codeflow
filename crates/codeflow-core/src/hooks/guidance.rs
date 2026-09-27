@@ -1,33 +1,46 @@
 //! Rules re-injected where they were lost or where they apply (TSK-128).
 //!
-//! Two short texts, both generated from the rule-map kernel
-//! (`assets/base/rule-map.toml`, TSK-127) for the project's tier:
+//! Two short texts for the project's tier, generated from the rule-map
+//! kernel (`assets/base/rule-map.toml`, TSK-127) and the scaffold manifest:
 //!
 //! - the **guidance block** the session-orient hook adds when a session
-//!   resumes or restarts after compaction (source `compact` or `resume`):
-//!   the always rules by title, the moment table by its first pointer and the
-//!   tier's skill names, at most [`MAX_GUIDANCE_BYTES`];
-//! - the **prompt reminder** the `prompt-reminder` hook adds when a prompt
-//!   asks for a duration, a status or a complex explanation: exactly one rule
-//!   line of at most [`MAX_REMINDER_BYTES`], or nothing.
+//!   resumes, forks or restarts after compaction (source `compact`,
+//!   `resume` or `fork`): the always rules by title, the moment table by its
+//!   first pointer, and every skill and agent the tier installs;
+//! - the **prompt reminder** the same hook adds on `UserPromptSubmit` when a
+//!   prompt asks for a duration, a status or a complex explanation: exactly
+//!   one rule line, or nothing.
 //!
-//! Both are advisory. Neither can fail a session or a prompt: a missing or
-//! unreadable kernel, project state or policy file yields no text, or the
-//! default level, never an error.
+//! One stable command, `codeflow hook session-orient`, carries both events
+//! and dispatches on the payload's `hook_event_name`, so an older binary
+//! that only knows that command still exits 0 on a prompt (it prints its
+//! digest) instead of refusing the prompt with a parse error. Both texts are
+//! advisory. Neither can fail a session or a prompt: a missing or unreadable
+//! kernel, project state or policy file yields no text, or the default
+//! level, never an error. Their sizes are guidelines, not caps
+//! ([`GUIDANCE_BLOCK_GUIDELINE_BYTES`], [`REMINDER_LINE_GUIDELINE_BYTES`]).
 
 use std::fmt::Write as _;
 use std::path::Path;
 
 use crate::scaffold::rule_map::{is_skill_pointer, Kernel, Moment, KERNEL};
-use crate::scaffold::Tier;
+use crate::scaffold::{ScaffoldManifest, Tier};
 
 use super::policy::{read_project_toml, Policy};
 
-/// The most bytes the compaction guidance block may take.
-pub const MAX_GUIDANCE_BYTES: usize = 1536;
+/// The size the compaction guidance block aims for. A guideline, not a
+/// cap: no skill or rule is dropped to meet it, and the tests print the
+/// measured size against it.
+pub const GUIDANCE_BLOCK_GUIDELINE_BYTES: usize = 1536;
 
-/// The most bytes one prompt reminder line may take.
-pub const MAX_REMINDER_BYTES: usize = 300;
+/// The size one prompt reminder line aims for; a guideline, not a cap.
+pub const REMINDER_LINE_GUIDELINE_BYTES: usize = 300;
+
+/// The scaffold manifest, the inventory of what each tier installs.
+pub const SCAFFOLD_MANIFEST: &str = include_str!("../../../../assets/base/scaffold-manifest.toml");
+
+/// The session-start sources after which the rules are gone or stale.
+pub const GUIDANCE_SOURCES: [&str; 3] = ["compact", "resume", "fork"];
 
 /// What a prompt asks for, when it asks for something a rule governs.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -258,42 +271,55 @@ pub fn reminder_line(kernel: &Kernel, tier: Tier, trigger: Trigger) -> Option<St
     ))
 }
 
-/// The skill and agent names the tier's map points at, in kernel order:
-/// skill pointers, and the skill that owns a skill-relative path.
-#[must_use]
-pub fn skill_names(kernel: &Kernel, tier: Tier) -> Vec<String> {
-    let pointers = kernel
-        .rules_for(tier)
-        .into_iter()
-        .flat_map(|rule| rule.see.iter())
-        .chain(
-            kernel
-                .moments_for(tier)
-                .into_iter()
-                .flat_map(|moment| moment.see.iter()),
-        );
-    let mut names: Vec<String> = Vec::new();
-    for pointer in pointers {
-        if !pointer.starts_with("cf-") {
-            continue;
-        }
-        let name = pointer.split('/').next().unwrap_or(pointer).to_string();
-        if !names.contains(&name) {
-            names.push(name);
-        }
-    }
-    names
+/// What a tier installs for the agent: its skills and its agents, each
+/// sorted by name, read from the scaffold manifest.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct Inventory {
+    pub skills: Vec<String>,
+    pub agents: Vec<String>,
 }
 
-/// The guidance block for `tier`: always rules by title, the moment table by
-/// its first pointer, and the tier's skill names.
+/// The skills (`.agents/skills/<name>/SKILL.md`) and agents
+/// (`.claude/agents/<name>.md`) the manifest source installs at `tier`, or
+/// an empty inventory when the source does not parse.
 #[must_use]
-pub fn guidance_block(kernel: &Kernel, tier: Tier) -> String {
+pub fn installed_inventory(manifest: &str, tier: Tier) -> Inventory {
+    let Ok(manifest) = toml::from_str::<ScaffoldManifest>(manifest) else {
+        return Inventory::default();
+    };
+    let mut inventory = Inventory::default();
+    for entry in manifest.entries.iter().filter(|e| e.tiers.contains(&tier)) {
+        let dest = entry.dest.as_str();
+        if let Some(name) = dest
+            .strip_prefix(".agents/skills/")
+            .and_then(|rest| rest.strip_suffix("/SKILL.md"))
+            .filter(|name| !name.contains('/'))
+        {
+            inventory.skills.push(name.to_string());
+        } else if let Some(name) = dest
+            .strip_prefix(".claude/agents/")
+            .and_then(|rest| rest.strip_suffix(".md"))
+            .filter(|name| !name.contains('/'))
+        {
+            inventory.agents.push(name.to_string());
+        }
+    }
+    for names in [&mut inventory.skills, &mut inventory.agents] {
+        names.sort();
+        names.dedup();
+    }
+    inventory
+}
+
+/// The guidance block for `tier`: always rules by title, the moment table
+/// by its first pointer, and the tier's installed skills and agents.
+#[must_use]
+pub fn guidance_block(kernel: &Kernel, inventory: &Inventory, tier: Tier) -> String {
     let mut out = String::new();
     let _ = writeln!(
         out,
         "## Rules after compaction or resume ({tier} tier)\n\
-         Re-read the AGENTS.md managed block before acting: it holds each rule in full."
+         Full rules: the AGENTS.md managed block; re-read it before acting."
     );
     let titles: Vec<&str> = kernel
         .rules_for(tier)
@@ -310,21 +336,13 @@ pub fn guidance_block(kernel: &Kernel, tier: Tier) -> String {
             .unwrap_or_default();
         let _ = writeln!(out, "- {}: {see}", moment.when);
     }
-    let skills = skill_names(kernel, tier);
-    if skills.is_empty() {
+    if inventory.skills.is_empty() {
         let _ = writeln!(out, "Skills: none at this tier.");
     } else {
-        let names: Vec<String> = skills
-            .iter()
-            .map(|name| {
-                if name == "cf-reviewer" {
-                    "cf-reviewer (agent)".to_string()
-                } else {
-                    format!("/{name}")
-                }
-            })
-            .collect();
-        let _ = writeln!(out, "Skills: {}.", names.join(", "));
+        let _ = writeln!(out, "Skills: {}.", inventory.skills.join(", "));
+    }
+    if !inventory.agents.is_empty() {
+        let _ = writeln!(out, "Agents: {}.", inventory.agents.join(", "));
     }
     out
 }
@@ -336,11 +354,43 @@ pub fn project_tier(root: &Path) -> Option<Tier> {
     read_project_toml(root)?.get("tier")?.as_str()?.parse().ok()
 }
 
-/// Whether a session-start source is one after which the rules are gone:
-/// a compaction or a resumed session.
+/// Whether a session-start source is one after which the rules are gone
+/// or stale: a compaction, a resumed session or a forked one (Claude Code's
+/// `fork` carries an older conversation, so it is treated as a resume).
 #[must_use]
 pub fn source_needs_guidance(source: &str) -> bool {
-    matches!(source, "compact" | "resume")
+    GUIDANCE_SOURCES.contains(&source)
+}
+
+/// Which lifecycle event a hook payload reports.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum HookEvent {
+    /// `SessionStart`, or a payload that names no event (the legacy input
+    /// of `codeflow hook session-orient`).
+    SessionStart,
+    /// `UserPromptSubmit`.
+    PromptSubmit,
+    /// Any other named event: the advisory hook adds nothing.
+    Other(String),
+}
+
+/// The event a hook payload names in `hook_event_name`; a payload that
+/// names none, or does not parse, is a session start, as before.
+#[must_use]
+pub fn payload_event(payload: &str) -> HookEvent {
+    let name = serde_json::from_str::<serde_json::Value>(payload)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("hook_event_name")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        });
+    match name.as_deref() {
+        None | Some("SessionStart") => HookEvent::SessionStart,
+        Some("UserPromptSubmit") => HookEvent::PromptSubmit,
+        Some(other) => HookEvent::Other(other.to_string()),
+    }
 }
 
 /// The `source` field of a session-start hook payload, read leniently: an
@@ -361,7 +411,11 @@ pub fn session_guidance_with(root: &Path, source: &str, kernel: &str) -> Option<
     }
     let tier = project_tier(root)?;
     let kernel = Kernel::parse(kernel).ok()?;
-    Some(guidance_block(&kernel, tier))
+    Some(guidance_block(
+        &kernel,
+        &installed_inventory(SCAFFOLD_MANIFEST, tier),
+        tier,
+    ))
 }
 
 /// [`session_guidance_with`] over the shipped kernel.
@@ -390,7 +444,7 @@ pub fn prompt_reminder_with(root: &Path, payload: &str, kernel: &str) -> Option<
     let trigger = classify(&payload_prompt(payload)?)?;
     let tier = project_tier(root)?;
     let kernel = Kernel::parse(kernel).ok()?;
-    reminder_line(&kernel, tier, trigger).filter(|line| line.len() <= MAX_REMINDER_BYTES)
+    reminder_line(&kernel, tier, trigger)
 }
 
 /// [`prompt_reminder_with`] over the shipped kernel.
@@ -437,31 +491,48 @@ mod tests {
         );
     }
 
+    /// One line per trigger at every tier; the measured size is printed
+    /// against the guideline, not asserted.
     #[test]
-    fn every_trigger_has_a_short_line_at_every_tier() {
+    fn every_trigger_has_one_line_at_every_tier() {
         let kernel = Kernel::shipped();
         for tier in Kernel::tiers() {
             for trigger in Trigger::ALL {
                 let line = reminder_line(&kernel, tier, trigger)
                     .unwrap_or_else(|| panic!("{tier}: {trigger:?} has no line"));
-                assert!(
-                    line.len() <= MAX_REMINDER_BYTES,
-                    "{tier} {trigger:?}: {} bytes: {line}",
+                assert!(!line.contains('\n'), "{line}");
+                assert!(line.starts_with("codeflow reminder: "), "{line}");
+                println!(
+                    "reminder {tier} {trigger:?}: {} bytes (guideline {REMINDER_LINE_GUIDELINE_BYTES})",
                     line.len()
                 );
-                assert!(!line.contains('\n'), "{line}");
             }
         }
     }
 
+    /// The block holds every always rule, every moment and the tier's whole
+    /// inventory; its size is printed against the guideline.
     #[test]
-    fn guidance_fits_its_budget_at_every_tier() {
+    fn guidance_holds_the_kernel_and_the_whole_inventory_at_every_tier() {
         let kernel = Kernel::shipped();
         for tier in Kernel::tiers() {
-            let block = guidance_block(&kernel, tier);
-            assert!(
-                block.len() <= MAX_GUIDANCE_BYTES,
-                "{tier}: {} bytes\n{block}",
+            let inventory = installed_inventory(SCAFFOLD_MANIFEST, tier);
+            let block = guidance_block(&kernel, &inventory, tier);
+            for rule in kernel.rules_for(tier) {
+                assert!(block.contains(&rule.title), "{tier}: {}", rule.title);
+            }
+            for moment in kernel.moments_for(tier) {
+                assert!(
+                    block.contains(&format!("- {}: ", moment.when)),
+                    "{tier}: {}",
+                    moment.when
+                );
+            }
+            for name in inventory.skills.iter().chain(&inventory.agents) {
+                assert!(block.contains(name.as_str()), "{tier}: {name}");
+            }
+            println!(
+                "guidance {tier}: {} bytes (guideline {GUIDANCE_BLOCK_GUIDELINE_BYTES})",
                 block.len()
             );
         }
@@ -471,7 +542,7 @@ mod tests {
     fn session_guidance_follows_the_source() {
         let dir = tempfile::tempdir().unwrap();
         write_project(dir.path(), "standard");
-        for source in ["compact", "resume"] {
+        for source in ["compact", "resume", "fork"] {
             assert!(session_guidance(dir.path(), source).is_some(), "{source}");
         }
         for source in ["startup", "clear", ""] {
@@ -508,17 +579,44 @@ mod tests {
     }
 
     #[test]
-    fn minimal_tier_names_no_skills() {
-        let kernel = Kernel::shipped();
-        assert!(skill_names(&kernel, Tier::Minimal).is_empty());
-        let standard = skill_names(&kernel, Tier::Standard);
+    fn inventory_keeps_agents_apart_from_skills() {
+        let minimal = installed_inventory(SCAFFOLD_MANIFEST, Tier::Minimal);
+        assert!(minimal.skills.is_empty() && minimal.agents.is_empty());
+        let standard = installed_inventory(SCAFFOLD_MANIFEST, Tier::Standard);
+        assert!(standard.agents.iter().any(|a| a == "cf-reviewer"));
+        assert!(!standard.skills.iter().any(|s| s == "cf-reviewer"));
         for name in [
-            "cf-estimate",
-            "cf-present",
-            "cf-model-orchestrator",
-            "cf-method",
+            "cf-customize",
+            "cf-docs-portal",
+            "cf-editorial-review",
+            "cf-herdr",
+            "cf-stack",
         ] {
-            assert!(standard.iter().any(|n| n == name), "{name}: {standard:?}");
+            assert!(standard.skills.iter().any(|s| s == name), "{name}");
         }
+        assert_eq!(
+            installed_inventory("not toml", Tier::Full),
+            Inventory::default()
+        );
+    }
+
+    #[test]
+    fn events_dispatch_by_name_and_default_to_session_start() {
+        assert_eq!(
+            payload_event(r#"{"hook_event_name":"UserPromptSubmit"}"#),
+            HookEvent::PromptSubmit
+        );
+        for payload in [
+            "",
+            "not json",
+            "{}",
+            r#"{"hook_event_name":"SessionStart"}"#,
+        ] {
+            assert_eq!(payload_event(payload), HookEvent::SessionStart, "{payload}");
+        }
+        assert_eq!(
+            payload_event(r#"{"hook_event_name":"PreCompact"}"#),
+            HookEvent::Other("PreCompact".into())
+        );
     }
 }

@@ -2469,6 +2469,7 @@ fn write_tier(dir: &Path, tier: &str) {
     std::fs::write(cf.join("project.toml"), format!("tier = \"{tier}\"\n")).unwrap();
 }
 
+/// The one advisory command both harnesses wire for both events.
 fn session_orient(dir: &Path, payload: &str) -> Output {
     run_with_stdin(
         codeflow().args(["hook", "session-orient"]).current_dir(dir),
@@ -2476,13 +2477,8 @@ fn session_orient(dir: &Path, payload: &str) -> Output {
     )
 }
 
-fn prompt_reminder(dir: &Path, payload: &str) -> Output {
-    run_with_stdin(
-        codeflow()
-            .args(["hook", "prompt-reminder"])
-            .current_dir(dir),
-        payload,
-    )
+fn start_payload(source: &str) -> String {
+    format!(r#"{{"session_id":"s1","hook_event_name":"SessionStart","source":"{source}"}}"#)
 }
 
 fn prompt_payload(prompt: &str) -> String {
@@ -2494,10 +2490,11 @@ fn prompt_payload(prompt: &str) -> String {
     .to_string()
 }
 
-/// AC-1: compact and resume add the guidance block, at most 1,536 bytes,
-/// after the unchanged digest; startup and clear print today's digest only.
+/// AC-1: compact, resume and fork add the guidance block after the
+/// unchanged digest; startup and clear print today's digest only. The block
+/// size is printed against its guideline, not capped.
 #[test]
-fn session_orient_adds_the_guidance_block_after_compact_and_resume_only() {
+fn session_orient_adds_the_guidance_block_after_compact_resume_and_fork() {
     for tier in ["minimal", "standard", "full"] {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
@@ -2511,21 +2508,14 @@ fn session_orient_adds_the_guidance_block_after_compact_and_resume_only() {
         assert!(digest.contains("# orient"), "{digest}");
 
         for source in ["startup", "clear"] {
-            let out = session_orient(
-                dir.path(),
-                &format!(r#"{{"hook_event_name":"SessionStart","source":"{source}"}}"#),
-            );
+            let out = session_orient(dir.path(), &start_payload(source));
             assert_eq!(out.status.code(), Some(0));
             let stdout = String::from_utf8(out.stdout).unwrap();
             assert_eq!(stdout, digest, "{tier} {source}: the digest changed");
-            assert!(!stdout.contains(GUIDANCE_HEADING), "{tier} {source}");
         }
 
-        for source in ["compact", "resume"] {
-            let out = session_orient(
-                dir.path(),
-                &format!(r#"{{"hook_event_name":"SessionStart","source":"{source}"}}"#),
-            );
+        for source in ["compact", "resume", "fork"] {
+            let out = session_orient(dir.path(), &start_payload(source));
             assert_eq!(out.status.code(), Some(0));
             let stdout = String::from_utf8(out.stdout).unwrap();
             let (head, block) = stdout
@@ -2533,11 +2523,6 @@ fn session_orient_adds_the_guidance_block_after_compact_and_resume_only() {
                 .unwrap_or_else(|| panic!("{tier} {source}: no guidance block\n{stdout}"));
             assert_eq!(head, digest, "{tier} {source}: the digest changed");
             let block = format!("{GUIDANCE_HEADING}{block}");
-            assert!(
-                block.len() <= 1536,
-                "{tier} {source}: block is {} bytes\n{block}",
-                block.len()
-            );
             assert!(block.contains(&format!("({tier} tier)")), "{block}");
             assert!(block.contains("Always: Work to the outcome."), "{block}");
             assert!(
@@ -2547,36 +2532,109 @@ fn session_orient_adds_the_guidance_block_after_compact_and_resume_only() {
             if tier == "minimal" {
                 assert!(block.contains("Skills: none at this tier."), "{block}");
             } else {
-                assert!(block.contains("/cf-estimate"), "{block}");
-                assert!(block.contains("/cf-present"), "{block}");
+                assert!(block.contains("cf-estimate"), "{block}");
+                assert!(block.contains("Agents: cf-reviewer"), "{block}");
             }
+            println!("guidance block {tier} {source}: {} bytes", block.len());
         }
     }
 }
 
 /// AC-1: no tier (not a scaffolded project) and a garbled payload keep the
-/// plain digest; the hook never fails.
+/// plain digest; an event-less payload is a session start, as before.
 #[test]
 fn session_orient_without_a_tier_or_payload_keeps_the_digest() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "feat/x");
-    let out = session_orient(dir.path(), r#"{"source":"compact"}"#);
+    let out = session_orient(dir.path(), &start_payload("compact"));
     assert_eq!(out.status.code(), Some(0));
     let stdout = String::from_utf8(out.stdout).unwrap();
     assert!(stdout.contains("# orient"), "{stdout}");
     assert!(!stdout.contains(GUIDANCE_HEADING), "{stdout}");
 
     write_tier(dir.path(), "standard");
-    for payload in ["", "not json", r#"{"source":7}"#] {
+    for payload in ["", "not json", r#"{"source":7}"#, "{}"] {
         let out = session_orient(dir.path(), payload);
         assert_eq!(out.status.code(), Some(0), "{payload}");
         let stdout = String::from_utf8(out.stdout).unwrap();
+        assert!(stdout.contains("# orient"), "{payload}: {stdout}");
         assert!(!stdout.contains(GUIDANCE_HEADING), "{payload}: {stdout}");
     }
 }
 
-/// AC-3: the fixture corpus; a matching prompt gets exactly one rule line of
-/// at most 300 bytes, any other prompt gets nothing.
+/// F1: the same wired command on `UserPromptSubmit` prints a reminder or
+/// nothing, never the digest; any other named event is an advisory no-op.
+#[test]
+fn session_orient_dispatches_on_the_event() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_tier(dir.path(), "standard");
+    let out = session_orient(dir.path(), &prompt_payload("How long will it take?"));
+    assert_eq!(out.status.code(), Some(0));
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    assert!(stdout.starts_with("codeflow reminder: "), "{stdout}");
+    assert!(!stdout.contains("# orient"), "{stdout}");
+
+    let out = session_orient(dir.path(), &prompt_payload("Rename foo to bar"));
+    assert_eq!(out.status.code(), Some(0));
+    assert!(out.stdout.is_empty());
+
+    for event in ["PreCompact", "PostCompact", "Stop", "SomeFutureEvent"] {
+        let out = session_orient(
+            dir.path(),
+            &format!(r#"{{"hook_event_name":"{event}","source":"compact"}}"#),
+        );
+        assert_eq!(out.status.code(), Some(0), "{event}");
+        assert!(out.stdout.is_empty(), "{event}: advisory no-op");
+        assert!(out.stderr.is_empty(), "{event}");
+    }
+
+    // The manual convenience command gives the same line.
+    let manual = run_with_stdin(
+        codeflow()
+            .args(["hook", "prompt-reminder"])
+            .current_dir(dir.path()),
+        &prompt_payload("How long will it take?"),
+    );
+    assert_eq!(manual.status.code(), Some(0));
+    assert_eq!(String::from_utf8(manual.stdout).unwrap(), stdout);
+}
+
+/// F1: a closed stdout (the harness stopped reading) never fails either
+/// event.
+#[test]
+fn session_orient_survives_a_closed_stdout() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_tier(dir.path(), "full");
+    for payload in [
+        start_payload("startup"),
+        start_payload("compact"),
+        prompt_payload("What's the status of the release?"),
+    ] {
+        let mut child = codeflow()
+            .args(["hook", "session-orient"])
+            .current_dir(dir.path())
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        drop(child.stdout.take());
+        child
+            .stdin
+            .take()
+            .unwrap()
+            .write_all(payload.as_bytes())
+            .unwrap();
+        let out = child.wait_with_output().unwrap();
+        assert_eq!(out.status.code(), Some(0), "{payload}: {out:?}");
+    }
+}
+
+/// AC-3: the fixture corpus through the wired command; a matching prompt
+/// gets exactly one rule line, any other prompt gets nothing. Line sizes are
+/// printed against the 300-byte guideline, not capped.
 #[test]
 fn prompt_reminder_follows_the_fixture_corpus() {
     let corpus: serde_json::Value =
@@ -2590,9 +2648,10 @@ fn prompt_reminder_follows_the_fixture_corpus() {
         let dir = tempfile::tempdir().unwrap();
         init_repo(dir.path(), "feat/x");
         write_tier(dir.path(), tier);
+        let mut longest = 0;
         for case in cases {
             let prompt = case["prompt"].as_str().unwrap();
-            let out = prompt_reminder(dir.path(), &prompt_payload(prompt));
+            let out = session_orient(dir.path(), &prompt_payload(prompt));
             assert_eq!(out.status.code(), Some(0), "{prompt}");
             assert!(out.stderr.is_empty(), "{prompt}");
             let stdout = String::from_utf8(out.stdout).unwrap();
@@ -2601,8 +2660,8 @@ fn prompt_reminder_follows_the_fixture_corpus() {
                 continue;
             };
             assert_eq!(stdout.lines().count(), 1, "{tier} {prompt:?}: {stdout}");
-            assert!(stdout.len() <= 301, "{tier} {prompt:?}: {stdout}");
             assert!(stdout.starts_with("codeflow reminder: "), "{stdout}");
+            longest = longest.max(stdout.trim_end().len());
             let title = match (expect, tier) {
                 ("duration", "minimal") => "Durations are agentic.",
                 ("duration", _) => "Durations come from cf-estimate.",
@@ -2615,6 +2674,7 @@ fn prompt_reminder_follows_the_fixture_corpus() {
                 "{tier} {prompt:?}: expected {title}, got {stdout}"
             );
         }
+        println!("reminder lines {tier}: longest {longest} bytes (guideline 300)");
     }
 }
 
@@ -2628,14 +2688,14 @@ fn prompt_reminder_is_advisory_switchable_and_never_fails() {
     let ask = prompt_payload("How long will the migration take?");
 
     // No project state at all: nothing, exit 0.
-    let out = prompt_reminder(dir.path(), &ask);
+    let out = session_orient(dir.path(), &ask);
     assert_eq!(out.status.code(), Some(0));
     assert!(out.stdout.is_empty());
 
     // Tier but no policy file: the default level (warn) adds the line.
     write_tier(dir.path(), "standard");
     assert!(!dir.path().join(".codeflow/policy.json").exists());
-    let out = prompt_reminder(dir.path(), &ask);
+    let out = session_orient(dir.path(), &ask);
     assert_eq!(out.status.code(), Some(0));
     assert!(String::from_utf8_lossy(&out.stdout).starts_with("codeflow reminder: "));
 
@@ -2649,7 +2709,7 @@ fn prompt_reminder_is_advisory_switchable_and_never_fails() {
         ("{ not json", true),
     ] {
         write_policy(dir.path(), policy);
-        let out = prompt_reminder(dir.path(), &ask);
+        let out = session_orient(dir.path(), &ask);
         assert_eq!(out.status.code(), Some(0), "{policy}");
         assert!(out.stderr.is_empty(), "{policy}");
         assert_eq!(!out.stdout.is_empty(), expect_line, "{policy}");
@@ -2669,8 +2729,11 @@ fn prompt_reminder_is_advisory_switchable_and_never_fails() {
     assert!(text.contains("guidance.prompt_reminders"), "{text}");
 
     write_policy(dir.path(), r#"{"guidance": {"prompt_reminders": "warn"}}"#);
-    for payload in ["", "not json", "{}", r#"{"prompt": 7}"#] {
-        let out = prompt_reminder(dir.path(), payload);
+    for payload in [
+        r#"{"hook_event_name":"UserPromptSubmit"}"#,
+        r#"{"hook_event_name":"UserPromptSubmit","prompt":7}"#,
+    ] {
+        let out = session_orient(dir.path(), payload);
         assert_eq!(out.status.code(), Some(0), "{payload}");
         assert!(out.stdout.is_empty(), "{payload}");
     }
