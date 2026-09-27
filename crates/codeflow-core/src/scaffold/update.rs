@@ -182,7 +182,7 @@ pub fn update(
 /// record, no commit, or a recorded baseline is left alone.
 fn record_work_records_baseline(root: &Path) -> Result<Option<String>, ScaffoldError> {
     use crate::workgraph::lifecycle::{recorded_baseline, Graph, BASELINE_KEY};
-    if recorded_baseline(root).is_some() || Graph::from_worktree(root).records.is_empty() {
+    if !recorded_baseline(root).is_empty() || Graph::from_worktree(root).records.is_empty() {
         return Ok(None);
     }
     let Some(head) = git2::Repository::discover(root).ok().and_then(|repo| {

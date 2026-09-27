@@ -14,6 +14,9 @@
 //! change, a criteria change, a changed acceptance block or a record created
 //! after the baseline applies the rules in full. Relationship errors are never
 //! grandfathered. Without a recorded baseline every record is judged in full.
+//! The baseline counts only when it is an ancestor of the judged commit, and
+//! a range whose base predates it judges older records from their baseline
+//! blobs.
 
 use std::collections::BTreeMap;
 use std::path::Path;
@@ -240,49 +243,173 @@ impl Graph {
     }
 }
 
-/// The migration baseline as this checkout can see it.
+/// The migration baseline as a judge can see it: one commit per line of work
+/// (`work_records_baseline`, a list of full 40-character commit ids; a single
+/// string is read as a one-item list). List order carries no meaning.
+///
+/// A record whose bytes equal its copy in any listed baseline is legacy.
+/// Otherwise it is judged from its ancestry-latest copies: of the baselines
+/// that hold it, any whose commit is an ancestor of another holder is
+/// dropped, the edit is judged as a transition from each remaining copy, and
+/// any refusal refuses it.
 #[derive(Debug, Clone)]
 pub enum Baseline {
     /// No baseline recorded: every record is judged in full.
     NotRecorded,
-    /// Recorded but not in this clone's history (a shallow checkout).
-    Unavailable(String),
+    /// Recorded, but these commits are not in this clone's history (a
+    /// shallow checkout): findings on records the range did not add warn.
+    Unavailable(Vec<String>),
+    /// Recorded but unusable (not a full commit id, not a commit, or not an
+    /// ancestor of the judged commit): every record is judged in full and
+    /// each reason is an error.
+    Refused(Vec<String>),
     Available {
-        commit: String,
-        graph: Graph,
+        commits: Vec<String>,
+        /// The records of each baseline, in list order.
+        graphs: Vec<Graph>,
+        /// `ancestor[i][j]`: baseline `i` is a proper ancestor of baseline `j`.
+        ancestor: Vec<Vec<bool>>,
     },
 }
 
 impl Baseline {
-    /// Load the baseline named in `.codeflow/project.toml`.
+    /// Load the baseline named in `.codeflow/project.toml` for the checked-out
+    /// `HEAD` (the verbs and `validate --docs`).
     #[must_use]
     pub fn load(repo_root: &Path) -> Self {
-        let Some(commit) = recorded_baseline(repo_root) else {
-            return Self::NotRecorded;
+        let Ok(repo) = Repository::discover(repo_root) else {
+            let entries = recorded_baseline(repo_root);
+            return if entries.is_empty() {
+                Self::NotRecorded
+            } else {
+                Self::Unavailable(entries)
+            };
         };
-        let graph = Repository::discover(repo_root)
-            .ok()
-            .and_then(|repo| Graph::from_revision(&repo, &format!("{commit}^{{commit}}")).ok());
-        match graph {
-            Some(graph) => Self::Available { commit, graph },
-            None => Self::Unavailable(commit),
+        let head = resolve_commit(&repo, "HEAD");
+        Self::from_entries(&repo, &recorded_baseline(repo_root), head)
+    }
+
+    /// Resolve baseline entries for judging the commit `head`. An entry is
+    /// read only as a full object id, never as a ref, tag, abbreviation or
+    /// revision expression, so a snapshot cannot move while its string stays.
+    fn from_entries(repo: &Repository, entries: &[String], head: Option<git2::Oid>) -> Self {
+        if entries.is_empty() {
+            return Self::NotRecorded;
+        }
+        let mut refused = Vec::new();
+        let mut missing = Vec::new();
+        let mut resolved: Vec<(String, git2::Oid)> = Vec::new();
+        for entry in entries {
+            let full = entry.len() == 40
+                && entry
+                    .bytes()
+                    .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+            let Some(oid) = full.then(|| git2::Oid::from_str(entry).ok()).flatten() else {
+                refused.push(format!(
+                    "{BASELINE_KEY} entry `{entry}` is not a full 40-character lowercase commit id; tags, refs, abbreviations and revision expressions are refused"
+                ));
+                continue;
+            };
+            match repo.find_object(oid, None) {
+                Err(_) => missing.push(entry.clone()),
+                Ok(object) if object.kind() != Some(git2::ObjectType::Commit) => refused.push(format!(
+                    "{BASELINE_KEY} entry {entry} is not a commit"
+                )),
+                Ok(_) if !head.is_some_and(|head| contains(repo, head, oid)) => refused.push(format!(
+                    "{BASELINE_KEY} entry {entry} is not an ancestor of the commit being judged; every baseline must be a commit this history contains"
+                )),
+                Ok(_) => {
+                    if !resolved.iter().any(|(_, seen)| *seen == oid) {
+                        resolved.push((entry.clone(), oid));
+                    }
+                }
+            }
+        }
+        if !refused.is_empty() {
+            return Self::Refused(refused);
+        }
+        if !missing.is_empty() {
+            return Self::Unavailable(missing);
+        }
+        let mut graphs = Vec::new();
+        for (entry, oid) in &resolved {
+            match Graph::from_revision(repo, &oid.to_string()) {
+                Ok(graph) => graphs.push(graph),
+                Err(_) => return Self::Unavailable(vec![entry.clone()]),
+            }
+        }
+        let ancestor = resolved
+            .iter()
+            .map(|(_, older)| {
+                resolved
+                    .iter()
+                    .map(|(_, newer)| older != newer && contains(repo, *newer, *older))
+                    .collect()
+            })
+            .collect();
+        Self::Available {
+            commits: resolved.into_iter().map(|(entry, _)| entry).collect(),
+            graphs,
+            ancestor,
         }
     }
 
-    /// Whether a record was created after the baseline.
+    /// The copies a record is judged from: those of the listed baselines
+    /// holding it whose commit is not an ancestor of another holder.
+    fn copies(&self, id: &str) -> Vec<&RecordView> {
+        let Self::Available {
+            graphs, ancestor, ..
+        } = self
+        else {
+            return Vec::new();
+        };
+        let holders: Vec<usize> = (0..graphs.len())
+            .filter(|&index| graphs[index].records.contains_key(id))
+            .collect();
+        holders
+            .iter()
+            .filter(|&&older| !holders.iter().any(|&newer| ancestor[older][newer]))
+            .filter_map(|&index| graphs[index].records.get(id))
+            .collect()
+    }
+
+    /// Whether the record's bytes equal its copy in any listed baseline.
+    fn is_legacy_blob(&self, record: &RecordView) -> bool {
+        match self {
+            Self::Available { graphs, .. } => graphs.iter().any(|graph| {
+                graph
+                    .records
+                    .get(&record.id)
+                    .is_some_and(|old| old.content == record.content)
+            }),
+            _ => false,
+        }
+    }
+
+    /// The refusals of an unusable baseline.
+    #[must_use]
+    pub fn errors(&self) -> Vec<String> {
+        match self {
+            Self::Refused(reasons) => reasons.clone(),
+            _ => Vec::new(),
+        }
+    }
+
+    /// Whether a record was created after every baseline.
     fn is_new(&self, record: &RecordView) -> bool {
         match self {
-            Self::NotRecorded => true,
+            Self::NotRecorded | Self::Refused(_) => true,
             Self::Unavailable(_) => false,
-            Self::Available { graph, .. } => !graph.records.contains_key(&record.id),
+            Self::Available { .. } => self.copies(&record.id).is_empty(),
         }
     }
 
     /// The visible warning of a checkout that cannot see the baseline.
     fn warning(&self) -> Option<String> {
         match self {
-            Self::Unavailable(commit) => Some(format!(
-                "work-records migration baseline {commit} is not in this clone's history; records the range did not add are judged leniently (fetch full history to enforce the rules in full)"
+            Self::Unavailable(commits) => Some(format!(
+                "work-records migration baseline {} is not in this clone's history; records the range did not add are judged leniently (fetch full history to enforce the rules in full)",
+                commits.join(", ")
             )),
             _ => None,
         }
@@ -291,27 +418,154 @@ impl Baseline {
     /// How fully the rules apply to a record that no transition touched.
     fn mode(&self, record: &RecordView) -> Mode {
         match self {
-            Self::NotRecorded => Mode::Strict,
+            Self::NotRecorded | Self::Refused(_) => Mode::Strict,
             Self::Unavailable(_) => Mode::Lenient,
-            Self::Available { graph, .. } => match graph.records.get(&record.id) {
-                None => Mode::Strict,
-                Some(old) if old.content == record.content => Mode::Exempt,
-                Some(old) if significant_change(old, record) => Mode::Strict,
-                Some(_) => Mode::Lenient,
-            },
+            Self::Available { .. } if self.is_legacy_blob(record) => Mode::Exempt,
+            Self::Available { .. } => {
+                let copies = self.copies(&record.id);
+                if !copies.is_empty() && copies.iter().all(|old| !significant_change(old, record)) {
+                    Mode::Lenient
+                } else {
+                    Mode::Strict
+                }
+            }
         }
     }
 }
 
-/// The recorded migration baseline commit, if any.
-#[must_use]
-pub fn recorded_baseline(repo_root: &Path) -> Option<String> {
-    crate::hooks::policy::read_project_toml(repo_root)?
-        .get(BASELINE_KEY)?
-        .as_str()
+fn resolve_commit(repo: &Repository, revision: &str) -> Option<git2::Oid> {
+    repo.revparse_single(revision)
+        .and_then(|object| object.peel_to_commit())
+        .map(|commit| commit.id())
+        .ok()
+}
+
+/// Whether `commit` is `tip` or one of its ancestors.
+fn contains(repo: &Repository, tip: git2::Oid, commit: git2::Oid) -> bool {
+    tip == commit || repo.graph_descendant_of(tip, commit).unwrap_or(false)
+}
+
+/// The baseline entries of a parsed project config: a list, or a single
+/// string read as a one-item list. Entries are trimmed; their form is
+/// checked when they are resolved.
+fn baseline_entries(config: Option<&toml::Value>) -> Vec<String> {
+    let values: Vec<&str> = match config.and_then(|config| config.get(BASELINE_KEY)) {
+        Some(toml::Value::String(value)) => vec![value.as_str()],
+        Some(toml::Value::Array(items)) => items.iter().filter_map(toml::Value::as_str).collect(),
+        _ => Vec::new(),
+    };
+    let mut entries: Vec<String> = Vec::new();
+    for value in values
+        .into_iter()
         .map(str::trim)
         .filter(|value| !value.is_empty())
-        .map(str::to_owned)
+    {
+        if !entries.iter().any(|seen| seen == value) {
+            entries.push(value.to_string());
+        }
+    }
+    entries
+}
+
+/// The recorded migration baseline entries of the checked-out tree; empty
+/// when none.
+#[must_use]
+pub fn recorded_baseline(repo_root: &Path) -> Vec<String> {
+    baseline_entries(crate::hooks::policy::read_project_toml(repo_root).as_ref())
+}
+
+/// The baseline entries recorded in a commit's `.codeflow/project.toml`.
+fn baseline_at(repo: &Repository, commit: git2::Oid) -> Vec<String> {
+    let config = repo
+        .find_commit(commit)
+        .ok()
+        .and_then(|commit| commit.tree().ok())
+        .and_then(|tree| tree.get_path(Path::new(".codeflow/project.toml")).ok())
+        .and_then(|entry| repo.find_blob(entry.id()).ok())
+        .and_then(|blob| String::from_utf8(blob.content().to_vec()).ok())
+        .and_then(|text| text.parse::<toml::Value>().ok());
+    baseline_entries(config.as_ref())
+}
+
+/// The baseline that governs a range, and the notices about it. Trust comes
+/// from the target (the pull request's base tip, or the `--since` revision),
+/// never from the merge-base: when the target records a baseline, that list
+/// exempts records and a change to it inside the range only takes effect
+/// after it lands. A target list that cannot be evaluated against the
+/// proposed history is refused, never replaced by the head's list. When the
+/// target records none, the range introduces the migration (an adopter's
+/// first update, or a release into a target that predates the rules); the
+/// head's list governs, every entry must be an ancestor of the head, and
+/// every entry is named for the human reviewer.
+fn range_baseline(
+    repo_root: &Path,
+    repo: &Repository,
+    target: git2::Oid,
+    head: Option<&str>,
+) -> (Baseline, Vec<String>) {
+    let head_commit = resolve_commit(repo, head.unwrap_or("HEAD"));
+    let base_list = baseline_at(repo, target);
+    let head_list = match head {
+        Some(_) => head_commit
+            .map(|commit| baseline_at(repo, commit))
+            .unwrap_or_default(),
+        None => recorded_baseline(repo_root),
+    };
+    let mut notices = Vec::new();
+    if base_list.is_empty() {
+        if !head_list.is_empty() {
+            notices.push(format!(
+                "this change introduces {BASELINE_KEY}; every record unchanged from these snapshots is legacy, so the human reviewer approves each: {}",
+                head_list.join(", ")
+            ));
+        }
+        return (
+            Baseline::from_entries(repo, &head_list, head_commit),
+            notices,
+        );
+    }
+    if head_list != base_list {
+        let added: Vec<&str> = head_list
+            .iter()
+            .filter(|e| !base_list.contains(e))
+            .map(String::as_str)
+            .collect();
+        let removed: Vec<&str> = base_list
+            .iter()
+            .filter(|e| !head_list.contains(e))
+            .map(String::as_str)
+            .collect();
+        let describe = |entries: &[&str]| {
+            if entries.is_empty() {
+                "none".to_string()
+            } else {
+                entries.join(", ")
+            }
+        };
+        notices.push(format!(
+            "this change edits {BASELINE_KEY} (added {}; removed {}{}); the target's list judges this change, and the edit takes effect after it lands",
+            describe(&added),
+            describe(&removed),
+            if added.is_empty() && removed.is_empty() { "; reordered" } else { "" }
+        ));
+    }
+    let baseline = match Baseline::from_entries(repo, &base_list, head_commit) {
+        Baseline::Refused(reasons) => Baseline::Refused(
+            reasons
+                .into_iter()
+                .map(|reason| {
+                    let hint = if reason.contains("not an ancestor") {
+                        "; bring the branch up to date with its target"
+                    } else {
+                        ""
+                    };
+                    format!("the target's {reason}{hint}")
+                })
+                .collect(),
+        ),
+        governed => governed,
+    };
+    (baseline, notices)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -329,6 +583,9 @@ enum Mode {
 pub struct Verdict {
     pub errors: Vec<String>,
     pub warnings: Vec<String>,
+    /// Facts a reviewer should see that are neither errors nor warnings,
+    /// such as a change to the baseline list.
+    pub notices: Vec<String>,
 }
 
 impl Verdict {
@@ -355,6 +612,8 @@ impl Verdict {
         self.errors.dedup();
         self.warnings.sort();
         self.warnings.dedup();
+        self.notices.sort();
+        self.notices.dedup();
     }
 }
 
@@ -1024,34 +1283,76 @@ pub fn judge_change(
 }
 
 /// Judge every record a range changes, from `base` to `head` (a revision, or
-/// the working tree when `None`).
+/// the working tree when `None`). A record `base` lacks but a migration
+/// baseline has is judged as a transition from each of its ancestry-latest
+/// baseline copies, so a range whose base predates a baseline treats older
+/// records as that baseline does. The baseline list is read from `base`
+/// (see [`range_baseline`]).
 ///
 /// # Errors
 ///
 /// Returns a message when the repository or a revision cannot be read.
 pub fn judge_range(repo_root: &Path, base: &str, head: Option<&str>) -> Result<Verdict, String> {
+    judge_range_against(repo_root, base, base, head)
+}
+
+/// [`judge_range`] with the records diffed from `base` and the governing
+/// baseline list read from `target`, which differ for a pull request whose
+/// branch forked before the target's current tip.
+fn judge_range_against(
+    repo_root: &Path,
+    base: &str,
+    target: &str,
+    head: Option<&str>,
+) -> Result<Verdict, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
-    let before = Graph::from_revision(&repo, base)?;
+    let target_commit = resolve_commit(&repo, target)
+        .ok_or_else(|| format!("cannot resolve {target} to a commit"))?;
+    let (baseline, notices) = range_baseline(repo_root, &repo, target_commit, head);
+    let base_graph = Graph::from_revision(&repo, base)?;
     let after = match head {
         Some(head) => Graph::from_revision(&repo, head)?,
         None => Graph::from_worktree(repo_root),
     };
+    // The tree before the change, with each record the base lacks taken
+    // from a baseline copy, for the rules that read the surrounding records.
+    let mut before = base_graph.clone();
+    for id in after.records.keys() {
+        if !before.records.contains_key(id) {
+            if let Some(copy) = baseline.copies(id).first() {
+                before.records.insert(id.clone(), (*copy).clone());
+            }
+        }
+    }
     let paths = changed_paths(&repo, base, head)?;
     let context = ChangeContext {
         base: Some(&before),
         changed_paths: Some(&paths),
     };
-    let baseline = Baseline::load(repo_root);
-    let mut verdict = Verdict::default();
+    let mut verdict = Verdict {
+        notices,
+        ..Verdict::default()
+    };
     verdict.warnings.extend(baseline.warning());
+    verdict.errors.extend(baseline.errors());
     for record in after.records.values() {
-        let old = before.records.get(&record.id);
-        if old.is_some_and(|old| old.content == record.content) {
-            continue;
+        let olds: Vec<&RecordView> = match base_graph.records.get(&record.id) {
+            Some(old) if old.content == record.content => continue,
+            Some(old) => vec![old],
+            None if baseline.is_legacy_blob(record) => continue,
+            None => baseline.copies(&record.id),
+        };
+        let judged: Vec<Verdict> = if olds.is_empty() {
+            vec![judge_change(None, record, &after, &baseline, context)]
+        } else {
+            olds.into_iter()
+                .map(|old| judge_change(Some(old), record, &after, &baseline, context))
+                .collect()
+        };
+        for one in judged {
+            verdict.errors.extend(one.errors);
+            verdict.warnings.extend(one.warnings);
         }
-        let judged = judge_change(old, record, &after, &baseline, context);
-        verdict.errors.extend(judged.errors);
-        verdict.warnings.extend(judged.warnings);
     }
     verdict.sort();
     Ok(verdict)
@@ -1125,7 +1426,9 @@ pub fn working_context(repo_root: &Path) -> (Option<Graph>, Option<Vec<String>>)
 
 /// Judge a pull request: the records changed from the merge-base of `base`
 /// and `head` to `head`, so work that landed on the target after the branch
-/// point is not mistaken for a change of this range.
+/// point is not mistaken for a change of this range. The governing baseline
+/// list is read from `base` itself, not from the merge-base, so a branch
+/// forked before the target adopted its list cannot re-enter migration.
 ///
 /// # Errors
 ///
@@ -1138,10 +1441,16 @@ pub fn judge_pull_request(repo_root: &Path, base: &str, head: &str) -> Result<Ve
             .map(|commit| commit.id())
             .map_err(|error| format!("{revision}: {}", error.message()))
     };
+    let target = commit(base)?;
     let anchor = repo
-        .merge_base(commit(base)?, commit(head)?)
+        .merge_base(target, commit(head)?)
         .map_err(|error| format!("no merge-base of {base} and {head}: {}", error.message()))?;
-    judge_range(repo_root, &anchor.to_string(), Some(head))
+    judge_range_against(
+        repo_root,
+        &anchor.to_string(),
+        &target.to_string(),
+        Some(head),
+    )
 }
 
 /// Judge the whole checked-out tree against the migration baseline, and add
@@ -1152,6 +1461,7 @@ pub fn validate_lifecycle(repo_root: &Path) -> Verdict {
     let baseline = Baseline::load(repo_root);
     let mut verdict = Verdict::default();
     verdict.warnings.extend(baseline.warning());
+    verdict.errors.extend(baseline.errors());
     for record in graph.records.values() {
         verdict.apply(
             baseline.mode(record),

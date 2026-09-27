@@ -9,7 +9,8 @@ use codeflow_core::hooks::{PolicyLevel, Violation};
 use codeflow_core::workgraph::durable_work_tracking_enabled;
 use codeflow_core::workgraph::lifecycle::judge_pull_request;
 
-/// Run the check for `codeflow ci` and record its findings and whether it ran.
+/// Run the check for `codeflow ci`, record its findings and whether it ran,
+/// and print its notices.
 pub(super) fn dispatch(
     root: &Path,
     base_candidates: &[String],
@@ -25,6 +26,9 @@ pub(super) fn dispatch(
     if outcome.ran {
         ran.push("work-records");
     }
+    for notice in &outcome.notices {
+        eprintln!("codeflow ci: notice: work.records: {notice}");
+    }
     tagged.extend(
         outcome
             .violations
@@ -39,6 +43,8 @@ pub(super) fn dispatch(
 /// What the check found and whether it ran.
 pub(super) struct Outcome {
     pub violations: Vec<Violation>,
+    /// Facts to show without blocking, such as an edited baseline list.
+    pub notices: Vec<String>,
     pub ran: bool,
 }
 
@@ -50,6 +56,7 @@ pub(super) fn check(root: &Path, base: Option<&str>, head: &str) -> Outcome {
         Ok(false) => {
             return Outcome {
                 violations: Vec::new(),
+                notices: Vec::new(),
                 ran: false,
             }
         }
@@ -58,6 +65,7 @@ pub(super) fn check(root: &Path, base: Option<&str>, head: &str) -> Outcome {
                 violations: vec![block(format!(
                     "cannot determine durable-work tracking: {error}"
                 ))],
+                notices: Vec::new(),
                 ran: true,
             }
         }
@@ -65,6 +73,7 @@ pub(super) fn check(root: &Path, base: Option<&str>, head: &str) -> Outcome {
     let Some(base) = base else {
         return Outcome {
             violations: Vec::new(),
+            notices: Vec::new(),
             ran: false,
         };
     };
@@ -81,11 +90,13 @@ pub(super) fn check(root: &Path, base: Option<&str>, head: &str) -> Outcome {
             }));
             Outcome {
                 violations,
+                notices: verdict.notices,
                 ran: true,
             }
         }
         Err(error) => Outcome {
             violations: vec![block(format!("cannot read the record range: {error}"))],
+            notices: Vec::new(),
             ran: true,
         },
     }
