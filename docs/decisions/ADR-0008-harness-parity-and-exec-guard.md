@@ -164,6 +164,8 @@ macOS) and the macOS per-user `/private/var/folders/<xx>/<id>/T`.
 Containment is canonical: the operand's longest existing prefix is resolved
 through symlinks, and a `..` in the rest, a failed resolution or a glob
 before the last component grants nothing, so a link under temp space that
-leads to `/etc` stays blocked. `$TMPDIR` adds no root; one that canonically
+leads to `/etc` stays blocked. A path that reads as temp space but whose
+target cannot be established, including an operand still holding an escape
+or quote, is refused through every spelling. `$TMPDIR` adds no root; one that canonically
 is or lies below a root is protected itself. The roots, a glob over one and
 every other system directory stay blocked.

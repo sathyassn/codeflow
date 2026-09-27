@@ -333,25 +333,47 @@ fn is_home_root_operand(op: &str) -> bool {
 /// depth). It recognizes ordinary command paths and direct `sh -c`/`eval`
 /// quoting without stripping quotes from an entire line, which would
 /// false-positive on ordinary `echo` and commit-message strings.
-fn dangerous_rm_target(op: &str) -> Option<&'static str> {
-    let op = unquote_unescape(op);
+fn dangerous_rm_target(raw: &str) -> Option<&'static str> {
+    let op = unquote_unescape(raw);
     let op = op.trim();
     if is_home_root_operand(op) {
         return Some("home directory");
     }
     let tmpdir = std::env::var_os("TMPDIR").map(PathBuf::from);
-    match temp_place(op, tmpdir.as_deref()) {
+    let place = if has_known_identity(raw) {
+        temp_place(op, tmpdir.as_deref())
+    } else {
+        TempPlace::Outside(None)
+    };
+    match place {
         TempPlace::Root => Some("temp root"),
         TempPlace::Below => None,
         TempPlace::Outside(canonical) => {
             let norm = normalize_path(op);
+            let reads_as_temp = temp_root_depth(&norm).is_some();
+            let Some(canonical) = canonical else {
+                // Temp space whose target cannot be established is refused
+                // through every spelling, not left to the system-prefix
+                // rule, which `/tmp` does not match.
+                return protected_path(&norm)
+                    .or_else(|| reads_as_temp.then_some("unresolved temp path"));
+            };
             // A path that reads as temp space but leads elsewhere (a link
             // under `/tmp`) is judged where it lands. Other paths keep their
             // lexical reading: `/home` resolves below `/System` on macOS.
-            let lands = canonical.filter(|_| temp_root_depth(&norm).is_some());
-            protected_path(&norm).or_else(|| lands.as_deref().and_then(protected_path))
+            protected_path(&norm)
+                .or_else(|| reads_as_temp.then(|| protected_path(&canonical)).flatten())
         }
     }
+}
+
+/// Whether the operand token is the path the shell passes. The tokenizer
+/// has already removed the quoting it models, so a backslash, quote,
+/// expansion or substitution left in the token is something this
+/// classifier cannot resolve: a literal backslash in a single-quoted name,
+/// for one, would otherwise be read as a different, absent path.
+fn has_known_identity(raw: &str) -> bool {
+    !raw.contains(['\\', '$', '`', '\'', '"'])
 }
 
 /// Classify a normalized absolute path as the root, a system directory or a
@@ -1513,11 +1535,36 @@ mod tests {
         ] {
             assert!(DangerousModule.check(&ctx(&command)).is_some(), "{command}");
         }
-        // A glob before the last component may match a link: not exempt.
+        // A glob before the last component may match a link: not exempt,
+        // and refused outright, whichever way temp space is spelled.
         assert_eq!(
             temp_place(&format!("{base}/out*/hosts"), None),
             TempPlace::Outside(None)
         );
+        assert!(DangerousModule
+            .check(&ctx("rm -rf /tmp/scratch/glob-*/hosts"))
+            .is_some());
+        assert!(DangerousModule
+            .check(&ctx("rm -rf /tmp/scratch/glob-*/../var/db"))
+            .is_some());
+        // A literal backslash in a quoted name makes the path unknowable.
+        std::os::unix::fs::symlink("/etc", format!("{base}/odd\\link")).unwrap();
+        for command in [
+            format!("rm -rf '{base}/odd\\link/hosts'"),
+            "rm -rf '/tmp/scratch/odd\\link/hosts'".to_string(),
+            "rm -rf '/tmp/scratch/a\"b/hosts'".to_string(),
+            "rm -rf \"/tmp/scratch/`echo x`/hosts\"".to_string(),
+        ] {
+            assert!(DangerousModule.check(&ctx(&command)).is_some(), "{command}");
+        }
+        assert!(!has_known_identity("/tmp/odd\\link"));
+        assert!(has_known_identity("/tmp/quoted dir"));
+        // Quoting the tokenizer removes keeps the operand's identity.
+        assert!(DangerousModule
+            .check(&ctx(&format!(
+                "rm -rf '{base}/x'\"y\" \"{base}/quoted dir\""
+            )))
+            .is_none());
         // A component that exists but does not resolve establishes nothing.
         assert_eq!(
             temp_place(&format!("{base}/dangling/y"), None),
