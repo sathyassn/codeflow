@@ -134,9 +134,10 @@ publication date._
   (`CODEFLOW_HOME`, else `~/.codeflow`), which spans the machine, and
   `codeflow/full-gate.lock` in the repository's git common directory, which
   spans its worktrees; where one cannot be opened, as in a sandbox, the gate
-  says so and holds the other. In every mode, a gate that runs cargo refuses
-  a `CARGO_TARGET_DIR` outside the worktree, since another worktree's build
-  would overwrite its binaries; unset it or point it inside the worktree.
+  says so and holds the other. In every mode, a gate that runs cargo warns
+  when `CARGO_TARGET_DIR` points outside the worktree, naming the shared
+  directory: builds in parallel worktrees can overwrite each other's binaries
+  there. The gate still runs; a shared directory to save disk stays valid.
   Each target now prints `[codeflow test] starting target '<name>' (<mode>
   mode)` on stderr as it starts, so a killed gate's log names the target it
   died in; stdout, the summary lines and the exit codes are unchanged, and

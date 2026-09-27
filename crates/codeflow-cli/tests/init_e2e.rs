@@ -484,8 +484,8 @@ fn init_full_tier_preserves_representative_brownfield_present_files() {
 }
 
 /// TSK-134: in a freshly scaffolded project at every tier, `codeflow test`
-/// refuses a `CARGO_TARGET_DIR` outside the worktree and refuses a full gate
-/// while another holds the gate lock.
+/// warns about a `CARGO_TARGET_DIR` outside the worktree and refuses a full
+/// gate while another holds the gate lock.
 #[test]
 fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
     use codeflow_core::testing::gate_guard::{acquire_full_gate_lock, lock_dirs};
@@ -516,13 +516,10 @@ fn fresh_scaffolds_apply_the_gate_lock_and_target_check_at_every_tier() {
         };
 
         let outside = tmp.path().join("shared-target");
-        let refused = gate(Some(&outside));
-        let err = String::from_utf8_lossy(&refused.stderr).to_string();
-        assert_eq!(refused.status.code(), Some(1), "{tier}: {err}");
-        assert!(
-            err.contains("never shared between worktrees"),
-            "{tier}: {err}"
-        );
+        let warned = gate(Some(&outside));
+        let err = String::from_utf8_lossy(&warned.stderr).to_string();
+        assert_eq!(warned.status.code(), Some(0), "{tier}: {err}");
+        assert!(err.contains("warning: CARGO_TARGET_DIR="), "{tier}: {err}");
 
         let held = acquire_full_gate_lock(&lock_dirs(&root, Some(&home)), &root).unwrap();
         let locked = gate(None);

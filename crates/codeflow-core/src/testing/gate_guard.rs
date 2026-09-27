@@ -17,9 +17,11 @@
 //! names the holder recorded in the file. A file that still names a holder
 //! while its lock is free was left by a process that died, and is reclaimed.
 //!
-//! **Target directory.** `CARGO_TARGET_DIR` outside the worktree lets one
-//! worktree's build overwrite another's binaries mid-gate;
-//! [`check_cargo_target_dir`] refuses it.
+//! **Target directory.** `CARGO_TARGET_DIR` outside the worktree lets builds
+//! in parallel worktrees overwrite each other's binaries. A shared directory
+//! is also a legitimate way to save disk, and the gate lock already keeps two
+//! gates apart, so [`check_cargo_target_dir`] returns a warning, never a
+//! refusal.
 
 use std::fs::{File, OpenOptions};
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -210,22 +212,20 @@ fn describe_holder(record: &str) -> String {
     format!("pid {pid}{dir}{age}")
 }
 
-/// Refuse a `CARGO_TARGET_DIR` outside the worktree when the gate runs cargo.
+/// Warn about a `CARGO_TARGET_DIR` outside the worktree when the gate runs
+/// cargo.
 ///
 /// `value` is the variable as set (relative paths resolve against `cwd`, as
 /// cargo resolves them). `None` or an empty value passes.
 ///
-/// # Errors
-///
-/// Returns the refusal message naming the rule.
+/// Returns the warning naming the shared directory, or `None`.
+#[must_use]
 pub fn check_cargo_target_dir(
     worktree: &Path,
     cwd: &Path,
     value: Option<&std::ffi::OsStr>,
-) -> Result<(), String> {
-    let Some(value) = value.filter(|v| !v.is_empty()) else {
-        return Ok(());
-    };
+) -> Option<String> {
+    let value = value.filter(|v| !v.is_empty())?;
     let raw = Path::new(value);
     let joined = if raw.is_absolute() {
         raw.to_path_buf()
@@ -235,13 +235,14 @@ pub fn check_cargo_target_dir(
     let target = resolve(&joined);
     let root = resolve(worktree);
     if target.starts_with(&root) {
-        return Ok(());
+        return None;
     }
-    Err(format!(
-        "CARGO_TARGET_DIR={} is outside this worktree ({}). A cargo target directory is \
-         never shared between worktrees: another worktree's build would overwrite this \
-         gate's binaries. Unset it, or point it inside the worktree (for example {}).",
-        raw.display(),
+    Some(format!(
+        "CARGO_TARGET_DIR={} is shared outside this worktree ({}). When worktrees build \
+         in parallel, a shared target directory lets one build overwrite another's \
+         binaries mid-run; for parallel work, point it inside each worktree (for \
+         example {}).",
+        target.display(),
         root.display(),
         root.join("target").display()
     ))
@@ -386,31 +387,32 @@ mod tests {
     }
 
     #[test]
-    fn target_dir_inside_the_worktree_passes() {
+    fn target_dir_inside_the_worktree_gives_no_warning() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("wt");
         std::fs::create_dir_all(&root).unwrap();
         for value in ["target", "./build/cargo", ""] {
             assert!(
-                check_cargo_target_dir(&root, &root, Some(std::ffi::OsStr::new(value))).is_ok(),
+                check_cargo_target_dir(&root, &root, Some(std::ffi::OsStr::new(value))).is_none(),
                 "{value}"
             );
         }
         let abs = root.join("target");
-        assert!(check_cargo_target_dir(&root, &root, Some(abs.as_os_str())).is_ok());
-        assert!(check_cargo_target_dir(&root, &root, None).is_ok());
+        assert!(check_cargo_target_dir(&root, &root, Some(abs.as_os_str())).is_none());
+        assert!(check_cargo_target_dir(&root, &root, None).is_none());
     }
 
     #[test]
-    fn target_dir_outside_the_worktree_is_refused_naming_the_rule() {
+    fn target_dir_outside_the_worktree_warns_naming_it() {
         let tmp = tempfile::tempdir().unwrap();
         let root = tmp.path().join("wt");
         std::fs::create_dir_all(&root).unwrap();
         let shared = tmp.path().join("shared-target");
-        let error = check_cargo_target_dir(&root, &root, Some(shared.as_os_str())).unwrap_err();
-        assert!(error.contains("never shared between worktrees"), "{error}");
+        let warning = check_cargo_target_dir(&root, &root, Some(shared.as_os_str())).unwrap();
+        assert!(warning.contains("shared-target"), "{warning}");
+        assert!(warning.contains("in parallel"), "{warning}");
         // A relative escape resolves against the working directory.
         let escape = check_cargo_target_dir(&root, &root, Some(std::ffi::OsStr::new("../x")));
-        assert!(escape.is_err());
+        assert!(escape.is_some());
     }
 }

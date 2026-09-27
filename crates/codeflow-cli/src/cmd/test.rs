@@ -148,13 +148,16 @@ pub fn run(args: &TestArgs) -> i32 {
 }
 
 /// TSK-134 guards, checked before any target runs: a gate that runs cargo
-/// refuses a `CARGO_TARGET_DIR` outside the worktree, and a full gate takes
-/// the machine-wide gate lock (held until the returned value drops) or
+/// warns about a `CARGO_TARGET_DIR` outside the worktree, and a full gate
+/// takes the machine-wide gate lock (held until the returned value drops) or
 /// refuses naming the gate that holds it.
 fn guard_gate(root: &std::path::Path, mode: &str) -> Result<Option<GateLock>, String> {
     if gate_uses_cargo(root, mode) {
         let cwd = std::env::current_dir().unwrap_or_else(|_| root.to_path_buf());
-        check_cargo_target_dir(root, &cwd, std::env::var_os("CARGO_TARGET_DIR").as_deref())?;
+        let value = std::env::var_os("CARGO_TARGET_DIR");
+        if let Some(warning) = check_cargo_target_dir(root, &cwd, value.as_deref()) {
+            eprintln!("codeflow test: warning: {warning}");
+        }
     }
     if mode != "full" {
         return Ok(None);

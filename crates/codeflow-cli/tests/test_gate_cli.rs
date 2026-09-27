@@ -1,6 +1,7 @@
 //! `codeflow test` gate guards and progress, driven through the real binary
 //! (TSK-134, TSK-094): a start line per target on stderr, one full gate at a
-//! time on a machine, and no cargo target directory outside the worktree.
+//! time on a machine, and a warning for a cargo target directory outside the
+//! worktree.
 
 use std::io::{BufRead, BufReader};
 use std::path::Path;
@@ -268,20 +269,26 @@ const CARGO_TARGET: &str = r#"{"schema_version": "1.0", "targets": [
 ]}"#;
 
 #[test]
-fn a_cargo_target_dir_outside_the_worktree_is_refused() {
+fn a_cargo_target_dir_outside_the_worktree_warns_and_runs() {
     let dir = repo(CARGO_TARGET);
     let home = tempfile::tempdir().unwrap();
     let elsewhere = tempfile::tempdir().unwrap();
     for mode in ["full", "quick"] {
-        let refused = command(dir.path(), home.path(), &["test", "--mode", mode])
+        let warned = command(dir.path(), home.path(), &["test", "--mode", mode])
             .env("CARGO_TARGET_DIR", elsewhere.path())
             .output()
             .unwrap();
-        let err = stderr(&refused);
-        assert_eq!(refused.status.code(), Some(1), "{mode}: {err}");
-        assert!(err.contains("never shared between worktrees"), "{err}");
-        assert!(err.contains("CARGO_TARGET_DIR="), "{err}");
-        assert!(!err.contains("starting target"), "no target ran: {err}");
+        let err = stderr(&warned);
+        assert_eq!(warned.status.code(), Some(0), "{mode}: {err}");
+        assert!(
+            err.contains("codeflow test: warning: CARGO_TARGET_DIR="),
+            "{err}"
+        );
+        assert!(err.contains("in parallel"), "{err}");
+        assert!(
+            err.contains("starting target 'rust'"),
+            "the gate still ran: {err}"
+        );
     }
 
     let inside = command(dir.path(), home.path(), &["test"])
@@ -289,12 +296,14 @@ fn a_cargo_target_dir_outside_the_worktree_is_refused() {
         .output()
         .unwrap();
     assert_eq!(inside.status.code(), Some(0), "{}", stderr(&inside));
+    assert!(!stderr(&inside).contains("warning: CARGO_TARGET_DIR"));
 
-    // A gate that runs no cargo is not refused.
+    // A gate that runs no cargo does not warn.
     let no_cargo = repo(QUICK_PASS);
     let other = command(no_cargo.path(), home.path(), &["test"])
         .env("CARGO_TARGET_DIR", elsewhere.path())
         .output()
         .unwrap();
     assert_eq!(other.status.code(), Some(0), "{}", stderr(&other));
+    assert!(!stderr(&other).contains("warning: CARGO_TARGET_DIR"));
 }
