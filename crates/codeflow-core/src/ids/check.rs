@@ -220,26 +220,47 @@ pub fn merge_rule(git: &Git, base: &str, head: &str) -> Result<Report, IdsError>
         }
     }
     let mut added = Vec::new();
+    let mut backfilled = Vec::new();
     for (id, path) in added_paths {
         if let Some(old) = removed.get(&id) {
             // A moved record keeps its identity: judge it as an edit.
-            check_uid_edit(git, &merge_base, old, head, &path, &id, &mut report);
+            backfilled.extend(check_uid_edit(
+                git,
+                &merge_base,
+                old,
+                head,
+                &path,
+                &id,
+                &mut report,
+            ));
             continue;
         }
         let uid = uid_at(git, head, &path);
         added.push(Added { id, path, uid });
     }
     for (id, path) in &modified {
-        check_uid_edit(git, &merge_base, path, head, path, id, &mut report);
+        backfilled.extend(check_uid_edit(
+            git,
+            &merge_base,
+            path,
+            head,
+            path,
+            id,
+            &mut report,
+        ));
     }
     report.info.push(format!(
-        "merge rule: {} record(s) added in {}..{}",
+        "merge rule: {} record(s) added, {} uid(s) backfilled in {}..{}",
         added.len(),
+        backfilled.len(),
         short(&merge_base),
         short(head)
     ));
+    if !added.is_empty() || !backfilled.is_empty() {
+        let judged: Vec<Added> = added.iter().chain(&backfilled).cloned().collect();
+        bind(git, head, &judged, &mut report)?;
+    }
     if !added.is_empty() {
-        bind(git, head, &added, &mut report)?;
         scan(git, head, &added, &mut report)?;
     }
     Ok(report)
@@ -253,9 +274,15 @@ fn check_uid_edit(
     new_path: &str,
     id: &RegId,
     report: &mut Report,
-) {
+) -> Option<Added> {
     let Some(old) = uid_at(git, base, old_path) else {
-        return;
+        // A record without a uid keeps its legacy allowance, but its first
+        // uid (the backfill) must be the one the registry binds (R-2).
+        return uid_at(git, head, new_path).map(|uid| Added {
+            id: id.clone(),
+            path: new_path.to_string(),
+            uid: Some(uid),
+        });
     };
     match uid_at(git, head, new_path) {
         Some(new) if new == old => {}
@@ -266,6 +293,7 @@ fn check_uid_edit(
             "{id}: the range removes the uid of an existing record ({old}) (R-2)"
         )),
     }
+    None
 }
 
 fn bind(git: &Git, head: &str, added: &[Added], report: &mut Report) -> Result<(), IdsError> {

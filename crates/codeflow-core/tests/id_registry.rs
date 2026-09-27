@@ -662,6 +662,63 @@ fn a_number_an_invalid_commit_introduced_is_never_issued_again() {
 }
 
 #[test]
+fn a_first_uid_backfill_must_be_the_registry_binding() {
+    let world = World::new();
+    let a = world.clone_as("a", "a@example.test");
+    write_record(&a, "TSK-001", None);
+    commit_all(&a, "legacy record");
+    git(&a, &["push", "-q", "origin", "main"]);
+    seed::seed(&a, None).unwrap();
+    let git_a = Git::new(&a);
+    let bound = Ledger::read(&git_a, &registry_ref(&git_a).unwrap())
+        .unwrap()
+        .entry(&RegId::parse("TSK-001").unwrap())
+        .unwrap()
+        .uid
+        .clone();
+
+    // Control: a text edit keeps the uid-free legacy allowance.
+    git(&a, &["checkout", "-q", "-b", "task/edit", "main"]);
+    std::fs::write(
+        a.join("project-management/tasks/TSK-001.md"),
+        record_text("TSK-001", None) + "more\n",
+    )
+    .unwrap();
+    commit_all(&a, "edit");
+    let edit = check::merge_rule(&git_a, "main", "HEAD").unwrap();
+    assert!(edit.passed(), "{:?}", edit.blocks);
+
+    // The correct backfill binds.
+    git(&a, &["checkout", "-q", "-b", "task/backfill", "main"]);
+    write_record(&a, "TSK-001", Some(&bound));
+    commit_all(&a, "backfill");
+    let right = check::merge_rule(&git_a, "main", "HEAD").unwrap();
+    assert!(right.passed(), "{:?}", right.blocks);
+    assert!(
+        right
+            .info
+            .iter()
+            .any(|l| l == &format!("bound: TSK-001 -> {bound}")),
+        "{:?}",
+        right.info
+    );
+
+    // A wrong first uid blocks before it lands.
+    git(&a, &["checkout", "-q", "-b", "task/wrong", "main"]);
+    write_record(&a, "TSK-001", Some(&new_uid()));
+    commit_all(&a, "wrong backfill");
+    let wrong = check::merge_rule(&git_a, "main", "HEAD").unwrap();
+    assert!(
+        wrong
+            .blocks
+            .iter()
+            .any(|b| b.contains("the registry binds it to uid") && b.contains(&bound)),
+        "{:?}",
+        wrong.blocks
+    );
+}
+
+#[test]
 fn quoted_record_paths_are_still_judged() {
     let world = World::new();
     let a = world.clone_as("a", "a@example.test");
