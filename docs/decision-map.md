@@ -18,9 +18,10 @@ before relying on it.
 
 ## Architecture
 
-A later decision can replace an earlier one. The earlier record stays in
-place with its `superseded_by` field naming its successor, so a chain always
-ends at the decision that binds today.
+A later decision can replace an earlier one or narrow it. The earlier record
+stays in place with its `superseded_by` field naming its successor, so a chain
+always ends at the decision that binds today. ADR-0058 narrows ADR-0048 rather
+than replacing it, so ADR-0048 still binds for what ADR-0058 did not change.
 
 - ADR-0002, then ADR-0006
 - ADR-0010, then ADR-0012, then ADR-0061, then ADR-0062

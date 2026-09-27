@@ -87,9 +87,10 @@ when you submit them.
    and, after acting on it, runs
    `codeflow present resolve <session-id> <event-id> --event-version <n> --status addressed`.
 
-The rail reads "Review received" with an event id when you submit and
-"Review state changed." as the agent handles it, and after a reload the
-**Earlier feedback** list shows that review as addressed or dismissed.
+The rail reads "Review received" with an event id when you submit, and
+"Review state changed." when the agent updates it. After a reload, the
+**Earlier feedback** list shows that review as addressed or dismissed once the
+agent has resolved it.
 
 ### Export or close a session
 

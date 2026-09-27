@@ -4,26 +4,27 @@
     "id": "product-architecture",
     "family": "layering",
     "binding": "authored",
-    "question": "Which record answers which question, and how often does each change?",
-    "idea": "Each knowledge layer changes at its own cadence, and one spine links a capability through its work and decisions to what happened.",
-    "title": "The six knowledge layers by how often they change",
+    "question": "Which layer holds which station of the traceability spine?",
+    "idea": "The spine runs from a capability through work and decisions to the ledger, four of the six layers hold its stations, and the pull request it crosses is held by none.",
+    "title": "The six knowledge layers along the traceability spine",
     "kicker": "The knowledge model",
-    "caption": "Read a bar's length as how often that layer changes; the spine is the path from a capability to the ledger.",
+    "description": "The axis is the five stations of the traceability spine: capability, epic and task, decision and spec, pull request, ledger. WHAT holds capability, WORK holds epic and task and also reaches decision and spec because specs live in project-management, HOW holds decision and spec, and TRACE holds the ledger. The spine enters each of those four layers at a disc and runs left to right in the source's order; it crosses the pull request station between HOW and TRACE, where no layer holds it. WHY and RULES hold no station and draw no bar. Each layer's pace is printed beside its name: WHY and RULES rarely, WHAT every ship, WORK daily, HOW per decision, TRACE automatically.",
+    "caption": "The spine runs through WHAT, WORK, HOW and TRACE in that order, and the pull request it crosses on the way to the ledger is held by no layer.",
     "states": [
       {
         "name": "layer",
         "mark": "layer",
-        "means": "Layer, drawn to how often it changes"
+        "means": "Layer, drawn over the spine stations it holds"
       },
       {
         "name": "act",
         "mark": "act",
-        "means": "Its cadence"
+        "means": "Where the spine enters the layer"
       },
       {
         "name": "done",
         "mark": "done",
-        "means": "Traceability spine"
+        "means": "Traceability spine, capability to ledger"
       }
     ],
     "facts": [
@@ -86,43 +87,63 @@
           "text": "The traceability spine runs downward: capability"
         },
         "value": true
+      },
+      {
+        "claim": "the spine passes the pull request between the decision and the ledger",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the spine sentence",
+        "check": {
+          "kind": "contains",
+          "text": "ADR/spec → PR →"
+        },
+        "value": true
+      },
+      {
+        "claim": "specs live in the WORK layer",
+        "source": "AGENTS.md#project-organization--six-layers",
+        "derive": "the WORK row",
+        "check": {
+          "kind": "contains",
+          "text": "`project-management/` (epics, specs, tasks"
+        },
+        "value": true
       }
     ],
     "wide": {
       "width": 720,
-      "height": 330,
+      "height": 352,
       "draw": [
         {
-          "text": "rarely",
-          "x": 290,
+          "text": "capability",
+          "x": 240,
           "y": 22,
           "anchor": "middle",
           "style": "mute"
         },
         {
-          "text": "per decision",
-          "x": 385,
+          "text": "epic, task",
+          "x": 350,
           "y": 22,
           "anchor": "middle",
           "style": "mute"
         },
         {
-          "text": "every ship",
-          "x": 480,
+          "text": "decision, spec",
+          "x": 460,
           "y": 22,
           "anchor": "middle",
           "style": "mute"
         },
         {
-          "text": "daily",
-          "x": 575,
+          "text": "pull request",
+          "x": 570,
           "y": 22,
           "anchor": "middle",
           "style": "mute"
         },
         {
-          "text": "automatic",
-          "x": 670,
+          "text": "ledger",
+          "x": 680,
           "y": 22,
           "anchor": "middle",
           "style": "mute"
@@ -130,7 +151,7 @@
         {
           "deco": "rule",
           "shape": "line",
-          "x1": 250,
+          "x1": 205,
           "y1": 36,
           "x2": 712,
           "y2": 36
@@ -138,128 +159,101 @@
         {
           "deco": "tick",
           "shape": "line",
-          "x1": 290,
+          "x1": 240,
           "y1": 30,
-          "x2": 290,
+          "x2": 240,
           "y2": 36
         },
         {
           "deco": "tick",
           "shape": "line",
-          "x1": 385,
+          "x1": 350,
           "y1": 30,
-          "x2": 385,
+          "x2": 350,
           "y2": 36
         },
         {
           "deco": "tick",
           "shape": "line",
-          "x1": 480,
+          "x1": 460,
           "y1": 30,
-          "x2": 480,
+          "x2": 460,
           "y2": 36
         },
         {
           "deco": "tick",
           "shape": "line",
-          "x1": 575,
+          "x1": 570,
           "y1": 30,
-          "x2": 575,
+          "x2": 570,
           "y2": 36
         },
         {
           "deco": "tick",
           "shape": "line",
-          "x1": 670,
+          "x1": 680,
           "y1": 30,
-          "x2": 670,
+          "x2": 680,
           "y2": 36
         },
         {
           "text": "WHY",
           "x": 0,
-          "y": 69,
-          "style": "strong",
-          "for": [
-            "b0"
-          ]
+          "y": 64,
+          "style": "strong"
+        },
+        {
+          "text": "rarely",
+          "x": 58,
+          "y": 64,
+          "style": "mute"
         },
         {
           "text": "docs/product.md",
-          "x": 58,
-          "y": 69,
-          "style": "mono",
-          "for": [
-            "b0"
-          ]
-        },
-        {
-          "state": "layer",
-          "shape": "rect",
-          "x": 250,
-          "y": 53,
-          "w": 60,
-          "h": 22,
-          "rx": 6,
-          "id": "b0"
-        },
-        {
-          "state": "act",
-          "shape": "circle",
-          "cx": 290,
-          "cy": 64,
-          "r": 8,
-          "id": "a0"
+          "x": 0,
+          "y": 80,
+          "style": "mono"
         },
         {
           "text": "RULES",
           "x": 0,
-          "y": 113,
-          "style": "strong",
-          "for": [
-            "b1"
-          ]
+          "y": 112,
+          "style": "strong"
+        },
+        {
+          "text": "rarely",
+          "x": 58,
+          "y": 112,
+          "style": "mute"
         },
         {
           "text": "AGENTS.md, skills",
-          "x": 58,
-          "y": 113,
-          "style": "mono",
-          "for": [
-            "b1"
-          ]
-        },
-        {
-          "state": "layer",
-          "shape": "rect",
-          "x": 250,
-          "y": 97,
-          "w": 60,
-          "h": 22,
-          "rx": 6,
-          "id": "b1"
-        },
-        {
-          "state": "act",
-          "shape": "circle",
-          "cx": 290,
-          "cy": 108,
-          "r": 8,
-          "id": "a1"
+          "x": 0,
+          "y": 128,
+          "style": "mono"
         },
         {
           "text": "WHAT",
           "x": 0,
-          "y": 157,
+          "y": 160,
           "style": "strong",
+          "for": [
+            "b2"
+          ]
+        },
+        {
+          "text": "every ship",
+          "x": 58,
+          "y": 160,
+          "style": "mute",
           "for": [
             "b2"
           ]
         },
         {
           "text": "docs/capabilities.md",
-          "x": 58,
-          "y": 157,
+          "x": 0,
+          "y": 176,
           "style": "mono",
           "for": [
             "b2"
@@ -268,9 +262,9 @@
         {
           "state": "layer",
           "shape": "rect",
-          "x": 250,
-          "y": 141,
-          "w": 250,
+          "x": 208,
+          "y": 151,
+          "w": 64,
           "h": 22,
           "rx": 6,
           "id": "b2"
@@ -278,24 +272,33 @@
         {
           "state": "act",
           "shape": "circle",
-          "cx": 480,
-          "cy": 152,
+          "cx": 240,
+          "cy": 162,
           "r": 8,
           "id": "a2"
         },
         {
           "text": "WORK",
           "x": 0,
-          "y": 201,
+          "y": 208,
           "style": "strong",
           "for": [
             "b3"
           ]
         },
         {
-          "text": "project-management/",
+          "text": "daily",
           "x": 58,
-          "y": 201,
+          "y": 208,
+          "style": "mute",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "project-management/",
+          "x": 0,
+          "y": 224,
           "style": "mono",
           "for": [
             "b3"
@@ -304,9 +307,9 @@
         {
           "state": "layer",
           "shape": "rect",
-          "x": 250,
-          "y": 185,
-          "w": 345,
+          "x": 318,
+          "y": 199,
+          "w": 174,
           "h": 22,
           "rx": 6,
           "id": "b3"
@@ -314,24 +317,33 @@
         {
           "state": "act",
           "shape": "circle",
-          "cx": 575,
-          "cy": 196,
+          "cx": 350,
+          "cy": 210,
           "r": 8,
           "id": "a3"
         },
         {
           "text": "HOW",
           "x": 0,
-          "y": 245,
+          "y": 256,
           "style": "strong",
           "for": [
             "b4"
           ]
         },
         {
-          "text": "architecture, ADRs",
+          "text": "per decision",
           "x": 58,
-          "y": 245,
+          "y": 256,
+          "style": "mute",
+          "for": [
+            "b4"
+          ]
+        },
+        {
+          "text": "architecture, ADRs",
+          "x": 0,
+          "y": 272,
           "style": "mono",
           "for": [
             "b4"
@@ -340,9 +352,9 @@
         {
           "state": "layer",
           "shape": "rect",
-          "x": 250,
-          "y": 229,
-          "w": 155,
+          "x": 428,
+          "y": 247,
+          "w": 64,
           "h": 22,
           "rx": 6,
           "id": "b4"
@@ -350,24 +362,33 @@
         {
           "state": "act",
           "shape": "circle",
-          "cx": 385,
-          "cy": 240,
+          "cx": 460,
+          "cy": 258,
           "r": 8,
           "id": "a4"
         },
         {
           "text": "TRACE",
           "x": 0,
-          "y": 289,
+          "y": 304,
           "style": "strong",
           "for": [
             "b5"
           ]
         },
         {
-          "text": "ledger",
+          "text": "automatic",
           "x": 58,
-          "y": 289,
+          "y": 304,
+          "style": "mute",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "ledger",
+          "x": 0,
+          "y": 320,
           "style": "mono",
           "for": [
             "b5"
@@ -376,9 +397,9 @@
         {
           "state": "layer",
           "shape": "rect",
-          "x": 250,
-          "y": 273,
-          "w": 440,
+          "x": 648,
+          "y": 295,
+          "w": 64,
           "h": 22,
           "rx": 6,
           "id": "b5"
@@ -386,8 +407,8 @@
         {
           "state": "act",
           "shape": "circle",
-          "cx": 670,
-          "cy": 284,
+          "cx": 680,
+          "cy": 306,
           "r": 8,
           "id": "a5"
         },
@@ -396,28 +417,38 @@
           "shape": "polyline",
           "points": [
             [
-              480,
-              152
+              240,
+              162
             ],
             [
-              575,
-              196
+              350,
+              210
             ],
             [
-              385,
-              240
+              460,
+              258
             ],
             [
-              670,
-              284
+              680,
+              306
             ]
           ],
           "id": "s"
         },
         {
+          "text": "no layer holds the pull request",
+          "x": 560,
+          "y": 304,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
           "text": "traceability spine",
-          "x": 700,
-          "y": 320,
+          "x": 712,
+          "y": 340,
           "anchor": "end",
           "style": "mute",
           "for": [
@@ -434,15 +465,14 @@
       "height": 344,
       "draw": [
         {
-          "text": "rarely",
-          "x": 204,
+          "text": "capability",
+          "x": 188,
           "y": 18,
-          "anchor": "middle",
           "style": "mute"
         },
         {
-          "text": "automatic",
-          "x": 352,
+          "text": "ledger",
+          "x": 348,
           "y": 18,
           "anchor": "end",
           "style": "mute"
@@ -451,91 +481,37 @@
           "text": "WHY",
           "x": 8,
           "y": 43,
-          "style": "strong",
-          "for": [
-            "b0"
-          ]
+          "style": "strong"
         },
         {
           "text": "rarely",
           "x": 72,
           "y": 43,
-          "style": "mute",
-          "for": [
-            "b0"
-          ]
+          "style": "mute"
         },
         {
           "text": "docs/product.md",
           "x": 8,
           "y": 64,
-          "style": "mono",
-          "for": [
-            "b0"
-          ]
-        },
-        {
-          "state": "layer",
-          "shape": "rect",
-          "x": 188,
-          "y": 38,
-          "w": 30,
-          "h": 20,
-          "rx": 6,
-          "id": "b0"
-        },
-        {
-          "state": "act",
-          "shape": "circle",
-          "cx": 204,
-          "cy": 48,
-          "r": 8,
-          "id": "a0"
+          "style": "mono"
         },
         {
           "text": "RULES",
           "x": 8,
           "y": 93,
-          "style": "strong",
-          "for": [
-            "b1"
-          ]
+          "style": "strong"
         },
         {
           "text": "rarely",
           "x": 72,
           "y": 93,
-          "style": "mute",
-          "for": [
-            "b1"
-          ]
+          "style": "mute"
         },
         {
           "text": "AGENTS.md, skills",
           "x": 8,
           "y": 114,
-          "style": "mono",
-          "for": [
-            "b1"
-          ]
-        },
-        {
-          "state": "layer",
-          "shape": "rect",
-          "x": 188,
-          "y": 88,
-          "w": 30,
-          "h": 20,
-          "rx": 6,
-          "id": "b1"
-        },
-        {
-          "state": "act",
-          "shape": "circle",
-          "cx": 204,
-          "cy": 98,
-          "r": 8,
-          "id": "a1"
+          "style": "mono"
         },
         {
           "text": "WHAT",
@@ -569,7 +545,7 @@
           "shape": "rect",
           "x": 188,
           "y": 138,
-          "w": 94,
+          "w": 24,
           "h": 20,
           "rx": 6,
           "id": "b2"
@@ -577,7 +553,7 @@
         {
           "state": "act",
           "shape": "circle",
-          "cx": 268,
+          "cx": 200,
           "cy": 148,
           "r": 8,
           "id": "a2"
@@ -612,9 +588,9 @@
         {
           "state": "layer",
           "shape": "rect",
-          "x": 188,
+          "x": 222,
           "y": 188,
-          "w": 126,
+          "w": 58,
           "h": 20,
           "rx": 6,
           "id": "b3"
@@ -622,7 +598,7 @@
         {
           "state": "act",
           "shape": "circle",
-          "cx": 300,
+          "cx": 234,
           "cy": 198,
           "r": 8,
           "id": "a3"
@@ -657,9 +633,9 @@
         {
           "state": "layer",
           "shape": "rect",
-          "x": 188,
+          "x": 256,
           "y": 238,
-          "w": 62,
+          "w": 24,
           "h": 20,
           "rx": 6,
           "id": "b4"
@@ -667,7 +643,7 @@
         {
           "state": "act",
           "shape": "circle",
-          "cx": 236,
+          "cx": 268,
           "cy": 248,
           "r": 8,
           "id": "a4"
@@ -702,9 +678,9 @@
         {
           "state": "layer",
           "shape": "rect",
-          "x": 188,
+          "x": 324,
           "y": 288,
-          "w": 158,
+          "w": 24,
           "h": 20,
           "rx": 6,
           "id": "b5"
@@ -712,7 +688,7 @@
         {
           "state": "act",
           "shape": "circle",
-          "cx": 332,
+          "cx": 336,
           "cy": 298,
           "r": 8,
           "id": "a5"
@@ -722,19 +698,19 @@
           "shape": "polyline",
           "points": [
             [
-              268,
+              200,
               148
             ],
             [
-              300,
+              234,
               198
             ],
             [
-              236,
+              268,
               248
             ],
             [
-              332,
+              336,
               298
             ]
           ],
@@ -757,44 +733,44 @@
         "Layer",
         "Lives in",
         "Changes",
-        "On the spine"
+        "Spine station"
       ],
       "rows": [
         [
           "WHY",
           "docs/product.md",
           "rarely",
-          "no"
+          "none"
         ],
         [
           "RULES",
           "AGENTS.md, skills",
           "rarely",
-          "no"
+          "none"
         ],
         [
           "WHAT",
           "docs/capabilities.md",
           "every ship",
-          "yes"
+          "capability"
         ],
         [
           "WORK",
           "project-management/",
           "daily",
-          "yes"
+          "epic and task; also holds the spec"
         ],
         [
           "HOW",
           "architecture, ADRs",
           "per decision",
-          "yes"
+          "decision and spec"
         ],
         [
           "TRACE",
           "ledger",
           "automatic",
-          "yes"
+          "ledger"
         ]
       ]
     }

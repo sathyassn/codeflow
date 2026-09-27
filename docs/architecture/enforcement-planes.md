@@ -22,8 +22,9 @@ wrappers (ADR-0017).
 
 ## Architecture
 
-Each plane acts at a different moment of a change, and only the remote plane
-at merge is a boundary.
+The planes cover different moments of one change, three of them can stop it
+at push, and only remote branch protection is a boundary, once the host arms
+it.
 
 - Minimal installs the local floor and the CI scaffold, not remote branch
   protection (ADR-0019), so the remote plane is coverage the host still has to
@@ -125,8 +126,7 @@ per-platform wrappers (ADR-0017).
 | attribution, emoji | no AI attribution and no emoji in commit content |
 | breaking footer, branch naming | the declared footer and branch conventions |
 
-CI also carries the **security-review** plane (ADR-0016): a `security-review`
-job whose deterministic floor is `osv-scanner`, stack-agnostic software
+CI also carries the **security-review** job (ADR-0016), whose deterministic floor is `osv-scanner`, stack-agnostic software
 composition analysis (SCA) across every
 lockfile ecosystem and the universal floor today, with the
 `cf-security-reviewer` dual-vendor red-team layered on top. Per-stack scanners
@@ -139,7 +139,7 @@ future extension.
 | SCA sub-gate | `dep_audit` | the `osv-scanner` floor |
 | secret scan | `secret_scan` | the sibling key the git-hook plane reads |
 
-The advisory blocks when either `security_review` or `dep_audit` is `block`.
+The job blocks when either `security_review` or `dep_audit` is `block`; otherwise it warns.
 
 ### remote protection
 

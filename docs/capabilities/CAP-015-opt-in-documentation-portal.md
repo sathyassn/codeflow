@@ -123,20 +123,31 @@ Each lane names the Node version it runs on, and only the starter is a floor.
 ### Adapter authority and fail-closed boundaries
 
 The source-authority adapter generates every output from one clean committed
-snapshot. Its pinned GitHub Flavored Markdown (GFM) pipeline, bounded
-no-follow reads, literal bounded Git pathspec batches, committed-blob
-authority, configured-tree source coverage, semantic source-root-relative
-routes, reserved generated-public namespaces, locale-independent ordering,
-workflow lease, and recoverable publication transaction fail closed before
-mixed or active content can be claimed. Index flags cannot hide changed
-runtime, configuration, source, token, or media bytes. The locked installer
-verifies the exact lifecycle-script inventory and disables dependency scripts.
+snapshot. These boundaries fail closed before mixed or active content can be
+claimed:
+
+- a pinned GitHub Flavored Markdown (GFM) pipeline;
+- bounded no-follow reads and literal bounded Git pathspec batches;
+- committed-blob authority and configured-tree source coverage;
+- semantic source-root-relative routes and reserved generated-public
+  namespaces;
+- locale-independent ordering;
+- a workflow lease and a recoverable publication transaction.
+
+Index flags cannot hide changed runtime, configuration, source, token, or
+media bytes.
+
+The locked installer verifies the exact lifecycle-script inventory and
+disables dependency scripts.
+
 Install, build, preview, browser, and Git subprocesses receive only a small
 non-secret environment allowlist; inherited provider, cloud, package-registry
 credential, and loader variables never cross the boundary, while Git also
-rejects inherited configuration. A broken current Markdown blob yields only a
-bounded, visible, non-searchable current-source error page; Git history and
-previous generated data are never republished.
+rejects inherited configuration.
+
+A broken current Markdown blob yields only a bounded, visible, non-searchable
+current-source error page; Git history and previous generated data are never
+republished.
 
 ### Independent verification
 

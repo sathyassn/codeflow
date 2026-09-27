@@ -14,9 +14,8 @@ and any fix or mitigation is coordinated before public disclosure.
 
 ## Supported versions
 
-Only the latest released major line is supported. Older major lines are
-unmaintained, including the archived `1.x` implementation kept at tag
-`v1-final` on branch `archive/v1`.
+Only the latest released major line is supported; older major lines are
+unmaintained.
 
 ## A note on the enforcement model
 

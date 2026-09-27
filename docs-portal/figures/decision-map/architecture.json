@@ -5,15 +5,20 @@
     "family": "graph",
     "binding": "authored",
     "question": "Which decisions replaced which?",
-    "idea": "Six chains of supersession end at the decision that binds today, and the release chain is the longest at four records.",
+    "idea": "Six chains end at the decision that binds today, one of them narrows its earlier record rather than replacing it, and the release chain is the longest at four records.",
     "title": "Which decisions replaced which",
     "kicker": "Supersession",
-    "caption": "Follow a chain to its filled end to find the decision that binds; every earlier record stays in place unchanged.",
+    "caption": "Follow a chain to its filled end to find the decision that binds, and the diamond marks the one earlier record that still binds for what its successor did not narrow.",
     "states": [
       {
         "name": "old",
         "mark": "node",
         "means": "Replaced by a later decision"
+      },
+      {
+        "name": "narrowed",
+        "mark": "merge",
+        "means": "Narrowed by a later decision, still binds for the rest"
       },
       {
         "name": "binds",
@@ -60,6 +65,26 @@
           "kind": "count-items"
         },
         "value": 6
+      },
+      {
+        "claim": "ADR-0058 supersedes only part of ADR-0048",
+        "source": "docs/decisions/ADR-0058-explicit-portal-runtime-ownership.md#decision",
+        "derive": "the first sentence of the Decision",
+        "check": {
+          "kind": "contains",
+          "text": "This supersedes only ADR-0048's portal reconciliation and pristine-copy"
+        },
+        "value": true
+      },
+      {
+        "claim": "a later record may narrow an earlier one without rewriting it",
+        "source": "docs/decision-map.md#architecture",
+        "derive": "the sentence after the chain list",
+        "check": {
+          "kind": "contains",
+          "text": "a later one narrows it"
+        },
+        "value": true
       }
     ],
     "wide": {
@@ -317,8 +342,8 @@
           ]
         },
         {
-          "state": "old",
-          "shape": "circle",
+          "state": "narrowed",
+          "shape": "diamond",
           "cx": 440,
           "cy": 270,
           "r": 9,
@@ -327,7 +352,7 @@
         {
           "text": "0048",
           "x": 440,
-          "y": 253,
+          "y": 250,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -623,8 +648,8 @@
           ]
         },
         {
-          "state": "old",
-          "shape": "circle",
+          "state": "narrowed",
+          "shape": "diamond",
           "cx": 210,
           "cy": 248,
           "r": 9,
@@ -633,7 +658,7 @@
         {
           "text": "0048",
           "x": 210,
-          "y": 231,
+          "y": 228,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -688,7 +713,7 @@
         ],
         [
           "ADR-0048, ADR-0058",
-          "ADR-0058"
+          "ADR-0058, and ADR-0048 for everything ADR-0058 did not narrow"
         ]
       ]
     }

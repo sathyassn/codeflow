@@ -35,7 +35,7 @@ not leave the numbers for CI to fill in. Write the PR Summary and Changes
 from the whole `base...HEAD` diff, not from the last commit or last review.
 
 The operating contract for this repo is [AGENTS.md](../AGENTS.md); the working
-method (planning weight, when an ADR is warranted, the capability registry) is
+method (planning weight, when an architecture decision record (ADR) is warranted, the capability registry) is
 in the portable `cf-method` skill under `.agents/skills/`, mirrored for Claude
 Code under `.claude/skills/`.
 

@@ -134,8 +134,8 @@ ADR-0018 prohibits.
 
 Hook payload contracts and config schemas move fast on both sides, so every
 stamp below records what was true on its date, not a current guarantee. The
-release checklist ([docs/releasing.md](releasing.md)) re-verifies them before
-each codeflow tag.
+release runbook ([releasing](releasing.md), "Re-verification before tagging")
+re-verifies them before each CodeFlow tag.
 
 | Claim | Observed on | Date |
 |---|---|---|
@@ -148,11 +148,15 @@ Treat the in-session guards as an interactive-session safeguard and rely on the
 git-hook plane where Git invokes the installed hooks. CodeFlow's own flows no
 longer produce headless runs: ADR-0018 makes cross-model transport
 interactive-only, so the consult, delegate and duo flows never shell out to
-`codex exec` and a headless Codex run is outside those flows. Do not generalize
+`codex exec` and a headless Codex run is outside those flows.
+
+Do not generalize
 that historical Codex observation to every harness: Claude's
 [programmatic-mode documentation](https://code.claude.com/docs/en/headless)
 states that ordinary noninteractive sessions load project hooks, while bare
-mode skips their automatic discovery. This does not authorize headless CodeFlow
+mode skips their automatic discovery.
+
+This does not authorize headless CodeFlow
 work. Earlier hook-specific evidence is retained by ADR-0008, ADR-0013, and
 ADR-0014, and how far each plane reaches is in
 [enforcement planes](architecture/enforcement-planes.md).

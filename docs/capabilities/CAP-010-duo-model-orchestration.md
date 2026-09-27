@@ -13,8 +13,10 @@ repository task: research, analysis, planning, design, implementation,
 debugging, security, substantive documentation, review, or verification. It
 selects the smallest complete outcome mode, so research/planning-only work
 settles an evidenced artifact and stops before implementation. The first stage
-is the load-bearing one: the two lanes share no context edge,
-so the second seat is never reduced to critiquing a plan the first already supplied.
+is the load-bearing one: the two lanes share no context edge.
+
+It is for the two primary seats and the host that runs them. It is not a
+model router and not the unattended pipeline, which stays single-vendor.
 
 ## Architecture
 
@@ -116,13 +118,17 @@ final contextual voice and editorial verdict.
 
 Cross-model callers invoke both primary seats directly using the selectors,
 default and escalation effort, triggers, and permitted internal routes in the
-current ensemble record. Primary seats retain their plan, integration and
+current ensemble record: `current-ensemble.json`, the managed list of primary
+selectors and effort defaults. Primary seats retain their plan, integration and
 approval duties; each owning primary controls its internal routes, and the
-selected Claude primary owns Claude-side judgment. A natively proven candidate
-may execute bounded non-design work under primary review without becoming
-qualified. A scoped-qualified claim is limited to its evidenced tuples and
-remains distinct from full primary promotion or an economy/default claim. Each
-run records actual model versions, applied effort and route,
+selected Claude primary owns Claude-side judgment.
+
+A natively proven candidate may execute bounded non-design work under primary
+review without becoming qualified. A scoped-qualified claim is limited to its
+evidenced tuples and remains distinct from full primary promotion or an
+economy/default claim.
+
+Each run records actual model versions, applied effort and route,
 requested-versus-observed provenance, and scoped usage evidence rather than
 inferring availability, application, quota, or savings.
 
@@ -228,6 +234,7 @@ one owner/branch/worktree per task, a single owner for shared files, serialized
 landing through `codeflow integrate` to `integration/<epic>`, affected gates
 after each landing, and aggregate gates plus review on the combined diff.
 Missing seats degrade legibly to solo; mid-run failure blocks and escalates.
+Deterministic gates and the human-merged PR remain authoritative.
 
 ### What pins this contract
 
@@ -236,7 +243,3 @@ Missing seats degrade legibly to solo; mid-run failure blocks and escalates.
 | Manifest parity tests | Byte mirrors of the skill across its managed copies |
 | `orchestration_contract.rs` | The two-draft anti-anchoring rule, design and review roles, hard coverage floor, security lenses, always-loaded reasoning duties, host, UI, and reverse-lane contract markers |
 | The hook unit and CLI tests of capability CAP-009 | Runtime adapter behavior |
-
-The unattended Claude workflow is explicitly single-vendor and rejects `duo`
-preset semantics. No engine model router is added; deterministic gates and the
-human-merged PR remain authoritative.

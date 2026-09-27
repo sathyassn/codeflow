@@ -5,15 +5,20 @@
     "family": "coverage",
     "binding": "authored",
     "question": "Which figure rules does the gate measure, and which does a person review?",
-    "idea": "The grammar module measures ten of the twelve rules on the render; one idea and no text boxes are left to rendered review.",
+    "idea": "The grammar module measures ten of the twelve rules whole and two in part, and whether a figure has one idea or leans on boxes is a person's judgment.",
     "title": "Who decides each figure rule",
     "kicker": "Figure rules",
-    "caption": "Ten rules are measured by the shared module on every render, and the two about meaning stay with a person looking at the figure.",
+    "caption": "Ten rules are measured whole by the shared module, two only in part, and whether a figure carries one idea or leans on boxes stays with a person looking at it.",
     "states": [
       {
         "name": "cov",
         "mark": "cov",
         "means": "Decides or declares this rule"
+      },
+      {
+        "name": "part",
+        "mark": "part",
+        "means": "Measures one part of this rule"
       },
       {
         "name": "na",
@@ -71,6 +76,36 @@
           "text": "| token sheet names the roles; grammar module lints |"
         },
         "value": true
+      },
+      {
+        "claim": "the module measures rules 1 and 7 only in part",
+        "source": "assets/base/agents/skills/cf-docs-portal/resources/explanation-method.md#a-gates-coverage-of-surfaces",
+        "derive": "the relationship line of the worked decision",
+        "check": {
+          "kind": "contains",
+          "text": "measures rules 1 and 7 only in part"
+        },
+        "value": true
+      },
+      {
+        "claim": "the module fails a figure with no grammar family",
+        "source": "docs-portal/scripts/figure-grammar.mjs",
+        "derive": "the rule 1 failure message",
+        "check": {
+          "kind": "contains",
+          "text": "the figure declares no grammar family"
+        },
+        "value": true
+      },
+      {
+        "claim": "the module fails labels in boxes with nothing drawn between them",
+        "source": "docs-portal/scripts/figure-grammar.mjs",
+        "derive": "the rule 7 failure message",
+        "check": {
+          "kind": "contains",
+          "text": "labels sit in boxes with nothing drawn between them"
+        },
+        "value": true
       }
     ],
     "layout": {
@@ -85,7 +120,7 @@
         {
           "label": "1 one idea",
           "cells": [
-            "na",
+            "part",
             "na",
             "na",
             "cov"
@@ -139,7 +174,7 @@
         {
           "label": "7 no text boxes",
           "cells": [
-            "na",
+            "part",
             "na",
             "na",
             "cov"
@@ -210,7 +245,7 @@
       "rows": [
         [
           "1 one idea",
-          "no",
+          "part: fails a missing family",
           "no",
           "no",
           "yes"
@@ -252,7 +287,7 @@
         ],
         [
           "7 no text boxes",
-          "no",
+          "part: fails boxes with nothing drawn between them",
           "no",
           "no",
           "yes"

@@ -127,7 +127,7 @@ try {
   if (canonicalJson(outcome) !== canonicalJson(EXPECTED)) {
     throw new Error(`present figure outcomes differ from the portal specimen table:\n${JSON.stringify(detail, null, 2)}`);
   }
-  process.stdout.write(`cf-present figure checks passed: ${names.length} specimens drawn in light and dark at 1280 and 390 px with the portal's rule outcomes, one refused declaration shown, the DOM guard accepting the grammar boundary, a 1001-point polyline included, and refusing 17 departures from it\n`);
+  process.stdout.write(`cf-present figure checks passed: ${names.length} specimens drawn in light and dark at 1280 and 390 px with the portal's rule outcomes, one refused declaration shown, the DOM guard accepting the grammar boundary, a 1001-point polyline included, and refusing 18 departures from it\n`);
 } finally {
   await browser?.close();
   if (sessionId !== null) await closeSession(sessionId);
@@ -177,6 +177,9 @@ async function checkGuard(browser) {
   validateDeclaration(boundary);
   drawn["boundary"] = renderFigure(boundary, { idPrefix: "cf-present-figure-1" });
   if ((drawn["boundary"].match(/<polyline [^>]*points="([^"]*)"/u)?.[1].split(" ").length ?? 0) !== 1001) throw new Error("the boundary figure does not draw a 1001-point polyline");
+  // A narrow that keeps the wide marks with a reason carries the grammar's
+  // declared-same marker, which the guard must accept.
+  if (!Object.values(drawn).some((figure) => figure.includes('data-cf-same-marks="declared"'))) throw new Error("no specimen draws a declared same mark set");
   const page = await browser.newPage();
   try {
     await page.setContent("<!doctype html><html><body></body></html>");
@@ -211,6 +214,7 @@ async function checkGuard(browser) {
           "repeated text style": guard(html, set("svg text", "class", "cf-t cf-t--mono cf-t--mono")),
           "unknown family": guard(html, set("figure", "data-cf-figure", "unlisted")),
           "undeclared state": guard(html, set("svg [data-state]", "data-state", "unlisted")),
+          "same marks not declared": guard(html, set("figure", "data-cf-same-marks", "yes")),
         },
       };
     }, { drawn, clean: "03-layering.json" });
@@ -234,6 +238,7 @@ async function checkGuard(browser) {
       "repeated text style": "an unexpected class value on <text>",
       "unknown family": "an unexpected data-cf-figure value on <figure>",
       "undeclared state": "a data-state the figure does not declare on <g>",
+      "same marks not declared": "an unexpected data-cf-same-marks value on <figure>",
     };
     if (canonicalJson(result.refused) !== canonicalJson(expected)) throw new Error(`the guard's refusals differ:\n${JSON.stringify(result.refused, null, 2)}`);
   } finally { await page.close(); }

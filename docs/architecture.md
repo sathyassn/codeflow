@@ -14,8 +14,8 @@ This repository has three areas, and two of them ship inside the one
 The engine is the Rust code, the scaffold is the `assets/` tree a consumer
 receives, and the docs describe both. Because the repository is its own first
 consumer, the scaffold it ships is the scaffold it runs under. Each surface,
-scaffold, enforce, verify and remember, is a command of the same binary, never
-a separate service.
+from scaffold to present, is a command of the same binary, never a separate
+service.
 
 ## Architecture
 
@@ -116,7 +116,7 @@ carry the operating detail.
 | Binding facts versus durable doctrine | ADR-0039, ADR-0041, ADR-0054 | `current-ensemble.json`, `routing-policy.json` and `harnesses.json` own the fast-changing selectors, triggers and capability catalog while the orchestrator keeps stable role duties; a consuming project maps a stable role to an approved binding ID in `.codeflow/model-selection.json`, and doctor fails closed on a malformed, missing, ineligible, unsupported, drifted or lineage-collapsing override. Interactive Grok Build is a first-class host; Hermes (an outer coordinator, not a native CodeFlow host) normally delegates the whole repository task |
 | Layered code verification | ADR-0042 | Project-owned deterministic lanes cover the applicable syntax/style, software composition analysis (SCA), source and data flow, taint, secret and architecture rules while the two primary lineages review intent and semantics; a deterministic red result blocks regardless of model agreement, and consuming projects choose their own analyzer or record the residual risk |
 | Whole-flow and UI isolation | ADR-0044 | Each material changed journey records one faithful vertical run across its applicable changed boundaries; concurrent UI tasks receive isolated browser state, non-overlapping endpoints, namespaced data, run-scoped artifacts and verified teardown; `codeflow status` reports removable, dirty and unproven resources and never deletes |
-| Session review CLI (`codeflow present`) | ADR-0049, ADR-0050, ADR-0052 | Agents author this session's catalog document and the runtime owns chrome and Comment; it is neither a documentation portal nor a clone of the design-exploration board |
+| Session review CLI (`codeflow present`) | ADR-0049, ADR-0050, ADR-0052 | Agents author this session's catalog document and the runtime owns chrome and the Comment tool; it is neither a documentation portal nor a clone of the design-exploration board |
 | Documentation portal bundle | ADR-0048, ADR-0058 | A separate managed bundle, absent until `codeflow portal setup --path <dir>` adopts it and records its root, release, hashes and ownership in `.codeflow/docs-portal.json`; the exact-pinned Node adapter is the sole author of disposable pages, twins, `llms.txt` and evidence from one clean committed snapshot; drift, collisions and edited retirement stop every portal write; `codeflow validate --portal` re-derives the byte claims without executing project code |
 | Utility presentation system | ADR-0053, ADR-0063 | One shared design system of tokens, type roles, altitude grammar, and stage grammar backs both `cf-present` and the portal, with a contract test failing the build on token drift |
 

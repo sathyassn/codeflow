@@ -11,9 +11,9 @@
 
 The jobs are the same six the capabilities page uses. Three commands are never
 typed by hand: the settings presets call `hook`, the git-hook shims call
-`git-hook`, and the scaffolded workflow runs `ci`. `codeflow help <command>`
-lists the same commands this page lists, and `codeflow <command> --help`
-prints the flags.
+`git-hook`, and the scaffolded workflow runs `ci`. `codeflow --help` lists
+the same commands this page lists, and `codeflow <command> --help` prints the
+flags.
 
 ## Architecture
 
@@ -46,7 +46,7 @@ guards all call the same functions through this surface.
 | Verify | `work` | Durable-work lifecycle checks | Before implementing a durable task |
 | Remember | `orient` | Print the session-start digest (pointers, not content) | At session start; the SessionStart hook runs it for you |
 | Remember | `status` | Generated status view: branch, worktrees, in-flight work, capabilities | When you need the current shape of the repository |
-| Remember | `recall` | Search project memory: ledger, session summaries, ADRs, epics, capabilities | When you need why something was decided |
+| Remember | `recall` | Search project memory: ledger, session summaries, decision records, epics, capabilities | When you need why something was decided |
 | Delegate | `delegate` | Transport-neutral lifecycle for interactive delegate turns | From a host driving a peer harness turn |
 | Present | `portal` | Adopt or reconcile the opt-in documentation portal | Adopting or transferring the documentation portal |
 | Present | `present` | Review this session on the utility presentation surface (catalog JSON, Comment) | When a bounded review surface materially helps |
@@ -143,7 +143,7 @@ are reported as partial-success warnings.
 
 | Command | Arguments and flags | Notes |
 |---|---|---|
-| `codeflow orient` | no flags | Prints the session-start digest to stdout: at most 30 lines of pointers, not content, covering the product one-liner, branch and worktree state, work and capability counts, recent ADR titles, gate status and paths to read more |
+| `codeflow orient` | no flags | Prints the session-start digest to stdout: at most 30 lines of pointers, not content, covering the product one-liner, branch and worktree state, work and capability counts, recent decision record (ADR) titles, gate status and paths to read more |
 | `codeflow status` | `--capabilities`, `--delivery` | Default output is counts by status; `--capabilities` shows the full capability table; `--delivery` shows each capability's epics with their open and total task counts and next actionable tasks |
 | `codeflow recall <QUERY>` | `--all`, `--rebuild`, `--limit <LIMIT>` | Searches ledger events, session summaries, ADRs, epics, tasks, frozen specs and capabilities through bundled SQLite full-text search (FTS5), disclosing coverage gaps. `--all` searches every repo in the user registry, `~/.codeflow/registry.json`, a locked registry updated on every command run and read lazily at query time, not a daemon. `--rebuild` drops the index for the searched repos and re-syncs. `--limit` defaults to 20, or `[recall].limit` from `~/.codeflow/config.toml` |
 

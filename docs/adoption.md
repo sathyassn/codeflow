@@ -243,7 +243,7 @@ Every task follows the same loop, and a gate checks each step.
 
 | Hook | Checks |
 |---|---|
-| `pre-commit` | Secret scan |
+| `pre-commit` | Commit on a protected branch, secret scan, and the read-only durable-work preflight |
 | `commit-msg` | Conventional format, description of at most 50 characters, subject of at most 72, bullet-only body (ADR-0020), no AI attribution, no emoji |
 | `pre-merge-commit`, `reference-transaction` | Protected-branch merge and ref rules; `reference-transaction` also catches fast-forward merges, `reset --hard` and `branch -D` |
 | `pre-push` | Branch naming, protected-branch rules, test gate |

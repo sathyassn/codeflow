@@ -18,8 +18,9 @@ service, which the agent reads when it is ready.
 
 Each active review keeps its state in three places, so growth is governed
 where it happens. One project-keyed, owner-private durable authority holds the
-record, and a separate derived runtime root holds only what the browser needs
-to start and recover.
+record, a separate derived runtime root holds only what the browser needs
+to start and recover, and the browser profile holds nothing that counts as
+record.
 
 Immutable revisions and feedback are the only quota-governed history. The
 browser profile and cache never become durable authority, and the

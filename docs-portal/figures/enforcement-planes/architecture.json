@@ -5,11 +5,11 @@
     "family": "layering",
     "binding": "authored",
     "question": "Which plane covers which moment, and which one is the boundary?",
-    "idea": "Four planes cover a change in order, and only the remote one is a boundary.",
+    "idea": "Four planes cover the moments of one change, three of them can stop a push, and only remote branch protection is a boundary.",
     "title": "Four enforcement planes along the life of one change",
     "kicker": "Enforcement planes",
-    "description": "A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and act at commit. The session git-guard covers edit to push and acts at push. CI covers push and pull request and acts at the pull request. Remote branch protection covers pull request and merge, acts at merge, and is the only plane drawn with an end cap, meaning remote and required. One change crosses all four planes in that order.",
-    "caption": "Local planes give fast feedback and can be edited, and the remote plane at merge is the boundary where the host arms it.",
+    "description": "A shared axis runs edit, commit, push, pull request, merge. Git hooks cover commit and push and can stop the change at both. The session git-guard covers every moment from edit to merge and can stop the change at commit, push, pull request and merge, because it also reads gh pr create and gh pr merge. CI covers push and pull request and can stop the change at the pull request, where its checks run and run again on every push to the open pull request. Remote branch protection covers push, pull request and merge, can stop the change at push and at merge, and is the only plane drawn with an end cap, meaning it is the boundary once the host arms it. At push three planes can act; CI acts once the pull request is open.",
+    "caption": "Git hooks, the session guard and remote protection can each stop a push, CI stops the change at its pull request, and remote protection is the boundary once the host has armed it.",
     "states": [
       {
         "name": "layer",
@@ -19,17 +19,12 @@
       {
         "name": "layer-remote",
         "mark": "layer-remote",
-        "means": "Plane covers this moment, remote and required"
+        "means": "Plane covers this moment and is the boundary, once the host arms it"
       },
       {
         "name": "act",
         "mark": "act",
-        "means": "Plane acts here"
-      },
-      {
-        "name": "done",
-        "mark": "done",
-        "means": "One change"
+        "means": "Plane can stop the change here"
       }
     ],
     "facts": [
@@ -50,6 +45,46 @@
         "check": {
           "kind": "contains",
           "text": "CI and remote protection are the authoritative perimeter"
+        },
+        "value": true
+      },
+      {
+        "claim": "git-guard sees gh pr merge into a protected base and CI does not",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the gh pr merge row",
+        "check": {
+          "kind": "contains",
+          "text": "| `gh pr merge` into a protected base | none (hooks cannot see a PR) | git-guard | none | yes |"
+        },
+        "value": true
+      },
+      {
+        "claim": "remote branch protection refuses a push to a protected branch",
+        "source": "docs/architecture/enforcement-planes.md#technical",
+        "derive": "the push row",
+        "check": {
+          "kind": "contains",
+          "text": "| Push / force-push / delete to protected | pre-push | git-guard | none | yes |"
+        },
+        "value": true
+      },
+      {
+        "claim": "PR-content checks are git-guard and CI",
+        "source": "docs/architecture/enforcement-planes.md#architecture",
+        "derive": "the PR-content bullet",
+        "check": {
+          "kind": "contains",
+          "text": "PR-content checks are git-guard and CI by design"
+        },
+        "value": true
+      },
+      {
+        "claim": "minimal does not install remote branch protection",
+        "source": "docs/architecture/enforcement-planes.md#architecture",
+        "derive": "the minimal bullet",
+        "check": {
+          "kind": "contains",
+          "text": "Minimal installs the local floor and the CI scaffold, not remote branch"
         },
         "value": true
       }
@@ -177,7 +212,7 @@
           "shape": "rect",
           "x": 190,
           "y": 120,
-          "w": 300,
+          "w": 500,
           "h": 24,
           "rx": 6,
           "id": "m2"
@@ -195,36 +230,13 @@
         {
           "state": "layer-remote",
           "shape": "rect",
-          "x": 490,
+          "x": 390,
           "y": 216,
-          "w": 186,
+          "w": 286,
           "h": 24,
           "rx": 6,
           "cap": "end",
           "id": "m4"
-        },
-        {
-          "state": "done",
-          "shape": "polyline",
-          "points": [
-            [
-              340,
-              84
-            ],
-            [
-              440,
-              132
-            ],
-            [
-              540,
-              180
-            ],
-            [
-              640,
-              228
-            ]
-          ],
-          "id": "m5"
         },
         {
           "state": "act",
@@ -238,6 +250,22 @@
           "state": "act",
           "shape": "circle",
           "cx": 440,
+          "cy": 84,
+          "r": 8,
+          "id": "m6b"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 340,
+          "cy": 132,
+          "r": 8,
+          "id": "m7a"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 440,
           "cy": 132,
           "r": 8,
           "id": "m7"
@@ -246,9 +274,33 @@
           "state": "act",
           "shape": "circle",
           "cx": 540,
+          "cy": 132,
+          "r": 8,
+          "id": "m7c"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 640,
+          "cy": 132,
+          "r": 8,
+          "id": "m7d"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 540,
           "cy": 180,
           "r": 8,
           "id": "m8"
+        },
+        {
+          "state": "act",
+          "shape": "circle",
+          "cx": 440,
+          "cy": 228,
+          "r": 8,
+          "id": "m9a"
         },
         {
           "state": "act",
@@ -265,7 +317,7 @@
       "drops": [],
       "marks": "same",
       "width": 340,
-      "height": 290,
+      "height": 296,
       "draw": [
         {
           "text": "Hooks",
@@ -342,7 +394,7 @@
           "x": 183,
           "y": 48,
           "w": 24,
-          "h": 124,
+          "h": 238,
           "rx": 6
         },
         {
@@ -360,40 +412,33 @@
           "id": "l4",
           "shape": "rect",
           "x": 293,
-          "y": 198,
+          "y": 148,
           "w": 24,
-          "h": 74,
+          "h": 138,
           "rx": 6,
           "cap": "end"
-        },
-        {
-          "state": "done",
-          "id": "d1",
-          "shape": "polyline",
-          "points": [
-            [
-              140,
-              110
-            ],
-            [
-              195,
-              160
-            ],
-            [
-              250,
-              210
-            ],
-            [
-              305,
-              260
-            ]
-          ]
         },
         {
           "state": "act",
           "id": "a1",
           "shape": "circle",
           "cx": 140,
+          "cy": 110,
+          "r": 8
+        },
+        {
+          "state": "act",
+          "id": "a1b",
+          "shape": "circle",
+          "cx": 140,
+          "cy": 160,
+          "r": 8
+        },
+        {
+          "state": "act",
+          "id": "a2a",
+          "shape": "circle",
+          "cx": 195,
           "cy": 110,
           "r": 8
         },
@@ -407,10 +452,34 @@
         },
         {
           "state": "act",
+          "id": "a2c",
+          "shape": "circle",
+          "cx": 195,
+          "cy": 210,
+          "r": 8
+        },
+        {
+          "state": "act",
+          "id": "a2d",
+          "shape": "circle",
+          "cx": 195,
+          "cy": 260,
+          "r": 8
+        },
+        {
+          "state": "act",
           "id": "a3",
           "shape": "circle",
           "cx": 250,
           "cy": 210,
+          "r": 8
+        },
+        {
+          "state": "act",
+          "id": "a4a",
+          "shape": "circle",
+          "cx": 305,
+          "cy": 160,
           "r": 8
         },
         {
@@ -426,7 +495,8 @@
     "twin": {
       "columns": [
         "Plane",
-        "Moments",
+        "Covers",
+        "Can stop the change at",
         "Shared source",
         "Can be bypassed locally"
       ],
@@ -434,26 +504,30 @@
         [
           "Git hooks",
           "commit, push",
+          "commit, push",
           "`.codeflow/policy.json`",
           "yes, hooks can be edited"
         ],
         [
           "Session git-guard",
-          "edit to push",
+          "edit to merge",
+          "commit, push, pull request, merge",
           "`.codeflow/policy.json`",
           "yes, the session setup can be edited"
         ],
         [
           "CI",
           "push, pull request",
+          "pull request",
           "`.codeflow/policy.json` through `codeflow ci`",
           "yes, unless the remote requires its result"
         ],
         [
           "Remote branch protection",
-          "pull request, merge",
+          "push, pull request, merge",
+          "push, merge",
           "rules derived from `.codeflow/policy.json`",
-          "no, it is the boundary at merge"
+          "no, once the host arms it"
         ]
       ]
     }

@@ -64,11 +64,14 @@ Slate.
 | Page classes | explanatory: the altitude trio with a family figure in every panel and in every how-to section, chosen by the altitude contract; illustrated; pass-through with a named reason; derived lookup, generated from a closed set of derivations; records are folders, not portal pages (ADR-0064) | `codeflow validate --portal`; portal composition gate |
 | Precedence | shared resource is normative; ADR-0053's design-intent note is historical evidence | ADR-0063 |
 
-Unsupported carriers (Mermaid and any other diagram syntax on both surfaces:
-the portal renders a Mermaid fence as plain code and present refuses a
-`diagram` block; a hierarchy tree in the portal, where a structure figure
-carries it) are not promised anywhere; adding one requires an adapter or
-runtime change and an ADR. The family figure is the default form (ADR-0068)
+Three carriers are not promised:
+
+- Mermaid and any other diagram syntax on both surfaces: the portal renders a
+  Mermaid fence as plain code;
+- a present `diagram` block, which present refuses;
+- a hierarchy tree in the portal, where a structure figure carries it.
+
+Adding one requires an adapter or runtime change and an ADR. The family figure is the default form (ADR-0068)
 and a rendered carrier on both surfaces. A portal page binds a declaration in `portal.config.json` and the
 adapter draws it as a companion beside the unchanged source; raw HTML in a
 source stays escaped, so a figure enters a page only through its declaration.

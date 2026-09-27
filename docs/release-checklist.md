@@ -164,7 +164,7 @@ Runbook: [same-PR preparation and deliberate publication](releasing.md#same-pr-p
 - [ ] 5.3 Archives, installers, checksums and attestations from the pinned workflow, and the release notes, are complete and consistent before announcement. Evidence: the release page.
 - [ ] 5.4 Fresh public-network install canaries pass without private credentials or repository access. Evidence: canary output.
 - [ ] 5.5 Rollback is ready, with the prior release still installable, the bad release withdrawable without rewriting tags, and a corrective release owner named. Evidence: the rollback record.
-- [ ] 5.6 Downstream Agent OS work starts only from this verified public release, and the portal updates only after the matching Agent OS release. Evidence: the release link.
+- [ ] 5.6 Downstream Agent OS work starts only from this verified public release, and the Agent OS portal updates only after the matching Agent OS release. Evidence: the release link.
 
 #### Publish and rollback details
 

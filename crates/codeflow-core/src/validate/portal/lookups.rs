@@ -133,7 +133,7 @@ pub fn skill_catalog(assets: &dyn AssetSource) -> Result<Generated, String> {
     }
     let count = rows.len();
     let text = format!(
-        "{}\n\nThe skills CodeFlow installs, one row per skill. Each description is the skill's own, from its `SKILL.md`; the harness reads it to decide when the skill applies. The minimal tier installs no skill.\n\n{}\n\n{}\n",
+        "{}\n\nThe skills CodeFlow installs, one row per skill. Each description is the skill's own, from its `SKILL.md`; the harness reads it to decide when the skill applies. The minimal tier installs no skill. ADR means architecture decision record.\n\n{}\n\n{}\n",
         begin_marker(SKILL_CATALOG),
         lookup_table(&SKILL_COLUMNS, &rows),
         end_marker(SKILL_CATALOG)
@@ -180,7 +180,7 @@ pub fn policy_reference() -> Generated {
         }
     }
     let mut text = format!(
-        "{}\n\nEvery key `.codeflow/policy.json` accepts, with its type, built-in default and valid values. A missing file or key means the default applies; `codeflow policy show` prints the values in effect for a repository.\n\nLevel keys accept `off`, `warn`, `allow` or `block`: {}\n",
+        "{}\n\nEvery key `.codeflow/policy.json` accepts, with its type, built-in default and valid values. A missing file or key means the default applies; `codeflow policy show` prints the values in effect for a repository. ADR means architecture decision record.\n\nLevel keys accept `off`, `warn`, `allow` or `block`: {}\n",
         begin_marker(POLICY_REFERENCE),
         cell(LEVEL_LEGEND)
     );

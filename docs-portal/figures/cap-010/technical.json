@@ -40,7 +40,7 @@
       {
         "claim": "the human-merged PR remains authoritative",
         "source": "docs/capabilities/CAP-010-duo-model-orchestration.md#technical",
-        "derive": "the closing sentence",
+        "derive": "the closing sentence of Parallelism",
         "check": {
           "kind": "contains",
           "text": "human-merged PR remain authoritative"
