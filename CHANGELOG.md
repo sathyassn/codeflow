@@ -17,6 +17,23 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Shared id registry.** With tracking on, `epic new`, `spec new` and
+  `task new` reserve their number on the `codeflow/registry` data branch of
+  `origin` by a non-forced push, so two clones can no longer take the same
+  id. Each new record carries a hidden `uid` bound to its number. Offline,
+  the number stays pending until `codeflow ids sync` (also run by pre-push)
+  publishes it. New `codeflow ids` commands: `seed` builds the registry from
+  existing records, `backfill` writes uids, `check` judges the registry, the
+  merge rule and a uniqueness scan over all refs, `admit`, `retarget` and
+  `restore` handle the exceptions. Pre-push and git-guard refuse deletion or
+  force on the registry, `remote protect` adds its data profile, `doctor`
+  gains an `id-registry` check, and the scaffold adds a
+  `codeflow-registry` workflow that runs on `pull_request_target`. A project
+  with a remote and existing records runs `codeflow ids seed` once. Upgrade
+  the `codeflow` on `PATH` first: an older pre-push hook refuses a registry
+  push by branch name.
+
+<!-- codeflow:release-impact minor -->
 - **Work record lifecycle.** `codeflow task status`, `epic status` and
   `spec status` change a record's status only by a legal transition and write
   only what it needs: a Blocker for blocked, a cancellation reason and scope,

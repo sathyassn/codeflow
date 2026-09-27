@@ -67,3 +67,23 @@ new canonical tasks require an explicit integration target.
 
 `docs/architecture.md` now describes independent IDs, frontmatter
 relationships, legacy compatibility, and the shared merge-base start preflight.
+
+## Note, 2026-09-26: ADR-0072 changes three clauses
+
+ADR-0072 (shared id registry) is accepted. It changes these clauses of this
+record and no other; everything else here stays accepted.
+
+- "Planning therefore serializes allocation or renumbers collisions before
+  merge." Superseded: ids are issued from the `codeflow/registry` data
+  branch by compare-and-swap push, and `codeflow ids retarget` is the
+  exception path for an offline clash, never the rule.
+- `work start` requires "completed dependencies". Amended: the dependency
+  kinds and the shared readiness predicate of SPC-013 (R-40, R-110, R-112)
+  apply; `work start` stays read-only.
+- "No surface creates records, branches, worktrees, or status changes."
+  Amended: the status verbs write status under transition rules,
+  `work claim` pushes the advisory task branch, and `ids retarget`
+  renumbers an unmerged record. No surface creates a worktree.
+
+"New records persist one `id`, equal to their flat filename" stands: `uid`
+and `former_ids` are additions beside it.

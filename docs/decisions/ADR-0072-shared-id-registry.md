@@ -2,7 +2,7 @@
 id: ADR-0072
 title: Shared id registry on a protected data branch
 date: 2026-09-26
-status: proposed
+status: accepted
 superseded_by: null
 architecture_impact: "`docs/architecture.md`: durable work gains a shared id registry on the `codeflow/registry` data branch, a hidden `uid` per record bound to its number before merge, history-based allocation with typed restore, and the advisory claim branch as the visible mark of work in progress. Updated in the PR that accepts this record (TSK-101)."
 ---
@@ -249,7 +249,11 @@ calculator.
 `docs/architecture.md`: durable work gains a shared id registry on the
 `codeflow/registry` data branch, a hidden `uid` per record bound to its
 number before merge, history-based allocation with typed restore, and the
-advisory claim branch as the visible mark of work in progress. This record
-is proposed on a planning-only change and updates nothing yet; the PR that
-lands the registry (TSK-101) sets it accepted, writes the ADR-0046 Note and
-updates `docs/architecture.md` in that same PR.
+advisory claim branch as the visible mark of work in progress. The PR that
+lands the registry (TSK-101) set this record accepted, wrote the ADR-0046
+Note and updated `docs/architecture.md`.
+
+Accepted 2026-09-26 with one amendment from the TSK-100 host proof: the
+enforcing registry check runs on `pull_request_target`, so its workflow comes
+from the target branch and never from the pull request it judges (SPC-013
+R-109).

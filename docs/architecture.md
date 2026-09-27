@@ -90,10 +90,10 @@ Core modules grouped by responsibility:
   lint, including structural task dependency identity/reference/cycle checks),
   the capability registry parser, FTS5 recall, and the cross-repo registry.
 - **Support** (`doctor/`, `settings/`, `status.rs`, `testing/`, `file_lock.rs`,
-  `error.rs`): the doctor check table (15 checks — hooks, claude, codex, grok, config,
+  `error.rs`): the doctor check table (16 checks — hooks, claude, codex, grok, config,
   permissions, network, delegates, qualified model bindings, delegate-roundtrip, repo-integrity,
   ci-perimeter, managed-drift,
-  customization, test-config), including bidirectional delegate readiness
+  customization, test-config, id-registry), including bidirectional delegate readiness
   (Codex auth/MCP, Claude plugin/MCP, and tmux prerequisites; live interactive
   canaries remain outside the binary) and a sentinel-based consuming-project
   customization nudge, structured settings merge,
@@ -226,6 +226,24 @@ display-only. Ledger compaction syncs the directory after installing the merged
 base and again after deleting fragments so crash ordering preserves the base.
 Task records carry an `integration_target` and canonical `depends_on`
 metadata; the historical `dependencies` spelling is a read alias.
+Ids come from a shared registry (ADR-0072, SPC-013): the data branch
+`codeflow/registry` on the authority remote holds one file per issued id,
+`ids/<KIND>/<N>.toml`, binding the number to the record's hidden `uid`.
+`epic new`, `spec new` and `task new` fetch the branch without force, take one
+more than the highest id ever added in its history or present on any ref,
+push the new file without force (the host's tip check is the compare-and-swap;
+a moved tip is retried at most five times), then create the record with that
+`uid`. Offline, the reservation is a pending local commit that `ids sync`
+publishes. The `codeflow_core::ids` module owns the protocol, the ledger of
+the registry's history (append-only rule, current and repaired damage, typed
+restore), the record inventory on every ref, seeding with provenance, and the
+read-only judgements: `ids check`, the merge rule that binds every added
+record to its `uid`, and a uniqueness scan over all refs that holds even
+without a registry. Pre-push and git-guard refuse deletion, force and
+non-additive ranges on the registry; the enforcing CI job runs on
+`pull_request_target` from the target branch's `codeflow-registry` workflow;
+`remote protect` applies the branch's data profile; `doctor` reports damage,
+unplaced ids and host assurance. Claims stay advisory (ADR-0072).
 Documentation validation checks the
 non-executable structural graph for well-formed IDs, filenames, references,
 duplicates, parent/standalone exclusivity, spec readiness, self-edges, and
