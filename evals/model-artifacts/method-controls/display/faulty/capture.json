@@ -1,0 +1,14 @@
+{
+  "image": "docs/images/first-paint.png",
+  "sha256": "sha256:c39014c5c45a7402354744938d930458a1b8d3ac22cb4f34f8a2c301cf9d4672",
+  "source": "app/index.html",
+  "element": "the whole page",
+  "browser": "Chromium through Playwright",
+  "viewport": {
+    "width": 480,
+    "height": 320
+  },
+  "device_scale_factor": 1,
+  "color_scheme": "light",
+  "note": "A screenshot of the painted page, offered as the answer to how the theme is applied before first paint."
+}

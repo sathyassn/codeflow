@@ -111,6 +111,17 @@
       }
     },
     {
+      "name": "visual-eval-controls",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
+        "full": {
+          "command": "npm run deps:install --prefix docs-portal && node --test evals/model-artifacts/visual_controls.test.mjs"
+        }
+      },
+      "timeout_seconds": 300
+    },
+    {
       "name": "skill-triggers",
       "enabled": true,
       "runner": "custom",

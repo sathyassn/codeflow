@@ -106,8 +106,8 @@ not need redundant runtime validation when their invariant is evidenced.
 
 Calibrate structure to the accepted operating context: expected lifetime,
 scale, rate and shape of change, contributor and integration breadth,
-operational or security risk, and cost of reversal. No factor—especially size
-alone—proves an abstraction. If missing context would materially change the
+operational or security risk, and cost of reversal. No factor, especially size
+alone, proves an abstraction. If missing context would materially change the
 settled design, clarify it before approval; if clarification is unavailable,
 state the assumption and prefer established safe practices with reversible
 boundaries, without speculative generality.
@@ -534,8 +534,8 @@ unit. The sentence above about Computer Use as a *driver of last resort*
 still holds for deterministic E2E. Playwright remains the deterministic web
 driver; Computer Use is the QA exploration layer, not a default web driver.
 Scope is every interactive
-control those journeys expose — buttons, links, tabs, menus, disclosures,
-fields, drag handles, scroll containers — with pointer (click, drag, scroll),
+control those journeys expose (buttons, links, tabs, menus, disclosures,
+fields, drag handles, scroll containers) with pointer (click, drag, scroll),
 keyboard (tab order, activation, shortcuts), and applicable touch/gesture.
 Cover applicable viewports including sizes where composition changes, not
 only the narrowest and widest. Do not exhaust the entire product unless the
@@ -607,7 +607,7 @@ green run wastes resources. A code-only review is not UI verification. If no UI
 changed, record `UI: N/A — no user-facing surface changed`.
 
 Compare the rendered result with the settled intent using only applicable
-dimensions—governing idea and composition, hierarchy, interaction, content,
+dimensions: governing idea and composition, hierarchy, interaction, content,
 visual/verbal coherence, type and colour roles, layout, spacing, imagery,
 density, motion, states, appearance modes, and platform fit. Distinguish an
 approved improvement or evidenced implementation constraint from unjustified
@@ -661,7 +661,7 @@ Completion requires:
 For a mode without implementation, read “task breakdown” as the final research,
 analysis, plan, or review artifact and apply only the relevant gates above. For
 parallel implementation, completion additionally requires a green integrated
-worktree and review of the combined diff—not a collection of green task
+worktree and review of the combined diff, not a collection of green task
 branches.
 
 A failing or missing gate cannot be overridden by model consensus.

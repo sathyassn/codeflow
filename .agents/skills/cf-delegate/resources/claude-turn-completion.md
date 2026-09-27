@@ -5,7 +5,7 @@ owns the durable lifecycle records; the host launches the harness and delivers
 the bytes. The protocol proves three things a terminal signal alone cannot:
 the session started cleanly, the delivered prompt was accepted as the armed
 turn, and the terminal event belongs to that turn. It never inspects
-transcripts, and it makes zero tmux calls — waiting is pure file polling.
+transcripts, and it makes zero tmux calls; waiting is pure file polling.
 
 ## Per-run setup
 
@@ -22,8 +22,8 @@ transcripts, and it makes zero tmux calls — waiting is pure file polling.
    edit it or merge other keys into it. Production launches
    `--permission-mode bypassPermissions`. Consult and no-edit review keep
    `--permission-mode auto`. Make `autoMode.classifyAllShell` effective at
-   user scope — Claude ignores it at project scope, and repeated `--settings`
-   flags are not a supported composition mechanism — then prove the composed
+   user scope (Claude ignores it at project scope, and repeated `--settings`
+   flags are not a supported composition mechanism), then prove the composed
    boundary with the preflight canary.
 
 A consuming project may opt into a context-window/compaction environment in its
@@ -57,13 +57,13 @@ Before launching, the operator enumerates the effective Stop-hook set from
 every source the session will load: user, project, and local settings, enabled
 plugins, and the task settings file. The task-owned
 `delegate-turn --state-dir` hook must be present exactly once. **Reject any
-sibling Stop hook you do not deterministically know to be nonblocking** —
+sibling Stop hook you do not deterministically know to be nonblocking**:
 remove it from the session's effective configuration or do not launch. The one
 currently known-safe sibling is the official Codex plugin's
 `stop-review-gate-hook.mjs`, and only when the operator has confirmed its
 effective `stopReviewGate` is off through the plugin's own surface; then it
 may be treated as nonblocking. CodeFlow does not read or infer plugin-private
-state — this check is the operator's, made against the plugin's own
+state; this check is the operator's, made against the plugin's own
 configuration, and an unknown or unverified sibling fails the preflight.
 
 ## Launch and drive one turn
@@ -128,7 +128,7 @@ Prompts are capped at 1 MiB.
 `Stop` result whose JSON is printed on stdout), `10` for a failed
 `StopFailure` terminal, `11` for poison or unsafe/malformed state, `124` for
 timeout, and `130` for interruption. `init` and `arm` exit `0` or `1`. Branch
-on these codes — never on pane appearance. A completed result carries
+on these codes, never on pane appearance. A completed result carries
 `schema_version` 2, the run and turn ids, `session_id`, `prompt_id` (absent
 only on the recorded pre-2.1.196 single-turn compatibility path), and the
 bounded `last_assistant_message`; require the message to carry the requested
@@ -138,7 +138,7 @@ evidence and the worktree diff.
 Session restarts (resume, clear, compact, fork), a conflicting startup, a
 mis-correlated terminal event, or an interrupted wait after acceptance write
 durable poison. Poison blocks every later transition; recovery is a new run
-id in a fresh state directory — records are never edited.
+id in a fresh state directory; records are never edited.
 
 ## Sequential turns
 
@@ -171,13 +171,13 @@ Auto mode can pause for a classifier escalation or an explicit user question.
 A dialog is interactive input, never completion: answer it in the dedicated
 pane without broadening authority and resume the bounded wait. Capture only
 this dedicated task pane, and only for bounded diagnosis when a wait times
-out or a result is malformed — never as a completion heuristic and never
+out or a result is malformed, never as a completion heuristic and never
 against unrelated sessions.
 
 ## Bounded harvest and cleanup
 
-After the terminal result is consumed, harvest what verification needs — the
-verdict, the evidence to re-derive, the worktree diff — then kill the task
+After the terminal result is consumed, harvest what verification needs (the
+verdict, the evidence to re-derive, the worktree diff), then kill the task
 session, remove the state directory, and delete the private prompt files.
 State records carry digests and bounded payloads, never the prompt text.
 

@@ -553,7 +553,7 @@ fn design_review_and_security_roles_cannot_silently_drift() {
         "a lineage different from the actual author's reviews it independently. Self-review is never independent.",
         "The Claude judgment primary owns integrated Claude judgment.",
         "they do not replace the required other-lineage review or primary judgment.",
-        "separate interactive Claude session in auto mode under the same fail-closed sandbox—not plan or bypass mode",
+        "separate interactive Claude session in auto mode under the same fail-closed sandbox (not plan or bypass mode)",
     ] {
         assert!(
             normalized.contains(required),

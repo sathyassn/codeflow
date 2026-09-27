@@ -1,0 +1,511 @@
+{
+  "schema_version": 1,
+  "figure": {
+    "id": "release-grid",
+    "family": "coverage",
+    "binding": "authored",
+    "question": "Who hands what to whom during a release?",
+    "idea": "Each step involves two of the four parties.",
+    "title": "Parties in each release step",
+    "caption": "CI takes part in four of the five steps.",
+    "states": [
+      {
+        "name": "cov",
+        "mark": "cov",
+        "means": "Takes part"
+      },
+      {
+        "name": "na",
+        "mark": "na",
+        "means": "Not involved"
+      }
+    ],
+    "facts": [
+      {
+        "claim": "the release has five handoffs",
+        "source": "docs/releasing.md#handoffs",
+        "derive": "the Handoffs table",
+        "check": {
+          "kind": "contains",
+          "text": "| 5 | Registry | Release manager | the published version |"
+        },
+        "value": true
+      }
+    ],
+    "wide": {
+      "width": 720,
+      "height": 240,
+      "draw": [
+        {
+          "text": "Release manager",
+          "x": 300,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "CI",
+          "x": 410,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Signing service",
+          "x": 520,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Registry",
+          "x": 630,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Step 1",
+          "x": 0,
+          "y": 67
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 288,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 398,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 508,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 618,
+          "y": 50,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Step 2",
+          "x": 0,
+          "y": 103
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 288,
+          "y": 86,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 398,
+          "y": 86,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 508,
+          "y": 86,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 618,
+          "y": 86,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Step 3",
+          "x": 0,
+          "y": 139
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 288,
+          "y": 122,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 398,
+          "y": 122,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 508,
+          "y": 122,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 618,
+          "y": 122,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Step 4",
+          "x": 0,
+          "y": 175
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 288,
+          "y": 158,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 398,
+          "y": 158,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 508,
+          "y": 158,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 618,
+          "y": 158,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "text": "Step 5",
+          "x": 0,
+          "y": 211
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 288,
+          "y": 194,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 398,
+          "y": 194,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 508,
+          "y": 194,
+          "w": 24,
+          "h": 24
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 618,
+          "y": 194,
+          "w": 24,
+          "h": 24
+        }
+      ]
+    },
+    "narrow": {
+      "recompose": "list",
+      "drops": [],
+      "marks": "same",
+      "width": 360,
+      "height": 210,
+      "draw": [
+        {
+          "text": "Release",
+          "x": 150,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "CI",
+          "x": 206,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Signing",
+          "x": 262,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Registry",
+          "x": 318,
+          "y": 30,
+          "anchor": "middle",
+          "style": "head"
+        },
+        {
+          "text": "Step 1",
+          "x": 0,
+          "y": 65
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 140,
+          "y": 50,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 196,
+          "y": 50,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 252,
+          "y": 50,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 308,
+          "y": 50,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "text": "Step 2",
+          "x": 0,
+          "y": 95
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 140,
+          "y": 80,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 196,
+          "y": 80,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 252,
+          "y": 80,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 308,
+          "y": 80,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "text": "Step 3",
+          "x": 0,
+          "y": 125
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 140,
+          "y": 110,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 196,
+          "y": 110,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 252,
+          "y": 110,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 308,
+          "y": 110,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "text": "Step 4",
+          "x": 0,
+          "y": 155
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 140,
+          "y": 140,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 196,
+          "y": 140,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 252,
+          "y": 140,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 308,
+          "y": 140,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "text": "Step 5",
+          "x": 0,
+          "y": 185
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 140,
+          "y": 170,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 196,
+          "y": 170,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "na",
+          "shape": "rect",
+          "x": 252,
+          "y": 170,
+          "w": 20,
+          "h": 20
+        },
+        {
+          "state": "cov",
+          "shape": "rect",
+          "x": 308,
+          "y": 170,
+          "w": 20,
+          "h": 20
+        }
+      ]
+    },
+    "twin": {
+      "columns": [
+        "Step",
+        "From",
+        "To"
+      ],
+      "rows": [
+        [
+          "1",
+          "Release manager",
+          "CI"
+        ],
+        [
+          "2",
+          "CI",
+          "Signing service"
+        ],
+        [
+          "3",
+          "Signing service",
+          "CI"
+        ],
+        [
+          "4",
+          "CI",
+          "Registry"
+        ],
+        [
+          "5",
+          "Registry",
+          "Release manager"
+        ]
+      ]
+    }
+  }
+}

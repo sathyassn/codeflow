@@ -3,7 +3,7 @@ name: cf-editorial-review
 description: Review or revise substantial repository and user-facing prose without semantic drift. Use for documentation, ADRs, proposals, release notes, PR narratives, operator communications, and other consequential copy whose structure, voice, credibility, or audience fit materially affects the outcome. Do not invoke for every short conversational response, mechanical text substitution, exact quoted text, or generated machine-readable content.
 ---
 
-# cf-editorial-review — preserve meaning, improve delivery
+# cf-editorial-review: preserve meaning, improve delivery
 
 Review the artifact in its real project, audience, medium, and task context.
 Improve clarity and credibility without flattening a legitimate voice or
