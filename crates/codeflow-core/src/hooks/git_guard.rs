@@ -307,7 +307,8 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
             }
             _ => false,
         };
-        let tokens = shell_tokens(segment);
+        let mut tokens = shell_tokens(segment);
+        strip_reserved_words(&mut tokens);
         if tokens.is_empty() {
             continue;
         }
@@ -364,7 +365,8 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
 
         // Dispatch on the argument vector the program receives: unquoted
         // redirections are the shell's, not arguments.
-        let words = command_argv(segment);
+        let mut words = command_argv(segment);
+        strip_reserved_words(&mut words);
         let launched = strip_launchers(&words);
         if top_level {
             // A redirection can fail, and the assignment with it.
@@ -397,6 +399,28 @@ pub fn evaluate_report(command: &str, ctx: &GuardContext<'_>) -> Evaluation {
     }
     report.notes = notes;
     report
+}
+
+/// Shell reserved words that can open a segment of a control structure
+/// (`do git commit`, `then git push`) or prefix a command (`! git commit`,
+/// `time git commit`). The command after them runs all the same.
+const LEADING_RESERVED_WORDS: &[&str] = &[
+    "if", "then", "else", "elif", "do", "while", "until", "!", "time",
+];
+
+/// Drop the reserved words that open a segment, and `time`'s own options, so
+/// the command they introduce is judged (TSK-112).
+fn strip_reserved_words(words: &mut Vec<String>) {
+    let mut at = 0;
+    while let Some(word) = words.get(at) {
+        let after_time = at > 0 && words[at - 1] == "time" && word.starts_with('-');
+        if LEADING_RESERVED_WORDS.contains(&word.as_str()) || after_time {
+            at += 1;
+        } else {
+            break;
+        }
+    }
+    words.drain(..at);
 }
 
 /// Which program a segment invokes, for dispatch. The basename is taken so a
@@ -1632,13 +1656,9 @@ impl LineFacts {
         for (idx, segment) in segments.iter().enumerate() {
             let mut tokens = shell_tokens(segment);
             let mut words = command_argv(segment);
-            // `! cd x`: the negation runs the command all the same.
-            if tokens.first().is_some_and(|t| t == "!") {
-                tokens.remove(0);
-            }
-            if words.first().is_some_and(|w| w == "!") {
-                words.remove(0);
-            }
+            // `! cd x`, `then cd x`: the command runs all the same.
+            strip_reserved_words(&mut tokens);
+            strip_reserved_words(&mut words);
             let program = strip_launchers(&words).map(|(program, _)| program);
             let mover = cd_target(&tokens).is_some()
                 || program.is_some_and(|p| git_target::moves_directory(p) || has_substitution(p));
@@ -6404,6 +6424,51 @@ mod tests {
         assert!(r.violations.is_empty(), "{:?}", r.violations);
     }
 
+    // A git command inside a control structure is judged like any other
+    // (found while pinning round 5; it predates TSK-112).
+    #[test]
+    fn test_tsk112_control_structure_bodies_are_judged() {
+        for cmd in [
+            "for i in 1 2; do git commit -m y; done",
+            "if true; then git commit -m y; fi",
+            "if false; then :; else git commit -m y; fi",
+            "if false; then :; elif git commit -m y; then :; fi",
+            "while true; do git commit -m y; done",
+            "until false; do git commit -m y; done",
+            "select x in a; do git commit -m y; done",
+            "if git commit -m y; then :; fi",
+            "! git commit -m y",
+            "time git commit -m y",
+            "time -p git commit -m y",
+            "case x in a) git commit -m y;; esac",
+            "for i in 1; do then_x=1; git commit -m y; done",
+        ] {
+            let r = report(cmd, "main");
+            assert!(
+                r.violations
+                    .iter()
+                    .any(|v| v.rule == "git.commit_to_protected"),
+                "{cmd}: {:?}",
+                r.violations
+            );
+        }
+        let r = report("while true; do git push origin main; done", "feat/s");
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+        // A directory move inside a body leaves later targets unresolved.
+        let r = report(
+            "if true; then cd /scratch-main; fi; git commit -m y",
+            "feat/s",
+        );
+        assert!(blocks(&r.violations), "{:?}", r.violations);
+        for cmd in [
+            "for i in 1 2; do git status; done",
+            "if true; then git log; fi",
+        ] {
+            let r = report(cmd, "main");
+            assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
+        }
+    }
+
     // R5-1: a branch move can fail, so it narrows the branch only for the
     // rest of its `&&` list; after `;` or a newline the earlier branch stays
     // a candidate. The same holds in retargeted repositories and for a rebase
@@ -6459,6 +6524,13 @@ mod tests {
             let r = report(cmd, session);
             assert!(r.violations.is_empty(), "{cmd}: {:?}", r.violations);
         }
+        // A move at one of several places narrows none of them: here the
+        // checkout may have run in the session if the first `cd` failed.
+        let r = report(
+            "cd /scratch-main; git checkout feat/q && cd /scratch-main && git commit -m x",
+            "feat/s",
+        );
+        assert!(blocks(&r.violations), "{:?}", r.violations);
         // A checkout the guard cannot place may have moved any repository.
         let r = report(
             "git -C \"$UNSET\" checkout main && git -C /scratch commit -m x",
@@ -6481,6 +6553,9 @@ mod tests {
             "echo \"$(git config alias.x commit)\"; git x -m y",
             "(git config alias.x commit); git x -m y",
             "printf '[alias] x = commit' >> .git/config; git x -m y",
+            "git config --unset alias.x; git x -m y",
+            "git config --edit; git x -m y",
+            "for i in 1 2; do git x -m y; git config alias.x commit; done",
             "git checkout feat/y && git st",
         ] {
             let r = report(cmd, "main");
