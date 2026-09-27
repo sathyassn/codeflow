@@ -1069,7 +1069,13 @@ fn editorial_quality_is_contextual_on_demand_and_cross_harness() {
 
 #[test]
 fn reverse_lane_uses_hook_completion_not_pane_stability() {
-    let delegate = normalize_whitespace(&read("assets/base/claude/skills/cf-delegate/SKILL.md"));
+    // TSK-129: the reverse lane lives in the lifecycle lane file; the core is
+    // read too so the legacy-protocol negatives still cover the whole skill.
+    let delegate = normalize_whitespace(&format!(
+        "{}\n{}",
+        read("assets/base/claude/skills/cf-delegate/SKILL.md"),
+        read("assets/base/claude/skills/cf-delegate/resources/lane-lifecycle.md")
+    ));
     let adapter = read("assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md");
 
     assert!(delegate.contains("codeflow delegate init"));

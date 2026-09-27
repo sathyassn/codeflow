@@ -23,7 +23,7 @@
     ".agents/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "8ae7296fd56d1cb8fa20d914136360deb3fae255e493a0e6e9c7a4472fc02113",
+      "sha256": "927569f77fcbb2bceef09e81ff248561ab5d7bf8bdcd647acefae75a164dd77a",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/agy.md": {
@@ -36,6 +36,18 @@
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
       "sha256": "7bc591337de9230a1e381d6e4cf1f17e47b42032af7679f8bbb1839228e03028",
+      "exec": false
+    },
+    ".agents/skills/cf-delegate/resources/lane-lifecycle.md": {
+      "src": "claude/skills/cf-delegate/resources/lane-lifecycle.md",
+      "ownership": "managed",
+      "sha256": "9cc2e904917c0fc501cbe0222733bddad13797fce7b0510315f4f3d46780a1f6",
+      "exec": false
+    },
+    ".agents/skills/cf-delegate/resources/lane-plugin.md": {
+      "src": "claude/skills/cf-delegate/resources/lane-plugin.md",
+      "ownership": "managed",
+      "sha256": "3ec201c448ce8bd2a5fe6e9a4b6facd8a0ba7b972c85119f83e70d24e18cd1f8",
       "exec": false
     },
     ".agents/skills/cf-delegate/resources/native-fallback.md": {
@@ -503,7 +515,7 @@
     ".claude/skills/cf-delegate/SKILL.md": {
       "src": "claude/skills/cf-delegate/SKILL.md",
       "ownership": "managed",
-      "sha256": "8ae7296fd56d1cb8fa20d914136360deb3fae255e493a0e6e9c7a4472fc02113",
+      "sha256": "927569f77fcbb2bceef09e81ff248561ab5d7bf8bdcd647acefae75a164dd77a",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/agy.md": {
@@ -516,6 +528,18 @@
       "src": "claude/skills/cf-delegate/resources/claude-turn-completion.md",
       "ownership": "managed",
       "sha256": "7bc591337de9230a1e381d6e4cf1f17e47b42032af7679f8bbb1839228e03028",
+      "exec": false
+    },
+    ".claude/skills/cf-delegate/resources/lane-lifecycle.md": {
+      "src": "claude/skills/cf-delegate/resources/lane-lifecycle.md",
+      "ownership": "managed",
+      "sha256": "9cc2e904917c0fc501cbe0222733bddad13797fce7b0510315f4f3d46780a1f6",
+      "exec": false
+    },
+    ".claude/skills/cf-delegate/resources/lane-plugin.md": {
+      "src": "claude/skills/cf-delegate/resources/lane-plugin.md",
+      "ownership": "managed",
+      "sha256": "3ec201c448ce8bd2a5fe6e9a4b6facd8a0ba7b972c85119f83e70d24e18cd1f8",
       "exec": false
     },
     ".claude/skills/cf-delegate/resources/native-fallback.md": {

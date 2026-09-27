@@ -911,7 +911,7 @@ fn no_claude_host_path_makes_the_turn_adapter_mandatory() {
     for owner in [
         "agents/skills/cf-model-orchestrator/SKILL.md",
         "agents/skills/cf-model-orchestrator/resources/capability-routing.md",
-        "claude/skills/cf-delegate/SKILL.md",
+        "claude/skills/cf-delegate/resources/lane-lifecycle.md",
     ] {
         assert!(
             scoped.contains(owner),

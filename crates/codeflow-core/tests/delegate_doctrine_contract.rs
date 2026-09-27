@@ -14,6 +14,11 @@ use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 
 const DELEGATE_SKILL: &str = "assets/base/claude/skills/cf-delegate/SKILL.md";
+// TSK-129 split cf-delegate into a common core plus one file per lane; each
+// lane pin reads the lane file that now holds the duty.
+const DELEGATE_PLUGIN_LANE: &str = "assets/base/claude/skills/cf-delegate/resources/lane-plugin.md";
+const DELEGATE_LIFECYCLE_LANE: &str =
+    "assets/base/claude/skills/cf-delegate/resources/lane-lifecycle.md";
 const ADAPTER: &str = "assets/base/claude/skills/cf-delegate/resources/claude-turn-completion.md";
 const CONSULT: &str = "assets/base/agents/skills/cf-consult/SKILL.md";
 const CUSTOMIZE: &str = "assets/base/agents/skills/cf-customize/SKILL.md";
@@ -68,7 +73,7 @@ const LIFECYCLE_ARROW: &str =
 
 #[test]
 fn lifecycle_sequence_is_ordered_across_delegate_assets() {
-    for asset in [DELEGATE_SKILL, ADAPTER] {
+    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
         assert_ordered(
             asset,
             &[
@@ -95,7 +100,13 @@ fn lifecycle_sequence_is_ordered_across_delegate_assets() {
     );
     // The lifecycle replaced the legacy signal protocol: no shipped skill may
     // reintroduce `tmux wait-for` as the work protocol.
-    for asset in [DELEGATE_SKILL, ADAPTER, CONSULT, ORCHESTRATOR] {
+    for asset in [
+        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
+        ADAPTER,
+        CONSULT,
+        ORCHESTRATOR,
+    ] {
         assert!(
             !read(asset).contains("tmux wait-for"),
             "{asset} reintroduced the legacy tmux wait-for protocol"
@@ -120,7 +131,7 @@ fn lifecycle_documents_stable_exits_immutability_turns_and_pane_discipline() {
         ],
     );
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "settings file is **immutable**",
             "one outstanding armed turn per run",
@@ -132,7 +143,7 @@ fn lifecycle_documents_stable_exits_immutability_turns_and_pane_discipline() {
 
 #[test]
 fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
-    for asset in [DELEGATE_SKILL, ADAPTER] {
+    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
         assert_contains(
             asset,
             &[
@@ -149,7 +160,7 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
             ],
         );
     }
-    for asset in [DELEGATE_SKILL, ADAPTER, CONSULT] {
+    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER, CONSULT] {
         assert_contains(asset, &["user scope"]);
         assert!(
             !read(asset).contains("user or CLI scope"),
@@ -167,10 +178,10 @@ fn lifecycle_pins_canonical_prompt_and_bounded_submission_retry() {
 
 #[test]
 fn every_cross_harness_dispatch_declares_a_bounded_role() {
-    for asset in [DELEGATE_SKILL, ORCHESTRATOR, CONSULT, ROUTING] {
+    for asset in [DELEGATE_PLUGIN_LANE, ORCHESTRATOR, CONSULT, ROUTING] {
         assert_contains(asset, &["ROLE: peer", "top-level", "host lineage"]);
     }
-    for asset in [DELEGATE_SKILL, ORCHESTRATOR, ROUTING] {
+    for asset in [DELEGATE_PLUGIN_LANE, ORCHESTRATOR, ROUTING] {
         assert_contains(asset, &["generic", "subagent"]);
     }
 }
@@ -178,7 +189,7 @@ fn every_cross_harness_dispatch_declares_a_bounded_role() {
 #[test]
 fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_PLUGIN_LANE,
         &[
             "native Codex thread behind it",
             "native thread ID, recheckable",
@@ -208,7 +219,7 @@ fn forward_lane_requires_native_recheckable_provenance_and_honest_effort() {
 #[test]
 fn generic_claude_relay_never_counts_as_codex() {
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_PLUGIN_LANE,
         &["any surface that cannot show that thread never counts as Codex"],
     );
     assert_contains(
@@ -227,7 +238,7 @@ fn generic_claude_relay_never_counts_as_codex() {
 #[test]
 fn sibling_preflight_rejects_unknown_stop_hooks() {
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "Reject any sibling Stop hook whose nonblocking behavior you do not deterministically know.",
             "unverified sibling fails the preflight",
@@ -247,7 +258,7 @@ fn sibling_preflight_rejects_unknown_stop_hooks() {
 
 #[test]
 fn sibling_preflight_permits_only_the_exact_known_safe_nonblocking_hook() {
-    for asset in [DELEGATE_SKILL, ADAPTER] {
+    for asset in [DELEGATE_LIFECYCLE_LANE, ADAPTER] {
         assert_contains(
             asset,
             &[
@@ -260,7 +271,7 @@ fn sibling_preflight_permits_only_the_exact_known_safe_nonblocking_hook() {
     // The check is the operator's, against the plugin's own configuration —
     // CodeFlow ships no code that reads or infers plugin-private state.
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &["CodeFlow never reads or infers plugin-private state"],
     );
     assert_contains(
@@ -311,7 +322,7 @@ fn legacy_result_mode_is_compatibility_only_and_mutually_exclusive() {
         ],
     );
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "byte-compatible compatibility for existing callers until a later major release",
             "mutually exclusive and never fall back",
@@ -417,7 +428,7 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
 #[test]
 fn tracked_claude_launch_uses_scoped_synchronous_task_mode() {
     assert_contains(
-        DELEGATE_SKILL,
+        DELEGATE_LIFECYCLE_LANE,
         &[
             "CLAUDE_CODE_DISABLE_BACKGROUND_TASKS=1 claude",
             "For consult/no-edit, use the same launch with --permission-mode auto",

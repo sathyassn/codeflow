@@ -29,6 +29,8 @@ fn assert_contains(relative: &str, markers: &[&str]) {
 const HERDR: &str = "assets/base/agents/skills/cf-herdr/SKILL.md";
 const CONSULT: &str = "assets/base/agents/skills/cf-consult/SKILL.md";
 const DELEGATE: &str = "assets/base/claude/skills/cf-delegate/SKILL.md";
+const DELEGATE_LIFECYCLE_LANE: &str =
+    "assets/base/claude/skills/cf-delegate/resources/lane-lifecycle.md";
 
 #[test]
 fn herdr_skill_names_tabs_anti_hijack_and_lifecycle_boundary() {
@@ -99,7 +101,8 @@ fn consult_and_delegate_route_through_herdr_when_inside_herdr() {
             "cf-herdr",
             "tmux is the degraded TTY host",
             "idle`/`done` is not turn completion",
-            "herdr pane send-text",
         ],
     );
+    // TSK-129: Herdr delivery moved with the lifecycle into its lane file.
+    assert_contains(DELEGATE_LIFECYCLE_LANE, &["herdr pane send-text"]);
 }

@@ -344,6 +344,18 @@ dest = ".claude/skills/cf-delegate/resources/agy.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
+[[entry]]
+src = "claude/skills/cf-delegate/resources/lane-plugin.md"
+dest = ".claude/skills/cf-delegate/resources/lane-plugin.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/lane-lifecycle.md"
+dest = ".claude/skills/cf-delegate/resources/lane-lifecycle.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
 # The five workflow commands are now SKILL.md skills. Claude Code merged custom
 # commands into skills (v2.1.101, 2026-04-11): `.claude/skills/<name>/SKILL.md`
 # creates `/<name>` just like the old `.claude/commands/<name>.md` did. Keeping
@@ -782,6 +794,18 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "claude/skills/cf-delegate/resources/agy.md"
 dest = ".agents/skills/cf-delegate/resources/agy.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/lane-plugin.md"
+dest = ".agents/skills/cf-delegate/resources/lane-plugin.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "claude/skills/cf-delegate/resources/lane-lifecycle.md"
+dest = ".agents/skills/cf-delegate/resources/lane-lifecycle.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 
