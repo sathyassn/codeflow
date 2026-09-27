@@ -11,11 +11,6 @@
     "caption": "Look for your feature in its group before building it; only delegate lifecycle and present review are still building.",
     "states": [
       {
-        "name": "group",
-        "mark": "layer",
-        "means": "A reading group"
-      },
-      {
         "name": "shipped",
         "mark": "agent",
         "means": "Shipped"
@@ -60,409 +55,354 @@
     ],
     "wide": {
       "width": 720,
-      "height": 312,
+      "height": 270,
       "draw": [
         {
-          "state": "group",
-          "shape": "rect",
+          "text": "Scaffold",
           "x": 16,
           "y": 24,
-          "w": 224,
-          "h": 138,
-          "rx": 8,
-          "id": "g0"
-        },
-        {
-          "text": "Scaffold",
-          "x": 30,
-          "y": 48,
-          "style": "strong",
-          "for": [
-            "g0"
-          ]
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 40,
-          "cy": 72,
-          "r": 6,
+          "cx": 124,
+          "cy": 19,
+          "r": 7,
           "id": "g0c0"
         },
         {
           "text": "init",
-          "x": 56,
-          "y": 77,
+          "x": 140,
+          "y": 24,
           "for": [
-            "g0c0",
-            "g0"
+            "g0c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 40,
-          "cy": 96,
-          "r": 6,
+          "cx": 195,
+          "cy": 19,
+          "r": 7,
           "id": "g0c1"
         },
         {
           "text": "update",
-          "x": 56,
-          "y": 101,
+          "x": 211,
+          "y": 24,
           "for": [
-            "g0c1",
-            "g0"
+            "g0c1"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 40,
-          "cy": 120,
-          "r": 6,
+          "cx": 292,
+          "cy": 19,
+          "r": 7,
           "id": "g0c2"
         },
         {
           "text": "customize",
-          "x": 56,
-          "y": 125,
+          "x": 308,
+          "y": 24,
           "for": [
-            "g0c2",
-            "g0"
+            "g0c2"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 40,
-          "cy": 144,
-          "r": 6,
+          "cx": 411,
+          "cy": 19,
+          "r": 7,
           "id": "g0c3"
         },
         {
           "text": "estimate",
-          "x": 56,
-          "y": 149,
+          "x": 427,
+          "y": 24,
           "for": [
-            "g0c3",
-            "g0"
+            "g0c3"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 248,
-          "y": 24,
-          "w": 224,
-          "h": 138,
-          "rx": 8,
-          "id": "g1"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 42,
+          "x2": 704,
+          "y2": 42
         },
         {
           "text": "Enforce",
-          "x": 262,
-          "y": 48,
-          "style": "strong",
-          "for": [
-            "g1"
-          ]
+          "x": 16,
+          "y": 70,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 272,
-          "cy": 72,
-          "r": 6,
+          "cx": 124,
+          "cy": 65,
+          "r": 7,
           "id": "g1c0"
         },
         {
           "text": "git gates",
-          "x": 288,
-          "y": 77,
+          "x": 140,
+          "y": 70,
           "for": [
-            "g1c0",
-            "g1"
+            "g1c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 272,
-          "cy": 96,
-          "r": 6,
+          "cx": 232,
+          "cy": 65,
+          "r": 7,
           "id": "g1c1"
         },
         {
           "text": "protect, doctor",
-          "x": 288,
-          "y": 101,
+          "x": 248,
+          "y": 70,
           "for": [
-            "g1c1",
-            "g1"
+            "g1c1"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 272,
-          "cy": 120,
-          "r": 6,
+          "cx": 382,
+          "cy": 65,
+          "r": 7,
           "id": "g1c2"
         },
         {
           "text": "red-team review",
-          "x": 288,
-          "y": 125,
+          "x": 398,
+          "y": 70,
           "for": [
-            "g1c2",
-            "g1"
+            "g1c2"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 480,
-          "y": 24,
-          "w": 224,
-          "h": 138,
-          "rx": 8,
-          "id": "g2"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 88,
+          "x2": 704,
+          "y2": 88
         },
         {
           "text": "Verify",
-          "x": 494,
-          "y": 48,
-          "style": "strong",
-          "for": [
-            "g2"
-          ]
+          "x": 16,
+          "y": 116,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 504,
-          "cy": 72,
-          "r": 6,
+          "cx": 124,
+          "cy": 111,
+          "r": 7,
           "id": "g2c0"
         },
         {
           "text": "test gate",
-          "x": 520,
-          "y": 77,
+          "x": 140,
+          "y": 116,
           "for": [
-            "g2c0",
-            "g2"
+            "g2c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 504,
-          "cy": 96,
-          "r": 6,
+          "cx": 233,
+          "cy": 111,
+          "r": 7,
           "id": "g2c1"
         },
         {
           "text": "integrate",
-          "x": 520,
-          "y": 101,
+          "x": 249,
+          "y": 116,
           "for": [
-            "g2c1",
-            "g2"
+            "g2c1"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 16,
-          "y": 174,
-          "w": 224,
-          "h": 138,
-          "rx": 8,
-          "id": "g3"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 134,
+          "x2": 704,
+          "y2": 134
         },
         {
           "text": "Remember",
-          "x": 30,
-          "y": 198,
-          "style": "strong",
-          "for": [
-            "g3"
-          ]
+          "x": 16,
+          "y": 162,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 40,
-          "cy": 222,
-          "r": 6,
+          "cx": 124,
+          "cy": 157,
+          "r": 7,
           "id": "g3c0"
         },
         {
           "text": "orient, summary",
-          "x": 56,
-          "y": 227,
+          "x": 140,
+          "y": 162,
           "for": [
-            "g3c0",
-            "g3"
+            "g3c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 40,
-          "cy": 246,
-          "r": 6,
+          "cx": 284,
+          "cy": 157,
+          "r": 7,
           "id": "g3c1"
         },
         {
           "text": "recall",
-          "x": 56,
-          "y": 251,
+          "x": 300,
+          "y": 162,
           "for": [
-            "g3c1",
-            "g3"
+            "g3c1"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 248,
-          "y": 174,
-          "w": 224,
-          "h": 138,
-          "rx": 8,
-          "id": "g4"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 180,
+          "x2": 704,
+          "y2": 180
         },
         {
           "text": "Delegate",
-          "x": 262,
-          "y": 198,
-          "style": "strong",
-          "for": [
-            "g4"
-          ]
+          "x": 16,
+          "y": 208,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 272,
-          "cy": 222,
-          "r": 6,
+          "cx": 124,
+          "cy": 203,
+          "r": 7,
           "id": "g4c0"
         },
         {
           "text": "delegation",
-          "x": 288,
-          "y": 227,
+          "x": 140,
+          "y": 208,
           "for": [
-            "g4c0",
-            "g4"
+            "g4c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 272,
-          "cy": 246,
-          "r": 6,
+          "cx": 245,
+          "cy": 203,
+          "r": 7,
           "id": "g4c1"
         },
         {
           "text": "duo",
-          "x": 288,
-          "y": 251,
+          "x": 261,
+          "y": 208,
           "for": [
-            "g4c1",
-            "g4"
+            "g4c1"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 272,
-          "cy": 270,
-          "r": 6,
+          "cx": 321,
+          "cy": 203,
+          "r": 7,
           "id": "g4c2"
         },
         {
           "text": "model bindings",
-          "x": 288,
-          "y": 275,
+          "x": 337,
+          "y": 208,
           "for": [
-            "g4c2",
-            "g4"
+            "g4c2"
           ]
         },
         {
           "state": "building",
           "shape": "circle",
-          "cx": 272,
-          "cy": 294,
-          "r": 6,
+          "cx": 474,
+          "cy": 203,
+          "r": 7,
           "id": "g4c3"
         },
         {
           "text": "delegate lifecycle",
-          "x": 288,
-          "y": 299,
+          "x": 490,
+          "y": 208,
           "for": [
-            "g4c3",
-            "g4"
+            "g4c3"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 480,
-          "y": 174,
-          "w": 224,
-          "h": 138,
-          "rx": 8,
-          "id": "g5"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 16,
+          "y1": 226,
+          "x2": 704,
+          "y2": 226
         },
         {
           "text": "Present",
-          "x": 494,
-          "y": 198,
-          "style": "strong",
-          "for": [
-            "g5"
-          ]
+          "x": 16,
+          "y": 254,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 504,
-          "cy": 222,
-          "r": 6,
+          "cx": 124,
+          "cy": 249,
+          "r": 7,
           "id": "g5c0"
         },
         {
           "text": "portal",
-          "x": 520,
-          "y": 227,
+          "x": 140,
+          "y": 254,
           "for": [
-            "g5c0",
-            "g5"
+            "g5c0"
           ]
         },
         {
           "state": "building",
           "shape": "circle",
-          "cx": 504,
-          "cy": 246,
-          "r": 6,
+          "cx": 214,
+          "cy": 249,
+          "r": 7,
           "id": "g5c1"
         },
         {
           "text": "present review",
-          "x": 520,
-          "y": 251,
+          "x": 230,
+          "y": 254,
           "for": [
-            "g5c1",
-            "g5"
+            "g5c1"
           ]
         }
       ]
@@ -472,409 +412,354 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 384,
+      "height": 342,
       "draw": [
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 8,
-          "y": 10,
-          "w": 168,
-          "h": 138,
-          "rx": 8,
-          "id": "g0"
-        },
-        {
           "text": "Scaffold",
-          "x": 20,
-          "y": 34,
-          "style": "strong",
-          "for": [
-            "g0"
-          ]
+          "x": 8,
+          "y": 24,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 28,
-          "cy": 56,
+          "cx": 110,
+          "cy": 19,
           "r": 6,
           "id": "g0c0"
         },
         {
           "text": "init",
-          "x": 42,
-          "y": 61,
+          "x": 124,
+          "y": 24,
           "for": [
-            "g0c0",
-            "g0"
+            "g0c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 28,
-          "cy": 80,
+          "cx": 171,
+          "cy": 19,
           "r": 6,
           "id": "g0c1"
         },
         {
           "text": "update",
-          "x": 42,
-          "y": 85,
+          "x": 185,
+          "y": 24,
           "for": [
-            "g0c1",
-            "g0"
+            "g0c1"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 28,
-          "cy": 104,
+          "cx": 258,
+          "cy": 19,
           "r": 6,
           "id": "g0c2"
         },
         {
           "text": "customize",
-          "x": 42,
-          "y": 109,
+          "x": 272,
+          "y": 24,
           "for": [
-            "g0c2",
-            "g0"
+            "g0c2"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 28,
-          "cy": 128,
+          "cx": 110,
+          "cy": 47,
           "r": 6,
           "id": "g0c3"
         },
         {
           "text": "estimate",
-          "x": 42,
-          "y": 133,
+          "x": 124,
+          "y": 52,
           "for": [
-            "g0c3",
-            "g0"
+            "g0c3"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 8,
-          "y": 158,
-          "w": 168,
-          "h": 114,
-          "rx": 8,
-          "id": "g1"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 66,
+          "x2": 352,
+          "y2": 66
         },
         {
           "text": "Enforce",
-          "x": 20,
-          "y": 182,
-          "style": "strong",
-          "for": [
-            "g1"
-          ]
+          "x": 8,
+          "y": 90,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 28,
-          "cy": 204,
+          "cx": 110,
+          "cy": 85,
           "r": 6,
           "id": "g1c0"
         },
         {
           "text": "git gates",
-          "x": 42,
-          "y": 209,
+          "x": 124,
+          "y": 90,
           "for": [
-            "g1c0",
-            "g1"
+            "g1c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 28,
-          "cy": 228,
+          "cx": 208,
+          "cy": 85,
           "r": 6,
           "id": "g1c1"
         },
         {
           "text": "protect, doctor",
-          "x": 42,
-          "y": 233,
+          "x": 222,
+          "y": 90,
           "for": [
-            "g1c1",
-            "g1"
+            "g1c1"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 28,
-          "cy": 252,
+          "cx": 110,
+          "cy": 113,
           "r": 6,
           "id": "g1c2"
         },
         {
           "text": "red-team review",
-          "x": 42,
-          "y": 257,
+          "x": 124,
+          "y": 118,
           "for": [
-            "g1c2",
-            "g1"
+            "g1c2"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 8,
-          "y": 282,
-          "w": 168,
-          "h": 90,
-          "rx": 8,
-          "id": "g2"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 132,
+          "x2": 352,
+          "y2": 132
         },
         {
           "text": "Verify",
-          "x": 20,
-          "y": 306,
-          "style": "strong",
-          "for": [
-            "g2"
-          ]
+          "x": 8,
+          "y": 156,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 28,
-          "cy": 328,
+          "cx": 110,
+          "cy": 151,
           "r": 6,
           "id": "g2c0"
         },
         {
           "text": "test gate",
-          "x": 42,
-          "y": 333,
+          "x": 124,
+          "y": 156,
           "for": [
-            "g2c0",
-            "g2"
+            "g2c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 28,
-          "cy": 352,
+          "cx": 209,
+          "cy": 151,
           "r": 6,
           "id": "g2c1"
         },
         {
           "text": "integrate",
-          "x": 42,
-          "y": 357,
+          "x": 223,
+          "y": 156,
           "for": [
-            "g2c1",
-            "g2"
+            "g2c1"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 184,
-          "y": 10,
-          "w": 168,
-          "h": 90,
-          "rx": 8,
-          "id": "g3"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 170,
+          "x2": 352,
+          "y2": 170
         },
         {
           "text": "Remember",
-          "x": 196,
-          "y": 34,
-          "style": "strong",
-          "for": [
-            "g3"
-          ]
+          "x": 8,
+          "y": 194,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 204,
-          "cy": 56,
+          "cx": 110,
+          "cy": 189,
           "r": 6,
           "id": "g3c0"
         },
         {
           "text": "orient, summary",
-          "x": 218,
-          "y": 61,
+          "x": 124,
+          "y": 194,
           "for": [
-            "g3c0",
-            "g3"
+            "g3c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 204,
-          "cy": 80,
+          "cx": 260,
+          "cy": 189,
           "r": 6,
           "id": "g3c1"
         },
         {
           "text": "recall",
-          "x": 218,
-          "y": 85,
+          "x": 274,
+          "y": 194,
           "for": [
-            "g3c1",
-            "g3"
+            "g3c1"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 184,
-          "y": 110,
-          "w": 168,
-          "h": 138,
-          "rx": 8,
-          "id": "g4"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 208,
+          "x2": 352,
+          "y2": 208
         },
         {
           "text": "Delegate",
-          "x": 196,
-          "y": 134,
-          "style": "strong",
-          "for": [
-            "g4"
-          ]
+          "x": 8,
+          "y": 232,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 204,
-          "cy": 156,
+          "cx": 110,
+          "cy": 227,
           "r": 6,
           "id": "g4c0"
         },
         {
           "text": "delegation",
-          "x": 218,
-          "y": 161,
+          "x": 124,
+          "y": 232,
           "for": [
-            "g4c0",
-            "g4"
+            "g4c0"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 204,
-          "cy": 180,
+          "cx": 221,
+          "cy": 227,
           "r": 6,
           "id": "g4c1"
         },
         {
           "text": "duo",
-          "x": 218,
-          "y": 185,
+          "x": 235,
+          "y": 232,
           "for": [
-            "g4c1",
-            "g4"
+            "g4c1"
           ]
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 204,
-          "cy": 204,
+          "cx": 110,
+          "cy": 255,
           "r": 6,
           "id": "g4c2"
         },
         {
           "text": "model bindings",
-          "x": 218,
-          "y": 209,
+          "x": 124,
+          "y": 260,
           "for": [
-            "g4c2",
-            "g4"
+            "g4c2"
           ]
         },
         {
           "state": "building",
           "shape": "circle",
-          "cx": 204,
-          "cy": 228,
+          "cx": 110,
+          "cy": 283,
           "r": 6,
           "id": "g4c3"
         },
         {
           "text": "delegate lifecycle",
-          "x": 218,
-          "y": 233,
+          "x": 124,
+          "y": 288,
           "for": [
-            "g4c3",
-            "g4"
+            "g4c3"
           ]
         },
         {
-          "state": "group",
-          "shape": "rect",
-          "x": 184,
-          "y": 258,
-          "w": 168,
-          "h": 90,
-          "rx": 8,
-          "id": "g5"
+          "deco": "rule",
+          "shape": "line",
+          "x1": 8,
+          "y1": 302,
+          "x2": 352,
+          "y2": 302
         },
         {
           "text": "Present",
-          "x": 196,
-          "y": 282,
-          "style": "strong",
-          "for": [
-            "g5"
-          ]
+          "x": 8,
+          "y": 326,
+          "style": "strong"
         },
         {
           "state": "shipped",
           "shape": "circle",
-          "cx": 204,
-          "cy": 304,
+          "cx": 110,
+          "cy": 321,
           "r": 6,
           "id": "g5c0"
         },
         {
           "text": "portal",
-          "x": 218,
-          "y": 309,
+          "x": 124,
+          "y": 326,
           "for": [
-            "g5c0",
-            "g5"
+            "g5c0"
           ]
         },
         {
           "state": "building",
           "shape": "circle",
-          "cx": 204,
-          "cy": 328,
+          "cx": 190,
+          "cy": 321,
           "r": 6,
           "id": "g5c1"
         },
         {
           "text": "present review",
-          "x": 218,
-          "y": 333,
+          "x": 204,
+          "y": 326,
           "for": [
-            "g5c1",
-            "g5"
+            "g5c1"
           ]
         }
       ]
