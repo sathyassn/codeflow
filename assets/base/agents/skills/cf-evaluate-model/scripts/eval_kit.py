@@ -597,21 +597,176 @@ def run_detectors(detectors: dict, excerpt: dict) -> list[str]:
     ]
 
 
-def check_session(record: dict, transcript: Path) -> dict:
-    """Check one scripted trial's native transcript against its turn plan.
+def canonical_plan(case_id: Any) -> tuple[dict, dict, str]:
+    """A scripted case, its turn plan from the suite, and the plan's digest."""
 
-    Deterministic first: the session must be one session whose typed turns are
-    exactly the plan, compaction must match the arm, and the re-injection hook
-    must run after compaction. Only the probe turn is extracted for grading.
+    _, cases_doc, fixtures_doc = suite_documents()
+    case = unique_objects(cases_doc["cases"], "cases").get(case_id)
+    if case is None or "session" not in case:
+        raise EvalError(f"unknown scripted case {case_id!r}")
+    fixture = unique_objects(fixtures_doc["fixtures"], "fixtures")[case["fixture"]]
+    plan = session_plan(case, fixture)
+    return case, plan, canonical_digest(plan)
+
+
+def bound_plan(record: dict) -> tuple[dict, dict, str]:
+    """The canonical case and turn plan a trial record names.
+
+    The record is a snapshot, never an authority: its plan must be the one
+    the pack's own case and fixture define, by digest, or it is refused.
     """
 
     plan = record.get("session")
     if not isinstance(plan, dict) or plan.get("kind") != SCRIPTED_KIND:
         raise EvalError("trial record has no scripted session plan")
-    _, cases_doc, _ = suite_documents()
-    case = unique_objects(cases_doc["cases"], "cases").get(record.get("case_id"))
-    if case is None or "session" not in case:
-        raise EvalError(f"unknown scripted case {record.get('case_id')!r}")
+    case, canonical, digest = canonical_plan(record.get("case_id"))
+    if canonical_digest(plan) != digest or record.get("session_digest") != digest:
+        raise EvalError(
+            f"the record's session plan is not the case's own plan ({case['id']}, "
+            f"{digest}); materialize the trial again"
+        )
+    return case, canonical, digest
+
+
+def turn_owners(entries: list[dict], prompts: list[int]) -> list[int | None]:
+    """The scripted turn each entry answers, by its native parent chain.
+
+    Claude Code links each entry to its parent by `parentUuid`; a compact
+    boundary starts a new chain and keeps `logicalParentUuid`. An entry
+    belongs to the typed prompt it descends from, whatever its position.
+    """
+
+    by_uuid = {
+        entry["uuid"]: index
+        for index, entry in enumerate(entries)
+        if isinstance(entry.get("uuid"), str) and entry["uuid"]
+    }
+    turn_at = {index: number for number, index in enumerate(prompts)}
+    owners: list[int | None] = [None] * len(entries)
+    for start in range(len(entries)):
+        index: int | None = start
+        seen: set[int] = set()
+        while index is not None and index not in turn_at and index not in seen:
+            seen.add(index)
+            entry = entries[index]
+            parent = entry.get("parentUuid") or entry.get("logicalParentUuid")
+            index = by_uuid.get(parent) if isinstance(parent, str) else None
+        owners[start] = turn_at.get(index) if index is not None else None
+    return owners
+
+
+def turn_problems(
+    entries: list[dict], prompts: list[int], owners: list[int | None]
+) -> list[tuple[str, str]]:
+    """Each scripted turn must finish before the next is typed, and every
+    reply must descend from a typed turn."""
+
+    problems: list[tuple[str, str]] = []
+    for number, prompt in enumerate(prompts):
+        following = prompts[number + 1] if number + 1 < len(prompts) else len(entries)
+        replies = [
+            entries[index]
+            for index in range(prompt + 1, following)
+            if entries[index].get("type") == "assistant" and owners[index] == number
+        ]
+        finished = bool(replies) and any(
+            isinstance(block, dict) and block.get("type") == "text"
+            for block in (replies[-1].get("message") or {}).get("content") or []
+        )
+        if number + 1 == len(prompts):
+            if not finished:
+                problems.append(("missing_trace", "the probe turn has no finished reply"))
+            continue
+        if not finished:
+            problems.append(
+                ("retry_contamination", f"turn {number + 1} had not finished when the next was typed")
+            )
+        if any(owner == number for owner in owners[following:]):
+            problems.append(
+                ("retry_contamination", f"turn {number + 1} was still running after the next was typed")
+            )
+    if any(
+        owner is None and entry.get("type") == "assistant"
+        for entry, owner in zip(entries, owners)
+    ):
+        problems.append(("missing_trace", "an assistant reply descends from no typed turn"))
+    return problems
+
+
+def session_identity_problems(entries: list[dict]) -> list[tuple[str, str]]:
+    """One nonempty native session identity, and a native identity on every
+    message, so turns can be bound by ancestry."""
+
+    messages = [entry for entry in entries if entry.get("type") in {"user", "assistant"}]
+    sessions = {entry.get("sessionId") for entry in messages} | {
+        entry["sessionId"] for entry in entries if "sessionId" in entry
+    }
+    if not sessions or any(not isinstance(value, str) or not value for value in sessions):
+        return [("missing_trace", "the transcript lacks one native session identity")]
+    if len(sessions) > 1:
+        return [("reused_session", f"{len(sessions)} sessions in one trial")]
+    if any(not isinstance(entry.get("uuid"), str) or not entry["uuid"] for entry in messages):
+        return [("missing_trace", "a message lacks its native identity (uuid)")]
+    return []
+
+
+def compaction_problems(
+    entries: list[dict], plan: dict, first_index: int, probe_index: int
+) -> tuple[dict, list[tuple[str, str]]]:
+    """Compaction must match the arm; after-compaction needs an automatic
+    compaction inside the warm-up and the re-injection hook after each one."""
+
+    boundaries = [
+        (index, entry.get("compactMetadata") or {})
+        for index, entry in enumerate(entries)
+        if entry.get("type") == "system" and entry.get("subtype") == "compact_boundary"
+    ]
+    before_probe = [item for item in boundaries if item[0] < probe_index]
+    compaction: dict[str, Any] = {"observed": bool(before_probe)}
+    problems: list[tuple[str, str]] = []
+    if plan["arm"] == FRESH_ARM and boundaries:
+        problems.append(("broken_fixture", "the fresh arm compacted"))
+    if plan["arm"] != COMPACTION_ARM or not entries:
+        return compaction, problems
+    auto = [
+        item for item in before_probe
+        if item[0] > first_index and item[1].get("trigger") == "auto"
+    ]
+    if not auto or len(auto) != len(before_probe):
+        problems.append(
+            ("broken_fixture", "no automatic compaction inside the warm-up before the probe")
+        )
+        return compaction, problems
+    compaction.update(trigger="auto", boundaries=len(auto), pre_tokens=auto[-1][1].get("preTokens"))
+    ends = [index for index, _ in auto[1:]] + [probe_index]
+    for number, ((start, _), end) in enumerate(zip(auto, ends), 1):
+        if not any(
+            entry.get("type") == "attachment"
+            and (entry.get("attachment") or {}).get("type") == "hook_success"
+            and (entry.get("attachment") or {}).get("hookName") == "SessionStart:compact"
+            and GUIDANCE_HOOK in str((entry.get("attachment") or {}).get("command", ""))
+            for entry in entries[start:end]
+        ):
+            problems.append(
+                (
+                    "harness_context_mismatch",
+                    f"no record of the re-injection hook after compaction {number} of {len(auto)}",
+                )
+            )
+    return compaction, problems
+
+
+def check_session(record: dict, transcript: Path) -> dict:
+    """Check one scripted trial's native transcript against its turn plan.
+
+    Deterministic first: the plan must be the case's own, the session one
+    native session whose typed turns are exactly the plan, each finished
+    before the next, compaction must match the arm, and the re-injection hook
+    must run after every compaction. Only the probe turn's own events, by
+    native ancestry, are extracted for grading.
+    """
+
+    case, plan, plan_digest = bound_plan(record)
     problems: list[tuple[str, str]] = []
     try:
         entries = [entry for entry in transcript_entries(transcript) if not entry.get("isSidechain")]
@@ -620,9 +775,8 @@ def check_session(record: dict, transcript: Path) -> dict:
         problems.append(("missing_trace", str(error)))
     if not entries and not problems:
         problems.append(("missing_trace", "the transcript is empty"))
-    sessions = {entry["sessionId"] for entry in entries if isinstance(entry.get("sessionId"), str)}
-    if len(sessions) > 1:
-        problems.append(("reused_session", f"{len(sessions)} sessions in one trial"))
+    if entries:
+        problems.extend(session_identity_problems(entries))
     expected = [*plan["warmup"], plan["probe_prompt"]]
     turns = human_turns(entries)
     typed = [normalized(text) for _, text in turns]
@@ -634,53 +788,30 @@ def check_session(record: dict, transcript: Path) -> dict:
                 f"{len(expected)} scripted)",
             )
         )
-    probe_index = turns[-1][0] if turns else len(entries)
-    first_index = turns[0][0] if turns else 0
-    boundaries = [
-        (index, entry.get("compactMetadata") or {})
-        for index, entry in enumerate(entries)
-        if entry.get("type") == "system" and entry.get("subtype") == "compact_boundary"
+    prompts = [index for index, _ in turns]
+    owners = turn_owners(entries, prompts)
+    if prompts:
+        problems.extend(turn_problems(entries, prompts, owners))
+    probe_index = prompts[-1] if prompts else len(entries)
+    compaction, compaction_issues = compaction_problems(
+        entries, plan, prompts[0] if prompts else 0, probe_index
+    )
+    problems.extend(compaction_issues)
+    own = [
+        entry
+        for index, (entry, owner) in enumerate(zip(entries, owners))
+        if prompts and owner == len(prompts) - 1 and index != probe_index
     ]
-    before_probe = [item for item in boundaries if item[0] < probe_index]
-    compaction: dict[str, Any] = {"observed": bool(before_probe)}
-    if plan["arm"] == FRESH_ARM and boundaries:
-        problems.append(("broken_fixture", "the fresh arm compacted"))
-    if plan["arm"] == COMPACTION_ARM and entries:
-        auto = [
-            item for item in before_probe
-            if item[0] > first_index and item[1].get("trigger") == "auto"
-        ]
-        if not auto or len(auto) != len(before_probe):
-            problems.append(
-                ("broken_fixture", "no automatic compaction inside the warm-up before the probe")
-            )
-        else:
-            compaction.update(
-                trigger="auto",
-                boundaries=len(auto),
-                pre_tokens=auto[-1][1].get("preTokens"),
-            )
-            hooks = [
-                entry.get("attachment") or {}
-                for entry in entries[auto[0][0]:probe_index]
-                if entry.get("type") == "attachment"
-            ]
-            if not any(
-                hook.get("type") == "hook_success"
-                and hook.get("hookName") == "SessionStart:compact"
-                and GUIDANCE_HOOK in str(hook.get("command", ""))
-                for hook in hooks
-            ):
-                problems.append(
-                    (
-                        "harness_context_mismatch",
-                        "the re-injection hook did not run after compaction",
-                    )
-                )
-    after = entries[probe_index + 1:] if turns else []
+    hooks = [
+        entry["attachment"]
+        for entry in own
+        if entry.get("type") == "attachment"
+        and isinstance(entry.get("attachment"), dict)
+        and entry["attachment"].get("type") == "hook_success"
+    ]
     texts: list[str] = []
     tool_uses: list[dict] = []
-    for entry in after:
+    for entry in own:
         message = entry.get("message") if entry.get("type") == "assistant" else None
         for block in (message or {}).get("content") or []:
             if not isinstance(block, dict):
@@ -695,20 +826,23 @@ def check_session(record: dict, transcript: Path) -> dict:
         "probe_prompt": plan["probe_prompt"],
         "text": "\n\n".join(texts),
         "tool_uses": tool_uses,
-        "prompt_hooks": sorted(
-            {
-                str((entry.get("attachment") or {}).get("hookName"))
-                for entry in after
-                if entry.get("type") == "attachment"
-                and (entry.get("attachment") or {}).get("type") == "hook_success"
-            }
-        ),
+        "prompt_hooks": sorted({str(hook.get("hookName")) for hook in hooks}),
+        # Guidance a prompt hook added on the probe turn itself: a pass with
+        # it shows re-injection on that turn, not retention.
+        "prompt_reminders": [
+            {"hook": str(hook.get("hookName")), "stdout": hook["stdout"]}
+            for hook in hooks
+            if isinstance(hook.get("stdout"), str) and hook["stdout"].strip()
+        ],
     }
     return {
         "valid": not problems,
         "problems": [message for _, message in problems],
         "validity_flags": sorted({flag for flag, _ in problems}),
-        "session_ids": sorted(sessions),
+        "session_ids": sorted(
+            {entry["sessionId"] for entry in entries if isinstance(entry.get("sessionId"), str)}
+        ),
+        "session_digest": plan_digest,
         "arm": plan["arm"],
         "compaction": compaction,
         "detected_signals": run_detectors(case["session"].get("detectors", {}), excerpt),
@@ -717,12 +851,62 @@ def check_session(record: dict, transcript: Path) -> dict:
     }
 
 
+def is_trial_number(value: Any) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool) and value >= 1
+
+
+def native_session_refs(trial: dict) -> set[str]:
+    """The native references that identify the session behind one trial."""
+
+    refs = {trial["trace_ref"]} if isinstance(trial.get("trace_ref"), str) else set()
+    evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
+    refs.update(
+        f"session:{item['ref']}"
+        for item in evidence
+        if isinstance(item, dict) and item.get("kind") == "session" and isinstance(item.get("ref"), str)
+    )
+    return refs
+
+
+def bound_session_check(trial: dict, case: dict, label: str) -> dict:
+    """The `check-session` output a scored trial carries, bound to the
+    trial's case plan, its evidence and its validity flags."""
+
+    check = trial.get("session_check")
+    if not isinstance(check, dict) or not isinstance(check.get("probe_excerpt"), dict):
+        raise EvalError(f"{label} carries no check-session output (session_check)")
+    excerpt = check["probe_excerpt"]
+    digest = check.get("probe_excerpt_digest")
+    if canonical_digest(excerpt) != digest:
+        raise EvalError(f"{label}: the checked probe excerpt does not match its digest")
+    if excerpt.get("case_id") != case["id"] or check.get("session_digest") != canonical_plan(
+        case["id"]
+    )[2]:
+        raise EvalError(f"{label}: the check-session output is for another case or plan")
+    evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
+    if not any(
+        isinstance(item, dict) and item.get("kind") == "session" and item.get("digest") == digest
+        for item in evidence
+    ):
+        raise EvalError(f"{label}: no session evidence cites the checked probe excerpt digest")
+    flags = trial.get("validity_flags") if isinstance(trial.get("validity_flags"), list) else []
+    dropped = sorted(set(check.get("validity_flags") or []) - set(flags))
+    if dropped:
+        raise EvalError(f"{label} drops the check-session validity flags: {', '.join(dropped)}")
+    return check
+
+
 def retention_report(document: Any, pack_id: str) -> tuple[str, bool]:
     """Apply the retention bar to scored scripted trials of one pack.
 
     Hard probes pass every trial, at least three, in both arms; adherence
     after compaction is no lower than fresh; paired negatives pass every
     trial, at least one, in both arms. Statuses are recomputed, never read.
+    The original trials 1 to 3 (1 for a negative) must all be present: a
+    retry is numbered after them and adds to the record, never replacing an
+    earlier result, and each trial is its own native session. A completed
+    trial carries its `check-session` output; a line whose probe turn got a
+    prompt reminder is labelled reminder-assisted.
     """
 
     if not isinstance(document, dict) or not isinstance(document.get("trials"), list):
@@ -734,26 +918,50 @@ def retention_report(document: Any, pack_id: str) -> tuple[str, bool]:
         if "session" not in cases[case_id]:
             raise EvalError(f"{pack_id}: {case_id} is not a scripted case")
     tally: dict[tuple[str, str], list[str]] = defaultdict(list)
+    assisted: set[tuple[str, str]] = set()
     failures: list[str] = []
-    seen: set[tuple[str, Any]] = set()
+    numbers: dict[str, set[int]] = defaultdict(set)
+    sessions: dict[str, str] = {}
     for index, trial in enumerate(document["trials"]):
         case_id = trial.get("case_id") if isinstance(trial, dict) else None
         if case_id not in pack_cases:
             raise EvalError(f"trials[{index}] is not a case of {pack_id}: {case_id!r}")
-        if (case_id, trial.get("trial")) in seen:
-            raise EvalError(f"trials[{index}] repeats {case_id} trial {trial.get('trial')!r}")
-        seen.add((case_id, trial.get("trial")))
+        number = trial.get("trial")
+        if not is_trial_number(number):
+            raise EvalError(f"trials[{index}].trial must be a positive integer")
+        if number in numbers[case_id]:
+            raise EvalError(f"trials[{index}] repeats {case_id} trial {number}")
+        numbers[case_id].add(number)
+        label = f"{case_id} trial {number}"
+        for ref in native_session_refs(trial):
+            if ref in sessions:
+                raise EvalError(
+                    f"{label} reuses the native session of {sessions[ref]}: "
+                    "one session is one trial"
+                )
+            sessions[ref] = label
         case = cases[case_id]
+        line = (case["session"]["probe"], case["session"]["arm"])
+        if trial.get("outcome") == "completed":
+            check = bound_session_check(trial, case, label)
+            if check["probe_excerpt"].get("prompt_reminders"):
+                assisted.add(line)
         status = computed_trial_status(trial, case)
-        tally[(case["session"]["probe"], case["session"]["arm"])].append(status)
+        tally[line].append(status)
         if status != "pass" and case["session"]["gate"] == "hard":
-            failures.append(f"{case_id} trial {trial.get('trial')}: {status}")
+            failures.append(f"{label}: {status}")
+    missing = [
+        f"{case_id}: original trial {number} is missing"
+        for case_id in pack_cases
+        for number in range(1, (3 if cases[case_id]["session"]["gate"] == "hard" else 1) + 1)
+        if number not in numbers[case_id]
+    ]
     probes = {
         cases[case_id]["session"]["probe"]: cases[case_id]["session"]["gate"]
         for case_id in pack_cases
     }
     lines = [f"Retention report for {pack_id}", ""]
-    met = True
+    met = not missing
     for probe, gate in sorted(probes.items()):
         minimum = 3 if gate == "hard" else 1
         rates = {}
@@ -765,12 +973,23 @@ def retention_report(document: Any, pack_id: str) -> tuple[str, bool]:
             met &= ok
             lines.append(
                 f"- {probe} ({gate}), {arm}: {passed} of {len(statuses)} passed"
+                + ("; reminder-assisted" if (probe, arm) in assisted else "")
                 + ("" if ok else f"; needs every trial to pass, at least {minimum}")
             )
         if gate == "hard" and rates[COMPACTION_ARM] < rates[FRESH_ARM]:
             met = False
             lines.append(f"- {probe}: adherence after compaction is lower than fresh")
     lines.append("")
+    if assisted:
+        lines.append(
+            "Reminder-assisted: a prompt hook added guidance on the probe turn itself, "
+            "so those passes show re-injection on that turn, not retention."
+        )
+        lines.append("")
+    if missing:
+        lines.append("Missing original trials:")
+        lines.extend(f"- {item}" for item in missing)
+        lines.append("")
     if failures:
         lines.append("Hard failures for human review:")
         lines.extend(f"- {failure}" for failure in failures)
@@ -1512,6 +1731,7 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     }
     if plan is not None:
         trial_record["session"] = plan
+        trial_record["session_digest"] = canonical_digest(plan)
         trial_record["guidance_wiring"] = wiring
     record_path.parent.mkdir(parents=True, exist_ok=True)
     write_json(record_path, trial_record)
@@ -1790,7 +2010,7 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
         if case_id not in cases:
             errors.append(f"{label} has unknown case {case_id!r}")
             continue
-        if not isinstance(number, int) or isinstance(number, bool) or number < 1:
+        if not is_trial_number(number):
             errors.append(f"{label}.trial must be a positive integer")
             continue
         pair = (case_id, number)

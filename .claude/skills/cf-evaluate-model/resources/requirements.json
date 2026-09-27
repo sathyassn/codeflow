@@ -2515,7 +2515,7 @@
     {
       "id": "CF-OUT-006",
       "level": "hard",
-      "statement": "A status report or summary names each item by what it achieved or what is at stake, in plain words, with identifiers following as references and never as an item's heading or lead; a direct question for an identifier gets the identifier. The rule holds in a fresh session and after compaction.",
+      "statement": "A status report or summary names each item by what it achieved or what is at stake, in plain words, with identifiers following as references and never as an item's heading or lead. The rule holds in a fresh session and after compaction.",
       "sources": [
         {
           "path": "AGENTS.md",

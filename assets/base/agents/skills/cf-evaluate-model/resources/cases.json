@@ -6431,7 +6431,7 @@
             "skill": "cf-estimate"
           },
           "human_calendar_duration": {
-            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
           },
           "ai_speed_multiplier": {
             "text": "(?i)\\b\\d+(?:\\.\\d+)?\\s*(?:x|times)\\s+(?:faster|quicker|the speed)\\b"
@@ -6482,7 +6482,7 @@
             "skill": "cf-estimate"
           },
           "human_calendar_duration": {
-            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
           },
           "ai_speed_multiplier": {
             "text": "(?i)\\b\\d+(?:\\.\\d+)?\\s*(?:x|times)\\s+(?:faster|quicker|the speed)\\b"
@@ -6534,7 +6534,7 @@
             "skill": "cf-estimate"
           },
           "human_calendar_duration": {
-            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
           }
         }
       },
@@ -6579,7 +6579,7 @@
             "skill": "cf-estimate"
           },
           "human_calendar_duration": {
-            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
           }
         }
       },
@@ -6694,7 +6694,7 @@
       "hosts": [
         "claude"
       ],
-      "prompt": "What's the ticket number for the webhook signature work?",
+      "prompt": "Which tickets are blocked or depend on another ticket?",
       "session": {
         "kind": "scripted-multi-turn",
         "arm": "fresh",
@@ -6702,8 +6702,8 @@
         "gate": "paired-negative",
         "pairs_with": "status-outcomes-first",
         "detectors": {
-          "asked_identifier_given": {
-            "text": "\\bPAY-219\\b"
+          "asked_identifiers_given": {
+            "text": "(?s)(?=.*\\bPAY-219\\b)(?=.*\\bPAY-220\\b)"
           }
         }
       },
@@ -6712,14 +6712,14 @@
           "direct"
         ],
         "signals": [
-          "asked_identifier_given"
+          "asked_identifiers_given"
         ],
         "references": [
           "WORKLOG.md"
         ],
         "must_not": [
           "status_report_instead_of_answer",
-          "identifier_withheld"
+          "identifiers_behind_outcome_prose"
         ]
       }
     },
@@ -6735,7 +6735,7 @@
       "hosts": [
         "claude"
       ],
-      "prompt": "What's the ticket number for the webhook signature work?",
+      "prompt": "Which tickets are blocked or depend on another ticket?",
       "session": {
         "kind": "scripted-multi-turn",
         "arm": "after-compaction",
@@ -6743,8 +6743,8 @@
         "gate": "paired-negative",
         "pairs_with": "status-outcomes-first",
         "detectors": {
-          "asked_identifier_given": {
-            "text": "\\bPAY-219\\b"
+          "asked_identifiers_given": {
+            "text": "(?s)(?=.*\\bPAY-219\\b)(?=.*\\bPAY-220\\b)"
           }
         }
       },
@@ -6753,14 +6753,14 @@
           "direct"
         ],
         "signals": [
-          "asked_identifier_given"
+          "asked_identifiers_given"
         ],
         "references": [
           "WORKLOG.md"
         ],
         "must_not": [
           "status_report_instead_of_answer",
-          "identifier_withheld"
+          "identifiers_behind_outcome_prose"
         ]
       }
     },
@@ -6799,7 +6799,7 @@
           "cf-present"
         ],
         "signals": [
-          "explanation_through_cf_present_or_surface_fit_figure",
+          "cf_present_opened_or_offered_with_reason",
           "current_blockers_named"
         ],
         "references": [
@@ -6849,7 +6849,7 @@
           "cf-present"
         ],
         "signals": [
-          "explanation_through_cf_present_or_surface_fit_figure",
+          "cf_present_opened_or_offered_with_reason",
           "current_blockers_named"
         ],
         "references": [

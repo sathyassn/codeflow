@@ -191,25 +191,42 @@ and shares its fixture. The materializer refuses a scripted case when the
 fresh scaffold lacks the rule map or the re-injection hooks, keeps the turn
 plan in the evaluator-side trial record, and writes no `TASK.md`.
 
+Before the matrix, run one after-compaction smoke session and read its JSONL:
+it must hold the automatic compact boundary, the `SessionStart:compact` hook
+record and each entry's `uuid` and `parentUuid`. Accept workspace trust for
+the fixture first; Claude Code runs no hooks in an untrusted folder.
+
 Grade deterministically first. `check-session --record <trial record>
---transcript <session JSONL>` checks that the transcript is one session whose
-typed turns are exactly the plan, that the fresh arm never compacted, and
-that the after-compaction arm compacted automatically inside the warm-up and
-then ran the re-injection hook. A failed check names its validity flag
-(`reused_session`, `retry_contamination`, `broken_fixture`,
-`harness_context_mismatch` or `missing_trace`) and leaves the trial invalid,
-never a model failure. It then extracts the probe turn alone, with its
-digest, and runs the case's `session.detectors`: tool-event and text
-patterns whose hits are evidence the grader confirms or rejects with a
-reason. The other vendor grades the probe excerpt against the fixture's
-grading note; the warm-up is never graded.
+--transcript <session JSONL>` refuses a record whose plan is not the case's
+own plan, by the `session_digest` the materializer wrote. It then checks
+that the transcript is one native session whose typed turns are exactly the
+plan, that each turn finished before the next was typed (every reply is
+bound to its turn by `parentUuid`, not by position), that the fresh arm
+never compacted, and that the after-compaction arm compacted automatically
+inside the warm-up with a re-injection hook record after every compaction.
+A failed check names its validity flag (`reused_session`,
+`retry_contamination`, `broken_fixture`, `harness_context_mismatch` or
+`missing_trace`) and leaves the trial invalid, never a model failure. It
+then extracts the probe turn's own events alone, with its digest, records
+any reminder a prompt hook added on that turn, and runs the case's
+`session.detectors`: tool-event and text patterns whose hits are evidence
+the grader confirms or rejects with a reason. The other vendor grades the
+probe excerpt against the fixture's grading note; the warm-up is never
+graded.
 
 `retention-report <trials.json>` applies the retention bar to scored trials
 of the `guidance-retention` pack: every hard probe passes every trial, at
 least three, in both arms; its adherence after compaction is no lower than
 fresh; every paired negative passes every trial, at least one, in both
-arms. It lists each hard failure for the human review this protocol
-requires. The bar is a diagnostic, never a promotion shortcut.
+arms. Original trials 1 to 3 (1 for a negative) must all be present; a
+retry takes the next number and adds to the record, never replacing an
+earlier result, and each trial is its own native session. Each completed
+trial carries its `check-session` output as `session_check`, cited by a
+session evidence digest and with every flag the check raised. A line whose
+probe turn got a prompt reminder is labelled reminder-assisted, since it
+shows re-injection on that turn rather than retention. The report lists
+each hard failure for the human review this protocol requires. The bar is
+a diagnostic, never a promotion shortcut.
 
 ## Promoted binding record
 
