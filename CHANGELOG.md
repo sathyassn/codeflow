@@ -227,6 +227,11 @@ publication date._
   alone names `project-management/`. `codeflow update` replaces the managed
   block and keeps the project section; `doctor` gains an `instructions`
   check that warns when `AGENTS.md` passes Codex's 32 KiB limit.
+  Migration: `codeflow update` never edits the project section, so a
+  project section that cites the old section names ("Git rules", "Worktree
+  doctrine", "Workflow discipline", "Entry points", "Planning and tracking",
+  "Session flow") should point at `.codeflow/rules/git-rules.md`,
+  `worktrees.md` or `workflow-discipline.md`, or at the map, instead.
 
 <!-- codeflow:release-impact patch -->
 - **Work start past a stale local target.** `codeflow work start` and the
