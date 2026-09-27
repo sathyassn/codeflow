@@ -59,6 +59,20 @@ publication date._
 
 ### Changed
 
+<!-- codeflow:release-impact major -->
+- **Effort default on upgrade.** Version 2.1.0 set no reasoning effort, so
+  Claude Code and Codex used their own defaults. After `codeflow update`,
+  both start at high: update adds `"effortLevel": "high"` to
+  `.claude/settings.json` when the key is absent, keeping any value you
+  already set, and sets `model_reasoning_effort = "high"` in
+  `.codex/config.toml`. To keep a lower default, set those two keys to the
+  level you want after updating and commit both files; later updates keep
+  your `effortLevel` and merge your edit to `.codex/config.toml`. Two other
+  changes are marked breaking in their commits but need no step from 2.1.0:
+  the version 4 model ensemble file is new, and `codeflow update` installs
+  it; the rule that rejects obsolete raw-text elements such as `<xmp>` in
+  presentations applies to `codeflow present`, which is also new here.
+
 <!-- codeflow:release-impact patch -->
 - **Operating doctrine follow-through.** After opening a pull request,
   cf-ship polls its required checks at most once a minute for up to thirty
