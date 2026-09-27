@@ -939,10 +939,11 @@ fn ci_shipped_skill_bytes_are_exempt_only_at_their_shipped_path() {
     assert!(!all.contains(".agents/skills/cf-consult"), "{all}");
 }
 
-/// A task record under `project-management/tasks/`, valid on its own.
+/// A task record under `project-management/tasks/`, valid on its own, with
+/// the journey criterion a product-path range needs (TSK-105).
 fn planned_task(id: &str, depends_on: &str) -> String {
     format!(
-        "---\nid: {id}\nepic_id: null\nstandalone_reason: bounded work\nintegration_target: main\ntitle: work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: [{depends_on}]\ncreated: 2026-07-29\n---\n\n## Description\nWork.\n\n## Acceptance Criteria\n- AC-1 When run, the system shall work.\n"
+        "---\nid: {id}\nepic_id: null\nstandalone_reason: bounded work\nintegration_target: main\ntitle: work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: [{depends_on}]\ncreated: 2026-07-29\n---\n\n## Description\nWork.\n\n## Acceptance Criteria\n- AC-1 When run, the system shall work.\n- AC-2 (journey) On a fresh project, the command shall succeed.\n"
     )
 }
 
