@@ -331,20 +331,11 @@ fn decide(
 }
 
 fn title_of(git: &Git, commit: &str, id: &RegId) -> Option<String> {
-    let changes = git
-        .run(&[
-            "diff-tree",
-            "-r",
-            "--root",
-            "--no-renames",
-            "--no-commit-id",
-            "--name-only",
-            "-z",
-            commit,
-        ])
-        .ok()?;
-    let path = z_fields(&changes).find(|path| record_id_from_path(path).as_ref() == Some(id))?;
-    let text = git.run(&["show", &format!("{commit}:{path}")]).ok()?;
+    let (_, blob) = inventory::added_records(git, commit)
+        .ok()?
+        .into_iter()
+        .find(|(path, _)| record_id_from_path(path).as_ref() == Some(id))?;
+    let text = git.run(&["cat-file", "blob", &blob]).ok()?;
     frontmatter_value(&text, "title")
 }
 

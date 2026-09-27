@@ -184,7 +184,8 @@ fn max_seq_in<'a>(paths: impl Iterator<Item = &'a str>, kind: Kind) -> u64 {
 }
 
 /// Each id added in `rev`'s history: its adding commits, oldest first, and
-/// the record paths it was added at.
+/// the record paths it was added at. A merge result counts as an add where
+/// it holds a record path that none of its parents holds.
 type AddLog = BTreeMap<RegId, (Vec<String>, BTreeSet<String>)>;
 
 fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
@@ -192,8 +193,9 @@ fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
         "log",
         "--reverse",
         "--no-renames",
+        "--cc",
         "--diff-filter=A",
-        "--name-only",
+        "--raw",
         "-z",
         "--format=%x1e%H",
         rev,
@@ -205,13 +207,16 @@ fn add_log(git: &Git, rev: &str) -> Result<AddLog, IdsError> {
     for record in log.split('\x1e').filter(|record| !record.trim().is_empty()) {
         let mut fields = z_fields(record);
         let sha = fields.next().unwrap_or_default().trim().to_string();
-        for path in fields {
-            if let Some(id) = record_id_from_path(path) {
+        for change in raw_fields(fields) {
+            if change.status != 'A' {
+                continue;
+            }
+            if let Some(id) = record_id_from_path(&change.path) {
                 let (shas, paths) = out.entry(id).or_default();
                 if !shas.contains(&sha) {
                     shas.push(sha.clone());
                 }
-                paths.insert(path.to_string());
+                paths.insert(change.path);
             }
         }
     }
@@ -258,9 +263,6 @@ fn resolve(
     held: &mut Option<BTreeSet<RegId>>,
 ) -> Result<String, IdsError> {
     let first = shas[0].clone();
-    if shas.len() == 1 {
-        return Ok(first);
-    }
     if held.is_none() {
         let ids = git
             .tree(rev, &RECORD_ROOTS)?
@@ -380,24 +382,38 @@ fn lifetime_start(
         .cloned())
 }
 
+/// The record files `commit` added, as `(path, blob)`: for a merge, the
+/// record paths its result holds that none of its parents holds.
+///
+/// # Errors
+///
+/// Returns an error when git fails.
+pub(crate) fn added_records(git: &Git, commit: &str) -> Result<Vec<(String, String)>, IdsError> {
+    let changes = git.run(&[
+        "diff-tree",
+        "-r",
+        "--root",
+        "--no-renames",
+        "--no-commit-id",
+        "--cc",
+        "--raw",
+        "-z",
+        commit,
+    ])?;
+    Ok(raw_changes(&changes)
+        .into_iter()
+        .filter(|change| change.status == 'A' && record_id_from_path(&change.path).is_some())
+        .map(|change| (change.path, change.blob))
+        .collect())
+}
+
 /// The blob a commit added for `id`'s record file.
 fn added_blob(git: &Git, commit: &str, id: &RegId) -> Option<String> {
-    let changes = git
-        .run(&[
-            "diff-tree",
-            "-r",
-            "--root",
-            "--no-renames",
-            "--no-commit-id",
-            "--diff-filter=A",
-            "-z",
-            commit,
-        ])
-        .ok()?;
-    raw_changes(&changes)
+    added_records(git, commit)
+        .ok()?
         .into_iter()
-        .find(|change| record_id_from_path(&change.path).as_ref() == Some(id))
-        .map(|change| change.blob)
+        .find(|(path, _)| record_id_from_path(path).as_ref() == Some(id))
+        .map(|(_, blob)| blob)
 }
 
 /// The landing of a copy introduced by `intro` (R-27, R-111): the commit
@@ -467,26 +483,49 @@ pub(crate) struct RawChange {
 
 /// Parse `diff-tree --raw -z` output: a `:meta` field, then its path.
 pub(crate) fn raw_changes(output: &str) -> Vec<RawChange> {
+    raw_fields(z_fields(output))
+}
+
+/// Parse raw diff fields. A combined entry (`--cc`, a merge) starts with
+/// one colon per parent and carries one status letter per parent; it
+/// takes a letter only when every parent agrees on it, else `M`, so `A`
+/// means that no parent held the path. The blob is the result's.
+fn raw_fields<'a>(mut fields: impl Iterator<Item = &'a str>) -> Vec<RawChange> {
     let mut changes = Vec::new();
-    let mut fields = z_fields(output);
     while let Some(meta) = fields.next() {
-        let Some(meta) = meta.strip_prefix(':') else {
+        let body = meta.trim_start_matches(':');
+        let parents = meta.len() - body.len();
+        if parents == 0 {
             continue;
-        };
+        }
         let Some(path) = fields.next() else {
             break;
         };
-        let parts: Vec<&str> = meta.split_whitespace().collect();
-        if let [_, _, _, blob, status] = parts.as_slice() {
-            changes.push(RawChange {
-                blob: (*blob).to_string(),
-                status: status.chars().next().unwrap_or('?'),
-                path: path.to_string(),
-            });
+        let parts: Vec<&str> = body.split_whitespace().collect();
+        if parts.len() != 2 * parents + 3 {
+            continue;
         }
+        let letters = parts[2 * parents + 2];
+        let status = if parents == 1 {
+            letters.chars().next().unwrap_or('?')
+        } else {
+            let mut chars = letters.chars();
+            let first = chars.next().unwrap_or('?');
+            if chars.all(|letter| letter == first) {
+                first
+            } else {
+                'M'
+            }
+        };
+        changes.push(RawChange {
+            blob: parts[2 * parents + 1].to_string(),
+            status,
+            path: path.to_string(),
+        });
     }
     changes
 }
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -500,5 +539,29 @@ mod tests {
         );
         assert!(is_landing_branch("integration/EPC-020-delivery-system"));
         assert!(!is_landing_branch("task/TSK-101-id-registry"));
+    }
+
+    #[test]
+    fn combined_entries_are_adds_only_when_no_parent_held_the_path() {
+        let z = "0000000";
+        let output = format!(
+            ":000000 100644 {z} aaa A\0tasks/TSK-001.md\0\
+             ::000000 000000 100644 {z} {z} bbb AA\0tasks/TSK-002.md\0\
+             ::000000 100644 100644 {z} ccc ddd AM\0tasks/TSK-003.md\0\
+             ::100644 100644 000000 eee fff {z} DD\0tasks/TSK-004.md\0"
+        );
+        let changes: Vec<(char, String, String)> = raw_changes(&output)
+            .into_iter()
+            .map(|change| (change.status, change.blob, change.path))
+            .collect();
+        assert_eq!(
+            changes,
+            vec![
+                ('A', "aaa".to_string(), "tasks/TSK-001.md".to_string()),
+                ('A', "bbb".to_string(), "tasks/TSK-002.md".to_string()),
+                ('M', "ddd".to_string(), "tasks/TSK-003.md".to_string()),
+                ('D', z.to_string(), "tasks/TSK-004.md".to_string()),
+            ]
+        );
     }
 }

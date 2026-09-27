@@ -1652,6 +1652,171 @@ fn a_record_moved_under_the_same_id_keeps_its_first_introduction() {
     assert!(epic.introduced.starts_with(&first), "{}", epic.introduced);
 }
 
+/// Split `main` into a side line and a main line with unrelated work, then
+/// start their merge without committing it.
+fn start_merge(m: &Path) {
+    git(m, &["checkout", "-q", "-b", "side"]);
+    std::fs::write(m.join("side.txt"), "side\n").unwrap();
+    commit_all(m, "side work");
+    git(m, &["checkout", "-q", "main"]);
+    std::fs::write(m.join("main.txt"), "main\n").unwrap();
+    commit_all(m, "main work");
+    git(m, &["merge", "-q", "--no-ff", "--no-commit", "side"]);
+}
+
+/// Review round 2, SL-4: the record is deleted, and the merge result
+/// itself adds a record titled `replacement` under the same id at
+/// `path`. Returns the original add and the merge.
+fn merge_adds_after_delete(
+    world: &World,
+    m: &Path,
+    seed_first: bool,
+    path: &str,
+) -> (String, String) {
+    write_titled(m, "TSK-001", "original");
+    let original = commit_all(m, "original");
+    git(m, &["push", "-q", "origin", "main"]);
+    if seed_first {
+        seed::seed(m, None).unwrap();
+        assert_eq!(entry(world, "TSK-001").title, "original");
+    }
+    std::fs::remove_file(m.join("project-management/tasks/TSK-001.md")).unwrap();
+    commit_all(m, "delete the record");
+    start_merge(m);
+    let file = m.join(path);
+    std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+    std::fs::write(
+        &file,
+        "---\nid: TSK-001\ntitle: \"replacement\"\nstatus: todo\n---\n",
+    )
+    .unwrap();
+    let merge = commit_all(m, "add a record under the same id in the merge");
+    git(m, &["branch", "-q", "-D", "side"]);
+    git(m, &["push", "-q", "origin", "main"]);
+    (original, merge)
+}
+
+/// Where a merge adds the replacement: the original's path, and a record
+/// path no ordinary commit ever used for the id.
+const MERGE_ADD_PATHS: [&str; 2] = [
+    "project-management/tasks/TSK-001.md",
+    "project-management/epics/EPC-001/tasks/TSK-001.md",
+];
+
+#[test]
+fn seed_credits_a_record_the_merge_result_itself_adds() {
+    for path in MERGE_ADD_PATHS {
+        let world = World::new();
+        let m = world.clone_as("maintainer", "maintainer@example.test");
+        let (original, merge) = merge_adds_after_delete(&world, &m, false, path);
+        seed::seed(&m, None).unwrap();
+        let tsk1 = entry(&world, "TSK-001");
+        assert!(
+            tsk1.introduced.starts_with(&merge),
+            "{path}: {}",
+            tsk1.introduced
+        );
+        assert!(!tsk1.introduced.starts_with(&original), "{path}");
+        assert_eq!(tsk1.title, "replacement", "{path}");
+        assert_eq!(tsk1.landed, merge, "{path}");
+    }
+}
+
+#[test]
+fn check_blocks_a_different_record_the_merge_result_adds() {
+    for path in MERGE_ADD_PATHS {
+        let world = World::new();
+        let m = world.clone_as("maintainer", "maintainer@example.test");
+        merge_adds_after_delete(&world, &m, true, path);
+        let report = check::check(&Git::new(&m), None).unwrap();
+        assert!(
+            report
+                .blocks
+                .iter()
+                .any(|b| b.contains("collision: TSK-001 on main")),
+            "{path}: {:?}",
+            report.blocks
+        );
+    }
+}
+
+/// Review round 2, SL-4: the record is renamed to another id, then the
+/// merge result renames it back, with its content unchanged or one byte
+/// longer. Returns the original add and the merge.
+fn rename_back_in_merge(
+    world: &World,
+    m: &Path,
+    seed_first: bool,
+    changed: bool,
+) -> (String, String) {
+    let task = "project-management/tasks/TSK-001.md";
+    write_titled(m, "TSK-001", "original");
+    let original = commit_all(m, "original");
+    git(m, &["push", "-q", "origin", "main"]);
+    if seed_first {
+        seed::seed(m, None).unwrap();
+        assert_eq!(entry(world, "TSK-001").title, "original");
+    }
+    git(m, &["mv", task, "project-management/tasks/TSK-002.md"]);
+    commit_all(m, "rename the record away");
+    start_merge(m);
+    git(m, &["mv", "project-management/tasks/TSK-002.md", task]);
+    if changed {
+        let path = m.join(task);
+        let text = std::fs::read_to_string(&path).unwrap();
+        std::fs::write(&path, format!("{text} ")).unwrap();
+    }
+    let merge = commit_all(m, "rename the record back in the merge");
+    git(m, &["branch", "-q", "-D", "side"]);
+    git(m, &["push", "-q", "origin", "main"]);
+    (original, merge)
+}
+
+#[test]
+fn a_record_renamed_back_unchanged_in_a_merge_keeps_its_introduction() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    let (original, _) = rename_back_in_merge(&world, &m, false, false);
+    seed::seed(&m, None).unwrap();
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(
+        tsk1.introduced.starts_with(&original),
+        "{}",
+        tsk1.introduced
+    );
+    assert_eq!(tsk1.title, "original");
+
+    let seeded = World::new();
+    let s = seeded.clone_as("maintainer", "maintainer@example.test");
+    rename_back_in_merge(&seeded, &s, true, false);
+    let report = check::check(&Git::new(&s), None).unwrap();
+    assert!(report.passed(), "{:?}", report.blocks);
+}
+
+#[test]
+fn a_record_renamed_back_changed_in_a_merge_is_a_new_record() {
+    let world = World::new();
+    let m = world.clone_as("maintainer", "maintainer@example.test");
+    let (original, merge) = rename_back_in_merge(&world, &m, false, true);
+    seed::seed(&m, None).unwrap();
+    let tsk1 = entry(&world, "TSK-001");
+    assert!(tsk1.introduced.starts_with(&merge), "{}", tsk1.introduced);
+    assert!(!tsk1.introduced.starts_with(&original));
+
+    let seeded = World::new();
+    let s = seeded.clone_as("maintainer", "maintainer@example.test");
+    rename_back_in_merge(&seeded, &s, true, true);
+    let report = check::check(&Git::new(&s), None).unwrap();
+    assert!(
+        report
+            .blocks
+            .iter()
+            .any(|b| b.contains("collision: TSK-001 on main")),
+        "{:?}",
+        report.blocks
+    );
+}
+
 // --- AC-11 (library part): a no-remote repository ---------------------------
 
 #[test]
