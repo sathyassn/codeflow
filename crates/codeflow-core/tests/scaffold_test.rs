@@ -1061,7 +1061,15 @@ fn update_conflict_writes_dot_new_and_never_clobbers() {
         mine,
         "file untouched"
     );
-    assert_eq!(read(&root, ".claude/workflows/develop.md.new"), DEVELOP_V2);
+    // The proposal is the merge with conflict markers: the user's line and
+    // the upstream line both survive for the user to resolve.
+    let proposal = read(&root, ".claude/workflows/develop.md.new");
+    assert!(proposal.contains("<<<<<<<"), "{proposal}");
+    assert!(proposal.contains("step one (user)"), "{proposal}");
+    assert!(
+        DEVELOP_V2.lines().all(|l| proposal.contains(l)),
+        "{proposal}"
+    );
     let notes = &report
         .files
         .iter()

@@ -6,8 +6,10 @@
 //!   the new shipped version; record and baseline refreshed.
 //! - **managed, user-modified**: 3-way merge with base = `.codeflow/.baseline/`
 //!   copy, ours = the user's file, theirs = the new shipped version. Clean
-//!   merge is applied and reported; a conflict writes `<path>.new` and the
-//!   report — the user's file is NEVER clobbered and NEVER silently skipped.
+//!   merge is applied and reported; a conflict writes `<path>.new` holding
+//!   the merge with conflict markers (the user's non-overlapping changes
+//!   kept) and the report; the user's file is NEVER clobbered and NEVER
+//!   silently skipped.
 //! - **managed-region**: only the marked block (markdown/hash) or the
 //!   codeflow-owned keys (settings JSON) are regenerated.
 //! - **user-owned**: never mutated; schema-versioned JSON (policy.json) gains
@@ -398,7 +400,8 @@ fn update_entry(
                 );
                 return Ok(());
             }
-            if let Ok(merged) = diffy::merge(&base, &current, &rendered) {
+            let merge = diffy::merge(&base, &current, &rendered);
+            if let Ok(merged) = merge {
                 write_dest(root, entry, &merged)?;
                 // Record the pristine shipped hash (not the merged file's), so the
                 // manifest invariant `recorded == hash(baseline)` holds: the merged
@@ -414,17 +417,27 @@ fn update_entry(
                     Action::Merged,
                     vec!["3-way merge applied cleanly (base = shipped baseline)".to_string()],
                 );
-            } else {
+            } else if let Err(conflicted) = merge {
+                // The proposal is the 3-way merge with conflict markers, not
+                // the bare shipped file: every change of yours that does not
+                // overlap an upstream change (a job you added to a workflow,
+                // a section you appended) is kept in it, and only the
+                // overlapping hunks wait for you.
                 let new_path = format!("{}.new", entry.dest);
-                write_beneath_root(root, &new_path, rendered.as_bytes())?;
-                report.file_with_notes(
-                    &entry.dest,
-                    Action::Conflicted,
-                    vec![format!(
-                        "your modifications conflict with the new shipped version; \
-                         file untouched, new version written to {new_path}"
-                    )],
-                );
+                write_beneath_root(root, &new_path, conflicted.as_bytes())?;
+                let mut notes = vec![format!(
+                    "your modifications conflict with the new shipped version; file untouched. \
+                     {new_path} holds the 3-way merge: your changes are kept and each \
+                     overlapping hunk carries conflict markers to resolve before you replace the file"
+                )];
+                if entry.src == "ci/codeflow-ci.yml" {
+                    notes.push(
+                        "the commit standards job moved to .github/workflows/codeflow-policy.yml on \
+                         pull_request_target; drop the commit-lint job from this file when you resolve"
+                            .to_string(),
+                    );
+                }
+                report.file_with_notes(&entry.dest, Action::Conflicted, notes);
             }
         }
         Ownership::ManagedRegion => match entry.region.unwrap_or(RegionFormat::Markdown) {
@@ -823,6 +836,22 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 
 #[cfg(test)]
 mod tests {
+    /// `CodeFlow`'s own workflow carries a release-impact job the shipped file
+    /// does not. The update proposal must keep it (TSK-107).
+    #[test]
+    fn dogfood_ci_proposal_keeps_the_release_impact_job() {
+        let base =
+            include_str!("../../../../.codeflow/.baseline/.github/workflows/codeflow-ci.yml");
+        let ours = include_str!("../../../../.github/workflows/codeflow-ci.yml");
+        let theirs = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
+        assert!(ours.contains("\n  release-impact:\n"));
+        let proposal = match diffy::merge(base, ours, theirs) {
+            Ok(merged) | Err(merged) => merged,
+        };
+        assert!(proposal.contains("\n  release-impact:\n"), "{proposal}");
+        assert!(proposal.contains("scripts/release.py check-pr"));
+    }
+
     #[test]
     fn test_unsafe_dest_rejected() {
         // codex pre-flip review: a tampered manifest must not escape the repo.
