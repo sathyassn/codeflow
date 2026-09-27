@@ -278,7 +278,13 @@ pub fn run(args: &CiArgs) -> i32 {
         &mut ran,
     );
 
-    own_branch_preflight(&root, &branch, &mut tagged, &mut ran);
+    own_branch_preflight(
+        &root,
+        &branch,
+        git.work_planning_level(),
+        &mut tagged,
+        &mut ran,
+    );
 
     // --- PR-body check ----------------------------------------------------
     // A Bitbucket PR without a body channel was warned about when resolving
@@ -522,13 +528,14 @@ fn evaluate_commit_range(
 fn own_branch_preflight(
     root: &Path,
     branch: &str,
+    level: PolicyLevel,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
     if branch.starts_with("task/") || branch_claims_task_id(root, branch) {
         match durable_work_tracking_enabled(root) {
             Ok(true) => {
-                evaluate_work_start(root, branch, tagged);
+                evaluate_work_start(root, branch, level, tagged);
                 ran.push("work-start");
             }
             Ok(false) => {}
@@ -548,7 +555,14 @@ fn own_branch_preflight(
     }
 }
 
-fn evaluate_work_start(root: &Path, branch: &str, tagged: &mut Vec<TaggedViolation>) {
+/// The planning checks for the task the branch carries, at the
+/// `git.work_planning` level (TSK-133).
+fn evaluate_work_start(
+    root: &Path,
+    branch: &str,
+    level: PolicyLevel,
+    tagged: &mut Vec<TaggedViolation>,
+) {
     let workgraph = validate_workgraph(root);
     if !workgraph.is_clean() {
         let findings = workgraph
@@ -561,7 +575,7 @@ fn evaluate_work_start(root: &Path, branch: &str, tagged: &mut Vec<TaggedViolati
             sha: None,
             violation: Violation::new(
                 "work.valid_graph",
-                PolicyLevel::Block,
+                level,
                 format!("visible durable workgraph is invalid: {findings}"),
                 "repair the workgraph until `codeflow validate --docs` passes".to_string(),
             ),
@@ -583,7 +597,7 @@ fn evaluate_work_start(root: &Path, branch: &str, tagged: &mut Vec<TaggedViolati
                     sha: None,
                     violation: Violation::new(
                         "work.stable_planning_anchor",
-                        PolicyLevel::Block,
+                        level,
                         error.to_string(),
                         format!(
                             "reconcile the target branch, then run `codeflow work start {task_id}`"
@@ -598,7 +612,7 @@ fn evaluate_work_start(root: &Path, branch: &str, tagged: &mut Vec<TaggedViolati
                 sha: None,
                 violation: Violation::new(
                     "work.stable_planning_anchor",
-                    PolicyLevel::Block,
+                    level,
                     error.to_string(),
                     format!(
                         "merge the validated planning record into '{target}', then run `codeflow work start {task_id}`"
@@ -611,7 +625,7 @@ fn evaluate_work_start(root: &Path, branch: &str, tagged: &mut Vec<TaggedViolati
             sha: None,
             violation: Violation::new(
                 "work.task_record",
-                PolicyLevel::Block,
+                level,
                 format!("task branch '{branch}' does not identify a visible task record"),
                 "create and merge the durable task record before implementation".to_string(),
             ),

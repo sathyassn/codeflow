@@ -268,7 +268,7 @@ fn print_levels(
     profile: Option<&AutomationProfile>,
     ran: Ran,
 ) {
-    let rows: [(&str, PolicyLevel, PolicyLevel); 9] = [
+    let rows: [(&str, PolicyLevel, PolicyLevel); 10] = [
         (
             "commit_format",
             configured.commit_format,
@@ -306,11 +306,16 @@ fn print_levels(
             configured.work_records_level(),
             configured.work_records_level(),
         ),
+        (
+            "work_planning",
+            configured.work_planning_level(),
+            configured.work_planning_level(),
+        ),
     ];
     for (key, level, applied) in rows {
         let runs = match key {
             "pr_sections" | "pr_release_impact" => ran.has_body,
-            "work_records" => ran.tracked,
+            "work_records" | "work_planning" => ran.tracked,
             _ => true,
         };
         if !runs {

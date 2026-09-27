@@ -2610,6 +2610,63 @@ fn pre_commit_leaves_the_planning_anchor_to_work_start_and_ci() {
 }
 
 #[test]
+/// TSK-133 AC-1: pre-commit does not re-validate the workgraph on each
+/// commit. A task branch whose tree holds an unrelated graph defect (an
+/// epic file whose id does not match its name) commits; CI reports the
+/// defect once, as `work.valid_graph`.
+fn pre_commit_ignores_an_unrelated_graph_defect_on_a_task_branch() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "main");
+    let tasks = dir.path().join("project-management/tasks");
+    std::fs::create_dir_all(&tasks).unwrap();
+    std::fs::write(
+        tasks.join("TSK-001.md"),
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
+    )
+    .unwrap();
+    git(dir.path(), &["add", "project-management"]);
+    git(dir.path(), &["commit", "-m", "chore: plan the repair"]);
+    git(dir.path(), &["switch", "-c", "task/TSK-001-repair"]);
+    let epics = dir.path().join("project-management/epics");
+    std::fs::create_dir_all(&epics).unwrap();
+    std::fs::write(
+        epics.join("EPC-999.md"),
+        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
+    )
+    .unwrap();
+    std::fs::write(dir.path().join("repair.rs"), "fn repair() {}\n").unwrap();
+    git(dir.path(), &["add", "."]);
+
+    let out = run_with_stdin(
+        codeflow()
+            .args(["git-hook", "pre-commit"])
+            .current_dir(dir.path()),
+        "",
+    );
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    assert!(!err.contains("work."), "{err}");
+    git(dir.path(), &["commit", "-m", "fix: repair the work"]);
+
+    let ci = codeflow()
+        .args([
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            "task/TSK-001-repair",
+        ])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&ci.stderr);
+    assert_eq!(ci.status.code(), Some(1), "{err}");
+    assert!(err.contains("work.valid_graph (block)"), "{err}");
+}
+
+#[test]
 fn pre_commit_keeps_task_prefix_available_without_durable_work_tracking() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");

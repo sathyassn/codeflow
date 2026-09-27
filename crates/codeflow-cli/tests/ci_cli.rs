@@ -938,3 +938,130 @@ fn ci_shipped_skill_bytes_are_exempt_only_at_their_shipped_path() {
     assert!(all.contains("docs/consult.md:6 adds an em dash"), "{all}");
     assert!(!all.contains(".agents/skills/cf-consult"), "{all}");
 }
+
+/// A task record under `project-management/tasks/`, valid on its own.
+fn planned_task(id: &str, depends_on: &str) -> String {
+    format!(
+        "---\nid: {id}\nepic_id: null\nstandalone_reason: bounded work\nintegration_target: main\ntitle: work\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: [{depends_on}]\ncreated: 2026-07-29\n---\n\n## Description\nWork.\n\n## Acceptance Criteria\n- AC-1 When run, the system shall work.\n"
+    )
+}
+
+/// TSK-133 AC-2: the planning checks run for every work prefix that
+/// carries a task id, at the `git.work_planning` level, never a hard-coded
+/// block. The target holds the policy and two planned tasks; TSK-001 waits
+/// on the open TSK-002, so its anchored preflight fails on `task/`, `fix/`
+/// and `feat/` alike.
+#[test]
+fn ci_runs_the_planning_checks_on_every_work_prefix_at_the_policy_level() {
+    for level in ["block", "warn"] {
+        for prefix in ["task", "fix", "feat"] {
+            let dir = tempfile::tempdir().unwrap();
+            git(dir.path(), &["init", "-b", "main"]);
+            git(dir.path(), &["config", "user.email", "t@example.com"]);
+            git(dir.path(), &["config", "user.name", "t"]);
+            std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+            std::fs::write(
+                dir.path().join(".codeflow/policy.json"),
+                format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+            )
+            .unwrap();
+            let tasks = dir.path().join("project-management/tasks");
+            std::fs::create_dir_all(&tasks).unwrap();
+            std::fs::write(tasks.join("TSK-001.md"), planned_task("TSK-001", "TSK-002")).unwrap();
+            std::fs::write(tasks.join("TSK-002.md"), planned_task("TSK-002", "")).unwrap();
+            git(dir.path(), &["add", "."]);
+            git(dir.path(), &["commit", "-m", "chore: plan two tasks"]);
+            let branch = format!("{prefix}/TSK-001-early");
+            git(dir.path(), &["switch", "-c", &branch]);
+            std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
+            git(dir.path(), &["add", "."]);
+            git(
+                dir.path(),
+                &["commit", "-m", "feat: start before the dependency"],
+            );
+            let output = run_in(
+                dir.path(),
+                &[
+                    "ci", "--base", "main", "--head", "HEAD", "--branch", &branch,
+                ],
+            );
+            let out = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
+            );
+            let shown = format!("work.stable_planning_anchor ({level})");
+            assert!(out.contains(&shown), "{branch} at {level}: {out}");
+            assert!(out.contains("TSK-002"), "{branch} at {level}: {out}");
+            let expected = i32::from(level == "block");
+            assert_eq!(
+                output.status.code(),
+                Some(expected),
+                "{branch} at {level}: {out}"
+            );
+        }
+    }
+}
+
+/// TSK-133 AC-2: a pull request naming its task with `Task:` from a branch
+/// that carries no task id gets the same anchored preflight, at the same
+/// `git.work_planning` level; classification itself still blocks.
+#[test]
+fn ci_reports_a_named_task_anchor_at_the_policy_level() {
+    for level in ["block", "warn"] {
+        let dir = tempfile::tempdir().unwrap();
+        git(dir.path(), &["init", "-b", "main"]);
+        git(dir.path(), &["config", "user.email", "t@example.com"]);
+        git(dir.path(), &["config", "user.name", "t"]);
+        std::fs::create_dir_all(dir.path().join(".codeflow")).unwrap();
+        std::fs::write(
+            dir.path().join(".codeflow/policy.json"),
+            format!(r#"{{"git": {{"work_planning": "{level}"}}}}"#),
+        )
+        .unwrap();
+        let tasks = dir.path().join("project-management/tasks");
+        std::fs::create_dir_all(&tasks).unwrap();
+        std::fs::write(tasks.join("TSK-001.md"), planned_task("TSK-001", "TSK-002")).unwrap();
+        std::fs::write(tasks.join("TSK-002.md"), planned_task("TSK-002", "")).unwrap();
+        git(dir.path(), &["add", "."]);
+        git(dir.path(), &["commit", "-m", "chore: plan two tasks"]);
+        git(dir.path(), &["switch", "-c", "feat/early-work"]);
+        std::fs::write(dir.path().join("thing.rs"), "fn work() {}\n").unwrap();
+        git(dir.path(), &["add", "."]);
+        git(
+            dir.path(),
+            &["commit", "-m", "feat: start before the dependency"],
+        );
+        let body = format!("Task: TSK-001\n\n{FULL_BODY}");
+        let output = run_in(
+            dir.path(),
+            &[
+                "ci",
+                "--base",
+                "main",
+                "--head",
+                "HEAD",
+                "--branch",
+                "feat/early-work",
+                "--pr-body",
+                &body,
+            ],
+        );
+        let out = format!(
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert!(
+            out.contains("pull request class: tracked TSK-001"),
+            "{level}: {out}"
+        );
+        let shown = format!("work.stable_planning_anchor ({level})");
+        assert!(out.contains(&shown), "{level}: {out}");
+        assert_eq!(
+            output.status.code(),
+            Some(i32::from(level == "block")),
+            "{level}: {out}"
+        );
+    }
+}

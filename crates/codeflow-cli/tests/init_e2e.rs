@@ -687,3 +687,129 @@ fn doctor_warns_for_an_oversized_nested_instruction_chain() {
         );
     }
 }
+
+/// `git` with the binary under test first on `PATH`, so the scaffolded hook
+/// shims run it.
+fn git_with_binary(dir: &Path, args: &[&str]) {
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .expect("joinable PATH");
+    let out = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("PATH", path)
+        .env("CODEFLOW_HOME", isolated_home())
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env("GIT_AUTHOR_NAME", "Journey")
+        .env("GIT_AUTHOR_EMAIL", "journey@example.test")
+        .env("GIT_COMMITTER_NAME", "Journey")
+        .env("GIT_COMMITTER_EMAIL", "journey@example.test")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .expect("git runs");
+    assert!(
+        out.status.success(),
+        "git {args:?}: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+/// TSK-133 AC-4 (journey): a freshly scaffolded full-tier project ships
+/// `git.work_planning = block`; a work branch carrying an unplanned task id
+/// is refused once by `work start` and once by `codeflow ci`, and pre-commit
+/// lets the commit through. The adopter sets `warn`: both report and pass,
+/// and `codeflow update` keeps the value.
+#[test]
+fn a_fresh_full_tier_project_checks_planning_once_at_the_policy_level() {
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("proj");
+    std::fs::create_dir(&root).unwrap();
+    let init = codeflow(&root, &["init", "--yes", "--full"]);
+    assert!(init.status.success(), "init --full failed");
+    let policy_path = root.join(".codeflow/policy.json");
+    let policy: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert_eq!(policy["git"]["work_planning"], "block");
+
+    let target = git_stdout(&root, &["branch", "--show-current"]);
+    let target = target.trim();
+    let branch = "fix/TSK-404-unplanned";
+    git_with_binary(&root, &["switch", "-q", "-c", branch]);
+    std::fs::write(root.join("fix.txt"), "a fix\n").unwrap();
+    git_with_binary(&root, &["add", "fix.txt"]);
+    git_with_binary(&root, &["commit", "-q", "-m", "fix: repair the thing"]);
+
+    let ci = |root: &Path| {
+        codeflow(
+            root,
+            &["ci", "--base", target, "--head", "HEAD", "--branch", branch],
+        )
+    };
+    let text = |out: &Output| {
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+    let blocked = ci(&root);
+    assert_eq!(blocked.status.code(), Some(1), "{}", text(&blocked));
+    assert!(text(&blocked).contains("(block)"), "{}", text(&blocked));
+    assert!(
+        text(&blocked).contains("level work_planning = block (configured)"),
+        "{}",
+        text(&blocked)
+    );
+    let start = codeflow(&root, &["work", "start", "TSK-404"]);
+    assert_eq!(start.status.code(), Some(1), "{}", text(&start));
+    assert!(
+        text(&start).contains("work start: error:"),
+        "{}",
+        text(&start)
+    );
+
+    let mut policy = policy;
+    policy["git"]["work_planning"] = "warn".into();
+    std::fs::write(
+        &policy_path,
+        format!("{}\n", serde_json::to_string_pretty(&policy).unwrap()),
+    )
+    .unwrap();
+    git_with_binary(&root, &["add", ".codeflow/policy.json"]);
+    git_with_binary(
+        &root,
+        &[
+            "commit",
+            "-q",
+            "-m",
+            "chore: report planning findings as warnings",
+        ],
+    );
+    let warned = ci(&root);
+    assert_eq!(warned.status.code(), Some(0), "{}", text(&warned));
+    assert!(
+        text(&warned).contains("level work_planning = warn (configured)")
+            && text(&warned).contains("(warn)"),
+        "{}",
+        text(&warned)
+    );
+    let start = codeflow(&root, &["work", "start", "TSK-404"]);
+    assert_eq!(start.status.code(), Some(0), "{}", text(&start));
+    assert!(
+        text(&start).contains("work start: warning:")
+            && text(&start).contains("git.work_planning is warn"),
+        "{}",
+        text(&start)
+    );
+
+    let update = codeflow(&root, &["update"]);
+    assert!(update.status.success(), "{}", text(&update));
+    let after: serde_json::Value =
+        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
+    assert_eq!(after["git"]["work_planning"], "warn");
+}
