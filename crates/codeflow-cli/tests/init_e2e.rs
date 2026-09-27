@@ -1020,7 +1020,7 @@ fn a_fresh_full_tier_project_scales_checks_to_the_change_class() {
     assert!(init.status.success(), "{}", output_text(&init));
     let template = read(&root, ".github/pull_request_template.md");
     assert!(
-        template.contains("A range of only documentation")
+        template.contains("A range of only Markdown under")
             && template.contains("needs Summary and Changes"),
         "{template}"
     );
@@ -1193,8 +1193,9 @@ fn update_migrates_the_spec_template_and_keeps_the_pr_mapping() {
     git_with_binary(&root, &["add", "-A"]);
     git_with_binary(&root, &["commit", "-q", "-m", "chore: adopt codeflow"]);
     git_with_binary(&root, &["switch", "-q", "-c", "docs/guide"]);
-    std::fs::write(root.join("guide.md"), "# Guide\n").unwrap();
-    git_with_binary(&root, &["add", "guide.md"]);
+    std::fs::create_dir_all(root.join("docs")).unwrap();
+    std::fs::write(root.join("docs/guide.md"), "# Guide\n").unwrap();
+    git_with_binary(&root, &["add", "docs/guide.md"]);
     git_with_binary(&root, &["commit", "-q", "-m", "docs: add a guide"]);
     let body = "Task: none: a new guide\n\n## Description\n\nAdds a guide.\n\n\
                 ## Changes\n\n- a guide\n";

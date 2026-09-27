@@ -1,8 +1,9 @@
 <!-- Linted by `codeflow ci`: no AI attribution, no emoji, no em or en dash.
      The sections a PR needs follow what its range touches. A range with
      code, config, scripts, shipped templates or agent instructions needs
-     all five sections below, in this order. A range of only documentation
-     or planning records needs Summary and Changes; Testing and Reviews are
+     all five sections below, in this order. A range of only Markdown under
+     docs/ or project-management/, outside product, watched contract and
+     template paths, needs Summary and Changes; Testing and Reviews are
      optional there, and a missing Release impact reads as no impact.
      Conditional sections are listed at the end. Aim for about 65 rows
      wrapped at 100 columns for a task PR, about 80 with Whole-flow

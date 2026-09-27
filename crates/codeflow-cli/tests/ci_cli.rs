@@ -9,6 +9,8 @@
 //! repo (the `policy_cli.rs` pattern), pinning the exit-code and message
 //! contracts a consumer of the binary (no source) relies on.
 
+#[path = "ci_cli/change_class_probes.rs"]
+mod change_class_probes;
 #[path = "ci_cli/pr_body_fixtures.rs"]
 mod pr_body_fixtures;
 
@@ -362,25 +364,25 @@ fn ci_scales_the_pr_body_sections_to_the_change_class() {
         )
         .unwrap();
     };
-    let planning = |dir: &Path| {
+    // Markdown under docs/ (a guide) or a plan under docs/plan/, on a
+    // branch cut from the base commit.
+    let light_range = |dir: &Path, path: &str| {
         repo_with_range(dir, "docs");
         git(dir, &["reset", "-q", "--hard", "main"]);
-        std::fs::create_dir_all(dir.join("docs/plan")).unwrap();
-        std::fs::write(dir.join("docs/plan/roadmap.json"), "{}\n").unwrap();
+        let file = dir.join(path);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, "# Notes\n").unwrap();
         git(dir, &["add", "."]);
-        git(dir, &["commit", "-m", "docs(plan): add the roadmap"]);
+        git(dir, &["commit", "-m", "docs: add notes"]);
     };
     // Docs-only and planning-only ranges: Summary and Changes suffice, and
     // an absent Release impact reads as none.
-    for (class, setup) in [
-        (
-            "docs-only",
-            &(|dir: &Path| repo_with_range(dir, "docs")) as &dyn Fn(&Path),
-        ),
-        ("planning-only", &planning),
+    for (class, path) in [
+        ("docs-only", "docs/guide.md"),
+        ("planning-only", "docs/plan/roadmap.md"),
     ] {
         let dir = tempfile::tempdir().unwrap();
-        setup(dir.path());
+        light_range(dir.path(), path);
         blocking(dir.path());
         let out = ci_with_body(dir.path(), LIGHT);
         let all = combined(&out);
