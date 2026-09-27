@@ -640,9 +640,6 @@ html[data-cfp-tabs="on"] .sl-markdown-content .portal-altitude > :is(.sl-heading
 @media (max-width: 30rem) {
   .portal-reading-path .portal-stage-node > a { grid-template-columns: minmax(0, 1fr); row-gap: 2px; }
 }
-/* A lone code token that opens a table row is an identifier, such as a
-   skill or a path: it wraps as a whole, never at its own hyphen. */
-.sl-markdown-content td:first-child > code:only-child { white-space: nowrap; }
 .portal-reading-path .portal-stage-node > a:hover .k { color: var(--cf-accent-strong); }
 
 /* A layer landing shows the order to read it in: one numbered line per
