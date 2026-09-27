@@ -65,7 +65,7 @@
         {
           "text": "notes saved",
           "x": 76,
-          "y": 63,
+          "y": 62,
           "anchor": "middle",
           "for": [
             "n"
@@ -223,6 +223,22 @@
           "anchor": "middle",
           "for": [
             "em"
+          ]
+        },
+        {
+          "state": "trans",
+          "shape": "path",
+          "d": "M76 148V78",
+          "head": "end",
+          "id": "t0"
+        },
+        {
+          "text": "save a note",
+          "x": 88,
+          "y": 118,
+          "style": "mute",
+          "for": [
+            "t0"
           ]
         },
         {

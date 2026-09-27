@@ -431,7 +431,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 336,
+      "height": 344,
       "draw": [
         {
           "text": "rarely",
@@ -739,6 +739,16 @@
             ]
           ],
           "id": "s"
+        },
+        {
+          "text": "traceability spine",
+          "x": 352,
+          "y": 334,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
         }
       ]
     },
