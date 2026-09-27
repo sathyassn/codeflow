@@ -1642,7 +1642,7 @@ fn pre_commit_blocks_implementation_when_task_exists_only_on_task_branch() {
     std::fs::create_dir_all(&task_dir).unwrap();
     std::fs::write(
         task_dir.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nBranch-only planning must not authorize itself.\n\n## Acceptance Criteria\n- [ ] planning is anchored\n",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: unanchored\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nBranch-only planning must not authorize itself.\n\n## Acceptance Criteria\n- AC-1 planning is anchored\n",
     )
     .unwrap();
     git(dir.path(), &["add", "project-management"]);
@@ -1671,7 +1671,7 @@ fn pre_commit_blocks_planning_records_created_on_a_task_branch() {
     std::fs::create_dir_all(&task_dir).unwrap();
     std::fs::write(
         task_dir.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: self planning\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nPlanning belongs on plan branches.\n\n## Acceptance Criteria\n- [ ] planning is anchored\n",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: branch-only task\nintegration_target: main\ntitle: self planning\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nPlanning belongs on plan branches.\n\n## Acceptance Criteria\n- AC-1 planning is anchored\n",
     )
     .unwrap();
     git(dir.path(), &["add", "project-management"]);
@@ -1695,7 +1695,7 @@ fn pre_commit_blocks_an_invalid_visible_workgraph_before_task_work() {
     std::fs::create_dir_all(&task_dir).unwrap();
     std::fs::write(
         task_dir.join("TSK-001.md"),
-        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- [ ] repair verified\n",
+        "---\nid: TSK-001\nepic_id: null\nstandalone_reason: bounded repair\nintegration_target: main\ntitle: repair\nstatus: todo\nwork_type: fix\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nRepair the implementation.\n\n## Acceptance Criteria\n- AC-1 repair verified\n",
     )
     .unwrap();
     git(dir.path(), &["add", "project-management"]);
@@ -1706,7 +1706,7 @@ fn pre_commit_blocks_an_invalid_visible_workgraph_before_task_work() {
     std::fs::create_dir_all(&epic_dir).unwrap();
     std::fs::write(
         epic_dir.join("EPC-999.md"),
-        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- [ ] fixed\n",
+        "---\nid: EPC-998\ntitle: mismatch\nstatus: planning\nwork_type: feat\ncreated: 2026-07-29\n---\n\n## Summary\nMismatch.\n\n## Acceptance Criteria\n- AC-1 fixed\n",
     )
     .unwrap();
     git(dir.path(), &["add", "project-management"]);
@@ -1975,7 +1975,7 @@ fn pre_commit_recognizes_nested_only_historical_task() {
     std::fs::create_dir_all(&nested).unwrap();
     std::fs::write(
         nested.join("TSK-001-001.md"),
-        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- [ ] anchored first\n",
+        "---\nid: TSK-001-001\nepic_id: null\nstandalone_reason: historical task\nintegration_target: main\ntitle: historical\nstatus: todo\nwork_type: feat\nspecs: []\ndepends_on: []\ncreated: 2026-07-29\n---\n\n## Description\nNested historical task.\n\n## Acceptance Criteria\n- AC-1 anchored first\n",
     )
     .unwrap();
     std::fs::write(dir.path().join("implementation.rs"), "fn work() {}\n").unwrap();

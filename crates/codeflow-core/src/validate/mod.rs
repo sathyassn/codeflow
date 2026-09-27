@@ -165,6 +165,10 @@ pub fn validate_workgraph(repo_root: &Path) -> WorkgraphValidationReport {
         }
     }
 
+    let lifecycle = crate::workgraph::lifecycle::validate_lifecycle(repo_root);
+    report.issues.extend(lifecycle.errors);
+    report.warnings.extend(lifecycle.warnings);
+
     let docs = docs::lint_docs(repo_root);
     report
         .issues
@@ -579,8 +583,15 @@ pub fn validate_task(
     // Section checks.
     errs.extend(validate_sections(&body, &opts.task_required_sections));
 
+    // Legacy checkbox records keep this rule; a record whose Closeout carries
+    // an acceptance block records its results there instead (R-50, R-54).
+    let body_text = String::from_utf8_lossy(&body);
+    let has_acceptance_block = crate::workgraph::record_text::acceptance_blocks(&body_text)
+        .iter()
+        .any(|block| !block.is_superseded());
     if get_string_field(&data, "status") == "complete"
-        && String::from_utf8_lossy(&body).contains("- [ ]")
+        && body_text.contains("- [ ]")
+        && !has_acceptance_block
     {
         errs.push(ValidationError {
             field: "body".into(),
@@ -603,6 +614,7 @@ const EPIC_STATUS_VALUES: &[&str] = &[
     "in_progress",
     "blocked",
     "complete",
+    "cancelled",
     "archived",
 ];
 
@@ -660,7 +672,9 @@ pub fn validate_epic(
 // ---------------------------------------------------------------------------
 
 const SPEC_REQUIRED_FIELDS: &[&str] = &["id", "title", "status"];
-const SPEC_STATUS_VALUES: &[&str] = &["draft", "approved", "implemented"];
+/// `implemented` stays readable on older specs; it is derived and never
+/// written on new ones (SPC-013 R-32, R-51).
+const SPEC_STATUS_VALUES: &[&str] = &["draft", "approved", "superseded", "implemented"];
 
 /// Validate a specification record.
 ///
@@ -682,6 +696,7 @@ pub fn validate_spec(
     warnings.extend(identity_warnings);
     errors.extend(validate_enum(&data, "status", SPEC_STATUS_VALUES));
     errors.extend(validate_sections(&body, &opts.spec_required_sections));
+    errors.extend(validate_array_fields(&data, &["supersedes"]));
 
     if matches!(
         get_string_field(&data, "status").as_str(),
@@ -703,7 +718,7 @@ fn section_has_content(body: &[u8], heading: &str) -> bool {
     !visible_section_text(body, heading).trim().is_empty()
 }
 
-fn section_has_unresolved_questions(body: &[u8]) -> bool {
+pub(crate) fn section_has_unresolved_questions(body: &[u8]) -> bool {
     let text = visible_section_text(body, "## Open questions");
     let marker = text.trim().trim_end_matches(['.', ';']);
     if marker.is_empty() {

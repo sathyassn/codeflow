@@ -23,6 +23,11 @@ pub struct ValidateArgs {
     /// Verify a portal evidence manifest without executing project code.
     #[arg(long, value_name = "DIR", conflicts_with = "path")]
     pub portal: Option<PathBuf>,
+
+    /// Also judge every record changed since REF (a commit or branch)
+    /// against the lifecycle transition rules, as CI judges a pull request.
+    #[arg(long, value_name = "REF", conflicts_with_all = ["path", "portal"])]
+    pub since: Option<String>,
 }
 
 pub fn run(args: &ValidateArgs) -> i32 {
@@ -37,6 +42,12 @@ pub fn run(args: &ValidateArgs) -> i32 {
         }
     } else if args.docs && args.path.is_none() {
         failed |= !run_workgraph_validation(&root);
+        if let Some(since) = &args.since {
+            failed |= !run_transition_validation(&root, since);
+        }
+    } else if let Some(since) = &args.since {
+        failed |= !validate_records(&root, None);
+        failed |= !run_transition_validation(&root, since);
     } else {
         failed |= !validate_records(&root, args.path.as_deref());
         if args.docs {
@@ -85,6 +96,28 @@ fn run_workgraph_validation(root: &Path) -> bool {
             report.issues.len()
         );
         false
+    }
+}
+
+/// Judge each record changed since `since` by the transition rules.
+fn run_transition_validation(root: &Path, since: &str) -> bool {
+    match codeflow_core::workgraph::lifecycle::judge_range(root, since, None) {
+        Ok(verdict) => {
+            for warning in &verdict.warnings {
+                eprintln!("validate --since: warning: {warning}");
+            }
+            for error in &verdict.errors {
+                eprintln!("validate --since: error: {error}");
+            }
+            if verdict.is_clean() {
+                println!("validate --since {since}: record transitions clean");
+            }
+            verdict.is_clean()
+        }
+        Err(error) => {
+            eprintln!("validate --since: error: {error}");
+            false
+        }
     }
 }
 

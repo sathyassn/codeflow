@@ -83,7 +83,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, then `security`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 42] = [
+pub const SCHEMA: [KeySpec; 43] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -361,6 +361,18 @@ pub const SCHEMA: [KeySpec; 42] = [
                 docs/**, or a .github template; anything else — or a range \
                 whose files could not be resolved — counts as code. Enforced \
                 under pr_sections.",
+    },
+    // ---- git: work records -------------------------------------------------
+    KeySpec {
+        path: "git.work_records",
+        kind: KeyKind::Enum(&["block", "warn"]),
+        valid: "block | warn",
+        purpose: "Level of the adjustable work-record rules: the acceptance block bound to the reviewed commit and the journey criterion (SPC-013 R-80).",
+        notes: "There is no `off`: once work tracking is on the rules always \
+                run, at block or warn. The transition rules (a Blocker for \
+                blocked, a Closeout for cancelled, an acceptance block for \
+                complete) always block whatever this says. `codeflow update` \
+                rewrites a stale `off` to `warn` and keeps every other value.",
     },
     KeySpec {
         path: "git.branch_naming",
@@ -807,6 +819,26 @@ mod tests {
         let errs =
             validate_policy_str(r#"{"security":{"dangerous_commands":"nope"}}"#).unwrap_err();
         assert_eq!(errs[0].key, "security.dangerous_commands");
+    }
+
+    #[test]
+    fn test_work_records_accepts_block_or_warn_and_refuses_off() {
+        for level in ["block", "warn"] {
+            let json = format!(r#"{{"git":{{"work_records":"{level}"}}}}"#);
+            assert!(validate_policy_str(&json).is_ok(), "{level}");
+        }
+        for level in ["off", "allow", "blok"] {
+            let json = format!(r#"{{"git":{{"work_records":"{level}"}}}}"#);
+            let errs = validate_policy_str(&json).unwrap_err();
+            assert_eq!(errs[0].key, "git.work_records");
+            assert!(errs[0].message.contains("block, warn"), "{}", errs[0]);
+        }
+        let mut git = super::super::policy::GitPolicy::default();
+        assert_eq!(git.work_records_level(), super::super::PolicyLevel::Block);
+        git.work_records = super::super::PolicyLevel::Off;
+        assert_eq!(git.work_records_level(), super::super::PolicyLevel::Block);
+        git.work_records = super::super::PolicyLevel::Warn;
+        assert_eq!(git.work_records_level(), super::super::PolicyLevel::Warn);
     }
 
     #[test]

@@ -3,7 +3,7 @@ id: TSK-{{NNN}}
 epic_id: {{EPIC_ID}}              # EPC-NNN, or null for a justified standalone task
 standalone_reason: {{STANDALONE_REASON}} # required exactly when epic_id is null
 title: {{TITLE_YAML}}
-status: todo             # todo | blocked | in_progress | complete | cancelled
+status: todo             # todo | blocked | complete | cancelled; change it with `codeflow task status`
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
 specs: []                # task-specific SPC-### inputs; epic specs are inherited
 depends_on: []           # every direct structural predecessor; [] only for a true root
@@ -34,9 +34,13 @@ created: {{DATE}}
      Each criterion names concrete, claim-matched evidence: automate where
      meaningful, otherwise name a bounded observable or review. Do not invent
      a hard-coded or meaningless test merely to satisfy the record. The
-     reviewer checks the named evidence, and unsupported claims are defects. -->
+     reviewer checks the named evidence, and unsupported claims are defects.
+     List each criterion as `- AC-n <criterion>` with no checkbox; ids are
+     unique and never renumbered. End a criterion with
+     `(serves EPC-NNN AC-m)` when it serves an epic criterion, or with
+     `(journey)` when it names the path exercised. -->
 
-- [ ]
+- AC-1
 
 ## Execution contract
 
@@ -51,6 +55,11 @@ created: {{DATE}}
 ## Closeout
 
 <!-- Fill before status becomes complete/cancelled; delete inapplicable bullets.
+     `codeflow task status` writes the status and what the transition needs:
+     a `## Blocker` (reason, owner, revisit) for blocked, the lines
+     `- cancelled: <reason>` and `- scope: <where it went>` for cancelled, and
+     for complete the fenced `yaml` acceptance block (reviewed commit, review,
+     one result per criterion, journey, not_verified, follow_ups, verdict).
      - Delivered outcome.
      - Plan conformance: as approved under Plan vN, or the later dual-approved
        Plan vN+1 that authorized a material change.

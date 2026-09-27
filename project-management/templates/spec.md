@@ -1,7 +1,7 @@
 ---
 id: SPC-{{NNN}}
 title: {{TITLE_YAML}}
-status: draft            # draft | approved | implemented
+status: draft            # draft | approved | superseded; change it with `codeflow spec status`
 created: {{DATE}}
 ---
 
@@ -11,9 +11,12 @@ created: {{DATE}}
      EPC-NNN|TSK-NNN` allocates this file and links it from the consuming work
      item. Write one only when interfaces, formats, or behavior need pinning
      down before building; many work items need no spec. `approved` requires
-     no unresolved open question. Set `implemented` and freeze the record when
-     the consuming work ships; later change gets a new spec. Keep maintained
-     requirements and executable schemas current at their declared authority. -->
+     no unresolved open question and freezes the criteria. `implemented` is
+     derived, never written: every consumer is terminal and at least one is
+     complete. A changed contract is a new spec that lists
+     `supersedes: [SPC-old]`; `codeflow spec status SPC-old superseded --by
+     SPC-new` records the link. Keep maintained requirements and executable
+     schemas current at their declared authority. -->
 
 ## Summary
 

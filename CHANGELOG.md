@@ -17,6 +17,20 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Work record lifecycle.** `codeflow task status`, `epic status` and
+  `spec status` change a record's status only by a legal transition and write
+  only what it needs: a Blocker for blocked, a cancellation reason and scope,
+  an acceptance block on completion, a superseded block with the reason on
+  reopen. `validate --docs`, the new `validate --since <ref>` and
+  `codeflow ci` judge hand edits with the same rules. New records list
+  criteria as `- AC-n` without a checkbox, spec `implemented` is derived,
+  `in_progress` is no longer written, and the producerless work-graph ledger
+  events are retired. The rules apply from a `work_records_baseline` that
+  `codeflow update` records once for projects with existing records. The new
+  `git.work_records` key accepts `block` or `warn`; upgrade the `codeflow` on
+  `PATH` before `codeflow update`, since an older binary rejects the key.
+
+<!-- codeflow:release-impact minor -->
 - **Portable pull request checks.** `codeflow ci` reads Markdown sections,
   rejects explicitly empty PR bodies and ambiguous headings, and warns about
   summary detail, missing testing limits and oversized evidence. Generic release

@@ -361,7 +361,7 @@ id: CAP-010
 name: duo-model-orchestration
 area: scaffold
 status: shipped
-verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md"]
+verified_by: ["codeflow-core tests/manifest_consistency.rs", "codeflow-core tests/model_eval_contract.rs", "codeflow-core src/model_qualification.rs", "codeflow-cli tests/orchestration_contract.rs", "cargo test validate::docs::tests", "cargo test models::task::tests", "docs/verification/task-graph-verification-canary-2026-07-25.md", "docs/verification/design-direction-canary-2026-07-26.md", "docs/verification/design-language-appearance-canary-2026-08-01.md", "docs/verification/whole-flow-ui-isolation-canary-2026-07-26.md", "cargo test doctor::tests::test_check_delegates", "docs/verification/grok-host-duo-canary-2026-09-07.md", "cargo test workgraph::lifecycle", "cargo test workgraph::record_text", "codeflow-cli tests/record_lifecycle_journey.rs"]
 epics: [EPC-002, EPC-003, EPC-004, EPC-005, EPC-008, EPC-009, EPC-011, EPC-012, EPC-017, EPC-020]
 adrs: [ADR-0015, ADR-0018, ADR-0023, ADR-0024, ADR-0025, ADR-0028, ADR-0030, ADR-0032, ADR-0034, ADR-0035, ADR-0040, ADR-0041, ADR-0042, ADR-0043, ADR-0044, ADR-0045, ADR-0046, ADR-0051, ADR-0054, ADR-0055, ADR-0060]
 ```
@@ -478,6 +478,27 @@ and detached CI apply that same read-only merge-base check when full-tier or
 recognizable historical CodeFlow task tracking is active. It proves validated
 planning is present on the declared stable target. Material graph or cross-task
 contract changes force Plan vN+1; in-node implementation detail does not.
+Record status moves only by legal transitions (SPC-013 R-30 to R-35).
+`codeflow task status`, `epic status` and `spec status` write the status and
+only the sections the transition needs: a `## Blocker` with reason, owner and
+revisit for a blocked task, Closeout lines `- cancelled:` and `- scope:` for a
+cancelled record, and a fenced `yaml` acceptance block on completion.
+Reopening keeps the old block under `acceptance_superseded:` with its reason;
+a task completed before the migration, with no block, records a Closeout line
+`- reopened: <reason>` instead. Sections and blocks inside HTML comments or
+enclosing fences never count. A spec is approved or superseded only in a
+planning-only change, and supersession adds its successor in that change.
+The verbs are safe editors, not the only writers: one core judge rules on a
+verb's proposal, on a hand edit (`validate --docs --since <ref>`) and on each
+record a pull request changes (`codeflow ci`). No verb writes `in_progress`,
+and spec `implemented` is derived from the consumers. Epic close needs every
+task terminal, every criterion verified and every consumed spec implemented
+or still consumed. New records list criteria as `- AC-n` without a checkbox.
+The rules apply from the `work_records_baseline` commit in project config,
+which `codeflow update` records once, and by transition: an unchanged older
+record keeps its exact-blob exemption. `git.work_records` accepts `block` or
+`warn`, never `off`. The ledger's producerless work-graph event types are
+retired.
 Review-relevant bounded discoveries persist at task closeout; closeout cannot
 retroactively approve a
 material change. Project organization keeps one authoritative work-item home
