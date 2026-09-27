@@ -57,8 +57,8 @@ project, never by the figure.
 | 8 | No text over text or over a mark | Oriented ink boxes: text overlapping text, or a mark it does not label, at a depth of 1 px or more fails; text keeps 8 px clear of any mark it does not label (W5 collision gate) | grammar module |
 | 9 | One-sentence caption | Exactly one sentence below the figure saying what the reader takes from it; the caption never repeats the title | grammar module |
 | 10 | Token-only colour | Every colour, font and rule is a `--cf-fig-*` custom property; a literal colour or any other property fails | token sheet names the roles; grammar module lints |
-| 11 | A description | `<title>` and `<desc>` on the SVG; the description names every state and states every drawn fact in words | grammar module |
-| 12 | A table twin | A disclosure below the caption holding the same facts as a table, inline or derived from the declaration | grammar module |
+| 11 | A visible title and a description | The title shows as the title line above the drawing ("Figure N · title" in present, "Figure · title" on the portal) and equals the SVG `<title>`; `<title>` and `<desc>` on the SVG; the description names every state and states every drawn fact in words | grammar module |
+| 12 | A table twin | One Details disclosure below the caption holding the description and the same facts as a table, inline or derived from the declaration | grammar module |
 
 A figure in chat, whatever form its surface takes, obeys the same rules
 where the medium allows: one idea, every mark explained, a caption line, and
@@ -202,19 +202,28 @@ sketches its intent and is not a file the module loads.
 | envelope | `{ "schema_version": 1, "figure": { ... } }`; the module refuses a bare figure object and an unknown key at any level |
 | `id`, `family`, `binding` | kebab-case id of at most 64 characters, unique on the page; one of the nine families; `authored` or `derived` |
 | `question`, `idea`, `title`, `caption` | required plain text, no em or en dash; the caption is one sentence ending in a full stop and never repeats the title (rule 9) |
-| `kicker` | optional; the line above the figure, the title when absent |
+| `kicker` | optional; a short qualifier shown after the title on the title line; the title always shows |
 | `description` | optional; generated from the `idea`, the states and the facts when absent (rule 11) |
 | `states` | 1 to 24 drawn states in legend order: `name` (kebab-case, the `data-state` value), `mark` from the vocabulary in section 4, `means` (the legend text), and optional `channels` naming the non-hue channels the state relies on (interior, edge, width, dash, shape, overlay); the gate measures the channels on the render (rule 3) |
 | `facts` | 1 to 32 facts the figure asserts (rule 6), each with `claim`, `derive`, `source`, `check` and `value`. `source` is a repository path with an optional `#anchor` naming a heading; the anchored section is the scope, and without an anchor the whole file is. `check.kind` is `contains` (the scope holds `check.text`; `value` is `true`), `count-items` (`value` is the number of list items in the scope) or `json` (a `.json` source with no anchor; `check.select` is a dotted path; `value` is what it holds) |
 | `wide`, `narrow` | each composition's `width` (120 to 720 units wide, 120 to 368 narrow), `height` (40 to 2400) and `draw` list of 1 to 600 items; every coordinate stays within 4000 units |
 | `narrow` recomposition | `recompose` (rotate, stack, strip or list), `drops` (the declared states the narrow composition leaves out), `marks` (`"same"` or the states it draws), and optional `elongation_max` (1 to 4, default 1.5), which above 1.5 needs a `reason` (rule 5) |
-| draw: state mark | `state`, `shape` and its geometry, an optional `id` (kebab-case, unique in the composition, and needed for a text's `for`) and optional parts. Line marks (done, todo, blocked, warn, stop, limit, trans, return) take `path`, `line` or `polyline`; human, node, agent and act take `circle`; merge takes `diamond` or `path`; cross takes `cross`; optional takes `rect`, `path`, `line` or `polyline`; every other mark takes `rect` |
+| draw: state mark | `state`, `shape` and its geometry, an optional `id` (kebab-case, unique in the composition, never `none` and never starting `legend-`, needed for a text's `for`; it is the mark's review entity id, and a present schema_version 2 document needs one on every mark of an authored figure) and optional parts. Line marks (done, todo, blocked, warn, stop, limit, trans, return) take `path`, `line` or `polyline`; human, node, agent and act take `circle`; merge takes `diamond` or `path`; cross takes `cross`; optional takes `rect`, `path`, `line` or `polyline`; every other mark takes `rect` |
 | geometry | `path`: `d`, absolute M, L, H, V, C, Q and Z commands only; `line`: `x1`, `y1`, `x2`, `y2`; `polyline`: `points`, two or more `[x, y]` pairs; `rect`: `x`, `y`, `w`, `h` and optional `rx` (0 to 40); `circle` and `diamond`: `cx`, `cy`, `r`; `cross`: `cx`, `cy`, `size` |
 | parts | `head`, `open` (an open head) and `square` (a square end) take `start`, `end` or `both` on a line shape; `cap: "end"` closes a `rect` bar; `cross` is `true` or `{ cx, cy, size }`; `tick: true` sits inside a `circle` |
 | draw: decoration | `deco` (rule, axis or tick) with a `path`, `line`, `polyline` or `rect` shape and its geometry |
 | draw: text | `text`, `x`, `y`, optional `anchor` (start, middle or end), `style` (strong, mute, head or mono, or a list of them) and `for`, the mark ids it labels |
 | `twin` | `"facts"` for a table of the facts, or `{ columns, rows }` with 1 to 8 columns and 1 to 64 rows (rule 12); backticks mark code in a cell |
 | `source`, `layout` | `source` is `{ path, select }` into a committed JSON file, derived binding only, and a derived figure draws from a `layout`. A layout replaces `wide` and the narrow `width`, `height` and `draw`; the module composes both. `extent` takes `max`, optional `unit`, 1 to 16 `rows` of `{ label, value, state }` and optional `limits` of the same shape, where `value` is a number or, derived only, a selector into the source; `coverage` takes 1 to 8 `columns` and 1 to 16 `rows` of `{ label, cells }`, one state name per column |
+
+The module draws the framing: the title line, the drawing, the legend, the
+caption and one Details disclosure. Each legend entry is a review entity,
+`legend-<state>`, labelled by its meaning. Each authored mark with an `id` is
+a review entity in its composition, labelled by the texts whose `for` names
+it, else by its state's meaning; a figure drawn from a `layout` exposes only
+its legend entities. Present numbers figures and tables in document order,
+through disclosures and tabs, and renders `[fig:<id>]` as "Figure N"; the
+portal leaves figures unnumbered.
 
 Coordinates are user units; the frame scales them. The module refuses an
 unknown key, an undeclared state, a declared state it never draws and a
@@ -241,8 +250,8 @@ build whenever the lockfile changes, and the pre-paint display script for the
 configured theme. The clean copy runs only those and the recorded built
 scripts. It compares each figure's DOM with a clean render of the pinned declaration, and
 every computed property of the companion, the figure and its descendants with
-a clean copy of the page. The figure, its caption and its legend must be
-visible at full opacity, and no ancestor may move, clip, filter or hide the
+a clean copy of the page. The figure, its title, its caption and its legend
+must be visible at full opacity, and no ancestor may move, clip, filter or hide the
 figure unless the clean copy's does too. The gate detects drift, hand edits to
 generated output, page CSS, page scripts and changed derived values. It
 compares computed styles, not pixels. It trusts the runtime's recorded sheets
@@ -288,5 +297,6 @@ rule is `explanation-method.md` stage 3.
 - Narrow recomposes with its declared mark set inside the elongation ceiling.
 - Every fact names its source and matches what the source says today.
 - No text box carries the form; no text overprints text or a mark.
-- One-sentence caption, `--cf-fig-*` only, a description, a table twin.
+- A visible title, a one-sentence caption, `--cf-fig-*` only, a description,
+  and one Details disclosure with the table twin.
 - The prose around it is short and plain, with no em or en dash.
