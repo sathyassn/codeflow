@@ -117,7 +117,9 @@ below means `agents/skills/cf-model-orchestrator/`.
 
 After the splits the chain was 155,679 bytes against the 151,552-byte cap.
 The coordinator approved three steps on 2026-09-27, and this section records
-each one for review. The chain is now 151,373 bytes, 179 under the cap. No
+each one for review. The chain was then 151,373 bytes on the first
+measuring basis; "Review round 1 fixes" below gives the complete-basis
+figures. No
 duty was deleted and no rule was softened: every removed sentence names the
 place that already states it, and each named section is read on every task
 unless the text says otherwise. `cf-model-orchestrator/` and `cf-delegate/`
@@ -645,6 +647,189 @@ After:
    > Multi-task plans use `resources/task-graph.md` as the plan contract sets out;
    > durable task records materialize the same direct dependencies.
 
+## Review round 1 fixes
+
+Codex (cx03) and Grok reviewed `4426cceac` and each asked for changes. All
+four findings held, and this section records the fixes. The reading chain is
+now measured on a complete basis: baseline 214,816 bytes, current 151,479,
+cap 151,552 (73 bytes of headroom).
+
+| Finding | Fix |
+|---|---|
+| Grok F1: preflight no longer said when to ask the operator | the clarity-gate condition is back in preflight step 1 |
+| Grok F2: the mature-task check lost dependencies and planning anchors | the step names all four checks again |
+| Codex T129-1: the fixed chain list missed `release-policy.md`, and new pointers or changed triggers could escape the count | the budget test walks every link from the entry points; each conditional read has a reviewed trigger; release policy is now read only when its trigger fires |
+| Codex T129-2: the adapter check accepted any sentence containing "codex host" | an explicit inventory of the three allowed adapter sentences, each Codex-only, and a negative test |
+
+### How the chain is counted now
+
+The test starts from the skills and files the always-loaded layer names
+(the orchestrator, `cf-method`, `current-ensemble.json`, `cf-delegate`,
+`cf-plan`, `cf-develop`, `cf-ship`) and follows every Markdown link and
+backticked path in each Markdown file it reaches. An edge is required unless
+`CONDITIONAL_READS` records it with trigger text that the sentence holding
+the link must contain. Required edges add their target to the chain. It
+fails on an unreviewed trigger change, a stale inventory entry, a reference
+to no shipped file that is not a listed project file, and a conditional
+target that a required edge also reaches. Two control tests prove the
+growth modes Codex probed are caught: a new every-task section of 34,000
+bytes joins the chain and breaks the cap, and an index trigger or the
+release-policy trigger turned always-on fails.
+
+The walk found the same 29 files the fixed list had, plus the one missed
+edge. The baseline was recomputed on the same basis at `95e25f514`: the
+first measurement, 203,489, left out `release-policy.md` (11,327 bytes),
+which `cf-ship` and its PR evidence reference required on every task then.
+The complete baseline is 214,816. The cap stays 151,552, now 63,264 below
+the baseline.
+
+### Release policy made conditional
+
+On the coordinator's direction (2026-09-27), the few release-impact rules
+every PR needs moved into `cf-ship/references/pr-evidence.md`, and the full
+release policy is read when its trigger fires: an impact that may be minor
+or major or is disputed, a PR that carries version or release-note updates,
+a project with no adopted release process, or publication. The policy's
+own opening names these same occasions, so the text stays accurate. To pay
+for the added rules inside the cap, three restatements left the chain:
+
+- `cf-ship` step 4's compatibility sweep, `type!:` footer, version
+  calculator and `breaking_watch_paths` sentences restated the git rules'
+  "Breaking changes" rule (`.codeflow/rules/git-rules.md`, loaded at every
+  commit), so the step now points there.
+- `pr-evidence.md`'s commit format line restated the git rules' "Commits"
+  rule, so it points there.
+- The multi-platform binary and installer paragraph moved from `cf-ship`
+  step 4 to the release policy's "Verify and publish deliberately" section,
+  which is read before publication. Its eval markers (CF-PLAT-001,
+  CF-SHIP-002) changed path only.
+
+`cf-ship` is TSK-105's file under R-118; this edit follows the
+coordinator's direction and is named here and in the Closeout.
+
+`cf-ship` step 4 before:
+
+> 4. Assess release impact using the project's adopted policy and
+>    [references/release-policy.md](references/release-policy.md). Sweep API,
+>    CLI flags, config, formats, defaults and managed instructions for actual
+>    compatibility changes. A touched contract is not automatically breaking;
+>    a misleading commit type is not proof of compatibility. Mark an actual
+>    break with `type!:` and a `BREAKING CHANGE:` migration footer, and reconcile
+>    the project's authoritative release input and PR explanation. Use its one
+>    version calculator; `breaking_watch_paths` only warns. Where the project
+>    adopts same-PR preparation, include the warranted notes and coupled version
+>    updates now, reconciled with the current target and published baseline.
+>    A reviewed merge is not permission to publish or deploy.
+>    For a multi-platform binary or installer release, keep native Windows and
+>    WSL2/Linux evidence separate: the native Windows installer must select its
+>    Windows binary, while WSL2 uses the Linux installer and binary. Cross-build
+>    success proves compilation and linking only; it never replaces native
+>    macOS/Linux/Windows tests or installer canaries. Missing platform evidence
+>    blocks publication rather than becoming an inferred pass.
+
+After:
+
+> 4. Assess release impact under the project's adopted policy and the Release
+>    impact rules in `references/pr-evidence.md`, which say when to read the
+>    release policy. Judge compatibility as the git rules' breaking-change rule
+>    says; a misleading commit type is not proof of compatibility. Reconcile
+>    the project's authoritative release input and PR explanation. Where the
+>    project adopts same-PR preparation, include the warranted notes and coupled
+>    version updates now, reconciled with the current target and published
+>    baseline.
+>    A reviewed merge is not permission to publish or deploy.
+
+`pr-evidence.md` commit line before:
+
+> Open the PR. Commits stay conventional (`type(scope): description`,
+> ≤ 50-char description, ≤ 72-char subject, at most 3 `-` body bullets each
+> ≤ 72 chars, optional `BREAKING CHANGE:` footer); one logical change each.
+
+After:
+
+> Open the PR. Commits follow the git rules' commit format, one logical change
+> each.
+
+`pr-evidence.md` Release impact before:
+
+> Assess the complete change under the project's adopted release policy; load
+> [release-policy.md](release-policy.md) for impact, authority and publication
+> boundaries. Carry its required release-impact explanation or justified `none`,
+> with evidence and migration when needed. Reconcile the authoritative commits
+> or change entries that will land, not only the PR title; do not add a competing
+> version calculator or release ledger.
+
+After:
+
+> Assess the complete change under the project's adopted release policy. Every
+> PR's Release impact states:
+>
+> - `Impact`: the level a consumer sees. In stable SemVer, major is an
+>   incompatible change to an accepted contract, minor is compatible added
+>   behavior, patch is a compatible fix or clarification, and `none` is no
+>   shipped impact under the project's policy, with a reason. Other schemes
+>   follow the project's rules.
+> - `Breaking`: `yes` or `no`; in stable SemVer yes exactly when Impact is
+>   major. Never prefill it on a watched contract path.
+> - `Rationale`: the consumer-visible effect and the evidence for the level.
+> - `Migration`: always present; `none` when nonbreaking, otherwise steps or a
+>   pointer to Breaking change.
+>
+> Declare what this PR's own entries add, not the cumulative pending version.
+> Read [release-policy.md](release-policy.md) when the impact may be minor or
+> major or is disputed, when the PR carries version or release-note updates,
+> when the project has no adopted release process, and before publication.
+> Reconcile the authoritative commits or change entries that will land, not
+> only the PR title; do not add a competing version calculator or release
+> ledger.
+
+The Release impact table row changed its pointer from `release-policy.md`
+to "(rules below)".
+
+### Grok F1 and F2: preflight step 1
+
+Before:
+
+> 1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
+>    non-goals, under `cf-plan`'s clarity gate. A mature approved task gets the
+>    workflow-lifecycle map's compact currency and acceptance check instead of
+>    open-ended discovery. When the brief concerns agentic estimates, capacity or
+>    deadlines, read [estimates](references/estimates.md).
+
+After:
+
+> 1. Pin the brief: objective, scope, constraints, acceptance criteria, and known
+>    non-goals. Discover facts yourself; ask the operator only when an answer
+>    changes the outcome, public behavior, authority, a material security
+>    boundary, or an irreversible action (`cf-plan`'s clarity gate). Reuse a
+>    mature approved task after a compact currency, acceptance, dependency and
+>    planning-anchor check. When the brief concerns agentic estimates, capacity
+>    or deadlines, read [estimates](references/estimates.md).
+
+### Adapter inventory and one reworded pointer
+
+`TURN_ADAPTER_READ_EDGES` in `artifact_budget_contract.rs` holds the three
+sentences allowed to name the turn adapter, word for word: orchestrator
+preflight step 3, `routing/effort.md`, and the lifecycle lane. Each names a
+Codex host and none names a Claude host or both hosts. Any other sentence
+naming the adapter fails, and so does a changed one. The negative test
+appends Codex's both-host mandate to the cf-delegate core, and rescopes the
+effort sentence to a Claude host; both fail.
+
+For the chain walk to bind its trigger, one cf-delegate sentence now names
+the host it serves. Before:
+
+> - **codex → claude: the interactive `claude` CLI driven through CodeFlow's
+>   schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036). Its host and
+>   canary rules are in [the lifecycle lane](resources/lane-lifecycle.md).
+
+After:
+
+> - **codex → claude: the interactive `claude` CLI driven through CodeFlow's
+>   schema-v2 delegate lifecycle, only** (CodeFlow ADR-0036). A Codex host
+>   follows its host and canary rules in
+>   [the lifecycle lane](resources/lane-lifecycle.md).
+
 ## Pins and eval markers
 
 - Test pins now read the file that holds each duty. Where a test pins "the
@@ -666,6 +851,8 @@ After:
   the orchestrator skill to its model overrides reference. Statements and
   levels are unchanged, and marker text is unchanged except for the three
   approved re-points in "Fitting the cap" (CF-MM-013, CF-SEC-002,
-  CF-SEC-003). Three sources whose markers now sit in two files (CF-QA-002,
+  CF-SEC-003). In review round 1, the CF-PLAT-001 and CF-SHIP-002 sources
+  for the platform paragraph moved from `cf-ship/SKILL.md` to
+  `cf-ship/references/release-policy.md`, path only. Three sources whose markers now sit in two files (CF-QA-002,
   CF-MM-017, CF-MM-011) became one source per file; each file's markers keep
   their original relative order.

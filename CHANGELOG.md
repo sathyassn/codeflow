@@ -280,8 +280,11 @@ publication date._
   other hosts and parallel tasks, to references. Duplicated rules now live
   in one place with pointers from the others. `codeflow update` replaces the
   old whole files and installs the new section files at the standard and
-  full tiers. A new test caps the per-task reading chain at 148 KiB, down
-  from about 199 KiB.
+  full tiers. cf-ship's PR evidence now carries the release-impact rules
+  every PR needs, and the full release policy is read for a minor, major or
+  disputed impact, release preparation, or publication. A new test walks
+  the per-task reading chain from its entry points and caps it at 148 KiB,
+  down from about 210 KiB.
 
 <!-- codeflow:release-impact patch -->
 - **Work start past a stale local target.** `codeflow work start` and the
