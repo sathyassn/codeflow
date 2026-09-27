@@ -103,6 +103,9 @@ fn run_workgraph_validation(root: &Path) -> bool {
 fn run_transition_validation(root: &Path, since: &str) -> bool {
     match codeflow_core::workgraph::lifecycle::judge_range(root, since, None) {
         Ok(verdict) => {
+            for notice in &verdict.notices {
+                eprintln!("validate --since: notice: {notice}");
+            }
             for warning in &verdict.warnings {
                 eprintln!("validate --since: warning: {warning}");
             }

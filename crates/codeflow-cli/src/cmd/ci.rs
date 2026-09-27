@@ -209,7 +209,7 @@ pub fn run(args: &CiArgs) -> i32 {
     }
 
     // --- work records: transitions (TSK-102), id binding and scan (TSK-101)
-    record_checks(&root, &base_candidates, &head, &mut tagged, &mut ran);
+    record_checks(&root, &base_candidates, &head, &branch, &mut tagged, &mut ran);
 
     // --- branch-naming check ---------------------------------------------
     if branch.is_empty() {
@@ -274,10 +274,13 @@ fn record_checks(
     root: &Path,
     base_candidates: &[String],
     head: &str,
+    branch: &str,
     tagged: &mut Vec<TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
-    work_records::dispatch(root, base_candidates, head, tagged, ran);
+    if work_records::dispatch(root, base_candidates, head, branch, tagged) {
+        ran.push("work-records");
+    }
     id_registry::dispatch(root, base_candidates, head, tagged, ran);
 }
 

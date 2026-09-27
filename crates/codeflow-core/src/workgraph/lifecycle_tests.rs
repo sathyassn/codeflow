@@ -64,6 +64,40 @@ impl Repo {
         judge_range(self.root(), base, None).unwrap()
     }
 
+    /// Add a bare `origin` and return it (keep it alive for the test).
+    fn origin(&self) -> tempfile::TempDir {
+        let bare = tempfile::tempdir().unwrap();
+        let status = Command::new("git")
+            .args(["init", "-q", "--bare"])
+            .arg(bare.path())
+            .status()
+            .unwrap();
+        assert!(status.success());
+        self.git(&[
+            "remote",
+            "add",
+            "origin",
+            &bare.path().display().to_string(),
+        ]);
+        bare
+    }
+
+    fn push(&self, branch: &str) {
+        self.git(&["push", "-q", "origin", branch]);
+    }
+
+    fn set_baselines(&self, commits: &[&str]) {
+        let list = commits
+            .iter()
+            .map(|commit| format!("\"{commit}\""))
+            .collect::<Vec<_>>()
+            .join(", ");
+        self.write(
+            ".codeflow/project.toml",
+            &format!("{BASELINE_KEY} = [{list}]\n"),
+        );
+    }
+
     fn set_baseline(&self, commit: &str) {
         self.write(
             ".codeflow/project.toml",
@@ -1496,6 +1530,9 @@ fn a_base_older_than_the_baseline_judges_records_from_the_baseline() {
     );
     repo.write(SPC_1, &spec("SPC-001", "approved", ""));
     let baseline = repo.commit("records under the old rules");
+    let _origin = repo.origin();
+    repo.push("integration/EPC-001-line");
+    repo.git(&["switch", "-q", "-c", "integration/release"]);
     repo.set_baseline(&baseline);
     repo.commit("record the baseline");
 
@@ -1561,6 +1598,9 @@ fn a_spec_approved_at_the_baseline_passes_in_a_code_range() {
     repo.commit("draft");
     repo.write(SPC_1, &spec("SPC-001", "approved", ""));
     let baseline = repo.commit("approved in a planning change");
+    let _origin = repo.origin();
+    repo.push("main");
+    repo.git(&["switch", "-q", "-c", "feat/code"]);
     repo.set_baseline(&baseline);
     repo.write("src/lib.rs", "// code\n");
     repo.commit("code and the baseline");
@@ -1623,4 +1663,179 @@ fn a_baseline_that_is_not_an_ancestor_is_refused() {
         Baseline::load(repo.root()),
         Baseline::Available { .. }
     ));
+}
+
+// ---------------------------------------------------------------------------
+// One baseline per line of work, and changes to the baseline list
+// ---------------------------------------------------------------------------
+
+/// Two lines merged into one release, each with its own baseline: legacy
+/// records of either line pass, a later edit is judged from its line's copy,
+/// and a record in neither baseline is new and strict.
+#[test]
+fn two_merged_lines_are_each_judged_from_their_own_baseline() {
+    let repo = Repo::new();
+    repo.write("src/lib.rs", "// old main\n");
+    let base = repo.commit("old main");
+    let _origin = repo.origin();
+    repo.push("main");
+
+    repo.git(&["switch", "-q", "-c", "integration/EPC-001-a"]);
+    repo.write(EPIC_PATH, &epic("in_progress", "", "- [x] AC-1 legacy"));
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "complete", "- [x] first", "Done on line a."),
+    );
+    repo.write(
+        "project-management/tasks/TSK-004.md",
+        &task("TSK-004", "todo", "- [ ] AC-1 checkbox", "Pending."),
+    );
+    let line_a = repo.commit("line a records");
+    repo.push("integration/EPC-001-a");
+
+    repo.git(&["switch", "-q", "-c", "integration/EPC-002-b", &base]);
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &task("TSK-002", "complete", "- [x] first", "Done on line b.").replace(
+            "epic_id: EPC-001\nstandalone_reason: null",
+            "epic_id: null\nstandalone_reason: \"one PR\"",
+        ),
+    );
+    let line_b = repo.commit("line b records");
+    repo.push("integration/EPC-002-b");
+
+    repo.git(&["switch", "-q", "-c", "integration/release", &base]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "merge line a",
+        "integration/EPC-001-a",
+    ]);
+    repo.git(&[
+        "merge",
+        "-q",
+        "--no-ff",
+        "-m",
+        "merge line b",
+        "integration/EPC-002-b",
+    ]);
+    repo.set_baselines(&[&line_a, &line_b]);
+    repo.write(
+        "project-management/tasks/TSK-004.md",
+        &task("TSK-004", "complete", "- [x] AC-1 checkbox", "Pending."),
+    );
+    repo.write(
+        "project-management/tasks/TSK-003.md",
+        &task("TSK-003", "todo", "- [ ] AC-1 new checkbox", "Pending."),
+    );
+    repo.write("src/lib.rs", "// the release\n");
+    repo.commit("release work");
+
+    assert!(matches!(
+        Baseline::load(repo.root()),
+        Baseline::Available { ref commits, .. } if commits.len() == 2
+    ));
+    let verdict = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    let errors = verdict.errors.join("\n");
+    assert!(
+        errors.contains("TSK-003.md: new records list criteria"),
+        "{errors}"
+    );
+    assert!(
+        errors.contains("TSK-004.md: a complete record needs an acceptance block"),
+        "{errors}"
+    );
+    assert_eq!(verdict.errors.len(), 2, "{errors}");
+    assert!(
+        verdict
+            .notices
+            .iter()
+            .any(|n| n.contains("moves work_records_baseline")),
+        "{verdict:?}"
+    );
+
+    // Control: with only line a's baseline, line b's legacy task is new.
+    repo.set_baselines(&[&line_a]);
+    repo.commit("only one baseline");
+    let one = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    assert!(
+        one.errors.iter().any(|e| e.contains("TSK-002.md")),
+        "{one:?}"
+    );
+}
+
+/// A baseline entry the range adds must be landed history; the range's own
+/// commit is refused even when its own branch is pushed as an integration
+/// branch, and the base itself counts.
+#[test]
+fn an_added_baseline_that_is_the_changes_own_commit_is_refused() {
+    let repo = Repo::new();
+    repo.write(
+        TASK_PATH,
+        &task(
+            "TSK-001",
+            "todo",
+            "- AC-1 When x, the system shall y.",
+            "Pending.",
+        ),
+    );
+    let base = repo.commit("records");
+    let _origin = repo.origin();
+    repo.push("main");
+    repo.git(&["switch", "-q", "-c", "integration/EPC-009-self"]);
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &task("TSK-002", "complete", "- [x] first", "No block."),
+    );
+    let own = repo.commit("a record the change wants exempt");
+    repo.set_baseline(&own);
+    repo.commit("exempt it");
+    repo.push("integration/EPC-009-self");
+
+    let needle = "is not landed history";
+    let range = judge_range(repo.root(), &base, Some("HEAD")).unwrap();
+    assert!(range.errors.iter().any(|e| e.contains(needle)), "{range:?}");
+    let ci = judge_pull_request(
+        repo.root(),
+        "main",
+        "HEAD",
+        Some("integration/EPC-009-self"),
+    )
+    .unwrap();
+    assert!(ci.errors.iter().any(|e| e.contains(needle)), "{ci:?}");
+    assert!(
+        ci.notices.iter().any(|n| n.contains(&own)),
+        "the change is reported: {ci:?}"
+    );
+
+    // Control: the range's base is landed history.
+    repo.set_baseline(&base);
+    let landed = judge_range(repo.root(), &base, None).unwrap();
+    assert!(
+        !landed.errors.iter().any(|e| e.contains(needle)),
+        "{landed:?}"
+    );
+}
+
+/// The single-string form reads as a one-item list, and repeats collapse.
+#[test]
+fn the_single_string_baseline_still_works() {
+    let repo = Repo::new();
+    repo.write(
+        TASK_PATH,
+        &task("TSK-001", "todo", "- [ ] legacy", "Pending."),
+    );
+    let commit = repo.commit("records");
+    repo.set_baseline(&commit);
+    assert_eq!(recorded_baseline(repo.root()), vec![commit.clone()]);
+    assert!(matches!(
+        Baseline::load(repo.root()),
+        Baseline::Available { .. }
+    ));
+    assert!(validate_lifecycle(repo.root()).is_clean());
+    repo.set_baselines(&[&commit, &commit]);
+    assert_eq!(recorded_baseline(repo.root()), vec![commit]);
+    assert!(validate_lifecycle(repo.root()).is_clean());
 }
