@@ -1363,47 +1363,21 @@ fn update_adds_new_policy_keys_without_mutating_user_values() {
 }
 
 #[test]
-fn update_moves_test_gate_on_push_from_the_old_default_to_block() {
+fn update_keeps_test_gate_on_push_and_recommends_block() {
+    // T132-4: a value equal to the old default may still be the adopter's
+    // choice, so update keeps it and recommends the new default.
     isolate_git();
-    let (_p, root) = project_dir();
-    let _v1 = init_v1(&root);
-    let before: serde_json::Value =
-        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
-    assert_eq!(before["git"]["test_gate_on_push"], "warn");
-
-    let (_a2, assets_v2) = fixture_assets(true);
-    let report = scaffold::update(&assets_v2, &root, &update_opts("2.1.0")).unwrap();
-
-    let after: serde_json::Value =
-        serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
-    assert_eq!(
-        after["git"]["test_gate_on_push"], "block",
-        "a value equal to the recorded baseline moves to the new default"
-    );
-    assert_eq!(after["git"]["commit_format"], "block");
-    let notes = &report
-        .files
-        .iter()
-        .find(|f| f.dest == ".codeflow/policy.json")
-        .unwrap()
-        .notes;
-    assert!(
-        notes
-            .iter()
-            .any(|n| n.contains("moved default git.test_gate_on_push") && n.contains("warn")),
-        "{notes:?}"
-    );
-}
-
-#[test]
-fn update_keeps_an_explicit_test_gate_on_push() {
-    isolate_git();
-    for explicit in ["off", "allow"] {
+    for (value, recommends) in [
+        ("warn", true),
+        ("off", true),
+        ("allow", true),
+        ("block", false),
+    ] {
         let (_p, root) = project_dir();
         let _v1 = init_v1(&root);
         let mut policy: serde_json::Value =
             serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
-        policy["git"]["test_gate_on_push"] = explicit.into();
+        policy["git"]["test_gate_on_push"] = value.into();
         std::fs::write(
             root.join(".codeflow/policy.json"),
             serde_json::to_string_pretty(&policy).unwrap(),
@@ -1415,20 +1389,22 @@ fn update_keeps_an_explicit_test_gate_on_push() {
 
         let after: serde_json::Value =
             serde_json::from_str(&read(&root, ".codeflow/policy.json")).unwrap();
-        assert_eq!(
-            after["git"]["test_gate_on_push"], explicit,
-            "an explicit adopter value is kept"
-        );
+        assert_eq!(after["git"]["test_gate_on_push"], value, "value kept");
         let notes = &report
             .files
             .iter()
             .find(|f| f.dest == ".codeflow/policy.json")
             .unwrap()
             .notes;
-        assert!(
-            !notes.iter().any(|n| n.contains("moved default")),
-            "{notes:?}"
-        );
+        let note = notes.iter().find(|n| n.contains("git.test_gate_on_push"));
+        assert_eq!(note.is_some(), recommends, "{value}: {notes:?}");
+        if let Some(note) = note {
+            assert!(
+                note.contains(&format!("kept git.test_gate_on_push = \"{value}\"")),
+                "{note}"
+            );
+            assert!(note.contains("set it to \"block\""), "{note}");
+        }
     }
 }
 

@@ -518,10 +518,10 @@ fn sync_user_owned_json(
         Baseline::read(root, &entry.dest).and_then(|t| serde_json::from_str(&t).ok());
 
     let mut added: Vec<String> = vec![];
-    let mut moved: Vec<String> = vec![];
+    let mut recommended: Vec<String> = vec![];
     if let Some(old) = old_default.as_ref() {
         add_new_keys(&mut user, Some(old), &new_default, "", &mut added);
-        moved = migrate_defaults(&mut user, old, &new_default);
+        recommended = recommend_defaults(&user, old, &new_default);
     }
 
     let migrated = migrate_policy_values(&entry.dest, &mut user);
@@ -530,8 +530,9 @@ fn sync_user_owned_json(
     Baseline::write(root, &entry.dest, rendered)?;
     record(installed, entry, hash::sha256_hex(rendered.as_bytes()));
 
-    if added.is_empty() && migrated.is_empty() && moved.is_empty() {
+    if added.is_empty() && migrated.is_empty() {
         let mut notes = vec!["user-owned: values never mutated; no new default keys".to_string()];
+        notes.extend(recommended);
         if old_default.is_none() {
             notes.push(
                 "no shipped-default baseline existed; key sync starts from this version"
@@ -546,7 +547,7 @@ fn sync_user_owned_json(
     // keys were added and the user has not customized it past the default.
     let mut notes: Vec<String> = added.iter().map(|k| format!("added key {k}")).collect();
     notes.extend(migrated);
-    notes.extend(moved);
+    notes.extend(recommended);
     if let (Some(user_sv), Some(new_sv)) = (
         user.get("schema_version")
             .and_then(serde_json::Value::as_u64),
@@ -568,39 +569,36 @@ fn sync_user_owned_json(
     Ok(())
 }
 
-/// Default changes that `codeflow update` carries to an adopter who never
-/// chose a value: `(dotted key path, reason)`. Only these keys move, and only
-/// while the adopter's value still equals the old shipped default; a value
-/// the adopter set explicitly is kept.
-const MIGRATED_DEFAULTS: &[(&str, &str)] = &[(
+/// Changed shipped defaults that `codeflow update` recommends to an existing
+/// install: `(dotted key path, reason)`. The value is never changed: equality
+/// with the old default cannot show whether the adopter chose it.
+const RECOMMENDED_DEFAULTS: &[(&str, &str)] = &[(
     "git.test_gate_on_push",
-    "the push set is now fast (TSK-132); set \"warn\" to restore the old behaviour",
+    "the push set now finishes in seconds and blocks a failed push (TSK-132)",
 )];
 
-/// Move each [`MIGRATED_DEFAULTS`] key from the old shipped default to the
-/// new one when the adopter's value equals the old default. Returns one note
-/// per moved key.
-fn migrate_defaults(
-    user: &mut serde_json::Value,
+/// One note per [`RECOMMENDED_DEFAULTS`] key whose shipped default changed
+/// and whose current value differs from the new default.
+fn recommend_defaults(
+    user: &serde_json::Value,
     old_default: &serde_json::Value,
     new_default: &serde_json::Value,
 ) -> Vec<String> {
     let mut notes = Vec::new();
-    for (path, reason) in MIGRATED_DEFAULTS {
+    for (path, reason) in RECOMMENDED_DEFAULTS {
         let pointer = format!("/{}", path.replace('.', "/"));
-        let (Some(old), Some(new)) = (old_default.pointer(&pointer), new_default.pointer(&pointer))
-        else {
+        let (Some(old), Some(new), Some(current)) = (
+            old_default.pointer(&pointer),
+            new_default.pointer(&pointer),
+            user.pointer(&pointer),
+        ) else {
             continue;
         };
-        if old == new {
-            continue;
-        }
-        let Some(current) = user.pointer_mut(&pointer) else {
-            continue;
-        };
-        if *current == *old {
-            *current = new.clone();
-            notes.push(format!("moved default {path} {old} -> {new}: {reason}"));
+        if old != new && current != new {
+            notes.push(format!(
+                "kept {path} = {current}; new installs default to {new}: {reason}. \
+                 To adopt it, set it to {new} in .codeflow/policy.json"
+            ));
         }
     }
     notes
