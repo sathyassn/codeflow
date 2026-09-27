@@ -528,6 +528,58 @@ fn spec_new_allocates_and_links_from_its_consumer() {
     assert!(epic.contains("specs: [SPC-001]"), "{epic}");
 }
 
+/// TSK-103 AC-8: one spec, several consumers, each written in the same
+/// change; the spec keeps no consumer list; a missing consumer writes none.
+#[test]
+fn spec_new_links_every_consumer_or_none() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    codeflow(dir.path(), &["epic", "new", "Contracted work"]);
+    codeflow(
+        dir.path(),
+        &[
+            "task",
+            "new",
+            "--standalone-reason",
+            "a one-off",
+            "Side work",
+        ],
+    );
+    let output = codeflow(
+        dir.path(),
+        &[
+            "spec",
+            "new",
+            "--for",
+            "EPC-001",
+            "--for",
+            "TSK-001",
+            "Shared contract",
+        ],
+    );
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    let read = |path: &str| std::fs::read_to_string(dir.path().join(path)).unwrap();
+    assert!(read("project-management/epics/EPC-001.md").contains("specs: [SPC-001]"));
+    assert!(read("project-management/tasks/TSK-001.md").contains("specs: [SPC-001]"));
+    let spec = read("project-management/specs/SPC-001.md");
+    assert!(
+        !spec.contains("EPC-001") && !spec.contains("TSK-001"),
+        "{spec}"
+    );
+
+    let before_epic = read("project-management/epics/EPC-001.md");
+    let output = codeflow(
+        dir.path(),
+        &["spec", "new", "--for", "EPC-001,TSK-404", "Half linked"],
+    );
+    assert_eq!(output.status.code(), Some(1));
+    assert_eq!(read("project-management/epics/EPC-001.md"), before_epic);
+    assert!(!dir
+        .path()
+        .join("project-management/specs/SPC-002.md")
+        .exists());
+}
+
 #[test]
 fn work_start_proves_a_merged_planning_anchor_without_mutation() {
     let dir = tempfile::tempdir().unwrap();

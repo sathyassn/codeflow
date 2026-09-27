@@ -211,7 +211,10 @@ fn tasks_line(root: &Path) -> Option<String> {
         .next()
         .map(|entry| format!("; next: {} {}", entry.task_id, truncate(&entry.title, 60)))
         .unwrap_or_default();
-    Some(format!("tasks: {}{next} (`codeflow work next`)", backlog.counts_line()))
+    Some(format!(
+        "tasks: {}{next} (`codeflow work next`)",
+        backlog.counts_line()
+    ))
 }
 
 /// Count capability statuses from `docs/capabilities.md` yaml entries.

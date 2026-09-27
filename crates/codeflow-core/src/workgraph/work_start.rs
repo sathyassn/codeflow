@@ -963,7 +963,9 @@ fn validate_dependencies(
 ) -> Result<(), WorkStartError> {
     for dependency in dependencies {
         match dependency.kind {
-            DependencyKind::Code => code_dependency(repo, records, task_id, target, &dependency.id)?,
+            DependencyKind::Code => {
+                code_dependency(repo, records, task_id, target, &dependency.id)?
+            }
             DependencyKind::Research | DependencyKind::Decision => {
                 pinned_dependency(repo, records, task_id, target, dependency)?;
             }
@@ -1067,14 +1069,21 @@ fn pinned_dependency(
             line,
         });
     };
-    if tip.id() != commit.id() && !repo.graph_descendant_of(tip.id(), commit.id()).unwrap_or(false) {
+    if tip.id() != commit.id()
+        && !repo
+            .graph_descendant_of(tip.id(), commit.id())
+            .unwrap_or(false)
+    {
         return Err(refuse(format!("not on '{line}'")));
     }
     let at_pin = commit
         .tree()
         .map_err(|error| WorkStartError::Repository(error.to_string()))
         .and_then(|tree| records_from_tree(repo, &tree))?;
-    match at_pin.get(&dependency.id).map(|record| record.status.as_str()) {
+    match at_pin
+        .get(&dependency.id)
+        .map(|record| record.status.as_str())
+    {
         Some("complete") => Ok(()),
         Some(status) => Err(refuse(format!("the record there is '{status}'"))),
         None => Err(refuse("the record is not there".to_string())),
@@ -1199,12 +1208,16 @@ fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
         specs: strings(&data, "specs")?,
         depends_on: dependencies(&data)?,
         work_type: string(&data, "work_type"),
-        awaiting_selection: string(&data, "awaiting_selection").filter(|path| !path.trim().is_empty()),
+        awaiting_selection: string(&data, "awaiting_selection")
+            .filter(|path| !path.trim().is_empty()),
         blocker_reason: blocker_reason(content),
     })
 }
 
-pub(crate) fn target_reference<'repo>(repo: &'repo Repository, target: &str) -> Option<git2::Commit<'repo>> {
+pub(crate) fn target_reference<'repo>(
+    repo: &'repo Repository,
+    target: &str,
+) -> Option<git2::Commit<'repo>> {
     target_reference_names(target)?
         .into_iter()
         .find_map(|name| repo.find_reference(&name).ok()?.peel_to_commit().ok())

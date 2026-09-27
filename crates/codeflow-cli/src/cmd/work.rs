@@ -133,13 +133,19 @@ fn claim(task_id: &str) -> i32 {
     let root = super::repo_root();
     match readiness::claim(&root, task_id) {
         Ok(claim) => {
-            println!("work claim: {task_id} -> {} from {}", claim.branch, claim.from);
+            println!(
+                "work claim: {task_id} -> {} from {}",
+                claim.branch, claim.from
+            );
             if claim.pushed {
                 println!("  pushed to origin; the branch is the visible mark of the claim");
             } else {
                 println!("  no origin remote: the claim is visible only in this clone");
             }
-            println!("  next: check out {} and run `codeflow work start {task_id}`", claim.branch);
+            println!(
+                "  next: check out {} and run `codeflow work start {task_id}`",
+                claim.branch
+            );
             0
         }
         Err(error) => {

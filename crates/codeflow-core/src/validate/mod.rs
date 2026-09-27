@@ -635,7 +635,10 @@ pub fn validate_task(
 fn record_repo_root(record: &Path) -> Option<std::path::PathBuf> {
     record
         .ancestors()
-        .find(|dir| dir.file_name().is_some_and(|name| name == "project-management"))
+        .find(|dir| {
+            dir.file_name()
+                .is_some_and(|name| name == "project-management")
+        })
         .and_then(Path::parent)
         .map(Path::to_path_buf)
 }
@@ -678,7 +681,9 @@ fn awaiting_selection_errors(
                 .any(|part| matches!(part, std::path::Component::ParentDir))
             || !root.join(relative).exists()
         {
-            fail(format!("`{path}` must be a path that exists in the repository"));
+            fail(format!(
+                "`{path}` must be a path that exists in the repository"
+            ));
         }
     }
     errs

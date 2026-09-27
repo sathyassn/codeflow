@@ -100,7 +100,9 @@ pub struct Backlog {
 impl Backlog {
     /// Entries in `state`.
     pub fn in_state(&self, state: State) -> impl Iterator<Item = &Entry> {
-        self.entries.iter().filter(move |entry| entry.state == state)
+        self.entries
+            .iter()
+            .filter(move |entry| entry.state == state)
     }
 
     /// Counts by derived state, in the order `work next` lists them.
@@ -133,7 +135,9 @@ impl Backlog {
             .join(", ");
         format!(
             "snapshot: {tips}; fetched {}",
-            self.fetched_at.as_deref().unwrap_or("never (local refs only)")
+            self.fetched_at
+                .as_deref()
+                .unwrap_or("never (local refs only)")
         )
     }
 }
@@ -210,9 +214,11 @@ fn landed(repo: &Repository, repo_root: &Path, tip: git2::Oid, target: git2::Oid
     if tip == target || repo.graph_descendant_of(target, tip).unwrap_or(false) {
         return !on_first_parent_line(repo, target, tip);
     }
-    git(repo_root, &["cherry", &target.to_string(), &tip.to_string()]).is_ok_and(|out| {
-        !out.trim().is_empty() && out.lines().all(|line| line.starts_with("- "))
-    })
+    git(
+        repo_root,
+        &["cherry", &target.to_string(), &tip.to_string()],
+    )
+    .is_ok_and(|out| !out.trim().is_empty() && out.lines().all(|line| line.starts_with("- ")))
 }
 
 fn on_first_parent_line(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> bool {
@@ -294,8 +300,8 @@ fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
 pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let prefixes = work_prefixes(repo_root);
-    let default = super::default_work_target(repo_root)
-        .map(|target| logical_target(&target).to_string());
+    let default =
+        super::default_work_target(repo_root).map(|target| logical_target(&target).to_string());
     let mut out = Backlog {
         fetched_at: fetched_at(&repo),
         ..Backlog::default()
@@ -331,7 +337,10 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
     let carried = visible_work_branches(&repo, &prefixes, &ids);
     let mut judged = BTreeSet::new();
     for (target, tip, records) in &tips {
-        for record in records.values().filter(|record| record.kind == RecordKind::Task) {
+        for record in records
+            .values()
+            .filter(|record| record.kind == RecordKind::Task)
+        {
             let declared = record
                 .integration_target
                 .as_deref()
@@ -349,7 +358,10 @@ pub fn backlog(repo_root: &Path) -> Result<Backlog, String> {
             let (names, done) = split_landed(
                 &repo,
                 repo_root,
-                carried.get(&record.id).map(Vec::as_slice).unwrap_or_default(),
+                carried
+                    .get(&record.id)
+                    .map(Vec::as_slice)
+                    .unwrap_or_default(),
                 *tip,
             );
             out.landed.extend(done);
@@ -456,7 +468,9 @@ pub fn claim(repo_root: &Path, task_id: &str) -> Result<Claim, String> {
             open.join(", ")
         ));
     }
-    let title = records.get(task_id).map_or("", |record| record.title.as_str());
+    let title = records
+        .get(task_id)
+        .map_or("", |record| record.title.as_str());
     let branch = format!("task/{task_id}-{}", super::light_paths::slug(title));
     git(repo_root, &["branch", &branch, &tip.to_string()])?;
     if has_origin {
@@ -502,7 +516,11 @@ pub fn other_branches(repo_root: &Path, task_id: &str, own: &str) -> Vec<String>
 /// # Errors
 ///
 /// Returns the reason when a revision or its records cannot be read.
-pub fn selections_in_range(repo_root: &Path, base: &str, head: &str) -> Result<Vec<String>, String> {
+pub fn selections_in_range(
+    repo_root: &Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<String>, String> {
     let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
     let commit = |revision: &str| {
         repo.revparse_single(revision)
@@ -545,12 +563,19 @@ pub fn is_live_integration_line(repo_root: &Path, branch: &str) -> bool {
         .into_iter()
         .filter_map(|path| std::fs::read_to_string(path).ok())
         .any(|content| {
-            let open = !content.contains("\nstatus: complete") && !content.contains("\nstatus: cancelled");
+            let open =
+                !content.contains("\nstatus: complete") && !content.contains("\nstatus: cancelled");
             open && content.lines().any(|line| {
-                line.strip_prefix("integration_target:").is_some_and(|value| {
-                    let value = value.split('#').next().unwrap_or("").trim().trim_matches('"');
-                    logical_target(value) == branch
-                })
+                line.strip_prefix("integration_target:")
+                    .is_some_and(|value| {
+                        let value = value
+                            .split('#')
+                            .next()
+                            .unwrap_or("")
+                            .trim()
+                            .trim_matches('"');
+                        logical_target(value) == branch
+                    })
             })
         })
 }
@@ -656,7 +681,13 @@ mod tests {
         task(root, "TSK-004", "in_progress", "[]", "");
         task(root, "TSK-005", "cancelled", "[]", "");
         task(root, "TSK-006", "blocked", "[]", "");
-        task(root, "TSK-007", "todo", "[]", "awaiting_selection: docs/plan/choice.md\n");
+        task(
+            root,
+            "TSK-007",
+            "todo",
+            "[]",
+            "awaiting_selection: docs/plan/choice.md\n",
+        );
         task(root, "TSK-008", "todo", "[TSK-002]", "");
         task(root, "TSK-009", "todo", "[]", "");
         fs::write(
@@ -673,8 +704,14 @@ mod tests {
         commit(root, "plan");
 
         assert!(verdict(root, "TSK-002").is_ok(), "all conditions hold");
-        assert!(verdict(root, "TSK-003").is_ok(), "a standalone task with a reason");
-        assert!(verdict(root, "TSK-004").is_ok(), "in_progress stays readable");
+        assert!(
+            verdict(root, "TSK-003").is_ok(),
+            "a standalone task with a reason"
+        );
+        assert!(
+            verdict(root, "TSK-004").is_ok(),
+            "in_progress stays readable"
+        );
         assert_eq!(state(root, "TSK-001"), Some(NotReady::Closed));
         assert_eq!(state(root, "TSK-005"), Some(NotReady::Closed));
         assert_eq!(state(root, "TSK-006"), Some(NotReady::Blocked));
@@ -707,7 +744,10 @@ mod tests {
         task_in(root, "TSK-001", None, "main", "todo", "[]", "");
         let text = fs::read_to_string(root.join("project-management/tasks/TSK-001.md"))
             .unwrap()
-            .replace("standalone_reason: \"a one-off fix\"", "standalone_reason: null");
+            .replace(
+                "standalone_reason: \"a one-off fix\"",
+                "standalone_reason: null",
+            );
         fs::write(root.join("project-management/tasks/TSK-001.md"), text).unwrap();
         commit(root, "plan");
         assert_eq!(state(root, "TSK-001"), Some(NotReady::Invalid));
@@ -802,12 +842,19 @@ mod tests {
         fs::write(root.join("done.txt"), "done\n").unwrap();
         commit(root, "done");
         run(root, &["switch", "-q", "main"]);
-        run(root, &["merge", "-q", "--no-ff", "-m", "land", "task/TSK-001-done"]);
+        run(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "land", "task/TSK-001-done"],
+        );
 
         let backlog = backlog(root).unwrap();
         let of = |id: &str| backlog.entries.iter().find(|entry| entry.task_id == id);
         assert_eq!(of("TSK-002").unwrap().state, State::Ready);
-        assert_eq!(of("TSK-006").unwrap().state, State::Ready, "standalone included");
+        assert_eq!(
+            of("TSK-006").unwrap().state,
+            State::Ready,
+            "standalone included"
+        );
         assert_eq!(of("TSK-003").unwrap().state, State::Waiting);
         assert!(of("TSK-003").unwrap().reason.contains("TSK-004"));
         assert_eq!(of("TSK-004").unwrap().state, State::Active);
@@ -835,7 +882,10 @@ mod tests {
     fn with_origin(root: &Path) -> tempfile::TempDir {
         let bare = tempfile::tempdir().unwrap();
         run(bare.path(), &["init", "-q", "--bare"]);
-        run(root, &["remote", "add", "origin", bare.path().to_str().unwrap()]);
+        run(
+            root,
+            &["remote", "add", "origin", bare.path().to_str().unwrap()],
+        );
         run(root, &["push", "-q", "-u", "origin", "main"]);
         bare
     }
@@ -888,7 +938,13 @@ mod tests {
     fn a_selection_removed_in_the_range_is_named() {
         let dir = repo();
         let root = dir.path();
-        task(root, "TSK-001", "blocked", "[]", "awaiting_selection: docs/plan/choice.md\n");
+        task(
+            root,
+            "TSK-001",
+            "blocked",
+            "[]",
+            "awaiting_selection: docs/plan/choice.md\n",
+        );
         commit(root, "plan");
         run(root, &["switch", "-q", "-c", "task/TSK-002-x"]);
         task(root, "TSK-001", "todo", "[]", "");
@@ -897,15 +953,33 @@ mod tests {
             selections_in_range(root, "main", "HEAD").unwrap(),
             ["TSK-001"]
         );
-        assert!(selections_in_range(root, "main", "main").unwrap().is_empty());
+        assert!(selections_in_range(root, "main", "main")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn only_an_integration_line_an_open_task_targets_is_live() {
         let dir = repo();
         let root = dir.path();
-        task_in(root, "TSK-001", Some("EPC-001"), "integration/EPC-001-a", "todo", "[]", "");
-        task_in(root, "TSK-002", Some("EPC-001"), "integration/EPC-001-b", "complete", "[]", "");
+        task_in(
+            root,
+            "TSK-001",
+            Some("EPC-001"),
+            "integration/EPC-001-a",
+            "todo",
+            "[]",
+            "",
+        );
+        task_in(
+            root,
+            "TSK-002",
+            Some("EPC-001"),
+            "integration/EPC-001-b",
+            "complete",
+            "[]",
+            "",
+        );
         assert!(is_live_integration_line(root, "integration/EPC-001-a"));
         assert!(!is_live_integration_line(root, "integration/EPC-001-b"));
         assert!(!is_live_integration_line(root, "task/TSK-001-x"));

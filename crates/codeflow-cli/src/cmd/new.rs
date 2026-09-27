@@ -153,9 +153,15 @@ pub struct SpecArgs {
 pub enum SpecCommand {
     /// Allocate the next `SPC-NNN`, scaffold it, and link the consuming work item.
     New {
-        /// Epic or task that consumes this specification.
-        #[arg(long = "for", value_name = "EPC-NNN|TSK-NNN")]
-        work_item: String,
+        /// Epic or task that consumes this specification; repeat the flag
+        /// (or separate ids with commas) for several consumers.
+        #[arg(
+            long = "for",
+            value_name = "EPC-NNN|TSK-NNN",
+            required = true,
+            value_delimiter = ','
+        )]
+        work_item: Vec<String>,
         /// Specification title.
         title: String,
     },
@@ -593,12 +599,14 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
     };
     let root = super::repo_root();
     let pm = root.join("project-management");
-    if !allocate::work_item_exists(&pm, work_item) {
-        eprintln!(
-            "error: work item {work_item} not found under {}",
-            pm.display()
-        );
-        return 1;
+    for work_item in work_item {
+        if !allocate::work_item_exists(&pm, work_item) {
+            eprintln!(
+                "error: work item {work_item} not found under {}",
+                pm.display()
+            );
+            return 1;
+        }
     }
     let Some(template) = load_template("base/pm/spec.md.tmpl") else {
         eprintln!("error: spec template unavailable");
@@ -613,7 +621,7 @@ pub fn run_spec(args: &SpecArgs) -> i32 {
             issuer.allocate(target)
         })
     } else {
-        allocate::create_spec(&pm, &template, work_item, title)
+        allocate::create_spec_for(&pm, &template, work_item, title)
     };
     issuer.finish(result)
 }

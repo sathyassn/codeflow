@@ -382,44 +382,69 @@ pub fn create_task_with(
 
 /// Allocate a spec and link it from an existing epic or task.
 ///
-/// The consuming work item owns the relationship through its `specs` list;
-/// the spec does not duplicate a parent field.
-///
 /// # Errors
 ///
-/// Returns a not-found error when the consuming epic or task does not exist,
-/// or an I/O/record error when creation or reference linking fails.
+/// As [`create_spec_for`].
 pub fn create_spec(
     pm_root: &Path,
     template: &str,
     work_item_id: &str,
     title: &str,
 ) -> Result<NewRecord, StoreError> {
+    create_spec_for(pm_root, template, &[work_item_id.to_string()], title)
+}
+
+/// Allocate a spec and link it from every consuming epic or task.
+///
+/// The consumers own the relationship through their `specs` lists (SPC-013
+/// R-65); the spec keeps no consumer list. Every consumer is written in the
+/// same change, or none is: a failure restores the ones already written.
+///
+/// # Errors
+///
+/// Returns a not-found error when a consuming epic or task does not exist,
+/// or an I/O/record error when creation or reference linking fails.
+pub fn create_spec_for(
+    pm_root: &Path,
+    template: &str,
+    work_item_ids: &[String],
+    title: &str,
+) -> Result<NewRecord, StoreError> {
     create_spec_with(
         pm_root,
         template,
-        work_item_id,
+        work_item_ids,
         title,
         &mut checkout_allocator(|| next_spec_id(pm_root)),
     )
 }
 
 /// Scaffold a spec with the id and `uid` `allocate` chooses and link it
-/// from its consuming work item.
+/// from every consuming work item, as [`create_spec_for`] does.
 ///
 /// # Errors
 ///
-/// As [`create_spec`], plus the allocator's error.
+/// As [`create_spec_for`], plus the allocator's error.
 pub fn create_spec_with(
     pm_root: &Path,
     template: &str,
-    work_item_id: &str,
+    work_item_ids: &[String],
     title: &str,
     allocate: &mut Allocator<'_>,
 ) -> Result<NewRecord, StoreError> {
     let title = record_title(title)?;
-    let target = find_work_item_path(pm_root, work_item_id)
-        .ok_or_else(|| StoreError::NotFound(format!("work-item:{work_item_id}")))?;
+    if work_item_ids.is_empty() {
+        return Err(StoreError::Invalid(
+            "a spec needs at least one consuming epic or task".to_string(),
+        ));
+    }
+    let targets = work_item_ids
+        .iter()
+        .map(|id| {
+            find_work_item_path(pm_root, id)
+                .ok_or_else(|| StoreError::NotFound(format!("work-item:{id}")))
+        })
+        .collect::<Result<Vec<_>, _>>()?;
     let (id, uid) = allocate(&planning_target(pm_root))?;
     let nnn = id.strip_prefix("SPC-").unwrap_or(id.as_str());
     let date = today();
@@ -438,11 +463,29 @@ pub fn create_spec_with(
     fs::create_dir_all(&dir)?;
     let path = dir.join(format!("{id}.md"));
     write_new(&path, &content)?;
-    if let Err(error) = append_spec_reference(&target, &id) {
-        let _ = fs::remove_file(&path);
-        return Err(error);
+    let mut written: Vec<(&PathBuf, String)> = Vec::new();
+    for target in &targets {
+        let original = match fs::read_to_string(target) {
+            Ok(original) => original,
+            Err(error) => {
+                restore(&path, &written);
+                return Err(error.into());
+            }
+        };
+        if let Err(error) = append_spec_reference(target, &id) {
+            restore(&path, &written);
+            return Err(error);
+        }
+        written.push((target, original));
     }
     Ok(NewRecord { id, uid, path })
+}
+
+fn restore(spec: &Path, written: &[(&PathBuf, String)]) {
+    for (target, original) in written {
+        let _ = crate::file_lock::atomic_write(target, original.as_bytes());
+    }
+    let _ = fs::remove_file(spec);
 }
 
 fn find_work_item_path(pm_root: &Path, id: &str) -> Option<PathBuf> {

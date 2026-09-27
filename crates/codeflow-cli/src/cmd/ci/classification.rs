@@ -242,7 +242,8 @@ pub(super) fn dispatch(
         .iter()
         .any(|file| file.starts_with("project-management/") && file.ends_with(".md"));
     if touches_records && !branch.starts_with("plan/") {
-        match codeflow_core::workgraph::readiness::selections_in_range(root, range.base, range.head) {
+        match codeflow_core::workgraph::readiness::selections_in_range(root, range.base, range.head)
+        {
             Ok(selected) => {
                 for task_id in selected {
                     push(
