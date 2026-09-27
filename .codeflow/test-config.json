@@ -32,9 +32,16 @@
       "modes": {
         "essential": {
           "command": "cargo test --workspace --quiet"
-        },
+        }
+      }
+    },
+    {
+      "name": "rust-doctest",
+      "enabled": true,
+      "runner": "custom",
+      "modes": {
         "full": {
-          "command": "cargo test --workspace"
+          "command": "cargo test --workspace --doc"
         }
       }
     },

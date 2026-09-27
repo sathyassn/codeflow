@@ -14,6 +14,8 @@ locally and in CI.
 
 Scope note: only the `rust` job is compared. Other jobs (coverage llvm-cov and
 doc-graph validation) run different tooling by design and are out of scope here.
+The local full gate runs the suite once under coverage plus the doctests; that
+pair is compared as the `rust` job's plain `cargo test --workspace`.
 """
 
 import json
@@ -37,13 +39,26 @@ def is_rust_verification_command(cmd: str) -> bool:
     ) or cmd.startswith('RUSTDOCFLAGS="-D warnings" cargo ')
 
 
+# The full gate runs the test suite once (TSK-134): under coverage, which
+# skips doctests, plus the doctests alone. Together they are the CI referee's
+# plain `cargo test --workspace`, so that pair stands for it here.
+SUITE = "cargo test --workspace"
+DOCTESTS = "cargo test --workspace --doc"
+COVERAGE_PREFIX = "cargo llvm-cov --workspace "
+
+
 def local_rust_commands() -> set[str]:
     cfg = json.loads(CONFIG.read_text())
     out = set()
+    coverage = False
     for target in cfg.get("targets", []):
         cmd = target.get("modes", {}).get("full", {}).get("command", "")
+        coverage = coverage or norm(cmd).startswith(COVERAGE_PREFIX)
         if is_rust_verification_command(cmd):
             out.add(norm(cmd))
+    if coverage and DOCTESTS in out:
+        out.discard(DOCTESTS)
+        out.add(SUITE)
     return out
 
 
