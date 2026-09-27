@@ -89,6 +89,28 @@ pub enum WorkStartError {
     },
     #[error("target '{0}' is not a stable local or remote-tracking non-task branch")]
     UnstableTarget(String),
+    #[error(
+        "local branch '{local}' and '{remote}' have diverged ({ahead} commit(s) only on \
+         '{local}', {behind} only on '{remote}'), so the work target is ambiguous; \
+         reconcile them (fetch, then rebase '{local}' onto '{remote}' or reset it), or \
+         name one with `--into`"
+    )]
+    DivergedTarget {
+        local: String,
+        remote: String,
+        ahead: usize,
+        behind: usize,
+    },
+}
+
+/// A work target resolved to a ref, with a note when a stale local branch was
+/// passed over for its remote-tracking ref.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ResolvedWorkTarget {
+    /// The target to anchor on (`main`, `origin/main` or a full ref).
+    pub target: String,
+    /// Why the remote-tracking ref was chosen, for the caller to print.
+    pub note: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -150,29 +172,94 @@ pub fn default_work_target(repo_root: &Path) -> Option<String> {
 /// Resolve a declared target to an available local or remote-tracking ref.
 ///
 /// The declared logical name remains portable (`main`, for example) while CI
-/// checkouts that expose only `origin/main` can verify the same task.
+/// checkouts that expose only `origin/main` can verify the same task. A
+/// diverged local branch resolves to the local branch here; callers that
+/// anchor work use [`resolve_work_target_checked`], which refuses it.
 #[must_use]
 pub fn resolve_work_target(repo_root: &Path, declared: Option<&str>) -> Option<String> {
-    let repo = Repository::discover(repo_root).ok()?;
-    if let Some(target) = declared.filter(|value| !value.trim().is_empty()) {
-        if let Some(candidates) = target_reference_names(target) {
-            for candidate in candidates {
-                if repo
-                    .find_reference(&candidate)
-                    .and_then(|reference| reference.peel_to_commit())
-                    .is_ok()
-                {
-                    return Some(if target.starts_with("refs/") {
-                        candidate
-                    } else {
-                        reference_display_name(&candidate)
-                    });
-                }
+    match resolve_work_target_checked(repo_root, declared) {
+        Ok(resolved) => resolved.map(|resolved| resolved.target),
+        Err(_) => declared.map(str::to_owned),
+    }
+}
+
+/// Resolve a declared target as [`resolve_work_target`] does, but never
+/// anchor on a stale local branch.
+///
+/// When a bare name (`main`) has both a local branch and an `origin/`
+/// remote-tracking ref:
+/// - equal, or the local branch ahead (unpushed commits): the local branch;
+/// - the local branch strictly behind: the remote-tracking ref, with a note
+///   saying so, since a stale local branch anchors on an old snapshot;
+/// - diverged: an error, since neither is clearly the target.
+///
+/// # Errors
+///
+/// Returns [`WorkStartError::DivergedTarget`] when the local branch and its
+/// remote-tracking ref have diverged.
+pub fn resolve_work_target_checked(
+    repo_root: &Path,
+    declared: Option<&str>,
+) -> Result<Option<ResolvedWorkTarget>, WorkStartError> {
+    let Some(target) = declared.filter(|value| !value.trim().is_empty()) else {
+        return Ok(
+            default_work_target(repo_root).map(|target| ResolvedWorkTarget { target, note: None })
+        );
+    };
+    let plain = |target: String| Ok(Some(ResolvedWorkTarget { target, note: None }));
+    let Ok(repo) = Repository::discover(repo_root) else {
+        return plain(target.to_string());
+    };
+    let Some(candidates) = target_reference_names(target) else {
+        return plain(target.to_string());
+    };
+    let found: Vec<(String, git2::Oid)> = candidates
+        .into_iter()
+        .filter_map(|candidate| {
+            let id = repo
+                .find_reference(&candidate)
+                .and_then(|reference| reference.peel_to_commit())
+                .ok()?
+                .id();
+            Some((candidate, id))
+        })
+        .collect();
+    let display = |candidate: &str| {
+        if target.starts_with("refs/") {
+            candidate.to_string()
+        } else {
+            reference_display_name(candidate)
+        }
+    };
+    match found.as_slice() {
+        [] => plain(target.to_string()),
+        [(only, _)] => plain(display(only)),
+        [(local, local_id), (remote, remote_id), ..] => {
+            let (local, remote) = (display(local), display(remote));
+            if local_id == remote_id {
+                return plain(local);
+            }
+            let (ahead, behind) = repo
+                .graph_ahead_behind(*local_id, *remote_id)
+                .map_err(|error| WorkStartError::Repository(error.to_string()))?;
+            match (ahead, behind) {
+                (_, 0) => plain(local),
+                (0, behind) => Ok(Some(ResolvedWorkTarget {
+                    note: Some(format!(
+                        "local branch '{local}' is {behind} commit(s) behind '{remote}'; \
+                         anchoring on '{remote}' (fast-forward '{local}' to silence this)"
+                    )),
+                    target: remote,
+                })),
+                (ahead, behind) => Err(WorkStartError::DivergedTarget {
+                    local,
+                    remote,
+                    ahead,
+                    behind,
+                }),
             }
         }
-        return Some(target.to_string());
     }
-    default_work_target(repo_root)
 }
 
 /// Whether a ref may serve as a stable planning authority.
@@ -1204,6 +1291,101 @@ mod tests {
         let dir = fixture();
         assert_eq!(
             declared_work_target(dir.path(), "TSK-002").as_deref(),
+            Some("main")
+        );
+    }
+
+    /// A fixture whose `main` is also `origin/main`, with a commit that
+    /// only one of them has when `local_extra` / `remote_extra` are set.
+    fn tracking_fixture(local_extra: bool, remote_extra: bool) -> tempfile::TempDir {
+        let dir = fixture();
+        git(
+            dir.path(),
+            &["update-ref", "refs/remotes/origin/main", "HEAD"],
+        );
+        if remote_extra {
+            git(dir.path(), &["checkout", "-q", "-b", "upstream"]);
+            git(
+                dir.path(),
+                &["commit", "-q", "--allow-empty", "-m", "upstream"],
+            );
+            git(
+                dir.path(),
+                &["update-ref", "refs/remotes/origin/main", "HEAD"],
+            );
+            git(dir.path(), &["checkout", "-q", "main"]);
+            git(dir.path(), &["branch", "-q", "-D", "upstream"]);
+        }
+        if local_extra {
+            git(
+                dir.path(),
+                &["commit", "-q", "--allow-empty", "-m", "local"],
+            );
+        }
+        dir
+    }
+
+    #[test]
+    fn a_target_equal_to_its_tracking_ref_resolves_to_the_local_branch() {
+        let dir = tracking_fixture(false, false);
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "main");
+        assert_eq!(resolved.note, None);
+    }
+
+    #[test]
+    fn a_local_target_strictly_behind_resolves_to_the_tracking_ref_and_says_so() {
+        let dir = tracking_fixture(false, true);
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "origin/main");
+        let note = resolved.note.unwrap();
+        assert!(
+            note.contains("'main' is 1 commit(s) behind 'origin/main'"),
+            "{note}"
+        );
+        assert_eq!(
+            resolve_work_target(dir.path(), Some("main")).as_deref(),
+            Some("origin/main")
+        );
+    }
+
+    #[test]
+    fn a_local_target_only_ahead_resolves_to_the_local_branch() {
+        let dir = tracking_fixture(true, false);
+        let resolved = resolve_work_target_checked(dir.path(), Some("main"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(resolved.target, "main");
+        assert_eq!(resolved.note, None);
+    }
+
+    #[test]
+    fn a_diverged_target_is_refused_naming_both_sides() {
+        let dir = tracking_fixture(true, true);
+        let error = resolve_work_target_checked(dir.path(), Some("main")).unwrap_err();
+        assert!(
+            matches!(
+                &error,
+                WorkStartError::DivergedTarget {
+                    ahead: 1,
+                    behind: 1,
+                    ..
+                }
+            ),
+            "{error:?}"
+        );
+        let message = error.to_string();
+        assert!(
+            message.contains("'main' and 'origin/main' have diverged"),
+            "{message}"
+        );
+        // The unchecked resolver keeps its old answer for non-anchoring callers.
+        assert_eq!(
+            resolve_work_target(dir.path(), Some("main")).as_deref(),
             Some("main")
         );
     }

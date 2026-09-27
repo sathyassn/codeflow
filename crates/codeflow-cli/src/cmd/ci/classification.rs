@@ -17,7 +17,7 @@ use codeflow_core::workgraph::classify::{
 };
 use codeflow_core::workgraph::{
     check_epic_line, check_work_start_anchored, declared_work_target,
-    durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target,
+    durable_work_tracking_enabled, durable_work_tracking_enabled_at, resolve_work_target_checked,
     task_id_from_branch,
 };
 
@@ -327,8 +327,21 @@ fn tracked(
         );
     }
     let declared = declared_work_target(root, task_id);
-    let target =
-        resolve_work_target(root, declared.as_deref()).unwrap_or_else(|| "main".to_string());
+    // The own-branch preflight prints any resolution note and reports a
+    // diverged target; this check reports it only for another task's claim.
+    let target = match resolve_work_target_checked(root, declared.as_deref()) {
+        Ok(resolved) => resolved.map_or_else(|| "main".to_string(), |r| r.target),
+        Err(_) if own_branch => return,
+        Err(error) => {
+            push(
+                tagged,
+                "work.stable_planning_anchor",
+                error.to_string(),
+                &format!("reconcile the target branch, then run `codeflow work start {task_id}`"),
+            );
+            return;
+        }
+    };
     match check_work_start_anchored(root, task_id, &target) {
         Ok(report) => {
             let spike = report.work_type.as_deref() == Some("spike") || branch.starts_with("spike/");

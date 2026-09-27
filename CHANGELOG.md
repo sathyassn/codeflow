@@ -73,6 +73,18 @@ publication date._
 
 ### Changed
 
+<!-- codeflow:release-impact patch -->
+- **Work start past a stale local target.** `codeflow work start` and the
+  `codeflow ci` work-start and classification checks resolve a
+  task's integration target, such as `main`, to its local branch or its
+  `origin/` remote-tracking ref. When the local branch is strictly behind
+  the remote-tracking ref, they now anchor on the remote-tracking ref and
+  print a note saying so, instead of refusing a task whose planning record
+  landed upstream but was never pulled. When the two have diverged, they
+  refuse and name both sides; reconcile the local branch, or name the ref
+  with `codeflow work start --into`. A local branch that is equal or only
+  ahead is still used.
+
 <!-- codeflow:release-impact major -->
 - **Effort default on upgrade.** Version 2.1.0 set no reasoning effort, so
   Claude Code and Codex used their own defaults. After `codeflow update`,

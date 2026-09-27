@@ -32,7 +32,7 @@ use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::{
     branch_claims_task_id, check_work_start_for_branch, declared_work_target,
-    durable_work_tracking_enabled, resolve_work_target, task_id_from_branch,
+    durable_work_tracking_enabled, resolve_work_target_checked, task_id_from_branch,
 };
 use pr_body::find_section;
 
@@ -459,8 +459,30 @@ fn evaluate_work_start(root: &Path, branch: &str, tagged: &mut Vec<TaggedViolati
     }
     if let Some(task_id) = task_id_from_branch(root, branch) {
         let declared = declared_work_target(root, &task_id);
-        let target =
-            resolve_work_target(root, declared.as_deref()).unwrap_or_else(|| "main".to_string());
+        let target = match resolve_work_target_checked(root, declared.as_deref()) {
+            Ok(resolved) => {
+                let resolved =
+                    resolved.map_or_else(|| ("main".to_string(), None), |r| (r.target, r.note));
+                if let Some(note) = resolved.1 {
+                    eprintln!("codeflow ci: note: {note}");
+                }
+                resolved.0
+            }
+            Err(error) => {
+                tagged.push(TaggedViolation {
+                    sha: None,
+                    violation: Violation::new(
+                        "work.stable_planning_anchor",
+                        PolicyLevel::Block,
+                        error.to_string(),
+                        format!(
+                            "reconcile the target branch, then run `codeflow work start {task_id}`"
+                        ),
+                    ),
+                });
+                return;
+            }
+        };
         if let Err(error) = check_work_start_for_branch(root, &task_id, &target, branch) {
             tagged.push(TaggedViolation {
                 sha: None,

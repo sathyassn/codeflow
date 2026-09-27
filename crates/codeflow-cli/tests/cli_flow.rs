@@ -560,6 +560,63 @@ fn work_start_proves_a_merged_planning_anchor_without_mutation() {
 }
 
 #[test]
+fn work_start_anchors_on_the_tracking_ref_past_a_stale_local_target() {
+    // The planning record landed on the remote; local `main` was never
+    // fast-forwarded. Anchoring on it would miss the record.
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path());
+    git(dir.path(), &["switch", "-c", "plan/anchor"]);
+    codeflow(dir.path(), &["epic", "new", "Anchored work"]);
+    codeflow(
+        dir.path(),
+        &[
+            "task",
+            "new",
+            "--epic",
+            "EPC-001",
+            "--into",
+            "main",
+            "Implement",
+        ],
+    );
+    git(dir.path(), &["add", "project-management"]);
+    git(dir.path(), &["commit", "-m", "plan: anchor durable task"]);
+    git(
+        dir.path(),
+        &["update-ref", "refs/remotes/origin/main", "HEAD"],
+    );
+    git(dir.path(), &["switch", "-c", "task/TSK-001-implement"]);
+
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(0), "stderr: {}", stderr(&output));
+    assert!(
+        stdout(&output).contains("-> origin/main"),
+        "{}",
+        stdout(&output)
+    );
+    assert!(
+        stderr(&output).contains("local branch 'main' is 1 commit(s) behind 'origin/main'"),
+        "{}",
+        stderr(&output)
+    );
+
+    // Local `main` gains a commit the remote lacks: diverged, refused.
+    git(dir.path(), &["switch", "main"]);
+    git(
+        dir.path(),
+        &["commit", "--allow-empty", "-m", "chore: local only"],
+    );
+    git(dir.path(), &["switch", "task/TSK-001-implement"]);
+    let output = codeflow(dir.path(), &["work", "start", "TSK-001"]);
+    assert_eq!(output.status.code(), Some(1), "{}", stdout(&output));
+    assert!(
+        stderr(&output).contains("'main' and 'origin/main' have diverged"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
 fn work_start_rejects_an_invalid_visible_workgraph() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path());
