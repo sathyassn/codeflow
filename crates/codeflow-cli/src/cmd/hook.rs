@@ -183,42 +183,28 @@ fn git_guard(stdin: &str) -> i32 {
         .unwrap_or_default();
 
     let lookup = gh_pr_base;
-    // Resolve a retargeted directory (`-C`/`--git-dir`/`GIT_DIR`/`cd`) to the
-    // branch checked out there, so a wrong-dir git op is judged against the
-    // target repo, not the session (charter §6.1).
+    // Resolve a retargeted repository (`-C`/`--git-dir`/`GIT_DIR`/`cd`) to its
+    // branch and policy, so a git op is judged by the repository it targets,
+    // not the session's (charter §6.1; TSK-112).
+    let session_common = codeflow_core::hooks::RepoInfo::discover(&root).map(|i| i.common_dir);
     let dir_cwd = cwd.clone();
-    let dir_branch = move |dir: &str| resolve_dir_branch(&dir_cwd, dir);
+    let dir_target = move |spec: &git_guard::Retarget<'_>| {
+        git_guard::read_target(&dir_cwd, session_common.as_deref(), spec)
+    };
+    // Resolve a subcommand that is not a builtin through the alias it names,
+    // as git reads it where the command runs (TSK-112).
+    let alias_cwd = cwd.clone();
+    let alias = move |query: &git_guard::AliasQuery<'_>| git_guard::read_alias(&alias_cwd, query);
     let ctx = git_guard::GuardContext {
         policy: &policy.git,
         current_branch: &branch,
         integrate_token: super::integrate_token_present(),
         pr_base_lookup: Some(&lookup),
-        dir_branch_lookup: Some(&dir_branch),
+        dir_target_lookup: Some(&dir_target),
+        alias_lookup: Some(&alias),
     };
-    let violations = git_guard::evaluate(command, &ctx);
-    super::render_outcome("git-guard", &violations, &[], 2)
-}
-
-/// Resolve a `-C`/`--git-dir`/`GIT_DIR`/`cd` target `dir` (relative to the
-/// session `cwd`) to the branch checked out there. `--git-dir` may point at a
-/// `.git` directory; discovery from its parent handles that. `None` when the
-/// branch cannot be read — the guard then falls back to the session branch.
-fn resolve_dir_branch(cwd: &std::path::Path, dir: &str) -> Option<String> {
-    let p = std::path::Path::new(dir);
-    let abs = if p.is_absolute() {
-        p.to_path_buf()
-    } else {
-        cwd.join(p)
-    };
-    let start = if abs.file_name().is_some_and(|n| n == ".git") {
-        abs.parent()
-            .map_or(abs.clone(), std::path::Path::to_path_buf)
-    } else {
-        abs
-    };
-    codeflow_core::hooks::RepoInfo::discover(&start)
-        .map(|i| i.branch)
-        .filter(|b| !b.is_empty())
+    let report = git_guard::evaluate_report(command, &ctx);
+    super::render_outcome("git-guard", &report.violations, &report.notes, 2)
 }
 
 /// `exec-guard` (`PreToolUse` Bash/PowerShell): run the dangerous/privilege security

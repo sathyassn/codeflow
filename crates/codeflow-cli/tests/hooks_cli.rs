@@ -291,6 +291,471 @@ fn git_guard_blocks_push_to_protected_with_exit_2() {
     assert!(stderr.contains("codeflow integrate"), "{stderr}");
 }
 
+/// Run `codeflow hook git-guard` on a Claude Code `PreToolUse` payload whose
+/// session cwd is `session`.
+fn guard_run(command: &str, session: &Path) -> Output {
+    run_with_stdin(
+        codeflow().args(["hook", "git-guard"]).current_dir(session),
+        &guard_payload(command, session),
+    )
+}
+
+// TSK-112 AC-4: the harness payload, the real binary and real repositories.
+// The session repository is on `main`; a scratch repository with its own
+// policy is on a feature branch; another has no policy and sits on `main`.
+#[test]
+fn git_guard_judges_the_repository_a_command_targets() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session = tmp.path().join("session");
+    let scratch = tmp.path().join("scratch");
+    let bare = tmp.path().join("nopolicy");
+    for (dir, branch) in [(&session, "main"), (&scratch, "feat/x"), (&bare, "main")] {
+        std::fs::create_dir_all(dir).unwrap();
+        init_repo(dir, branch);
+    }
+    write_policy(
+        &session,
+        r#"{"git":{"protected_branches":["main","master"]}}"#,
+    );
+    write_policy(
+        &scratch,
+        r#"{"git":{"protected_branches":["main","master"]}}"#,
+    );
+    let s = scratch.to_string_lossy();
+    let b = bare.to_string_lossy();
+    let sg = session.join(".git");
+    let sg = sg.to_string_lossy();
+
+    for allowed in [
+        format!("git -C {s} commit -m 'feat: x'"),
+        format!("R={s}; git -C \"$R\" commit -m 'feat: x'"),
+        format!(
+            "cd {} && git -C scratch commit -m 'feat: x'",
+            tmp.path().display()
+        ),
+    ] {
+        let out = guard_run(&allowed, &session);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{allowed}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    for blocked in [
+        "git commit -m 'feat: x'".to_string(),
+        format!("git -C {b} commit -m 'feat: x'"),
+        format!("git -C {s} --git-dir={sg} commit -m 'feat: x'"),
+    ] {
+        let out = guard_run(&blocked, &session);
+        assert_eq!(out.status.code(), Some(2), "{blocked}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("git.commit_to_protected"),
+            "{blocked}: {stderr}"
+        );
+    }
+
+    let out = guard_run("git -C \"$UNSET_DIR\" commit -m 'feat: x'", &session);
+    assert_eq!(out.status.code(), Some(2));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("target unresolved: `$UNSET_DIR`")
+            && stderr.contains("cannot prove it is not a protected branch"),
+        "{stderr}"
+    );
+}
+
+// TSK-112 review round 1 (Codex probe table), on real repositories. The
+// session is on an unprotected branch, so every block below comes from the
+// repository git would actually write to, which is on `main`.
+#[test]
+#[allow(clippy::too_many_lines)] // one fixture replaying the review probe tables
+fn git_guard_blocks_targets_it_cannot_prove() {
+    let tmp = tempfile::tempdir().unwrap();
+    let session = tmp.path().join("session");
+    let feature = tmp.path().join("feature");
+    let protected = tmp.path().join("protected");
+    for (dir, branch) in [
+        (&session, "feat/s"),
+        (&feature, "feat/x"),
+        (&protected, "main"),
+    ] {
+        std::fs::create_dir_all(dir).unwrap();
+        init_repo(dir, branch);
+    }
+    // A directory literally named `$R` inside the session, a repository on main.
+    let literal = session.join("$R");
+    std::fs::create_dir_all(&literal).unwrap();
+    init_repo(&literal, "main");
+    let f = feature.to_string_lossy();
+    let pg = protected.join(".git");
+    let pg = pg.to_string_lossy();
+    let absent = tmp.path().join("absent/out");
+    let absent = absent.to_string_lossy();
+
+    for (case, command) in [
+        (
+            "escaped dollar, quoted",
+            format!("R={f}; git -C \"\\$R\" commit -m 'fix: p'"),
+        ),
+        (
+            "escaped dollar, bare",
+            format!("R={f}; git -C \\$R commit -m 'fix: p'"),
+        ),
+        (
+            "env GIT_DIR",
+            format!("R={f}; env GIT_DIR={pg} git -C \"$R\" commit -m 'fix: p'"),
+        ),
+        (
+            "command env GIT_DIR",
+            format!("R={f}; command env GIT_DIR={pg} git -C \"$R\" commit -m 'fix: p'"),
+        ),
+        (
+            "unresolved variable",
+            "git -C \"$DEST\" commit -m 'fix: p'".to_string(),
+        ),
+        (
+            "subshell assignment",
+            format!("(R={f}); git -C \"$R\" commit -m 'fix: p'"),
+        ),
+    ] {
+        let out = guard_run(&command, &session);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{case}: {command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+
+    // The failed `cd` probe needs a protected session: after `;` the commit
+    // may run where the shell started.
+    let main_session = tmp.path().join("main-session");
+    std::fs::create_dir_all(&main_session).unwrap();
+    init_repo(&main_session, "main");
+    let failed_cd = format!("R={f}; cd \"$R\" > {absent}; git commit -m 'fix: p'");
+    assert_eq!(guard_run(&failed_cd, &main_session).status.code(), Some(2));
+
+    // Round 3 (R3-1): a substitution before the subcommand hides it. The
+    // first three run from a protected session, the last from a feature one.
+    let p = protected.to_string_lossy();
+    for (command, from) in [
+        (
+            "git $(printf '') commit --allow-empty -m 'fix: p'".to_string(),
+            &main_session,
+        ),
+        (
+            "git `printf ''` commit --allow-empty -m 'fix: p'".to_string(),
+            &main_session,
+        ),
+        (
+            "git $(printf -- '--no-pager') commit --allow-empty -m 'fix: p'".to_string(),
+            &main_session,
+        ),
+        (
+            format!("git -C {p} $(printf '') commit --allow-empty -m 'fix: p'"),
+            &session,
+        ),
+    ] {
+        let out = guard_run(&command, from);
+        assert_eq!(out.status.code(), Some(2), "{command}");
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(stderr.contains("command unresolved"), "{command}: {stderr}");
+    }
+
+    // Round 2 (R2-1): a protected repository nested in the feature one,
+    // reached through a substitution in the path.
+    let nested = feature.join("protected");
+    std::fs::create_dir_all(&nested).unwrap();
+    init_repo(&nested, "main");
+    for command in [
+        format!("R={f}$(printf /protected); git -C \"$R\" commit -m 'fix: p'"),
+        format!("R={f}`printf /protected`; git -C \"$R\" commit -m 'fix: p'"),
+    ] {
+        let out = guard_run(&command, &session);
+        assert_eq!(out.status.code(), Some(2), "{command}");
+    }
+
+    // Controls: proven targets on a feature branch pass, including an
+    // and-list continued on the next line (R2-2).
+    for command in [
+        format!("R={f}; git -C \"$R\" commit -m 'fix: p'"),
+        format!("R={f}; cd \"$R\" && git commit -m 'fix: p'"),
+        format!("cd {f} && git commit -m \"$(printf 'fix: p')\""),
+        format!("cd {f} &&\ngit commit -m 'fix: p'"),
+        format!("cd {f} && # continue\ngit commit -m 'fix: p'"),
+    ] {
+        let out = guard_run(&command, &main_session);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+// TSK-112 round 4 (R4-1): an unclassifiable argument never skips the
+// protected-commit check. With `commit_to_protected: block`, a commit on main
+// blocks at every `local_ref_protection` level, with or without a substitution.
+#[test]
+fn git_guard_uncertainty_keeps_the_protected_commit_check() {
+    for local in ["off", "warn", "block"] {
+        let tmp = tempfile::tempdir().unwrap();
+        init_repo(tmp.path(), "main");
+        write_policy(
+            tmp.path(),
+            &format!(
+                r#"{{"git":{{"protected_branches":["main","master"],"commit_to_protected":"block","local_ref_protection":"{local}"}}}}"#
+            ),
+        );
+        for command in [
+            "git commit --allow-empty -m x --author=\"$(printf 'X <x@example.com>')\"",
+            "git commit $(printf '') --allow-empty -m x",
+            "git commit --allow-empty -m x",
+        ] {
+            let out = guard_run(command, tmp.path());
+            assert_eq!(
+                out.status.code(),
+                Some(2),
+                "{local}: {command}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+        }
+    }
+}
+
+// TSK-112 (primary ruling after round 4): an alias is read the way git reads
+// it, in the repository the command targets, and its expansion is judged; a
+// rebase's `<branch>` is the branch judged. Codex's round 4 reproductions.
+#[test]
+fn git_guard_resolves_aliases_and_rebase_branches() {
+    let tmp = tempfile::tempdir().unwrap();
+    let main = tmp.path().join("main");
+    let feat = tmp.path().join("feat");
+    for (dir, branch) in [(&main, "main"), (&feat, "feat/x")] {
+        std::fs::create_dir_all(dir).unwrap();
+        init_repo(dir, branch);
+        write_policy(dir, r#"{"git":{"protected_branches":["main","master"]}}"#);
+    }
+    let inc = tmp.path().join("aliases.ini");
+    std::fs::write(&inc, "[alias]\n    x = commit\n").unwrap();
+    let inc = inc.to_string_lossy();
+    let m = main.to_string_lossy();
+
+    let blocked = [
+        "git -c alias.x=commit x --allow-empty -m \"$(printf x)\"".to_string(),
+        "git -c alias.x=commit x $(printf '') --allow-empty -m x".to_string(),
+        format!("git -c include.path={inc} x --allow-empty -m \"$(printf x)\""),
+        format!("git -c include.path={inc} x $(printf '') --allow-empty -m x"),
+    ];
+    for command in &blocked {
+        let out = guard_run(command, &main);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // An alias in the repository's own config.
+    git(&main, &["config", "alias.x", "commit"]);
+    git(&main, &["config", "alias.st", "status"]);
+    git(&feat, &["config", "alias.x", "commit"]);
+    git(&feat, &["config", "alias.sh", "!git commit"]);
+    for (command, from) in [
+        ("git x --allow-empty -m \"$(printf x)\"".to_string(), &main),
+        (format!("git -C {m} x --allow-empty -m x"), &feat),
+        ("git sh -m x".to_string(), &feat),
+        ("git rebase feat/y main".to_string(), &feat),
+        ("git rebase --onto feat/z feat/y main".to_string(), &feat),
+    ] {
+        let out = guard_run(&command, from);
+        assert_eq!(
+            out.status.code(),
+            Some(2),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+    // Controls: the same alias on a feature branch, a read-only alias, a
+    // name that is no alias, and a rebase of the current branch.
+    for (command, from) in [
+        ("git x --allow-empty -m x", &feat),
+        ("git st", &main),
+        ("git frobnicate", &main),
+        ("git rebase main", &feat),
+    ] {
+        let out = guard_run(command, from);
+        assert_eq!(
+            out.status.code(),
+            Some(0),
+            "{command}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
+// TSK-112 round 5: every row of Codex's boundary script
+// (`tsk112-r5-boundaries.py`), on real repositories, plus failed moves
+// after `;` and a newline and config reads. Each row gets a fresh repository
+// on `main` with a `feat/x` branch, checked out on the branch given.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn git_guard_round_5_boundaries() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut n = 0;
+    let mut fixture = |on: &str| {
+        n += 1;
+        let dir = tmp.path().join(format!("r{n}"));
+        std::fs::create_dir_all(&dir).unwrap();
+        init_repo(&dir, "main");
+        git(&dir, &["branch", "feat/x"]);
+        if on != "main" {
+            git(&dir, &["checkout", "-q", on]);
+        }
+        write_policy(&dir, r#"{"git":{"protected_branches":["main","master"]}}"#);
+        dir
+    };
+    let commit = "commit --allow-empty -m \"fix: probe\"";
+    let mut rows: Vec<(String, &str, i32)> = vec![
+        // Codex rows, in script order.
+        (
+            "git -c alias.x=commit x --allow-empty -m \"fix: probe\"".to_string(),
+            "main",
+            2,
+        ),
+        // Git rejects an attached `-c`, so nothing runs.
+        (
+            "git -calias.x=commit x --allow-empty -m \"fix: probe\"".to_string(),
+            "main",
+            0,
+        ),
+        (
+            "git checkout main && git x --allow-empty -m \"fix: probe\"".to_string(),
+            "feat/x",
+            2,
+        ),
+        (
+            "git config alias.x commit; git x --allow-empty -m \"fix: probe\"".to_string(),
+            "main",
+            2,
+        ),
+        (
+            "git config include.path ROOT/alias.ini; git x --allow-empty -m x".to_string(),
+            "main",
+            2,
+        ),
+        (
+            format!("git rebase does-not-exist feat/x ; git {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git rebase does-not-exist feat/x \n git {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git rebase does-not-exist feat/x && git {commit}"),
+            "main",
+            0,
+        ),
+        ("git rebase main main".to_string(), "feat/x", 2),
+        (
+            "git rebase --onto feat/x main main".to_string(),
+            "feat/x",
+            2,
+        ),
+        ("git rebase --root main".to_string(), "feat/x", 2),
+        (
+            "git rebase --strategy recursive main main".to_string(),
+            "feat/x",
+            2,
+        ),
+        ("git rebase --exec true main main".to_string(), "feat/x", 2),
+        (format!("git rebase main feat/x && git {commit}"), "main", 0),
+        (
+            "git rebase main \"$(printf main)\"".to_string(),
+            "feat/x",
+            2,
+        ),
+        ("git -c alias.x=status x --short".to_string(), "main", 0),
+        (
+            "git -c alias.x=y -c alias.y=commit x --allow-empty -m x".to_string(),
+            "main",
+            2,
+        ),
+        ("git -c alias.x='!git commit' x -m x".to_string(), "main", 2),
+    ];
+    rows.extend([
+        // A failed checkout, and a rebase from an alias, after `;`.
+        (
+            format!("git checkout does-not-exist; git {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git checkout does-not-exist\ngit {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git -c alias.rb=rebase rb does-not-exist feat/x; git {commit}"),
+            "main",
+            2,
+        ),
+        // The same in a repository reached with `-C`.
+        (
+            format!("git -C ROOT rebase does-not-exist feat/x; git -C ROOT {commit}"),
+            "main",
+            2,
+        ),
+        (
+            format!("git -C ROOT rebase main feat/x && git -C ROOT {commit}"),
+            "main",
+            0,
+        ),
+        // Config reads change nothing.
+        (
+            "git config --get user.name; git -c alias.x=status x".to_string(),
+            "main",
+            0,
+        ),
+        (
+            "git config user.name && git -c alias.x=status x".to_string(),
+            "main",
+            0,
+        ),
+    ]);
+    for (command, on, expected) in rows {
+        let dir = fixture(on);
+        std::fs::write(dir.join("alias.ini"), "[alias]\n x = commit\n").unwrap();
+        // Codex's conditional row: an alias included only on `main`.
+        if command.starts_with("git checkout main && git x") {
+            let inc = dir.join("conditional.ini");
+            std::fs::write(&inc, "[alias]\n x = commit\n").unwrap();
+            git(
+                &dir,
+                &[
+                    "config",
+                    "includeIf.onbranch:main.path",
+                    &inc.to_string_lossy(),
+                ],
+            );
+        }
+        let command = command.replace("ROOT", &dir.to_string_lossy());
+        let out = guard_run(&command, &dir);
+        assert_eq!(
+            out.status.code(),
+            Some(expected),
+            "{command} (on {on}): {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    }
+}
+
 #[test]
 fn git_guard_allows_force_push_to_feature_branch() {
     let dir = tempfile::tempdir().unwrap();
