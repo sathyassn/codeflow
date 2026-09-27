@@ -57,6 +57,13 @@
       "first_passing_task": "TSK-118"
     },
     {
+      "file": "documents/v2-figure-mark-none.json",
+      "clause": "B2",
+      "valid": false,
+      "expect": "refused: none is reserved and is never a figure mark id",
+      "first_passing_task": "TSK-118"
+    },
+    {
       "file": "documents/v2-vocabulary-unknown-name.json",
       "clause": "B2",
       "valid": false,
@@ -75,6 +82,20 @@
       "clause": "B2",
       "valid": false,
       "expect": "refused: data-cf-for names missing-edge, which is not an entity",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-vocabulary-group-none.json",
+      "clause": "B2",
+      "valid": false,
+      "expect": "refused: none is reserved for data-cf-target and is never a group id",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "documents/v2-vocabulary-for-none.json",
+      "clause": "B2",
+      "valid": false,
+      "expect": "refused: data-cf-for names none, which is never an entity",
       "first_passing_task": "TSK-118"
     },
     {
@@ -138,7 +159,14 @@
       "file": "anchors/entity-valid-stage.json",
       "clause": "B4, I2",
       "valid": true,
-      "expect": "accepted; label 'Service'",
+      "expect": "accepted; label 'submit'; the line's crop is checked, so no crop_check field",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "anchors/entity-group-with-text-unverified.json",
+      "clause": "B4, I2",
+      "valid": true,
+      "expect": "accepted with crop_check 'unverified' (the service group holds text, whose extent the server cannot compute)",
       "first_passing_task": "TSK-118"
     },
     {
@@ -379,6 +407,20 @@
       "valid": true,
       "expect": "a read-only appendix with the answer and the tombstone; the tombstoned note body is absent",
       "first_passing_task": "TSK-121"
+    },
+    {
+      "file": "documents/delivery-v2.json",
+      "clause": "B2, B3, B5",
+      "valid": true,
+      "expect": "renders five framed stages and the migrated flow figure; stage-registry names three groups, seven message arrows labelled by their sibling text and two file rectangles",
+      "first_passing_task": "TSK-118"
+    },
+    {
+      "file": "entities/landing.json",
+      "clause": "B2",
+      "valid": true,
+      "expect": "the ids, variants and labels of every entity in landing, identical in Rust and in the grammar",
+      "first_passing_task": "TSK-118"
     }
   ]
 }

@@ -186,6 +186,33 @@ pub struct ElementSelector {
     pub block_digest: String,
 }
 
+/// A note's anchor on a named entity inside its block (SPC-014 I2).
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct EntitySelector {
+    pub entity_id: String,
+    /// The page sends the label it showed; the server refuses a label that
+    /// differs from its own resolution, so the stored label is the server's.
+    pub label: String,
+    pub block_digest: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub variant: Option<crate::entity::Variant>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_box: Option<crate::entity::Rect>,
+    /// Set only by the server, and only to `unverified`, when it could not
+    /// compute the entity's bounds; absent means the crop was checked.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub crop_check: Option<CropCheck>,
+}
+
+impl Eq for EntitySelector {}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum CropCheck {
+    Unverified,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum RegionScope {
@@ -221,6 +248,10 @@ pub struct FeedbackNote {
     pub element_selector: Option<ElementSelector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub region_selector: Option<RegionSelector>,
+    /// Schema v2 entity anchor (SPC-014 I2). A note with it also carries the
+    /// entity element's `element_selector`, so its v1 view stays well formed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub entity_selector: Option<EntitySelector>,
     /// Visible quote, element contents, or text inside a region — plus an optional crop.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub excerpt: Option<FeedbackExcerpt>,
@@ -292,6 +323,21 @@ pub enum FeedbackAnchor {
     Reanchored {
         start_utf16: u32,
         end_utf16: u32,
+        /// True when the note reached this text by the fuzzy step or from a
+        /// target that is gone (SPC-014 B1); the v1 exact rule leaves it false.
+        #[serde(default, skip_serializing_if = "is_false")]
+        changed: bool,
+    },
+    EntityAnchored {
+        entity_id: String,
+    },
+    EntityReanchored {
+        entity_id: String,
+        label_changed: bool,
+    },
+    BlockFallback {
+        block_id: String,
+        reason: String,
     },
     ElementAnchored {
         element_path: String,
@@ -371,6 +417,46 @@ pub enum FeedbackEvent {
         event_id: Uuid,
         at_unix: u64,
     },
+}
+
+#[allow(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "serde skip_serializing_if takes a reference"
+)]
+const fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+impl FeedbackEnvelope {
+    /// The envelope as the v1 `feedback` stream prints it: byte-compatible
+    /// with 3.0.0, so no v2 entity field (SPC-014 C1).
+    #[must_use]
+    pub fn v1_view(&self) -> Self {
+        let mut view = self.clone();
+        for note in &mut view.notes {
+            note.entity_selector = None;
+            // v1 carries JPEG crops only; an entity crop is a PNG.
+            if let Some(excerpt) = &mut note.excerpt {
+                if excerpt
+                    .image
+                    .as_ref()
+                    .is_some_and(|image| image.media_type != "image/jpeg")
+                {
+                    excerpt.image = None;
+                }
+                if excerpt.text.is_none() && excerpt.image.is_none() {
+                    note.excerpt = None;
+                }
+            }
+        }
+        view
+    }
+
+    /// Whether any note carries a v2 entity anchor.
+    #[must_use]
+    pub fn has_entity_notes(&self) -> bool {
+        self.notes.iter().any(|note| note.entity_selector.is_some())
+    }
 }
 
 impl FeedbackEvent {
@@ -1225,8 +1311,15 @@ impl SessionStore {
             revisions.push(record);
         }
         let feedback_events = self.read_events_unlocked(id)?;
+        // A session holding v2 data prints against the v2 history schema; a
+        // v1 session prints exactly as before (SPC-014 I2, compatibility).
+        let holds_v2 = revisions.iter().any(|record| {
+            matches!(&record.content, RevisionContent::Supported { document } if document.schema_version >= 2)
+        }) || feedback_events.iter().any(|event| {
+            matches!(event, FeedbackEvent::Received { envelope, .. } if envelope.has_entity_notes())
+        });
         Ok(SessionHistory {
-            schema_version: STATE_SCHEMA_VERSION,
+            schema_version: if holds_v2 { 2 } else { STATE_SCHEMA_VERSION },
             session: HistorySession {
                 id: session.id,
                 title: session.title,
@@ -1384,6 +1477,11 @@ impl SessionStore {
         }) {
             let mut normalized_existing = existing.clone();
             normalized_existing.created_at_unix = 0;
+            for note in &mut normalized_existing.notes {
+                if let Some(selector) = &mut note.entity_selector {
+                    selector.crop_check = None;
+                }
+            }
             envelope.created_at_unix = 0;
             if normalized_existing == envelope {
                 return Ok(FeedbackAppend {
@@ -1401,6 +1499,7 @@ impl SessionStore {
         }
         let revision = self.revision(id, session.current_revision)?;
         validate_feedback(&envelope, &session, &revision.content)?;
+        mark_unverified_crops(&mut envelope, &revision.content)?;
         envelope.created_at_unix = now_unix()?;
         let ledger = FeedbackLedger::replay(&events)?;
         let sequence = ledger.next_sequence;
@@ -2168,9 +2267,19 @@ fn validate_feedback(
     session: &SessionRecord,
     content: &RevisionContent,
 ) -> Result<()> {
-    if envelope.session_id != session.id || envelope.revision != session.current_revision {
+    if envelope.session_id != session.id {
         return Err(PresentError::InvalidDocument(
             "feedback session or revision is stale".to_string(),
+        ));
+    }
+    if envelope.revision != session.current_revision {
+        return Err(PresentError::review(
+            "stale_revision",
+            format!(
+                "the review names revision {} but the current revision is {}",
+                envelope.revision, session.current_revision
+            ),
+            serde_json::json!({ "current_revision": session.current_revision }),
         ));
     }
     if envelope.actor.trim().is_empty() || envelope.actor.len() > 256 {
@@ -2267,14 +2376,29 @@ fn validate_feedback_note(note: &FeedbackNote, content: &RevisionContent) -> Res
             "a feedback note may target text, one element, or one region, not several".to_string(),
         ));
     }
+    if note.entity_selector.is_some() && note.element_selector.is_none() {
+        return Err(PresentError::InvalidDocument(
+            "an entity note also carries the element selector of its entity".to_string(),
+        ));
+    }
+    let framing = content_framing(content);
+    // The entity checks run first so a refused entity anchor reports its
+    // typed code (SPC-014 I3) rather than the element selector's message.
+    let entity_bytes = validate_entity_selector(note.entity_selector.as_ref(), block)?;
     Ok(note.body.len()
         + note.block_id.len()
         + note.block_label.len()
-        + validate_feedback_excerpt(note.excerpt.as_ref())?
-        + validate_feedback_target(note, block)?)
+        + validate_feedback_excerpt(note.excerpt.as_ref(), note.entity_selector.is_some())?
+        + validate_feedback_target(note, block, &framing)?
+        + entity_bytes)
 }
 
-fn validate_feedback_excerpt(excerpt: Option<&FeedbackExcerpt>) -> Result<usize> {
+/// A crop is a JPEG, or a PNG on an entity note (SPC-014 B4), so a v1
+/// history or feedback stream never holds a PNG.
+fn validate_feedback_excerpt(
+    excerpt: Option<&FeedbackExcerpt>,
+    entity_note: bool,
+) -> Result<usize> {
     let Some(excerpt) = excerpt else {
         return Ok(0);
     };
@@ -2294,9 +2418,11 @@ fn validate_feedback_excerpt(excerpt: Option<&FeedbackExcerpt>) -> Result<usize>
         bytes += trimmed.len();
     }
     if let Some(image) = &excerpt.image {
-        if image.media_type != "image/jpeg" {
+        let png_allowed = entity_note && image.media_type == "image/png";
+        if image.media_type != "image/jpeg" && !png_allowed {
             return Err(PresentError::InvalidDocument(
-                "feedback excerpt image must be image/jpeg".to_string(),
+                "feedback excerpt image must be image/jpeg, or image/png on an entity note"
+                    .to_string(),
             ));
         }
         if image.data_base64.len() > limits::MAX_EXCERPT_IMAGE_B64_BYTES {
@@ -2312,17 +2438,145 @@ fn validate_feedback_excerpt(excerpt: Option<&FeedbackExcerpt>) -> Result<usize>
                 "feedback excerpt image exceeds its decoded bound".to_string(),
             ));
         }
-        if decoded.len() < 3 || decoded[0] != 0xff || decoded[1] != 0xd8 {
-            return Err(PresentError::InvalidDocument(
-                "feedback excerpt image is not a JPEG".to_string(),
-            ));
+        let signature_matches = if image.media_type == "image/png" {
+            decoded.starts_with(b"\x89PNG\r\n\x1a\n")
+        } else {
+            decoded.len() >= 3 && decoded[0] == 0xff && decoded[1] == 0xd8
+        };
+        if !signature_matches {
+            return Err(PresentError::InvalidDocument(format!(
+                "feedback excerpt image is not a {}",
+                if image.media_type == "image/png" {
+                    "PNG"
+                } else {
+                    "JPEG"
+                }
+            )));
         }
         bytes += image.data_base64.len();
     }
     Ok(bytes)
 }
 
-fn validate_feedback_target(note: &FeedbackNote, block: &crate::document::Block) -> Result<usize> {
+fn content_framing(content: &RevisionContent) -> crate::document::Framing {
+    match content {
+        RevisionContent::Supported { document } => crate::document::Framing::of(document),
+        RevisionContent::Unsupported { .. } | RevisionContent::Retired { .. } => {
+            crate::document::Framing::default()
+        }
+    }
+}
+
+/// The server's checks on an entity anchor (SPC-014 B4), with the typed
+/// error codes of I3.
+fn validate_entity_selector(
+    selector: Option<&EntitySelector>,
+    block: &crate::document::Block,
+) -> Result<usize> {
+    let Some(selector) = selector else {
+        return Ok(0);
+    };
+    if selector.crop_check.is_some() {
+        return Err(PresentError::InvalidDocument(
+            "crop_check is set by the service, never by the page".to_string(),
+        ));
+    }
+    if !crate::entity::is_entity_id(&selector.entity_id)
+        || selector.label.len() > limits::MAX_VISUAL_ANCHOR_BYTES
+    {
+        return Err(PresentError::review(
+            "unknown_entity",
+            format!("{:?} is not an entity id", selector.entity_id),
+            serde_json::json!({ "entity_id": selector.entity_id }),
+        ));
+    }
+    let entities = crate::entity::block_entities(block)?;
+    let Some(entity) = crate::entity::find_entity(&entities, &selector.entity_id, selector.variant)
+    else {
+        return Err(PresentError::review(
+            "unknown_entity",
+            format!(
+                "block {} has no entity {:?} at this revision",
+                block.id(),
+                selector.entity_id
+            ),
+            serde_json::json!({ "block_id": block.id(), "entity_id": selector.entity_id }),
+        ));
+    };
+    if !is_sha256(&selector.block_digest) || selector.block_digest != block_digest(block) {
+        return Err(PresentError::review(
+            "digest_mismatch",
+            format!(
+                "the block digest does not match block {} at this revision",
+                block.id()
+            ),
+            serde_json::json!({ "block_id": block.id() }),
+        ));
+    }
+    if selector.label != entity.label {
+        return Err(PresentError::review(
+            "label_mismatch",
+            format!(
+                "the page labelled entity {:?} {:?}, but it is {:?}",
+                selector.entity_id, selector.label, entity.label
+            ),
+            serde_json::json!({ "entity_id": selector.entity_id, "label": entity.label }),
+        ));
+    }
+    if let Some(crop) = &selector.crop_box {
+        let finite = [crop.x, crop.y, crop.width, crop.height]
+            .iter()
+            .all(|value| value.is_finite());
+        if !finite || crop.width <= 0.0 || crop.height <= 0.0 {
+            return Err(PresentError::InvalidDocument(
+                "the entity crop box is not a finite, non-empty rectangle".to_string(),
+            ));
+        }
+        if let Some(bounds) = &entity.bounds {
+            if !bounds.contains_within(crop, limits::ENTITY_CROP_TOLERANCE) {
+                return Err(PresentError::review(
+                    "crop_outside_entity",
+                    format!(
+                        "the crop lies outside entity {:?} widened by {} user units",
+                        selector.entity_id,
+                        limits::ENTITY_CROP_TOLERANCE
+                    ),
+                    serde_json::json!({ "entity_id": selector.entity_id }),
+                ));
+            }
+        }
+    }
+    Ok(selector.entity_id.len() + selector.label.len() + selector.block_digest.len())
+}
+
+/// Record `crop_check: unverified` on every entity note whose crop the
+/// server could not check (SPC-014 B4 and I2). Runs after validation.
+fn mark_unverified_crops(envelope: &mut FeedbackEnvelope, content: &RevisionContent) -> Result<()> {
+    for note in &mut envelope.notes {
+        let Some(selector) = &mut note.entity_selector else {
+            continue;
+        };
+        if selector.crop_box.is_none() {
+            continue;
+        }
+        let Some(block) = content_block(content, &note.block_id) else {
+            continue;
+        };
+        let entities = crate::entity::block_entities(block)?;
+        let checked = crate::entity::find_entity(&entities, &selector.entity_id, selector.variant)
+            .is_some_and(|entity| entity.bounds.is_some());
+        if !checked {
+            selector.crop_check = Some(CropCheck::Unverified);
+        }
+    }
+    Ok(())
+}
+
+fn validate_feedback_target(
+    note: &FeedbackNote,
+    block: &crate::document::Block,
+    framing: &crate::document::Framing,
+) -> Result<usize> {
     if let Some(selector) = &note.selector {
         let selected_units = selector.exact.encode_utf16().count();
         let range_units = selector.end_utf16.saturating_sub(selector.start_utf16) as usize;
@@ -2337,7 +2591,7 @@ fn validate_feedback_target(note: &FeedbackNote, block: &crate::document::Block)
                 "feedback selector range or exact quote is invalid".to_string(),
             ));
         }
-        validate_selector_anchor(selector, &block.canonical_review_text())?;
+        validate_selector_anchor(selector, &block.canonical_review_text(framing))?;
         return Ok(selector.exact.len() + selector.prefix.len() + selector.suffix.len());
     }
     if let Some(selector) = &note.element_selector {
@@ -2486,54 +2740,192 @@ fn reanchor_note(
             reason: "the referenced block is absent from the current revision".to_string(),
         };
     };
+    let framing = crate::document::Framing::of(document);
+    let same_revision = source_revision == current_revision;
+    let digest_unchanged = |digest: &str| digest == block_digest(block);
+    let excerpt_text = note
+        .excerpt
+        .as_ref()
+        .and_then(|excerpt| excerpt.text.as_deref());
+    // Step 1: the entity, when the block still has it.
+    if let Some(selector) = &note.entity_selector {
+        let entities = crate::entity::block_entities(block).unwrap_or_default();
+        if let Some(entity) =
+            crate::entity::find_entity(&entities, &selector.entity_id, selector.variant)
+        {
+            if same_revision || digest_unchanged(&selector.block_digest) {
+                return FeedbackAnchor::EntityAnchored {
+                    entity_id: selector.entity_id.clone(),
+                };
+            }
+            return FeedbackAnchor::EntityReanchored {
+                entity_id: selector.entity_id.clone(),
+                label_changed: entity.label != selector.label,
+            };
+        }
+        return reanchor_by_quote(
+            excerpt_text.unwrap_or(&selector.label),
+            block,
+            &framing,
+            "the entity is gone and its label was not found",
+        );
+    }
     if let Some(selector) = &note.element_selector {
-        return reanchor_element(selector, source_revision, current_revision, block);
+        if same_revision {
+            return FeedbackAnchor::ElementAnchored {
+                element_path: selector.element_path.clone(),
+            };
+        }
+        if digest_unchanged(&selector.block_digest) {
+            return FeedbackAnchor::ElementReanchored {
+                element_path: selector.element_path.clone(),
+            };
+        }
+        return reanchor_by_quote(
+            excerpt_text.unwrap_or(&selector.label),
+            block,
+            &framing,
+            "the element changed and its text was not found",
+        );
     }
     if let Some(selector) = &note.region_selector {
-        return reanchor_region(selector, source_revision, current_revision, block);
-    }
-    let Some(selector) = &note.selector else {
-        return FeedbackAnchor::Block {
-            block_id: note.block_id.clone(),
+        if let Some(anchor) = reanchor_region(selector, source_revision, current_revision, block) {
+            return anchor;
+        }
+        return match excerpt_text {
+            Some(text) => reanchor_by_quote(
+                text,
+                block,
+                &framing,
+                "the region's block changed and its text was not found",
+            ),
+            None => FeedbackAnchor::BlockFallback {
+                block_id: note.block_id.clone(),
+                reason: "the selected region's block changed in the current revision".to_string(),
+            },
         };
-    };
-    if source_revision == current_revision {
+    }
+    match &note.selector {
+        Some(selector) => reanchor_text(selector, same_revision, block, &framing),
+        None => FeedbackAnchor::Block {
+            block_id: note.block_id.clone(),
+        },
+    }
+}
+
+/// B1 for a text note: exact v1 rule, then the fuzzy quote, then the block.
+fn reanchor_text(
+    selector: &TextSelector,
+    same_revision: bool,
+    block: &crate::document::Block,
+    framing: &crate::document::Framing,
+) -> FeedbackAnchor {
+    if same_revision {
         return FeedbackAnchor::Anchored {
             start_utf16: selector.start_utf16,
             end_utf16: selector.end_utf16,
         };
     }
-    reanchor_text(selector, block)
-}
-
-fn reanchor_element(
-    selector: &ElementSelector,
-    source_revision: u64,
-    current_revision: u64,
-    block: &crate::document::Block,
-) -> FeedbackAnchor {
-    if source_revision == current_revision {
-        return FeedbackAnchor::ElementAnchored {
-            element_path: selector.element_path.clone(),
+    let canonical = block.canonical_review_text(framing);
+    if let Some((start_utf16, end_utf16)) = exact_text_match(selector, &canonical) {
+        return FeedbackAnchor::Reanchored {
+            start_utf16,
+            end_utf16,
+            changed: false,
         };
     }
-    if selector.block_digest == block_digest(block) {
-        FeedbackAnchor::ElementReanchored {
-            element_path: selector.element_path.clone(),
-        }
+    let quote = crate::fuzzy::Quote {
+        exact: &selector.exact,
+        prefix: &selector.prefix,
+        suffix: &selector.suffix,
+        start: Some(selector.start_utf16 as usize),
+    };
+    fuzzy_anchor(
+        &quote,
+        &canonical,
+        block,
+        "the quote was not found in its block",
+    )
+}
+
+/// B1 step 2 for a note whose quote has no stored offset or context (an
+/// entity or element label, or excerpt text).
+fn reanchor_by_quote(
+    quote: &str,
+    block: &crate::document::Block,
+    framing: &crate::document::Framing,
+    reason: &str,
+) -> FeedbackAnchor {
+    let canonical = block.canonical_review_text(framing);
+    let quote = crate::fuzzy::Quote {
+        exact: quote,
+        prefix: "",
+        suffix: "",
+        start: None,
+    };
+    let units: Vec<u16> = canonical.encode_utf16().collect();
+    let exact: Vec<u16> = quote.exact.encode_utf16().collect();
+    let occurrences = if exact.is_empty() {
+        Vec::new()
     } else {
-        FeedbackAnchor::Orphaned {
-            reason: "the element's rendered block changed in the current revision".to_string(),
+        units
+            .windows(exact.len())
+            .enumerate()
+            .filter(|(_, window)| *window == exact.as_slice())
+            .map(|(index, _)| index)
+            .take(2)
+            .collect::<Vec<_>>()
+    };
+    if let [start] = occurrences.as_slice() {
+        if let (Ok(start_utf16), Ok(end_utf16)) =
+            (u32::try_from(*start), u32::try_from(start + exact.len()))
+        {
+            return FeedbackAnchor::Reanchored {
+                start_utf16,
+                end_utf16,
+                changed: true,
+            };
         }
+    }
+    fuzzy_anchor(&quote, &canonical, block, reason)
+}
+
+fn fuzzy_anchor(
+    quote: &crate::fuzzy::Quote<'_>,
+    canonical: &str,
+    block: &crate::document::Block,
+    reason: &str,
+) -> FeedbackAnchor {
+    match crate::fuzzy::best_match(quote, canonical) {
+        Some(found) => match (
+            u32::try_from(found.start_utf16),
+            u32::try_from(found.end_utf16),
+        ) {
+            (Ok(start_utf16), Ok(end_utf16)) => FeedbackAnchor::Reanchored {
+                start_utf16,
+                end_utf16,
+                changed: true,
+            },
+            _ => FeedbackAnchor::BlockFallback {
+                block_id: block.id().to_string(),
+                reason: "the re-anchored quote exceeds the offset bound".to_string(),
+            },
+        },
+        None => FeedbackAnchor::BlockFallback {
+            block_id: block.id().to_string(),
+            reason: reason.to_string(),
+        },
     }
 }
 
+/// The unchanged-digest fast path of a region note, or `None` when the
+/// note continues at the quote step.
 fn reanchor_region(
     selector: &RegionSelector,
     source_revision: u64,
     current_revision: u64,
     block: &crate::document::Block,
-) -> FeedbackAnchor {
+) -> Option<FeedbackAnchor> {
     let anchored = |reanchored: bool| {
         if reanchored {
             FeedbackAnchor::RegionReanchored {
@@ -2556,21 +2948,20 @@ fn reanchor_region(
         }
     };
     if source_revision == current_revision {
-        return anchored(false);
+        return Some(anchored(false));
     }
     match selector.scope {
-        RegionScope::Block if selector.block_digest == block_digest(block) => anchored(true),
-        RegionScope::Block => FeedbackAnchor::Orphaned {
-            reason: "the selected region's block changed in the current revision".to_string(),
-        },
-        RegionScope::Document => FeedbackAnchor::Orphaned {
+        RegionScope::Block if selector.block_digest == block_digest(block) => Some(anchored(true)),
+        RegionScope::Block => None,
+        RegionScope::Document => Some(FeedbackAnchor::Orphaned {
             reason: "a document-wide visual region is pinned to its source revision".to_string(),
-        },
+        }),
     }
 }
 
-fn reanchor_text(selector: &TextSelector, block: &crate::document::Block) -> FeedbackAnchor {
-    let canonical = block.canonical_review_text();
+/// The v1 exact rule (unchanged): the quote with its stored prefix before it
+/// and suffix after it occurs exactly once.
+fn exact_text_match(selector: &TextSelector, canonical: &str) -> Option<(u32, u32)> {
     let matches = canonical
         .match_indices(&selector.exact)
         .filter(|(start, exact)| {
@@ -2585,28 +2976,8 @@ fn reanchor_text(selector: &TextSelector, block: &crate::document::Block) -> Fee
         .take(2)
         .collect::<Vec<_>>();
     match matches.as_slice() {
-        [(start, end)] => {
-            let Ok(start_utf16) = u32::try_from(*start) else {
-                return FeedbackAnchor::Orphaned {
-                    reason: "re-anchored selection exceeds the offset bound".to_string(),
-                };
-            };
-            let Ok(end_utf16) = u32::try_from(*end) else {
-                return FeedbackAnchor::Orphaned {
-                    reason: "re-anchored selection exceeds the offset bound".to_string(),
-                };
-            };
-            FeedbackAnchor::Reanchored {
-                start_utf16,
-                end_utf16,
-            }
-        }
-        [] => FeedbackAnchor::Orphaned {
-            reason: "the exact quote and context no longer match".to_string(),
-        },
-        _ => FeedbackAnchor::Orphaned {
-            reason: "the exact quote and context match more than once".to_string(),
-        },
+        [(start, end)] => Some((u32::try_from(*start).ok()?, u32::try_from(*end).ok()?)),
+        _ => None,
     }
 }
 
@@ -3516,6 +3887,7 @@ pub(crate) mod retired_fixture {
     pub fn install(store: &SessionStore, revision: &str) -> Uuid {
         let session = store
             .create(ParsedDocument::Supported(PresentationDocument {
+                summary: None,
                 schema_version: 1,
                 title: "Qualification review".to_string(),
                 language: None,
@@ -3566,6 +3938,7 @@ mod tests {
 
     fn parsed() -> ParsedDocument {
         ParsedDocument::Supported(PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Review".to_string(),
             language: None,
@@ -3592,6 +3965,7 @@ mod tests {
 
     fn parsed_code(bytes: usize) -> ParsedDocument {
         ParsedDocument::Supported(PresentationDocument {
+            summary: None,
             schema_version: 1,
             title: "Large review".to_string(),
             language: None,
@@ -3601,6 +3975,7 @@ mod tests {
                 language: "text".to_string(),
                 code: "x".repeat(bytes),
                 caption: None,
+                source: None,
             }],
         })
     }
@@ -4048,7 +4423,7 @@ mod tests {
     }
 
     #[test]
-    fn feedback_resolution_requires_current_version_and_reanchoring_never_guesses() {
+    fn feedback_resolution_requires_current_version_and_fuzzy_reanchoring_is_marked_changed() {
         let (_temp, store) = store();
         let session = store.create(parsed()).unwrap();
         let event_id = Uuid::new_v4();
@@ -4069,6 +4444,7 @@ mod tests {
             element_selector: None,
             excerpt: None,
             region_selector: None,
+            entity_selector: None,
         });
         assert_eq!(store.append_feedback(envelope).unwrap().sequence, 1);
         store.mark_delivered(session.id, &[event_id]).unwrap();
@@ -4097,7 +4473,8 @@ mod tests {
             snapshot.items[0].notes[0].anchor,
             FeedbackAnchor::Reanchored {
                 start_utf16: 7,
-                end_utf16: 12
+                end_utf16: 12,
+                changed: false
             }
         ));
 
@@ -4112,7 +4489,11 @@ mod tests {
         store.update_document(session.id, ambiguous).unwrap();
         assert!(matches!(
             store.feedback_snapshot(session.id).unwrap().items[0].notes[0].anchor,
-            FeedbackAnchor::Orphaned { .. }
+            FeedbackAnchor::Reanchored {
+                start_utf16: 0,
+                end_utf16: 5,
+                changed: true
+            }
         ));
     }
 
@@ -4459,6 +4840,7 @@ mod tests {
             element_selector: None,
             excerpt: None,
             region_selector: None,
+            entity_selector: None,
         });
         assert!(store.append_feedback(envelope.clone()).is_ok());
 
@@ -4471,7 +4853,7 @@ mod tests {
     }
 
     #[test]
-    fn feedback_excerpt_accepts_quoted_text_and_rejects_empty_or_non_jpeg() {
+    fn feedback_excerpt_accepts_quoted_text_and_jpeg_and_rejects_the_rest() {
         let (_temp, store) = store();
         let session = store.create(parsed()).unwrap();
         let mut envelope = feedback(session.id, Uuid::new_v4());
@@ -4484,6 +4866,7 @@ mod tests {
             selector: None,
             element_selector: None,
             region_selector: None,
+            entity_selector: None,
             excerpt: Some(FeedbackExcerpt {
                 text: Some("Hello".to_string()),
                 image: None,
@@ -4515,6 +4898,34 @@ mod tests {
             image: Some(FeedbackImage {
                 media_type: "image/png".to_string(),
                 data_base64: "aaaa".to_string(),
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: Some(FeedbackImage {
+                media_type: "image/gif".to_string(),
+                data_base64: STANDARD.encode(b"GIF89a"),
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: Some(FeedbackImage {
+                media_type: "image/png".to_string(),
+                data_base64: STANDARD.encode([0xff, 0xd8, 0xff]),
+            }),
+        });
+        assert!(store.append_feedback(envelope.clone()).is_err());
+
+        // A real PNG is still refused on a note without an entity anchor.
+        envelope.notes[0].excerpt = Some(FeedbackExcerpt {
+            text: None,
+            image: Some(FeedbackImage {
+                media_type: "image/png".to_string(),
+                data_base64: STANDARD.encode(b"\x89PNG\r\n\x1a\n\0\0\0\rIHDR"),
             }),
         });
         assert!(store.append_feedback(envelope.clone()).is_err());
@@ -4573,6 +4984,7 @@ mod tests {
             }),
             excerpt: None,
             region_selector: None,
+            entity_selector: None,
         });
         assert!(store.append_feedback(envelope.clone()).is_ok());
 
@@ -4615,6 +5027,7 @@ mod tests {
             body: "This visual area needs more separation.".to_string(),
             selector: None,
             element_selector: None,
+            entity_selector: None,
             excerpt: None,
             region_selector: Some(RegionSelector {
                 scope: RegionScope::Block,
@@ -4646,7 +5059,7 @@ mod tests {
         store.update_document(session.id, changed).unwrap();
         assert!(matches!(
             store.feedback_snapshot(session.id).unwrap().items[0].notes[0].anchor,
-            FeedbackAnchor::Orphaned { .. }
+            FeedbackAnchor::BlockFallback { .. }
         ));
     }
 
@@ -4914,6 +5327,7 @@ mod tests {
             selector: None,
             element_selector: None,
             region_selector: None,
+            entity_selector: None,
             excerpt: None,
         }];
         let refused = store
