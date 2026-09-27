@@ -45,10 +45,9 @@ an individual is officially representing the community in public spaces.
 ## Enforcement
 
 Instances of abusive, harassing, or otherwise unacceptable behavior may be
-reported to the maintainers through the repository's private channels (the
-**Security** tab → **Report a vulnerability**, or a direct message to the
-maintainer). All complaints will be reviewed and investigated promptly and
-fairly.
+reported to the maintainers privately, through the reporting route described
+in [SECURITY.md](SECURITY.md). All complaints will be reviewed and investigated
+promptly and fairly.
 
 ## Attribution
 

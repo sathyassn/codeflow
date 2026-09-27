@@ -6,45 +6,52 @@ loop. Every claim here reflects current behavior; nothing aspirational.
 
 ## Install the binary
 
-`codeflow` is a single binary. The latest verified published release is
-v2.1.0. Its assets are `.tar.xz` archives with `.sha256` files for
-`aarch64-apple-darwin`, `x86_64-apple-darwin`, and `x86_64-unknown-linux-gnu`,
-a `sha256.sum`, the shell installer, and a source archive. It has no Windows
-archive and no PowerShell installer. The workspace on `main` is the pending
-3.0.0 source; its distribution targets add `x86_64-pc-windows-msvc` and a
-PowerShell installer, but no 3.0.0 assets exist until a release is published.
-
-The anonymous installer one-liner works once codeflow's releases are public;
-while the repo is private, use the `gh release download` path or the checkout
-build below (both authenticate as a collaborator):
+`codeflow` is a single binary. From 3.0.0 on, each release publishes
+`.tar.xz` archives for `aarch64-apple-darwin`, `x86_64-apple-darwin` and
+`x86_64-unknown-linux-gnu`, a `.zip` archive for `x86_64-pc-windows-msvc`, a
+`.sha256` file for each archive, a `sha256.sum`, a shell installer, a
+PowerShell installer and a source archive. Install the latest release on macOS
+or Linux:
 
 ```sh
 curl -fsSL https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.sh | sh
 ```
 
-Or build the pending 3.0.0 source from a checkout, with a Rust toolchain:
+On native Windows, in PowerShell (Git for Windows is required):
+
+```powershell
+powershell -ExecutionPolicy Bypass -c "irm https://github.com/sathyassn/codeflow/releases/latest/download/codeflow-cli-installer.ps1 | iex"
+```
+
+Or build from a checkout, with a Rust toolchain:
 
 ```sh
 cargo install --path crates/codeflow-cli
 ```
 
-To install one published platform archive directly (to pin a version or script
-the install), use `gh`. This example pins the published legacy v2.1.0 release;
-substitute `x86_64-apple-darwin` or `x86_64-unknown-linux-gnu` for the other
-published archives. Each archive unpacks to a directory of the same name
-containing the `codeflow` binary:
+To pin a version or script the install, download one platform archive and
+check it against its `.sha256` file. Substitute the version you pin and your
+platform's target (the Windows archive is a `.zip`). Releases before 3.0.0
+publish fewer assets, so check a release's asset list before pinning it. Each
+archive unpacks to a directory of the same name containing the `codeflow`
+binary. The commands run in a subshell that stops at the first failure, so
+nothing is extracted or installed unless the download and the checksum pass;
+`D` must be a directory on your `PATH`:
 
 ```sh
-A=codeflow-cli-aarch64-apple-darwin
-gh release download v2.1.0 -R sathyassn/codeflow -p "$A.tar.xz" -D /tmp/cf --clobber
-tar -xf "/tmp/cf/$A.tar.xz" -C /tmp/cf
-install "/tmp/cf/$A/codeflow" ~/.cargo/bin/    # or any directory on PATH
+V=v3.0.0 A=codeflow-cli-aarch64-apple-darwin D="$HOME/.cargo/bin"
+B=https://github.com/sathyassn/codeflow/releases/download/$V
+(
+  set -e
+  mkdir -p /tmp/cf && cd /tmp/cf
+  curl -fsSLO "$B/$A.tar.xz"
+  curl -fsSLO "$B/$A.tar.xz.sha256"
+  shasum -a 256 -c "$A.tar.xz.sha256"
+  tar -xf "$A.tar.xz"
+  mkdir -p "$D"
+  install "$A/codeflow" "$D/"
+)
 ```
-
-That v2.1.0 binary predates parts of this guide: the commands and workflows
-documented here describe the pending 3.0.0 source, and some of them are not
-available in the published release. To follow the current guide, build the
-pending source checkout above.
 
 Upgrading the binary improves every repo at once, because hooks call `codeflow`
 from `PATH` (see "The update story").
@@ -327,13 +334,9 @@ pages once and serves them through Astro's dev server for authoring; it reads
 the same committed snapshot. `npm run browser:verify` runs the isolated
 headless journey matrix when Playwright browsers are installed.
 
-The home page names the exact repository commit the guide was built from and
-no release version. That is deliberate: the workspace source identifies as
-3.0.0, which is pending and unpublished, while `v2.1.0` remains the latest
-verified published release (see the
-[historical bridge into v3](releasing.md#historical-bridge-into-v3)). A
-`release_version` value renders as a release label, so it stays `null` until a
-verified published release exists for the built commit.
+The home page names the exact repository commit the guide was built from. A
+`release_version` value renders as a release label, so it stays `null` unless
+a verified published release exists for the built commit.
 
 Node roles differ by lane, and neither pin changes here: the aggregate CI gate
 runs on Node 26.4.0, and its full strict target installs, checks, builds, and
