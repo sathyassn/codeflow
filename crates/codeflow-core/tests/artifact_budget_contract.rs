@@ -16,7 +16,10 @@ const STANDARD_AGENTS_MAX_BYTES: usize = 28 * KIB;
 const MINIMAL_AGENTS_MAX_BYTES: usize = 16 * KIB;
 const STANDARD_CLAUDE_MAX_BYTES: usize = 6 * KIB;
 const MINIMAL_CLAUDE_MAX_BYTES: usize = 3 * KIB;
-const ROUTING_SKILL_MAX_BYTES: usize = 29 * KIB;
+// Raised from 29 KiB with the orchestrator ratchet below: the byte-cut audit
+// restorations (H36, H37) put back text cut for bytes, and nothing key is
+// trimmed to fit. cf-delegate's ratchet sits far below either value.
+const ROUTING_SKILL_MAX_BYTES: usize = 29 * KIB + 512;
 const OTHER_SKILL_MAX_BYTES: usize = 24 * KIB;
 const REVIEWER_AGENT_MAX_BYTES: usize = 9 * KIB + 512;
 const SECURITY_REVIEWER_AGENT_MAX_BYTES: usize = 12 * KIB;
@@ -72,7 +75,14 @@ const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     ("agents/skills/cf-herdr/SKILL.md", 8 * KIB),
     // TSK-016 keeps optional estimation discoverable; TSK-022 adds accountable
     // primary/executor routing while detailed rules stay in on-demand resources.
-    ("agents/skills/cf-model-orchestrator/SKILL.md", 29 * KIB),
+    // Raised from 29 KiB for the byte-cut audit restorations H36 and H37: the
+    // read trigger for the operator-owned list at the escalation decision and
+    // the staged-routes rationale (29,867 bytes). Operator ruling, 2026-09-27:
+    // nothing key is cut for bytes; TSK-150 turns these caps into guidelines.
+    (
+        "agents/skills/cf-model-orchestrator/SKILL.md",
+        29 * KIB + 512,
+    ),
     ("agents/skills/cf-plan/SKILL.md", 9 * KIB), // optional estimation offer/consent route
     ("agents/skills/cf-present/SKILL.md", 8 * KIB),
     ("agents/skills/cf-ship/SKILL.md", 6 * KIB + 512),
