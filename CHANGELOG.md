@@ -52,6 +52,21 @@ publication date._
   refuses a task whose epic is complete, cancelled or archived.
 
 <!-- codeflow:release-impact minor -->
+- **Headless peer runs are flagged, and delegated turns carry their
+  provenance.** exec-guard now recognizes a Bash command that runs a peer
+  harness headless (`claude -p` or `--print`, `codex exec` or `codex e`,
+  `grok -p`), including behind `sh -c`, `env` or leading assignments, and
+  names the interactive route instead: the Codex plugin, `codeflow
+  delegate` over the interactive `claude` CLI, or a named Herdr tab. The new
+  policy key `security.headless_peer_runs` sets the level: fresh installs
+  and the built-in default use `warn`, `block` refuses, `off` disables it,
+  and `codeflow update` adds it at `warn` while keeping an explicit level.
+  `codeflow delegate init` takes `--model` and `--effort`; the terminal
+  `codeflow delegate wait` result then carries `provenance`: the thread
+  (the Claude session), and model and effort as requested at `init` and as
+  observed in the `SessionStart` payload, each `unknown` when not given.
+
+<!-- codeflow:release-impact minor -->
 - **Work record lifecycle.** `codeflow task status`, `epic status` and
   `spec status` change a record's status only by a legal transition and write
   only what it needs: a Blocker for blocked, a cancellation reason and scope,
