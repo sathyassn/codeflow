@@ -665,3 +665,106 @@ fn sandboxed_open_keeps_state_in_the_allowed_root_and_prints_a_handoff_link() {
         .collect();
     assert!(remaining.is_empty(), "session state remains: {remaining:?}");
 }
+
+/// Runs a scaffold command with a fresh `HOME` and isolated Git and registry
+/// state, as an operator would outside the agent sandbox.
+fn scaffold_command(project: &Path, home: &Path, args: &[&str]) -> Output {
+    Command::new(env!("CARGO_BIN_EXE_codeflow"))
+        .args(args)
+        .current_dir(project)
+        .env("HOME", home)
+        .env("CODEFLOW_HOME", home.join(".codeflow"))
+        .env("GIT_CONFIG_GLOBAL", "/dev/null")
+        .env("GIT_CONFIG_SYSTEM", "/dev/null")
+        .env_remove("XDG_STATE_HOME")
+        .env_remove("GIT_DIR")
+        .env_remove("GIT_WORK_TREE")
+        .env_remove("GIT_INDEX_FILE")
+        .output()
+        .unwrap()
+}
+
+fn assert_owner_private_dir(path: &Path) {
+    use std::os::unix::fs::PermissionsExt;
+
+    let metadata = fs::symlink_metadata(path)
+        .unwrap_or_else(|error| panic!("{} was not created: {error}", path.display()));
+    assert!(metadata.is_dir(), "{} is not a directory", path.display());
+    assert_eq!(
+        metadata.permissions().mode() & 0o077,
+        0,
+        "{} is not owner-private",
+        path.display()
+    );
+}
+
+#[test]
+fn init_and_update_provision_the_present_state_root_in_a_fresh_home() {
+    let fixture = setup_project();
+    let state_root = preset_present_state_root(&fixture.home);
+    assert!(!state_root.exists());
+
+    require_success(&scaffold_command(
+        &fixture.project,
+        &fixture.home,
+        &["init", "--minimal", "--yes"],
+    ));
+    assert_owner_private_dir(&state_root);
+
+    // `update` recreates a root removed after `init`.
+    let codeflow_dir = state_root.parent().unwrap();
+    fs::remove_dir_all(codeflow_dir).unwrap();
+    require_success(&scaffold_command(
+        &fixture.project,
+        &fixture.home,
+        &["update"],
+    ));
+    assert_owner_private_dir(&state_root);
+    assert_owner_private_dir(codeflow_dir);
+
+    // A provisioned root is all a sandboxed session needs for first use.
+    require_success(&codeflow_default_state(
+        &fixture.project,
+        &fixture.home,
+        &["present", "list"],
+    ));
+}
+
+#[test]
+fn first_use_without_a_writable_state_parent_names_the_provisioning_command() {
+    use std::os::unix::fs::PermissionsExt;
+
+    if unsafe { libc::geteuid() } == 0 {
+        // Root ignores directory permissions, so the denial cannot be staged.
+        return;
+    }
+    let fixture = setup_project();
+    let state_root = preset_present_state_root(&fixture.home);
+    // Stage what the sandbox allowance leaves: the nearest existing ancestor
+    // of the state root is not writable, so its missing parents cannot be made.
+    let writable_limit = if cfg!(target_os = "macos") {
+        fixture.home.join("Library/Application Support")
+    } else {
+        fixture.home.join(".local/state")
+    };
+    fs::create_dir_all(&writable_limit).unwrap();
+    fs::set_permissions(&writable_limit, fs::Permissions::from_mode(0o555)).unwrap();
+
+    let refused = codeflow_default_state(&fixture.project, &fixture.home, &["present", "list"]);
+    fs::set_permissions(&writable_limit, fs::Permissions::from_mode(0o755)).unwrap();
+
+    assert_eq!(refused.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "the cf-present state directory {} is missing and could not be created",
+            state_root.display()
+        )),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains("run `codeflow update` once outside the agent sandbox to create it"),
+        "{stderr}"
+    );
+    assert!(!state_root.exists());
+}

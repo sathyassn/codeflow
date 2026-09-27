@@ -98,6 +98,15 @@ enum PresentCommand {
     ServeInternal { session_id: String },
 }
 
+/// Create the cf-present state root during `init` and `update`, which run
+/// outside the agent sandbox; the sandbox preset can write only inside it.
+/// A failure is reported but does not fail the scaffold operation.
+pub fn provision_state_root_or_warn() {
+    if let Err(error) = codeflow_present::state::provision_state_root() {
+        eprintln!("warning: could not create the cf-present state directory: {error}");
+    }
+}
+
 pub fn run(args: &PresentArgs) -> i32 {
     match run_inner(&args.command) {
         Ok(()) => 0,
@@ -703,6 +712,7 @@ fn exit_code(error: &PresentError) -> i32 {
         PresentError::UnsafePath(_) | PresentError::CorruptState(_) => 5,
         PresentError::SessionClosed(_)
         | PresentError::PartialCleanup { .. }
+        | PresentError::StateRootUnavailable { .. }
         | PresentError::Io { .. } => 1,
     }
 }
