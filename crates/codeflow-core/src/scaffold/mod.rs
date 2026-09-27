@@ -25,6 +25,7 @@ pub mod detect;
 pub mod init;
 pub mod manifest;
 pub mod portal;
+pub mod pr_template;
 pub mod region;
 pub mod report;
 pub mod settings_merge;

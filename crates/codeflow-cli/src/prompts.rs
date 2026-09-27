@@ -4,6 +4,7 @@
 use std::io::{BufRead, Write};
 use std::path::Path;
 
+use codeflow_core::hooks::policy::MappingState;
 use codeflow_core::scaffold::InitAnswers;
 
 /// The permission-preset question is Claude Code-scoped: the answer selects
@@ -24,6 +25,31 @@ fn ask(input: &mut impl BufRead, question: &str, default: &str) -> std::io::Resu
     } else {
         answer.to_string()
     })
+}
+
+/// Ask the decision for a kept PR template (SPC-013 R-84) until the answer
+/// is valid. End of input returns `None`, which leaves the mapping diagnosed.
+pub fn decide_pr_template(
+    input: &mut impl BufRead,
+    path: &str,
+) -> std::io::Result<Option<MappingState>> {
+    loop {
+        print!(
+            "Kept PR template {path}: accept the proposed heading mapping, refuse it (append the required headings to the template), or keep a custom section list set in policy? [accept | refuse | custom]: "
+        );
+        std::io::stdout().flush()?;
+        let mut line = String::new();
+        if input.read_line(&mut line)? == 0 {
+            println!();
+            return Ok(None);
+        }
+        match line.trim().to_ascii_lowercase().as_str() {
+            "accept" | "accepted" => return Ok(Some(MappingState::Accepted)),
+            "refuse" | "refused" => return Ok(Some(MappingState::Refused)),
+            "custom" => return Ok(Some(MappingState::Custom)),
+            other => println!("unknown answer {other:?}; choose accept, refuse or custom"),
+        }
+    }
 }
 
 /// Gathers the three init answers from stdin. Empty input keeps the default;
@@ -73,6 +99,17 @@ mod tests {
     fn gather(input: &str) -> InitAnswers {
         let mut reader = input.as_bytes();
         gather_answers_from(&mut reader, Path::new("/tmp/myproj")).unwrap()
+    }
+
+    #[test]
+    fn pr_template_decision_reasks_and_stops_at_end_of_input() {
+        let mut input = "maybe\nrefuse\n".as_bytes();
+        assert_eq!(
+            decide_pr_template(&mut input, "x").unwrap(),
+            Some(MappingState::Refused)
+        );
+        let mut input = "".as_bytes();
+        assert_eq!(decide_pr_template(&mut input, "x").unwrap(), None);
     }
 
     #[test]

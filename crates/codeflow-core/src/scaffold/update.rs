@@ -51,7 +51,7 @@ use super::state::{
     guard_beneath_root, remove_beneath_root, set_exec, write_beneath_root, write_file, Baseline,
     InstalledFile, InstalledManifest, ProjectState, ScaffoldConfig,
 };
-use super::{hash, should_skip_initial_stack_adr, ScaffoldError};
+use super::{hash, pr_template, should_skip_initial_stack_adr, ScaffoldError};
 use crate::hooks::policy_schema::DEPRECATED_KEYS;
 
 /// Options for [`update`].
@@ -75,6 +75,7 @@ pub struct UpdateOptions {
 /// [`ScaffoldError::NotInitialized`] when the project has no
 /// `.codeflow/project.toml`; otherwise IO, JSON, or manifest failures.
 /// Per-file merge conflicts are NOT errors — they are reported.
+#[allow(clippy::too_many_lines)] // linear phase orchestration, as in `init`
 pub fn update(
     source: &dyn super::AssetSource,
     root: &Path,
@@ -109,6 +110,8 @@ pub fn update(
         state.scaffold_version, opts.binary_version, state.tier
     ));
     let mut diffs = String::new();
+    let kept_template = super::assets::read_text(source, "base/ci/pull_request_template.md")
+        .and_then(|shipped| pr_template::find_kept(root, &shipped, &installed));
 
     for entry in &manifest.entries {
         if !entry.applies(state.tier, &state.permission_preset) {
@@ -137,6 +140,23 @@ pub fn update(
             );
             continue;
         }
+        if let Some(kept) = kept_template
+            .as_ref()
+            .filter(|_| entry.dest == pr_template::MANAGED_TEMPLATE)
+        {
+            // A kept brownfield template is the project's (SPC-013 R-84):
+            // never merged into, never shadowed by a sidecar or a second
+            // template.
+            report.file_with_notes(
+                &entry.dest,
+                Action::Skipped,
+                vec![format!(
+                    "the project's PR template {} is kept; see git.pr_section_mapping",
+                    kept.path
+                )],
+            );
+            continue;
+        }
         update_entry(
             source,
             root,
@@ -151,6 +171,23 @@ pub fn update(
     }
 
     prune_orphans(root, &manifest, &ignore, &mut installed, &mut report)?;
+    if let Some(kept) = &kept_template {
+        if root.join(".codeflow/policy.json").exists() {
+            let diagnosis = pr_template::diagnose(root, kept, false)?;
+            if let Some(line) = pr_template::describe(kept, &diagnosis, false) {
+                report.notes.push(line);
+            }
+            if matches!(
+                diagnosis,
+                pr_template::Diagnosis::Diagnosed { .. }
+                    | pr_template::Diagnosis::Recorded(
+                        crate::hooks::policy::MappingState::Diagnosed
+                    )
+            ) {
+                report.pending_pr_template = Some(kept.clone());
+            }
+        }
+    }
 
     installed.scaffold_version.clone_from(&opts.binary_version);
     installed.store(root)?;
