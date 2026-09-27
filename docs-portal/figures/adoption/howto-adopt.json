@@ -99,7 +99,7 @@
         },
         {
           "text": "init, commits for you",
-          "x": 176,
+          "x": 179,
           "y": 34,
           "style": "mute",
           "for": [
@@ -116,7 +116,7 @@
         {
           "text": "on a branch, you commit",
           "x": 16,
-          "y": 136,
+          "y": 135,
           "style": "mute",
           "for": [
             "t2"
@@ -144,13 +144,13 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M414 98H538",
+          "d": "M414 98H558",
           "head": "end",
           "id": "t3"
         },
         {
           "text": "/cf-customize",
-          "x": 476,
+          "x": 486,
           "y": 88,
           "anchor": "middle",
           "style": "mono",
@@ -161,7 +161,7 @@
         {
           "state": "state",
           "shape": "rect",
-          "x": 540,
+          "x": 560,
           "y": 80,
           "w": 130,
           "h": 36,
@@ -170,7 +170,7 @@
         },
         {
           "text": "customized",
-          "x": 605,
+          "x": 625,
           "y": 103,
           "anchor": "middle",
           "for": [
@@ -180,13 +180,13 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M605 78V50H352V78",
+          "d": "M625 78V50H352V78",
           "head": "end",
           "id": "t4"
         },
         {
           "text": "re-run init at a higher tier",
-          "x": 478,
+          "x": 488,
           "y": 40,
           "anchor": "middle",
           "style": "mute",
@@ -208,7 +208,7 @@
         {
           "text": "--force past a collision",
           "x": 250,
-          "y": 210,
+          "y": 211,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -237,7 +237,7 @@
         {
           "text": "empty directory",
           "x": 88,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "for": [
             "em"
@@ -256,7 +256,7 @@
         {
           "text": "existing repository",
           "x": 272,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "for": [
             "ex"

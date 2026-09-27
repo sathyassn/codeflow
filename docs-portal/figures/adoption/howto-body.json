@@ -203,7 +203,7 @@
         {
           "text": "task/TSK-NNN",
           "x": 98,
-          "y": 33,
+          "y": 32,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -213,7 +213,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M60 48V98",
+          "d": "M60 48V97",
           "head": "end",
           "id": "t1"
         },
@@ -249,7 +249,7 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M60 138V198",
+          "d": "M60 139V198",
           "head": "end",
           "id": "t2"
         },
