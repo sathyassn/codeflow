@@ -41,32 +41,64 @@ def is_rust_verification_command(cmd: str) -> bool:
 
 # The full gate runs the test suite once (TSK-134): under coverage, which
 # skips doctests, plus the doctests alone. Together they are the CI referee's
-# plain `cargo test --workspace`, so that pair stands for it here.
+# plain `cargo test --workspace`, so that pair stands for it here, but only in
+# exactly these forms: a coverage command with a test filter, a narrower
+# target selection or a feature change runs less than CI does. The line
+# threshold does not change what runs, so any value is accepted.
 SUITE = "cargo test --workspace"
 DOCTESTS = "cargo test --workspace --doc"
-COVERAGE_PREFIX = "cargo llvm-cov --workspace "
+COVERAGE = re.compile(
+    r"^cargo llvm-cov --workspace --summary-only --fail-under-lines \d+$")
+COVERAGE_FORM = ("cargo llvm-cov --workspace --summary-only "
+                 "--fail-under-lines <N>")
 
 
-def local_rust_commands() -> set[str]:
-    cfg = json.loads(CONFIG.read_text())
+def applicable(target: dict) -> bool:
+    """A target the CI full gate runs: enabled and not skipped in CI."""
+    return target.get("enabled", True) is not False and not target.get("ci_skip")
+
+
+def plain(target: dict) -> bool:
+    """No working directory or environment that could change what runs."""
+    return not target.get("cwd") and not target.get("env")
+
+
+def local_rust_commands(cfg: dict, notes: list[str] | None = None) -> set[str]:
+    """Rust verification commands the CI full gate runs from this config."""
+    notes = [] if notes is None else notes
     out = set()
     coverage = False
     for target in cfg.get("targets", []):
-        cmd = target.get("modes", {}).get("full", {}).get("command", "")
-        coverage = coverage or norm(cmd).startswith(COVERAGE_PREFIX)
+        cmd = norm(target.get("modes", {}).get("full", {}).get("command", ""))
+        if not cmd or not applicable(target):
+            continue
+        if cmd.startswith("cargo llvm-cov "):
+            if COVERAGE.match(cmd) and plain(target):
+                coverage = True
+            else:
+                notes.append(
+                    f"target '{target.get('name')}' runs coverage as {cmd!r}"
+                    f"{' with its own cwd or env' if not plain(target) else ''}; "
+                    f"only `{COVERAGE_FORM}` with no cwd or env stands for "
+                    f"half of `{SUITE}`")
         if is_rust_verification_command(cmd):
-            out.add(norm(cmd))
+            if cmd == DOCTESTS and not plain(target):
+                notes.append(f"target '{target.get('name')}' runs `{DOCTESTS}` "
+                             "with its own cwd or env; it does not stand for "
+                             f"half of `{SUITE}`")
+                cmd = f"{cmd} (with cwd or env)"
+            out.add(cmd)
     if coverage and DOCTESTS in out:
         out.discard(DOCTESTS)
         out.add(SUITE)
     return out
 
 
-def ci_rust_job_commands() -> set[str]:
+def ci_rust_job_commands(workflow: str) -> set[str]:
     """Rust verification `run:` commands inside the `rust:` job block only."""
     out = set()
     in_rust = False
-    for line in WORKFLOW.read_text().splitlines():
+    for line in workflow.splitlines():
         job = re.match(r"^ {2}([A-Za-z0-9_-]+):\s*$", line)
         if job:  # a top-level job key (2-space indent)
             in_rust = job.group(1) == "rust"
@@ -79,8 +111,9 @@ def ci_rust_job_commands() -> set[str]:
 
 
 def main() -> int:
-    local = local_rust_commands()
-    ci = ci_rust_job_commands()
+    notes: list[str] = []
+    local = local_rust_commands(json.loads(CONFIG.read_text()), notes)
+    ci = ci_rust_job_commands(WORKFLOW.read_text())
     if not ci:
         print("gate-parity: could not find the CI `rust` job cargo commands — "
               "the workflow layout changed; update this guard.", file=sys.stderr)
@@ -92,6 +125,8 @@ def main() -> int:
               f"{sorted(local - ci)}", file=sys.stderr)
         print(f"  only in CI (.github/workflows/codeflow-ci.yml, rust job): "
               f"{sorted(ci - local)}", file=sys.stderr)
+        for note in notes:
+            print(f"  note: {note}", file=sys.stderr)
         print("  fix: make both run the same cargo commands so local "
               "`codeflow test` matches CI.", file=sys.stderr)
         return 1
