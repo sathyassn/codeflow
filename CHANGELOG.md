@@ -188,9 +188,14 @@ publication date._
   blocks on what it can see, leaving the rest to CI. `codeflow ci` runs on
   each pushed branch's range, leaving out only history known to be on the
   destination: the commit the destination advertises for the branch, or,
-  for a new branch, the tracking refs of its protected branches, which
-  policy keeps from being rewritten. Other tracking refs may be stale and
-  never shrink the range. After a rebase the range therefore also holds the
+  for a new branch, the branch and tag tips the push location advertises
+  now (one `git ls-remote`, which never prompts, gives up after 10 seconds
+  and downloads nothing, even in a partial clone), so a branch cut from an
+  integration line is checked for its own commits. When the destination
+  cannot be asked, the hook says why and uses the tracking refs of its
+  protected branches, which policy keeps from being rewritten, but only
+  when the remote fetches from the location pushed to. Other tracking refs may be stale and never shrink the
+  range. After a rebase the range therefore also holds the
   commits the rebase brought in, and the hook says so. When nothing gives a
   base, the hook reports the range unresolved and never compares with a
   local branch. `codeflow validate

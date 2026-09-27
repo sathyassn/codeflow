@@ -11,10 +11,14 @@
 //!   tree they did not see. Untracked files are part of the working checkout
 //!   and can influence a quick target, which the pass line says.
 //! - The hook blocks on what it can see and never claims more: the range
-//!   leaves out only history known to be on the destination (the sha it
-//!   advertised for the branch, or for a new branch its protected branches'
-//!   tracking refs). When nothing gives a base, the range is reported
-//!   unresolved and left to CI, never compared with a local branch.
+//!   leaves out only history known to be on the destination: the sha it
+//!   advertised for the branch, or for a new branch the branch and tag tips
+//!   the push location advertises now (`git ls-remote`, never interactive,
+//!   bounded in time and size, fetching nothing), falling back to its
+//!   protected branches' tracking refs when it cannot be asked and those
+//!   refs describe the same location. When nothing gives a base, the range
+//!   is reported unresolved and left to CI, never compared with a local
+//!   branch.
 //! - The whole set is timed; over [`git_hook::PUSH_SET_BUDGET`] the hook names
 //!   the slowest step.
 //!
@@ -22,22 +26,26 @@
 //! check. A failure is a `git.test_gate_on_push` violation at the policy's
 //! level, with the check's own output printed above it.
 
+use std::cell::OnceCell;
+use std::io::{Read as _, Write as _};
 use std::path::Path;
-use std::process::Command;
-use std::time::Instant;
+use std::process::{Command, Stdio};
+use std::time::{Duration, Instant};
 
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
 use codeflow_core::hooks::policy::GitPolicy;
 use codeflow_core::hooks::Violation;
 
-/// Run the push set for `refs` into `report`. `remote` is the pre-push
-/// hook's first argument: a configured remote name, or the URL or path
-/// pushed to directly.
+/// Run the push set for `refs` into `report`. `remote` and `url` are the
+/// pre-push hook's arguments: a configured remote name (or the URL or path
+/// pushed to directly), and the location actually pushed to, which honours
+/// `pushurl`.
 pub(super) fn run(
     root: &Path,
     policy: &GitPolicy,
     refs: &[PushRef],
     remote: Option<&str>,
+    url: Option<&str>,
     report: &mut StageReport,
 ) {
     // A push of the id registry carries no code: it is judged by its own
@@ -66,29 +74,46 @@ pub(super) fn run(
             return;
         }
     };
-    let namespace = remote.and_then(|name| tracking_namespace(root, name));
+    let url = url.or(remote);
+    // Tracking refs describe the fetch location; they stand in for the push
+    // location only when the two are the same.
+    let namespace = remote
+        .filter(|name| url.is_some_and(|url| fetches_from(root, name, url)))
+        .and_then(|name| tracking_namespace(root, name));
+    // Asked once, and only when a pushed branch is new to the destination.
+    let advertised: OnceCell<Advertised> = OnceCell::new();
+    let destination = Destination {
+        url,
+        advertised: &advertised,
+        namespace: namespace.as_deref(),
+        protected: &policy.protected_branches,
+    };
     let mut steps: Vec<PushStep> = Vec::new();
 
     for r in &pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        match range_base(root, r, namespace.as_deref(), &policy.protected_branches) {
-            Some(RangeBase { base, note }) => {
-                report.notes.extend(note);
-                let args = [
-                    "ci",
-                    "--base",
-                    &base,
-                    "--head",
-                    &r.local_sha,
-                    "--branch",
-                    branch,
-                ];
-                run_check(&exe, root, &args, policy, report, &mut steps);
-            }
-            None => report.notes.push(format!(
-                "`codeflow ci` did not run for '{branch}': range unresolved (a new branch \
-                 and no tracked protected branch of this destination); CI checks it"
-            )),
+        if let Some(RangeBase { base, note }) = range_base(root, r, &destination) {
+            report.notes.extend(note);
+            let args = [
+                "ci",
+                "--base",
+                &base,
+                "--head",
+                &r.local_sha,
+                "--branch",
+                branch,
+            ];
+            run_check(&exe, root, &args, policy, report, &mut steps);
+        } else {
+            let why = destination
+                .failure()
+                .map(|why| format!("; asking it: {why}"))
+                .unwrap_or_default();
+            report.notes.push(format!(
+                "`codeflow ci` did not run for '{branch}': range unresolved (a new \
+                     branch, and neither the destination's advertised tips nor tracking \
+                     refs bound to it give a base{why}); CI checks it"
+            ));
         }
     }
 
@@ -203,6 +228,205 @@ fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
     })
 }
 
+/// What is known of the destination's history.
+struct Destination<'a> {
+    /// Where the push goes: the hook's URL argument, else its remote name.
+    url: Option<&'a str>,
+    /// What the destination advertises now. Filled on first use.
+    advertised: &'a OnceCell<Advertised>,
+    /// The tracking namespace of a remote that fetches from `url`, for the
+    /// protected-branch fallback; `None` when no tracking refs describe it.
+    namespace: Option<&'a str>,
+    protected: &'a [String],
+}
+
+/// The destination's answer to `git ls-remote`.
+enum Advertised {
+    /// The advertised commits that exist here.
+    Tips(Vec<String>),
+    /// Why it could not be asked.
+    Failed(String),
+}
+
+impl Destination<'_> {
+    fn advertised(&self, root: &Path) -> &Advertised {
+        self.advertised.get_or_init(|| {
+            self.url.map_or_else(
+                || Advertised::Failed("no destination given".to_string()),
+                |url| advertised_commits(root, url),
+            )
+        })
+    }
+
+    /// Why the destination could not be asked, once it was tried.
+    fn failure(&self) -> Option<&str> {
+        match self.advertised.get()? {
+            Advertised::Failed(why) => Some(why),
+            Advertised::Tips(_) => None,
+        }
+    }
+}
+
+/// Whether remote `name` fetches from `url`, so that its tracking refs
+/// describe the location pushed to. A `pushurl` elsewhere does not.
+fn fetches_from(root: &Path, name: &str, url: &str) -> bool {
+    git(root, &["remote", "get-url", name]).is_some_and(|fetch| fetch.trim() == url)
+}
+
+/// How long the destination may take to answer, and how much it may say.
+const LS_REMOTE_DEADLINE: Duration = Duration::from_secs(10);
+const LS_REMOTE_MAX_BYTES: usize = 16 << 20;
+
+/// The branch and tag tips `url` advertises now (tags peeled), kept when the
+/// commit already exists here; nothing is fetched, even in a partial clone.
+fn advertised_commits(root: &Path, url: &str) -> Advertised {
+    let listed = match ls_remote(root, url) {
+        Ok(listed) => listed,
+        Err(why) => return Advertised::Failed(why),
+    };
+    let shas: Vec<&str> = listed
+        .lines()
+        .filter_map(|line| line.split_whitespace().next())
+        .filter(|sha| sha.len() >= 40 && sha.chars().all(|c| c.is_ascii_hexdigit()))
+        .collect();
+    if shas.is_empty() {
+        return Advertised::Tips(Vec::new());
+    }
+    let mut input = shas.join("\n");
+    input.push('\n');
+    let Some(types) = git_input(
+        root,
+        &["cat-file", "--batch-check=%(objectname) %(objecttype)"],
+        &input,
+    ) else {
+        return Advertised::Failed("its tips could not be looked up here".to_string());
+    };
+    let mut commits: Vec<String> = types
+        .lines()
+        .filter_map(|line| line.strip_suffix(" commit"))
+        .map(ToString::to_string)
+        .collect();
+    commits.sort();
+    commits.dedup();
+    Advertised::Tips(commits)
+}
+
+/// `git ls-remote --heads --tags <url>`, never interactive and bounded: no
+/// terminal, askpass or SSH password prompt, at most [`LS_REMOTE_DEADLINE`]
+/// (then the whole process group is killed) and [`LS_REMOTE_MAX_BYTES`].
+fn ls_remote(root: &Path, url: &str) -> Result<String, String> {
+    let mut command = Command::new("git");
+    command
+        .arg("-C")
+        .arg(root)
+        .args(["ls-remote", "--heads", "--tags", url])
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_ASKPASS", "false")
+        .env("SSH_ASKPASS", "false")
+        .env("SSH_ASKPASS_REQUIRE", "never")
+        .env("GIT_SSH_COMMAND", batch_ssh_command(root))
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt as _;
+        command.process_group(0);
+    }
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("could not start git: {error}"))?;
+    let Some(stdout) = child.stdout.take() else {
+        kill_group(&mut child);
+        return Err("could not read its answer".to_string());
+    };
+    let (sender, receiver) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let mut bytes = Vec::new();
+        let read = stdout
+            .take(LS_REMOTE_MAX_BYTES as u64 + 1)
+            .read_to_end(&mut bytes);
+        let _ = sender.send(read.map(|_| bytes));
+    });
+    let deadline = Instant::now() + LS_REMOTE_DEADLINE;
+    let timed_out = || format!("no answer within {}s", LS_REMOTE_DEADLINE.as_secs());
+    let bytes = loop {
+        match receiver.recv_timeout(Duration::from_millis(20)) {
+            Ok(Ok(bytes)) => break bytes,
+            Ok(Err(error)) => {
+                kill_group(&mut child);
+                return Err(format!("reading its answer failed: {error}"));
+            }
+            Err(std::sync::mpsc::RecvTimeoutError::Timeout) if Instant::now() < deadline => {}
+            Err(_) => {
+                kill_group(&mut child);
+                return Err(timed_out());
+            }
+        }
+    };
+    if bytes.len() > LS_REMOTE_MAX_BYTES {
+        kill_group(&mut child);
+        return Err(format!(
+            "its answer is over {} MiB",
+            LS_REMOTE_MAX_BYTES >> 20
+        ));
+    }
+    let status = loop {
+        match child.try_wait() {
+            Ok(Some(status)) => break status,
+            Ok(None) if Instant::now() < deadline => std::thread::sleep(Duration::from_millis(20)),
+            _ => {
+                kill_group(&mut child);
+                return Err(timed_out());
+            }
+        }
+    };
+    if !status.success() {
+        return Err(
+            "`git ls-remote` failed (unreachable, no credentials, or no such repository)"
+                .to_string(),
+        );
+    }
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
+/// The SSH command git would use, with password and host-key prompts off.
+/// A configured command is kept: `GIT_SSH_COMMAND`, then `core.sshCommand`,
+/// then `GIT_SSH`, then `ssh`.
+fn batch_ssh_command(root: &Path) -> String {
+    let configured = std::env::var("GIT_SSH_COMMAND")
+        .ok()
+        .filter(|command| !command.trim().is_empty())
+        .or_else(|| {
+            git(root, &["config", "--get", "core.sshCommand"])
+                .map(|command| command.trim().to_string())
+                .filter(|command| !command.is_empty())
+        })
+        .or_else(|| {
+            std::env::var("GIT_SSH")
+                .ok()
+                .filter(|program| !program.is_empty())
+                .map(|program| format!("'{}'", program.replace('\'', "'\\''")))
+        })
+        .unwrap_or_else(|| "ssh".to_string());
+    format!("{configured} -o BatchMode=yes")
+}
+
+/// Kill a child and, on Unix, the process group it leads (an SSH or
+/// credential helper it started), then reap it.
+fn kill_group(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    if let Ok(group) = i32::try_from(child.id()) {
+        // SAFETY: the child leads its own process group (`process_group(0)`),
+        // whose id is its pid; SIGKILL to it is best-effort.
+        unsafe {
+            libc::killpg(group, libc::SIGKILL);
+        }
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 /// The exclusive base of a pushed branch's range, and a note when the range
 /// is wider than the push itself.
 struct RangeBase {
@@ -221,19 +445,20 @@ struct RangeBase {
 ///    on the destination (a feature or integration branch may have been
 ///    rewritten since the last fetch). With no shared history, `codeflow ci`
 ///    reports the unrelated base;
-/// 2. a new branch: a boundary of the commits not reachable from the
-///    destination's protected branches' tracking refs. Policy forbids
-///    rewriting a protected branch, so even an old cached tip is history the
-///    destination keeps; any such boundary is a safe base. The pushed sha
-///    itself when nothing is new;
-/// 3. else `None`: the range is unresolved and CI checks it. A local branch
+/// 2. a new branch: a boundary of the commits not reachable from the branch
+///    and tag tips the destination advertises now (`git ls-remote`). Those
+///    are exactly the commits it has, so a stale local tracking ref neither
+///    hides nor adds anything, and a branch cut from any integration line is
+///    checked for its own commits only. The pushed sha itself when nothing
+///    is new;
+/// 3. a new branch when the destination cannot be asked, or none of its
+///    tips is here: the same boundary against its protected branches'
+///    tracking refs, when the remote fetches from the location pushed to.
+///    Policy forbids rewriting a protected branch, so even an old cached tip
+///    is history the destination keeps. A failed ask is noted;
+/// 4. else `None`: the range is unresolved and CI checks it. A local branch
 ///    is never substituted: it may be stale or not the destination's base.
-fn range_base(
-    root: &Path,
-    r: &PushRef,
-    namespace: Option<&str>,
-    protected: &[String],
-) -> Option<RangeBase> {
+fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option<RangeBase> {
     let zero = r.remote_sha.is_empty() || r.remote_sha.chars().all(|c| c == '0');
     if !zero && is_commit(root, &r.remote_sha) {
         let extends = git(
@@ -259,9 +484,27 @@ fn range_base(
             note,
         });
     }
-    let ns = namespace?;
+    let note = match destination.advertised(root) {
+        Advertised::Tips(tips) if !tips.is_empty() => {
+            let mut input = format!("{}\n", r.local_sha);
+            for tip in tips {
+                input.push('^');
+                input.push_str(tip);
+                input.push('\n');
+            }
+            let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
+            return boundary(&listed, &r.local_sha, None);
+        }
+        Advertised::Tips(_) => None,
+        Advertised::Failed(why) => Some(format!(
+            "asking the destination for its branches failed ({why}): the range of new \
+             branch '{}' is bounded by its tracked protected branches instead",
+            r.remote_branch().unwrap_or_default()
+        )),
+    };
+    let ns = destination.namespace?;
     let mut known: Vec<String> = Vec::new();
-    for branch in protected {
+    for branch in destination.protected {
         let reference = format!("{ns}{branch}");
         if branch.contains(['*', '?', '[']) {
             let any = git(
@@ -287,10 +530,16 @@ fn range_base(
     let mut args = vec!["rev-list", "--boundary", r.local_sha.as_str(), "--not"];
     args.extend(known.iter().map(String::as_str));
     let listed = git(root, &args)?;
+    boundary(&listed, &r.local_sha, note)
+}
+
+/// The base from `rev-list --boundary` output: its first boundary commit, or
+/// the pushed sha itself when no commit is new.
+fn boundary(listed: &str, local_sha: &str, note: Option<String>) -> Option<RangeBase> {
     if listed.trim().is_empty() {
         return Some(RangeBase {
-            base: r.local_sha.clone(),
-            note: None,
+            base: local_sha.to_string(),
+            note,
         });
     }
     listed
@@ -298,7 +547,7 @@ fn range_base(
         .find_map(|line| line.strip_prefix('-'))
         .map(|base| RangeBase {
             base: base.to_string(),
-            note: None,
+            note,
         })
 }
 
@@ -328,15 +577,41 @@ fn incomplete_checkout(root: &Path) -> Option<String> {
     })
 }
 
+/// Git for the hook's own queries: never fetches a missing object, even in
+/// a partial clone.
 fn git(root: &Path, args: &[&str]) -> Option<String> {
     Command::new("git")
         .arg("-C")
         .arg(root)
         .args(args)
+        .env("GIT_NO_LAZY_FETCH", "1")
         .output()
         .ok()
         .filter(|o| o.status.success())
         .map(|o| String::from_utf8_lossy(&o.stdout).to_string())
+}
+
+/// [`git`] with `input` on stdin.
+fn git_input(root: &Path, args: &[&str], input: &str) -> Option<String> {
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .env("GIT_NO_LAZY_FETCH", "1")
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .ok()?;
+    // Written from a thread so a large answer cannot fill the pipe first.
+    let mut stdin = child.stdin.take()?;
+    let input = input.to_string();
+    let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
+    let out = child.wait_with_output().ok()?;
+    writer.join().ok()?.ok()?;
+    out.status
+        .success()
+        .then(|| String::from_utf8_lossy(&out.stdout).to_string())
 }
 
 fn rev_parse(root: &Path, rev: &str) -> Option<String> {

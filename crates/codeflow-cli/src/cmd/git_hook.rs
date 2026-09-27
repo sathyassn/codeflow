@@ -92,7 +92,8 @@ pub fn run(args: &GitHookArgs) -> i32 {
             let mut result = git_hook::pre_push(&root, &policy.git, &refs, token);
             if let Ok(report) = result.as_mut() {
                 let remote = args.args.first().map(String::as_str);
-                super::push_set::run(&root, &policy.git, &refs, remote, report);
+                let url = args.args.get(1).map(String::as_str);
+                super::push_set::run(&root, &policy.git, &refs, remote, url, report);
                 sync_pending_ids(&root, remote, &refs, report);
             }
             ("pre-push", result)
