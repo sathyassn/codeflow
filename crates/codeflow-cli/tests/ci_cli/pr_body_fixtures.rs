@@ -104,9 +104,15 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
         for section in policy["git"]["pr_required_sections"].as_array().unwrap() {
             assert!(headings.contains(&section.as_str().unwrap()));
         }
+        // Full tier tracks work, so its pull request names its class
+        // (TSK-104); the line is inert where tracking is off.
+        let task_line = "Task: none: clarify the result\n\n";
         assert_clean(
             dir.path(),
-            &fill_installed_template(std::str::from_utf8(&template).unwrap()),
+            &format!(
+                "{task_line}{}",
+                fill_installed_template(std::str::from_utf8(&template).unwrap())
+            ),
         );
         update(dir.path(), &source());
         update(dir.path(), &source());
@@ -115,7 +121,7 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             template
         );
         assert_eq!(read_policy(dir.path()), policy);
-        assert_clean(dir.path(), BODY);
+        assert_clean(dir.path(), &format!("{task_line}{BODY}"));
     }
 }
 
