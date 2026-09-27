@@ -654,6 +654,13 @@ step_evidence() {
       continue
     fi
     gh run view -R "$REPO" "$id" --log > "$OUT/run-$id-$ev-latest.log" 2>&1
+    if [ ! -s "$OUT/run-$id-$ev-latest.log" ]; then
+      # gh run view --log can come back empty (seen for the schedule run);
+      # read each job log from the API, shaped as job, step, line.
+      for job in $(gh run view -R "$REPO" "$id" --json jobs --jq '.jobs[].databaseId'); do
+        gh api "repos/$REPO/actions/jobs/$job/logs" | sed "s/^/$job$TAB$TAB/"
+      done > "$OUT/run-$id-$ev-latest.log" 2>&1
+    fi
     block=$(awk -F'\t' '/GITHUB_TOKEN Permissions/ {on = 1; next} on && /##\[endgroup\]/ {exit} on {sub(/^[^ ]* /, "", $3); print $3}' \
       "$OUT/run-$id-$ev-latest.log")
     echo "$ev run $id token permissions:"

@@ -1,5 +1,5 @@
 
-## run at 2026-09-26T23:13:29Z against sathyassn/codeflow-registry-proof
+## run at 2026-09-27T04:05:11Z against sathyassn/codeflow-registry-proof
 $ git -C $WORK/maint fetch --no-tags -q origin refs/heads/codeflow/registry:refs/remotes/origin/codeflow/registry
 [exit 0]
 
@@ -59,6 +59,7 @@ $ grep -nE ^(on|permissions|  pull_request|  push|  schedule|    - cron|      co
 [exit 0]
 
 ## runs of each job kind
+36283958457	schedule	main	failure	2026-09-27T00:55:26Z
 36276985397	pull_request	task/TSK-010-workflow-edit	success	2026-09-26T22:39:28Z
 36276942616	pull_request	task/TSK-010-workflow-edit	success	2026-09-26T22:38:40Z
 36276894678	workflow_dispatch	main	failure	2026-09-26T22:37:47Z
@@ -73,7 +74,9 @@ pull_request run 36276831759 token permissions:
 Contents: read
 Metadata: read
 PASS: pull_request run 36276831759 has read-only token permissions
-no completed schedule run yet
-FAIL: one completed schedule run
+schedule run 36283958457 token permissions:
+Contents: read
+Metadata: read
+PASS: schedule run 36283958457 has read-only token permissions
 
-## result: 1 failed assertions
+## result: 0 failed assertions

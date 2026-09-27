@@ -3,9 +3,9 @@
 This records the TSK-100 host proof: the id registry of SPC-013 run end to
 end on a real GitHub repository before TSK-101 builds it. It is the gate for
 EPC-020. On 2026-09-26 AC-1 to AC-6 passed and nothing failed, so decision 1
-(the protected data branch `codeflow/registry`) is not returned. One piece of
-AC-8 evidence is still missing: GitHub did not start a scheduled run in the
-79 minutes the proof waited. The proof also found one gap in the R-109
+(the protected data branch `codeflow/registry`) is not returned. AC-8 passed
+on 2026-09-27 when GitHub started the first scheduled run of the check. The
+proof also found one gap in the R-109
 arrangement that the design must close before TSK-101 ships, and two smaller
 facts that TSK-101 must handle. They are listed under Findings.
 
@@ -54,8 +54,8 @@ The steps are ordered: `delete` damages the registry on purpose, and
 | AC-4 deleted top reservation not reissued; code-branch CI reports it | pass | `delete.txt`, runs 36276880984 and 36276894678 |
 | AC-5 fork-style record red until admitted, green after | pass | `fork.txt`, run 36276831759 attempts 1 and 2 |
 | AC-6 file-path push rule on the host | recorded: not offered for this repository, and unsuitable where offered | `pushrule.txt` |
-| AC-7 failure hand-off | not triggered: no criterion failed; open until AC-8's scheduled run exists | this record |
-| AC-8 R-109 arrangement, one run of each job kind, read-only permissions | pass except the scheduled run, which has not happened yet | `evidence.txt`, `workflow-main.yml`, `runs.json` |
+| AC-7 failure hand-off | not triggered: no criterion failed | this record |
+| AC-8 R-109 arrangement, one run of each job kind, read-only permissions | pass | `evidence.txt`, `workflow-main.yml`, `runs.json`, run 36283958457 |
 
 ### AC-1: data-branch rules
 
@@ -158,19 +158,28 @@ controls.
   and read-only, reads the check code from the target branch
   (`origin/target:ci/ids.py`), and runs on `pull_request`, on `push` to `main`
   and `integration/**`, and on a schedule.
-- Its permission block is `contents: read`. The push and pull request run
-  logs show `GITHUB_TOKEN Permissions: Contents: read, Metadata: read`, and
-  the job uses no token to fetch.
+- Its permission block is `contents: read`. The push, pull request and
+  schedule run logs show `GITHUB_TOKEN Permissions: Contents: read, Metadata:
+  read`, and the job uses no token to fetch.
 - One run of each kind: push 36276768160 and pull request 36276831759 are
-  green with read-only permissions. No scheduled run has happened yet.
+  green. Schedule run 36283958457 (event `schedule`, branch `main`, created
+  2026-09-27T00:55:26Z, job `registry-check`) ran from the code branch with
+  the same read-only permissions and reported `registry check: FAIL (2
+  findings)`: `deletes ids/TSK/008.toml (R-8)` and `damaged:
+  ids/TSK/008.toml ... absent from the tip (R-9)`.
+
+That FAIL is the check working, not a proof failure. It is the damage the
+AC-4 fault case left in the registry on purpose, and the earlier
+`workflow_dispatch` run 36276894678 on `main` reported the same two
+findings. The scheduled job therefore shows the third job kind running from
+the code branch with read-only scope and detecting damage that persists
+between pushes. Log: `run-36283958457-schedule-latest.log`.
 
 The workflow reached `main` at 22:35 UTC with a `*/15` cron, chosen so that a
 scheduled run would happen during the proof; the product cadence is daily.
-By 23:54 UTC GitHub had started none, and the workflow's state was `active`.
-GitHub documents schedule events as delayable under load, but not a delay of
-this length. This is missing evidence, not a failure: when a scheduled run
-appears, `run.sh evidence` records it and its permission block. `main` now
-requires a pull request, so the proof cannot change the workflow to retry.
+GitHub started the first scheduled run about 2 hours 20 minutes later, and
+by 04:04 UTC it had started no other. `gh run view --log` came back empty
+for that run, so `run.sh evidence` now falls back to the job log API.
 
 ## Findings
 
