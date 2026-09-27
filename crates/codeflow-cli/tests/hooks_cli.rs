@@ -2082,6 +2082,12 @@ fn push_set_by_path_reports_an_unresolved_range_without_borrowing_history() {
     );
 }
 
+/// The destination `bare` fetches `refspec` from `from`, as if it had been
+/// pushed there, without running any client hook.
+fn receive(bare: &Path, from: &Path, refspec: &str) {
+    git(bare, &["fetch", "-q", from.to_str().unwrap(), refspec]);
+}
+
 /// A bare destination whose only branch is `stable`, holding `commits` made
 /// in a scratch clone, and a local repository with it configured as `dest`.
 fn stable_destination(legacy_subject: &str) -> (tempfile::TempDir, tempfile::TempDir) {
@@ -2091,12 +2097,15 @@ fn stable_destination(legacy_subject: &str) -> (tempfile::TempDir, tempfile::Tem
     init_repo(local.path(), "main");
     commit_file(local.path(), "legacy.txt", "legacy\n", legacy_subject);
     let url = bare.path().to_str().unwrap();
-    git(
-        local.path(),
-        &["push", "-q", "--no-verify", url, "main:stable"],
-    );
+    // The destination takes the commits by fetching them: no client hook.
+    receive(bare.path(), local.path(), "main:stable");
     git(local.path(), &["remote", "add", "dest", url]);
     git(local.path(), &["fetch", "-q", "dest"]);
+    // `stable` is the destination's protected branch.
+    write_policy(
+        local.path(),
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block"}}"#,
+    );
     (bare, local)
 }
 
@@ -2138,28 +2147,72 @@ fn push_set_ignores_a_stale_local_main() {
 }
 
 #[test]
-fn push_set_checks_only_the_rebased_commits_of_a_rewrite() {
+fn push_set_checks_a_rewrite_from_the_destination_sha_and_says_so() {
     // A branch the destination holds is rebased onto a destination commit it
-    // did not have. The old destination sha is not in the new history, so
-    // the range comes from the destination's tracking refs: only the rebased
-    // commits are checked, never the upstream commits the rebase brought in.
-    let (bare, local) = stable_destination("Legacy subject.");
+    // did not have. The range starts at the destination's advertised sha, so
+    // the commit the rebase brought in is checked again, and the hook says
+    // why: no cached tracking ref can prove it is still on the destination.
+    let (bare, local) = stable_destination("chore: legacy base");
     git(local.path(), &["checkout", "-q", "-b", "feat/r", "main~1"]);
     let old = commit_file(local.path(), "r.txt", "r\n", "feat: add r");
-    let url = bare.path().to_str().unwrap();
-    git(local.path(), &["push", "-q", "--no-verify", url, "feat/r"]);
+    receive(bare.path(), local.path(), "feat/r:feat/r");
     git(local.path(), &["fetch", "-q", "dest"]);
     git(local.path(), &["rebase", "-q", "dest/stable"]);
     let rebased = rev(local.path(), "HEAD");
     let (code, err) = push_hook_onto(local.path(), "dest", "feat/r", &rebased, &old);
     assert_eq!(code, Some(0), "{err}");
-    assert!(!err.contains("did not run"), "ci ran on the rewrite: {err}");
+    assert!(
+        err.contains("'feat/r' rewrites the destination's")
+            && err.contains("checks all 2 commit(s) not on it"),
+        "{err}"
+    );
 
-    // A bad commit in the rewrite is still blocked.
+    // A bad commit in the rewrite is blocked.
     let bad = commit_file(local.path(), "s.txt", "s\n", "Not conventional.");
     let (code, err) = push_hook_onto(local.path(), "dest", "feat/r", &bad, &old);
     assert_eq!(code, Some(1), "{err}");
     assert!(err.contains("push set check failed: `codeflow ci"), "{err}");
+}
+
+/// The R4-1 history: the destination held B ("Not conventional.") on the
+/// `stale` branches, then rewrote them to O without a fetch here, so their
+/// cached tracking refs still hold B. Returns (local head C on B, O).
+fn stale_destination_history(bare: &Path, local: &Path, stale: &[&str]) -> (String, String) {
+    git(local, &["checkout", "-q", "-b", "work", "main~1"]);
+    let bad = commit_file(local, "b.txt", "b\n", "Not conventional.");
+    for name in stale {
+        receive(bare, local, &format!("work:{name}"));
+    }
+    git(local, &["fetch", "-q", "dest"]);
+    git(local, &["checkout", "-q", "-b", "other", "main~1"]);
+    let replaced = commit_file(local, "o.txt", "o\n", "feat: replace previous work");
+    for name in stale {
+        receive(bare, local, &format!("+other:{name}"));
+    }
+    for name in stale {
+        assert_eq!(rev(local, &format!("dest/{name}")), bad, "stale {name}");
+    }
+    git(local, &["checkout", "-q", "work"]);
+    let head = commit_file(local, "c.txt", "c\n", "feat: add new work");
+    (head, replaced)
+}
+
+#[test]
+fn push_set_checks_a_commit_only_a_stale_tracking_ref_holds() {
+    // R4-1: a push of C restores B, which the destination dropped. Whatever
+    // cached ref still holds B (the pushed branch's own, its own integration
+    // ref, or a sibling integration ref), B is checked.
+    for (branch, stale) in [
+        ("feat/x", &["feat/x"][..]),
+        ("integration/probe", &["integration/probe"][..]),
+        ("feat/x", &["feat/x", "integration/sibling"][..]),
+    ] {
+        let (bare, local) = stable_destination("chore: legacy base");
+        let (head, replaced) = stale_destination_history(bare.path(), local.path(), stale);
+        let (code, err) = push_hook_onto(local.path(), "dest", branch, &head, &replaced);
+        assert_eq!(code, Some(1), "{branch} with stale {stale:?}: {err}");
+        assert!(err.contains("Not conventional."), "{err}");
+    }
 }
 
 #[test]
