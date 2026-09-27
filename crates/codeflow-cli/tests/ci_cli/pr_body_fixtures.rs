@@ -104,6 +104,12 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
         for section in policy["git"]["pr_required_sections"].as_array().unwrap() {
             assert!(headings.contains(&section.as_str().unwrap()));
         }
+        // The template carries the class line (TSK-104): full tier tracks
+        // work, so its pull request names its class; the line is inert where
+        // tracking is off.
+        assert!(std::str::from_utf8(&template)
+            .unwrap()
+            .contains("\nTask: `TSK-NNN | none: <reason>`\n"));
         assert_clean(
             dir.path(),
             &fill_installed_template(std::str::from_utf8(&template).unwrap()),
@@ -115,7 +121,10 @@ fn fresh_all_tiers_ship_template_and_accept_portable_terminal_body() {
             template
         );
         assert_eq!(read_policy(dir.path()), policy);
-        assert_clean(dir.path(), BODY);
+        assert_clean(
+            dir.path(),
+            &format!("Task: none: clarify the result\n\n{BODY}"),
+        );
     }
 }
 
@@ -397,6 +406,10 @@ fn rendered_budget_detects_epic_target_and_markdown_failures_reach_cli() {
 /// missing heading: that would hide a template/default-policy mismatch.
 fn fill_installed_template(template: &str) -> String {
     template
+        .replace(
+            "Task: `TSK-NNN | none: <reason>`",
+            "Task: none: clarify the result",
+        )
         .replace(
             "## Summary\n",
             "## Summary\n\nClarify the command's result.\n",

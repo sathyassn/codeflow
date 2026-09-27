@@ -10,11 +10,6 @@ use std::process::Command;
 
 use clap::Args;
 use codeflow_core::hooks::{git_hook, policy::Policy, policy_schema};
-use codeflow_core::validate::validate_workgraph;
-use codeflow_core::workgraph::{
-    check_work_start, declared_work_target, durable_work_tracking_enabled, resolve_work_target,
-    task_id_from_branch,
-};
 
 /// Which git client hook stage to run.
 #[derive(Clone, Copy, Debug, clap::ValueEnum)]
@@ -65,12 +60,6 @@ pub fn run(args: &GitHookArgs) -> i32 {
                 "codeflow commit-msg: .codeflow/policy.json is invalid — fix the key(s) above (see `codeflow policy explain`) or remove the file to use the built-in defaults"
             );
             return 1;
-        }
-    }
-
-    if matches!(args.stage, StageName::PreCommit) {
-        if let Some(exit) = durable_work_preflight(&root) {
-            return exit;
         }
     }
 
@@ -125,74 +114,6 @@ pub fn run(args: &GitHookArgs) -> i32 {
             0
         }
     }
-}
-
-/// Enforce a valid visible workgraph and stable planning anchor on task branches.
-///
-/// Planning belongs on a `plan/` branch. Allowing task-local planning commits
-/// would let an implementation surface propose its own authorization and would
-/// disagree with the authoritative CI check.
-fn durable_work_preflight(root: &Path) -> Option<i32> {
-    let branch = current_branch(root)?;
-    if !branch.starts_with("task/") {
-        return None;
-    }
-    let staged = staged_files(root);
-    if staged.is_empty() {
-        return None;
-    }
-    match durable_work_tracking_enabled(root) {
-        Ok(true) => {}
-        Ok(false) => return None,
-        Err(error) => {
-            eprintln!("codeflow pre-commit: cannot determine durable-work tracking: {error}");
-            return Some(1);
-        }
-    }
-    let workgraph = validate_workgraph(root);
-    if !workgraph.is_clean() {
-        for issue in workgraph.issues {
-            eprintln!("codeflow pre-commit: workgraph error: {issue}");
-        }
-        eprintln!(
-            "codeflow pre-commit: task work cannot proceed until `codeflow validate --docs` passes"
-        );
-        return Some(1);
-    }
-    let Some(task_id) = task_id_from_branch(root, &branch) else {
-        eprintln!(
-            "codeflow pre-commit: task implementation is not ready: task branch \
-             '{branch}' does not identify a visible durable task record\n\
-             create and merge the task record into its stable integration target \
-             before implementation"
-        );
-        return Some(1);
-    };
-    let declared = declared_work_target(root, &task_id);
-    let target =
-        resolve_work_target(root, declared.as_deref()).unwrap_or_else(|| "main".to_string());
-    match check_work_start(root, &task_id, &target) {
-        Ok(_) => None,
-        Err(error) => {
-            eprintln!(
-                "codeflow pre-commit: task implementation is not ready: {error}\n\
-                 run `codeflow work start {task_id}` after the planning record is merged into '{target}'"
-            );
-            Some(1)
-        }
-    }
-}
-
-fn current_branch(root: &Path) -> Option<String> {
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["branch", "--show-current"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-        .filter(|branch| !branch.is_empty())
 }
 
 /// Handle `git-hook reference-transaction <state>`. Exit 1 on the `prepared`

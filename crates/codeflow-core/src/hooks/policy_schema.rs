@@ -83,7 +83,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, then `security`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 43] = [
+pub const SCHEMA: [KeySpec; 45] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -373,6 +373,26 @@ pub const SCHEMA: [KeySpec; 43] = [
                 blocked, a Closeout for cancelled, an acceptance block for \
                 complete) always block whatever this says. `codeflow update` \
                 rewrites a stale `off` to `warn` and keeps every other value.",
+    },
+    KeySpec {
+        path: "git.product_paths",
+        kind: KeyKind::StringList,
+        valid: "an array of path globs (e.g. src/**)",
+        purpose: "The project's product code: a pull request touching it is tracked work, never a direct change (SPC-013 R-71, R-114).",
+        notes: "`codeflow init` writes the default for the detected stack and \
+                `codeflow update` adds it once; a value the project sets is \
+                kept. Absent, the binary assumes the stack default. It extends \
+                the fixed floor (policy, hooks, managed instructions, CI files, \
+                manifests, record schema); it cannot narrow it.",
+    },
+    KeySpec {
+        path: "git.direct_changes",
+        kind: KeyKind::Enum(&["allow", "forbid"]),
+        valid: "allow | forbid",
+        purpose: "Whether a pull request may be a direct change (`Task: none: <reason>`) at all.",
+        notes: "Default allow. `forbid` makes every product pull request tracked \
+                or planning-only; no value narrows the surfaces a direct change \
+                is refused on.",
     },
     KeySpec {
         path: "git.branch_naming",

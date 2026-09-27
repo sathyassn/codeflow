@@ -239,7 +239,7 @@
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "574c3822a29df720394621537b148dfac36482b3384a59ae367cd7f6994b2e23",
+      "sha256": "393750f72dfb17dbdc9ad7d61d517c8491a41b824fae234d98bb671031cf77d6",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -713,7 +713,7 @@
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
       "src": "agents/skills/cf-evaluate-model/resources/requirements.json",
       "ownership": "managed",
-      "sha256": "574c3822a29df720394621537b148dfac36482b3384a59ae367cd7f6994b2e23",
+      "sha256": "393750f72dfb17dbdc9ad7d61d517c8491a41b824fae234d98bb671031cf77d6",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/configure_fake_endpoint.py": {
@@ -1013,7 +1013,7 @@
     ".github/pull_request_template.md": {
       "src": "ci/pull_request_template.md",
       "ownership": "managed",
-      "sha256": "f60efe6631848c2a580cbab8e9428473031e6aa005f2d27a8a95cd7be0d73bb9",
+      "sha256": "98a7d245ca31bc9bfe1fcd2ade17cecf2b24a5449128f997a1d69edeb913b589",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {
@@ -1037,7 +1037,7 @@
     "AGENTS.md": {
       "src": "AGENTS.md.tmpl",
       "ownership": "managed-region",
-      "sha256": "fa46f44c0b09a348c69bb4801e758e5ea006e12962c4961b03fa418ac135465b",
+      "sha256": "35d1813bdfbda262e5a1117b6edebe991fb21154592462e3e7831513437c4e77",
       "exec": false
     },
     "CLAUDE.md": {
@@ -1067,7 +1067,7 @@
     "docs/decisions/template.md": {
       "src": "docs/decisions/template.md",
       "ownership": "user-owned",
-      "sha256": "9d26f7cd3c5b93c3ba3c58f8135206e73a60779b0823b271c962b8bab74f0be0",
+      "sha256": "1479c8c8385c59be3442c3f304b687ab3a6e9501f5360703e402de9fcf96ec9d",
       "exec": false
     },
     "docs/product.md": {

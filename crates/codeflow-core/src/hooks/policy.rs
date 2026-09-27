@@ -215,6 +215,17 @@ pub struct GitPolicy {
     /// and are not governed by this key. Read it through
     /// [`GitPolicy::work_records_level`].
     pub work_records: PolicyLevel,
+    /// Globs naming the project's product code (SPC-013 R-71, R-114). A
+    /// range touching one is tracked work, never a direct change
+    /// (`Task: none`). `codeflow init` writes the default for the detected
+    /// stack and `codeflow update` adds it once, keeping any value the
+    /// project set. Absent (`null`), the binary assumes the stack default
+    /// recorded in `.codeflow/project.toml`.
+    pub product_paths: Option<Vec<String>>,
+    /// Whether a pull request may be a direct change (`Task: none: <reason>`)
+    /// at all: `allow` (default) or `forbid`. Forbidding never narrows the
+    /// surfaces a direct change is refused on (R-71).
+    pub direct_changes: String,
     pub branch_naming: PolicyLevel,
     pub branch_prefixes: Vec<String>,
     pub secret_scan: PolicyLevel,
@@ -269,6 +280,8 @@ impl Default for GitPolicy {
             pr_required_sections: vec!["Summary".into(), "Changes".into()],
             pr_code_sections: vec!["Testing".into()],
             work_records: PolicyLevel::Block,
+            product_paths: None,
+            direct_changes: "allow".to_string(),
             branch_naming: PolicyLevel::Block,
             branch_prefixes: [
                 "feat/",

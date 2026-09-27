@@ -89,6 +89,34 @@ publication date._
   it; the rule that rejects obsolete raw-text elements such as `<xmp>` in
   presentations applies to `codeflow present`, which is also new here.
 
+<!-- codeflow:release-impact major -->
+- **Pull request classification and light planning paths.** With durable
+  work tracking on, `codeflow ci` gives every pull request one class: tracked
+  (`Task: TSK-NNN`, or the task id its branch carries), direct change
+  (`Task: none: <reason>`), planning-only, an epic's integration line
+  landing on the default target with only merges on it, or an automation
+  profile, and blocks an unclassified one. The range is read as one diff
+  from the merge-base, and tracking is read at the target as well as the
+  head, so a pull request cannot classify itself lighter. A direct change is
+  refused on policy, hooks, managed instructions, CI files, manifests, the
+  record schema and the project's product code, named by the new
+  `git.product_paths` policy key: `init` writes a default for the detected
+  stack and `update` adds it once, keeping any project value;
+  `git.direct_changes: forbid` refuses direct changes entirely. The planning
+  anchor check runs at `work start` and in CI on every work prefix carrying a
+  task id (`task/`, `fix/`, `feat/`, `spike/` and the rest) and no longer on
+  every commit. A spike lands only `docs/research/` findings and its own
+  record, and a pull request cannot claim the task record it adds. New
+  `task new --follow-up-of`, `epic new --integration` and `adr new` (written
+  `proposed`, the ADR template's new default). The shipped pull request
+  template now carries the `Task:` line with a hint. Migration: a pull
+  request from a `task/TSK-NNN-<slug>` branch is classified from the branch
+  id and needs no change; any other pull request in a project with durable
+  work tracking adds `Task: TSK-NNN` or `Task: none: <reason>` to its body.
+  No policy key restores the old behavior: `git.direct_changes` only allows
+  or forbids direct changes, and classification is off only where durable
+  work tracking is off.
+
 <!-- codeflow:release-impact patch -->
 - **Privilege escalation asks in both shells.** The scaffolded Claude
   settings presets now ask before `pkexec`, `gsudo`, `runas` and

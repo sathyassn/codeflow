@@ -47,7 +47,7 @@ pub enum WorkStartError {
     Repository(String),
     #[error("target ref '{0}' does not resolve to a commit")]
     Target(String),
-    #[error("current branch '{branch}' is not task/{task_id}-<slug>")]
+    #[error("current branch '{branch}' does not carry {task_id} on a work prefix (<prefix>/{task_id}-<slug>)")]
     Branch { branch: String, task_id: String },
     #[error("no merge-base exists between HEAD and '{0}'")]
     MergeBase(String),
@@ -100,6 +100,8 @@ pub struct WorkStartReport {
     pub epic_id: Option<String>,
     pub specs: Vec<String>,
     pub dependencies: Vec<String>,
+    /// The anchored task's `work_type` (`spike` selects the spike path rule).
+    pub work_type: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -112,6 +114,7 @@ struct Record {
     integration_target: Option<String>,
     specs: Vec<String>,
     depends_on: Vec<String>,
+    work_type: Option<String>,
 }
 
 /// The three durable record kinds.
@@ -126,6 +129,7 @@ struct AnchoredTask {
     epic_id: Option<String>,
     specs: Vec<String>,
     dependencies: Vec<String>,
+    work_type: Option<String>,
 }
 
 /// Pick the configured target convention without mutating repository state.
@@ -253,6 +257,156 @@ pub fn durable_work_tracking_enabled(repo_root: &Path) -> Result<bool, DurableTr
     })
 }
 
+/// Whether durable work tracking was on in the committed tree of `revision`:
+/// a full-tier `.codeflow/project.toml`, or a supported task record path.
+/// CI reads this at the target so a pull request cannot switch tracking off
+/// for itself by deleting the records or the state file (SPC-013 R-70).
+///
+/// # Errors
+///
+/// Returns the reason when the revision, the state file or the tree cannot
+/// be read.
+pub fn durable_work_tracking_enabled_at(repo_root: &Path, revision: &str) -> Result<bool, String> {
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    let tree = repo
+        .revparse_single(revision)
+        .and_then(|object| object.peel_to_tree())
+        .map_err(|error| format!("{revision}: {error}"))?;
+    if let Ok(entry) = tree.get_path(Path::new(crate::scaffold::state::PROJECT_TOML)) {
+        let blob = repo
+            .find_blob(entry.id())
+            .map_err(|_| format!("{revision}: .codeflow/project.toml is not a file"))?;
+        let text = std::str::from_utf8(blob.content())
+            .map_err(|_| format!("{revision}: .codeflow/project.toml is not UTF-8"))?;
+        let state: crate::scaffold::state::ProjectState = toml::from_str(text)
+            .map_err(|error| format!("{revision}: .codeflow/project.toml: {error}"))?;
+        if state.tier == crate::scaffold::manifest::Tier::Full {
+            return Ok(true);
+        }
+    }
+    let Ok(entry) = tree.get_path(Path::new("project-management")) else {
+        return Ok(false);
+    };
+    let home = repo
+        .find_tree(entry.id())
+        .map_err(|_| format!("{revision}: project-management is not a directory"))?;
+    let mut found = false;
+    home.walk(TreeWalkMode::PreOrder, |root, entry| {
+        let path = format!("project-management/{root}{}", entry.name().unwrap_or(""));
+        if record_kind_for_tree_path(&path) == Some(RecordKind::Task) {
+            found = true;
+            return TreeWalkResult::Abort;
+        }
+        TreeWalkResult::Ok
+    })
+    .or_else(|error| if found { Ok(()) } else { Err(error) })
+    .map_err(|error| error.to_string())?;
+    Ok(found)
+}
+
+/// Check that `branch` is an epic's integration line landing on its
+/// destination, so the whole line may land as one pull request whose tasks
+/// were each classified when they landed on it. A prefix alone grants
+/// nothing: the name must carry an epic that exists and is not cancelled, a
+/// task of that epic must target this exact line, the pull request must go
+/// to the project's default target, and the line's first-parent history
+/// from the merge-base must hold only merges (no work committed directly on
+/// the line). Returns the epic id.
+///
+/// # Errors
+///
+/// Returns why the head is not an epic line landing, or why git could not
+/// be read.
+pub fn check_epic_line(
+    repo_root: &Path,
+    branch: &str,
+    base_ref: &str,
+    base: &str,
+    head: &str,
+) -> Result<String, String> {
+    let suffix = branch
+        .strip_prefix("integration/")
+        .ok_or_else(|| format!("'{branch}' is not an integration line"))?;
+    let digits = suffix.strip_prefix("EPC-").map_or(0, |rest| {
+        rest.chars().take_while(char::is_ascii_digit).count()
+    });
+    let epic_id = suffix.get(..4 + digits).unwrap_or_default();
+    if digits == 0 || !is_valid_epic_format_id(epic_id) || !suffix[epic_id.len()..].starts_with('-')
+    {
+        return Err(format!(
+            "'{branch}' names no epic; an epic line is integration/EPC-NNN-<slug>"
+        ));
+    }
+    let repo = Repository::discover(repo_root).map_err(|error| error.to_string())?;
+    let commit = |revision: &str| {
+        repo.revparse_single(revision)
+            .and_then(|object| object.peel_to_commit())
+            .map_err(|error| format!("{revision}: {error}"))
+    };
+    let head_commit = commit(head)?;
+    let target_tip = commit(base)?.id();
+    let merge_base = repo
+        .merge_base(target_tip, head_commit.id())
+        .map_err(|error| error.to_string())?;
+    let records_at = |oid: git2::Oid| {
+        repo.find_commit(oid)
+            .and_then(|commit| commit.tree())
+            .map_err(|error| error.to_string())
+            .and_then(|tree| records_from_tree(&repo, &tree).map_err(|error| error.to_string()))
+    };
+    // The target's current records decide, so an epic closed on the target
+    // after the line forked is closed here; the merge-base only bounds the
+    // range and the first-parent walk.
+    let at_base = records_at(target_tip)?;
+    let at_head = records_at(head_commit.id())?;
+    let epic = at_base
+        .get(epic_id)
+        .or_else(|| at_head.get(epic_id))
+        .filter(|record| record.kind == RecordKind::Epic)
+        .ok_or_else(|| format!("'{branch}' names {epic_id}, which has no epic record"))?;
+    if matches!(epic.status.as_str(), "cancelled" | "archived") {
+        return Err(format!("{epic_id} is {}", epic.status));
+    }
+    let bound = at_head.values().chain(at_base.values()).any(|record| {
+        record.kind == RecordKind::Task
+            && record.epic_id.as_deref() == Some(epic_id)
+            && record
+                .integration_target
+                .as_deref()
+                .is_some_and(|target| logical_target(target) == branch)
+    });
+    if !bound {
+        return Err(format!("no task of {epic_id} targets '{branch}'"));
+    }
+    let destination =
+        default_work_target(repo_root).ok_or("no main or master branch to land the line on")?;
+    if logical_target(base_ref) != logical_target(&destination) {
+        return Err(format!(
+            "'{branch}' lands on '{}', not '{base_ref}'",
+            logical_target(&destination)
+        ));
+    }
+    let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
+    walk.push(head_commit.id())
+        .and_then(|()| walk.hide(merge_base))
+        .and_then(|()| walk.simplify_first_parent())
+        .map_err(|error| error.to_string())?;
+    for oid in walk {
+        let oid = oid.map_err(|error| error.to_string())?;
+        let parents = repo
+            .find_commit(oid)
+            .map_err(|error| error.to_string())?
+            .parent_count();
+        if parents < 2 {
+            return Err(format!(
+                "'{branch}' has a commit made directly on the line ({}); land work on the line by classified pull requests",
+                &oid.to_string()[..9]
+            ));
+        }
+    }
+    Ok(epic_id.to_string())
+}
+
 /// Whether a stable target resolves to a real local or remote-tracking branch.
 #[must_use]
 pub fn work_target_resolves(repo_root: &Path, target: &str) -> bool {
@@ -285,13 +439,31 @@ pub fn declared_work_target(repo_root: &Path, task_id: &str) -> Option<String> {
         .filter(|target| !target.trim().is_empty())
 }
 
-/// Resolve the durable task id represented by a task branch.
+/// Branch prefixes that never carry a task id: planning branches create
+/// records and integration branches carry many tasks.
+const NON_WORK_PREFIXES: [&str; 2] = ["plan/", "integration/"];
+
+/// The part of `branch` after a sanctioned work prefix: any policy branch
+/// prefix except `plan/` and `integration/` (SPC-013 R-110).
+fn work_branch_suffix<'b>(repo_root: &Path, branch: &'b str) -> Option<&'b str> {
+    let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
+    policy
+        .git
+        .branch_prefixes
+        .iter()
+        .filter(|prefix| !NON_WORK_PREFIXES.contains(&prefix.as_str()))
+        .find_map(|prefix| branch.strip_prefix(prefix.as_str()))
+}
+
+/// Resolve the durable task id a work branch carries,
+/// `<prefix>/TSK-NNN-<slug>` on any sanctioned work prefix (`task/`, `fix/`,
+/// `feat/`, `spike/` and the rest of `git.branch_prefixes`).
 ///
 /// The visible workgraph is the source of truth, which avoids baking legacy
 /// or future id shapes into branch parsing.
 #[must_use]
 pub fn task_id_from_branch(repo_root: &Path, branch: &str) -> Option<String> {
-    let suffix = branch.strip_prefix("task/")?;
+    let suffix = work_branch_suffix(repo_root, branch)?;
     let pm_root = repo_root.join("project-management");
     crate::workgraph::layout::task_record_files(&pm_root)
         .into_iter()
@@ -303,6 +475,18 @@ pub fn task_id_from_branch(repo_root: &Path, branch: &str) -> Option<String> {
         .filter(|id| is_valid_task_format_id(id))
         .filter(|id| suffix.starts_with(&format!("{id}-")))
         .max_by_key(String::len)
+}
+
+/// Whether a work branch names a task id by shape (`<prefix>/TSK-<digits>-`),
+/// whether or not a record for it is visible. A branch that claims an id the
+/// workgraph does not hold is refused rather than treated as untracked.
+#[must_use]
+pub fn branch_claims_task_id(repo_root: &Path, branch: &str) -> bool {
+    work_branch_suffix(repo_root, branch).is_some_and(|suffix| {
+        suffix
+            .strip_prefix("TSK-")
+            .is_some_and(|rest| rest.starts_with(|c: char| c.is_ascii_digit()))
+    })
 }
 
 /// Validate that `task_id` is safe to begin on the current branch.
@@ -351,12 +535,36 @@ pub fn check_work_start_for_branch(
             "task id '{task_id}' is malformed"
         )));
     }
-    let expected_prefix = format!("task/{task_id}-");
-    if !branch.starts_with(&expected_prefix) {
+    let expected = format!("{task_id}-");
+    if !work_branch_suffix(repo_root, branch).is_some_and(|suffix| suffix.starts_with(&expected)) {
         return Err(WorkStartError::Branch {
             branch: branch.to_string(),
             task_id: task_id.to_string(),
         });
+    }
+    let mut report = check_work_start_anchored(repo_root, task_id, target)?;
+    report.branch = branch.to_string();
+    Ok(report)
+}
+
+/// Validate a durable task at the merge-base of `HEAD` and `target`, whatever
+/// the branch is called: the pull request context of SPC-013 R-110, where a
+/// `Task: TSK-NNN` line names the task (a `fix/` pull request naming the
+/// release task, for example). The returned report's `branch` is empty.
+///
+/// # Errors
+///
+/// Returns the same errors as [`check_work_start_for_branch`] apart from
+/// branch identity.
+pub fn check_work_start_anchored(
+    repo_root: &Path,
+    task_id: &str,
+    target: &str,
+) -> Result<WorkStartReport, WorkStartError> {
+    if !is_valid_task_format_id(task_id) {
+        return Err(WorkStartError::InvalidGraph(format!(
+            "task id '{task_id}' is malformed"
+        )));
     }
     if !is_stable_work_target(target) {
         return Err(WorkStartError::UnstableTarget(target.to_string()));
@@ -366,12 +574,13 @@ pub fn check_work_start_for_branch(
 
     Ok(WorkStartReport {
         task_id: task_id.to_string(),
-        branch: branch.to_string(),
+        branch: String::new(),
         target: target.to_string(),
         merge_base,
         epic_id: anchored.epic_id,
         specs: anchored.specs,
         dependencies: anchored.dependencies,
+        work_type: anchored.work_type,
     })
 }
 
@@ -471,6 +680,7 @@ fn validate_anchored_task(
         epic_id: task.epic_id.clone(),
         specs,
         dependencies: task.depends_on.clone(),
+        work_type: task.work_type.clone(),
     })
 }
 
@@ -638,6 +848,7 @@ fn parse_record(content: &str, kind: RecordKind) -> Result<Record, String> {
         integration_target: string(&data, "integration_target"),
         specs: strings(&data, "specs")?,
         depends_on: strings_alias(&data, "depends_on", "dependencies")?,
+        work_type: string(&data, "work_type"),
     })
 }
 
@@ -904,6 +1115,53 @@ mod tests {
             .unwrap()
             .stdout;
         assert_eq!(before_status, after_status);
+    }
+
+    /// TSK-104 AC-2: the preflight runs on every sanctioned work prefix that
+    /// carries the task id, keyed on that id.
+    #[test]
+    fn preflight_runs_on_every_work_prefix_carrying_the_id() {
+        let dir = fixture();
+        for branch in [
+            "task/TSK-002-work",
+            "fix/TSK-002-repair",
+            "feat/TSK-002-thing",
+            "spike/TSK-002-probe",
+        ] {
+            assert_eq!(
+                task_id_from_branch(dir.path(), branch).as_deref(),
+                Some("TSK-002"),
+                "{branch}"
+            );
+            let report = check_work_start_for_branch(dir.path(), "TSK-002", "main", branch)
+                .unwrap_or_else(|error| panic!("{branch}: {error}"));
+            assert_eq!(report.branch, branch);
+            assert_eq!(report.work_type.as_deref(), Some("feat"));
+        }
+        for branch in ["plan/TSK-002-graph", "integration/TSK-002-line", "fix/typo"] {
+            assert_eq!(task_id_from_branch(dir.path(), branch), None, "{branch}");
+        }
+        assert!(branch_claims_task_id(dir.path(), "fix/TSK-404-ghost"));
+        assert!(!branch_claims_task_id(dir.path(), "fix/typo"));
+        assert!(!branch_claims_task_id(dir.path(), "plan/TSK-404-new"));
+        assert!(matches!(
+            check_work_start_for_branch(dir.path(), "TSK-002", "main", "fix/TSK-001-other"),
+            Err(WorkStartError::Branch { .. })
+        ));
+    }
+
+    /// The pull request context: a `fix/` branch without an id may still
+    /// name a task, whose anchored state is checked all the same.
+    #[test]
+    fn anchored_check_needs_no_branch_identity() {
+        let dir = fixture();
+        git(dir.path(), &["switch", "-c", "fix/release-notes"]);
+        let report = check_work_start_anchored(dir.path(), "TSK-002", "main").unwrap();
+        assert!(report.branch.is_empty());
+        assert!(matches!(
+            check_work_start_anchored(dir.path(), "TSK-001", "main"),
+            Err(WorkStartError::TaskNotStartable { .. })
+        ));
     }
 
     #[test]

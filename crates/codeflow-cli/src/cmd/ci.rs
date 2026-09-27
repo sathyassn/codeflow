@@ -19,6 +19,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod classification;
 mod pr_body;
 mod work_records;
 
@@ -30,8 +31,8 @@ use codeflow_core::hooks::{
 use codeflow_core::scaffold::ScaffoldManifest;
 use codeflow_core::validate::validate_workgraph;
 use codeflow_core::workgraph::{
-    check_work_start_for_branch, declared_work_target, durable_work_tracking_enabled,
-    resolve_work_target, task_id_from_branch,
+    branch_claims_task_id, check_work_start_for_branch, declared_work_target,
+    durable_work_tracking_enabled, resolve_work_target, task_id_from_branch,
 };
 use pr_body::find_section;
 
@@ -209,30 +210,30 @@ pub fn run(args: &CiArgs) -> i32 {
         ran.push("branch-naming");
     }
 
-    // A durable task branch may contain implementation only after its planning
-    // record is present on the declared integration target. This uses the same
-    // read-only merge-base preflight as `codeflow work start` and pre-commit.
-    if branch.starts_with("task/") {
-        match durable_work_tracking_enabled(&root) {
-            Ok(true) => {
-                evaluate_work_start(&root, &branch, &mut tagged);
-                ran.push("work-start");
-            }
-            Ok(false) => {}
-            Err(error) => {
-                tagged.push(TaggedViolation {
-                    sha: None,
-                    violation: Violation::new(
-                        "work.tracking_state",
-                        PolicyLevel::Block,
-                        format!("cannot determine durable-work tracking: {error}"),
-                        "repair CodeFlow state or task-home access before task work".to_string(),
-                    ),
-                });
-                ran.push("work-start");
-            }
-        }
+    // --- pull request classification (TSK-104) -----------------------------
+    // Every product pull request has one class; tracked work runs the
+    // anchored preflight for the task it names, whatever its branch.
+    if let Some(body) = &pr_body {
+        let base = base_candidates
+            .iter()
+            .find_map(|name| rev_parse(&root, name).map(|sha| (name.as_str(), sha)));
+        let range_parts = base.as_ref().map(|(base_ref, base)| classification::Range {
+            base_ref,
+            base,
+            head: head.as_str(),
+        });
+        classification::dispatch(
+            &root,
+            git,
+            body,
+            &branch,
+            range_parts.as_ref(),
+            &mut tagged,
+            &mut ran,
+        );
     }
+
+    own_branch_preflight(&root, &branch, &mut tagged, &mut ran);
 
     // --- PR-body check ----------------------------------------------------
     // A Bitbucket PR without a body channel was warned about when resolving
@@ -399,6 +400,39 @@ fn evaluate_commit_range(
                 ran: false,
                 added_lines_ran: git.policy_characters.is_active().then_some(false),
                 breaking_commit: false,
+            }
+        }
+    }
+}
+
+/// A work branch carrying a task id (any sanctioned prefix) may contain
+/// implementation only after its planning record is present on the
+/// declared integration target: the same read-only merge-base preflight as
+/// `codeflow work start`.
+fn own_branch_preflight(
+    root: &Path,
+    branch: &str,
+    tagged: &mut Vec<TaggedViolation>,
+    ran: &mut Vec<&str>,
+) {
+    if branch.starts_with("task/") || branch_claims_task_id(root, branch) {
+        match durable_work_tracking_enabled(root) {
+            Ok(true) => {
+                evaluate_work_start(root, branch, tagged);
+                ran.push("work-start");
+            }
+            Ok(false) => {}
+            Err(error) => {
+                tagged.push(TaggedViolation {
+                    sha: None,
+                    violation: Violation::new(
+                        "work.tracking_state",
+                        PolicyLevel::Block,
+                        format!("cannot determine durable-work tracking: {error}"),
+                        "repair CodeFlow state or task-home access before task work".to_string(),
+                    ),
+                });
+                ran.push("work-start");
             }
         }
     }

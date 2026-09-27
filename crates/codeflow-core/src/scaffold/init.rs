@@ -357,7 +357,40 @@ pub(crate) fn render_entry(
     } else {
         text
     };
+    if entry.dest == POLICY_DEST {
+        return Ok(Some(with_stack_product_paths(
+            &rendered,
+            ctx.get("STACK").unwrap_or_default(),
+        )));
+    }
     Ok(Some(rendered))
+}
+
+const POLICY_DEST: &str = ".codeflow/policy.json";
+
+/// Write the stack's default `git.product_paths` into the shipped policy, as
+/// the first key of `git`, unless the shipped policy already names it. The
+/// same rendered text is the default `update` compares against, so an
+/// existing install gains the key once and keeps any value it sets.
+fn with_stack_product_paths(policy: &str, stack: &str) -> String {
+    const GIT_OPEN: &str = "\n  \"git\": {\n";
+    if policy.contains("\"product_paths\"") {
+        return policy.to_string();
+    }
+    let Some(at) = policy.find(GIT_OPEN) else {
+        return policy.to_string();
+    };
+    let globs = crate::workgraph::classify::stack_product_paths(stack)
+        .iter()
+        .map(|glob| format!("\"{glob}\""))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let split = at + GIT_OPEN.len();
+    format!(
+        "{}    \"product_paths\": [{globs}],\n{}",
+        &policy[..split],
+        &policy[split..]
+    )
 }
 
 fn record(installed: &mut InstalledManifest, entry: &ManifestEntry, sha256: String) {
@@ -607,6 +640,20 @@ fn civil_from_days(z: i64) -> (i64, u32, u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shipped_policy_gains_the_stack_product_paths_once() {
+        let shipped = include_str!("../../../../assets/base/policy.json");
+        for stack in ["rust", "node", "python", "unset"] {
+            let rendered = with_stack_product_paths(shipped, stack);
+            let value: serde_json::Value = serde_json::from_str(&rendered).unwrap();
+            let expected: Vec<&str> =
+                crate::workgraph::classify::stack_product_paths(stack).to_vec();
+            assert_eq!(value["git"]["product_paths"], serde_json::json!(expected));
+            assert!(crate::hooks::policy_schema::validate_policy_str(&rendered).is_ok());
+            assert_eq!(with_stack_product_paths(&rendered, "node"), rendered);
+        }
+    }
 
     #[test]
     fn civil_date_known_values() {

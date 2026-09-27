@@ -1522,14 +1522,14 @@
     {
       "id": "CF-PM-004",
       "level": "hard",
-      "statement": "Durable implementation starts only after a validated planning PR reaches a declared real local or remote-tracking non-task branch; codeflow work start, pre-commit, and CI reject revision-expression aliases and share a read-only merge-base check for the task, matching target declaration, parent or standalone rationale, ready specs, and completed predecessors.",
+      "statement": "Durable implementation starts only after a validated planning PR reaches a declared real local or remote-tracking non-task branch; codeflow work start and CI reject revision-expression aliases and share a read-only merge-base check for the task, matching target declaration, parent or standalone rationale, ready specs, and completed predecessors.",
       "sources": [
         {
           "path": "AGENTS.md",
           "markers": [
             "validated planning PR must reach",
             "`codeflow work start TSK-NNN`",
-            "CLI, pre-commit, and CI share this read-only rule"
+            "`work start` and CI share this read-only rule"
           ]
         },
         {
