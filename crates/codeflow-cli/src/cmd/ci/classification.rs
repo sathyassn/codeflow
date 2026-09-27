@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process::Command;
 
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
+use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::classify::{
     is_planning_path, is_spike_path, path_sets, ProjectPaths,
 };
@@ -182,6 +183,17 @@ pub(super) struct Range<'a> {
     pub head: &'a str,
 }
 
+/// Whether durable work tracking is on at the head or at the target, so a
+/// pull request cannot switch it off for itself.
+pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool, String> {
+    let at_target = range.map(|range| durable_work_tracking_enabled_at(root, range.base));
+    match (durable_work_tracking_enabled(root), at_target) {
+        (Err(error), _) => Err(error.to_string()),
+        (_, Some(Err(error))) => Err(error),
+        (Ok(head), target) => Ok(head || matches!(target, Some(Ok(true)))),
+    }
+}
+
 /// Run the classification for `codeflow ci`. Classification judges the
 /// whole range against the target's own state: tracking is on when it is on
 /// at the target or at the head, and the paths are the range's diff from
@@ -195,13 +207,7 @@ pub(super) fn dispatch(
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
 ) {
-    let at_target = range.map(|range| durable_work_tracking_enabled_at(root, range.base));
-    let enabled = match (durable_work_tracking_enabled(root), at_target) {
-        (Err(error), _) => Err(error.to_string()),
-        (_, Some(Err(error))) => Err(error),
-        (Ok(head), target) => Ok(head || matches!(target, Some(Ok(true)))),
-    };
-    match enabled {
+    match tracking_on(root, range) {
         Ok(true) => {}
         Ok(false) => return,
         Err(error) => {
@@ -278,6 +284,7 @@ pub(super) fn dispatch(
                 .map(|(_, path)| path.as_str())
                 .collect();
             tracked(root, task_id, own_branch, branch, &files, &added, tagged);
+            journey(root, git, task_id, range.head, &files, tagged);
         }
         Class::Direct { reason } => {
             println!("codeflow ci: pull request class: direct change ({reason})");
@@ -451,6 +458,42 @@ fn direct(
             ),
             "track the work with `Task: TSK-NNN`; product code, managed instructions, policy, hooks, CI files, manifests and the record schema are never direct changes",
         );
+    }
+}
+
+/// A range touching the adopter-facing path set belongs to a task with a
+/// journey criterion or one serving its epic's journey (R-53), at the
+/// `git.work_records` level. The task is read at the head.
+fn journey(
+    root: &Path,
+    git: &GitPolicy,
+    task_id: &str,
+    head: &str,
+    files: &[String],
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    let project = ProjectPaths::load(root);
+    let sets = path_sets();
+    let Some((path, member)) = files.iter().find_map(|path| {
+        sets.adopter_facing_member(path, &project)
+            .map(|member| (path, member))
+    }) else {
+        return;
+    };
+    let message = match journey_requirement_at(root, head, task_id) {
+        Ok(problem) => problem.map(|problem| format!("{problem} ({path} is {member})")),
+        Err(error) => Some(format!("cannot read the task at the head: {error}")),
+    };
+    if let Some(message) = message {
+        tagged.push(super::TaggedViolation {
+            sha: None,
+            violation: Violation::new(
+                JOURNEY_RULE,
+                git.work_records_level(),
+                message,
+                "add a `(journey)` criterion by a planning pull request, or serve the epic's journey criterion with `(serves EPC-NNN AC-n)`".to_string(),
+            ),
+        });
     }
 }
 
