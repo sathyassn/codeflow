@@ -549,6 +549,19 @@ publication date._
 
 ### Fixed
 
+<!-- codeflow:release-impact patch -->
+- **git-guard judges the repository a command targets.** A git command that
+  reaches another repository through `cd`, `git -C`, `--git-dir`, a
+  `GIT_DIR=` prefix or a path held in a variable set earlier on the same line
+  is judged by that repository's branch and its own policy, so a commit on
+  another repository's feature branch is no longer refused as a commit on the
+  session's `main`. A repository without a CodeFlow policy keeps the default
+  protection of `main` and `master`. `git -C <repo> --git-dir=<git dir>` is
+  judged by the git dir it writes to, which closes a wrong allow. When the
+  guard cannot resolve the target, for example an unset variable or a
+  subshell, it judges the session repository as before and says the target
+  was unresolved.
+
 - **Breaking: presentation build reproducibility.** Maintainer asset builds now require
   the official pinned Node distribution's compression libraries and explain
   incompatible system-library builds. Regenerated export bytes match that
