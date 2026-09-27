@@ -14,11 +14,8 @@
         "role": "passing",
         "declaration": "checks-coverage.json",
         "family": "coverage",
-        "rules": [
-          7
-        ],
+        "rules": [],
         "facts": "match",
-        "note": "Rule 7 is the grammar module's false positive on a grid of single-rect cells; drop it from rules when fix/figure-module-coverage lands.",
         "placement": {
           "bind": {
             "route": "system/checks",
@@ -32,9 +29,7 @@
         "role": "faulty",
         "declaration": "release-grid.json",
         "family": "coverage",
-        "rules": [
-          7
-        ],
+        "rules": [],
         "facts": "match"
       },
       {
@@ -240,8 +235,7 @@
         "declaration": "fixture:docs/figures/signed-artifacts.json",
         "family": "coverage",
         "rules": [],
-        "facts": "match",
-        "note": "nc stands in for na until fix/figure-module-coverage lands."
+        "facts": "match"
       },
       {
         "role": "passing",
