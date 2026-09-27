@@ -377,15 +377,22 @@ impl Baseline {
             .collect()
     }
 
-    /// Whether the record's bytes equal its copy in any listed baseline.
+    /// Whether the record's bytes equal its copy in any listed baseline,
+    /// before or after `ids backfill` added its `uid` line. The backfill is
+    /// part of the migration (R-3, R-25): it brings the record under the uid
+    /// checks, which judge that line on their own (R-2), and leaves the
+    /// exception bound to the rest of the blob (R-83).
     fn is_legacy_blob(&self, record: &RecordView) -> bool {
         match self {
-            Self::Available { graphs, .. } => graphs.iter().any(|graph| {
-                graph
-                    .records
-                    .get(&record.id)
-                    .is_some_and(|old| old.content == record.content)
-            }),
+            Self::Available { graphs, .. } => {
+                let backfilled = without_backfilled_uid(&record.content);
+                graphs.iter().any(|graph| {
+                    graph.records.get(&record.id).is_some_and(|old| {
+                        old.content == record.content
+                            || backfilled.as_deref() == Some(old.content.as_str())
+                    })
+                })
+            }
             _ => false,
         }
     }
@@ -435,6 +442,30 @@ impl Baseline {
             }
         }
     }
+}
+
+/// `content` without the frontmatter `uid:` line `ids backfill` writes, or
+/// `None` when its frontmatter has no such line.
+fn without_backfilled_uid(content: &str) -> Option<String> {
+    let mut lines = content.split_inclusive('\n');
+    let first = lines.next()?;
+    if first.trim_end() != "---" {
+        return None;
+    }
+    let mut out = String::from(first);
+    let (mut removed, mut closed) = (false, false);
+    for line in lines {
+        if !closed {
+            if line.trim_end() == "---" {
+                closed = true;
+            } else if !removed && line.starts_with("uid:") {
+                removed = true;
+                continue;
+            }
+        }
+        out.push_str(line);
+    }
+    (removed && closed).then_some(out)
 }
 
 fn resolve_commit(repo: &Repository, revision: &str) -> Option<git2::Oid> {

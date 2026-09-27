@@ -999,6 +999,62 @@ fn an_unchanged_baseline_blob_is_exempt_and_a_spelling_edit_only_warns() {
     assert!(range.is_clean() && !range.warnings.is_empty(), "{range:?}");
 }
 
+/// TSK-109: the backfill adds only the registered `uid` (R-25), so the
+/// record keeps its baseline exception (R-3, R-83); any other edit on top
+/// of the backfill still warns, and a changed status is still refused.
+#[test]
+fn a_backfilled_uid_keeps_the_baseline_exemption_and_nothing_else_does() {
+    let (repo, baseline) = baseline_project();
+    let backfilled = repo.read(TASK_PATH).replacen(
+        "id: TSK-001\n",
+        "id: TSK-001\nuid: 0e273f9f-5e55-4bf0-9b24-2698eeeca620\n",
+        1,
+    );
+    assert_ne!(backfilled, repo.read(TASK_PATH), "the uid line was added");
+    repo.write(TASK_PATH, &backfilled);
+    let tree = validate_lifecycle(repo.root());
+    assert!(tree.is_clean() && tree.warnings.is_empty(), "{tree:?}");
+    let range = repo.judge(&baseline);
+    assert!(range.is_clean() && range.warnings.is_empty(), "{range:?}");
+
+    // A spelling edit on top of the backfill is an edit: it warns.
+    repo.write(
+        TASK_PATH,
+        &backfilled.replace("Done long ago.", "Done long ago, spelling."),
+    );
+    let tree = validate_lifecycle(repo.root());
+    assert!(
+        tree.is_clean()
+            && tree
+                .warnings
+                .iter()
+                .any(|w| w.contains("needs an acceptance block")),
+        "{tree:?}"
+    );
+    // A uid line in the body is not a backfill.
+    repo.write(
+        TASK_PATH,
+        &format!("{}\nuid: in the body\n", repo.read(TASK_PATH)),
+    );
+    let body = repo
+        .read(TASK_PATH)
+        .replace("uid: 0e273f9f-5e55-4bf0-9b24-2698eeeca620\n", "");
+    repo.write(
+        TASK_PATH,
+        &body.replace("Done long ago, spelling.", "Done long ago."),
+    );
+    assert!(validate_lifecycle(repo.root())
+        .warnings
+        .iter()
+        .any(|w| w.contains("needs an acceptance block")));
+    // A status change beside the uid is a transition, judged in full.
+    repo.write(
+        TASK_PATH,
+        &backfilled.replace("status: complete", "status: cancelled"),
+    );
+    assert!(!validate_lifecycle(repo.root()).is_clean());
+}
+
 #[test]
 fn reopening_changing_criteria_or_completing_again_applies_the_new_rules() {
     let (repo, _) = baseline_project();
