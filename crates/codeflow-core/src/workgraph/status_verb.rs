@@ -158,13 +158,54 @@ pub fn set_status(
     if !verdict.is_clean() {
         return Err(VerbError::Refused(verdict.errors));
     }
+    let mut warnings = verdict.warnings;
+    if kind == RecordKind::Task && change.target == "complete" {
+        let findings = binding(repo_root, &graph.with(after.clone()), &after);
+        let (policy, _) = crate::hooks::policy::Policy::load_effective(repo_root);
+        if !findings.is_empty() {
+            if policy.git.work_records_level() == crate::hooks::PolicyLevel::Block {
+                let mut refused = findings;
+                refused.push(super::acceptance::SCOPE_NOTE.to_string());
+                return Err(VerbError::Refused(refused));
+            }
+            warnings.extend(findings);
+        }
+    }
     replace_if_unchanged(&path, digest.as_slice(), &proposed)?;
     Ok(VerbOutcome {
         path,
         from: record.status.clone(),
         to: change.target.clone(),
-        warnings: verdict.warnings,
+        warnings,
     })
+}
+
+/// The binding of a completion to the reviewed commit (R-60), with `HEAD` as
+/// the head: the verb runs where the reviewed result is checked out.
+fn binding(repo_root: &Path, graph: &Graph, task: &RecordView) -> Vec<String> {
+    let Ok(repo) = git2::Repository::discover(repo_root) else {
+        return vec!["cannot open the repository to bind the acceptance block".into()];
+    };
+    let Some(head) = repo
+        .head()
+        .ok()
+        .and_then(|head| head.peel_to_commit().ok())
+        .map(|commit| commit.id())
+    else {
+        return vec!["no HEAD commit to bind the acceptance block to".into()];
+    };
+    let target_tip =
+        super::work_start::resolve_work_target(repo_root, task.integration_target.as_deref())
+            .and_then(|target| repo.revparse_single(&target).ok())
+            .and_then(|object| object.peel_to_commit().ok())
+            .map(|commit| commit.id());
+    super::acceptance::uncommitted_outside(&repo, task)
+        .into_iter()
+        .chain(super::acceptance::bind_completion(
+            &repo, task, graph, head, target_tip,
+        ))
+        .map(|finding| format!("{}: {}", finding.rule, finding.message))
+        .collect()
 }
 
 /// Replace `path` with `content` only when its bytes still hash to

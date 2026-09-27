@@ -1093,7 +1093,7 @@ fn pinned_dependency(
 /// Resolve a pin through the object database, never through refs: a tag or
 /// branch named like the pin cannot redirect it. An abbreviated id must be
 /// unambiguous and name a commit.
-fn commit_by_object_id<'repo>(
+pub(crate) fn commit_by_object_id<'repo>(
     repo: &'repo Repository,
     pin: &str,
 ) -> Result<git2::Commit<'repo>, String> {

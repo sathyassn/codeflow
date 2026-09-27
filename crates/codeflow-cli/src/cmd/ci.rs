@@ -19,6 +19,7 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 
+mod acceptance;
 mod adopter;
 mod classification;
 mod id_registry;
@@ -266,25 +267,16 @@ pub fn run(args: &CiArgs) -> i32 {
     // --- pull request classification (TSK-104) -----------------------------
     // Every product pull request has one class; tracked work runs the
     // anchored preflight for the task it names, whatever its branch.
-    if let Some(body) = &pr_body {
-        let base = base_candidates
-            .iter()
-            .find_map(|name| rev_parse(&root, name).map(|sha| (name.as_str(), sha)));
-        let range_parts = base.as_ref().map(|(base_ref, base)| classification::Range {
-            base_ref,
-            base,
-            head: head.as_str(),
-        });
-        classification::dispatch(
-            &root,
-            git,
-            body,
-            &branch,
-            range_parts.as_ref(),
-            &mut tagged,
-            &mut ran,
-        );
-    }
+    work_checks(
+        &root,
+        git,
+        pr_body.as_deref(),
+        &branch,
+        &base_candidates,
+        &head,
+        &mut tagged,
+        &mut ran,
+    );
 
     own_branch_preflight(&root, &branch, &mut tagged, &mut ran);
 
@@ -307,6 +299,42 @@ pub fn run(args: &CiArgs) -> i32 {
     }
 
     report(&tagged, &ran, &skipped)
+}
+
+/// Pull request classification (TSK-104), which needs the body, and
+/// acceptance bound to the reviewed commit (TSK-105), which runs for any
+/// range: a completion is bound to the head it lands with.
+#[allow(clippy::too_many_arguments)] // The run's shared state, passed once.
+fn work_checks<'a>(
+    root: &Path,
+    git: &GitPolicy,
+    pr_body: Option<&str>,
+    branch: &str,
+    base_candidates: &'a [String],
+    head: &str,
+    tagged: &mut Vec<TaggedViolation>,
+    ran: &mut Vec<&'a str>,
+) {
+    let base = base_candidates
+        .iter()
+        .find_map(|name| rev_parse(root, name).map(|sha| (name.as_str(), sha)));
+    let range_parts = base.as_ref().map(|(base_ref, base)| classification::Range {
+        base_ref,
+        base,
+        head,
+    });
+    let class = pr_body.and_then(|body| {
+        classification::dispatch(root, git, body, branch, range_parts.as_ref(), tagged, ran)
+    });
+    acceptance::dispatch(
+        root,
+        git,
+        range_parts.as_ref(),
+        branch,
+        class.as_ref(),
+        tagged,
+        ran,
+    );
 }
 
 /// The durable-record rows of the dispatch, in their append-only order

@@ -226,12 +226,15 @@ fn planned_project() -> (tempfile::TempDir, PathBuf) {
             criterion,
         );
     }
+    // A task changing product code carries a journey criterion (TSK-105).
+    let task_criteria =
+        format!("{criterion}- AC-2 (journey) On a fresh project, the flow shall pass.\n");
     for n in 1..=7 {
         edit(
             &root,
             &task_file(&format!("TSK-00{n}")),
             "- AC-1\n",
-            criterion,
+            &task_criteria,
         );
     }
     edit(
@@ -465,7 +468,7 @@ fn the_three_contexts_judge_one_task_the_same_way() {
     std::fs::write(
         &acceptance,
         format!(
-            "acceptance:\n  reviewed: {}\n  review: session:journey@sha256:00\n  criteria:\n    AC-1: verified | journey step\n  journey: none | no journey criterion\n  not_verified: none\n  follow_ups: none: journey fixture\n  verdict: approved\n",
+            "acceptance:\n  reviewed: {}\n  review: session:journey@sha256:00\n  criteria:\n    AC-1: verified | journey step\n    AC-2: verified | readiness journey\n  journey: verified | crates/codeflow-cli/tests/readiness_journey.rs\n  not_verified: none\n  follow_ups: none: journey fixture\n  verdict: approved\n",
             git(&root, &["rev-parse", "HEAD"])
         ),
     )

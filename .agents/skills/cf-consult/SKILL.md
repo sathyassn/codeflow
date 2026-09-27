@@ -84,7 +84,8 @@ counts as independent cross-lineage review.
    point, citing where you **agree** and **disagree** and why — with your own
    evidence (file:line, command output). Label each finding `axis: standards`
    or `axis: spec`; when both apply, label both so one cannot mask the other.
-   Disposition
+   For task acceptance, ask `cf-reviewer`'s two questions per criterion and
+   refuse a block copied from an older commit. Disposition
    stays `fix now`, `track once`, or `drop` (same vocabulary as the quality
    contract and `cf-reviewer`). Note which seat raised each item. Branch on
    the verdict line, then re-derive the findings. Meet the `cf-delegate` five-obligation evidence

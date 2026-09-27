@@ -12,6 +12,7 @@ use std::path::Path;
 use std::process::Command;
 
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
+use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
 use codeflow_core::workgraph::classify::{
     is_planning_path, is_spike_path, path_sets, ProjectPaths,
 };
@@ -182,10 +183,22 @@ pub(super) struct Range<'a> {
     pub head: &'a str,
 }
 
+/// Whether durable work tracking is on at the head or at the target, so a
+/// pull request cannot switch it off for itself.
+pub(super) fn tracking_on(root: &Path, range: Option<&Range<'_>>) -> Result<bool, String> {
+    let at_target = range.map(|range| durable_work_tracking_enabled_at(root, range.base));
+    match (durable_work_tracking_enabled(root), at_target) {
+        (Err(error), _) => Err(error.to_string()),
+        (_, Some(Err(error))) => Err(error),
+        (Ok(head), target) => Ok(head || matches!(target, Some(Ok(true)))),
+    }
+}
+
 /// Run the classification for `codeflow ci`. Classification judges the
 /// whole range against the target's own state: tracking is on when it is on
 /// at the target or at the head, and the paths are the range's diff from
-/// the merge-base, merge resolutions included.
+/// the merge-base, merge resolutions included. Returns the validated class,
+/// or `None` when the pull request was not classified.
 pub(super) fn dispatch(
     root: &Path,
     git: &GitPolicy,
@@ -194,16 +207,10 @@ pub(super) fn dispatch(
     range: Option<&Range<'_>>,
     tagged: &mut Vec<super::TaggedViolation>,
     ran: &mut Vec<&str>,
-) {
-    let at_target = range.map(|range| durable_work_tracking_enabled_at(root, range.base));
-    let enabled = match (durable_work_tracking_enabled(root), at_target) {
-        (Err(error), _) => Err(error.to_string()),
-        (_, Some(Err(error))) => Err(error),
-        (Ok(head), target) => Ok(head || matches!(target, Some(Ok(true)))),
-    };
-    match enabled {
+) -> Option<Class> {
+    match tracking_on(root, range) {
         Ok(true) => {}
-        Ok(false) => return,
+        Ok(false) => return None,
         Err(error) => {
             push(
                 tagged,
@@ -212,7 +219,7 @@ pub(super) fn dispatch(
                 "repair CodeFlow state or task-home access before classifying work",
             );
             ran.push("classification");
-            return;
+            return None;
         }
     }
     ran.push("classification");
@@ -223,7 +230,7 @@ pub(super) fn dispatch(
             "the range could not be read, so the pull request cannot be classified".to_string(),
             "pass --base and --head so CI can read the range",
         );
-        return;
+        return None;
     };
     let changes = match range_changes(root, range.base, range.head) {
         Ok(changes) => changes,
@@ -234,7 +241,7 @@ pub(super) fn dispatch(
                 format!("cannot list the paths the range changes: {error}"),
                 "pass --base and --head so CI can read the range",
             );
-            return;
+            return None;
         }
     };
     let files: Vec<String> = changes.iter().map(|(_, path)| path.clone()).collect();
@@ -258,7 +265,7 @@ pub(super) fn dispatch(
                 format!("unclassified pull request: {reason}"),
                 HINT,
             );
-            return;
+            return None;
         }
     };
     match &class {
@@ -278,6 +285,7 @@ pub(super) fn dispatch(
                 .map(|(_, path)| path.as_str())
                 .collect();
             tracked(root, task_id, own_branch, branch, &files, &added, tagged);
+            journey(root, git, task_id, range.head, &files, tagged);
         }
         Class::Direct { reason } => {
             println!("codeflow ci: pull request class: direct change ({reason})");
@@ -291,6 +299,7 @@ pub(super) fn dispatch(
             println!("codeflow ci: pull request class: automation profile {profile}");
         }
     }
+    Some(class)
 }
 
 /// A selection lands only by a planning pull request (SPC-013 R-43): a range
@@ -454,6 +463,42 @@ fn direct(
     }
 }
 
+/// A range touching the adopter-facing path set belongs to a task with a
+/// journey criterion or one serving its epic's journey (R-53), at the
+/// `git.work_records` level. The task is read at the head.
+fn journey(
+    root: &Path,
+    git: &GitPolicy,
+    task_id: &str,
+    head: &str,
+    files: &[String],
+    tagged: &mut Vec<super::TaggedViolation>,
+) {
+    let project = ProjectPaths::load(root);
+    let sets = path_sets();
+    let Some((path, member)) = files.iter().find_map(|path| {
+        sets.adopter_facing_member(path, &project)
+            .map(|member| (path, member))
+    }) else {
+        return;
+    };
+    let message = match journey_requirement_at(root, head, task_id) {
+        Ok(problem) => problem.map(|problem| format!("{problem} ({path} is {member})")),
+        Err(error) => Some(format!("cannot read the task at the head: {error}")),
+    };
+    if let Some(message) = message {
+        tagged.push(super::TaggedViolation {
+            sha: None,
+            violation: Violation::new(
+                JOURNEY_RULE,
+                git.work_records_level(),
+                message,
+                "add a `(journey)` criterion by a planning pull request, or serve the epic's journey criterion with `(serves EPC-NNN AC-n)`".to_string(),
+            ),
+        });
+    }
+}
+
 fn is_record_of(path: &str, task_id: &str) -> bool {
     path.starts_with("project-management/")
         && path
@@ -467,7 +512,11 @@ fn is_record_of(path: &str, task_id: &str) -> bool {
 /// resolving a merge counts, a rename is both its sides, and paths are read
 /// NUL-delimited without display quoting. A failure is an error, never an
 /// empty range.
-fn range_changes(root: &Path, base: &str, head: &str) -> Result<Vec<(String, String)>, String> {
+pub(super) fn range_changes(
+    root: &Path,
+    base: &str,
+    head: &str,
+) -> Result<Vec<(String, String)>, String> {
     let out = Command::new("git")
         .arg("-C")
         .arg(root)

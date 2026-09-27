@@ -18,7 +18,9 @@ const STANDARD_CLAUDE_MAX_BYTES: usize = 6 * KIB;
 const MINIMAL_CLAUDE_MAX_BYTES: usize = 3 * KIB;
 const ROUTING_SKILL_MAX_BYTES: usize = 29 * KIB;
 const OTHER_SKILL_MAX_BYTES: usize = 24 * KIB;
-const REVIEWER_AGENT_MAX_BYTES: usize = 9 * KIB + 512;
+// Raised from 9.5 KiB by TSK-105: the reviewer states the acceptance
+// binding, the head or an ancestor with only record status and Closeout after.
+const REVIEWER_AGENT_MAX_BYTES: usize = 9 * KIB + 640;
 const SECURITY_REVIEWER_AGENT_MAX_BYTES: usize = 12 * KIB;
 
 /// These skills own cross-lineage routing or orchestration mechanics and may
@@ -75,7 +77,10 @@ const SKILL_BYTE_RATCHETS: &[(&str, usize)] = &[
     ("agents/skills/cf-model-orchestrator/SKILL.md", 29 * KIB),
     ("agents/skills/cf-plan/SKILL.md", 9 * KIB), // optional estimation offer/consent route
     ("agents/skills/cf-present/SKILL.md", 8 * KIB),
-    ("agents/skills/cf-ship/SKILL.md", 6 * KIB + 512),
+    // Raised from 6.5 KiB by TSK-105: the ship precondition binds the
+    // acceptance block to the head or a record-only ancestor and keeps
+    // after-release criteria deferred.
+    ("agents/skills/cf-ship/SKILL.md", 6 * KIB + 896),
     ("agents/skills/cf-stack/SKILL.md", 4 * KIB),
     // TSK-022 adds candidate execution with primary acceptance and authorship
     // provenance while retaining the transport's fail-closed lifecycle.

@@ -222,6 +222,30 @@ fn reviewer_labels_axis_and_disposition() {
     );
 }
 
+/// TSK-105 (review round 1, T105-6): the reviewer and ship state the same
+/// binding the checker applies, the head or a record-only ancestor.
+#[test]
+fn reviewer_and_ship_state_the_acceptance_binding() {
+    assert_contains(
+        "assets/base/claude/agents/cf-reviewer.md",
+        &[
+            "`reviewed` is this head, or an ancestor after which only this record's status and Closeout changed",
+        ],
+    );
+    assert_contains(
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        &[
+            "names as `reviewed` this head, or an ancestor after which only its record's status and Closeout changed",
+        ],
+    );
+    for path in [
+        "assets/base/claude/agents/cf-reviewer.md",
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+    ] {
+        assert!(!read(path).contains("must be this head"), "{path}");
+    }
+}
+
 #[test]
 fn method_loads_skill_authoring_when_editing_skills() {
     assert_contains(

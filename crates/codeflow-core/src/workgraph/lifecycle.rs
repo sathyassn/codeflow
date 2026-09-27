@@ -108,7 +108,7 @@ impl RecordView {
         acceptance_blocks(&self.body)
     }
 
-    fn active_blocks(&self) -> Vec<FencedAcceptance> {
+    pub(crate) fn active_blocks(&self) -> Vec<FencedAcceptance> {
         self.blocks()
             .into_iter()
             .filter(|block| !block.is_superseded())
@@ -1287,7 +1287,7 @@ pub fn judge_change(
 /// baseline has is judged as a transition from each of its ancestry-latest
 /// baseline copies, so a range whose base predates a baseline treats older
 /// records as that baseline does. The baseline list is read from `base`
-/// (see [`range_baseline`]).
+/// (see `range_baseline`).
 ///
 /// # Errors
 ///

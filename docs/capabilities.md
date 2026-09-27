@@ -539,6 +539,21 @@ which `codeflow update` records once, and by transition: an unchanged older
 record keeps its exact-blob exemption. `git.work_records` accepts `block` or
 `warn`, never `off`. The ledger's producerless work-graph event types are
 retired.
+A completion is bound to the reviewed commit (SPC-013 R-52 to R-54, R-60 to
+R-62): `task status complete` and `codeflow ci` check that the block's
+`reviewed` commit, named by object id, is the head or an ancestor after
+which only the record's status and Closeout changed, and that each waiver
+names a planning-only amendment on the target that changed that criterion;
+the verb also refuses uncommitted changes outside the record. Only a
+planning-only change or a checked epic line can change a task's criteria;
+the pull request's class decides it, not the branch prefix. A range touching the
+adopter-facing path set needs a `(journey)` criterion or one serving the
+epic's journey, and a leaf serving it says what ran or its narrower path. A
+criterion tagged `(after release)` is `deferred` with owner, window and a
+listed follow-up. `git.work_records` sets the binding and journey rules;
+frozen criteria always block. The check states that it proves structure and
+binding only, and cf-reviewer, cf-consult and cf-ship ask whether each
+criterion is supported on this source and achieves the outcome.
 Review-relevant bounded discoveries persist at task closeout; closeout cannot
 retroactively approve a
 material change. Project organization keeps one authoritative work-item home
