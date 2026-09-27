@@ -45,10 +45,14 @@ publication date._
   events are retired. The rules apply from a `work_records_baseline`:
   `codeflow update` to 3.0.0 records your current `HEAD` once when the
   project has records, so every existing record is legacy and only records
-  added or changed afterwards follow the new rules. The baseline counts only
-  when it is an ancestor of the commit being judged, and a pull request whose
-  base is older than the baseline judges older records from their baseline
-  copy rather than as new. The new
+  added or changed afterwards follow the new rules. The baseline may list one
+  commit per line of work, oldest first (a single string still works); a
+  record is legacy when it is unchanged from its copy in any listed baseline.
+  Every entry must be an ancestor of the commit being judged, a pull request
+  whose base is older than the baseline judges older records from their
+  baseline copy rather than as new, and a change that adds an entry is
+  reported and refused unless that entry is already on the target or a
+  remote integration or protected branch. The new
   `git.work_records` key accepts `block` or `warn`; upgrade the `codeflow` on
   `PATH` before `codeflow update`, since an older binary rejects the key.
 
