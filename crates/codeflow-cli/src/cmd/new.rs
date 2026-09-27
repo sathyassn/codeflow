@@ -293,15 +293,28 @@ pub fn run_task(args: &TaskArgs) -> i32 {
         }
         _ => {}
     }
+    new_task(
+        epic.as_deref(),
+        standalone_reason.as_deref(),
+        integration_target.as_deref(),
+        &title,
+    )
+}
+
+/// Write a new task record, its id issued from the registry where durable
+/// work is tracked.
+fn new_task(
+    epic: Option<&str>,
+    standalone_reason: Option<&str>,
+    integration_target: Option<&str>,
+    title: &str,
+) -> i32 {
     let root = super::repo_root();
     let pm = root.join("project-management");
-    if epic
-        .as_deref()
-        .is_some_and(|value| !allocate::epic_exists(&pm, value))
-    {
+    if epic.is_some_and(|value| !allocate::epic_exists(&pm, value)) {
         eprintln!(
             "error: epic {} not found under {}",
-            epic.as_deref().unwrap_or_default(),
+            epic.unwrap_or_default(),
             pm.display()
         );
         return 1;
@@ -317,27 +330,27 @@ pub fn run_task(args: &TaskArgs) -> i32 {
         "into": integration_target,
         "title": title,
     });
-    let Some(mut issuer) = Issuer::new(&root, Kind::Tsk, &title, request) else {
+    let Some(mut issuer) = Issuer::new(&root, Kind::Tsk, title, request) else {
         return 1;
     };
     let result = if issuer.registry {
         allocate::create_task_with(
             &pm,
             &template,
-            epic.as_deref(),
-            standalone_reason.as_deref(),
-            integration_target.as_deref(),
-            &title,
+            epic,
+            standalone_reason,
+            integration_target,
+            title,
             &mut |target| issuer.allocate(target),
         )
     } else {
         allocate::create_task(
             &pm,
             &template,
-            epic.as_deref(),
-            standalone_reason.as_deref(),
-            integration_target.as_deref(),
-            &title,
+            epic,
+            standalone_reason,
+            integration_target,
+            title,
         )
     };
     issuer.finish(result)
@@ -372,15 +385,27 @@ fn resume_task(id: &str) -> i32 {
     };
     let pm = root.join("project-management");
     let (record_id, uid) = (unwritten.id.clone(), unwritten.uid.clone());
-    let result = allocate::create_task_with(
-        &pm,
-        &template,
-        field("epic").as_deref(),
-        field("standalone_reason").as_deref(),
-        field("into").as_deref(),
-        &field("title").unwrap_or_default(),
-        &mut |_| Ok((record_id.clone(), uid.clone())),
-    );
+    let title = field("title").unwrap_or_default();
+    let mut reserved = |_: &str| Ok((record_id.clone(), uid.clone()));
+    // A follow-up re-derives its epic and target from its source.
+    let result = match field("follow_up_of") {
+        Some(source) => light_paths::create_follow_up_with(
+            &root,
+            &template,
+            &source,
+            &title,
+            Some(&mut reserved),
+        ),
+        None => allocate::create_task_with(
+            &pm,
+            &template,
+            field("epic").as_deref(),
+            field("standalone_reason").as_deref(),
+            field("into").as_deref(),
+            &title,
+            &mut reserved,
+        ),
+    };
     match result {
         Ok(record) => {
             if let Err(error) = issue::written(&root, &parsed) {
@@ -396,22 +421,35 @@ fn resume_task(id: &str) -> i32 {
 }
 
 /// `task new --follow-up-of`: one command, one planning pull request.
+/// Where durable work is tracked, its id is issued from the registry like
+/// any other task (SPC-013 R-12).
 fn run_follow_up(source: &str, title: &str) -> i32 {
     let Some(template) = load_template("base/pm/task.md.tmpl") else {
         eprintln!("error: task template unavailable");
         return 1;
     };
-    match light_paths::create_follow_up(&super::repo_root(), &template, source, title) {
-        Ok(rec) => {
-            report(&rec);
-            println!("  follow_up_of: {source}");
-            0
-        }
-        Err(error) => {
-            eprintln!("error: {error}");
-            1
-        }
-    }
+    let root = super::repo_root();
+    let request = serde_json::json!({ "kind": "task", "follow_up_of": source, "title": title });
+    let Some(mut issuer) = Issuer::new(&root, Kind::Tsk, title, request) else {
+        return 1;
+    };
+    let result = if issuer.registry {
+        light_paths::create_follow_up_with(
+            &root,
+            &template,
+            source,
+            title,
+            Some(&mut |target| issuer.allocate(target)),
+        )
+    } else {
+        light_paths::create_follow_up(&root, &template, source, title)
+    };
+    let Some(rec) = issuer.settle(result) else {
+        return 1;
+    };
+    report(&rec);
+    println!("  follow_up_of: {source}");
+    0
 }
 
 /// Arguments for `codeflow adr`.

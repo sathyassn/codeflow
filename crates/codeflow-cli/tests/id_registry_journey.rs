@@ -443,6 +443,81 @@ fn task_new_resume_writes_an_interrupted_reservation_once() {
     assert!(!again.status.success(), "{}", text(&again));
 }
 
+/// A follow-up is a task: where durable work is tracked its number comes
+/// from the registry, bound to its `uid`, and an interrupted follow-up
+/// resumes as a follow-up of the same source.
+#[test]
+fn a_follow_up_task_takes_its_number_from_the_registry() {
+    let (_dir, root, bare) = project_with_remote();
+    ok(
+        &codeflow(&root, &["epic", "new", "follow-up outcome"]),
+        "epic new",
+    );
+    ok(
+        &codeflow(
+            &root,
+            &["task", "new", "--epic", "EPC-001", "--into", LINE, "source"],
+        ),
+        "task new",
+    );
+    commit(&root, "chore: plan the source task");
+    git(&root, &["switch", "-q", "-c", "plan/follow-up"]);
+    let follow = ok(
+        &codeflow(
+            &root,
+            &["task", "new", "--follow-up-of", "TSK-001", "a follow-up"],
+        ),
+        "task new --follow-up-of",
+    );
+    assert!(
+        follow.contains("TSK-002") && follow.contains("reserved on the authority"),
+        "{follow}"
+    );
+    let record = std::fs::read_to_string(root.join("project-management/tasks/TSK-002.md")).unwrap();
+    assert!(record.contains("follow_up_of: TSK-001"), "{record}");
+    let uid_line = record
+        .lines()
+        .find(|line| line.starts_with("uid: "))
+        .unwrap();
+    let uid = uid_line[5..].split_whitespace().next().unwrap();
+    let bound = git(&bare, &["show", "codeflow/registry:ids/TSK/002.toml"]);
+    assert!(bound.contains(&format!("uid = \"{uid}\"")), "{bound}");
+
+    // Reserve a follow-up as `task new` does, stop before the write, resume.
+    let exe = PathBuf::from(env!("CARGO_BIN_EXE_codeflow"));
+    let path = std::env::join_paths(exe.parent().map(Path::to_path_buf).into_iter().chain(
+        std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()),
+    ))
+    .unwrap();
+    std::env::set_var("PATH", path);
+    std::env::set_var("CODEFLOW_HOME", isolated_home());
+    std::env::set_var("GIT_CONFIG_GLOBAL", "/dev/null");
+    let mut request = codeflow_core::ids::issue::Request::issue(
+        codeflow_core::ids::Kind::Tsk,
+        "interrupted follow-up",
+        LINE,
+    );
+    request.resume = Some(serde_json::json!({
+        "kind": "task", "follow_up_of": "TSK-001", "title": "interrupted follow-up",
+    }));
+    git(&root, &["config", "user.email", "journey@example.test"]);
+    let reserved = codeflow_core::ids::issue::reserve(&root, &request).unwrap();
+    assert_eq!(reserved.id.to_string(), "TSK-003");
+    let resumed = ok(
+        &codeflow(&root, &["task", "new", "--resume", "TSK-003"]),
+        "resume a follow-up",
+    );
+    assert!(resumed.contains("TSK-003"), "{resumed}");
+    let written =
+        std::fs::read_to_string(root.join("project-management/tasks/TSK-003.md")).unwrap();
+    assert!(written.contains("follow_up_of: TSK-001"), "{written}");
+    assert!(written.contains("epic_id: EPC-001"), "{written}");
+    assert!(
+        written.contains(&format!("uid: {}", reserved.uid)),
+        "{written}"
+    );
+}
+
 /// The enforcing registry job must run from the target branch's workflow
 /// (`pull_request_target`), read the PR head only as git data, and hold a
 /// read-only token: then a PR that edits this file changes nothing about

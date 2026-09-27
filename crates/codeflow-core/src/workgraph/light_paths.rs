@@ -10,7 +10,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use crate::workgraph::allocate::{create_task, NewRecord};
+use crate::workgraph::allocate::{create_task, create_task_with, Allocator, NewRecord};
 use crate::workgraph::store::StoreError;
 
 /// A kebab-case slug of a title for branch and file names, at most 48
@@ -81,6 +81,23 @@ pub fn create_follow_up(
     source_id: &str,
     title: &str,
 ) -> Result<NewRecord, StoreError> {
+    create_follow_up_with(repo_root, template, source_id, title, None)
+}
+
+/// [`create_follow_up`] with the id and `uid` chosen by `allocate`, as the
+/// shared registry issues them where durable work is tracked (SPC-013 R-12);
+/// `None` takes the next number visible in the checkout.
+///
+/// # Errors
+///
+/// As [`create_follow_up`], plus the allocator's error.
+pub fn create_follow_up_with(
+    repo_root: &Path,
+    template: &str,
+    source_id: &str,
+    title: &str,
+    allocate: Option<&mut Allocator<'_>>,
+) -> Result<NewRecord, StoreError> {
     let pm_root = repo_root.join("project-management");
     let source = crate::workgraph::layout::task_record_files(&pm_root)
         .into_iter()
@@ -101,14 +118,25 @@ pub fn create_follow_up(
     let reason = epic
         .is_none()
         .then(|| format!("follow-up of standalone task {source_id}"));
-    let record = create_task(
-        &pm_root,
-        template,
-        epic.as_deref(),
-        reason.as_deref(),
-        Some(&target),
-        title,
-    )?;
+    let record = match allocate {
+        Some(allocate) => create_task_with(
+            &pm_root,
+            template,
+            epic.as_deref(),
+            reason.as_deref(),
+            Some(&target),
+            title,
+            allocate,
+        )?,
+        None => create_task(
+            &pm_root,
+            template,
+            epic.as_deref(),
+            reason.as_deref(),
+            Some(&target),
+            title,
+        )?,
+    };
     let text = fs::read_to_string(&record.path)?;
     let Some(at) = text.find("\ncreated:") else {
         let _ = fs::remove_file(&record.path);
