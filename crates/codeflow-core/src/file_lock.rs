@@ -73,6 +73,22 @@ fn acquire_shared_lock(path: &Path) -> Result<fs::File, String> {
 ///
 /// Appends `.lock` to the full file name (e.g., `foo.json` → `foo.json.lock`,
 /// `registry.json` → `registry.json.lock`).
+/// Whether this process may create and write the sidecar lock of `path`.
+/// `Err` carries the OS error, so a caller can tell a permission denial (a
+/// sandbox, a read-only home) from other failures.
+pub(crate) fn probe_lock_writable(path: &Path) -> std::io::Result<()> {
+    let lock_path = sidecar_lock_path(path);
+    if let Some(dir) = lock_path.parent() {
+        fs::create_dir_all(dir)?;
+    }
+    fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(false)
+        .open(&lock_path)
+        .map(drop)
+}
+
 fn sidecar_lock_path(path: &Path) -> std::path::PathBuf {
     let mut lock_name = path.file_name().unwrap_or_default().to_os_string();
     lock_name.push(".lock");

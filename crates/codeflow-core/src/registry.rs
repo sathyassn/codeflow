@@ -196,15 +196,23 @@ pub fn read_project_info(repo_root: &Path) -> ProjectInfo {
 /// concurrent invocations never lose entries. Entries whose recorded path
 /// no longer exists on disk (deleted or moved repos) are pruned in the same
 /// locked read-modify-write — the registry is a view, and stale rows make
-/// it lie. Returns `Ok(true)` when an entry was written.
+/// it lie. Returns `Ok(true)` when an entry was written, and `Ok(false)`
+/// when nothing was: the repo is not initialized, or this process may not
+/// write the registry (a sandbox or a read-only home), which is expected
+/// and not worth a warning.
 ///
 /// # Errors
 ///
 /// Returns `Err(String)` when the lock cannot be acquired or the registry
-/// file cannot be read, parsed, or written.
+/// file cannot be read, parsed, or written for another reason.
 pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
     if !is_initialized(repo_root) {
         return Ok(false);
+    }
+    if let Err(error) = crate::file_lock::probe_lock_writable(&registry_path(home)) {
+        if is_denied(&error) {
+            return Ok(false);
+        }
     }
 
     let canonical = std::fs::canonicalize(repo_root)
@@ -236,6 +244,15 @@ pub fn touch_registry(home: &Path, repo_root: &Path) -> Result<bool, String> {
     })?;
 
     Ok(true)
+}
+
+/// A permission denial or a read-only file system: the registry is not this
+/// process's to write, as in a sandbox.
+fn is_denied(error: &std::io::Error) -> bool {
+    matches!(
+        error.kind(),
+        std::io::ErrorKind::PermissionDenied | std::io::ErrorKind::ReadOnlyFilesystem
+    )
 }
 
 /// List registered repos. A missing registry file is an empty registry.
