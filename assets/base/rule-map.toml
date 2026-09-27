@@ -345,6 +345,12 @@ see = [".codeflow/rules/workflow-discipline.md"]
 tiers = ["minimal"]
 
 [[moment]]
+key = "blocker"
+when = "hit a failure, a red check or a blocker"
+action = "classify it; one bounded probe on a new hypothesis, never the same retry; an unfinished CI job is missing evidence; escalate only operator-owned choices"
+see = [".codeflow/rules/workflow-discipline.md"]
+
+[[moment]]
 key = "branch"
 when = "branch, open a worktree, commit, rebase or clean up"
 action = "work-start check first (identity, intent-match, currency); one worktree per session; cleanup needs merge proof"

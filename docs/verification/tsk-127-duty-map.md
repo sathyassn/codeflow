@@ -76,7 +76,7 @@ Homes used below:
 | Workflow discipline intro and lifecycle route | WD intro; map build moment | `artifact_budget_contract` |
 | Work to the outcome | WD; map rule | `rule_map_contract` |
 | Ground it in evidence | WD; map evidence rule | `orchestration_contract` |
-| Navigate blockers | WD | CF-GOV-002, CF-QA-013 |
+| Navigate blockers | WD; map blocker moment (classify, one bounded probe, never the same retry, escalate only operator-owned choices) | CF-GOV-002, CF-QA-013, `rule_map_contract` |
 | Find broadly; act by materiality | WD; map rule (broad form); the ranking in the map review moment, which points at `cf-reviewer`, `quality-contract.md` and `verification-selection.md` | CF-QA-005, `rule_map_contract` |
 | Challenge decisions independently | WD; map rule | `orchestration_contract` |
 | Guard your context | WD; CLAUDE "Stay lean by delegating" | none needed |
