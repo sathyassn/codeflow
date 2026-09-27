@@ -1795,6 +1795,23 @@ class TypedRepairTests(unittest.TestCase):
         with self.assertRaisesRegex(release.ReleaseError, "managed stamp of the release version"):
             self.check(head)
 
+    def test_a_baseline_changed_without_the_manifest_is_refused(self) -> None:
+        # F2: the live stamps are right and the base breaks on an unmarked
+        # entry; the repair fixes the changelog and also rewrites a baseline
+        # stamp while the manifest, and its recorded hash, stay as they were.
+        self.repo.pending("2.0.1", [("patch", "Fix a crash")])
+        self.repo.write_stamps("2.0.1")
+        self.record_baselines("2.0.1")
+        good = (self.repo.root / "CHANGELOG.md").read_text()
+        self.repo.write("CHANGELOG.md", good.replace("## [2.0.0]", "- stray item\n\n## [2.0.0]"))
+        self.base = self.repo.commit("fix: a crash")
+        self.repo.write("CHANGELOG.md", good)
+        baseline = self.repo.root / ".codeflow/.baseline/AGENTS.md"
+        baseline.write_text(baseline.read_text().replace("2.0.1", "99.0.0"))
+        head = self.repo.commit("docs(changelog): mark the entry")
+        with self.assertRaisesRegex(release.ReleaseError, "managed stamp of the release version 2.0.1"):
+            self.check(head)
+
     def test_a_repair_cannot_rewrite_an_existing_entry(self) -> None:
         # F4: the repair restores the stamps and also changes what an entry
         # says; a none declaration does not make that wording.
