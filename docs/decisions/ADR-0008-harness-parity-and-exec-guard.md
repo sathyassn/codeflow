@@ -156,8 +156,14 @@ has its own rules, so the removed code had no production caller: a second set
 of rules that never ran beside the ones the live guards own. Nothing an
 adopter configures or sees changes.
 
-Changed at the same time: recursive removal strictly below a temp root
-(`$TMPDIR`, `/tmp`, `/var/tmp`, the macOS per-user `/var/folders/<xx>/<id>/T`,
-each also under `/private`) is no longer classified as a protected target.
-An agent's scratch space lives there, below the protected `/private` and
-`/var`; the roots themselves and every other system directory stay blocked.
+Changed at the same time: recursive removal strictly below a temp root is
+no longer classified as a protected target. An agent's scratch space lives
+there, below the protected `/private` and `/var`. The roots are a fixed set:
+`/tmp`, `/var/tmp` (canonically `/private/tmp` and `/private/var/tmp` on
+macOS) and the macOS per-user `/private/var/folders/<xx>/<id>/T`.
+Containment is canonical: the operand's longest existing prefix is resolved
+through symlinks, and a `..` in the rest, a failed resolution or a glob
+before the last component grants nothing, so a link under temp space that
+leads to `/etc` stays blocked. `$TMPDIR` adds no root; one that canonically
+is or lies below a root is protected itself. The roots, a glob over one and
+every other system directory stay blocked.

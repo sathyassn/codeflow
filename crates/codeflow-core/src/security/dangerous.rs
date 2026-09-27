@@ -3,6 +3,7 @@
 //! Checks for: recursive deletion of root/system dirs, disk operations,
 //! dangerous permission changes, fork bombs.
 
+use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use regex::Regex;
@@ -338,58 +339,157 @@ fn dangerous_rm_target(op: &str) -> Option<&'static str> {
     if is_home_root_operand(op) {
         return Some("home directory");
     }
-    let norm = normalize_path(op);
+    let tmpdir = std::env::var_os("TMPDIR").map(PathBuf::from);
+    match temp_place(op, tmpdir.as_deref()) {
+        TempPlace::Root => Some("temp root"),
+        TempPlace::Below => None,
+        TempPlace::Outside(canonical) => {
+            let norm = normalize_path(op);
+            // A path that reads as temp space but leads elsewhere (a link
+            // under `/tmp`) is judged where it lands. Other paths keep their
+            // lexical reading: `/home` resolves below `/System` on macOS.
+            let lands = canonical.filter(|_| temp_root_depth(&norm).is_some());
+            protected_path(&norm).or_else(|| lands.as_deref().and_then(protected_path))
+        }
+    }
+}
+
+/// Classify a normalized absolute path as the root, a system directory or a
+/// whole top-level user or mount collection.
+fn protected_path(norm: &str) -> Option<&'static str> {
     if norm == "/" || norm == "/*" {
         return Some("/");
     }
-    let tmpdir = std::env::var("TMPDIR").ok();
-    if is_below_temp_root(&norm, tmpdir.as_deref()) {
-        return None;
+    let rest = norm.strip_prefix('/')?;
+    let mut parts = rest.split('/');
+    let first = parts.next().unwrap_or("");
+    if SYSTEM_DIRS.contains(&first) {
+        return Some("system directory");
     }
-    if let Some(rest) = norm.strip_prefix('/') {
-        let mut parts = rest.split('/');
-        let first = parts.next().unwrap_or("");
-        if SYSTEM_DIRS.contains(&first) {
-            return Some("system directory");
-        }
-        let remainder = parts.collect::<Vec<_>>().join("/");
-        if ROOT_COLLECTION_DIRS.contains(&first) && (remainder.is_empty() || remainder == "*") {
-            return Some("top-level user or mount collection");
-        }
+    let remainder = parts.collect::<Vec<_>>().join("/");
+    if ROOT_COLLECTION_DIRS.contains(&first) && (remainder.is_empty() || remainder == "*") {
+        return Some("top-level user or mount collection");
     }
     None
 }
 
-/// Whether a normalized absolute path lies strictly below a temp root: the
-/// process's `$TMPDIR`, the shared `/tmp` and `/var/tmp`, or the macOS
-/// per-user `/var/folders/<xx>/<id>/T`, each also under `/private`. An
-/// agent's own scratch space often lives there, below system directories
-/// such as `/private` and `/var`; the root itself stays protected, and `..`
-/// was already resolved, so an escape is classified by where it lands.
-fn is_below_temp_root(norm: &str, tmpdir: Option<&str>) -> bool {
-    let below = |root: &str| {
-        let root = root.trim_end_matches('/');
-        !root.is_empty()
-            && norm
-                .strip_prefix(root)
-                .is_some_and(|rest| rest.len() > 1 && rest.starts_with('/'))
+/// The shared temp roots in canonical form: macOS keeps them below
+/// `/private`, where `/tmp` and `/var/tmp` are symlinks.
+const TEMP_ROOTS: &[&str] = &["/tmp", "/var/tmp", "/private/tmp", "/private/var/tmp"];
+
+/// Where an operand lands relative to the temp roots (TSK-137).
+#[derive(Debug, PartialEq, Eq)]
+enum TempPlace {
+    /// A temp root itself, or a glob over one: always protected.
+    Root,
+    /// Canonically below a temp root: an agent's scratch space, exempt.
+    Below,
+    /// Not established below a temp root; carries the canonical path when
+    /// it resolved, so a symlinked system target is still classified.
+    Outside(Option<String>),
+}
+
+/// Place an operand relative to the temp roots by where it really lands.
+///
+/// Containment is canonical, never lexical: the longest existing prefix is
+/// canonicalized (following symlinks) and the rest appended; a `..` in that
+/// rest, a failed canonicalization or a component that exists but does not
+/// resolve (a dangling link) establishes nothing. A glob is judged by its
+/// text before the first glob character, and only when the glob is in the
+/// last component, since a match in the middle may itself be a link.
+///
+/// The roots are the fixed [`TEMP_ROOTS`] and the macOS per-user
+/// `/private/var/folders/<xx>/<id>/T`. `$TMPDIR` adds no root: it is honoured
+/// only when it canonically is one of those or lies below one, and then only
+/// to protect the directory itself.
+fn temp_place(op: &str, tmpdir: Option<&Path>) -> TempPlace {
+    if !op.starts_with('/') {
+        return TempPlace::Outside(None);
+    }
+    let judged = match op.find(['*', '?', '[']) {
+        Some(index) if op[index..].contains('/') => return TempPlace::Outside(None),
+        Some(index) => &op[..index],
+        None => op,
     };
-    if let Some(tmpdir) = tmpdir.map(normalize_path) {
-        // A `$TMPDIR` that is itself a system directory or the root is not
-        // an exemption.
-        if tmpdir.matches('/').count() >= 2 && below(&tmpdir) {
-            return true;
+    let Some(canonical) = canonical_operand(judged) else {
+        return TempPlace::Outside(None);
+    };
+    let tmpdir = tmpdir
+        .and_then(|dir| std::fs::canonicalize(dir).ok())
+        .map(|dir| dir.to_string_lossy().into_owned())
+        .filter(|dir| temp_root_depth(dir).is_some());
+    // `/tmp/*` is judged as `/tmp/`, so a glob over a whole root is the root.
+    match temp_root_depth(&canonical) {
+        Some(0) => TempPlace::Root,
+        _ if tmpdir.as_deref() == Some(canonical.as_str()) => TempPlace::Root,
+        Some(_) => TempPlace::Below,
+        None => TempPlace::Outside(Some(canonical)),
+    }
+}
+
+/// How many components a canonical path lies below a temp root: `Some(0)`
+/// for a root itself, `None` outside every root.
+fn temp_root_depth(canonical: &str) -> Option<usize> {
+    let below = |root: &str| {
+        let rest = canonical.strip_prefix(root)?;
+        if rest.is_empty() {
+            return Some(0);
+        }
+        rest.strip_prefix('/')
+            .map(|rest| rest.split('/').filter(|part| !part.is_empty()).count())
+    };
+    if let Some(depth) = TEMP_ROOTS.iter().find_map(|root| below(root)) {
+        return Some(depth);
+    }
+    let parts: Vec<&str> = canonical.split('/').skip(1).collect();
+    let name = |part: &str, len: Option<usize>| {
+        !part.is_empty()
+            && len.is_none_or(|len| part.len() == len)
+            && part
+                .chars()
+                .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '+')
+    };
+    match parts.as_slice() {
+        ["private", "var", "folders", bucket, id, "T", rest @ ..]
+            if name(bucket, Some(2)) && name(id, None) =>
+        {
+            Some(rest.iter().filter(|part| !part.is_empty()).count())
+        }
+        _ => None,
+    }
+}
+
+/// Canonicalize the longest existing prefix of an absolute path and append
+/// the rest, or `None` when that cannot be established.
+fn canonical_operand(path: &str) -> Option<String> {
+    let parts: Vec<&str> = path
+        .split('/')
+        .filter(|part| !part.is_empty() && *part != ".")
+        .collect();
+    for existing in (0..=parts.len()).rev() {
+        let prefix = format!("/{}", parts[..existing].join("/"));
+        match std::fs::canonicalize(&prefix) {
+            Ok(base) => {
+                let rest = &parts[existing..];
+                if rest.contains(&"..") {
+                    return None;
+                }
+                let mut canonical = base.to_string_lossy().into_owned();
+                for part in rest {
+                    if !canonical.ends_with('/') {
+                        canonical.push('/');
+                    }
+                    canonical.push_str(part);
+                }
+                return Some(canonical);
+            }
+            Err(error)
+                if error.kind() == std::io::ErrorKind::NotFound
+                    && std::fs::symlink_metadata(&prefix).is_err() => {}
+            Err(_) => return None,
         }
     }
-    let path = norm.strip_prefix("/private").unwrap_or(norm);
-    if ["/tmp", "/var/tmp"].into_iter().any(|root| {
-        path.strip_prefix(root)
-            .is_some_and(|rest| rest.len() > 1 && rest.starts_with('/'))
-    }) {
-        return true;
-    }
-    let parts: Vec<&str> = path.split('/').skip(1).collect();
-    matches!(parts.as_slice(), ["var", "folders", _, _, "T", rest @ ..] if !rest.is_empty())
+    None
 }
 
 /// Classify Windows drive, system, profile, and share roots. Comparisons are
@@ -1277,36 +1377,155 @@ mod tests {
     }
 
     #[test]
-    fn removal_below_a_temp_root_is_allowed_and_system_paths_stay_blocked() {
-        let tmpdir = Some("/private/var/folders/ab/cd123/T/");
-        for path in [
-            "/private/var/folders/ab/cd123/T/scratch",
-            "/var/folders/xy/zz9/T/build/out",
+    fn temp_roots_are_fixed_and_protected_themselves() {
+        for root in [
+            "/tmp",
+            "/tmp/",
+            "/tmp/*",
+            "/tmp*",
+            "/private/tmp",
+            "/var/tmp",
+            "/private/var/tmp/",
+            "/private/var/folders/ab/cd123/T",
+            "/private/var/folders/ab/cd123/T/*",
+        ] {
+            assert_eq!(temp_place(root, None), TempPlace::Root, "{root}");
+            assert!(DangerousModule
+                .check(&ctx(&format!("rm -rf {root}")))
+                .is_some());
+        }
+        for below in [
             "/private/tmp/claude-501/work",
             "/private/var/tmp/cache",
-            "/var/tmp/cache",
+            "/private/var/folders/ab/cd123/T/scratch",
+            "/private/var/folders/a_/x+y_0/T/build/*",
         ] {
-            assert!(is_below_temp_root(path, tmpdir), "{path}");
+            assert_eq!(temp_place(below, None), TempPlace::Below, "{below}");
         }
-        for path in [
-            "/private/var/folders/ab/cd123/T",
-            "/private/tmp",
+        // Lookalikes of the per-user root are not roots.
+        for outside in [
+            "/private/var/folders/not-xx/id/T/cache",
+            "/private/var/foldersXX/ab/id/T/cache",
+            "/private/var/folders/ab/id/T-not/cache",
+            "/private/var/folders/ab/cd123/C/cache",
             "/private/var/db/x",
-            "/var/folders/ab/cd123",
-            "/var/folders/ab/cd123/C/cache",
-            "/var/lib/x",
-            "/private/etc",
         ] {
-            assert!(!is_below_temp_root(path, tmpdir), "{path}");
+            assert!(
+                matches!(temp_place(outside, None), TempPlace::Outside(_)),
+                "{outside}"
+            );
         }
-        // A custom `$TMPDIR` below a system directory is honoured; one that
-        // is a system directory itself is not.
-        assert!(is_below_temp_root(
-            "/opt/agent-tmp/x",
-            Some("/opt/agent-tmp")
-        ));
-        assert!(!is_below_temp_root("/usr/lib", Some("/usr")));
-        assert!(!is_below_temp_root("/etc/x", Some("/")));
+    }
+
+    #[test]
+    fn tmpdir_adds_no_root_and_only_a_valid_one_is_protected() {
+        // A system directory as `$TMPDIR` confers nothing.
+        for (tmpdir, path) in [
+            ("/private/etc", "/private/etc/hosts"),
+            ("/private/var", "/private/var/db"),
+            ("/usr/local", "/usr/local/bin"),
+            ("/usr", "/usr/lib"),
+            ("/", "/etc/x"),
+        ] {
+            assert!(
+                matches!(
+                    temp_place(path, Some(Path::new(tmpdir))),
+                    TempPlace::Outside(_)
+                ),
+                "{tmpdir} {path}"
+            );
+        }
+        // A custom `$TMPDIR` nested below a root is protected itself, also
+        // through an alias spelling, and its descendants stay exempt.
+        let scratch = tempfile::tempdir().unwrap();
+        let tmpdir = scratch.path().join("agent-tmp");
+        std::fs::create_dir(&tmpdir).unwrap();
+        let canonical = std::fs::canonicalize(&tmpdir).unwrap();
+        let canonical = canonical.to_str().unwrap();
+        for tmpdir_spelling in [tmpdir.clone(), scratch.path().join("./agent-tmp/")] {
+            let tmpdir = Some(tmpdir_spelling.as_path());
+            assert_eq!(temp_place(canonical, tmpdir), TempPlace::Root);
+            assert_eq!(
+                temp_place(&format!("{canonical}/"), tmpdir),
+                TempPlace::Root
+            );
+            assert_eq!(
+                temp_place(&format!("{canonical}/*"), tmpdir),
+                TempPlace::Root
+            );
+            assert_eq!(
+                temp_place(&format!("{canonical}/x"), tmpdir),
+                TempPlace::Below
+            );
+        }
+        #[cfg(unix)]
+        {
+            let alias = scratch.path().join("alias");
+            std::os::unix::fs::symlink(&tmpdir, &alias).unwrap();
+            assert_eq!(temp_place(canonical, Some(&alias)), TempPlace::Root);
+        }
+    }
+
+    #[test]
+    fn a_lexical_escape_from_a_temp_root_is_not_below_it() {
+        for path in [
+            "/private/tmp/../etc/hosts",
+            "//private//tmp/../etc/hosts",
+            "/private/tmp/claude-501/../../etc",
+        ] {
+            assert!(
+                matches!(temp_place(path, None), TempPlace::Outside(_)),
+                "{path}"
+            );
+            assert!(DangerousModule
+                .check(&ctx(&format!("rm -rf {path}")))
+                .is_some());
+        }
+        // `..` below a component that does not exist cannot be resolved.
+        let scratch = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(scratch.path()).unwrap();
+        let escape = format!("{}/missing/../../../etc/hosts", base.display());
+        assert_eq!(temp_place(&escape, None), TempPlace::Outside(None));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlink_below_a_temp_root_is_judged_by_its_target() {
+        let scratch = tempfile::tempdir().unwrap();
+        let base = std::fs::canonicalize(scratch.path()).unwrap();
+        let base = base.to_str().unwrap();
+        let link = format!("{base}/outside-link");
+        std::os::unix::fs::symlink("/etc", &link).unwrap();
+        std::os::unix::fs::symlink("/nonexistent-codeflow-target/x", format!("{base}/dangling"))
+            .unwrap();
+
+        assert_eq!(temp_place(&format!("{base}/work"), None), TempPlace::Below);
+        assert_eq!(temp_place(&format!("{base}/*"), None), TempPlace::Below);
+        for command in [
+            "rm -rf /etc/hosts".to_string(),
+            format!("rm -rf {link}/hosts"),
+            format!("rm -rf \"{link}/hosts\""),
+            format!("rm -rf '{link}'/hosts"),
+            format!("rm -rf {link}/*"),
+            format!("rm -rf {link}/"),
+            format!("rm -rf {link}/../var/db"),
+            format!("chmod -R 777 {link}/ssh"),
+        ] {
+            assert!(DangerousModule.check(&ctx(&command)).is_some(), "{command}");
+        }
+        // A glob before the last component may match a link: not exempt.
+        assert_eq!(
+            temp_place(&format!("{base}/out*/hosts"), None),
+            TempPlace::Outside(None)
+        );
+        // A component that exists but does not resolve establishes nothing.
+        assert_eq!(
+            temp_place(&format!("{base}/dangling/y"), None),
+            TempPlace::Outside(None)
+        );
+        assert!(DangerousModule
+            .check(&ctx(&format!("rm -rf {base}/work \"{base}/quoted dir\"")))
+            .is_none());
     }
 
     #[test]
