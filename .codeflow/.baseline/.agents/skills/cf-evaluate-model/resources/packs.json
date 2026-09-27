@@ -132,6 +132,8 @@
         "direct-xhigh-does-not-require-failure",
         "cross-family-entry-cannot-skip-primary",
         "routine-work-avoids-effort-inflation",
+        "same-family-worker-runs-as-native-subagent",
+        "same-family-worker-falls-back-without-native-route",
         "extra-family-invoked-when-warranted"
       ]
     },

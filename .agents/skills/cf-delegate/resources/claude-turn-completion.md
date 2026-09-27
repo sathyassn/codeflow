@@ -52,8 +52,9 @@ The tradeoff is scoped to that Claude process: background Bash tasks, background
 subagents, and Ctrl+B are disabled. Put servers or watchers in separate owned
 panes; independent host-owned native sessions may still run in parallel. Before
 relying on the lane, run a bounded named-child canary and observe its reviewer
-result before that armed turn's `Stop`. A task notification, `UserPromptSubmit`,
-backgrounded Agent, requested environment value, or launch string is not proof.
+result before that armed turn's `Stop`. Within this lane: A task notification,
+`UserPromptSubmit`, backgrounded Agent, requested environment value, or launch
+string is not proof.
 
 ## Sibling Stop-hook preflight
 
@@ -187,6 +188,10 @@ durable poison. Poison blocks every later transition; recovery is a new run
 id in a fresh state directory — records are never edited.
 
 ## Sequential turns
+
+This section governs the delegated Claude lifecycle (`wait --until terminal`,
+continuation records). An in-session Agent launch follows capability-routing
+instead: its return is the task notification from the session's own launch.
 
 Collect delegated worker results before the primary returns its final answer.
 For peer-dependent turns, verify a supported public foreground native return

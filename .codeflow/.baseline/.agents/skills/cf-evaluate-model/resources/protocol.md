@@ -36,6 +36,12 @@ qualifies a role; they never encode the current model name. Requested and
 observed system identity proves the concrete binding separately. Recording a
 stable primary role requires its tagged cases to pass.
 
+A case may name the `hosts` it applies to, as harness-catalog lineages. The
+canary and full suites then select it only for a subject harness of a listed
+lineage, so a host-specific behavior, such as a native same-family subagent
+on Claude Code, is graded where it exists and its truthful fallback is graded
+on the other hosts. A case without `hosts` applies to every harness.
+
 A scoped internal-route qualification is not a full primary-binding promotion.
 Pre-register the exact catalog route, harness, selector, effort, workload, and
 cases; label each arm qualifying or comparison before launch, never after seeing

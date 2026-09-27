@@ -18,8 +18,9 @@ Every native session declares one role:
 Only `host` invokes `cf-model-orchestrator`. The first line of every
 cross-family task declares `ROLE: peer` and invokes the receiving family's
 qualified primary at its default effort. `ROLE: worker` is only for same-family
-work owned and dispatched by that family's primary, through a native child or
-separate native session. The prompt limits
+work owned and dispatched by that family's primary, as a native subagent of
+that primary's own session, never a separate CLI session or Herdr tab. The
+prompt limits
 the session to that bounded assignment and explicitly forbids starting the
 top-level orchestrator or delegating back to the host lineage. A generic
 same-lineage subagent cannot satisfy a named cross-lineage assignment. A Grok
@@ -81,12 +82,18 @@ reassignment: create Plan vN+1 and obtain fresh Claude and Codex approval before
 work continues. A same-seat trigger-based effort escalation, including direct
 high→xhigh, is ledger evidence, not reassignment. Novelty is not a trigger. Mid-session, the
 high primary stays the orchestrator and spawns same-family workers at that
-effort. Spawn through the harness's native child-effort knob or a `ROLE:
-worker` native session at that effort. Record requested versus observed
-selector/effort. If that route is unavailable, keep the high primary,
-record the limitation, and do not infer a pass. A permitted worker change
-within the approved responsible-primary seat remains internal routing unless it
-changes the named primary or reviewer.
+effort. Same-family workers run inside the host harness: spawn each one as a
+native subagent of the primary's own session through the harness's native
+child-effort knob, never as a separate CLI session or Herdr tab. A Claude
+primary, in the desktop app or the CLI alike, launches Fable or Opus through
+Claude Code's Agent tool with a subagent definition (preflight below). A Codex
+or Grok primary follows the same rule once native evidence shows a subagent
+route for that model in its harness; none is recorded yet. Record requested
+versus observed selector/effort. Where the harness has no native route for
+that model, the recorded fallback is `primary-retained`: keep the high
+primary, record the missing route as a limitation, and do not infer a pass.
+A permitted worker change within the approved responsible-primary seat remains
+internal routing unless it changes the named primary or reviewer.
 
 Default effort is high for primary seats, not a ceiling or a mandate to make
 every worker high. A primary already qualified at high can perform suitable
@@ -164,14 +171,18 @@ session, verify a supported definition is loaded before invoking it. Never
 invent a missing Agent argument or install a permanent fleet of worker roles.
 
 Before launching any Claude worker, **read and follow**
-`.claude/skills/cf-delegate/resources/claude-turn-completion.md`, especially
-"Sequential turns." The dispatch must keep worker collection inside the
-accepted foreground turn: collect the worker result before the primary returns,
-do not use background Bash watchers or task notifications as completion, and do
-not accept a terminal response that says work is still running. If the harness
-cannot provide that supported foreground return, the route is unavailable for
-this dispatch; use another bounded native route and preserve the existing
-Stop-hook and lifecycle safety policy unchanged.
+`.claude/skills/cf-delegate/resources/claude-turn-completion.md`. Its
+"Sequential turns" section governs the delegated Claude lifecycle (`wait
+--until terminal`, continuation records): there, collect the worker result
+before the primary returns. It does not govern an in-session Agent launch.
+Claude Code runs Agent-tool subagents in the background; for a same-family
+worker launched that way, the verified return is the task notification from
+this session's own launch of that worker. Do not report the unit complete
+before it arrives, then check the result in it against the brief.
+Notifications from any other launch and background Bash watchers are not
+completion. If the harness gives no such notification, the route is
+unavailable for this dispatch; use another bounded native route and
+preserve the existing Stop-hook and lifecycle safety policy unchanged.
 
 Keep the primary at its default effort. Inspect effective
 [effort precedence](https://code.claude.com/docs/en/model-config):

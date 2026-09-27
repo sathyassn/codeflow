@@ -167,10 +167,8 @@ Codex preferably via plugin/app-server; an incompatible plugin permits the
 qualified native fallback in `cf-delegate`, not simulated Codex. Grok reaches
 Codex via official `codex` CLI and the app-server daemon
 (Herdr CLI if daemon missing; no third-party Grok Codex plugins). Codex reaches
-Claude via Herdr (tmux degraded) plus schema-v2. Hermes and other non-catalog
-harnesses delegate to one native host unless both lanes are proven. Missing lane:
-exhaust qualified routes before recorded solo fallback. Host is not duty; Claude
-produces design.
+Claude via Herdr (tmux degraded) plus schema-v2. Missing lane: exhaust
+qualified routes before recorded solo fallback.
 
 ## Preflight
 
@@ -191,9 +189,11 @@ produces design.
 2. Identify the active host and required lane from the matrix. Set the current
    session role to `host`; every cross-family entry uses `ROLE: peer` and the
    receiving primary's default effort. Only that primary dispatches its own
-   `ROLE: worker` escalation. Bound the assignment; forbid nested orchestration
-   or delegating back to the host lineage. A generic same-lineage subagent
-   never satisfies the named cross-lineage assignment.
+   `ROLE: worker` escalation, as a native subagent of its own session, never a
+   separate CLI session or Herdr tab (fallback: capability-routing). Bound the
+   assignment; forbid nested orchestration or delegating back to the host
+   lineage. A generic same-lineage subagent never satisfies the named
+   cross-lineage assignment.
 3. Verify command and tool readiness:
    - Require each vendor executable/plugin, authenticated interactive canary,
      task tools, and exact selector/effort evidence needed by the chosen lane.

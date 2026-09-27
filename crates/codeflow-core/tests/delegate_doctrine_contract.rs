@@ -393,6 +393,9 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
             "Before launching any Claude worker, **read and follow**",
             "claude-turn-completion.md",
             "collect the worker result before the primary returns",
+            "It does not govern an in-session Agent launch.",
+            "the verified return is the task notification from this session's own launch",
+            "Do not report the unit complete before it arrives",
             "preserve the existing Stop-hook and lifecycle safety policy unchanged",
         ],
     );
@@ -400,6 +403,7 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
         ADAPTER,
         &[
             "## Sequential turns",
+            "This section governs the delegated Claude lifecycle",
             "Collect delegated worker results before the primary returns",
             "do not use Claude Bash `run_in_background` watchers",
             "work is still running is incomplete",

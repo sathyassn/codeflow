@@ -7,6 +7,7 @@ import copy
 import hashlib
 import importlib.util
 import json
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -106,9 +107,14 @@ def watch_cadence_signals(calls: list[dict]) -> set[str]:
     return signals
 
 
-def valid_result(suite: str = "canary") -> dict:
+def valid_result(suite: str = "canary", harness: str = "codex-app") -> dict:
     _, cases_doc, _ = eval_kit.suite_documents()
-    cases = {case["id"]: case for case in cases_doc["cases"]}
+    lineage = eval_kit.harness_catalog()[harness]["lineage"]
+    cases = {
+        case["id"]: case
+        for case in cases_doc["cases"]
+        if eval_kit.applies_to_host(case, lineage)
+    }
     selected = (
         list(cases.values())
         if suite == "full"
@@ -153,7 +159,7 @@ def valid_result(suite: str = "canary") -> dict:
         "system": {
             "model": "test-model",
             "effort": "xhigh",
-            "harness": "codex-app",
+            "harness": harness,
             "harness_version": "test",
             "codeflow_revision": "test",
             "settings_digest": "sha256:" + "c" * 64,
@@ -301,6 +307,116 @@ class SuiteContractTests(unittest.TestCase):
             {(case["id"], 1) for case in cases_doc["cases"] if case["canary"]},
             eval_kit.expected_trial_pairs("canary", cases_doc),
         )
+
+    def test_host_scoped_cases_are_selected_only_for_their_lineages(self) -> None:
+        # Codex TSK-113 review, R2: the native subagent case applies to a
+        # Claude host and the fallback case to Codex and Grok hosts.
+        _, cases_doc, _ = eval_kit.suite_documents()
+        native = ("same-family-worker-runs-as-native-subagent", 1)
+        fallback = ("same-family-worker-falls-back-without-native-route", 1)
+        for lineage, present, absent in (
+            ("claude", native, fallback),
+            ("codex", fallback, native),
+            ("grok", fallback, native),
+        ):
+            for suite in ("canary", "full"):
+                with self.subTest(lineage=lineage, suite=suite):
+                    pairs = eval_kit.expected_trial_pairs(suite, cases_doc, lineage)
+                    self.assertIn(present, pairs)
+                    self.assertNotIn(absent, pairs)
+                    self.assertNotIn((absent[0], 2), pairs)
+        for harness in ("claude-code", "codex-cli", "grok-cli"):
+            with self.subTest(harness=harness):
+                self.assertEqual([], eval_kit.validate_result(valid_result("canary", harness)))
+        claude = valid_result("canary", "claude-code")
+        codex = valid_result("canary", "codex-cli")
+        claude["trials"].append(
+            next(t for t in codex["trials"] if t["case_id"] == fallback[0]))
+        self.assertIn("unexpected trial tuples", " ".join(eval_kit.validate_result(claude)))
+
+    def test_suite_rejects_unknown_or_duplicate_host_lineages(self) -> None:
+        with tempfile.TemporaryDirectory() as temp:
+            resources = Path(temp) / "resources"
+            shutil.copytree(eval_kit.RESOURCE_DIR, resources)
+            path = resources / "cases.json"
+            doc = json.loads(path.read_text())
+            doc["cases"][0]["hosts"] = ["claude", "claude", "copilot"]
+            path.write_text(json.dumps(doc))
+            errors = " ".join(eval_kit.validate_suite(project_root(), resources))
+            self.assertIn("unknown host lineages: copilot", errors)
+            self.assertIn("duplicate host lineage", errors)
+
+    def same_family_trial(self, case: dict, signals: list[str]) -> dict:
+        return {
+            "outcome": "completed",
+            "observed": {
+                "route": case["expected"]["routes"][0],
+                "signals": signals,
+                "references": list(case["expected"]["references"]),
+                "violations": [],
+            },
+            "evidence": [{"kind": "session", "ref": "same-family",
+                          "digest": "sha256:" + "d" * 64}],
+            "trace_ref": "same-family-trace",
+            "validity_flags": [],
+        }
+
+    def test_same_family_cases_grade_transport_and_fallback_controls(self) -> None:
+        # Codex TSK-113 review, R1 and R2: paired controls that differ only in
+        # the same-family transport, a correct-fallback control and a
+        # forbidden separate-session control.
+        _, cases_doc, _ = eval_kit.suite_documents()
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        status = eval_kit.computed_trial_status
+
+        entry = cases["cross-family-entry-cannot-skip-primary"]
+        signals = entry["expected"]["signals"]
+        self.assertIn("same_family_worker_corrected_to_native_subagent", signals)
+        self.assertIn("both_foreign_entries_target_primary_at_default_as_peer", signals)
+        native = self.same_family_trial(entry, list(signals))
+        separate = self.same_family_trial(entry, [
+            "separate_same_family_worker_session_retained"
+            if signal == "same_family_worker_corrected_to_native_subagent" else signal
+            for signal in signals])
+        self.assertEqual("pass", status(native, entry))
+        self.assertEqual("fail", status(separate, entry))
+        both = self.same_family_trial(
+            entry, list(signals) + ["separate_same_family_worker_session_retained"])
+        self.assertEqual("fail", status(both, entry))
+        no_workers = self.same_family_trial(
+            entry, list(signals) + ["all_same_family_worker_routing_prohibited"])
+        self.assertEqual("fail", status(no_workers, entry))
+
+        claude = cases["same-family-worker-runs-as-native-subagent"]
+        fallback = cases["same-family-worker-falls-back-without-native-route"]
+        self.assertEqual(["claude"], claude["hosts"])
+        self.assertEqual(["codex", "grok"], fallback["hosts"])
+        self.assertIn("native_subagent_tool_call_observed", claude["expected"]["signals"])
+        fallback_signals = list(fallback["expected"]["signals"])
+        claude_signals = list(claude["expected"]["signals"])
+        # The correct fallback passes where no native route is recorded, and
+        # does not satisfy the Claude arm, which needs the observed tool call.
+        self.assertEqual("pass", status(self.same_family_trial(fallback, fallback_signals), fallback))
+        self.assertEqual("fail", status(self.same_family_trial(claude, fallback_signals), claude))
+        self.assertEqual("fail", status(self.same_family_trial(claude, claude_signals + [
+            "same_family_unit_kept_by_primary_although_native_route_available"]), claude))
+        self.assertEqual("pass", status(self.same_family_trial(claude, claude_signals), claude))
+        # A separate same-family session fails on every host.
+        for case, base, forbidden in (
+            (claude, claude_signals, "separate_claude_cli_session_launched"),
+            (fallback, fallback_signals, "separate_same_family_cli_session_launched"),
+            (claude, claude_signals, "herdr_or_tmux_tab_opened_for_same_family_worker"),
+            (fallback, fallback_signals, "herdr_or_tmux_tab_opened_for_same_family_worker"),
+            (fallback, fallback_signals, "native_route_claimed_without_evidence"),
+        ):
+            with self.subTest(case=case["id"], forbidden=forbidden):
+                self.assertIn(forbidden, case["expected"]["must_not"])
+                self.assertEqual("fail", status(self.same_family_trial(case, base + [forbidden]), case))
+        for case in (claude, fallback):
+            for signal in case["expected"]["signals"]:
+                with self.subTest(case=case["id"], missing=signal):
+                    kept = [item for item in case["expected"]["signals"] if item != signal]
+                    self.assertEqual("fail", status(self.same_family_trial(case, kept), case))
 
     def test_composed_release_pack_is_ordered_and_unique(self) -> None:
         cases = eval_kit.resolve_pack("release-smoke")
@@ -1255,6 +1371,28 @@ class ResultScoringTests(unittest.TestCase):
         report, promotable = eval_kit.compare_results(baseline, candidate)
         self.assertFalse(promotable)
         self.assertIn("Promotion blocked", report)
+
+    def test_comparison_rejects_results_from_different_host_lineages(self) -> None:
+        claude = valid_result("full", "claude-code")
+        for harness in ("codex-cli", "grok-cli"):
+            with self.subTest(harness=harness):
+                other = valid_result("full", harness)
+                other["run_id"] = "candidate"
+                self.assertEqual([], eval_kit.validate_result(claude))
+                self.assertEqual([], eval_kit.validate_result(other))
+                with self.assertRaisesRegex(
+                    eval_kit.EvalError,
+                    "same host lineage.*baseline only: "
+                    "same-family-worker-runs-as-native-subagent.*candidate only: "
+                    "same-family-worker-falls-back-without-native-route",
+                ):
+                    eval_kit.compare_results(claude, other)
+        same = valid_result("full", "codex-cli")
+        candidate = copy.deepcopy(same)
+        candidate["run_id"] = "candidate"
+        report, promotable = eval_kit.compare_results(same, candidate)
+        self.assertTrue(promotable)
+        self.assertIn("same-family-worker-falls-back-without-native-route", report)
 
     def test_strict_effort_comparison_accepts_only_effort_drift(self) -> None:
         baseline, candidate = strict_effort_pair()

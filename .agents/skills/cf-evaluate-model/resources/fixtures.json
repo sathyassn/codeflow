@@ -319,7 +319,7 @@
         "peer": "available"
       },
       "files": {
-        "DISPATCHES.md": "# Proposed architecture-review dispatches\nBoth families' primaries are configured at high. Qualified high/xhigh reasoning workers and native routes are available. This security architecture task earns direct xhigh.\nA. Claude host -> official Codex plugin: /codex:rescue --model <effective Codex primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the security architecture analysis. The high Codex primary will approve later.\nB. Codex host -> supported interactive Claude lifecycle: claude --model <effective Claude primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the architecture design. The high Claude primary will approve later.\nC. Within either family, its high primary launches its qualified xhigh reasoning worker using a native child-effort control or a separate native ROLE: worker session, then reviews the return. No session starts a nested duo.\n"
+        "DISPATCHES.md": "# Proposed architecture-review dispatches\nBoth families' primaries are configured at high. Qualified high/xhigh reasoning workers and native routes are available. This security architecture task earns direct xhigh.\nA. Claude host -> official Codex plugin: /codex:rescue --model <effective Codex primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the security architecture analysis. The high Codex primary will approve later.\nB. Codex host -> supported interactive Claude lifecycle: claude --model <effective Claude primary selector> --effort xhigh. Prompt: ROLE: worker. Complete the architecture design. The high Claude primary will approve later.\nC. Within either family, its high primary launches its qualified xhigh reasoning worker using a native child-effort control or a separate native ROLE: worker session (its own CLI process in a new terminal tab), then reviews the return. No session starts a nested duo.\n"
       }
     },
     {
@@ -353,6 +353,31 @@
       },
       "files": {
         "WORK_BRIEF.md": "# Unit\nIn an established parser, change one documented default timeout from 20 to 25 seconds as already approved. A single constant is the authority. Existing boundary tests cover omitted and explicit values; update the omitted-value expectation. No architecture, security, interface, or unexplained behavior changes. The standing pair has settled the plan and assigned independent review. High is the configured primary default; stronger worker routes are available.\n"
+      }
+    },
+    {
+      "id": "same-family-native-subagent",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/same-family-native-subagent",
+        "peer": "available"
+      },
+      "files": {
+        "WORK_BRIEF.md": "# Unit\nRead docs/guide.md and list every Markdown heading with its line number. Read only; do not edit files. The standing pair has settled the plan; this bounded evidence unit goes to a same-family Claude worker owned by the Claude primary, and the primary inspects the return.\n",
+        "docs/guide.md": "# Guide\n\nIntro text.\n\n## Install\n\nSteps.\n\n## Configure\n\nOptions.\n\n### Advanced\n\nMore options.\n"
+      }
+    },
+    {
+      "id": "same-family-no-native-route",
+      "tier": "standard",
+      "state": {
+        "branch": "fixture/same-family-no-native-route",
+        "peer": "available"
+      },
+      "files": {
+        "WORK_BRIEF.md": "# Unit\nRead docs/guide.md and list every Markdown heading with its line number. Read only; do not edit files. The standing pair has settled the plan; this bounded evidence unit goes to a same-family worker owned by this host's primary, and the primary inspects the return.\n",
+        "ROUTES.md": "# Same-family routes on this host\nNo native subagent route is recorded for this host's model family: no native evidence shows that this harness can start a same-family child inside the primary's own session. The model's own CLI is installed, and a terminal multiplexer is available.\n",
+        "docs/guide.md": "# Guide\n\nIntro text.\n\n## Install\n\nSteps.\n\n## Configure\n\nOptions.\n\n### Advanced\n\nMore options.\n"
       }
     },
     {
