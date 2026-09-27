@@ -16,7 +16,10 @@ export type ReviewVerdict =
 export type FeedbackLifecycle = "received" | "delivered" | "addressed" | "dismissed";
 export type FeedbackAnchor =
   | Readonly<{ state: "block"; block_id: string }>
-  | Readonly<{ state: "anchored" | "reanchored"; start_utf16: number; end_utf16: number }>
+  | Readonly<{ state: "anchored" | "reanchored"; start_utf16: number; end_utf16: number; changed?: boolean }>
+  | Readonly<{ state: "entity_anchored"; entity_id: string }>
+  | Readonly<{ state: "entity_reanchored"; entity_id: string; label_changed: boolean }>
+  | Readonly<{ state: "block_fallback"; block_id: string; reason: string }>
   | Readonly<{ state: "element_anchored" | "element_reanchored"; element_path: string }>
   | Readonly<{
       state: "region_anchored" | "region_reanchored";
@@ -95,6 +98,38 @@ export interface ElementSelector {
   readonly block_digest: string;
 }
 
+/** SPC-014 I2: a note on a named entity, checked by the service at submit. */
+export interface EntitySelector {
+  readonly entity_id: string;
+  readonly label: string;
+  readonly block_digest: string;
+  readonly variant?: "wide" | "narrow";
+  readonly crop_box?: Readonly<{ x: number; y: number; width: number; height: number }>;
+}
+
+/** SPC-014 I3: the body of a refused review. */
+export interface ServiceErrorBody {
+  readonly error: string;
+  readonly message: string;
+  readonly details?: Readonly<Record<string, unknown>>;
+}
+
+export function parseServiceError(text: string): ServiceErrorBody | null {
+  let value: unknown;
+  try {
+    value = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!isRecord(value) || typeof value.error !== "string" || typeof value.message !== "string") return null;
+  if (value.details !== undefined && !isRecord(value.details)) return null;
+  return {
+    error: value.error,
+    message: value.message,
+    ...(value.details !== undefined ? { details: value.details } : {}),
+  };
+}
+
 export type RegionScope = "block" | "document";
 
 export interface RegionSelector {
@@ -117,11 +152,12 @@ export interface PendingFeedback {
   readonly body: string;
   readonly selector?: TextSelector;
   readonly element_selector?: ElementSelector;
+  readonly entity_selector?: EntitySelector;
   readonly region_selector?: RegionSelector;
   readonly target_summary?: string;
   readonly excerpt?: {
     readonly text?: string;
-    readonly image?: { readonly media_type: "image/jpeg"; readonly data_base64: string };
+    readonly image?: { readonly media_type: "image/jpeg" | "image/png"; readonly data_base64: string };
   };
 }
 
@@ -252,6 +288,9 @@ function isFeedbackAnchor(value: unknown): value is FeedbackAnchor {
   if (!isRecord(value) || typeof value.state !== "string") return false;
   if (value.state === "block") return typeof value.block_id === "string";
   if (value.state === "orphaned") return typeof value.reason === "string";
+  if (value.state === "entity_anchored") return typeof value.entity_id === "string";
+  if (value.state === "entity_reanchored") return typeof value.entity_id === "string" && typeof value.label_changed === "boolean";
+  if (value.state === "block_fallback") return typeof value.block_id === "string" && typeof value.reason === "string";
   if (value.state === "element_anchored" || value.state === "element_reanchored") {
     return typeof value.element_path === "string";
   }
@@ -271,7 +310,8 @@ function isFeedbackAnchor(value: unknown): value is FeedbackAnchor {
     value.start_utf16 >= 0 &&
     typeof value.end_utf16 === "number" &&
     Number.isSafeInteger(value.end_utf16) &&
-    value.end_utf16 > value.start_utf16
+    value.end_utf16 > value.start_utf16 &&
+    (value.changed === undefined || typeof value.changed === "boolean")
   );
 }
 

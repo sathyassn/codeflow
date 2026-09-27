@@ -18,12 +18,14 @@ const SVG_PAINT_PROPS = [
   "dominant-baseline",
   "color",
 ];
+// The service's bound on an excerpt image, in base64 bytes (24 KiB decoded).
 const MAX_JPEG_B64 = 32_768;
 const MAX_CROP_WIDTH = 480;
 const MAX_CROP_HEIGHT = 360;
 
 export interface ExcerptImage {
-  readonly media_type: "image/jpeg";
+  /** JPEG, or PNG for the crop of a review entity (SPC-014 B4). */
+  readonly media_type: "image/jpeg" | "image/png";
   readonly data_base64: string;
 }
 
@@ -102,11 +104,16 @@ export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string
  * in that mode, which is why element/region crops used to ship blank. Paint
  * HTML onto a canvas from live layout instead. Reject near-blank frames.
  */
-export async function captureRectJpeg(root: HTMLElement, box: DOMRect): Promise<ExcerptImage | null> {
+export async function captureRectJpeg(
+  root: HTMLElement,
+  box: DOMRect,
+  owner: SVGSVGElement | null = null,
+  { png = false }: { png?: boolean } = {},
+): Promise<ExcerptImage | null> {
   if (box.width < 4 || box.height < 4) return null;
-  const svg = intersectingSvg(root, box);
+  const svg = owner ?? intersectingSvg(root, box);
   if (svg && containsRect(svg.getBoundingClientRect(), box)) {
-    const fromSvg = await rasterizeSvgCrop(svg, box);
+    const fromSvg = await rasterizeSvgCrop(svg, box, png);
     if (fromSvg) return fromSvg;
   }
   return rasterizeDomSlice(root, box);
@@ -123,7 +130,7 @@ function intersectingSvg(root: HTMLElement, box: DOMRect): SVGSVGElement | null 
   return svg instanceof SVGSVGElement ? svg : null;
 }
 
-async function rasterizeSvgCrop(svg: SVGSVGElement, box: DOMRect): Promise<ExcerptImage | null> {
+async function rasterizeSvgCrop(svg: SVGSVGElement, box: DOMRect, png: boolean): Promise<ExcerptImage | null> {
   const svgRect = svg.getBoundingClientRect();
   const clone = svg.cloneNode(true) as SVGSVGElement;
   bakeSvgPaints(svg, clone);
@@ -136,7 +143,46 @@ async function rasterizeSvgCrop(svg: SVGSVGElement, box: DOMRect): Promise<Excer
   clone.setAttribute("viewBox", `${(box.left - svgRect.left) * sx} ${(box.top - svgRect.top) * sy} ${Math.max(1, box.width * sx)} ${Math.max(1, box.height * sy)}`);
   clone.setAttribute("width", String(Math.round(box.width)));
   clone.setAttribute("height", String(Math.round(box.height)));
-  return canvasFromSvgMarkup(new XMLSerializer().serializeToString(clone), box);
+  return canvasFromSvgMarkup(new XMLSerializer().serializeToString(clone), box, groundOf(svg), png);
+}
+
+// The colour a drawing sits on: its nearest opaque background, else the page.
+function groundOf(element: Element): string {
+  for (let node: Element | null = element; node; node = node.parentElement) {
+    const color = opaqueColor(getComputedStyle(node).backgroundColor);
+    if (color) return color;
+  }
+  return "#ffffff";
+}
+
+/**
+ * The thin-stroke padding in CSS px (SPC-014 B4), held inside the service's
+ * containment tolerance of 8 user units when the drawing is shown below 0.75
+ * px per unit, so a correct crop is never refused as outside its entity.
+ */
+export function entityCropPadding(svg: SVGSVGElement, strokePadding: number): number {
+  const matrix = svg.getScreenCTM();
+  const pxPerUnit = matrix ? Math.hypot(matrix.a, matrix.b) : 1;
+  return Math.min(strokePadding, 7.5 * (pxPerUnit || 1));
+}
+
+/** A client rectangle widened on every side, as the entity crop pads thin strokes. */
+export function paddedRect(rect: DOMRect, padding: number): DOMRect {
+  return new DOMRect(rect.left - padding, rect.top - padding, rect.width + 2 * padding, rect.height + 2 * padding);
+}
+
+/** A client rectangle in the user space of an SVG, at most three decimals (SPC-014 I2). */
+export function userSpaceBox(svg: SVGSVGElement, box: DOMRect): { x: number; y: number; width: number; height: number } | null {
+  const matrix = svg.getScreenCTM()?.inverse();
+  if (!matrix) return null;
+  const corners = [[box.left, box.top], [box.right, box.top], [box.left, box.bottom], [box.right, box.bottom]]
+    .map(([x, y]) => new DOMPoint(x, y).matrixTransform(matrix));
+  const xs = corners.map((point) => point.x);
+  const ys = corners.map((point) => point.y);
+  const round = (value: number): number => Math.round(value * 1000) / 1000;
+  const left = Math.min(...xs);
+  const top = Math.min(...ys);
+  return { x: round(left), y: round(top), width: round(Math.max(...xs) - left), height: round(Math.max(...ys) - top) };
 }
 
 async function rasterizeDomSlice(root: HTMLElement, box: DOMRect): Promise<ExcerptImage | null> {
@@ -154,10 +200,11 @@ async function rasterizeDomSlice(root: HTMLElement, box: DOMRect): Promise<Excer
     || opaqueColor(getComputedStyle(source).backgroundColor)
     || "#ffffff";
   ctx.fillRect(0, 0, width, height);
+  const reference = ctx.getImageData(0, 0, 1, 1).data;
 
   const painted = await paintElementTree(ctx, source, box, scale);
   if (!painted) return null;
-  return jpegFromCanvas(ctx, canvas);
+  return imageFromCanvas(ctx, canvas, reference, false);
 }
 
 function bestHtmlSource(root: HTMLElement, box: DOMRect): HTMLElement {
@@ -305,7 +352,7 @@ function paintTextNode(
   return painted;
 }
 
-async function canvasFromSvgMarkup(markup: string, box: DOMRect): Promise<ExcerptImage | null> {
+async function canvasFromSvgMarkup(markup: string, box: DOMRect, ground: string, png: boolean): Promise<ExcerptImage | null> {
   const blob = new Blob([markup], { type: "image/svg+xml;charset=utf-8" });
   const url = URL.createObjectURL(blob);
   try {
@@ -318,10 +365,11 @@ async function canvasFromSvgMarkup(markup: string, box: DOMRect): Promise<Excerp
     canvas.height = height;
     const ctx = canvas.getContext("2d");
     if (!ctx) return null;
-    ctx.fillStyle = "#ffffff";
+    ctx.fillStyle = ground;
     ctx.fillRect(0, 0, width, height);
+    const reference = ctx.getImageData(0, 0, 1, 1).data;
     ctx.drawImage(image, 0, 0, width, height);
-    return jpegFromCanvas(ctx, canvas);
+    return imageFromCanvas(ctx, canvas, reference, png);
   } catch {
     return null;
   } finally {
@@ -329,9 +377,15 @@ async function canvasFromSvgMarkup(markup: string, box: DOMRect): Promise<Excerp
   }
 }
 
-function jpegFromCanvas(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement): ExcerptImage | null {
+// A PNG keeps a drawing's flat colours and thin strokes exact; when it is
+// over the bound, the JPEG ladder below still yields evidence.
+function imageFromCanvas(ctx: CanvasRenderingContext2D, canvas: HTMLCanvasElement, ground: Uint8ClampedArray, png: boolean): ExcerptImage | null {
   try {
-    if (isMostlyBlank(ctx, canvas.width, canvas.height)) return null;
+    if (isOneColour(ctx, canvas.width, canvas.height, ground)) return null;
+    if (png) {
+      const data_base64 = canvas.toDataURL("image/png").split(",", 2)[1] ?? "";
+      if (data_base64 && data_base64.length <= MAX_JPEG_B64) return { media_type: "image/png", data_base64 };
+    }
     for (const quality of [0.82, 0.7, 0.55, 0.4]) {
       const dataUrl = canvas.toDataURL("image/jpeg", quality);
       const data_base64 = dataUrl.split(",", 2)[1] ?? "";
@@ -362,13 +416,15 @@ function bakeSvgPaints(source: SVGElement, clone: SVGElement): void {
   }
 }
 
-function isMostlyBlank(ctx: CanvasRenderingContext2D, width: number, height: number): boolean {
+// A crop that is all ground, in either mode, carries no evidence: fewer than
+// 1% of the sampled pixels (and fewer than four) differ from the ground.
+function isOneColour(ctx: CanvasRenderingContext2D, width: number, height: number, ground: Uint8ClampedArray): boolean {
   const sample = ctx.getImageData(0, 0, width, height).data;
   let painted = 0;
   let seen = 0;
   for (let i = 0; i < sample.length; i += 64) {
     seen += 1;
-    if ((sample[i] ?? 255) < 248 || (sample[i + 1] ?? 255) < 248 || (sample[i + 2] ?? 255) < 248) painted += 1;
+    if ([0, 1, 2].some((channel) => Math.abs((sample[i + channel] ?? 0) - (ground[channel] ?? 0)) > 8)) painted += 1;
   }
   return painted < Math.max(4, seen * 0.01);
 }

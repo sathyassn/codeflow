@@ -15,6 +15,7 @@ run("npx", ["tsc", "--noEmit"]);
 checkBinaryAttributes();
 run("node", ["--test", "scripts/toolchain.test.mjs"]);
 await checkSelectorOffsets();
+await checkEntityLabelParity();
 
 const scratch = await mkdtemp(join(tmpdir(), "cf-present-check-"));
 try {
@@ -37,6 +38,34 @@ try {
   process.stdout.write(`cf-present web checks passed; reproducible tree ${firstDigest}\n`);
 } finally {
   await rm(scratch, { recursive: true, force: true });
+}
+
+// The grammar draws the ids and labels the service's entity table resolves
+// (SPC-014 B2): both sides are pinned to one golden file, which a Rust test
+// in codeflow-present also asserts.
+async function checkEntityLabelParity() {
+  const { renderFigure } = await import("../src/figure-grammar.mjs");
+  const fixtures = join(crateRoot, "tests/fixtures/contract-v2");
+  const framed = JSON.parse(await readFile(join(fixtures, "documents/v2-framed.json"), "utf8"));
+  const golden = JSON.parse(await readFile(join(fixtures, "entities/landing.json"), "utf8"));
+  const declaration = framed.blocks.find((block) => block.id === "landing").declaration;
+  const html = renderFigure(declaration, { idPrefix: "parity", number: 1 });
+  const unescape = (value) => value.replaceAll("&quot;", '"').replaceAll("&#39;", "'").replaceAll("&lt;", "<").replaceAll("&gt;", ">").replaceAll("&amp;", "&");
+  const entities = (text) => [...text.matchAll(/data-cf-entity="([^"]+)" data-cf-entity-label="([^"]*)"/gu)].map((match) => ({ id: match[1], label: unescape(match[2]) }));
+  const rows = [];
+  for (const variant of ["wide", "narrow"]) {
+    const drawing = html.match(new RegExp(`<svg class="cf-fig-svg cf-fig-svg--${variant}"[\\s\\S]*?</svg>`, "u"))?.[0] ?? "";
+    rows.push(...entities(drawing).map((entity) => ({ id: entity.id, variant, label: entity.label })));
+  }
+  const legend = html.match(/<ul class="cf-legend"[\s\S]*?<\/ul>/u)?.[0] ?? "";
+  rows.push(...entities(legend).map((entity) => ({ id: entity.id, variant: null, label: entity.label })));
+  rows.sort((left, right) => {
+    const key = (row) => `${JSON.stringify(row.variant)}|${row.id}`;
+    return key(left) < key(right) ? -1 : key(left) > key(right) ? 1 : 0;
+  });
+  if (JSON.stringify(rows) !== JSON.stringify(golden)) {
+    throw new Error(`the grammar's entity table differs from entities/landing.json:\n${JSON.stringify(rows, null, 2)}`);
+  }
 }
 
 async function checkSelectorOffsets() {

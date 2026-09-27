@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "preact/hooks";
 import type {
   AppearanceMode,
   ChromeConfig,
+  FeedbackAnchor,
   FeedbackKind,
   PendingFeedback,
   ReviewRequest,
@@ -18,21 +19,28 @@ import type {
   Typeface,
   UtilityTheme,
 } from "./contracts";
+import { parseServiceError } from "./contracts";
+import type { EntitySelector } from "./contracts";
 import { followSessionEvents } from "./events";
-import { postJson } from "./http";
+import { postJson, PresentRequestError } from "./http";
 import {
   annotatableAncestor,
   annotatableElements,
   captureDocument,
   captureElement,
   captureRegion,
+  captureResolution,
   captureSelection,
+  enclosingTarget,
   isTextualTarget,
   resolveElement,
+  resolveEntity,
   resolveRegion,
+  resolveTarget,
+  STROKE_PADDING_PX,
 } from "./selection";
 import type { CapturedTarget, Point } from "./selection";
-import { captureRectJpeg } from "./excerpt";
+import { captureRectJpeg, entityCropPadding, paddedRect, userSpaceBox } from "./excerpt";
 import {
   applyAppearance,
   initialAppearance,
@@ -62,7 +70,10 @@ interface PendingPin {
   readonly captured: CapturedTarget;
   readonly clientX: number;
   readonly clientY: number;
+  /** The element an element pin resolved to, for "select enclosing". */
+  readonly element?: Element;
 }
+type Focusable = HTMLElement | SVGElement;
 interface DragGesture {
   x0: number;
   y0: number;
@@ -159,12 +170,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const lastPinnedSelectionRef = useRef<string>("");
   const composerOpenRef = useRef(false);
   const pendingPinRef = useRef<PendingPin | null>(null);
-  const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: { openComposer?: boolean }) => void>(() => undefined);
+  const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: { openComposer?: boolean; element?: Element }) => void>(() => undefined);
   const saveComposerRef = useRef<() => void>(() => undefined);
   const settingsOpenRef = useRef(false);
   const shiftRef = useRef(false);
-  const hotRef = useRef<HTMLElement | null>(null);
-  const hotSelRef = useRef<HTMLElement | null>(null);
+  const hotRef = useRef<Element | null>(null);
+  const hotSelRef = useRef<Element | null>(null);
   // Client-side marker placement hints (never sent to the server): for a text
   // note, the selection's vertical fraction inside its anchor block.
   const markerMetaRef = useRef(new Map<string, { ay: number }>());
@@ -186,13 +197,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     hotSelRef.current?.classList.remove("cf-hot-sel");
     hotSelRef.current = null;
   };
-  const setHot = (element: HTMLElement | null): void => {
+  const setHot = (element: Element | null): void => {
     if (hotRef.current === element) return;
     hotRef.current?.classList.remove("cf-hot");
     hotRef.current = element;
     element?.classList.add("cf-hot");
   };
-  const setHotSel = (element: HTMLElement | null): void => {
+  const setHotSel = (element: Element | null): void => {
     hotSelRef.current?.classList.remove("cf-hot-sel");
     hotSelRef.current = element;
     element?.classList.add("cf-hot-sel");
@@ -304,9 +315,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   /* ─── Explicit capture modes (a11y / advanced tools) ─── */
   useEffect(() => {
     if (captureMode !== "element") return undefined;
-    const candidates = annotatableElements(documentRoot);
+    // Keyboard stops (SPC-014 B3): entities and annotatable elements in
+    // document order. Arrows move, Enter pins, Shift+Enter climbs to the
+    // enclosing entity, then the block.
+    const candidates = annotatableElements(documentRoot).filter((el): el is Focusable => el instanceof HTMLElement || el instanceof SVGElement);
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const previousTabIndexes = candidates.map((el) => el.getAttribute("tabindex"));
+    const touched = new Map<Focusable, string | null>(candidates.map((el) => [el, el.getAttribute("tabindex")]));
     let activeIndex = Math.max(0, candidates.findIndex((el) => el.contains(previousFocus)));
     const focusCandidate = (index: number): void => {
       activeIndex = (index + candidates.length) % candidates.length;
@@ -314,6 +328,17 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         el.tabIndex = i === activeIndex ? 0 : -1;
       });
       candidates[activeIndex]?.focus();
+      setHot(candidates[activeIndex] ?? null);
+    };
+    const focusEnclosing = (from: Element): void => {
+      const outer = enclosingTarget(documentRoot, from)?.element;
+      if (!(outer instanceof HTMLElement || outer instanceof SVGElement)) return;
+      if (!touched.has(outer)) touched.set(outer, outer.getAttribute("tabindex"));
+      outer.tabIndex = -1;
+      outer.focus();
+      setHot(outer);
+      const index = candidates.indexOf(outer);
+      if (index >= 0) activeIndex = index;
     };
     const complete = (target: Element): void => {
       const captured = captureElement(documentRoot, target);
@@ -321,6 +346,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         const r = target.getBoundingClientRect();
         pinCaptureRef.current(captured, r.left, r.top, { openComposer: true });
       } else setStatus("That element cannot be anchored. Choose content inside one review block.");
+      setHot(null);
       setCaptureMode(null);
       captureModeRef.current = null;
     };
@@ -333,6 +359,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     };
     const keydown = (event: KeyboardEvent): void => {
       if (event.key === "Escape") return;
+      if (event.key === "Enter" && event.shiftKey && document.activeElement instanceof Element && documentRoot.contains(document.activeElement)) {
+        event.preventDefault();
+        focusEnclosing(document.activeElement);
+        return;
+      }
       if ((event.key === "Enter" || event.key === " ") && document.activeElement instanceof Element && documentRoot.contains(document.activeElement)) {
         event.preventDefault();
         complete(document.activeElement);
@@ -353,11 +384,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       delete documentRoot.dataset.cfCaptureMode;
       documentRoot.removeEventListener("click", pick, { capture: true });
       documentRoot.ownerDocument.removeEventListener("keydown", keydown, { capture: true });
-      candidates.forEach((el, i) => {
-        const prev = previousTabIndexes[i] ?? null;
+      touched.forEach((prev, el) => {
         if (prev === null) el.removeAttribute("tabindex");
         else el.setAttribute("tabindex", prev);
       });
+      setHot(null);
       if (previousFocus?.isConnected) previousFocus.focus();
     };
   }, [captureMode, documentRoot, notes.length]);
@@ -505,7 +536,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         }
         const textual = isTextualTarget(target) && !shiftRef.current;
         documentRoot.dataset.cfCursor = textual ? "text" : "cross";
-        const candidate = textual ? null : (annotatableAncestor(documentRoot, target) as HTMLElement | null);
+        // SVG words are selectable and still name the part they label, so
+        // hover shows the part a click would pin.
+        const drawing = target instanceof SVGElement;
+        const point = { x: event.clientX, y: event.clientY };
+        const candidate = textual && !drawing ? null : annotatableAncestor(documentRoot, target, point);
         setHot(candidate);
         if (textual) setHintMode("text");
         else if (shiftRef.current) setHintMode("region");
@@ -567,7 +602,26 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
       // Text selection wins — the selectionchange pin already owns the float.
       const sel = window.getSelection();
-      if (sel && !sel.isCollapsed && String(sel).trim().length >= 2) return;
+      if (sel && !sel.isCollapsed && String(sel).trim().length >= 2) {
+        if (captureSelection(documentRoot)?.selector) return;
+        // A selection the review text cannot hold, such as a figure's label,
+        // pins the part the label names; it is never a dead gesture (QA
+        // defect 5 in its figure form).
+        const node = sel.anchorNode;
+        const anchor = node instanceof Element ? node : node?.parentElement ?? null;
+        sel.removeAllRanges();
+        const labelled = anchor && documentRoot.contains(anchor) ? resolveTarget(documentRoot, anchor) : null;
+        const pinned = labelled ? captureResolution(labelled) : null;
+        if (!labelled || !pinned) {
+          setStatus("That selection cannot be anchored. Select text inside one review block, or click the part.");
+          return;
+        }
+        setHintMode("element");
+        setHot(null);
+        setHotSel(labelled.element);
+        pinCapture(pinned, event.clientX, event.clientY, { openComposer: false, element: labelled.element });
+        return;
+      }
 
       // Abandoned non-region drag
       if (!g.proseOnly && dist > 22) {
@@ -581,12 +635,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         (under && documentRoot.contains(under) && !under.closest(".cf-marker, .cf-marker-layer") ? under : null) ??
         (event.target instanceof Element ? event.target : null);
       if (!target || target.closest(".cf-marker, .cf-marker-layer")) return;
-      const captured = captureElement(documentRoot, target);
-      if (!captured) return;
+      const point = { x: event.clientX, y: event.clientY };
+      const resolved = annotatableAncestor(documentRoot, target, point);
+      const captured = captureElement(documentRoot, target, point);
+      if (!captured || !resolved) return;
       setHintMode("element");
       setHot(null);
-      setHotSel(annotatableAncestor(documentRoot, target));
-      pinCapture(captured, event.clientX, event.clientY, { openComposer: false });
+      setHotSel(resolved);
+      pinCapture(captured, event.clientX, event.clientY, { openComposer: false, element: resolved });
     };
 
     document.addEventListener("selectionchange", onSelection);
@@ -630,7 +686,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   }, [composerOpen]);
 
   /* ─── Pin → float → composer (qualified Comment flow) ─── */
-  function pinCapture(captured: CapturedTarget, clientX: number, clientY: number, opts?: { openComposer?: boolean }): void {
+  function pinCapture(captured: CapturedTarget, clientX: number, clientY: number, opts?: { openComposer?: boolean; element?: Element }): void {
     if (notesCountRef.current >= config.review_limits.max_notes) {
       setStatus(noteLimitMessage(config.review_limits.max_notes));
       if (!commentModeRef.current) armComment(true);
@@ -638,7 +694,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     }
     if (!commentModeRef.current) armComment(true);
     else setPanelOpen(true);
-    setPendingPin({ captured, clientX, clientY });
+    setPendingPin({ captured, clientX, clientY, ...(opts?.element ? { element: opts.element } : {}) });
     setComposerBody("");
     setEditingId(null);
     // Default open composer (tools + a11y). Gestures pass openComposer:false for float-first.
@@ -678,15 +734,26 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       }
       let excerptText = c.excerptText?.trim() || c.selector?.exact?.trim() || "";
       let excerptImage = null;
+      let cropBox: EntitySelector["crop_box"] | null = null;
       if (c.region_selector) {
         const box = resolveRegion(documentRoot, c.region_selector);
         if (box) excerptImage = await captureRectJpeg(documentRoot, box);
       } else if (c.element_selector) {
-        const el = resolveElement(documentRoot, c.blockId, c.element_selector);
-        const box = el?.getBoundingClientRect();
-        if (box && box.width >= 4 && box.height >= 4) excerptImage = await captureRectJpeg(documentRoot, box);
+        const el = (c.entity_selector ? resolveEntity(documentRoot, c.blockId, c.entity_selector.entity_id) : null)
+          ?? resolveElement(documentRoot, c.blockId, c.element_selector);
+        // A drawing part is cropped with the thin-stroke padding (SPC-014 B4),
+        // in its own drawing, and an entity note records that crop in the
+        // drawing's user space.
+        const owner = el instanceof SVGElement ? el.closest("svg") : null;
+        const rect = el?.getBoundingClientRect();
+        const box = rect && owner ? paddedRect(rect, entityCropPadding(owner, STROKE_PADDING_PX)) : rect;
+        if (box && box.width >= 4 && box.height >= 4) {
+          excerptImage = await captureRectJpeg(documentRoot, box, owner, { png: Boolean(c.entity_selector) });
+          if (excerptImage && owner && c.entity_selector) cropBox = userSpaceBox(owner, box);
+        }
       }
       const excerpt = excerptText || excerptImage ? { ...(excerptText ? { text: excerptText } : {}), ...(excerptImage ? { image: excerptImage } : {}) } : undefined;
+      const entitySelector: EntitySelector | undefined = c.entity_selector ? { ...c.entity_selector, ...(cropBox ? { crop_box: cropBox } : {}) } : undefined;
       setNotes((current) => [
         ...current,
         {
@@ -697,6 +764,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           body,
           ...(c.selector ? { selector: c.selector } : {}),
           ...(c.element_selector ? { element_selector: c.element_selector } : {}),
+          ...(entitySelector ? { entity_selector: entitySelector } : {}),
           ...(c.region_selector ? { region_selector: c.region_selector } : {}),
           target_summary: c.summary,
           ...(excerpt ? { excerpt } : {}),
@@ -808,8 +876,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"} (${response.event_id}).`;
       setStatus(confirmation);
       showToast(confirmation);
-    } catch {
-      setStatus("Review was not submitted. Your pending notes are unchanged.");
+    } catch (error) {
+      // SPC-014 I3: a refused review names its reason; the pending notes stay
+      // for every refusal, so the reviewer can correct and resend them.
+      const refusal = error instanceof PresentRequestError ? parseServiceError(error.message) : null;
+      const reason = refusal?.message ?? (error instanceof Error ? error.message : String(error));
+      const notice = `Review was not submitted: ${reason} Your pending notes are unchanged.`;
+      setStatus(notice);
+      showToast(notice, { sticky: true });
     } finally {
       setBusy(false);
     }
@@ -852,6 +926,18 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           armComment(false);
           document.getElementById("cf-comment-toggle")?.focus();
         }
+        return;
+      }
+      // "Select enclosing" for a pin made by pointer or touch: climb to the
+      // entity around the pinned part, then the block.
+      const pinned = pendingPinRef.current;
+      if (event.key === "Enter" && event.shiftKey && !composerOpenRef.current && pinned?.element && !isEditable(event.target)) {
+        event.preventDefault();
+        const outer = enclosingTarget(documentRoot, pinned.element);
+        const captured = outer ? captureResolution(outer) : null;
+        if (!outer || !captured) return;
+        setHotSel(outer.element);
+        pinCaptureRef.current(captured, pinned.clientX, pinned.clientY, { openComposer: false, element: outer.element });
         return;
       }
       if ((event.metaKey || event.ctrlKey) && event.key === "Enter" && composerOpenRef.current) {
@@ -1277,11 +1363,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                           </div>
                           {note.quote ? <blockquote>{note.quote}</blockquote> : null}
                           <p>{note.body}</p>
-                          {note.anchor.state === "orphaned" ? (
-                            <p class="cf-anchor-warning">Unpositioned: {note.anchor.reason}</p>
-                          ) : note.anchor.state === "reanchored" ? (
-                            <p class="cf-anchor-note">Matched uniquely in this revision.</p>
-                          ) : null}
+                          {anchorNotice(note.anchor)}
                         </li>
                       ))}
                     </ul>
@@ -1452,6 +1534,10 @@ function markerPlacement(
 
 function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpoch: number): DOMRect | null {
   if (note.region_selector) return resolveRegion(documentRoot, note.region_selector);
+  if (note.entity_selector) {
+    const entity = resolveEntity(documentRoot, note.block_id, note.entity_selector.entity_id);
+    if (entity) return entity.getBoundingClientRect();
+  }
   if (note.element_selector) {
     return resolveElement(documentRoot, note.block_id, note.element_selector)?.getBoundingClientRect() ?? null;
   }
@@ -1462,6 +1548,22 @@ function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpo
   return (
     documentRoot.querySelector<HTMLElement>(`[data-cf-block-id="${CSS.escape(note.block_id)}"]`)?.getBoundingClientRect() ?? null
   );
+}
+
+// What the rail says about where an earlier note now sits (SPC-014 B1): a
+// note that moved or lost its target says so, never silently.
+function anchorNotice(anchor: FeedbackAnchor) {
+  switch (anchor.state) {
+    case "orphaned": return <p class="cf-anchor-warning">Unpositioned: {anchor.reason}</p>;
+    case "block_fallback": return <p class="cf-anchor-warning">Shown on the block: {anchor.reason}</p>;
+    case "reanchored": return anchor.changed
+      ? <p class="cf-anchor-warning">Moved: the closest match in this revision differs from the quote.</p>
+      : <p class="cf-anchor-note">Matched uniquely in this revision.</p>;
+    case "entity_reanchored": return anchor.label_changed
+      ? <p class="cf-anchor-warning">The part it names was relabelled in this revision.</p>
+      : <p class="cf-anchor-note">The part it names changed in this revision.</p>;
+    default: return null;
+  }
 }
 
 function noteLimitMessage(limit: number): string {
