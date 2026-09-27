@@ -1,0 +1,11 @@
+id = "TSK-141"
+uid = "eca941e4-5214-4028-a777-4bb623d55a1d"
+kind = "TSK"
+title = "exec-guard deletion coverage and hooks run by the calling binary"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-27T13:59:43Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
