@@ -269,22 +269,22 @@
           "state": "poison",
           "shape": "path",
           "d": "M195 78C195 130 309 120 309 168",
-          "head": "end",
-          "id": "p1"
+          "id": "p1",
+          "open": "end"
         },
         {
           "state": "poison",
           "shape": "path",
           "d": "M309 78V168",
-          "head": "end",
-          "id": "p2"
+          "id": "p2",
+          "open": "end"
         },
         {
           "state": "poison",
           "shape": "path",
           "d": "M433 78C433 130 309 120 309 168",
-          "head": "end",
-          "id": "p3"
+          "id": "p3",
+          "open": "end"
         },
         {
           "text": "restart, resume, compaction,",
@@ -539,22 +539,22 @@
           "state": "poison",
           "shape": "path",
           "d": "M160 84C188 84 186 135 210 135",
-          "head": "end",
-          "id": "p1"
+          "id": "p1",
+          "open": "end"
         },
         {
           "state": "poison",
           "shape": "path",
           "d": "M160 140C186 140 186 135 210 135",
-          "head": "end",
-          "id": "p2"
+          "id": "p2",
+          "open": "end"
         },
         {
           "state": "poison",
           "shape": "path",
           "d": "M160 196C188 196 186 135 210 135",
-          "head": "end",
-          "id": "p3"
+          "id": "p3",
+          "open": "end"
         },
         {
           "text": "restart, resume,",
