@@ -1,0 +1,11 @@
+id = "TSK-113"
+uid = "327e500e-0b2e-49bf-b944-4512246d9783"
+kind = "TSK"
+title = "same-family models run inside the host harness"
+issuer = "seed"
+created = "2026-09-27T13:29:05Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "84ee6e10e81946294b95b8eaebf20d35a28c91fd@integration/EPC-020-delivery-system"
+landed = "84ee6e10e81946294b95b8eaebf20d35a28c91fd"
+mapped = []
+mapped_by = "none"

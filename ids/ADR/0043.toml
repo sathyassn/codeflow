@@ -1,0 +1,11 @@
+id = "ADR-0043"
+uid = "50fc5c87-44e7-4546-9c9e-eab9ea8f64e3"
+kind = "ADR"
+title = "make product and interface design direction an explicit proportionate contract"
+issuer = "seed"
+created = "2026-09-27T13:29:24Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "20fda9a88b9ca675c6c54c59c892cae90bcf65d8@integration/EPC-005-presentation-system"
+landed = "20fda9a88b9ca675c6c54c59c892cae90bcf65d8"
+mapped = []
+mapped_by = "none"

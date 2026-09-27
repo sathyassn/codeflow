@@ -1,0 +1,11 @@
+id = "TSK-004-001"
+uid = "845a8ca8-5444-470e-bb60-bd2463af6e17"
+kind = "TSK"
+title = "implement whole-flow and resource contracts"
+issuer = "seed"
+created = "2026-09-27T13:28:45Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "ebdae4c292a5fe18cf787e11dfaaffe66311010c@integration/EPC-005-presentation-system"
+landed = "ebdae4c292a5fe18cf787e11dfaaffe66311010c"
+mapped = []
+mapped_by = "none"

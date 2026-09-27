@@ -1,0 +1,11 @@
+id = "ADR-0006"
+uid = "7d9b921b-5a94-4221-a07d-93a2a684675c"
+kind = "ADR"
+title = "pr-based landings — supersede the integrate path on this repo"
+issuer = "seed"
+created = "2026-09-27T13:29:15Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "143464825411ae5c9cbc1610f4caf251c4d804d2@integration/EPC-005-presentation-system"
+landed = "143464825411ae5c9cbc1610f4caf251c4d804d2"
+mapped = ["3170b7464c995dfdfdcc38bc52bd0810cfd7c392"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

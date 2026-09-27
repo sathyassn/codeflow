@@ -1,0 +1,11 @@
+id = "TSK-067"
+uid = "c8aa7441-1b40-400d-b8c0-f18700fc2def"
+kind = "TSK"
+title = "verified links in operator-facing replies"
+issuer = "seed"
+created = "2026-09-27T13:28:58Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f@integration/EPC-016-visual-guide"
+landed = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f"
+mapped = []
+mapped_by = "none"

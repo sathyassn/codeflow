@@ -1,0 +1,11 @@
+id = "TSK-071"
+uid = "ba082f6d-909e-48ef-8588-9e1d229d20b9"
+kind = "TSK"
+title = "present annotation coverage and feedback round trip"
+issuer = "seed"
+created = "2026-09-27T13:28:58Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "49c8ce91528627f64ab99300add918de43a97556@integration/EPC-016-visual-guide"
+landed = "49c8ce91528627f64ab99300add918de43a97556"
+mapped = []
+mapped_by = "none"

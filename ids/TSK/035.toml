@@ -1,0 +1,11 @@
+id = "TSK-035"
+uid = "b5abc204-2c59-4aa4-a7b5-d1e1454a53ab"
+kind = "TSK"
+title = "make the CodeFlow guide locally usable"
+issuer = "seed"
+created = "2026-09-27T13:28:52Z"
+target = "integration/EPC-013-release-guides"
+introduced = "845bbc3194f68cb7c9b6263bd5137ef64bb090df@integration/EPC-013-release-guides"
+landed = "845bbc3194f68cb7c9b6263bd5137ef64bb090df"
+mapped = []
+mapped_by = "none"

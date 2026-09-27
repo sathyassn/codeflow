@@ -1,0 +1,11 @@
+id = "ADR-0028"
+uid = "a1560451-1045-46a4-a3e6-e0dceeac0c71"
+kind = "ADR"
+title = "route model effort by evidence and task demand"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "6bfd202725f4c5872ed965a4bcc1336f928d0a3d@integration/EPC-005-presentation-system"
+landed = "6bfd202725f4c5872ed965a4bcc1336f928d0a3d"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-016"
+uid = "10a9c853-8f07-4ac2-8a23-108774ba8832"
+kind = "TSK"
+title = "offer and apply the agentic delivery method"
+issuer = "seed"
+created = "2026-09-27T13:28:50Z"
+target = "integration/EPC-013-release-guides"
+introduced = "1e2a4454dff209604625b03e9d128ee1d7a92a85@integration/EPC-013-release-guides"
+landed = "1e2a4454dff209604625b03e9d128ee1d7a92a85"
+mapped = []
+mapped_by = "none"

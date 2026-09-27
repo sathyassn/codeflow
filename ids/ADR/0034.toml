@@ -1,0 +1,11 @@
+id = "ADR-0034"
+uid = "2813fd85-6c95-43cf-9281-87465909e4ea"
+kind = "ADR"
+title = "prioritize substantiated material findings without issue farming"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "0f8bdd3e4fb5feb0d9f5f8f843724f30b5a7e9b3@integration/EPC-005-presentation-system"
+landed = "0f8bdd3e4fb5feb0d9f5f8f843724f30b5a7e9b3"
+mapped = []
+mapped_by = "none"

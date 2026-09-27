@@ -1,0 +1,11 @@
+id = "ADR-0031"
+uid = "76c88d4f-54e4-48ef-919e-af92cf352f24"
+kind = "ADR"
+title = "safe adaptive test setup and fail-closed configured gates"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "19ea5a453d0a50e8bdbf06f78e5c1e0517c77b9f@integration/EPC-005-presentation-system"
+landed = "19ea5a453d0a50e8bdbf06f78e5c1e0517c77b9f"
+mapped = []
+mapped_by = "none"

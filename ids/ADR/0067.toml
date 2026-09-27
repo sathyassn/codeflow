@@ -1,0 +1,11 @@
+id = "ADR-0067"
+uid = "53b71ead-ada5-4b4c-a3a7-05fe3f4d51eb"
+kind = "ADR"
+title = "Written content policy for new text"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "a190ea152fe310587fd95999ec46da311e25bcc2@integration/EPC-016-visual-guide"
+landed = "a190ea152fe310587fd95999ec46da311e25bcc2"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "ADR-0049"
+uid = "2317badb-5a08-4c38-904b-8c001e0a3fa8"
+kind = "ADR"
+title = "bounded cf-present runtime and renderer boundary"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "58ab1c50912c6f5d015638eeb04fe9c02580d288@integration/EPC-005-presentation-system"
+landed = "58ab1c50912c6f5d015638eeb04fe9c02580d288"
+mapped = []
+mapped_by = "none"

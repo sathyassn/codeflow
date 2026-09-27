@@ -1,0 +1,11 @@
+id = "SPC-007"
+uid = "fe19fcf2-3c31-42ba-be71-3e7762b24037"
+kind = "SPC"
+title = "agentic estimation and read-only forecast verification"
+issuer = "seed"
+created = "2026-09-27T13:28:43Z"
+target = "integration/EPC-013-release-guides"
+introduced = "1e2a4454dff209604625b03e9d128ee1d7a92a85@integration/EPC-013-release-guides"
+landed = "1e2a4454dff209604625b03e9d128ee1d7a92a85"
+mapped = []
+mapped_by = "none"

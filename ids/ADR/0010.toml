@@ -1,0 +1,11 @@
+id = "ADR-0010"
+uid = "be944dda-fece-4c97-9824-582cd4056bc7"
+kind = "ADR"
+title = "automated release — release-plz owns version/changelog/tag, cargo-dist owns artifacts"
+issuer = "seed"
+created = "2026-09-27T13:29:16Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "1b6d2f9de615a5928824ad2d355954829060023a@integration/EPC-005-presentation-system"
+landed = "1b6d2f9de615a5928824ad2d355954829060023a"
+mapped = ["8a9b6ce37b7f8e8a456d2ee1b16d125414ec2803"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

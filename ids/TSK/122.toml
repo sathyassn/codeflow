@@ -1,0 +1,11 @@
+id = "TSK-122"
+uid = "504054e5-79cb-4f48-946c-616943659f43"
+kind = "TSK"
+title = "present review parity qualification and distribution"
+issuer = "seed"
+created = "2026-09-27T13:29:07Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "e79db0e0912b94750a4f762d3443dded7e75989c@integration/EPC-016-visual-guide"
+landed = "e79db0e0912b94750a4f762d3443dded7e75989c"
+mapped = []
+mapped_by = "none"

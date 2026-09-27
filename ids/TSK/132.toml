@@ -1,0 +1,11 @@
+id = "TSK-132"
+uid = "28e4cc23-c096-4b11-bf4a-63c55fafd5ca"
+kind = "TSK"
+title = "a pre-push gate under a minute that blocks"
+issuer = "seed"
+created = "2026-09-27T13:29:11Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d@integration/EPC-020-delivery-system"
+landed = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d"
+mapped = []
+mapped_by = "none"

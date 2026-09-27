@@ -1,0 +1,11 @@
+id = "TSK-072"
+uid = "22f6fd72-962a-427d-954d-29284ab7849b"
+kind = "TSK"
+title = "explanation method for docs, portal and present"
+issuer = "seed"
+created = "2026-09-27T13:28:58Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "5ead8f67942c873302460cb952d3a077dbb207a3@integration/EPC-016-visual-guide"
+landed = "5ead8f67942c873302460cb952d3a077dbb207a3"
+mapped = []
+mapped_by = "none"

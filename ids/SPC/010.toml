@@ -1,0 +1,11 @@
+id = "SPC-010"
+uid = "4efa53b1-5fb2-4a36-91e7-875eec79de7b"
+kind = "SPC"
+title = "composed portal views from frontmatter and the doc graph"
+issuer = "seed"
+created = "2026-09-27T13:28:44Z"
+target = "integration/EPC-014-public-docs"
+introduced = "895176e7a37e40dd9dd069b84190e04c54b8c23f@integration/EPC-014-public-docs"
+landed = "895176e7a37e40dd9dd069b84190e04c54b8c23f"
+mapped = []
+mapped_by = "none"

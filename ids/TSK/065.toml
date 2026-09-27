@@ -1,0 +1,11 @@
+id = "TSK-065"
+uid = "49d12876-b202-47dc-a3a6-2d59e01905fa"
+kind = "TSK"
+title = "post-open pull request loop in the ship skill"
+issuer = "seed"
+created = "2026-09-27T13:28:57Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f@integration/EPC-016-visual-guide"
+landed = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f"
+mapped = []
+mapped_by = "none"

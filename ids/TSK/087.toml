@@ -1,0 +1,11 @@
+id = "TSK-087"
+uid = "c4205d35-fda2-4b12-b4e4-74ca52aa8625"
+kind = "TSK"
+title = "retire Mermaid and the present diagram block"
+issuer = "seed"
+created = "2026-09-27T13:29:01Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "b0132fa98cd5b701ca00162cefbaccb459cef45f@integration/EPC-016-visual-guide"
+landed = "b0132fa98cd5b701ca00162cefbaccb459cef45f"
+mapped = []
+mapped_by = "none"

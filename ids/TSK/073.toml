@@ -1,0 +1,11 @@
+id = "TSK-073"
+uid = "e9461a8b-edf3-481b-92cb-1675941bb401"
+kind = "TSK"
+title = "positive copy guide"
+issuer = "seed"
+created = "2026-09-27T13:28:59Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "5ead8f67942c873302460cb952d3a077dbb207a3@integration/EPC-016-visual-guide"
+landed = "5ead8f67942c873302460cb952d3a077dbb207a3"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-040"
+uid = "b8ba3ea4-b8f1-4f1f-9d0b-cbbe6a8a3b07"
+kind = "TSK"
+title = "correct the public-facing documentation"
+issuer = "seed"
+created = "2026-09-27T13:28:53Z"
+target = "integration/EPC-014-public-docs"
+introduced = "6a95b030ac7b8bb1c95122c98247996f8737d480@integration/EPC-014-public-docs"
+landed = "6a95b030ac7b8bb1c95122c98247996f8737d480"
+mapped = []
+mapped_by = "none"

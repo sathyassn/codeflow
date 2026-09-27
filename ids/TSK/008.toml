@@ -1,0 +1,11 @@
+id = "TSK-008"
+uid = "330127d0-bb82-4ce7-9a17-94233c3bf718"
+kind = "TSK"
+title = "research and prototype documentation portals"
+issuer = "seed"
+created = "2026-09-27T13:28:48Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "d7518ca12dcc84bb918dd8713d49d67f5e172f80@integration/EPC-005-presentation-system"
+landed = "d7518ca12dcc84bb918dd8713d49d67f5e172f80"
+mapped = []
+mapped_by = "none"

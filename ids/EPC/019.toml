@@ -1,0 +1,11 @@
+id = "EPC-019"
+uid = "77148a9e-396e-4529-856f-af5b878d5daa"
+kind = "EPC"
+title = "delegate turn continuation and live transport proof"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "e430139866e672f2a15907efcd119401fab43cbb@integration/EPC-020-delivery-system"
+landed = "e430139866e672f2a15907efcd119401fab43cbb"
+mapped = []
+mapped_by = "none"

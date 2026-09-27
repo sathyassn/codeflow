@@ -1,0 +1,11 @@
+id = "EPC-018"
+uid = "3e18091e-3105-4f89-9b71-1370ecbbe725"
+kind = "EPC"
+title = "autonomy with judgment and the current model roster"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/release-3-0-0-list"
+introduced = "d092295ea1ec8ad2cd9946c9a46122360f2f5e70@integration/release-3-0-0-list"
+landed = "d092295ea1ec8ad2cd9946c9a46122360f2f5e70"
+mapped = []
+mapped_by = "none"

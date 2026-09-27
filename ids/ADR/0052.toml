@@ -1,0 +1,11 @@
+id = "ADR-0052"
+uid = "ab5f793d-0286-42f5-9bb4-8b2472a667e5"
+kind = "ADR"
+title = "separate cf-present ephemeral runtime from durable state"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "aa39d92cfb2588f74533f28ede639ebdeb3cd21c@integration/EPC-005-presentation-system"
+landed = "aa39d92cfb2588f74533f28ede639ebdeb3cd21c"
+mapped = []
+mapped_by = "none"

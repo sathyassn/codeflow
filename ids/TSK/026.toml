@@ -1,0 +1,11 @@
+id = "TSK-026"
+uid = "b4e81edd-6058-4479-92a7-6e49ad28ab47"
+kind = "TSK"
+title = "repair native evaluation binding and handoff"
+issuer = "seed"
+created = "2026-09-27T13:28:51Z"
+target = "integration/EPC-013-release-guides"
+introduced = "1bd8c418ff1972aab347b24c37ffe6a21c2f5a98@integration/EPC-013-release-guides"
+landed = "1bd8c418ff1972aab347b24c37ffe6a21c2f5a98"
+mapped = []
+mapped_by = "none"

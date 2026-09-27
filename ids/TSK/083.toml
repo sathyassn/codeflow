@@ -1,0 +1,11 @@
+id = "TSK-083"
+uid = "1c164def-7305-4fe6-b4e5-c02d941bcda1"
+kind = "TSK"
+title = "qualify harness answers its own trust prompt"
+issuer = "seed"
+created = "2026-09-27T13:29:00Z"
+target = "integration/release-3-0-0-list"
+introduced = "8d3e2bd7cc4bbd26e1e638f1fb2c5775ab5da117@integration/release-3-0-0-list"
+landed = "8d3e2bd7cc4bbd26e1e638f1fb2c5775ab5da117"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "EPC-014"
+uid = "9f844d04-2aff-489e-9dbb-e39e3b7f756a"
+kind = "EPC"
+title = "public-release documentation and presentation"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-014-public-docs"
+introduced = "6a95b030ac7b8bb1c95122c98247996f8737d480@integration/EPC-014-public-docs"
+landed = "6a95b030ac7b8bb1c95122c98247996f8737d480"
+mapped = []
+mapped_by = "none"

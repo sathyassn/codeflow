@@ -1,0 +1,11 @@
+id = "SPC-002"
+uid = "6bcb98ff-c6c0-4302-9e32-ed4cd72fa24b"
+kind = "SPC"
+title = "durable delegate turn lifecycle"
+issuer = "seed"
+created = "2026-09-27T13:28:43Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "62be7f1da114aadcb9b134d8f081983024a6270f@integration/EPC-005-presentation-system"
+landed = "62be7f1da114aadcb9b134d8f081983024a6270f"
+mapped = []
+mapped_by = "none"

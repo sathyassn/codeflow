@@ -1,0 +1,11 @@
+id = "TSK-014"
+uid = "d7d2af01-03dd-409f-9a73-f4859982c032"
+kind = "TSK"
+title = "recover the design method and utility directions"
+issuer = "seed"
+created = "2026-09-27T13:28:50Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "adf1205a1d9ed7c1398e75eb81040990bb5696f2@integration/EPC-005-presentation-system"
+landed = "adf1205a1d9ed7c1398e75eb81040990bb5696f2"
+mapped = []
+mapped_by = "none"

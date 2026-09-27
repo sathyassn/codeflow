@@ -1,0 +1,11 @@
+id = "TSK-131"
+uid = "29f99da0-0bf5-441a-94ad-69e46cac1c65"
+kind = "TSK"
+title = "holistic-fix doctrine and positive copy guide salvaged"
+issuer = "seed"
+created = "2026-09-27T13:29:10Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d@integration/EPC-020-delivery-system"
+landed = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d"
+mapped = []
+mapped_by = "none"

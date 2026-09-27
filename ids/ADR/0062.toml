@@ -1,0 +1,11 @@
+id = "ADR-0062"
+uid = "32d8762e-3556-45e4-b882-444e54bd27ee"
+kind = "ADR"
+title = "keep release state in the normal work PR"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/EPC-013-release-guides"
+introduced = "1e806781578c189fa74013e06439c64b3d465950@integration/EPC-013-release-guides"
+landed = "1e806781578c189fa74013e06439c64b3d465950"
+mapped = []
+mapped_by = "none"

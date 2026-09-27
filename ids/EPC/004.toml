@@ -1,0 +1,11 @@
+id = "EPC-004"
+uid = "c17947b7-ae72-4a7d-bbbf-f85bfb960ef6"
+kind = "EPC"
+title = "whole-flow verification and UI resource isolation"
+issuer = "seed"
+created = "2026-09-27T13:28:41Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "ebdae4c292a5fe18cf787e11dfaaffe66311010c@integration/EPC-005-presentation-system"
+landed = "ebdae4c292a5fe18cf787e11dfaaffe66311010c"
+mapped = []
+mapped_by = "none"

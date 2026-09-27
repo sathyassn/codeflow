@@ -1,0 +1,11 @@
+id = "ADR-0018"
+uid = "20050cfd-8599-4daf-8a12-45df8beceafb"
+kind = "ADR"
+title = "interactive-only cross-model transport — one lane per direction"
+issuer = "seed"
+created = "2026-09-27T13:29:19Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "0fa9374e880b8e71209dd82f31e0cadf461f0d4a@integration/EPC-005-presentation-system"
+landed = "0fa9374e880b8e71209dd82f31e0cadf461f0d4a"
+mapped = []
+mapped_by = "none"

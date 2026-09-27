@@ -1,0 +1,11 @@
+id = "TSK-059"
+uid = "64ef997a-d98b-4529-bfde-73bd50a74f5c"
+kind = "TSK"
+title = "portal figure runtime and figure gate"
+issuer = "seed"
+created = "2026-09-27T13:28:56Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "a6479025492412d1d749bb7c62afdb6e86e2fd00@integration/EPC-016-visual-guide"
+landed = "a6479025492412d1d749bb7c62afdb6e86e2fd00"
+mapped = []
+mapped_by = "none"

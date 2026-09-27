@@ -1,0 +1,11 @@
+id = "EPC-001"
+uid = "780bbc5a-2d25-4c57-98c1-aa8a795e61bb"
+kind = "EPC"
+title = "v2 bootstrap"
+issuer = "seed"
+created = "2026-09-27T13:28:41Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "38f7eafe6eb77b91bf9cca4fda295dd6225da0fb@integration/EPC-005-presentation-system"
+landed = "38f7eafe6eb77b91bf9cca4fda295dd6225da0fb"
+mapped = ["6b76bbbd7b0854b492adeede7901f3fb297106b1"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

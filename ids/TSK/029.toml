@@ -1,0 +1,11 @@
+id = "TSK-029"
+uid = "a31f09a4-31e6-4db4-886c-e61a53f3c0b8"
+kind = "TSK"
+title = "preserve and repair workflow contracts"
+issuer = "seed"
+created = "2026-09-27T13:28:52Z"
+target = "integration/EPC-013-release-guides"
+introduced = "1d66074e973fa3832733a9bd63745bddfd9169cd@integration/EPC-013-release-guides"
+landed = "1d66074e973fa3832733a9bd63745bddfd9169cd"
+mapped = []
+mapped_by = "none"

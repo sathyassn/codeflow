@@ -1,0 +1,11 @@
+id = "TSK-082"
+uid = "31821bac-f47d-41d7-bf96-d073b140e179"
+kind = "TSK"
+title = "Agent OS mirror of the catalog and autonomy rules"
+issuer = "seed"
+created = "2026-09-27T13:29:00Z"
+target = "integration/release-3-0-0-list"
+introduced = "8d3e2bd7cc4bbd26e1e638f1fb2c5775ab5da117@integration/release-3-0-0-list"
+landed = "8d3e2bd7cc4bbd26e1e638f1fb2c5775ab5da117"
+mapped = []
+mapped_by = "none"

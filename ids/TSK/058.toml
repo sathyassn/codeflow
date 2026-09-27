@@ -1,0 +1,11 @@
+id = "TSK-058"
+uid = "f79577f6-01ef-4249-9e72-e8a29a70fb92"
+kind = "TSK"
+title = "visual explanation doctrine and figure grammar"
+issuer = "seed"
+created = "2026-09-27T13:28:56Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "a6479025492412d1d749bb7c62afdb6e86e2fd00@integration/EPC-016-visual-guide"
+landed = "a6479025492412d1d749bb7c62afdb6e86e2fd00"
+mapped = []
+mapped_by = "none"

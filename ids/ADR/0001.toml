@@ -1,0 +1,11 @@
+id = "ADR-0001"
+uid = "adbd005d-27cd-4494-8916-5b45bd66efe5"
+kind = "ADR"
+title = "stack choice — rust"
+issuer = "seed"
+created = "2026-09-27T13:29:13Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "e3a129acf39768eb1147cb385a67ccb09447d95a@integration/EPC-005-presentation-system"
+landed = "e3a129acf39768eb1147cb385a67ccb09447d95a"
+mapped = ["5b54284c36409eaf93a57b7422b89af3618a7be7"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

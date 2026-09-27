@@ -1,0 +1,11 @@
+id = "TSK-075"
+uid = "27bd3d04-54d9-4fc6-97a0-e9dd388bfbe0"
+kind = "TSK"
+title = "autonomy reference and its decision record"
+issuer = "seed"
+created = "2026-09-27T13:28:59Z"
+target = "integration/release-3-0-0-list"
+introduced = "d092295ea1ec8ad2cd9946c9a46122360f2f5e70@integration/release-3-0-0-list"
+landed = "d092295ea1ec8ad2cd9946c9a46122360f2f5e70"
+mapped = []
+mapped_by = "none"

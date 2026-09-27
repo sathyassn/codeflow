@@ -1,0 +1,11 @@
+id = "EPC-007"
+uid = "c6051644-04c1-40ea-b5fe-2ca7c164d042"
+kind = "EPC"
+title = "simplify documentation portal ownership and updates"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-013-release-guides"
+introduced = "dc81a2d68649cade59a15c0822170181418798bf@integration/EPC-013-release-guides"
+landed = "dc81a2d68649cade59a15c0822170181418798bf"
+mapped = []
+mapped_by = "none"

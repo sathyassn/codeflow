@@ -1,0 +1,11 @@
+id = "ADR-0024"
+uid = "1b84af4e-b919-44b8-b0a4-4ed7d2368bf3"
+kind = "ADR"
+title = "stage-aware duo default with bounded parallel worktrees"
+issuer = "seed"
+created = "2026-09-27T13:29:22Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "9a7c47631bf763d05e89de9dda0ff16e16492813@integration/EPC-005-presentation-system"
+landed = "9a7c47631bf763d05e89de9dda0ff16e16492813"
+mapped = []
+mapped_by = "none"

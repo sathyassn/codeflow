@@ -1,0 +1,11 @@
+id = "TSK-039"
+uid = "0e086045-46cb-405b-b120-97859a5d7749"
+kind = "TSK"
+title = "compose the orient layer sources"
+issuer = "seed"
+created = "2026-09-27T13:28:53Z"
+target = "integration/EPC-014-public-docs"
+introduced = "6a95b030ac7b8bb1c95122c98247996f8737d480@integration/EPC-014-public-docs"
+landed = "6a95b030ac7b8bb1c95122c98247996f8737d480"
+mapped = []
+mapped_by = "none"

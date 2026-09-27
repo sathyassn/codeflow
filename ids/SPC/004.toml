@@ -1,0 +1,11 @@
+id = "SPC-004"
+uid = "67b3134d-08f5-4d2d-9d44-642cdb966961"
+kind = "SPC"
+title = "interactive presentation utility contract"
+issuer = "seed"
+created = "2026-09-27T13:28:43Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "d7518ca12dcc84bb918dd8713d49d67f5e172f80@integration/EPC-005-presentation-system"
+landed = "d7518ca12dcc84bb918dd8713d49d67f5e172f80"
+mapped = []
+mapped_by = "none"

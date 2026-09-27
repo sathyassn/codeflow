@@ -1,0 +1,11 @@
+id = "ADR-0050"
+uid = "4e7af7d4-3340-4941-82ac-80cf85f27417"
+kind = "ADR"
+title = "versioned cf-present document and session contract"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "58ab1c50912c6f5d015638eeb04fe9c02580d288@integration/EPC-005-presentation-system"
+landed = "58ab1c50912c6f5d015638eeb04fe9c02580d288"
+mapped = []
+mapped_by = "none"

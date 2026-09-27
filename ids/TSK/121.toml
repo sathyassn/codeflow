@@ -1,0 +1,11 @@
+id = "TSK-121"
+uid = "19be0046-2cda-47b3-94b2-15e81e9e534b"
+kind = "TSK"
+title = "present revision diff, replies and reopen"
+issuer = "seed"
+created = "2026-09-27T13:29:07Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "e79db0e0912b94750a4f762d3443dded7e75989c@integration/EPC-016-visual-guide"
+landed = "e79db0e0912b94750a4f762d3443dded7e75989c"
+mapped = []
+mapped_by = "none"

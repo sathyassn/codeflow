@@ -1,0 +1,11 @@
+id = "TSK-012"
+uid = "de340bd1-d476-4bfb-a250-9c9a8572fccc"
+kind = "TSK"
+title = "refine design exploration, sourcing, and revision contracts"
+issuer = "seed"
+created = "2026-09-27T13:28:50Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "37c6d4e5d3c0a8f1494f587dea2a60d5b39ba876@integration/EPC-005-presentation-system"
+landed = "37c6d4e5d3c0a8f1494f587dea2a60d5b39ba876"
+mapped = []
+mapped_by = "none"

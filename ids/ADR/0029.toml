@@ -1,0 +1,11 @@
+id = "ADR-0029"
+uid = "862f675b-9292-45f8-9d44-45470cc5cb67"
+kind = "ADR"
+title = "permit classified sandbox retry for trusted installed tools"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "6bfd202725f4c5872ed965a4bcc1336f928d0a3d@integration/EPC-005-presentation-system"
+landed = "6bfd202725f4c5872ed965a4bcc1336f928d0a3d"
+mapped = []
+mapped_by = "none"

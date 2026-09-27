@@ -1,0 +1,11 @@
+id = "TSK-022"
+uid = "d46c6dd6-87de-4ec1-8669-22382491bf43"
+kind = "TSK"
+title = "apply and verify accountable worker delegation"
+issuer = "seed"
+created = "2026-09-27T13:28:51Z"
+target = "integration/EPC-013-release-guides"
+introduced = "511282b822f04e258caab096671fbebe2aa16fdb@integration/EPC-013-release-guides"
+landed = "511282b822f04e258caab096671fbebe2aa16fdb"
+mapped = []
+mapped_by = "none"

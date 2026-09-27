@@ -1,0 +1,11 @@
+id = "ADR-0039"
+uid = "d3d8ad7d-0649-4d16-8c0d-6528f60d120b"
+kind = "ADR"
+title = "separate durable orchestration doctrine from qualified model and harness bindings"
+issuer = "seed"
+created = "2026-09-27T13:29:24Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "85089b0ac8b13e268f60c830f65cf28e038fd0c8@integration/EPC-005-presentation-system"
+landed = "85089b0ac8b13e268f60c830f65cf28e038fd0c8"
+mapped = []
+mapped_by = "none"

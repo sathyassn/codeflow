@@ -1,0 +1,11 @@
+id = "TSK-019"
+uid = "a2810e1f-fef3-46d3-b3b4-301931d54864"
+kind = "TSK"
+title = "replace portal baseline reconciliation with explicit ownership"
+issuer = "seed"
+created = "2026-09-27T13:28:50Z"
+target = "integration/EPC-013-release-guides"
+introduced = "dc81a2d68649cade59a15c0822170181418798bf@integration/EPC-013-release-guides"
+landed = "dc81a2d68649cade59a15c0822170181418798bf"
+mapped = []
+mapped_by = "none"

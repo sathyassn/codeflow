@@ -1,0 +1,11 @@
+id = "TSK-084"
+uid = "d477fca8-70fa-413f-9c52-d038f72c9d65"
+kind = "TSK"
+title = "operating doctrine merged in from main"
+issuer = "seed"
+created = "2026-09-27T13:29:01Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "399a83f1a01947e9e21cd847d1f887a83ab429ce@integration/EPC-016-visual-guide"
+landed = "399a83f1a01947e9e21cd847d1f887a83ab429ce"
+mapped = []
+mapped_by = "none"

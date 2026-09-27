@@ -1,0 +1,11 @@
+id = "ADR-0020"
+uid = "3cb29038-ac1b-4d80-81a4-1f1635bf8856"
+kind = "ADR"
+title = "restore the original commit standard — 50/72 subject, bullet-only body, block-enforced"
+issuer = "seed"
+created = "2026-09-27T13:29:20Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "d9891283f47a0ec11d6ce4a04c033b97115b4cfc@integration/EPC-005-presentation-system"
+landed = "d9891283f47a0ec11d6ce4a04c033b97115b4cfc"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "ADR-0072"
+uid = "091c7334-d4ec-489c-b030-7c110906faae"
+kind = "ADR"
+title = "shared id registry and recorded work lifecycle"
+issuer = "seed"
+created = "2026-09-27T13:29:28Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "94a358252d205c5f467e6b8e8b887fe580da21a4@integration/EPC-020-delivery-system"
+landed = "94a358252d205c5f467e6b8e8b887fe580da21a4"
+mapped = []
+mapped_by = "none"

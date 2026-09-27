@@ -1,0 +1,11 @@
+id = "ADR-0038"
+uid = "4302c423-27af-4612-aede-75fb07053941"
+kind = "ADR"
+title = "preserve critical-path focus without reflexive deferral or escalation"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "6d76f9ed4665ad704ce392c609256d4311d1c9ce@integration/EPC-005-presentation-system"
+landed = "6d76f9ed4665ad704ce392c609256d4311d1c9ce"
+mapped = []
+mapped_by = "none"

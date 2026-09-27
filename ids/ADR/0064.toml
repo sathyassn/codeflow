@@ -1,0 +1,11 @@
+id = "ADR-0064"
+uid = "c313f9c1-3874-45cd-bb51-da7bcf946ab6"
+kind = "ADR"
+title = "the portal is a guide to the project as it stands"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/EPC-014-public-docs"
+introduced = "9d26abf9a99991dc49c10b4ae601d58cf1c2a506@integration/EPC-014-public-docs"
+landed = "9d26abf9a99991dc49c10b4ae601d58cf1c2a506"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "ADR-0066"
+uid = "96736567-74d3-485c-b407-4e9d75a7eb79"
+kind = "ADR"
+title = "Permission preset leaves the mode and ordinary deletes to the operator"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/EPC-014-public-docs"
+introduced = "98d7e71717ad5b432fcc6a59aceb6a14b875c12f@integration/EPC-014-public-docs"
+landed = "98d7e71717ad5b432fcc6a59aceb6a14b875c12f"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "ADR-0042"
+uid = "a080aaa5-734b-49e3-9e54-3feef184094b"
+kind = "ADR"
+title = "combine selected deterministic analyzers with contextual agentic verification"
+issuer = "seed"
+created = "2026-09-27T13:29:24Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "f89f4a96e9545bd95d8c4d0dafc14f4a301f6599@integration/EPC-005-presentation-system"
+landed = "f89f4a96e9545bd95d8c4d0dafc14f4a301f6599"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "EPC-010"
+uid = "495e7a83-1d7f-4a0e-b388-41db24bd2dc4"
+kind = "EPC"
+title = "automated release candidates and governed publication"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-013-release-guides"
+introduced = "8c33cc2b67cbd800b5e13f57b3916d79176e0879@integration/EPC-013-release-guides"
+landed = "8c33cc2b67cbd800b5e13f57b3916d79176e0879"
+mapped = []
+mapped_by = "none"

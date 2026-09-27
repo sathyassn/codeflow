@@ -1,0 +1,11 @@
+id = "TSK-024"
+uid = "7bc8770e-b4da-461e-8c7b-86192f36ad3b"
+kind = "TSK"
+title = "guide project organization and authority"
+issuer = "seed"
+created = "2026-09-27T13:28:51Z"
+target = "integration/EPC-013-release-guides"
+introduced = "5137876a9e430fa7c213bd918e24487c0f732490@integration/EPC-013-release-guides"
+landed = "5137876a9e430fa7c213bd918e24487c0f732490"
+mapped = []
+mapped_by = "none"

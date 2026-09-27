@@ -1,0 +1,11 @@
+id = "ADR-0032"
+uid = "596a84e9-53f5-4535-88f4-bbcc7992728f"
+kind = "ADR"
+title = "make editorial quality contextual and on demand"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "f31da2dc37312d0cb683feb497467c1a5e0fabab@integration/EPC-005-presentation-system"
+landed = "f31da2dc37312d0cb683feb497467c1a5e0fabab"
+mapped = []
+mapped_by = "none"

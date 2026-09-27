@@ -1,0 +1,11 @@
+id = "EPC-020"
+uid = "8a5478d8-30ae-48e5-bc9e-c8e0ca00b0e0"
+kind = "EPC"
+title = "delivery system for 3.0.0"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "2f2249a84a4f9565ba0a14d4d7b5904a24d6f8e0@integration/EPC-020-delivery-system"
+landed = "2f2249a84a4f9565ba0a14d4d7b5904a24d6f8e0"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "ADR-0030"
+uid = "287b9c1a-6d4e-4de2-8801-2b33fc02af7d"
+kind = "ADR"
+title = "make proportionate design and code quality a duo gate"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "6bfd202725f4c5872ed965a4bcc1336f928d0a3d@integration/EPC-005-presentation-system"
+landed = "6bfd202725f4c5872ed965a4bcc1336f928d0a3d"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-025"
+uid = "85017702-b05f-41c3-a834-0912e605a63b"
+kind = "TSK"
+title = "qualify organization adoption end to end"
+issuer = "seed"
+created = "2026-09-27T13:28:51Z"
+target = "integration/EPC-013-release-guides"
+introduced = "5137876a9e430fa7c213bd918e24487c0f732490@integration/EPC-013-release-guides"
+landed = "5137876a9e430fa7c213bd918e24487c0f732490"
+mapped = []
+mapped_by = "none"

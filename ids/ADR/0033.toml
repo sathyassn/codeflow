@@ -1,0 +1,11 @@
+id = "ADR-0033"
+uid = "07099037-0a5d-40be-ba8e-6ebba1bff410"
+kind = "ADR"
+title = "make the catastrophic-action boundary cross-platform"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "b926e62efdadfc86ee3b70a728a4fcfd9e1e3f92@integration/EPC-005-presentation-system"
+landed = "b926e62efdadfc86ee3b70a728a4fcfd9e1e3f92"
+mapped = []
+mapped_by = "none"

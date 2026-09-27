@@ -1,0 +1,11 @@
+id = "TSK-036"
+uid = "a4dd781b-47cf-43e0-ab2d-4e2d0875d404"
+kind = "TSK"
+title = "preserve committed directory links in portals"
+issuer = "seed"
+created = "2026-09-27T13:28:52Z"
+target = "integration/EPC-013-release-guides"
+introduced = "832ed73e217a9b0851bc0f55ff8d65e516713ffc@integration/EPC-013-release-guides"
+landed = "832ed73e217a9b0851bc0f55ff8d65e516713ffc"
+mapped = []
+mapped_by = "none"

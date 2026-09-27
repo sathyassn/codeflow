@@ -1,0 +1,11 @@
+id = "ADR-0053"
+uid = "d0cb2a61-94a7-4414-b539-45abdac66975"
+kind = "ADR"
+title = "utility presentation design system with Preact present chrome and Starlight portal"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "b3ef7abaf3e14d095aab4d633aaf7b69d8089435@integration/EPC-005-presentation-system"
+landed = "b3ef7abaf3e14d095aab4d633aaf7b69d8089435"
+mapped = []
+mapped_by = "none"

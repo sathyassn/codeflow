@@ -1,0 +1,11 @@
+id = "TSK-089"
+uid = "7870011d-0124-42ff-b0f5-2c6971a8691b"
+kind = "TSK"
+title = "brownfield setup that keeps strict defaults and reports every choice"
+issuer = "seed"
+created = "2026-09-27T13:29:02Z"
+target = "plan/adoption-fit"
+introduced = "af8f75bb4259ff0994015efdd261293bf1b9e232@plan/adoption-fit"
+landed = "none"
+mapped = []
+mapped_by = "none"

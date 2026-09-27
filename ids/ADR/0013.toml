@@ -1,0 +1,11 @@
+id = "ADR-0013"
+uid = "f48d690f-3644-40dd-aace-573c75b913a0"
+kind = "ADR"
+title = "Codex gets the orient digest (SessionStart); compaction resilience is a disposition, not a snapshot"
+issuer = "seed"
+created = "2026-09-27T13:29:17Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "ad2320109225f7c6e4ec354197e9f7ac586f6988@integration/EPC-005-presentation-system"
+landed = "ad2320109225f7c6e4ec354197e9f7ac586f6988"
+mapped = ["ad20e101b8a2bbed6990d676f25d47e74a291561"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

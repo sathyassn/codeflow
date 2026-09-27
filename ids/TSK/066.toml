@@ -1,0 +1,11 @@
+id = "TSK-066"
+uid = "b606adf1-94e6-46bb-b247-5cd00af1a0e7"
+kind = "TSK"
+title = "written content policy and reply rule"
+issuer = "seed"
+created = "2026-09-27T13:28:58Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f@integration/EPC-016-visual-guide"
+landed = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f"
+mapped = []
+mapped_by = "none"

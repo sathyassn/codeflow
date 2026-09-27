@@ -1,0 +1,11 @@
+id = "EPC-012"
+uid = "a1fe4285-1f3a-4ba8-9a6b-be4ddad28bc2"
+kind = "EPC"
+title = "Responsible autonomy"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-013-release-guides"
+introduced = "7383fe151e224572ee30de7fc7ba5bd3f291c671@integration/EPC-013-release-guides"
+landed = "7383fe151e224572ee30de7fc7ba5bd3f291c671"
+mapped = []
+mapped_by = "none"

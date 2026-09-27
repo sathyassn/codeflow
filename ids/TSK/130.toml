@@ -1,0 +1,11 @@
+id = "TSK-130"
+uid = "c0025f00-ddc9-4028-8a51-681a4fc3c113"
+kind = "TSK"
+title = "guidance retention evals across compaction"
+issuer = "seed"
+created = "2026-09-27T13:29:10Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d@integration/EPC-020-delivery-system"
+landed = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d"
+mapped = []
+mapped_by = "none"

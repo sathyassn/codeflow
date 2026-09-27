@@ -1,0 +1,11 @@
+id = "ADR-0025"
+uid = "98bc51f7-fefe-4b99-b585-a8fc687113a9"
+kind = "ADR"
+title = "effective harness autonomy with broad tools and guarded side effects"
+issuer = "seed"
+created = "2026-09-27T13:29:22Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "9a7c47631bf763d05e89de9dda0ff16e16492813@integration/EPC-005-presentation-system"
+landed = "9a7c47631bf763d05e89de9dda0ff16e16492813"
+mapped = []
+mapped_by = "none"

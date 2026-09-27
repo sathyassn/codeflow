@@ -1,0 +1,11 @@
+id = "EPC-017"
+uid = "52a18081-d3be-43d6-9ec1-e59c825a92d8"
+kind = "EPC"
+title = "operating doctrine follow-through"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f@integration/EPC-016-visual-guide"
+landed = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f"
+mapped = []
+mapped_by = "none"

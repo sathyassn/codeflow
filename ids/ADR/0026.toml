@@ -1,0 +1,11 @@
+id = "ADR-0026"
+uid = "650c8f3b-0968-4eb5-bd04-19c5a0844b56"
+kind = "ADR"
+title = "correct harness credential and destructive-action boundaries"
+issuer = "seed"
+created = "2026-09-27T13:29:22Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "6a6a2e3513e43174152ddf97e4e04011e991fe77@integration/EPC-005-presentation-system"
+landed = "6a6a2e3513e43174152ddf97e4e04011e991fe77"
+mapped = []
+mapped_by = "none"

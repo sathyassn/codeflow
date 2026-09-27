@@ -1,0 +1,11 @@
+id = "ADR-0040"
+uid = "f497ce8a-be43-4a6e-93c4-8913d8beacc9"
+kind = "ADR"
+title = "settle task graphs and select verification strength by evidence"
+issuer = "seed"
+created = "2026-09-27T13:29:24Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "472b38e309c03106de4f3072c98a589909d43812@integration/EPC-005-presentation-system"
+landed = "472b38e309c03106de4f3072c98a589909d43812"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "ADR-0071"
+uid = "ad18a9a6-035c-4a42-b59a-f849c1a4418b"
+kind = "ADR"
+title = "Outcome-first working and reporting"
+issuer = "seed"
+created = "2026-09-27T13:29:28Z"
+target = "task/TSK-088-outcome-first"
+introduced = "8ed667cc434ce52595a72b955fc32312cb268b9d@task/TSK-088-outcome-first"
+landed = "none"
+mapped = []
+mapped_by = "none"

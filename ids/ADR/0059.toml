@@ -1,0 +1,11 @@
+id = "ADR-0059"
+uid = "36924baa-ed0d-4e39-b567-8ccf3a0698ae"
+kind = "ADR"
+title = "qualify native transport by capabilities instead of plugin exclusivity"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/EPC-013-release-guides"
+introduced = "98498d1191d555ecbcc988891352399e6cfaef13@integration/EPC-013-release-guides"
+landed = "98498d1191d555ecbcc988891352399e6cfaef13"
+mapped = []
+mapped_by = "none"

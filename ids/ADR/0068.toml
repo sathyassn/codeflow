@@ -1,0 +1,11 @@
+id = "ADR-0068"
+uid = "9c20e7ff-663b-49ec-a6bf-523a502d4e22"
+kind = "ADR"
+title = "Figure grammar is the default form of a utility figure"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "f0715fe2b0209f9dd29ac19d2859e10d54b2f859@integration/EPC-016-visual-guide"
+landed = "f0715fe2b0209f9dd29ac19d2859e10d54b2f859"
+mapped = []
+mapped_by = "none"

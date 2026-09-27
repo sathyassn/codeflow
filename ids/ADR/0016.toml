@@ -1,0 +1,11 @@
+id = "ADR-0016"
+uid = "8da7bf5c-0db8-4213-a95c-b6a6c44765b2"
+kind = "ADR"
+title = "security / red-team review — dual-vendor adversarial stage plus deterministic scanner floor"
+issuer = "seed"
+created = "2026-09-27T13:29:18Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "59da1b5a2db3ab924e3a610f77e70e80b0f53cdc@integration/EPC-005-presentation-system"
+landed = "59da1b5a2db3ab924e3a610f77e70e80b0f53cdc"
+mapped = []
+mapped_by = "none"

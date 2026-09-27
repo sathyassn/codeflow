@@ -1,0 +1,11 @@
+id = "TSK-044"
+uid = "6a140b86-cae0-4d21-b99a-72ad7a54b93c"
+kind = "TSK"
+title = "qualify the CLI on sample projects"
+issuer = "seed"
+created = "2026-09-27T13:28:53Z"
+target = "integration/EPC-014-public-docs"
+introduced = "b3df19e8a9bb43b3b0d3a8f338dc09467ad9fe1d@integration/EPC-014-public-docs"
+landed = "b3df19e8a9bb43b3b0d3a8f338dc09467ad9fe1d"
+mapped = []
+mapped_by = "none"

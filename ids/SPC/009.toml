@@ -1,0 +1,11 @@
+id = "SPC-009"
+uid = "26a9c070-4e5e-4027-b6bf-ec6541e95703"
+kind = "SPC"
+title = "typed worker routes and accountable delegation"
+issuer = "seed"
+created = "2026-09-27T13:28:44Z"
+target = "integration/EPC-013-release-guides"
+introduced = "511282b822f04e258caab096671fbebe2aa16fdb@integration/EPC-013-release-guides"
+landed = "511282b822f04e258caab096671fbebe2aa16fdb"
+mapped = []
+mapped_by = "none"

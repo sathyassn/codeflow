@@ -1,0 +1,11 @@
+id = "TSK-126"
+uid = "654a2a73-9e0b-4021-abe4-0463ed939ab5"
+kind = "TSK"
+title = "reconcile the backlog plan's records after it syncs from main"
+issuer = "seed"
+created = "2026-09-27T13:29:09Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "e8627f59069a5771ab704cd8695c7016dcdcc8cc@integration/EPC-020-delivery-system"
+landed = "e8627f59069a5771ab704cd8695c7016dcdcc8cc"
+mapped = []
+mapped_by = "none"

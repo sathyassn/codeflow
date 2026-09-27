@@ -1,0 +1,11 @@
+id = "TSK-013"
+uid = "c99c8102-9089-4511-b088-27f2bce0f7b5"
+kind = "TSK"
+title = "prepare the v3 release candidate"
+issuer = "seed"
+created = "2026-09-27T13:28:50Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "9e79eae4619d475861093af688aa5359226792fc@integration/EPC-005-presentation-system"
+landed = "9e79eae4619d475861093af688aa5359226792fc"
+mapped = []
+mapped_by = "none"

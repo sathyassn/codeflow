@@ -1,0 +1,11 @@
+id = "TSK-062"
+uid = "69b92531-eb13-4dba-a19f-d4edf1c371ce"
+kind = "TSK"
+title = "evaluation cases for the visual doctrine"
+issuer = "seed"
+created = "2026-09-27T13:28:57Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "a6479025492412d1d749bb7c62afdb6e86e2fd00@integration/EPC-016-visual-guide"
+landed = "a6479025492412d1d749bb7c62afdb6e86e2fd00"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "SPC-013"
+uid = "5e33146d-c727-4694-b0e5-3ca867155cbc"
+kind = "SPC"
+title = "shared id registry, work lifecycle and acceptance contract"
+issuer = "seed"
+created = "2026-09-27T13:28:44Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "94a358252d205c5f467e6b8e8b887fe580da21a4@integration/EPC-020-delivery-system"
+landed = "94a358252d205c5f467e6b8e8b887fe580da21a4"
+mapped = []
+mapped_by = "none"

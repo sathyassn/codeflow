@@ -1,0 +1,11 @@
+id = "ADR-0063"
+uid = "80073827-c2c2-4f9a-8dd0-c12c6fb41c6d"
+kind = "ADR"
+title = "one shared utility presentation doctrine with a durable architecture home"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/EPC-014-public-docs"
+introduced = "e6d6b03026b96ca2867a56afffcc9fdf1626afee@integration/EPC-014-public-docs"
+landed = "e6d6b03026b96ca2867a56afffcc9fdf1626afee"
+mapped = []
+mapped_by = "none"

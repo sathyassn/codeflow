@@ -1,0 +1,11 @@
+id = "TSK-114"
+uid = "66bde28f-ba5b-4384-a0ac-73f99fc5ac62"
+kind = "TSK"
+title = "retire the present diagram input on the 3.0.0 source"
+issuer = "seed"
+created = "2026-09-27T13:29:05Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "4563c22f948f7791593b5d0b318fb499a6b24da1@integration/EPC-020-delivery-system"
+landed = "4563c22f948f7791593b5d0b318fb499a6b24da1"
+mapped = []
+mapped_by = "none"

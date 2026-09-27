@@ -1,0 +1,11 @@
+id = "TSK-004-002"
+uid = "b220f2e2-4d9c-410c-bdce-0202d04215d3"
+kind = "TSK"
+title = "verify and ship isolation contracts"
+issuer = "seed"
+created = "2026-09-27T13:28:45Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "ebdae4c292a5fe18cf787e11dfaaffe66311010c@integration/EPC-005-presentation-system"
+landed = "ebdae4c292a5fe18cf787e11dfaaffe66311010c"
+mapped = []
+mapped_by = "none"

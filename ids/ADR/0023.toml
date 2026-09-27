@@ -1,0 +1,11 @@
+id = "ADR-0023"
+uid = "adca53dd-9a70-4679-b0e2-f62d2beae7bc"
+kind = "ADR"
+title = "host-neutral Claude+Codex duo with fixed roles and evidence gates"
+issuer = "seed"
+created = "2026-09-27T13:29:21Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "e62fe106096e3a67638afcc7a197996655fc4577@integration/EPC-005-presentation-system"
+landed = "e62fe106096e3a67638afcc7a197996655fc4577"
+mapped = []
+mapped_by = "none"

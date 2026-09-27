@@ -1,0 +1,11 @@
+id = "ADR-0036"
+uid = "fa81c09a-4b6d-47fb-a948-bf3080dfa11c"
+kind = "ADR"
+title = "make delegate turns a durable transport-neutral lifecycle"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "ca10dec8b88c64f3015ff9b3add35407ea9bc65e@integration/EPC-005-presentation-system"
+landed = "ca10dec8b88c64f3015ff9b3add35407ea9bc65e"
+mapped = []
+mapped_by = "none"

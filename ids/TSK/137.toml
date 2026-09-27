@@ -1,0 +1,11 @@
+id = "TSK-137"
+uid = "d8c60c43-c421-4798-9495-1c23028dd578"
+kind = "TSK"
+title = "unwired security code and inert policy key removed"
+issuer = "seed"
+created = "2026-09-27T13:29:12Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d@integration/EPC-020-delivery-system"
+landed = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d"
+mapped = []
+mapped_by = "none"

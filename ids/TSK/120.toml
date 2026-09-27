@@ -1,0 +1,11 @@
+id = "TSK-120"
+uid = "28484981-91b3-4b20-9c3f-145557cc4490"
+kind = "TSK"
+title = "present answer submission and agent delivery"
+issuer = "seed"
+created = "2026-09-27T13:29:06Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "e79db0e0912b94750a4f762d3443dded7e75989c@integration/EPC-016-visual-guide"
+landed = "e79db0e0912b94750a4f762d3443dded7e75989c"
+mapped = []
+mapped_by = "none"

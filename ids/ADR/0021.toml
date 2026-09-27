@@ -1,0 +1,11 @@
+id = "ADR-0021"
+uid = "2780c478-0c00-42e1-be8c-adac0329ebfe"
+kind = "ADR"
+title = "reject changed-file coverage without a comparison base"
+issuer = "seed"
+created = "2026-09-27T13:29:20Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "ec3607448c8bb0e94e44baabf8624dd87bcd5728@integration/EPC-005-presentation-system"
+landed = "ec3607448c8bb0e94e44baabf8624dd87bcd5728"
+mapped = []
+mapped_by = "none"

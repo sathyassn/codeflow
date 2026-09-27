@@ -1,0 +1,11 @@
+id = "TSK-047"
+uid = "b008eaff-5106-4a7f-bfb4-f5d78264c67c"
+kind = "TSK"
+title = "ship the no attribution setting in every Claude settings preset"
+issuer = "seed"
+created = "2026-09-27T13:28:54Z"
+target = "integration/EPC-014-public-docs"
+introduced = "555ae12f6f03511454c23730c332914d04138b59@integration/EPC-014-public-docs"
+landed = "555ae12f6f03511454c23730c332914d04138b59"
+mapped = []
+mapped_by = "none"

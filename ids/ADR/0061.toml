@@ -1,0 +1,11 @@
+id = "ADR-0061"
+uid = "5f3c1939-616a-47ba-b541-03223e97343d"
+kind = "ADR"
+title = "automate release candidates while keeping publication human-authorized"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/EPC-013-release-guides"
+introduced = "568c7b6e907c1e3b1ba5db9b1b60e04f81bb3551@integration/EPC-013-release-guides"
+landed = "568c7b6e907c1e3b1ba5db9b1b60e04f81bb3551"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "ADR-0060"
+uid = "3e7538f2-80c6-4087-9857-f91fbd0b760b"
+kind = "ADR"
+title = "separate primary accountability from worker execution"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/EPC-013-release-guides"
+introduced = "abde8fefd2e3eb07adfb97d84d6740d5e92c58a8@integration/EPC-013-release-guides"
+landed = "abde8fefd2e3eb07adfb97d84d6740d5e92c58a8"
+mapped = []
+mapped_by = "none"

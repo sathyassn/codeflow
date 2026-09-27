@@ -1,0 +1,11 @@
+id = "TSK-139"
+uid = "1bfaa8cc-13a4-4008-814b-53409a731b33"
+kind = "TSK"
+title = "qualify each designated catalog seat version natively"
+issuer = "seed"
+created = "2026-09-27T13:29:12Z"
+target = "integration/release-3-0-0-list"
+introduced = "8b868f0743e152c82114f3531371db55189adbf2@integration/release-3-0-0-list"
+landed = "8b868f0743e152c82114f3531371db55189adbf2"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-049"
+uid = "e3e21477-2b02-4834-9e7a-9b3a2922ff5e"
+kind = "TSK"
+title = "retitle decisions and architecture pages without dashes"
+issuer = "seed"
+created = "2026-09-27T13:28:54Z"
+target = "integration/EPC-014-public-docs"
+introduced = "3144937d55062b8f61455a65f6439084de9c61e4@integration/EPC-014-public-docs"
+landed = "3144937d55062b8f61455a65f6439084de9c61e4"
+mapped = []
+mapped_by = "none"

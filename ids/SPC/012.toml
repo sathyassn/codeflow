@@ -1,0 +1,11 @@
+id = "SPC-012"
+uid = "e80090ed-01c7-46d9-abe3-883ca70436e4"
+kind = "SPC"
+title = "Holistic repair and fix-bearing review"
+issuer = "seed"
+created = "2026-09-27T13:28:44Z"
+target = "integration/EPC-015-engineering-bar"
+introduced = "d3f8a2db82eddec8d37519e74c4c0e2b16b372a6@integration/EPC-015-engineering-bar"
+landed = "d3f8a2db82eddec8d37519e74c4c0e2b16b372a6"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-031"
+uid = "66e039ad-6503-4e94-917e-0d02e787cc27"
+kind = "TSK"
+title = "verify compositional workflow behavior"
+issuer = "seed"
+created = "2026-09-27T13:28:52Z"
+target = "integration/EPC-013-release-guides"
+introduced = "1d66074e973fa3832733a9bd63745bddfd9169cd@integration/EPC-013-release-guides"
+landed = "1d66074e973fa3832733a9bd63745bddfd9169cd"
+mapped = []
+mapped_by = "none"

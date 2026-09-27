@@ -1,0 +1,11 @@
+id = "EPC-021"
+uid = "a95d3b03-d02e-4855-88ba-d77be2e5e58f"
+kind = "EPC"
+title = "delivery system follow-on for 3.1"
+issuer = "seed"
+created = "2026-09-27T13:28:43Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "6275318447ae688965119500f7ae5472417aa633@integration/EPC-020-delivery-system"
+landed = "6275318447ae688965119500f7ae5472417aa633"
+mapped = []
+mapped_by = "none"

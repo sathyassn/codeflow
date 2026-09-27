@@ -1,0 +1,11 @@
+id = "TSK-095"
+uid = "8b0e7e65-7c20-413c-95dc-91d1929c6b4d"
+kind = "TSK"
+title = "pin the scaffolded CI install to the recorded version"
+issuer = "seed"
+created = "2026-09-27T13:29:03Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "b2aae5400dfa5b84d930a36f2e43cc1ca0eff58e@integration/EPC-020-delivery-system"
+landed = "b2aae5400dfa5b84d930a36f2e43cc1ca0eff58e"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-052"
+uid = "7bc03697-866e-4ec1-b153-9ad6673074c5"
+kind = "TSK"
+title = "compose the guide pages from the sources"
+issuer = "seed"
+created = "2026-09-27T13:28:54Z"
+target = "integration/EPC-014-public-docs"
+introduced = "1d3d0656962fa7a4deb33a89035fac23d03125e5@integration/EPC-014-public-docs"
+landed = "1d3d0656962fa7a4deb33a89035fac23d03125e5"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-021"
+uid = "be0be5a1-231d-4970-98ba-e950e518020c"
+kind = "TSK"
+title = "validate and report typed worker routes"
+issuer = "seed"
+created = "2026-09-27T13:28:51Z"
+target = "integration/EPC-013-release-guides"
+introduced = "511282b822f04e258caab096671fbebe2aa16fdb@integration/EPC-013-release-guides"
+landed = "511282b822f04e258caab096671fbebe2aa16fdb"
+mapped = []
+mapped_by = "none"

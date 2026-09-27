@@ -1,0 +1,11 @@
+id = "TSK-076"
+uid = "d4bd8f73-c103-4ecc-bd23-3e2cf88d8fd7"
+kind = "TSK"
+title = "skill corrections that let a task run to its finish line"
+issuer = "seed"
+created = "2026-09-27T13:28:59Z"
+target = "integration/release-3-0-0-list"
+introduced = "d092295ea1ec8ad2cd9946c9a46122360f2f5e70@integration/release-3-0-0-list"
+landed = "d092295ea1ec8ad2cd9946c9a46122360f2f5e70"
+mapped = []
+mapped_by = "none"

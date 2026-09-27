@@ -1,0 +1,11 @@
+id = "ADR-0017"
+uid = "1ad6586e-20a9-48e2-92c2-3fe3a47bee5f"
+kind = "ADR"
+title = "codeflow ci — CI-portable, binary-sourced verification"
+issuer = "seed"
+created = "2026-09-27T13:29:18Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "1f2e8b9d2885531fd85c6baaa74bcf8d361dbf51@integration/EPC-005-presentation-system"
+landed = "1f2e8b9d2885531fd85c6baaa74bcf8d361dbf51"
+mapped = []
+mapped_by = "none"

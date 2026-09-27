@@ -1,0 +1,11 @@
+id = "TSK-003-003"
+uid = "5e663428-a091-4d88-baf3-c8621376ae37"
+kind = "TSK"
+title = "extend evaluation and verification guidance"
+issuer = "seed"
+created = "2026-09-27T13:28:44Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "f89f4a96e9545bd95d8c4d0dafc14f4a301f6599@integration/EPC-005-presentation-system"
+landed = "f89f4a96e9545bd95d8c4d0dafc14f4a301f6599"
+mapped = []
+mapped_by = "none"

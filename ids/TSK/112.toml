@@ -1,0 +1,11 @@
+id = "TSK-112"
+uid = "4d0b0a90-dccf-45d0-91b2-ce246df3aec5"
+kind = "TSK"
+title = "git-guard judges a git command by the repository it targets"
+issuer = "seed"
+created = "2026-09-27T13:29:05Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "84ee6e10e81946294b95b8eaebf20d35a28c91fd@integration/EPC-020-delivery-system"
+landed = "84ee6e10e81946294b95b8eaebf20d35a28c91fd"
+mapped = []
+mapped_by = "none"

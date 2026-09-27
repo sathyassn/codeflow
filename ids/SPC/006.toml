@@ -1,0 +1,11 @@
+id = "SPC-006"
+uid = "2b34afc9-858f-416f-9445-91499250f37d"
+kind = "SPC"
+title = "bounded design exploration, sourcing, and revision contract"
+issuer = "seed"
+created = "2026-09-27T13:28:43Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "37c6d4e5d3c0a8f1494f587dea2a60d5b39ba876@integration/EPC-005-presentation-system"
+landed = "37c6d4e5d3c0a8f1494f587dea2a60d5b39ba876"
+mapped = []
+mapped_by = "none"

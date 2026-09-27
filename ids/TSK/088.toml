@@ -1,0 +1,11 @@
+id = "TSK-088"
+uid = "37a9e2ee-4847-4b68-8a79-32de116e6fae"
+kind = "TSK"
+title = "outcome-first working and reporting, with one attention marker"
+issuer = "seed"
+created = "2026-09-27T13:29:01Z"
+target = "integration/release-3-0-0-list"
+introduced = "68c94913d9f5452dad5bd8d02df552ec706f7e94@integration/release-3-0-0-list"
+landed = "68c94913d9f5452dad5bd8d02df552ec706f7e94"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-020"
+uid = "3c05b0fa-4a7c-47e3-aec8-243e2ec595f8"
+kind = "TSK"
+title = "qualify and distribute portal ownership lifecycle"
+issuer = "seed"
+created = "2026-09-27T13:28:51Z"
+target = "integration/EPC-013-release-guides"
+introduced = "dc81a2d68649cade59a15c0822170181418798bf@integration/EPC-013-release-guides"
+landed = "dc81a2d68649cade59a15c0822170181418798bf"
+mapped = []
+mapped_by = "none"

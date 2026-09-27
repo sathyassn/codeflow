@@ -1,0 +1,11 @@
+id = "ADR-0046"
+uid = "04d829d4-1017-4f0a-90e9-b2107482636d"
+kind = "ADR"
+title = "use independent work ids and a stable planning anchor"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "7b4f10a6c2085bc507c5fe9653827fb612c50fcc@integration/EPC-005-presentation-system"
+landed = "7b4f10a6c2085bc507c5fe9653827fb612c50fcc"
+mapped = []
+mapped_by = "none"

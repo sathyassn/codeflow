@@ -1,0 +1,11 @@
+id = "ADR-0045"
+uid = "87f62666-6c09-42f3-9656-b3a175518538"
+kind = "ADR"
+title = "define durable work authority and canonical record layout"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "913a636de9099227e8945eb52c67b2d86f332f2d@integration/EPC-005-presentation-system"
+landed = "913a636de9099227e8945eb52c67b2d86f332f2d"
+mapped = []
+mapped_by = "none"

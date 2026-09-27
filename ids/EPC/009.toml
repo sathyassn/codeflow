@@ -1,0 +1,11 @@
+id = "EPC-009"
+uid = "a4e7032e-003c-4f89-a9e2-295fed601678"
+kind = "EPC"
+title = "adopt proportionate project organization"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-013-release-guides"
+introduced = "5137876a9e430fa7c213bd918e24487c0f732490@integration/EPC-013-release-guides"
+landed = "5137876a9e430fa7c213bd918e24487c0f732490"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "EPC-015"
+uid = "3d627c6f-0ecf-4991-a3b9-4d8cdb9709fb"
+kind = "EPC"
+title = "engineering bar ingrained"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-015-engineering-bar"
+introduced = "ea461a442d3f5c4c9e1b505565ccff438d32d8d8@integration/EPC-015-engineering-bar"
+landed = "ea461a442d3f5c4c9e1b505565ccff438d32d8d8"
+mapped = []
+mapped_by = "none"

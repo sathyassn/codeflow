@@ -1,0 +1,11 @@
+id = "ADR-0005"
+uid = "7d325923-1412-4f94-a820-d351fd709e8a"
+kind = "ADR"
+title = "cross-vendor delegation via harness-boundary composition"
+issuer = "seed"
+created = "2026-09-27T13:29:14Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "8676ec39c422d62610b3fd205e7304ad03851c6b@integration/EPC-005-presentation-system"
+landed = "8676ec39c422d62610b3fd205e7304ad03851c6b"
+mapped = ["c4ed1af7f67fc700af638bcf61d381a612028ef1"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

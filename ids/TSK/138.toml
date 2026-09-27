@@ -1,0 +1,11 @@
+id = "TSK-138"
+uid = "b22b13fe-0ad4-47fd-9e58-5bd295fda59b"
+kind = "TSK"
+title = "shipped docs and artifacts right-sized with duty maps"
+issuer = "seed"
+created = "2026-09-27T13:29:12Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d@integration/EPC-020-delivery-system"
+landed = "8586a8fd2afe1e5e9d6d50c1bf3e2e38e5ed7d6d"
+mapped = []
+mapped_by = "none"

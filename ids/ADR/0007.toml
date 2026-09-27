@@ -1,0 +1,11 @@
+id = "ADR-0007"
+uid = "5354e7b9-89ae-4e8a-b8b1-364235568792"
+kind = "ADR"
+title = "agent/human merge boundary — protected-branch merge controls"
+issuer = "seed"
+created = "2026-09-27T13:29:15Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "05c1496f62af07a76190820b89c7285b1cd69c37@integration/EPC-005-presentation-system"
+landed = "05c1496f62af07a76190820b89c7285b1cd69c37"
+mapped = ["a024e855ab1fb7f15c2be7322099a4194975a6f1"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

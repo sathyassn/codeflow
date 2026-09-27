@@ -1,0 +1,11 @@
+id = "ADR-0056"
+uid = "b8347aae-67fc-41f6-88a8-689c3babe070"
+kind = "ADR"
+title = "High primary effort with bounded workers"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-013-release-guides"
+introduced = "83903695d5053def71cbbb0f11881de74ebadbf9@integration/EPC-013-release-guides"
+landed = "83903695d5053def71cbbb0f11881de74ebadbf9"
+mapped = []
+mapped_by = "none"

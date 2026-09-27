@@ -1,0 +1,11 @@
+id = "ADR-0044"
+uid = "99f2ed55-f45b-403a-8354-08005302a7f6"
+kind = "ADR"
+title = "require whole-flow evidence and isolated UI resources"
+issuer = "seed"
+created = "2026-09-27T13:29:24Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "ebdae4c292a5fe18cf787e11dfaaffe66311010c@integration/EPC-005-presentation-system"
+landed = "ebdae4c292a5fe18cf787e11dfaaffe66311010c"
+mapped = []
+mapped_by = "none"

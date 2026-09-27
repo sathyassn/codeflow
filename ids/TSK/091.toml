@@ -1,0 +1,11 @@
+id = "TSK-091"
+uid = "497e9dec-a861-4b33-9684-525974a4d096"
+kind = "TSK"
+title = "live trial of the tmux delegate transport"
+issuer = "seed"
+created = "2026-09-27T13:29:03Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "82f889788629be37aab7261e9ce5f869d9ff656d@integration/EPC-020-delivery-system"
+landed = "82f889788629be37aab7261e9ce5f869d9ff656d"
+mapped = []
+mapped_by = "none"

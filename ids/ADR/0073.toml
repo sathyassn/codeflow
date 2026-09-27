@@ -1,0 +1,11 @@
+id = "ADR-0073"
+uid = "c1a34657-03be-476a-8a49-102c0bf3d63f"
+kind = "ADR"
+title = "Present review contract v2"
+issuer = "seed"
+created = "2026-09-27T13:29:28Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "304c51baf82e9bdcba56b0f3686fa7ab4b26e9a0@integration/EPC-016-visual-guide"
+landed = "304c51baf82e9bdcba56b0f3686fa7ab4b26e9a0"
+mapped = []
+mapped_by = "none"

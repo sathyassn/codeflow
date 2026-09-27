@@ -1,0 +1,11 @@
+id = "EPC-003"
+uid = "e8f81cae-057b-42b6-a5ea-c06a709f20c2"
+kind = "EPC"
+title = "role-based model selection and layered verification"
+issuer = "seed"
+created = "2026-09-27T13:28:41Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "f89f4a96e9545bd95d8c4d0dafc14f4a301f6599@integration/EPC-005-presentation-system"
+landed = "f89f4a96e9545bd95d8c4d0dafc14f4a301f6599"
+mapped = []
+mapped_by = "none"

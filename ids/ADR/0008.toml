@@ -1,0 +1,11 @@
+id = "ADR-0008"
+uid = "2266298b-4f1d-45f1-bdcd-cc581db309f5"
+kind = "ADR"
+title = "harness parity and the exec-guard security stage"
+issuer = "seed"
+created = "2026-09-27T13:29:16Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "a92920fcdab1f600f3b10b7079d29abe6cd6ab60@integration/EPC-005-presentation-system"
+landed = "a92920fcdab1f600f3b10b7079d29abe6cd6ab60"
+mapped = ["c508722fb8270bae1450f95b85b0137d0b6e47b0"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

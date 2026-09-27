@@ -1,0 +1,11 @@
+id = "TSK-123"
+uid = "486ea07f-0332-43ff-91b6-3103e8aa27ef"
+kind = "TSK"
+title = "select figure parts and show html stage titles in present"
+issuer = "seed"
+created = "2026-09-27T13:29:09Z"
+target = "plan/present-3-0-x-patch"
+introduced = "2dc9a46c67b20341ea50caa6fc7dd3607add8f29@plan/present-3-0-x-patch"
+landed = "none"
+mapped = []
+mapped_by = "none"

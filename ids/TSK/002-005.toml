@@ -1,0 +1,11 @@
+id = "TSK-002-005"
+uid = "c4687ca6-a19b-4954-9a74-4832da663ad4"
+kind = "TSK"
+title = "cross-platform live canaries"
+issuer = "seed"
+created = "2026-09-27T13:28:44Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "62be7f1da114aadcb9b134d8f081983024a6270f@integration/EPC-005-presentation-system"
+landed = "62be7f1da114aadcb9b134d8f081983024a6270f"
+mapped = []
+mapped_by = "none"

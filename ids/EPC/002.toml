@@ -1,0 +1,11 @@
+id = "EPC-002"
+uid = "2d299894-d708-4cc7-b994-10cb92395fb5"
+kind = "EPC"
+title = "transport-neutral delegate foundation"
+issuer = "seed"
+created = "2026-09-27T13:28:41Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "62be7f1da114aadcb9b134d8f081983024a6270f@integration/EPC-005-presentation-system"
+landed = "62be7f1da114aadcb9b134d8f081983024a6270f"
+mapped = []
+mapped_by = "none"

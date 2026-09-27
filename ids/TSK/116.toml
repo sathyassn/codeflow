@@ -1,0 +1,11 @@
+id = "TSK-116"
+uid = "e9ed6fb9-573c-4c6d-95c7-d6bfc0d57c98"
+kind = "TSK"
+title = "36 live agent sessions"
+issuer = "seed"
+created = "2026-09-27T13:29:06Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "84000d7d17e94062ee3765d022a06897c8735ce7@integration/EPC-020-delivery-system"
+landed = "84000d7d17e94062ee3765d022a06897c8735ce7"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "EPC-008"
+uid = "fcdad66a-1153-4c7c-8b58-9bf87124c7b3"
+kind = "EPC"
+title = "resource-aware delegated execution"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-013-release-guides"
+introduced = "511282b822f04e258caab096671fbebe2aa16fdb@integration/EPC-013-release-guides"
+landed = "511282b822f04e258caab096671fbebe2aa16fdb"
+mapped = []
+mapped_by = "none"

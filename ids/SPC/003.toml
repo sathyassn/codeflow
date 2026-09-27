@@ -1,0 +1,11 @@
+id = "SPC-003"
+uid = "d51ff1f0-0446-421b-b182-05948fc25c63"
+kind = "SPC"
+title = "surface language, voice, and appearance contract"
+issuer = "seed"
+created = "2026-09-27T13:28:43Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "d7518ca12dcc84bb918dd8713d49d67f5e172f80@integration/EPC-005-presentation-system"
+landed = "d7518ca12dcc84bb918dd8713d49d67f5e172f80"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "ADR-0069"
+uid = "89d5fdf0-3b29-43a3-b7b5-658e876b31db"
+kind = "ADR"
+title = "Model catalog with product lines, seats and duties"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/release-3-0-0-list"
+introduced = "a0e16d4cce8301b9a598449d78606f07f1929dea@integration/release-3-0-0-list"
+landed = "a0e16d4cce8301b9a598449d78606f07f1929dea"
+mapped = []
+mapped_by = "none"

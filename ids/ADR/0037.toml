@@ -1,0 +1,11 @@
+id = "ADR-0037"
+uid = "b5f2f8b6-af5a-4ad6-9355-7c754451b3e6"
+kind = "ADR"
+title = "require a canonical delegate prompt boundary"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "5a54c76b6cd8f5ce46d24fb71283df61c860acae@integration/EPC-005-presentation-system"
+landed = "5a54c76b6cd8f5ce46d24fb71283df61c860acae"
+mapped = []
+mapped_by = "none"

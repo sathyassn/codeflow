@@ -1,0 +1,11 @@
+id = "TSK-051"
+uid = "7d217878-7b0a-47ae-98b1-380a15f69857"
+kind = "TSK"
+title = "render the guide shape in the adapter and the starter"
+issuer = "seed"
+created = "2026-09-27T13:28:54Z"
+target = "integration/EPC-014-public-docs"
+introduced = "1d3d0656962fa7a4deb33a89035fac23d03125e5@integration/EPC-014-public-docs"
+landed = "1d3d0656962fa7a4deb33a89035fac23d03125e5"
+mapped = []
+mapped_by = "none"

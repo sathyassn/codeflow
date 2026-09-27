@@ -1,0 +1,11 @@
+id = "ADR-0014"
+uid = "842f1a32-5bb4-4edb-87c7-5b11a4823da5"
+kind = "ADR"
+title = "Codex credential read-guard via a named permission profile (cf-guard)"
+issuer = "seed"
+created = "2026-09-27T13:29:17Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "963db875ddf249e81cc756515635f98e97553ed8@integration/EPC-005-presentation-system"
+landed = "963db875ddf249e81cc756515635f98e97553ed8"
+mapped = ["391a2c8d8aef1e66efe5f954db0492224613b16d"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

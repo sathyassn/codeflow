@@ -1,0 +1,11 @@
+id = "TSK-048"
+uid = "d2fd6aaf-4e09-4b4b-a32b-d23b91a2d36e"
+kind = "TSK"
+title = "close the validator and cleanliness holes under the portal gate"
+issuer = "seed"
+created = "2026-09-27T13:28:54Z"
+target = "integration/EPC-014-public-docs"
+introduced = "3144937d55062b8f61455a65f6439084de9c61e4@integration/EPC-014-public-docs"
+landed = "3144937d55062b8f61455a65f6439084de9c61e4"
+mapped = []
+mapped_by = "none"

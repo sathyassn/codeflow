@@ -1,0 +1,11 @@
+id = "ADR-0004"
+uid = "8de6918f-ec9a-4907-9319-945289a76838"
+kind = "ADR"
+title = "Composable pipeline workflow, shipped user-owned"
+issuer = "seed"
+created = "2026-09-27T13:29:14Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "6d0629659c69319474da5f85154f70110bb000ab@integration/EPC-005-presentation-system"
+landed = "6d0629659c69319474da5f85154f70110bb000ab"
+mapped = ["958a7e066cca4284484f7200c72839235f0c923d"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

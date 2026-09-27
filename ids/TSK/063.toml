@@ -1,0 +1,11 @@
+id = "TSK-063"
+uid = "a913f8ce-ac60-4bd2-900f-4ae6ca68d020"
+kind = "TSK"
+title = "agent-os guide rebuilt on the doctrine"
+issuer = "seed"
+created = "2026-09-27T13:28:57Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "a6479025492412d1d749bb7c62afdb6e86e2fd00@integration/EPC-016-visual-guide"
+landed = "a6479025492412d1d749bb7c62afdb6e86e2fd00"
+mapped = []
+mapped_by = "none"

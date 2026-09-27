@@ -1,0 +1,11 @@
+id = "TSK-069"
+uid = "c9c6a2f4-341b-4874-b903-5b4161eb606c"
+kind = "TSK"
+title = "integrate and verify the operating doctrine body"
+issuer = "seed"
+created = "2026-09-27T13:28:58Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f@integration/EPC-016-visual-guide"
+landed = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-027"
+uid = "ecea5fc5-4a4f-468d-a534-7c6b94a957b8"
+kind = "TSK"
+title = "automate release candidates and governed publication"
+issuer = "seed"
+created = "2026-09-27T13:28:51Z"
+target = "integration/EPC-013-release-guides"
+introduced = "8c33cc2b67cbd800b5e13f57b3916d79176e0879@integration/EPC-013-release-guides"
+landed = "8c33cc2b67cbd800b5e13f57b3916d79176e0879"
+mapped = []
+mapped_by = "none"

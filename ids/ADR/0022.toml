@@ -1,0 +1,11 @@
+id = "ADR-0022"
+uid = "f66b7f46-7c9d-4ba1-addd-c84cd64b9bf0"
+kind = "ADR"
+title = "replace the unmaintained YAML parser"
+issuer = "seed"
+created = "2026-09-27T13:29:21Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "e5e00ac642947ba62f911f6aa42118f62fe93768@integration/EPC-005-presentation-system"
+landed = "e5e00ac642947ba62f911f6aa42118f62fe93768"
+mapped = []
+mapped_by = "none"

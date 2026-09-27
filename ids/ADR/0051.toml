@@ -1,0 +1,11 @@
+id = "ADR-0051"
+uid = "742bd00b-4861-4c7c-a7ba-0a77f040c94d"
+kind = "ADR"
+title = "extend product design with bounded variation, trustworthy sourcing, and revision provenance"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "37c6d4e5d3c0a8f1494f587dea2a60d5b39ba876@integration/EPC-005-presentation-system"
+landed = "37c6d4e5d3c0a8f1494f587dea2a60d5b39ba876"
+mapped = []
+mapped_by = "none"

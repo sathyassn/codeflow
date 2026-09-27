@@ -1,0 +1,11 @@
+id = "TSK-097"
+uid = "483672d6-bacc-489d-9cab-d3955db6b4fc"
+kind = "TSK"
+title = "move CI off Node 20 actions and pin the runner image"
+issuer = "seed"
+created = "2026-09-27T13:29:03Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "028b58a308c82e2baf1b72010b394963c69f74c3@integration/EPC-020-delivery-system"
+landed = "028b58a308c82e2baf1b72010b394963c69f74c3"
+mapped = []
+mapped_by = "none"

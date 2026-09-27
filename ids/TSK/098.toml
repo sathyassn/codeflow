@@ -1,0 +1,11 @@
+id = "TSK-098"
+uid = "4f8251bd-f290-4d89-a869-845e9cad0dd2"
+kind = "TSK"
+title = "resync CodeFlow's own policy baseline with shipped defaults"
+issuer = "seed"
+created = "2026-09-27T13:29:03Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "028b58a308c82e2baf1b72010b394963c69f74c3@integration/EPC-020-delivery-system"
+landed = "028b58a308c82e2baf1b72010b394963c69f74c3"
+mapped = []
+mapped_by = "none"

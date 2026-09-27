@@ -1,0 +1,11 @@
+id = "ADR-0047"
+uid = "f4e4c2db-b446-445d-9fcf-af4814471d94"
+kind = "ADR"
+title = "narrow plugin-code sandbox carveout"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "e96db64bc0de66c9cb7b76fcb8eab163963c0647@integration/EPC-005-presentation-system"
+landed = "e96db64bc0de66c9cb7b76fcb8eab163963c0647"
+mapped = []
+mapped_by = "none"

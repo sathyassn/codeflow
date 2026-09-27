@@ -1,0 +1,11 @@
+id = "TSK-068"
+uid = "c0d984dd-45ac-4f28-8717-bc0547abba6b"
+kind = "TSK"
+title = "evaluation cases for the operating doctrine"
+issuer = "seed"
+created = "2026-09-27T13:28:58Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f@integration/EPC-016-visual-guide"
+landed = "dd72e9b02a2fe3493ff107f397a6e428e0fa320f"
+mapped = []
+mapped_by = "none"

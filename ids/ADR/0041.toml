@@ -1,0 +1,11 @@
+id = "ADR-0041"
+uid = "022b3ef1-05b6-466b-bc2e-61a6a576949a"
+kind = "ADR"
+title = "select qualified model bindings by stable project roles"
+issuer = "seed"
+created = "2026-09-27T13:29:24Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "f89f4a96e9545bd95d8c4d0dafc14f4a301f6599@integration/EPC-005-presentation-system"
+landed = "f89f4a96e9545bd95d8c4d0dafc14f4a301f6599"
+mapped = []
+mapped_by = "none"

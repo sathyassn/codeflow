@@ -1,0 +1,11 @@
+id = "TSK-055"
+uid = "4741900c-3b81-4de1-9524-dbf8f6e96a5b"
+kind = "TSK"
+title = "engineering bar evaluations"
+issuer = "seed"
+created = "2026-09-27T13:28:55Z"
+target = "integration/EPC-015-engineering-bar"
+introduced = "ea461a442d3f5c4c9e1b505565ccff438d32d8d8@integration/EPC-015-engineering-bar"
+landed = "ea461a442d3f5c4c9e1b505565ccff438d32d8d8"
+mapped = []
+mapped_by = "none"

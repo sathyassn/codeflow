@@ -1,0 +1,11 @@
+id = "ADR-0027"
+uid = "b5b8c7aa-96a2-4426-9ecc-ffc499f685d4"
+kind = "ADR"
+title = "qualify model and harness bindings with native-interactive evaluations"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "cdb82e870ff050bd833703d4ec9bf29ac7b55d58@integration/EPC-005-presentation-system"
+landed = "cdb82e870ff050bd833703d4ec9bf29ac7b55d58"
+mapped = []
+mapped_by = "none"

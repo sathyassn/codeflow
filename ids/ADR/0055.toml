@@ -1,0 +1,11 @@
+id = "ADR-0055"
+uid = "9cc0c4f2-3ef3-48a4-b17b-c5499cbf175b"
+kind = "ADR"
+title = "Medium-default effort, Astra Codex primary, contained worktrees, Herdr project cwd"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-013-release-guides"
+introduced = "020ec2c8ebf0e7e9ab4ca6233051a4779efee0d4@integration/EPC-013-release-guides"
+landed = "020ec2c8ebf0e7e9ab4ca6233051a4779efee0d4"
+mapped = []
+mapped_by = "none"

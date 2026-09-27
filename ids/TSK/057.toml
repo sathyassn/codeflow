@@ -1,0 +1,11 @@
+id = "TSK-057"
+uid = "527f84d4-3a71-4fe0-8d2d-ace562617c19"
+kind = "TSK"
+title = "carry the holistic repair deltas into the scaffold"
+issuer = "seed"
+created = "2026-09-27T13:28:56Z"
+target = "integration/EPC-015-engineering-bar"
+introduced = "d6e243f39b550f43ec9e1960d92350bb83ae4aa0@integration/EPC-015-engineering-bar"
+landed = "d6e243f39b550f43ec9e1960d92350bb83ae4aa0"
+mapped = []
+mapped_by = "none"

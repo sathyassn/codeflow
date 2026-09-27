@@ -1,0 +1,11 @@
+id = "ADR-0009"
+uid = "0b5a60b3-8474-4788-9c39-b217cd437035"
+kind = "ADR"
+title = "human authorization is out-of-band; local guards are the honest-agent floor"
+issuer = "seed"
+created = "2026-09-27T13:29:16Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "0dbcce534e0a244a85a7bec0e9d59e5e14bca5ed@integration/EPC-005-presentation-system"
+landed = "0dbcce534e0a244a85a7bec0e9d59e5e14bca5ed"
+mapped = ["a803cc2d4b954c355a3572cee831171e2e678912"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

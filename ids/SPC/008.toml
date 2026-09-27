@@ -1,0 +1,11 @@
+id = "SPC-008"
+uid = "b3b5f145-9e9b-46bd-82f5-8f5a9d820731"
+kind = "SPC"
+title = "replace-only portal ownership and safe migration"
+issuer = "seed"
+created = "2026-09-27T13:28:43Z"
+target = "integration/EPC-013-release-guides"
+introduced = "dc81a2d68649cade59a15c0822170181418798bf@integration/EPC-013-release-guides"
+landed = "dc81a2d68649cade59a15c0822170181418798bf"
+mapped = []
+mapped_by = "none"

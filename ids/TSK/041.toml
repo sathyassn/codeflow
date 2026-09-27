@@ -1,0 +1,11 @@
+id = "TSK-041"
+uid = "24acf4b4-2db7-4cb9-9422-b07425d74a51"
+kind = "TSK"
+title = "repair contract and scaffold defects"
+issuer = "seed"
+created = "2026-09-27T13:28:53Z"
+target = "integration/EPC-014-public-docs"
+introduced = "6a95b030ac7b8bb1c95122c98247996f8737d480@integration/EPC-014-public-docs"
+landed = "6a95b030ac7b8bb1c95122c98247996f8737d480"
+mapped = []
+mapped_by = "none"

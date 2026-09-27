@@ -1,0 +1,11 @@
+id = "TSK-106"
+uid = "d58575e2-6e33-4e19-afe9-95152f824081"
+kind = "TSK"
+title = "release notes, entry identity, local preflight and typed repair"
+issuer = "seed"
+created = "2026-09-27T13:29:04Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "4563c22f948f7791593b5d0b318fb499a6b24da1@integration/EPC-020-delivery-system"
+landed = "4563c22f948f7791593b5d0b318fb499a6b24da1"
+mapped = []
+mapped_by = "none"

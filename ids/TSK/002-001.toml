@@ -1,0 +1,11 @@
+id = "TSK-002-001"
+uid = "5a85c59a-ffea-462f-a444-2bcc85979050"
+kind = "TSK"
+title = "durable delegate lifecycle engine"
+issuer = "seed"
+created = "2026-09-27T13:28:44Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "62be7f1da114aadcb9b134d8f081983024a6270f@integration/EPC-005-presentation-system"
+landed = "62be7f1da114aadcb9b134d8f081983024a6270f"
+mapped = []
+mapped_by = "none"

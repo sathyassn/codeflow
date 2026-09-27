@@ -1,0 +1,11 @@
+id = "TSK-054"
+uid = "979b8dd7-a09b-4ad4-8938-d0bc4081aaa5"
+kind = "TSK"
+title = "ui evidence validator"
+issuer = "seed"
+created = "2026-09-27T13:28:55Z"
+target = "integration/EPC-015-engineering-bar"
+introduced = "ea461a442d3f5c4c9e1b505565ccff438d32d8d8@integration/EPC-015-engineering-bar"
+landed = "ea461a442d3f5c4c9e1b505565ccff438d32d8d8"
+mapped = []
+mapped_by = "none"

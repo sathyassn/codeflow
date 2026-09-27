@@ -1,0 +1,11 @@
+id = "TSK-032"
+uid = "8908b2b9-d2d0-42f6-aad4-1649525929be"
+kind = "TSK"
+title = "Integrate responsible autonomy contract"
+issuer = "seed"
+created = "2026-09-27T13:28:52Z"
+target = "integration/EPC-013-release-guides"
+introduced = "7383fe151e224572ee30de7fc7ba5bd3f291c671@integration/EPC-013-release-guides"
+landed = "7383fe151e224572ee30de7fc7ba5bd3f291c671"
+mapped = []
+mapped_by = "none"

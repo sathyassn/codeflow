@@ -1,0 +1,11 @@
+id = "ADR-0070"
+uid = "ae03f88c-a953-404b-a65f-a652b76306c7"
+kind = "ADR"
+title = "Autonomous operation with judgment"
+issuer = "seed"
+created = "2026-09-27T13:29:26Z"
+target = "integration/release-3-0-0-list"
+introduced = "1e6a7ce01aef3e512acb118ee4952691133b046f@integration/release-3-0-0-list"
+landed = "1e6a7ce01aef3e512acb118ee4952691133b046f"
+mapped = []
+mapped_by = "none"

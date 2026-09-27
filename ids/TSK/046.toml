@@ -1,0 +1,11 @@
+id = "TSK-046"
+uid = "0efe9928-556d-4be8-b6a0-107e6f071d70"
+kind = "TSK"
+title = "compose decisions, records and landings from the doc graph"
+issuer = "seed"
+created = "2026-09-27T13:28:54Z"
+target = "integration/EPC-014-public-docs"
+introduced = "895176e7a37e40dd9dd069b84190e04c54b8c23f@integration/EPC-014-public-docs"
+landed = "895176e7a37e40dd9dd069b84190e04c54b8c23f"
+mapped = []
+mapped_by = "none"

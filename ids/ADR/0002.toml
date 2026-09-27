@@ -1,0 +1,11 @@
+id = "ADR-0002"
+uid = "bcee16fc-2be5-48b6-9915-6933dea96b7c"
+kind = "ADR"
+title = "sync push policy — push_to_protected warn on this repo"
+issuer = "seed"
+created = "2026-09-27T13:29:13Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "64aaeb31a2c0869fd0de57a3ea1dc519c7fb15dc@integration/EPC-005-presentation-system"
+landed = "64aaeb31a2c0869fd0de57a3ea1dc519c7fb15dc"
+mapped = ["2cd76961a086525d7500b894a9596880c3e9612b"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

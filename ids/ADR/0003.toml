@@ -1,0 +1,11 @@
+id = "ADR-0003"
+uid = "ac78e1ac-0ea5-48e7-8668-aaedfbe3c56e"
+kind = "ADR"
+title = "CLI vs Claude command boundary"
+issuer = "seed"
+created = "2026-09-27T13:29:14Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "cbd09876023c82302f4ee8db6eceb5adf110f40c@integration/EPC-005-presentation-system"
+landed = "cbd09876023c82302f4ee8db6eceb5adf110f40c"
+mapped = ["d140a9375997651f10addbfb36c9486146c36c59"]
+mapped_by = "26560960+sathyassn@users.noreply.github.com 2026-09-27"

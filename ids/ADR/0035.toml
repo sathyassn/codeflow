@@ -1,0 +1,11 @@
+id = "ADR-0035"
+uid = "2c4c815c-d63e-4718-a68b-a41066f78481"
+kind = "ADR"
+title = "route duo execution by verified per-task capability"
+issuer = "seed"
+created = "2026-09-27T13:29:23Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "0be99f5b494d84ed7a4a3dff44b6f2e7b050a51f@integration/EPC-005-presentation-system"
+landed = "0be99f5b494d84ed7a4a3dff44b6f2e7b050a51f"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "SPC-011"
+uid = "919a2dbb-3a0c-4a66-8dfe-5c9516f6182d"
+kind = "SPC"
+title = "engineering bar plan of record"
+issuer = "seed"
+created = "2026-09-27T13:28:44Z"
+target = "integration/EPC-015-engineering-bar"
+introduced = "79086a4224b2f255f89982063f4350e322b712b4@integration/EPC-015-engineering-bar"
+landed = "79086a4224b2f255f89982063f4350e322b712b4"
+mapped = []
+mapped_by = "none"

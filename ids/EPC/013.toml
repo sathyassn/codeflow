@@ -1,0 +1,11 @@
+id = "EPC-013"
+uid = "cab2e447-e86c-4703-a39c-e4e19d53d098"
+kind = "EPC"
+title = "prepare verified local documentation guides"
+issuer = "seed"
+created = "2026-09-27T13:28:42Z"
+target = "integration/EPC-013-release-guides"
+introduced = "845bbc3194f68cb7c9b6263bd5137ef64bb090df@integration/EPC-013-release-guides"
+landed = "845bbc3194f68cb7c9b6263bd5137ef64bb090df"
+mapped = []
+mapped_by = "none"

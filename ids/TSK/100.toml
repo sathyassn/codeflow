@@ -1,0 +1,11 @@
+id = "TSK-100"
+uid = "76e937bd-e3d2-4f45-84a0-3ff01639b9cd"
+kind = "TSK"
+title = "prove the shared id registry on a real host"
+issuer = "seed"
+created = "2026-09-27T13:29:03Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "4563c22f948f7791593b5d0b318fb499a6b24da1@integration/EPC-020-delivery-system"
+landed = "4563c22f948f7791593b5d0b318fb499a6b24da1"
+mapped = []
+mapped_by = "none"

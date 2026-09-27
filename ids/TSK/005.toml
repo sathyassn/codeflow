@@ -1,0 +1,11 @@
+id = "TSK-005"
+uid = "04e4301f-f5e1-4060-aea6-2197f06196e3"
+kind = "TSK"
+title = "strengthen editorial and product design contracts"
+issuer = "seed"
+created = "2026-09-27T13:28:46Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "d7518ca12dcc84bb918dd8713d49d67f5e172f80@integration/EPC-005-presentation-system"
+landed = "d7518ca12dcc84bb918dd8713d49d67f5e172f80"
+mapped = []
+mapped_by = "none"

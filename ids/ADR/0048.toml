@@ -1,0 +1,11 @@
+id = "ADR-0048"
+uid = "1a48fa65-7d23-411b-b4a1-2e1fb99f2da3"
+kind = "ADR"
+title = "isolate portal adoption and verify derived evidence"
+issuer = "seed"
+created = "2026-09-27T13:29:25Z"
+target = "integration/EPC-005-presentation-system"
+introduced = "444d669d6a274f7274ceca6e84dd65ea9a989fe3@integration/EPC-005-presentation-system"
+landed = "444d669d6a274f7274ceca6e84dd65ea9a989fe3"
+mapped = []
+mapped_by = "none"

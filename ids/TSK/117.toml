@@ -1,0 +1,11 @@
+id = "TSK-117"
+uid = "9d3e9801-51fa-4c4b-ad70-1e5f8c25bc42"
+kind = "TSK"
+title = "present review contract v2 and its decision record"
+issuer = "seed"
+created = "2026-09-27T13:29:06Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "e79db0e0912b94750a4f762d3443dded7e75989c@integration/EPC-016-visual-guide"
+landed = "e79db0e0912b94750a4f762d3443dded7e75989c"
+mapped = []
+mapped_by = "none"

@@ -1,0 +1,11 @@
+id = "TSK-028"
+uid = "cef71ab1-fbc5-472b-b399-83d199cd2bfd"
+kind = "TSK"
+title = "guide consumer-owned releases and qualify impact reasoning"
+issuer = "seed"
+created = "2026-09-27T13:28:52Z"
+target = "integration/EPC-013-release-guides"
+introduced = "8c33cc2b67cbd800b5e13f57b3916d79176e0879@integration/EPC-013-release-guides"
+landed = "8c33cc2b67cbd800b5e13f57b3916d79176e0879"
+mapped = []
+mapped_by = "none"
