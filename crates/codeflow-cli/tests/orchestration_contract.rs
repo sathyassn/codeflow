@@ -1322,3 +1322,25 @@ fn batch_workflow_is_honestly_single_vendor_and_validates_edges() {
     }
     assert!(!source.contains("duo: ['plan-align'"));
 }
+
+/// TSK-151: the per-stage model example names the placeholder the catalog
+/// resolves, never a model. The catalog scan bars catalog selectors; this pin
+/// also bars the stale `sonnet`, which is not in the catalog.
+#[test]
+fn pipeline_example_names_the_resolved_selector_not_a_model() {
+    for path in [
+        "assets/base/claude/workflows/pipeline.workflow.js",
+        ".claude/workflows/pipeline.workflow.js",
+        ".codeflow/.baseline/.claude/workflows/pipeline.workflow.js",
+    ] {
+        let text = normalize_whitespace(&read(path));
+        assert!(
+            text.contains("per-stage model, e.g. { build: '<selector>' }, where the // selector comes from `codeflow models resolve`"),
+            "{path}: the per-stage model example must name the resolved selector"
+        );
+        assert!(
+            !text.contains("sonnet"),
+            "{path}: the stale 'sonnet' example is back"
+        );
+    }
+}
