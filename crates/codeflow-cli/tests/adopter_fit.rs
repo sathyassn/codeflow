@@ -23,6 +23,9 @@ fn codeflow_cmd(dir: &Path) -> Command {
         .env("GIT_CONFIG_GLOBAL", "/dev/null")
         .env("GIT_CONFIG_SYSTEM", "/dev/null")
         .env_remove("CODEFLOW_PR_BODY")
+        .env_remove("GITHUB_ACTIONS")
+        .env_remove("GITHUB_ACTOR")
+        .env_remove("GITHUB_EVENT_PATH")
         .env_remove("GITHUB_EVENT_NAME")
         .env_remove("GITHUB_HEAD_REF")
         .env_remove("CI_PIPELINE_SOURCE")
@@ -168,10 +171,28 @@ fn bot_repo(dir: &Path, policy: &str, branch: &str, message: &str) {
     git(dir, &["commit", "-m", message]);
 }
 
-fn ci_as(dir: &Path, actor: &str, branch: &str, body: &str) -> Output {
-    codeflow(
-        dir,
-        &[
+/// `codeflow ci` as the enforcing workflow runs it: a GitHub Actions
+/// `pull_request_target` event whose actor is `actor`, from `head_repo`
+/// (the base repository is `acme/app`; another name is a fork).
+fn ci_event(dir: &Path, actor: &str, head_repo: &str, branch: &str, body: &str) -> Output {
+    let event = dir.join(".git/codeflow-test-event.json");
+    std::fs::write(
+        &event,
+        serde_json::json!({
+            "pull_request": {
+                "head": { "repo": { "full_name": head_repo } },
+                "base": { "repo": { "full_name": "acme/app" } },
+            }
+        })
+        .to_string(),
+    )
+    .unwrap();
+    codeflow_cmd(dir)
+        .env("GITHUB_ACTIONS", "true")
+        .env("GITHUB_EVENT_NAME", "pull_request_target")
+        .env("GITHUB_EVENT_PATH", &event)
+        .env("GITHUB_ACTOR", actor)
+        .args([
             "ci",
             "--base",
             "main",
@@ -183,8 +204,15 @@ fn ci_as(dir: &Path, actor: &str, branch: &str, body: &str) -> Output {
             actor,
             "--pr-body",
             body,
-        ],
-    )
+        ])
+        .stdin(Stdio::null())
+        .output()
+        .expect("binary runs")
+}
+
+/// A same-repository pull request event for `actor`.
+fn ci_as(dir: &Path, actor: &str, branch: &str, body: &str) -> Output {
+    ci_event(dir, actor, "acme/app", branch, body)
 }
 
 /// A Dependabot commit as Dependabot writes it: a sentence-case subject, a
@@ -314,6 +342,62 @@ fn spoofed_and_unknown_actors_get_no_exemption_or_supplied_content() {
     let all = text(&out);
     assert!(all.contains("actor 'unknown'"), "{all}");
     assert_eq!(out.status.code(), Some(1), "{all}");
+}
+
+/// Codex review F2: a trusted name is an identity only in a same-repository
+/// pull request event. A local run given the bot's name, and a fork event
+/// whose actor carries it, stay `unknown`.
+#[test]
+fn a_bot_name_is_trusted_only_from_a_same_repository_event() {
+    let dir = tempfile::tempdir().unwrap();
+    bot_repo(
+        dir.path(),
+        &policy_with_profiles(false),
+        DEPENDABOT_BRANCH,
+        DEPENDABOT_COMMIT,
+    );
+    let local = codeflow(
+        dir.path(),
+        &[
+            "ci",
+            "--base",
+            "main",
+            "--head",
+            "HEAD",
+            "--branch",
+            DEPENDABOT_BRANCH,
+            "--actor",
+            "dependabot[bot]",
+            "--pr-body",
+            DEPENDABOT_BODY,
+        ],
+    );
+    let fork = ci_event(
+        dir.path(),
+        "dependabot[bot]",
+        "mallory/app",
+        DEPENDABOT_BRANCH,
+        DEPENDABOT_BODY,
+    );
+    for (what, out, why) in [
+        ("local", local, "not a GitHub Actions run"),
+        (
+            "fork",
+            fork,
+            "a fork pull request carries no trusted identity",
+        ),
+    ] {
+        let all = text(&out);
+        assert_eq!(out.status.code(), Some(1), "{what}: {all}");
+        assert!(all.contains("actor 'unknown'"), "{what}: {all}");
+        assert!(all.contains(why), "{what}: {all}");
+        assert!(!all.contains("applies (actor"), "{what}: {all}");
+        assert!(all.contains("git.commit_format"), "{what}: {all}");
+        assert!(
+            !all.contains("supplied by automation profile"),
+            "{what}: {all}"
+        );
+    }
 }
 
 #[test]

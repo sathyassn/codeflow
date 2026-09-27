@@ -66,8 +66,9 @@ pub struct CiArgs {
 
     /// The actor or app id that opened or updated the pull request, as the
     /// CI workflow passes it for trusted automation profiles (SPC-013 R-82).
-    /// The workflow passes `unknown` on fork pull requests; locally it is
-    /// `unknown` unless given.
+    /// It is trusted only in a GitHub Actions pull request event from the
+    /// same repository whose actor it names; a local run, another CI or a
+    /// fork is `unknown` whatever is given.
     #[arg(long, value_name = "ACTOR", default_value = "unknown")]
     pub actor: String,
 }
