@@ -1466,6 +1466,38 @@ fn commit_msg_blocks_attribution_and_malformed_subject() {
 }
 
 #[test]
+fn commit_msg_requires_a_blank_line_after_the_subject() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    let msg = dir.path().join("MSG");
+    let run = |text: &str| {
+        std::fs::write(&msg, text).unwrap();
+        run_with_stdin(
+            codeflow()
+                .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+                .current_dir(dir.path()),
+            "",
+        )
+    };
+
+    let out = run("feat(cli): wire the hook plane\n- keep the shim\n");
+    assert_eq!(out.status.code(), Some(1));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("git.commit_format"), "{stderr}");
+    assert!(stderr.contains("must be blank"), "{stderr}");
+
+    let out = run("feat(cli): wire the hook plane\n\n- keep the shim\n");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let out = run("feat(cli): wire the hook plane\n");
+    assert_eq!(out.status.code(), Some(0));
+}
+
+#[test]
 fn commit_msg_blocks_on_invalid_policy_value() {
     // Strict validation: a typo'd policy value must fail loudly at the hook,
     // naming the key and its valid options — never silently revert the whole
