@@ -52,8 +52,9 @@ publication date._
   expressions and abbreviations are refused. A record is legacy when it is
   unchanged from its copy in any listed baseline; an edited record is judged
   as a transition from its latest copies. A pull request is judged by the
-  baseline list on its target, so a list change is reported and takes effect
-  once it lands. The pull request that introduces the list (your first
+  baseline list at its target's tip, even when the branch forked before the
+  target had one, so a list change is reported and takes effect once it
+  lands. The pull request that introduces the list (your first
   `codeflow update` pull request, or a release into a branch that has none)
   is judged by its own list, and a human reviews every entry it names. The new
   `git.work_records` key accepts `block` or `warn`; upgrade the `codeflow` on
