@@ -257,6 +257,17 @@ publication date._
   "Session flow") should point at `.codeflow/rules/git-rules.md`,
   `worktrees.md` or `workflow-discipline.md`, or at the map, instead.
 
+<!-- codeflow:release-impact minor -->
+- **Planning checked once, at a level you set.** The planning checks (a
+  valid workgraph, a record for the task the branch carries, and that
+  record anchored on its target) run once per task: at `codeflow work
+  start` and in `codeflow ci`, on every work prefix, never in the
+  pre-commit hook. The new `git.work_planning` key sets their level:
+  `block` (the default) or `warn`, which reports the finding and lets the
+  work continue; there is no `off`. `codeflow update` adds the key and
+  keeps a value you set. An undeterminable tracking state and pull request
+  classification still block.
+
 <!-- codeflow:release-impact patch -->
 - **Work start past a stale local target.** `codeflow work start` and the
   `codeflow ci` work-start and classification checks resolve a

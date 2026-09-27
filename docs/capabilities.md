@@ -491,7 +491,8 @@ checks the planning anchor of the task the branch carries on any work prefix
 `integration/`). CI applies the same read-only merge-base check once per pull
 request when full-tier or recognizable historical task tracking is active; the
 per-commit hook no longer does. It proves validated planning is present on the
-declared stable target. A declared target whose local branch is strictly
+declared stable target. Both report at the `git.work_planning` level: `block`
+by default, or `warn`, which reports the finding and lets the work continue. A declared target whose local branch is strictly
 behind its configured upstream anchors on that upstream, with a note; a
 diverged pair is refused. With tracking on, `codeflow ci` classifies every pull
 request: tracked (`Task: TSK-NNN`, or the id the branch carries), direct change

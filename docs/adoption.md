@@ -371,6 +371,12 @@ A task completed before that commit, with no acceptance block, reopens with
 `codeflow task status <id> todo --reason <text>`, which keeps its Closeout and
 adds the line `- reopened: <text>`.
 
+`codeflow update` also adds `git.work_planning` (`block` or `warn`, default
+`block`), the level at which `work start` and `codeflow ci` report the
+planning checks: a valid workgraph, a record for the task the branch
+carries, and that record anchored on its target. Pre-commit does not run
+them. A value the project set is kept.
+
 ## Optional repository guide portal
 
 Standard and full tiers include the concise `cf-docs-portal` workflow, but no
