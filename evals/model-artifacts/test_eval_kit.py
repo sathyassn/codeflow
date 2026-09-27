@@ -1372,6 +1372,28 @@ class ResultScoringTests(unittest.TestCase):
         self.assertFalse(promotable)
         self.assertIn("Promotion blocked", report)
 
+    def test_comparison_rejects_results_from_different_host_lineages(self) -> None:
+        claude = valid_result("full", "claude-code")
+        for harness in ("codex-cli", "grok-cli"):
+            with self.subTest(harness=harness):
+                other = valid_result("full", harness)
+                other["run_id"] = "candidate"
+                self.assertEqual([], eval_kit.validate_result(claude))
+                self.assertEqual([], eval_kit.validate_result(other))
+                with self.assertRaisesRegex(
+                    eval_kit.EvalError,
+                    "same host lineage.*baseline only: "
+                    "same-family-worker-runs-as-native-subagent.*candidate only: "
+                    "same-family-worker-falls-back-without-native-route",
+                ):
+                    eval_kit.compare_results(claude, other)
+        same = valid_result("full", "codex-cli")
+        candidate = copy.deepcopy(same)
+        candidate["run_id"] = "candidate"
+        report, promotable = eval_kit.compare_results(same, candidate)
+        self.assertTrue(promotable)
+        self.assertIn("same-family-worker-falls-back-without-native-route", report)
+
     def test_strict_effort_comparison_accepts_only_effort_drift(self) -> None:
         baseline, candidate = strict_effort_pair()
         report, promotable = eval_kit.compare_results(

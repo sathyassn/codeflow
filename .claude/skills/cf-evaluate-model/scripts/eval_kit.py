@@ -1606,6 +1606,15 @@ def compare_results(
     )
     base_rates = case_pass_rates(baseline)
     candidate_rates = case_pass_rates(candidate)
+    baseline_only = sorted(set(base_rates) - set(candidate_rates))
+    candidate_only = sorted(set(candidate_rates) - set(base_rates))
+    if baseline_only or candidate_only:
+        raise EvalError(
+            "baseline and candidate ran different case sets; some cases apply "
+            "only to one host lineage, so comparison needs the same host "
+            f"lineage (baseline only: {', '.join(baseline_only) or 'none'}; "
+            f"candidate only: {', '.join(candidate_only) or 'none'})"
+        )
     requirements_doc, cases_doc, _ = suite_documents()
     cases = unique_objects(cases_doc["cases"], "cases")
     hard_requirements = {
