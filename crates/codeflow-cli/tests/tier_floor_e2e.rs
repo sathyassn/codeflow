@@ -733,3 +733,36 @@ fn manifest_files(root: &Path) -> serde_json::Map<String, serde_json::Value> {
         serde_json::from_str(&read(root, ".codeflow/manifest.json")).unwrap();
     manifest["files"].as_object().cloned().unwrap_or_default()
 }
+
+/// TSK-137: at every tier the fresh policy has no `human_authorization` key
+/// and validates without a deprecation warning; an adopter's policy that
+/// still has the key validates with one warning.
+#[test]
+fn fresh_policy_has_no_human_authorization_at_every_tier() {
+    for tier in ["--minimal", "--standard", "--full"] {
+        let (_tmp, root) = project();
+        init(&root, tier);
+        let text = read(&root, ".codeflow/policy.json");
+        assert!(!text.contains("human_authorization"), "{tier}: {text}");
+        let out = codeflow(&root, &["validate"]);
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(out.status.success(), "{tier}: {err}");
+        assert!(!err.contains("deprecated"), "{tier}: {err}");
+
+        let mut policy: serde_json::Value = serde_json::from_str(&text).unwrap();
+        policy["human_authorization"] = serde_json::Value::from("none");
+        std::fs::write(
+            root.join(".codeflow/policy.json"),
+            serde_json::to_string_pretty(&policy).unwrap(),
+        )
+        .unwrap();
+        let out = codeflow(&root, &["validate"]);
+        let err = String::from_utf8_lossy(&out.stderr).to_string();
+        assert!(out.status.success(), "{tier}: {err}");
+        assert_eq!(
+            err.matches("human_authorization is deprecated").count(),
+            1,
+            "{tier}: {err}"
+        );
+    }
+}
