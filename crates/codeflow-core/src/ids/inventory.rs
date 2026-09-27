@@ -267,6 +267,13 @@ fn resolve(
     held: &mut Option<BTreeSet<RegId>>,
 ) -> Result<String, IdsError> {
     let first = shas[0].clone();
+    // One add is the introduction. This is sound only because the add log
+    // holds merge additions too (`--cc` in `add_log`): every lifetime
+    // starts with a commit that added the id against all its parents, so a
+    // path added once was never re-added and the walk has nothing to pick.
+    if shas.len() == 1 {
+        return Ok(first);
+    }
     if held.is_none() {
         let ids = git
             .tree(rev, &RECORD_ROOTS)?
@@ -552,6 +559,170 @@ mod tests {
         );
         assert!(is_landing_branch("integration/EPC-020-delivery-system"));
         assert!(!is_landing_branch("task/TSK-101-id-registry"));
+    }
+
+    /// A hermetic scratch repository for the lifetime fixtures.
+    struct Repo {
+        dir: tempfile::TempDir,
+    }
+
+    impl Repo {
+        fn new() -> Repo {
+            let repo = Repo {
+                dir: tempfile::tempdir().unwrap(),
+            };
+            repo.git(&["init", "-q", "-b", "main"]);
+            repo.write("README.md", "fixture\n");
+            repo.commit("root");
+            repo
+        }
+
+        fn git(&self, args: &[&str]) -> String {
+            let out = std::process::Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.test"])
+                .args(args)
+                .current_dir(self.dir.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .env_remove("GIT_DIR")
+                .env_remove("GIT_WORK_TREE")
+                .output()
+                .unwrap();
+            assert!(
+                out.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&out.stderr)
+            );
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        }
+
+        fn write(&self, path: &str, text: &str) {
+            let file = self.dir.path().join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, text).unwrap();
+        }
+
+        fn remove(&self, path: &str) {
+            std::fs::remove_file(self.dir.path().join(path)).unwrap();
+        }
+
+        fn commit(&self, message: &str) -> String {
+            self.git(&["add", "-A"]);
+            self.git(&["commit", "-q", "-m", message]);
+            self.git(&["rev-parse", "HEAD"])
+        }
+
+        /// Fork a side line, add unrelated work on both, and start their
+        /// merge without committing it.
+        fn start_merge(&self) {
+            self.git(&["checkout", "-q", "-b", "side"]);
+            self.write("side.txt", "side\n");
+            self.commit("side");
+            self.git(&["checkout", "-q", "main"]);
+            self.write("main.txt", "main\n");
+            self.commit("main");
+            self.git(&["merge", "-q", "--no-ff", "--no-commit", "side"]);
+        }
+
+        fn handle(&self) -> Git {
+            Git::new(self.dir.path())
+        }
+    }
+
+    const TASK: &str = "project-management/tasks/TSK-001.md";
+    const NESTED: &str = "project-management/epics/EPC-001/tasks/TSK-001.md";
+
+    fn record(title: &str) -> String {
+        format!("---\nid: TSK-001\ntitle: \"{title}\"\n---\n")
+    }
+
+    /// SL-4: the record is deleted, then a merge result adds a different
+    /// record under its id at `path`. Returns the merge.
+    fn merge_born(repo: &Repo, path: &str) -> String {
+        repo.write(TASK, &record("original"));
+        repo.commit("original");
+        repo.remove(TASK);
+        repo.commit("delete");
+        repo.start_merge();
+        repo.write(path, &record("replacement"));
+        repo.commit("replacement in the merge")
+    }
+
+    /// SL-4: the record is renamed to another id, then a merge result
+    /// renames it back, unchanged or one byte longer. Returns the
+    /// original add and the merge.
+    fn rename_back(repo: &Repo, changed: bool) -> (String, String) {
+        repo.write(TASK, &record("original"));
+        let original = repo.commit("original");
+        repo.git(&["mv", TASK, "project-management/tasks/TSK-002.md"]);
+        repo.commit("rename away");
+        repo.start_merge();
+        repo.git(&["mv", "project-management/tasks/TSK-002.md", TASK]);
+        if changed {
+            repo.write(TASK, &format!("{} ", record("original")));
+        }
+        (original, repo.commit("rename back in the merge"))
+    }
+
+    fn id() -> RegId {
+        RegId::parse("TSK-001").unwrap()
+    }
+
+    #[test]
+    fn the_add_log_holds_merge_additions_and_their_paths() {
+        for path in [TASK, NESTED] {
+            let repo = Repo::new();
+            let merge = merge_born(&repo, path);
+            let log = add_log(&repo.handle(), "HEAD").unwrap();
+            let (shas, paths) = &log[&id()];
+            assert_eq!(shas.last(), Some(&merge), "{path}: {shas:?}");
+            assert!(paths.contains(path), "{path}: {paths:?}");
+        }
+        let repo = Repo::new();
+        let (_, merge) = rename_back(&repo, true);
+        let log = add_log(&repo.handle(), "HEAD").unwrap();
+        assert_eq!(log[&id()].0.last(), Some(&merge), "{:?}", log[&id()]);
+    }
+
+    #[test]
+    fn the_one_add_shortcut_agrees_with_the_forced_lifetime_walk() {
+        let mut cases: Vec<(String, Repo, String)> = Vec::new();
+        for path in [TASK, NESTED] {
+            let repo = Repo::new();
+            let merge = merge_born(&repo, path);
+            cases.push((format!("merge-born at {path}"), repo, merge));
+        }
+        for changed in [false, true] {
+            let repo = Repo::new();
+            let (original, merge) = rename_back(&repo, changed);
+            let expected = if changed { merge } else { original };
+            cases.push((format!("rename back, changed={changed}"), repo, expected));
+        }
+        let repo = Repo::new();
+        repo.write(TASK, &record("only"));
+        let only = repo.commit("only add");
+        repo.write(TASK, &record("edited"));
+        repo.commit("edit");
+        cases.push(("one add".to_string(), repo, only));
+        for (name, repo, expected) in cases {
+            let git = repo.handle();
+            for (id, (shas, paths)) in add_log(&git, "HEAD").unwrap() {
+                let shortcut = resolve(&git, "HEAD", &id, &shas, &paths, &mut None).unwrap();
+                let walked = lifetime_start(&git, "HEAD", &id, &paths, &shas)
+                    .unwrap()
+                    .unwrap_or_else(|| shas[0].clone());
+                let held = git
+                    .tree("HEAD", &RECORD_ROOTS)
+                    .unwrap()
+                    .iter()
+                    .any(|(_, _, path)| record_id_from_path(path).as_ref() == Some(&id));
+                if held {
+                    assert_eq!(shortcut, walked, "{name}: {id}");
+                }
+            }
+            let intro = introduction(&git, "HEAD", &id()).unwrap();
+            assert_eq!(intro.as_ref(), Some(&expected), "{name}");
+        }
     }
 
     #[test]
