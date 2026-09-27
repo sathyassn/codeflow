@@ -213,7 +213,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 290,
+      "height": 266,
       "draw": [
         {
           "state": "run",
@@ -266,7 +266,7 @@
           "shape": "rect",
           "x": 40,
           "y": 60,
-          "w": 270,
+          "w": 220,
           "h": 52,
           "rx": 8,
           "id": "ok"
@@ -294,7 +294,7 @@
           "shape": "rect",
           "x": 40,
           "y": 132,
-          "w": 270,
+          "w": 220,
           "h": 52,
           "rx": 8,
           "id": "wn"
@@ -322,7 +322,7 @@
           "shape": "rect",
           "x": 40,
           "y": 204,
-          "w": 270,
+          "w": 220,
           "h": 52,
           "rx": 8,
           "id": "fl"
@@ -348,15 +348,23 @@
         {
           "state": "fixed",
           "shape": "path",
-          "d": "M312 230H340V86H312",
+          "d": "M262 230H290V86H262",
           "open": "end",
           "id": "fx"
         },
         {
-          "text": "fix, rerun",
-          "x": 352,
-          "y": 281,
-          "anchor": "end",
+          "text": "fix,",
+          "x": 302,
+          "y": 151,
+          "style": "mute",
+          "for": [
+            "fx"
+          ]
+        },
+        {
+          "text": "rerun",
+          "x": 302,
+          "y": 172,
           "style": "mute",
           "for": [
             "fx"

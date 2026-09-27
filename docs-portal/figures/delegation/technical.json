@@ -65,7 +65,7 @@
     ],
     "wide": {
       "width": 720,
-      "height": 224,
+      "height": 232,
       "draw": [
         {
           "state": "state",
@@ -106,7 +106,7 @@
         {
           "text": "ready",
           "x": 195,
-          "y": 63,
+          "y": 62,
           "anchor": "middle",
           "for": [
             "rd"
@@ -158,7 +158,7 @@
         {
           "text": "accepted",
           "x": 433,
-          "y": 63,
+          "y": 62,
           "anchor": "middle",
           "for": [
             "ac"
@@ -239,8 +239,8 @@
         {
           "state": "state",
           "shape": "rect",
-          "x": 200,
-          "y": 150,
+          "x": 234,
+          "y": 170,
           "w": 150,
           "h": 50,
           "rx": 8,
@@ -248,8 +248,8 @@
         },
         {
           "text": "poisoned",
-          "x": 275,
-          "y": 171,
+          "x": 309,
+          "y": 194,
           "anchor": "middle",
           "for": [
             "po"
@@ -257,8 +257,8 @@
         },
         {
           "text": "exit 11",
-          "x": 275,
-          "y": 192,
+          "x": 309,
+          "y": 215,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -268,26 +268,42 @@
         {
           "state": "poison",
           "shape": "path",
-          "d": "M320 78V148",
+          "d": "M195 78C195 130 309 120 309 168",
           "head": "end",
           "id": "p1"
         },
         {
-          "text": "restart, resume, compaction",
-          "x": 332,
-          "y": 118,
+          "state": "poison",
+          "shape": "path",
+          "d": "M309 78V168",
+          "head": "end",
+          "id": "p2"
+        },
+        {
+          "state": "poison",
+          "shape": "path",
+          "d": "M433 78C433 130 309 120 309 168",
+          "head": "end",
+          "id": "p3"
+        },
+        {
+          "text": "restart, resume, compaction, stray event",
+          "x": 380,
+          "y": 154,
           "style": "mute",
           "for": [
-            "p1"
+            "p1",
+            "p2",
+            "p3"
           ]
         },
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M200 175H70V78",
+          "d": "M232 195H70V78",
           "cross": {
-            "cx": 136,
-            "cy": 175,
+            "cx": 150,
+            "cy": 195,
             "size": 12
           },
           "id": "f1"
@@ -295,7 +311,7 @@
         {
           "text": "reuse the run",
           "x": 16,
-          "y": 212,
+          "y": 222,
           "style": "mute",
           "for": [
             "f1"
@@ -308,7 +324,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 300,
+      "height": 316,
       "draw": [
         {
           "state": "state",
@@ -410,14 +426,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M60 217V237",
+          "d": "M60 217V255",
           "head": "end",
           "id": "t4"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M130 217C130 227 250 225 262 237",
+          "d": "M130 217V243H265V255",
           "head": "end",
           "id": "t5"
         },
@@ -425,7 +441,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 240,
+          "y": 258,
           "w": 150,
           "h": 50,
           "rx": 8,
@@ -434,7 +450,7 @@
         {
           "text": "completed",
           "x": 83,
-          "y": 263,
+          "y": 281,
           "anchor": "middle",
           "for": [
             "co"
@@ -443,7 +459,7 @@
         {
           "text": "exit 0",
           "x": 83,
-          "y": 284,
+          "y": 302,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -454,7 +470,7 @@
           "state": "state",
           "shape": "rect",
           "x": 190,
-          "y": 240,
+          "y": 258,
           "w": 150,
           "h": 50,
           "rx": 8,
@@ -463,7 +479,7 @@
         {
           "text": "failed",
           "x": 265,
-          "y": 263,
+          "y": 281,
           "anchor": "middle",
           "for": [
             "fa"
@@ -472,7 +488,7 @@
         {
           "text": "exit 10",
           "x": 265,
-          "y": 284,
+          "y": 302,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -482,17 +498,17 @@
         {
           "state": "state",
           "shape": "rect",
-          "x": 202,
-          "y": 66,
-          "w": 150,
-          "h": 57,
+          "x": 212,
+          "y": 110,
+          "w": 140,
+          "h": 50,
           "rx": 8,
           "id": "po"
         },
         {
           "text": "poisoned",
-          "x": 277,
-          "y": 88,
+          "x": 282,
+          "y": 133,
           "anchor": "middle",
           "for": [
             "po"
@@ -500,8 +516,8 @@
         },
         {
           "text": "exit 11",
-          "x": 277,
-          "y": 109,
+          "x": 282,
+          "y": 154,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -511,23 +527,61 @@
         {
           "state": "poison",
           "shape": "path",
-          "d": "M160 196H270V125",
+          "d": "M160 84C188 84 186 135 210 135",
           "head": "end",
           "id": "p1"
         },
         {
-          "text": "restart",
-          "x": 280,
-          "y": 164,
+          "state": "poison",
+          "shape": "path",
+          "d": "M160 140C186 140 186 135 210 135",
+          "head": "end",
+          "id": "p2"
+        },
+        {
+          "state": "poison",
+          "shape": "path",
+          "d": "M160 196C188 196 186 135 210 135",
+          "head": "end",
+          "id": "p3"
+        },
+        {
+          "text": "restart, resume,",
+          "x": 212,
+          "y": 185,
           "style": "mute",
           "for": [
-            "p1"
+            "p1",
+            "p2",
+            "p3"
+          ]
+        },
+        {
+          "text": "compaction,",
+          "x": 212,
+          "y": 206,
+          "style": "mute",
+          "for": [
+            "p1",
+            "p2",
+            "p3"
+          ]
+        },
+        {
+          "text": "stray event",
+          "x": 212,
+          "y": 227,
+          "style": "mute",
+          "for": [
+            "p1",
+            "p2",
+            "p3"
           ]
         },
         {
           "state": "blocked",
           "shape": "path",
-          "d": "M277 63V28H160",
+          "d": "M282 108V28H160",
           "cross": {
             "cx": 220,
             "cy": 28,

@@ -218,23 +218,23 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 306,
+      "height": 222,
       "draw": [
         {
           "state": "source",
           "shape": "rect",
           "x": 8,
           "y": 12,
-          "w": 160,
-          "h": 40,
+          "w": 142,
+          "h": 38,
           "rx": 4,
           "cap": "end",
           "id": "c"
         },
         {
           "text": "crates/",
-          "x": 88,
-          "y": 37,
+          "x": 72,
+          "y": 36,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -244,18 +244,18 @@
         {
           "state": "source",
           "shape": "rect",
-          "x": 192,
-          "y": 12,
-          "w": 160,
-          "h": 40,
+          "x": 8,
+          "y": 70,
+          "w": 142,
+          "h": 38,
           "rx": 4,
           "cap": "end",
           "id": "a"
         },
         {
           "text": "assets/",
-          "x": 272,
-          "y": 37,
+          "x": 72,
+          "y": 94,
           "anchor": "middle",
           "style": "mono",
           "for": [
@@ -265,30 +265,30 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M88 54C88 80 160 84 170 96",
+          "d": "M152 31C180 31 188 56 204 58",
           "head": "end",
           "id": "d1"
         },
         {
           "state": "derives",
           "shape": "path",
-          "d": "M272 54C272 80 200 84 190 96",
+          "d": "M152 89C180 89 188 64 204 62",
           "head": "end",
           "id": "d2"
         },
         {
           "state": "transform",
           "shape": "diamond",
-          "cx": 180,
-          "cy": 124,
+          "cx": 232,
+          "cy": 60,
           "r": 26,
           "id": "tf"
         },
         {
           "text": "cargo build",
-          "x": 150,
-          "y": 120,
-          "anchor": "end",
+          "x": 232,
+          "y": 22,
+          "anchor": "middle",
           "style": "mono",
           "for": [
             "tf"
@@ -296,8 +296,8 @@
         },
         {
           "text": "rust-embed",
-          "x": 210,
-          "y": 138,
+          "x": 268,
+          "y": 92,
           "style": "mono",
           "for": [
             "tf"
@@ -306,24 +306,24 @@
         {
           "state": "derives",
           "shape": "path",
-          "d": "M180 152V186",
+          "d": "M232 88V126",
           "head": "end",
           "id": "d3"
         },
         {
           "state": "product",
           "shape": "rect",
-          "x": 90,
-          "y": 188,
-          "w": 180,
+          "x": 160,
+          "y": 128,
+          "w": 192,
           "h": 40,
           "rx": 4,
           "id": "b"
         },
         {
           "text": "one codeflow binary",
-          "x": 180,
-          "y": 213,
+          "x": 256,
+          "y": 153,
           "anchor": "middle",
           "for": [
             "b"
@@ -332,24 +332,23 @@
         {
           "state": "compares",
           "shape": "path",
-          "d": "M330 54V262H224",
+          "d": "M50 110V134",
           "square": "end",
           "id": "k1"
         },
         {
           "state": "check",
           "shape": "circle",
-          "cx": 210,
-          "cy": 262,
+          "cx": 50,
+          "cy": 148,
           "r": 12,
           "tick": true,
           "id": "k"
         },
         {
           "text": "manifest_consistency",
-          "x": 196,
-          "y": 267,
-          "anchor": "end",
+          "x": 8,
+          "y": 193,
           "style": "mono",
           "for": [
             "k"
@@ -358,7 +357,7 @@
         {
           "text": "assets listed, mirrors identical",
           "x": 8,
-          "y": 296,
+          "y": 215,
           "style": "mute",
           "for": [
             "k"

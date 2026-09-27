@@ -457,6 +457,15 @@
           ]
         },
         {
+          "text": "rarely",
+          "x": 72,
+          "y": 43,
+          "style": "mute",
+          "for": [
+            "b0"
+          ]
+        },
+        {
           "text": "docs/product.md",
           "x": 8,
           "y": 64,
@@ -488,6 +497,15 @@
           "x": 8,
           "y": 93,
           "style": "strong",
+          "for": [
+            "b1"
+          ]
+        },
+        {
+          "text": "rarely",
+          "x": 72,
+          "y": 93,
+          "style": "mute",
           "for": [
             "b1"
           ]
@@ -529,6 +547,15 @@
           ]
         },
         {
+          "text": "every ship",
+          "x": 72,
+          "y": 143,
+          "style": "mute",
+          "for": [
+            "b2"
+          ]
+        },
+        {
           "text": "docs/capabilities.md",
           "x": 8,
           "y": 164,
@@ -560,6 +587,15 @@
           "x": 8,
           "y": 193,
           "style": "strong",
+          "for": [
+            "b3"
+          ]
+        },
+        {
+          "text": "daily",
+          "x": 72,
+          "y": 193,
+          "style": "mute",
           "for": [
             "b3"
           ]
@@ -601,6 +637,15 @@
           ]
         },
         {
+          "text": "per decision",
+          "x": 72,
+          "y": 243,
+          "style": "mute",
+          "for": [
+            "b4"
+          ]
+        },
+        {
           "text": "architecture, ADRs",
           "x": 8,
           "y": 264,
@@ -632,6 +677,15 @@
           "x": 8,
           "y": 293,
           "style": "strong",
+          "for": [
+            "b5"
+          ]
+        },
+        {
+          "text": "automatic",
+          "x": 72,
+          "y": 293,
+          "style": "mute",
           "for": [
             "b5"
           ]

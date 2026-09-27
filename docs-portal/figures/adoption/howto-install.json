@@ -123,7 +123,7 @@
         },
         {
           "text": "codeflow --version",
-          "x": 360,
+          "x": 215,
           "y": 144,
           "anchor": "middle",
           "style": "mono",
@@ -140,7 +140,7 @@
         },
         {
           "text": "the installed version",
-          "x": 360,
+          "x": 215,
           "y": 190,
           "anchor": "middle",
           "style": "mute",

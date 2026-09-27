@@ -146,14 +146,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M506 50C540 50 548 30 568 30",
+          "d": "M506 50C540 50 548 26 568 26",
           "head": "end",
           "id": "t3"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M506 66C540 66 548 86 568 86",
+          "d": "M506 66C540 66 548 102 568 102",
           "head": "end",
           "id": "t4"
         },
@@ -161,7 +161,7 @@
           "state": "state",
           "shape": "rect",
           "x": 570,
-          "y": 12,
+          "y": 8,
           "w": 134,
           "h": 36,
           "rx": 8,
@@ -170,7 +170,7 @@
         {
           "text": "addressed",
           "x": 637,
-          "y": 35,
+          "y": 31,
           "anchor": "middle",
           "for": [
             "ad"
@@ -180,7 +180,7 @@
           "state": "state",
           "shape": "rect",
           "x": 570,
-          "y": 68,
+          "y": 84,
           "w": 134,
           "h": 36,
           "rx": 8,
@@ -189,7 +189,7 @@
         {
           "text": "dismissed",
           "x": 637,
-          "y": 91,
+          "y": 107,
           "anchor": "middle",
           "for": [
             "di"
@@ -197,9 +197,9 @@
         },
         {
           "text": "resolve",
-          "x": 520,
-          "y": 108,
-          "anchor": "middle",
+          "x": 540,
+          "y": 69,
+          "anchor": "start",
           "style": "mono",
           "for": [
             "t3",
@@ -252,7 +252,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 347,
+      "height": 364,
       "elongation_max": 1.8,
       "reason": "The review's states stack one per row at phone width, with the two end states side by side.",
       "draw": [
@@ -383,14 +383,14 @@
         {
           "state": "trans",
           "shape": "path",
-          "d": "M60 280V298",
+          "d": "M60 280V315",
           "head": "end",
           "id": "t3"
         },
         {
           "state": "trans",
           "shape": "path",
-          "d": "M130 280C130 292 250 290 254 298",
+          "d": "M140 280V292H265V315",
           "head": "end",
           "id": "t4"
         },
@@ -398,7 +398,7 @@
           "state": "state",
           "shape": "rect",
           "x": 8,
-          "y": 301,
+          "y": 318,
           "w": 150,
           "h": 36,
           "rx": 8,
@@ -407,7 +407,7 @@
         {
           "text": "addressed",
           "x": 83,
-          "y": 324,
+          "y": 341,
           "anchor": "middle",
           "for": [
             "ad"
@@ -417,7 +417,7 @@
           "state": "state",
           "shape": "rect",
           "x": 190,
-          "y": 301,
+          "y": 318,
           "w": 150,
           "h": 36,
           "rx": 8,
@@ -426,7 +426,7 @@
         {
           "text": "dismissed",
           "x": 265,
-          "y": 324,
+          "y": 341,
           "anchor": "middle",
           "for": [
             "di"
@@ -434,8 +434,8 @@
         },
         {
           "text": "resolve",
-          "x": 171,
-          "y": 265,
+          "x": 72,
+          "y": 302,
           "style": "mono",
           "for": [
             "t3",

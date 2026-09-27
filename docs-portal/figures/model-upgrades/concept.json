@@ -116,9 +116,20 @@
           "id": "s"
         },
         {
-          "text": "until a full native run",
-          "x": 60,
-          "y": 105,
+          "text": "until a full",
+          "x": 150,
+          "y": 97,
+          "anchor": "middle",
+          "style": "mute",
+          "for": [
+            "s"
+          ]
+        },
+        {
+          "text": "native run",
+          "x": 150,
+          "y": 118,
+          "anchor": "middle",
           "style": "mute",
           "for": [
             "s"
@@ -282,7 +293,7 @@
           "d": "M40 74V158",
           "cross": {
             "cx": 40,
-            "cy": 118,
+            "cy": 136,
             "size": 12
           },
           "id": "x"
@@ -290,7 +301,7 @@
         {
           "text": "rewrite the doctrine",
           "x": 56,
-          "y": 142,
+          "y": 144,
           "style": "mute",
           "for": [
             "x"
@@ -448,24 +459,15 @@
           "x": 200,
           "y": 122,
           "w": 152,
-          "h": 56,
+          "h": 36,
           "rx": 8,
           "cap": "end",
           "id": "d"
         },
         {
-          "text": "durable",
+          "text": "durable doctrine",
           "x": 212,
           "y": 145,
-          "style": "strong",
-          "for": [
-            "d"
-          ]
-        },
-        {
-          "text": "doctrine",
-          "x": 212,
-          "y": 166,
           "style": "strong",
           "for": [
             "d"
@@ -475,7 +477,7 @@
           "state": "fixed",
           "shape": "rect",
           "x": 200,
-          "y": 224,
+          "y": 176,
           "w": 152,
           "h": 56,
           "rx": 8,
@@ -485,7 +487,7 @@
         {
           "text": "harness",
           "x": 212,
-          "y": 247,
+          "y": 199,
           "style": "strong",
           "for": [
             "k"
@@ -494,7 +496,7 @@
         {
           "text": "contract",
           "x": 212,
-          "y": 268,
+          "y": 220,
           "style": "strong",
           "for": [
             "k"
@@ -503,7 +505,7 @@
         {
           "state": "moves",
           "shape": "path",
-          "d": "M198 252H180",
+          "d": "M198 196H150V160",
           "head": "end",
           "id": "m5"
         },

@@ -179,7 +179,7 @@
         },
         {
           "text": "open from the template",
-          "x": 360,
+          "x": 215,
           "y": 236,
           "anchor": "middle",
           "for": [
@@ -195,7 +195,7 @@
         },
         {
           "text": "required checks green",
-          "x": 360,
+          "x": 215,
           "y": 282,
           "anchor": "middle",
           "style": "mute",
@@ -212,7 +212,7 @@
         },
         {
           "text": "gh pr merge",
-          "x": 352,
+          "x": 505,
           "y": 328,
           "anchor": "middle",
           "style": "mono",
@@ -231,9 +231,9 @@
         },
         {
           "text": "blocked for agents",
-          "x": 626,
+          "x": 638,
           "y": 368,
-          "anchor": "middle",
+          "anchor": "end",
           "style": "mute",
           "for": [
             "m8"

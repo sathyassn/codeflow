@@ -65,7 +65,7 @@
     ],
     "wide": {
       "width": 720,
-      "height": 292,
+      "height": 244,
       "draw": [
         {
           "state": "run",
@@ -89,7 +89,7 @@
         {
           "state": "ends",
           "shape": "path",
-          "d": "M148 116C220 116 230 44 300 44",
+          "d": "M148 116C220 116 230 52 300 52",
           "head": "end",
           "id": "e0"
         },
@@ -194,19 +194,19 @@
         {
           "state": "misread",
           "shape": "path",
-          "d": "M160 254H690V232",
+          "d": "M300 26H218",
           "cross": {
-            "cx": 420,
-            "cy": 254,
+            "cx": 259,
+            "cy": 26,
             "size": 12
           },
           "id": "f1"
         },
         {
           "text": "hook exit 0 read as enforced",
-          "x": 420,
-          "y": 280,
-          "anchor": "middle",
+          "x": 208,
+          "y": 31,
+          "anchor": "end",
           "style": "mute",
           "for": [
             "f1"
@@ -219,7 +219,7 @@
       "drops": [],
       "marks": "same",
       "width": 360,
-      "height": 326,
+      "height": 266,
       "draw": [
         {
           "state": "run",
@@ -354,19 +354,29 @@
         {
           "state": "misread",
           "shape": "path",
-          "d": "M60 286H320V258",
+          "d": "M320 58V28H262",
           "cross": {
-            "cx": 190,
-            "cy": 286,
+            "cx": 291,
+            "cy": 28,
             "size": 12
           },
           "id": "f1"
         },
         {
-          "text": "hook exit 0 read as enforced",
-          "x": 190,
-          "y": 314,
-          "anchor": "middle",
+          "text": "hook exit 0",
+          "x": 256,
+          "y": 21,
+          "anchor": "end",
+          "style": "mute",
+          "for": [
+            "f1"
+          ]
+        },
+        {
+          "text": "read as enforced",
+          "x": 256,
+          "y": 42,
+          "anchor": "end",
           "style": "mute",
           "for": [
             "f1"
