@@ -55,7 +55,7 @@ Think in jobs, not tags:
 
 | Job for the reader | What they need to perceive | Instrument (block) | What goes wrong if you substitute prose |
 |--------------------|----------------------------|--------------------|----------------------------------------|
-| Grasp a relationship, flow, or split | Geometry: nodes, edges, order, fork | **figure** in one grammar family / **tree**; a flow stage (`html`) only as the flow interim; **diagram** as support | They re-linearise your sentences and miss the shape |
+| Grasp a relationship, flow, or split | Geometry: nodes, edges, order, fork | **figure** in one grammar family / **tree**; a flow stage (`html`) only as the flow interim | They re-linearise your sentences and miss the shape |
 | Compare peers | Side-by-side columns of equal rank | **comparison** | A bullet list collapses peers into sequence (implies ranking by order) |
 | Trust evidence | Scanable states: pass / fail / pending / not-run | **status** | A paragraph “tests are mostly fine” cannot be annotated as a row |
 | Inspect exact change | Monospace change surface | **diff** / **code** | Paraphrase hides the line they need to mark |
@@ -91,6 +91,22 @@ present, the stage 3 carrier is the first block, and the draft is the page
 walked top to bottom in plain words before JSON encodes it, with stable `id`s
 for blocks that persist across revisions.
 
+The first block should give the reader the picture in about five seconds,
+with almost no reading. Pictures that do:
+
+- “Two lanes only meet at settle.”
+- “Ship or hold: these two options, this one open risk.”
+- “This diff is the whole dispute.”
+
+Ask what the reader holds after those five seconds. If the honest answer is
+“they will need to read the bullets”, there is no picture yet: the page is a
+memo.
+
+Read that walk for its shape. If it reads “paragraph, list, list, three
+cards, paragraph”, it is chat restyled: stop and choose the carrier again.
+If it reads “figure of the dispute, two options, evidence rows, one ask”, the
+structure is doing the work before any JSON exists.
+
 ---
 
 ## 4. Mental models for present blocks
@@ -103,15 +119,17 @@ when **layout** carries mechanism (stage, tree, table of responsibilities).
 
 ### “The catalog is a palette of instruments, not a form to complete”
 
-You do not score points for using every block type. A strong present might be:
-one diagram, one status, one prompt. A weak present often uses eight types and
-still teaches nothing.
+You do not score points for using every block type. Present is expensive:
+every block is another band of attention, so prefer fewer, heavier
+instruments over many light ones. A strong present might be one figure, one
+status, one prompt. A weak present often uses eight types and still teaches
+nothing.
 
 ### “Comparison is for peers; sequence is for process”
 
-If the truth is a pipeline, a left‑to‑right (or top‑to‑bottom) **diagram**
-beats three columns labeled Phase 1/2/3 full of prose. If the truth is a fork
-in the road, **comparison** beats a numbered list.
+If the truth is a pipeline, a left‑to‑right (or top‑to‑bottom) flow
+**figure** beats three columns labeled Phase 1/2/3 full of prose. If the
+truth is a fork in the road, **comparison** beats a numbered list.
 
 ### “Evidence is a surface you can point at”
 

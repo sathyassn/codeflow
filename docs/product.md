@@ -15,6 +15,10 @@ those rails and is never replaced. The first audience is a solo developer who
 wants that discipline and a durable record of why, without standing up a
 framework.
 
+That shape is deliberate. Process built as an orchestration framework rots
+faster than it earns its keep, so CodeFlow keeps the inputs clear and the
+outputs verified, and lets the harness supply the middle.
+
 | Audience | Standing |
 |---|---|
 | Solo, AI-assisted developers | First: someone running Claude Code, Codex, or another capable host who wants git, secret, and test discipline plus a durable why-record without standing up a framework |
