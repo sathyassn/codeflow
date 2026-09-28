@@ -3011,7 +3011,9 @@ fn pr_template_summary_block_is_identical_across_its_three_copies() {
     let split = live.replacen("## Release impact\n", "## Release impact\n\n## Other\n", 1);
     let split_problems = release_impact_problems(&split);
     assert!(
-        split_problems.iter().any(|problem| problem.contains("- Impact:")),
+        split_problems
+            .iter()
+            .any(|problem| problem.contains("- Impact:")),
         "a heading inside Release impact must hide its fields: {split_problems:?}"
     );
 }
