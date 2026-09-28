@@ -136,6 +136,7 @@ try {
   }
   // A plain drag (no Shift) over the blank ends of diff lines selects those
   // lines as text; it never pins the whole diff as one element (QA defect 6).
+  // Its quote is what the reader sees: no screen-reader label, no marker.
   {
     await armComment(page);
     await reveal(page, "change");
@@ -162,9 +163,11 @@ try {
     const quote = await page.evaluate(() => String(getSelection()));
     assert.equal(kind, "Text", `diff whitespace: a plain drag pinned ${kind}`);
     assert.ok(quote.includes("256 * 1024") && quote.includes("bytes <= limit"), `diff whitespace: the drag selected ${JSON.stringify(quote)}`);
-    await page.getByTestId("float-esc").click();
-    await page.getByTestId("float-chip").waitFor({ state: "detached" });
-    process.stdout.write(`diff whitespace passed: a plain drag over the blank ends of three diff lines selects them as text (${JSON.stringify(quote)}), not the whole diff\n`);
+    const summary = await chip(page, "Text");
+    assert.doesNotMatch(summary, /Added|Removed|(^|\n|: )[+-] /u, `diff whitespace: the chip quotes ${JSON.stringify(summary)}`);
+    await saveNote(page, "matrix: diff whitespace");
+    expected.push({ type: "diff", gesture: "text", block: "change", where: "diff whitespace", recipe: { seen: ["256 * 1024", "bytes <= limit"] }, summary });
+    process.stdout.write(`diff whitespace passed: a plain drag over the blank ends of three diff lines selects them as text, not the whole diff, quoted as ${JSON.stringify(summary)}\n`);
   }
   // Markers park beside what they mark, and a saved area keeps a faint
   // outline while Comment is on (P2-2): no area marker sits on its area.
@@ -224,6 +227,13 @@ try {
     const own = { text: "selector", element: "element_selector", area: "region_selector", document: "region_selector" }[cell.gesture];
     assert.deepEqual(selectors, [own], `${cell.where}, delivery: selectors`);
     if (cell.gesture !== "document") assert.equal(note.block_id, cell.expectBlock ?? cell.block, `${cell.where}, delivery: block`);
+    if (cell.gesture === "text" && cell.recipe.seen) {
+      // A diff quote holds the lines' words, never a label or a marker.
+      const exact = note.selector?.exact ?? "";
+      for (const words of cell.recipe.seen) assert.ok(exact.includes(words), `${cell.where}, delivery: quote ${JSON.stringify(exact)}`);
+      assert.doesNotMatch(exact, /Added|Removed|(^|\n)[+-](?![+-])/u, `${cell.where}, delivery: quote ${JSON.stringify(exact)}`);
+      continue;
+    }
     if (cell.gesture === "text") {
       assert.equal(note.selector?.exact, cell.recipe.words, `${cell.where}, delivery: quote`);
       assert.equal(typeof note.selector.prefix, "string", `${cell.where}, delivery: prefix`);

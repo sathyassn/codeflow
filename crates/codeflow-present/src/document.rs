@@ -670,13 +670,10 @@ impl Block {
                 if !output.is_empty() {
                     output.push('\n');
                 }
+                // What the reader sees and selects: a changed line without its
+                // marker, and without the screen-reader label the page gives it.
                 for line in diff.lines() {
-                    if line.starts_with('+') && !line.starts_with("+++") {
-                        output.push_str("Added: ");
-                    } else if line.starts_with('-') && !line.starts_with("---") {
-                        output.push_str("Removed: ");
-                    }
-                    output.push_str(line);
+                    output.push_str(diff_line_parts(line).2);
                     output.push('\n');
                 }
                 output
@@ -1187,6 +1184,21 @@ fn append_tree_text(nodes: &[TreeNode], output: &mut String) {
         output.push('\n');
         output.push_str(&node.label);
         append_tree_text(&node.children, output);
+    }
+}
+
+/// A diff line as the page draws it: the screen-reader label ("Added: ",
+/// "Removed: " or none), the marker the reader sees but never quotes ("+",
+/// "-" or none) and the text that is the line's review text. File headers
+/// ("+++", "---") and context lines have no marker.
+#[must_use]
+pub fn diff_line_parts(line: &str) -> (&'static str, &str, &str) {
+    if line.starts_with('+') && !line.starts_with("+++") {
+        ("Added: ", &line[..1], &line[1..])
+    } else if line.starts_with('-') && !line.starts_with("---") {
+        ("Removed: ", &line[..1], &line[1..])
+    } else {
+        ("", "", line)
     }
 }
 
@@ -1862,6 +1874,28 @@ mod tests {
             ),
             "Why\nOne.\na\nb"
         );
+    }
+
+    /// TSK-071 round 3: a diff's review text is what the reader sees and
+    /// selects, a changed line without its marker and without the screen
+    /// reader label; file headers and context lines are unchanged.
+    #[test]
+    fn diff_review_text_holds_no_label_or_marker() {
+        let block: Block = serde_json::from_value(serde_json::json!({
+            "type": "diff", "id": "change", "caption": "One change.",
+            "diff": "--- a/x.rs\n+++ b/x.rs\n fn f() {\n-    let n = 1;\n+    let n = 2;\n }"
+        }))
+        .unwrap();
+        let text = block.canonical_review_text(&crate::document::Framing::default());
+        assert_eq!(
+            text,
+            "One change.\n--- a/x.rs\n+++ b/x.rs\n fn f() {\n    let n = 1;\n    let n = 2;\n }\n"
+        );
+        assert!(!text.contains("Added") && !text.contains("Removed"));
+        assert_eq!(diff_line_parts("+x"), ("Added: ", "+", "x"));
+        assert_eq!(diff_line_parts("-x"), ("Removed: ", "-", "x"));
+        assert_eq!(diff_line_parts("+++ b/x"), ("", "", "+++ b/x"));
+        assert_eq!(diff_line_parts(" x"), ("", "", " x"));
     }
 
     #[test]

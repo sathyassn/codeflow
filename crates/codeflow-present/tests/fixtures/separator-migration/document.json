@@ -21,6 +21,12 @@
           "state": "pass"
         }
       ]
+    },
+    {
+      "type": "diff",
+      "id": "change",
+      "caption": "One change.",
+      "diff": "--- a/x.rs\n+++ b/x.rs\n fn f() {\n-    let n = 1;\n+    let n = 2;\n }"
     }
   ]
 }

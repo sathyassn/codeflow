@@ -1029,4 +1029,22 @@ fn a_stored_quote_from_before_the_separator_change_reanchors() {
         selected("checks", &across.anchor).as_deref(),
         Some("run\none crop")
     );
+    // A diff quote stored with its line's screen-reader label and marker
+    // ("Added: +"), which the review text no longer holds (round 3): it is
+    // read without them and found at the same line.
+    assert_eq!(
+        current("change"),
+        "One change.\n--- a/x.rs\n+++ b/x.rs\n fn f() {\n    let n = 1;\n    let n = 2;\n }\n"
+    );
+    let diff = &notes[3];
+    assert_eq!(diff.quote.as_deref(), Some("Added: +    let n = 2;"));
+    assert!(
+        matches!(diff.anchor, FeedbackAnchor::Reanchored { .. }),
+        "{:?}",
+        diff.anchor
+    );
+    assert_eq!(
+        selected("change", &diff.anchor).as_deref(),
+        Some("    let n = 2;")
+    );
 }

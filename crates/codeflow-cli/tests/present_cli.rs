@@ -585,6 +585,49 @@ fn update_export_close_and_clear(
     assert_eq!(sessions.trim(), "[]");
 }
 
+/// SPC-014 C1 across the TSK-071 review-text changes: a review stored before
+/// them (separator-migration fixture, with a diff quote that carries
+/// "Added: +") reaches a 3.0.x agent on the v1 stream byte for byte as a
+/// build before the change delivered it (`feedback-v1.jsonl`, captured at
+/// ea0946594), and the history keeps the stored envelope unchanged.
+#[test]
+fn a_stored_review_reads_the_same_on_the_v1_stream() {
+    const FIXTURES: &str = "../codeflow-present/tests/fixtures/separator-migration";
+    const CAPTURED_SESSION: &str = "5e9a7c1e-0d2b-4f5a-9c3e-7b1d2f4a6c80";
+    let fixtures = Path::new(env!("CARGO_MANIFEST_DIR")).join(FIXTURES);
+    let read = |name: &str| fs::read_to_string(fixtures.join(name)).unwrap();
+    let fixture = setup_project();
+    let document = fixture.project.join("migration.json");
+    fs::write(&document, read("document.json")).unwrap();
+    let (session_id, _) = open_no_launch(&fixture, &document);
+    let events = read("events.jsonl").replace(CAPTURED_SESSION, &session_id);
+    fs::write(
+        session_dir(&fixture, &session_id).join("events.jsonl"),
+        &events,
+    )
+    .unwrap();
+
+    let delivered = require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "feedback", &session_id],
+    ));
+    assert_eq!(
+        delivered,
+        read("feedback-v1.jsonl").replace(CAPTURED_SESSION, &session_id)
+    );
+    let history: serde_json::Value = serde_json::from_str(&require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", &session_id],
+    )))
+    .unwrap();
+    assert_eq!(history["schema_version"], 1);
+    let stored: serde_json::Value = serde_json::from_str(events.trim()).unwrap();
+    assert_eq!(history["feedback_events"][0], stored);
+    close_and_clear(&fixture, &session_id);
+}
+
 const RETIRED_REVISION: &str =
     include_str!("../../codeflow-present/tests/fixtures/retired-diagram/revision.json");
 const RETIRED_EVENTS: &str =

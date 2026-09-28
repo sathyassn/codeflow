@@ -60,7 +60,11 @@ export function quoteFromRange(range: Range): string {
   const fragment = range.cloneContents();
   const svgParts = svgTextParts(fragment);
   if (svgParts.length) return svgParts.join(" ");
-  return range.toString();
+  // A diff line's screen-reader label and marker are never quoted.
+  const skipped = fragment.querySelectorAll("[data-cf-review-skip]");
+  if (!skipped.length) return range.toString();
+  skipped.forEach((node) => node.remove());
+  return fragment.textContent ?? "";
 }
 
 function svgTextParts(root: Element | DocumentFragment): string[] {

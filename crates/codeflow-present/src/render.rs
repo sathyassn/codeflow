@@ -385,22 +385,25 @@ fn render_block(block: &Block, context: &Context<'_>, output: &mut String) {
             }
             output.push_str("<div class=\"cf-local-scroll\" tabindex=\"0\" role=\"region\" aria-label=\"Scrollable diff\"><pre class=\"diff\"><code>");
             for line in diff.lines() {
-                let (tag, label) = if line.starts_with('+') && !line.starts_with("+++") {
-                    ("ins", "Added: ")
-                } else if line.starts_with('-') && !line.starts_with("---") {
-                    ("del", "Removed: ")
-                } else {
-                    ("span", "")
+                let (label, marker, text) = crate::document::diff_line_parts(line);
+                let tag = match label {
+                    "Added: " => "ins",
+                    "Removed: " => "del",
+                    _ => "span",
                 };
                 output.push('<');
                 output.push_str(tag);
                 output.push_str(" class=\"cf-line\">");
+                // The label is for screen readers and the marker for the eye;
+                // neither is review text, so a quote holds only the line's words.
                 if !label.is_empty() {
-                    output.push_str("<span class=\"sr-only\">");
+                    output.push_str("<span class=\"sr-only\" data-cf-review-skip>");
                     output.push_str(label);
+                    output.push_str("</span><span class=\"cf-diff-marker\" data-cf-review-skip aria-hidden=\"true\">");
+                    escape_html_to(marker, output);
                     output.push_str("</span>");
                 }
-                escape_html_to(line, output);
+                escape_html_to(text, output);
                 output.push_str("</");
                 output.push_str(tag);
                 output.push_str(">\n");
@@ -1022,17 +1025,26 @@ pub(crate) mod tests {
             assert_eq!(roots.len(), 1);
             // Every root carries the canonical text the client quotes from; the
             // client maps a selection to it ignoring whitespace (selection.ts),
-            // which separates a block's parts.
+            // which separates a block's parts, and skipping what is marked
+            // data-cf-review-skip (a diff line's label and marker).
             let canonical = block.canonical_review_text(&crate::document::Framing::default());
             assert_eq!(
                 roots[0].value().attr("data-cf-canonical-text"),
                 Some(canonical.as_str())
             );
             let compact = |text: &str| text.split_whitespace().collect::<String>();
-            assert_eq!(
-                compact(&roots[0].text().collect::<String>()),
-                compact(&canonical)
-            );
+            let reviewed: String = roots[0]
+                .descendants()
+                .filter_map(|node| node.value().as_text().map(|text| (node, text)))
+                .filter(|(node, _)| {
+                    !node
+                        .ancestors()
+                        .filter_map(ElementRef::wrap)
+                        .any(|element| element.value().attr("data-cf-review-skip").is_some())
+                })
+                .map(|(_, text)| text.to_string())
+                .collect();
+            assert_eq!(compact(&reviewed), compact(&canonical));
         }
     }
 

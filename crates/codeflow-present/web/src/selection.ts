@@ -249,6 +249,8 @@ export function segmentDistance(point: Point, from: Point, to: Point): number {
 // Details sit outside a block's review text; they take element notes
 // labelled by their text, never text selections.
 const FRAME = ".cf-frame-title, .cf-frame-caption, .cf-frame-details, .cf-legend, .cf-fig-title, .cf-fig-caption, .cf-fig-details";
+/** Text the page draws that is never review text: a diff line's label and marker. */
+export const REVIEW_SKIP = "[data-cf-review-skip]";
 const TEXTUAL_TAGS = /^(H1|H2|H3|H4|P|LI|PRE|CODE|TD|TH|LABEL|A|EM|STRONG|SMALL|BLOCKQUOTE|SPAN)$/;
 const PROSE_SELECTOR = "p, h1, h2, h3, h4, li, pre, td, th, blockquote, figcaption";
 
@@ -354,7 +356,7 @@ function reviewText(root: Node): string {
   const parts: string[] = [];
   while (walker.nextNode()) {
     const text = walker.currentNode;
-    if (!text.parentElement?.closest("style, script")) parts.push(text.textContent ?? "");
+    if (!text.parentElement?.closest(`style, script, ${REVIEW_SKIP}`)) parts.push(text.textContent ?? "");
   }
   return parts.join("");
 }

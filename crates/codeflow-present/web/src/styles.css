@@ -663,6 +663,8 @@ th { color: var(--cf-text-muted); font-size: 0.78rem; letter-spacing: 0.04em; te
 .feedback-prompt { padding-block-start: var(--cf-space-4); border-block-start: 0.2rem solid var(--cf-accent); font-size: 1.08rem; font-weight: 650; }
 
 /* Visually hidden but available to AT (figure status). */
+/* A diff line's marker is seen, never selected or quoted. */
+[data-cf-review-skip] { user-select: none; -webkit-user-select: none; }
 .sr-only {
   position: absolute;
   inline-size: 1px;
