@@ -257,6 +257,54 @@ try {
       await page.mouse.up();
       await discard("a held press after a selection");
     }
+    // A selection begun on a link inside the review text is document text,
+    // not a control: it pins on release even when no selection change
+    // follows the release (TSK-160, Codex confirm C160-1).
+    {
+      await armComment(page);
+      const link = await page.evaluate(() => {
+        const paragraph = document.querySelector("[data-cf-block-id='prose'] p");
+        const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.data.indexOf("runtime draws");
+          if (at < 0) continue;
+          const words = node.splitText(at);
+          words.splitText("runtime draws".length);
+          const anchor = document.createElement("a");
+          anchor.id = "t160-prose-link";
+          words.replaceWith(anchor);
+          anchor.append(words);
+          anchor.scrollIntoView({ block: "center", behavior: "instant" });
+          const box = anchor.getBoundingClientRect();
+          return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        }
+        return null;
+      });
+      assert.ok(link, "a press on a prose link: no link was made");
+      await page.mouse.move(link.x, link.y);
+      await page.mouse.down();
+      const selected = await page.evaluate(() => {
+        const text = document.getElementById("t160-prose-link").firstChild;
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, text.data.length);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+        document.dispatchEvent(new Event("selectionchange"));
+        return String(getSelection());
+      });
+      assert.equal(selected, "runtime draws", "a press on a prose link: the selection was not made");
+      await page.waitForTimeout(400);
+      assert.equal(await page.getByTestId("float-chip").count(), 0, "a press on a prose link: a chip opened while the button was held");
+      await page.mouse.up();
+      await discard("a press on a prose link");
+      await page.evaluate(() => {
+        const anchor = document.getElementById("t160-prose-link");
+        anchor.replaceWith(...anchor.childNodes);
+        anchor.parentNode?.normalize();
+        document.querySelector("[data-cf-block-id='prose'] p").normalize();
+      });
+    }
     assert.ok(await choice.locator("[data-cf-decline-reason]").isVisible(), "form control: the decline box closed");
     assert.deepEqual(answerRequests, [], "form control: an answer was sent");
     assert.equal(await findFile(root, "responses.jsonl"), null, "form control: the answer store was written");
