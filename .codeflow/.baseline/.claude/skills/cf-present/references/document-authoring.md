@@ -243,7 +243,10 @@ the service check each answer against the same rules.
   --expected-revision N` applies only while revision N is current; otherwise
   it exits 8, writes nothing and prints the current revision. When the
   reviewer answers against an older revision, the page asks them to confirm
-  the answer against the current one.
+  the answer against the current one if the question is unchanged there. If
+  any part of the question changed, the page keeps the draft read only and
+  asks for a reload, so change a question under an open answer only when
+  the reviewer must see the new wording.
 
 ## Converting a diagram block
 
