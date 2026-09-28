@@ -792,6 +792,23 @@ publication date._
   portal.
 
 <!-- codeflow:release-impact patch -->
+- **Faster `init` and `update` on macOS.** Scaffold writes no longer flush
+  the whole disk cache for every file. Each file is still written to a temp
+  copy, synced and renamed into place; on macOS the sync is a write barrier
+  that keeps the data ahead of the rename, so an interrupted run or a power
+  cut leaves every file whole. A directory is synced before any baseline,
+  manifest or project state that records its files, and when those files
+  sit on another disk than the record, that disk is flushed first, so a
+  record never survives a crash ahead of them. With the project on one
+  disk, the usual case, macOS gets one full disk flush per run instead of
+  about four per file; a disk that gets new writes after its flush is
+  flushed again before the next record on another disk. A symlinked
+  manifest or `project.toml` is refused, as a symlinked baseline already
+  was. A standard init made
+  about 1,000 such flushes, most of its wall time. The installed files are
+  unchanged.
+
+<!-- codeflow:release-impact patch -->
 - **`git gc` works in a hooked clone.** The reference-transaction hook no
   longer refuses `git pack-refs`, which `git gc` and auto gc run: moving a
   protected branch such as `main` from a loose ref into packed-refs, and
