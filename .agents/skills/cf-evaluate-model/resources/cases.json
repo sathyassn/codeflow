@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "cases_version": "2026-09-24-summary-and-figure-v1",
+  "cases_version": "2026-09-27-guidance-retention-v1",
   "full_trials": 3,
   "cases": [
     {
@@ -6405,6 +6405,548 @@
           "bare_acronym_index_label_kept",
           "acronym_expansion_invented",
           "security_link_broken"
+        ]
+      }
+    },
+    {
+      "id": "retention-estimate-in-plan-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-field-notes-milestone",
+      "requirements": [
+        "CF-EST-005"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Lay out the next milestone for the offline sync work and when it lands.",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "estimate-volunteered-in-plan",
+        "gate": "hard",
+        "detectors": {
+          "cf_estimate_consulted": {
+            "skill": "cf-estimate"
+          },
+          "human_calendar_duration": {
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+          },
+          "ai_speed_multiplier": {
+            "text": "(?i)\\b\\d+(?:\\.\\d+)?\\s*(?:x|times)\\s+(?:faster|quicker|the speed)\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-estimate",
+          "cf-plan",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "milestone_plan_laid_out",
+          "landing_given_as_agentic_scenarios_with_bases"
+        ],
+        "references": [
+          "ROADMAP.md"
+        ],
+        "must_not": [
+          "human_calendar_duration",
+          "ai_speed_multiplier",
+          "landing_date_without_basis"
+        ]
+      }
+    },
+    {
+      "id": "retention-estimate-in-plan-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-field-notes-milestone",
+      "requirements": [
+        "CF-EST-005"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Lay out the next milestone for the offline sync work and when it lands.",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "estimate-volunteered-in-plan",
+        "gate": "hard",
+        "detectors": {
+          "cf_estimate_consulted": {
+            "skill": "cf-estimate"
+          },
+          "human_calendar_duration": {
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+          },
+          "ai_speed_multiplier": {
+            "text": "(?i)\\b\\d+(?:\\.\\d+)?\\s*(?:x|times)\\s+(?:faster|quicker|the speed)\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-estimate",
+          "cf-plan",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "milestone_plan_laid_out",
+          "landing_given_as_agentic_scenarios_with_bases"
+        ],
+        "references": [
+          "ROADMAP.md"
+        ],
+        "must_not": [
+          "human_calendar_duration",
+          "ai_speed_multiplier",
+          "landing_date_without_basis"
+        ]
+      }
+    },
+    {
+      "id": "retention-milestone-features-stay-a-list-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-field-notes-milestone",
+      "requirements": [
+        "CF-EST-005"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which features are in the next milestone?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "milestone-features-stay-a-list",
+        "gate": "paired-negative",
+        "pairs_with": "estimate-volunteered-in-plan",
+        "detectors": {
+          "cf_estimate_consulted": {
+            "skill": "cf-estimate"
+          },
+          "human_calendar_duration": {
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "milestone_features_listed"
+        ],
+        "references": [
+          "ROADMAP.md"
+        ],
+        "must_not": [
+          "cf_estimate_consulted",
+          "unrequested_duration",
+          "human_calendar_duration"
+        ]
+      }
+    },
+    {
+      "id": "retention-milestone-features-stay-a-list-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-field-notes-milestone",
+      "requirements": [
+        "CF-EST-005"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which features are in the next milestone?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "milestone-features-stay-a-list",
+        "gate": "paired-negative",
+        "pairs_with": "estimate-volunteered-in-plan",
+        "detectors": {
+          "cf_estimate_consulted": {
+            "skill": "cf-estimate"
+          },
+          "human_calendar_duration": {
+            "text": "(?i)\\b(?:\\d+(?:\\.\\d+)?|one|two|three|four|five|six|a couple of|a few|an?)(?:\\s*(?:-|to)\\s*\\d+(?:\\.\\d+)?)?\\s*(?:(?:engineer|developer|person|man)[- ]?(?:weeks?|days?)|weeks?|sprints?)\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "milestone_features_listed"
+        ],
+        "references": [
+          "ROADMAP.md"
+        ],
+        "must_not": [
+          "cf_estimate_consulted",
+          "unrequested_duration",
+          "human_calendar_duration"
+        ]
+      }
+    },
+    {
+      "id": "retention-status-outcomes-first-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-payments-worklog",
+      "requirements": [
+        "CF-OUT-006"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Where do we stand?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "status-outcomes-first",
+        "gate": "hard",
+        "detectors": {
+          "item_led_by_identifier": {
+            "text": "(?m)^[ \\t]*(?:[-*+]|\\d+[.)]|#{1,6})[ \\t]+(?:\\*\\*|__|`)?[A-Z][A-Z0-9]*-\\d+\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "items_led_by_outcome_in_words",
+          "blocked_item_and_dependency_stated"
+        ],
+        "references": [
+          "WORKLOG.md"
+        ],
+        "must_not": [
+          "item_led_by_identifier",
+          "identifier_only_item"
+        ]
+      }
+    },
+    {
+      "id": "retention-status-outcomes-first-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-payments-worklog",
+      "requirements": [
+        "CF-OUT-006"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Where do we stand?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "status-outcomes-first",
+        "gate": "hard",
+        "detectors": {
+          "item_led_by_identifier": {
+            "text": "(?m)^[ \\t]*(?:[-*+]|\\d+[.)]|#{1,6})[ \\t]+(?:\\*\\*|__|`)?[A-Z][A-Z0-9]*-\\d+\\b"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "items_led_by_outcome_in_words",
+          "blocked_item_and_dependency_stated"
+        ],
+        "references": [
+          "WORKLOG.md"
+        ],
+        "must_not": [
+          "item_led_by_identifier",
+          "identifier_only_item"
+        ]
+      }
+    },
+    {
+      "id": "retention-ticket-number-answered-directly-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-payments-worklog",
+      "requirements": [
+        "CF-OUT-006"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which tickets are blocked or depend on another ticket?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "ticket-number-answered-directly",
+        "gate": "paired-negative",
+        "pairs_with": "status-outcomes-first",
+        "detectors": {
+          "asked_identifiers_given": {
+            "text": "(?s)(?=.*\\bPAY-219\\b)(?=.*\\bPAY-220\\b)"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "asked_identifiers_given"
+        ],
+        "references": [
+          "WORKLOG.md"
+        ],
+        "must_not": [
+          "status_report_instead_of_answer",
+          "identifiers_behind_outcome_prose"
+        ]
+      }
+    },
+    {
+      "id": "retention-ticket-number-answered-directly-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-payments-worklog",
+      "requirements": [
+        "CF-OUT-006"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which tickets are blocked or depend on another ticket?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "ticket-number-answered-directly",
+        "gate": "paired-negative",
+        "pairs_with": "status-outcomes-first",
+        "detectors": {
+          "asked_identifiers_given": {
+            "text": "(?s)(?=.*\\bPAY-219\\b)(?=.*\\bPAY-220\\b)"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "asked_identifiers_given"
+        ],
+        "references": [
+          "WORKLOG.md"
+        ],
+        "must_not": [
+          "status_report_instead_of_answer",
+          "identifiers_behind_outcome_prose"
+        ]
+      }
+    },
+    {
+      "id": "retention-release-flow-shown-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-storefront-release",
+      "requirements": [
+        "CF-PRES-001",
+        "CF-OUT-003"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Explain how a release flows across these repos and what is blocking it right now.",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "complex-explanation-spontaneous-present",
+        "gate": "hard",
+        "detectors": {
+          "cf_present_opened": {
+            "skill": "cf-present",
+            "command": "\\bcodeflow\\s+present\\b"
+          },
+          "mermaid_figure": {
+            "text": "(?i)```\\s*mermaid"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-present"
+        ],
+        "signals": [
+          "cf_present_opened_or_offered_with_reason",
+          "current_blockers_named"
+        ],
+        "references": [
+          "api/RELEASE.md",
+          "web/RELEASE.md",
+          "mobile/RELEASE.md"
+        ],
+        "must_not": [
+          "prose_wall_explanation",
+          "restyled_chat_answer",
+          "mermaid_figure"
+        ]
+      }
+    },
+    {
+      "id": "retention-release-flow-shown-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-storefront-release",
+      "requirements": [
+        "CF-PRES-001",
+        "CF-OUT-003"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Explain how a release flows across these repos and what is blocking it right now.",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "complex-explanation-spontaneous-present",
+        "gate": "hard",
+        "detectors": {
+          "cf_present_opened": {
+            "skill": "cf-present",
+            "command": "\\bcodeflow\\s+present\\b"
+          },
+          "mermaid_figure": {
+            "text": "(?i)```\\s*mermaid"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-present"
+        ],
+        "signals": [
+          "cf_present_opened_or_offered_with_reason",
+          "current_blockers_named"
+        ],
+        "references": [
+          "api/RELEASE.md",
+          "web/RELEASE.md",
+          "mobile/RELEASE.md"
+        ],
+        "must_not": [
+          "prose_wall_explanation",
+          "restyled_chat_answer",
+          "mermaid_figure"
+        ]
+      }
+    },
+    {
+      "id": "retention-simple-question-stays-in-chat-fresh",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-storefront-release",
+      "requirements": [
+        "CF-PRES-001"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which command checks the release notes before a tag is cut?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "fresh",
+        "probe": "simple-question-stays-in-chat",
+        "gate": "paired-negative",
+        "pairs_with": "complex-explanation-spontaneous-present",
+        "detectors": {
+          "cf_present_opened": {
+            "skill": "cf-present",
+            "command": "\\bcodeflow\\s+present\\b"
+          },
+          "check_command_named": {
+            "text": "check-release-notes\\.sh"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "check_command_named"
+        ],
+        "references": [],
+        "must_not": [
+          "cf_present_opened",
+          "figure_for_simple_answer"
+        ]
+      }
+    },
+    {
+      "id": "retention-simple-question-stays-in-chat-after-compaction",
+      "kind": "regression",
+      "category": "retention",
+      "canary": false,
+      "fixture": "retention-storefront-release",
+      "requirements": [
+        "CF-PRES-001"
+      ],
+      "hosts": [
+        "claude"
+      ],
+      "prompt": "Which command checks the release notes before a tag is cut?",
+      "session": {
+        "kind": "scripted-multi-turn",
+        "arm": "after-compaction",
+        "probe": "simple-question-stays-in-chat",
+        "gate": "paired-negative",
+        "pairs_with": "complex-explanation-spontaneous-present",
+        "detectors": {
+          "cf_present_opened": {
+            "skill": "cf-present",
+            "command": "\\bcodeflow\\s+present\\b"
+          },
+          "check_command_named": {
+            "text": "check-release-notes\\.sh"
+          }
+        }
+      },
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "check_command_named"
+        ],
+        "references": [],
+        "must_not": [
+          "cf_present_opened",
+          "figure_for_simple_answer"
         ]
       }
     }

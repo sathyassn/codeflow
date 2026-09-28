@@ -45,6 +45,18 @@ publication date._
 ### Added
 
 <!-- codeflow:release-impact minor -->
+- **Guidance retention evaluations.** `cf-evaluate-model` gains a scripted
+  multi-turn case kind: the fixture supplies warm-up turns, the case prompt
+  is the probe, and only the probe turn is graded. A new
+  `guidance-retention` pack checks three rules (a landing time asked for in
+  a plan, a status report, a multi-part explanation), each with a paired
+  negative, in a fresh arm and an arm that compacts automatically inside the
+  disposable fixture on the Claude host. `eval_kit.py check-session` checks a
+  trial's transcript against its turn plan and extracts the probe turn, and
+  `retention-report` applies the retention bar. `codeflow update` installs
+  the changed skill at the standard and full tiers.
+
+<!-- codeflow:release-impact minor -->
 - **Review findings, repair and a copy guide.** The duo quality contract has a
   new section on review findings and repair, read when a defect is fixed or
   review findings are briefed, written or acted on. A defect fix states its

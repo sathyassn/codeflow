@@ -87,9 +87,10 @@ limits of catalog support in consuming scaffolds.
    endpoints follow [bounded effects](resources/fake-effects.md), retain both
    digests, and hide owner state.
 5. **Run the subject naturally.** Open the native interactive harness in the
-   fixture and give only `TASK.md` as the task. Match actual CodeFlow and hook
-   executables to the external receipt per [protocol](resources/protocol.md);
-   `PATH` or version is not proof. Preserve session and scoped evidence. Duo
+   fixture and give only `TASK.md`, or a scripted case's turns in order, as
+   the task. Match actual CodeFlow and hook executables to the external
+   receipt per [protocol](resources/protocol.md); `PATH` or version is not
+   proof. Preserve session and scoped evidence. Duo
    cases require real native seats; a missing seat is observed degradation, not simulation.
 6. **Record raw observations.** Use the result shape in the protocol. Record the
    route, signals actually observed, violations, references consulted, evidence
