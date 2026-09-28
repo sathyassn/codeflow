@@ -552,7 +552,8 @@ each. One readiness core judges a task for `work next`, `work claim`,
 `awaiting_selection`, specs approved, epic open or standalone, code
 dependencies complete in the execution base, and research or decision
 dependencies (`{id, kind, pin}`, the pin quoted) complete at their pinned
-commit; a pin YAML reads as a number is refused with the quote remedy. `work
+commit; a pin YAML reads as a number or as null is refused with the quote
+remedy, and a pin left out keeps the edge unmet. `work
 next` lists ready, then waiting and blocked tasks with reasons from the
 refs as last fetched; `work claim` fetches, refuses a task a visible branch
 already carries, and pushes `task/TSK-NNN-<slug>` as an advisory claim.

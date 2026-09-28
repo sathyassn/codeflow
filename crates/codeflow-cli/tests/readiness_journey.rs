@@ -674,4 +674,29 @@ fn a_number_shaped_pin_is_refused_with_the_quote_remedy_on_a_fresh_project() {
         &codeflow(&root, &["validate", "--docs"]),
         "validate with the pin quoted",
     );
+
+    // Review T156-1: a written null keeps no text and is refused with the
+    // same remedy; leaving `pin` out is the not-yet-known state.
+    let mut previous = "pin: \"70283613\"}".to_string();
+    for null in ["pin: null}", "pin: ~}"] {
+        edit(&root, consumer, &previous, null);
+        let out = codeflow(&root, &["validate", "--docs"]);
+        let said = format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        );
+        assert_ne!(out.status.code(), Some(0), "{null}: {said}");
+        assert!(
+            said.contains("TSK-001 pin reads as YAML null")
+                && said.contains("quote it: pin: \"<commit sha>\""),
+            "{null}: {said}"
+        );
+        previous = null.to_string();
+    }
+    edit(&root, consumer, ", pin: ~}", "}");
+    ok(
+        &codeflow(&root, &["validate", "--docs"]),
+        "validate with the pin left out",
+    );
 }

@@ -94,7 +94,14 @@ pub fn parse_dependency(value: &Value) -> Result<Dependency, String> {
         None => return Err(format!("dependency {id} needs `kind: research | decision`")),
     };
     let pin = match field("pin") {
-        None | Some(Value::Null) => None,
+        // No `pin` key: the pin is not known yet, and the edge is unmet.
+        None => None,
+        // `pin: null` or `pin: ~` was written, but YAML kept no text.
+        Some(Value::Null) => {
+            return Err(format!(
+                "dependency {id} pin reads as YAML null, not a commit id; quote it: pin: \"<commit sha>\", or leave pin out until it is known"
+            ))
+        }
         Some(Value::String(pin)) if is_commit_id(pin) => Some(pin.clone()),
         // YAML may have dropped the text (`949894e0` is 949894.0, a 40-digit
         // id is a rounded float, `+1234567` loses its sign), so a number is
@@ -202,5 +209,23 @@ mod tests {
         let error = parse_dependencies(Some(&yaml("[{id: TSK-001, kind: research, pin: main}]")))
             .unwrap_err();
         assert!(error.contains("written quoted"), "{error}");
+    }
+
+    /// Review T156-1: a written `pin: null` or `pin: ~` keeps no text, so it
+    /// is refused with the quote remedy; only a missing `pin` key is the
+    /// not-yet-known state, which parses as an unmet edge.
+    #[test]
+    fn an_explicit_null_pin_is_refused_and_a_missing_pin_is_unmet() {
+        for pin in ["null", "~", "Null", "NULL"] {
+            let text = format!("[{{id: TSK-001, kind: research, pin: {pin}}}]");
+            let error = parse_dependencies(Some(&yaml(&text))).unwrap_err();
+            assert!(
+                error.contains("TSK-001 pin reads as YAML null")
+                    && error.contains("quote it: pin: \"<commit sha>\""),
+                "{pin}: {error}"
+            );
+        }
+        let deps = parse_dependencies(Some(&yaml("[{id: TSK-001, kind: decision}]"))).unwrap();
+        assert_eq!(deps[0].pin, None);
     }
 }
