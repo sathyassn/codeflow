@@ -129,3 +129,118 @@ records no ratchet move.
   effort, and the session record does not carry it.
 - `codeflow test` as one command and rustdoc on this head.
 - Linux, WSL2 and Windows hosts.
+
+## Recheck at the line tip, 2026-09-28
+
+The record above verifies `5a4d54a53`. Since then the line took TSK-151
+(pull request 650), TSK-154 (669) and the planning changes 584, 647, 667 and
+721; together they change `autonomy.md`, the orchestrator skill, the quality
+contract, `pipeline.workflow.js` and two contract tests. Every check below
+ran at `c72f80396` with a release binary built from that head in a private
+target directory (`codeflow 3.0.0`, SHA-256 prefix `834438d3f492f3e6`).
+
+| Check | Result | Evidence |
+|---|---|---|
+| `codeflow validate`, `validate --docs` | Pass | exit 0; 88 records clean; doc graph clean |
+| `codeflow ci --base origin/main --head HEAD` | Pass | exit 0; 92 commits and 21 merges; the same two `breaking_watch_paths` warnings as above (`242a55a7`, `36234984`), both compatible additions |
+| `doctor --check managed-drift` | Pass | exit 0; no managed-region drift |
+| `doctor --check model-bindings` | Pass with warnings | exit 0; rows labeled illustrative; one "designated version with no full-suite record" warning per designated version and harness (nine), which TSK-139 closes |
+| `artifact_budget_contract`, `catalog_craft_contract`, `manifest_consistency`, `model_catalog_surfaces`, `model_eval_contract` | Pass | 18, 13, 23, 10 and 47 passed |
+| `models_cli`, `models_managed_catalog`, `orchestration_contract` | Pass | 15, 4 and 23 passed |
+| `eval_kit.py validate-suite` | Pass | suite digest `sha256:d606789b0423aa57b12217a7a303a99d3d1eb1a92cc218e61f2937be3287b078` |
+
+The real-tree model-name scan is part of `model_catalog_surfaces` and passes
+at this head.
+
+**Update journey and identity canary.** Their evidence at `5a4d54a53` still
+holds at this head. `git diff --stat 5a4d54a53..c72f80396` changes 28 files:
+`autonomy.md`, the orchestrator skill, the quality contract,
+`pipeline.workflow.js` and their mirrors, two contract tests,
+`.codeflow/manifest.json` and task records. It touches none of the five
+copies of `current-ensemble.json` and no file under `crates/*/src`, so the
+catalog the canary checked and the update mechanism the journey ran are
+unchanged. The new hashes in `.codeflow/manifest.json` are covered by
+`manifest_consistency`, which passes 23 of 23 above.
+
+**Ratchet move.** The "no ratchet changed" finding above no longer holds.
+TSK-154's `58031bc7d` raised the orchestrator skill ratchet and the routing
+skill ceiling from 29 KiB (29,696 bytes) to 29 KiB + 512 (30,208 bytes). The
+file measures 29,867 bytes at this head, against 29,682 on `main`. The reason
+is audit rows H36 and H37: the operator ruled on 2026-09-27 that nothing key
+is cut for bytes. The move is recorded in EPC-018's byte budget by this
+change.
+
+Not run at this head by this task: `codeflow test` as one command (the
+primary runs it at the task branch head), `cargo test --workspace`, clippy,
+rustdoc and coverage.
+
+## EPC-018 section of the 3.0.0 release pull request body
+
+The coordinator assembles the release body; this is EPC-018's part.
+
+EPC-018 turns model routing into data and gives agents one written rule for
+when to act and when to stop. Seats, product lines and duties now live in the
+managed catalog, and one read-only command resolves them. The autonomy
+reference is the only full list of what belongs to the operator.
+
+- **Model catalog (ADR-0069).** Schema 5 carries families, product lines
+  with ordered versions, seats, duties, effort floors and the identity drift
+  rule. `codeflow models resolve` returns participants with pinned ids, or
+  an open duty. `doctor --check model-bindings` labels its rows
+  illustrative.
+  - Breaking: the managed catalog moves from schema 4 to schema 5, and the
+    binary no longer reads schema 4. Until an adopter runs `codeflow
+    update`, `codeflow doctor --check model-bindings` fails and `codeflow
+    models resolve` refuses on the older tree (TSK-085, marked `major` in
+    the changelog).
+- **Autonomy reference (ADR-0070).** `cf-method/references/autonomy.md`
+  holds the finish line, the four-rung ladder, the operator-owned list, the
+  trust prompt rule and settled dissent. The skills continue where they used
+  to stop:
+  - the primary merges green reviewed pull requests into unprotected
+    integration branches;
+  - "ready on local evidence" needs a completed result for every owed check;
+  - the standing seats approve a reassignment after a seat loss.
+  - TSK-154 restored risk tolerance and a material security boundary to the
+    operator's list.
+- **Evaluation.** Seventeen blind autonomy cases and the routing cases, each
+  with a faulty control that fails.
+- **Roster.** The operator designated the 2026-09-23 roster (Q2).
+  Designation is not qualification: every seat version reads "designated,
+  full suite not run" until TSK-139 runs.
+- **Evidence.**
+  - Validators, `ci`, both doctor checks, the targeted contract tests and
+    the suite check pass at `c72f80396` (recheck above). `codeflow test` as
+    one command is the primary's gate at the task branch head.
+  - The native identity canary matched Claude by pinned id. The Codex
+    identity matched on the requested and recorded model only, since Codex
+    records no served id. Grok served `grok-4.7-build` for `grok-4.7`, which
+    stays recorded as drift until TSK-139 settles it.
+- **Not verified.** `gpt-5.6-sol` and `gpt-6-luna` were never launched. No
+  seat version is qualified. The body-review duty runs once, on the release
+  pull request: seat `codex-primary` review and seat `claude-primary`
+  integrated judgment, seat `grok-primary` per the Q4 default, and the
+  `design-and-editorial-review` second opinion.
+- **Operator answers.**
+  - Q2 was answered on 2026-09-23.
+  - Q1 (automatic adoption of newer versions) and Q4 (Grok in every
+    engineering review) stay open with their seed defaults: `manual`
+    adoption, and today's `routing-policy.json` triggers.
+  - EPC-015 D21 (stop before a new departure) is not carried: the operator
+    closed the EPC-015 line on 2026-09-26, and only its holistic-fix
+    doctrine moved on, through TSK-131.
+  - TSK-083 was not selected. Its trust-prompt fix landed on the harness's
+    own line through pull request 578.
+- **Follow-ups.**
+  - TSK-082, the Agent OS mirror: the routing half starts now, and the
+    autonomy half waits for TSK-164.
+  - TSK-164, `blocked`: the autonomy reference after the harness permission
+    units.
+  - TSK-139, `blocked`: native qualification after settings units 1 and 3,
+    unit 5's D1 spike and the D10 fixture route.
+  - TSK-125, on `integration/EPC-020-delivery-system`: record
+    reconciliation after this line syncs from `main`. The record is not on
+    this line; it resolves once the release branch merges both lines.
+  - The workspace "Seats and models" and trust bullets, and
+    `RELEASE-PLAN.md`, are updated on `docs/workspace` to point at the
+    catalog.
