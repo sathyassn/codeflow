@@ -62,11 +62,32 @@ pub enum Block {
         id: String,
         columns: Vec<ComparisonColumn>,
     },
+    /// Schema v1: a decision the author states, with its `status`.
+    /// Schema v2: a question with one choice (`options`, an optional
+    /// `rationale` mode) that the reviewer answers; it has no `status`
+    /// (SPC-014 B6).
     Decision {
         id: String,
         title: String,
-        status: DecisionStatus,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        status: Option<DecisionStatus>,
         markdown: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        options: Option<Vec<crate::form::Choice>>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        rationale: Option<crate::form::RationaleMode>,
+    },
+    /// Schema v2: typed questions the reviewer answers (SPC-014 B6). The
+    /// runtime renders the fields; answers are stored against the revision
+    /// shown.
+    Form {
+        id: String,
+        title: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        markdown: Option<String>,
+        fields: Vec<crate::form::FormField>,
+        #[serde(default)]
+        required: Vec<String>,
     },
     Table {
         id: String,
@@ -349,6 +370,17 @@ impl PresentationDocument {
         )?;
         if version >= 2 {
             validate_references(self)?;
+            let forms = self
+                .walk()
+                .into_iter()
+                .filter(|block| crate::form::FormView::of(block).is_some())
+                .count();
+            if forms > limits::MAX_FORMS_PER_DOCUMENT {
+                return Err(invalid(format!(
+                    "a document holds at most {} form and decision blocks; this one holds {forms}",
+                    limits::MAX_FORMS_PER_DOCUMENT
+                )));
+            }
         }
         Ok(())
     }
@@ -594,6 +626,7 @@ impl Block {
             | Self::Callout { id, .. }
             | Self::Comparison { id, .. }
             | Self::Decision { id, .. }
+            | Self::Form { id, .. }
             | Self::Table { id, .. }
             | Self::Status { id, .. }
             | Self::Code { id, .. }
@@ -615,6 +648,7 @@ impl Block {
             Self::Narrative { markdown, .. }
             | Self::Callout { markdown, .. }
             | Self::Decision { markdown, .. } => vec![markdown],
+            Self::Form { markdown, .. } => markdown.iter().map(String::as_str).collect(),
             Self::Bullets { items, .. } => items.iter().map(String::as_str).collect(),
             Self::Comparison { columns, .. } => columns
                 .iter()
@@ -637,7 +671,7 @@ impl Block {
             } => join_parts([title.clone().unwrap_or_default(), markdown_text(markdown)]),
             Self::Decision {
                 title,
-                status,
+                status: Some(status),
                 markdown,
                 ..
             } => join_parts([
@@ -645,6 +679,7 @@ impl Block {
                 format!("{status:?}"),
                 markdown_text(markdown),
             ]),
+            Self::Decision { .. } | Self::Form { .. } => form_review_text(self, framing),
             Self::Bullets { items, .. } => join_parts(items.iter().map(|item| markdown_text(item))),
             Self::Comparison { columns, .. } => join_parts(
                 columns
@@ -771,6 +806,7 @@ impl Block {
                 title: Some(title), ..
             }
             | Self::Decision { title, .. }
+            | Self::Form { title, .. }
             | Self::Tree { label: title, .. } => title.clone(),
             // No raw ids in the nav (QA defect 8): a name the reader can see.
             Self::Tabs { tabs, .. } => tabs
@@ -797,6 +833,45 @@ impl Block {
         };
         truncate_nav_label(&raw, 40)
     }
+}
+
+/// A form or a v2 decision reads as the page shows it (SPC-014 B6): the
+/// title, the prompt, then each field's label, description and option
+/// labels in order. A decision's one field is labelled by the title, which
+/// is not repeated.
+fn form_review_text(block: &Block, framing: &Framing) -> String {
+    let (title, markdown) = match block {
+        Block::Decision {
+            title, markdown, ..
+        } => (title, Some(markdown.as_str())),
+        Block::Form {
+            title, markdown, ..
+        } => (title, markdown.as_deref()),
+        _ => return String::new(),
+    };
+    let mut parts = vec![
+        title.clone(),
+        markdown
+            .map(|markdown| markdown_text(markdown, framing))
+            .unwrap_or_default(),
+    ];
+    if let Some(view) = crate::form::FormView::of(block) {
+        let decision = matches!(block, Block::Decision { .. });
+        for field in view.fields.iter() {
+            if !decision {
+                parts.push(field.label.clone());
+            }
+            parts.extend(field.description.clone());
+            parts.extend(
+                field
+                    .options
+                    .iter()
+                    .flatten()
+                    .map(|option| option.label.clone()),
+            );
+        }
+    }
+    join_parts(parts)
 }
 
 /// The first sentence of the rendered text: Markdown syntax gone, its
@@ -951,10 +1026,59 @@ fn validate_block(
             Ok(())
         }
         Block::Decision {
-            title, markdown, ..
+            id,
+            title,
+            status,
+            markdown,
+            options,
+            rationale,
         } => {
             require_nonempty_bounded("decision title", title, limits::MAX_TITLE_BYTES)?;
-            bounded("decision markdown", markdown, limits::MAX_PROSE_BYTES)
+            bounded("decision markdown", markdown, limits::MAX_PROSE_BYTES)?;
+            if version == 1 {
+                if status.is_none() {
+                    return Err(invalid(format!(
+                        "decision block {id} needs a status in a schema_version 1 document"
+                    )));
+                }
+                if options.is_some() {
+                    return Err(needs_v2("options", &format!("decision block {id}")));
+                }
+                if rationale.is_some() {
+                    return Err(needs_v2("rationale", &format!("decision block {id}")));
+                }
+                return Ok(());
+            }
+            if status.is_some() {
+                return Err(invalid(format!(
+                    "decision block {id}: a schema_version 2 decision has no status; the reviewer's answer is its outcome, so list its options instead"
+                )));
+            }
+            let Some(options) = options else {
+                return Err(invalid(format!(
+                    "decision block {id} needs options: a schema_version 2 decision is a question the reviewer answers"
+                )));
+            };
+            crate::form::validate_decision_options(id, options)
+        }
+        Block::Form {
+            id,
+            title,
+            markdown,
+            fields,
+            required,
+        } => {
+            if version == 1 {
+                return Err(invalid(format!(
+                    "form block {id} is a schema_version 2 block; set schema_version 2 or remove it"
+                )));
+            }
+            optional_bounded(
+                "form markdown",
+                markdown.as_deref(),
+                limits::MAX_PROSE_BYTES,
+            )?;
+            crate::form::validate_form(id, title, fields, required)
         }
         Block::Table {
             id,

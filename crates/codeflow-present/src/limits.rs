@@ -90,5 +90,31 @@ pub const FUZZY_THRESHOLD: f64 = 0.75;
 /// notice (SPC-014 B1, TSK-118 review round 1).
 pub const FUZZY_WORK_BUDGET: u64 = 32_000_000;
 
+/// At most this many `form` and v2 `decision` blocks in one document
+/// (SPC-014 I1).
+pub const MAX_FORMS_PER_DOCUMENT: usize = 32;
+/// At most this many fields in one form (I1).
+pub const MAX_FORM_FIELDS: usize = 32;
+/// A choice field lists 2 to this many options (B6, I1).
+pub const MAX_FIELD_OPTIONS: usize = 24;
+/// A v2 decision lists 2 to this many options (B6).
+pub const MAX_DECISION_OPTIONS: usize = 8;
+/// A field or option label is 1 to this many characters (B6).
+pub const MAX_FORM_LABEL_CHARS: usize = 200;
+/// The largest `max_length` a text field may declare, in UTF-16 units (B6).
+pub const MAX_FORM_TEXT_UTF16: u32 = 16_384;
+/// A decline reason is at most this many bytes (B6).
+pub const MAX_DECLINE_REASON_BYTES: usize = 4 * 1024;
+/// An answer request body is at most this many bytes; the bound is checked
+/// before anything else in the body (I3 `answer_too_large`).
+pub const MAX_ANSWER_REQUEST_BYTES: usize = 64 * 1024;
+/// One `responses.jsonl` line, newline excluded: a request of at most
+/// 64 KiB plus the question as shown (32 fields of 24 options).
+pub const MAX_RESPONSE_RECORD_BYTES: u64 = 1024 * 1024;
+/// The whole `responses.jsonl` ledger.
+pub const MAX_RESPONSE_LOG_BYTES: u64 = 64 * 1024 * 1024;
+/// Lines in `responses.jsonl`.
+pub const MAX_RESPONSE_EVENTS: usize = 100_000;
+
 /// How long `present close` waits for the session service to exit.
 pub const SERVICE_EXIT_WAIT_SECONDS: u64 = 10;

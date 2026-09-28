@@ -5,6 +5,8 @@
     reason = "this internal, non-published crate exposes one typed error boundary to its CLI adapter"
 )]
 
+#[cfg(test)]
+mod answer_contract_tests;
 pub mod browser;
 pub mod config;
 #[cfg(test)]
@@ -13,6 +15,7 @@ pub mod document;
 pub mod entity;
 pub mod error;
 pub mod export;
+pub mod form;
 mod fuzzy;
 pub mod limits;
 mod media;
