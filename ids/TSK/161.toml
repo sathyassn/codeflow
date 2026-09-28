@@ -1,0 +1,11 @@
+id = "TSK-161"
+uid = "ebcc57c7-d6a9-4c4c-aa55-6ad64494da11"
+kind = "TSK"
+title = "portal verifier serves pages without idle closes"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T18:18:23Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
