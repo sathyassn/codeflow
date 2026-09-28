@@ -1,5 +1,5 @@
 {
   "files": {
-    "app/search.html": "<dialog class=\"cf-dialog\" id=\"search\" aria-label=\"Search The Guide\">\n  <button class=\"cf-btn\" data-copy=\"open\">Search The Guide</button>\n  <input class=\"cf-input\" type=\"search\" data-copy=\"placeholder\" placeholder=\"Type Here...\">\n  <p class=\"cf-dialog-empty\" data-copy=\"empty\">Nothing here yet!</p>\n  <p class=\"cf-dialog-status\" data-copy=\"count\" data-example-count=\"3\">Found three results for your query</p>\n  <p class=\"cf-dialog-status\" data-copy=\"no-results\">Oops, no matches. Try again?</p>\n  <button class=\"cf-btn\" data-copy=\"close\">Close Search</button>\n</dialog>\n"
+    "app/search.html": "<dialog class=\"cf-dialog\" id=\"search\" aria-label=\"Search The Docs\">\n  <button class=\"cf-btn\" data-copy=\"open\">Search The Docs</button>\n  <input class=\"cf-input\" type=\"search\" data-copy=\"placeholder\" placeholder=\"Type Here...\">\n  <p class=\"cf-dialog-empty\" data-copy=\"empty\">Nothing here yet!</p>\n  <p class=\"cf-dialog-status\" data-copy=\"count\" data-example-count=\"3\">Found three results for your query</p>\n  <p class=\"cf-dialog-status\" data-copy=\"no-results\">Oops, no matches. Try again?</p>\n  <button class=\"cf-btn\" data-copy=\"close\">Close Search</button>\n</dialog>\n"
   }
 }

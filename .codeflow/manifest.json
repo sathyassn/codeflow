@@ -281,7 +281,7 @@
     ".agents/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "d59c1ba055ea19129b64f488cc23f962a2c54744ab4b9f4ef6a2fef9ed40ae35",
+      "sha256": "41654cb2eeeb3b1a0ab48d706d829e55445bbba4a64d3c6b30ad8bfa9673263c",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/harness-evidence.md": {
@@ -893,7 +893,7 @@
     ".claude/skills/cf-evaluate-model/resources/fixtures.json": {
       "src": "agents/skills/cf-evaluate-model/resources/fixtures.json",
       "ownership": "managed",
-      "sha256": "d59c1ba055ea19129b64f488cc23f962a2c54744ab4b9f4ef6a2fef9ed40ae35",
+      "sha256": "41654cb2eeeb3b1a0ab48d706d829e55445bbba4a64d3c6b30ad8bfa9673263c",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/harness-evidence.md": {

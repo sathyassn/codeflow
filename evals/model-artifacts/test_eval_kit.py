@@ -209,6 +209,7 @@ def _content_words(text: str) -> set[str]:
     return {w for w in re.findall(r"[a-z0-9]+", text.lower()) if w not in _STOP and len(w) > 2}
 
 
+# ------------------------------------------------------------ figure case
 def _figure_parts(answer: dict, fixture: dict) -> dict:
     page = answer["files"]["docs/release-flow.md"]
     declared = json.loads(fixture["files"]["docs/figures/release-flow.json"])["figure"]
@@ -238,12 +239,32 @@ def _legend_explained(parts: dict) -> bool:
     return bool(re.search(r"\blegend\b", parts["page"], re.I)) or sum(m in parts["page"] for m in marks) >= 2
 
 
+# Finding 2, legend keys. A key is a clause when it opens with a determiner
+# or pronoun (a sentence about the reader or the step), when its second word
+# is a finite verb or auxiliary (a subject followed by its verb: "CI runs
+# this step", "Maintainer publishes the package"), or when it opens with a
+# bare verb (an instruction: "Merge into the release branch"). A relative
+# clause after "that" stays a noun phrase ("Red check that stops the
+# release"), and a reduced relative keeps its verb in third position ("Step
+# CI runs").
+_KEY_OPENERS = {"this", "that", "these", "those", "the", "a", "an", "it", "you", "we", "they", "he", "she",
+                "here", "there"}
+_KEY_FINITE = {"runs", "takes", "decides", "stops", "has", "is", "are", "was", "were", "approves", "publishes",
+               "merges", "builds", "tests", "fails", "passes", "blocks", "waits", "holds", "marks", "means",
+               "needs", "ends", "starts", "does", "will", "can", "must", "may", "cannot", "happens", "goes",
+               "sits", "gets", "shows", "lands"}
+_KEY_BARE_VERBS = {"merge", "run", "build", "test", "publish", "approve", "stop", "check", "deploy", "tag",
+                   "wait", "hand", "record", "find", "verify", "use", "click", "open", "close", "read", "write",
+                   "press", "select", "go", "see"}
+
+
 def _key_is_clause(key: str) -> bool:
-    words = key.split()
-    return words[0].lower() in {"this", "that", "the", "a", "an", "it", "you", "we", "they"} or (
-        len(words) > 1 and words[1].lower() in {"takes", "decides", "stops", "has", "is", "are", "approves"})
+    words = [w.strip(",.;:").lower() for w in key.split()]
+    return (words[0] in _KEY_OPENERS or words[0] in _KEY_BARE_VERBS
+            or (len(words) > 1 and words[1] in _KEY_FINITE))
 
 
+# ------------------------------------------------------------ search case
 def _search_strings(answer: dict) -> dict:
     html = answer["files"]["app/search.html"]
     slot = lambda name: re.search(r'data-copy="' + name + r'"[^>]*>([^<]*)<', html).group(1).strip()
@@ -259,13 +280,19 @@ def _title_case(text: str) -> bool:
 
 
 _ACTIONS = {"search", "close", "open", "find", "clear", "cancel", "type", "enter", "try"}
+# Finding 2, empty state. Saying what to do next means a verb first and an
+# object the reader can type: one of the things the README says the dialog
+# finds. "Search." has the verb and no object.
+_SEARCHABLE = re.compile(r"\b(page|pages|title|titles|heading|headings|command|commands|ID|IDs|record|records|"
+                         r"name|names|word|words|term|terms|keyword|keywords)\b")
 
 
 def _empty_state_acts(s: dict) -> bool:
     first = s["empty"].split()[0].lower().strip(",.") if s["empty"] else ""
-    return first in _ACTIONS and "!" not in s["empty"]
+    return first in _ACTIONS and "!" not in s["empty"] and bool(_SEARCHABLE.search(s["empty"]))
 
 
+# ------------------------------------------------------------ closeout case
 def _closeout_parts(answer: dict) -> dict:
     closeout = answer["files"]["project-management/tasks/TSK-231.md#Closeout"].split("## Closeout", 1)[1].strip()
     paragraphs = [p for p in closeout.split("\n\n") if p.strip()]
@@ -274,36 +301,132 @@ def _closeout_parts(answer: dict) -> dict:
             "lines": [line for line in closeout.splitlines() if line.strip()]}
 
 
+# Finding 2, closeout summary. A detail is a digit, a code span, a path, a
+# dot-name (EVIDENCE.md), a revision named as such, a spelled identifier
+# (three or more hyphen-joined letters or number words: four-f-two-c) or a
+# measurement in words (percent, "point two"). A count in words is allowed.
+_NUMBER_WORD = r"(?:zero|one|two|three|four|five|six|seven|eight|nine)"
+_SUMMARY_DETAIL = re.compile(
+    r"\d|`|/"
+    r"|\b[\w-]+\.(?:md|json|rs|py|txt|toml|ya?ml|html|css|js|mjs|lock)\b"
+    r"|\b(?:revision|commit|sha|hash)\b"
+    r"|\b(?:[a-z]|" + _NUMBER_WORD + r")(?:-(?:[a-z]|" + _NUMBER_WORD + r")){2,}\b"
+    r"|\bper ?cent\b|\b" + _NUMBER_WORD + r" point " + _NUMBER_WORD + r"\b", re.I)
+
+
 def _summary_carries_detail(c: dict) -> bool:
     lead = " ".join(_sentences(c["summary"])[:3])
-    return bool(c["summary"]) and bool(re.search(r"\d|`|/", lead))
+    return bool(c["summary"]) and bool(_SUMMARY_DETAIL.search(lead))
 
 
 def _paragraph_wall(c: dict) -> bool:
     return len(c["paragraphs"]) == 1 and bool(c["summary"]) and len(_sentences(c["summary"])) >= 5
 
 
+# ------------------------------------------------------------ short answer
+# Finding 3, one line. The line the guide means is the answer's paragraph:
+# a hard wrap inside it is not a second line, a blank line starts one. The
+# paragraph holds yes or no first and at most three sentences.
 def _reply_lines(answer: dict) -> list[str]:
     return [line for line in answer["reply"].splitlines() if line.strip()]
 
 
+def _reply_paragraphs(answer: dict) -> list[str]:
+    return [" ".join(p.split()) for p in re.split(r"\n\s*\n", answer["reply"].strip()) if p.strip()]
+
+
+def _structured_line(line: str) -> bool:
+    return line.lstrip().startswith(("#", "- ", "* ", "|", "```", "1. "))
+
+
+def _one_paragraph_answer(answer: dict) -> bool:
+    paragraphs = _reply_paragraphs(answer)
+    return (len(paragraphs) == 1 and not any(map(_structured_line, _reply_lines(answer)))
+            and len(_sentences(paragraphs[0])) <= 3)
+
+
+# ------------------------------------------------------------ skill case
 def _skill_text(answer: dict) -> str:
     return answer["files"][".agents/skills/cf-rollback/SKILL.md#opening"]
 
 
+# Finding 3, imperative steps. Structural, not a verb list: a numbered step
+# is imperative when it opens with a capitalised word that is not a subject
+# opener, not an -ing form, and is not followed by a finite verb or modal
+# (which would make the opener a subject: "Steps should be recorded").
+_NON_IMPERATIVE_OPENERS = {"the", "a", "an", "this", "that", "these", "those", "it", "you", "we", "i", "they",
+                           "there", "then", "first", "next", "after", "before", "when", "if", "once", "now",
+                           "please", "let", "let's", "also", "so", "rollback", "rollbacks"}
+_FINITE_SECOND = {"should", "must", "may", "might", "will", "can", "could", "would", "is", "are", "was", "were",
+                  "has", "have", "needs", "gets", "does", "did", "takes", "runs"}
+
+
+def _step_is_imperative(step: str) -> bool:
+    words = step.split()
+    first = words[0].strip(",.:;")
+    second = words[1].strip(",.:;").lower() if len(words) > 1 else ""
+    return (first[:1].isupper() and first.lower() not in _NON_IMPERATIVE_OPENERS
+            and not first.lower().endswith("ing") and second not in _FINITE_SECOND)
+
+
+# Finding 3, the named actor. The operator is the subject of a sentence (an
+# -s verb follows "the operator", with an optional aside between) and the
+# text names the production step that sentence is about.
+_OPERATOR_ACTS = re.compile(r"\bthe operator\b(?:,[^,.;]*,)? [a-z]+s\b", re.I)
+
+
+def _actor_named(text: str) -> bool:
+    folded = " ".join(text.split())  # a hard wrap between "the" and "operator" is not a boundary
+    return bool(_OPERATOR_ACTS.search(folded)) and "production" in folded.lower()
+
+
+# ------------------------------------------------------------ ADR case
 def _adr_sections(answer: dict) -> dict:
     adr = answer["files"]["docs/decisions/ADR-0104.md"]
     section = lambda name: adr.split(f"## {name}", 1)[1].split("\n## ", 1)[0].strip()
     return {"context": section("Context"), "decision": section("Decision"), "consequences": section("Consequences")}
 
 
+# Finding 1, the constraint after the notes rewrite: the context names the
+# promise (one rendering wherever the kit is carried) and the review limit.
 def _names_constraint(answer: dict) -> bool:
     context = " ".join(_adr_sections(answer)["context"].split())
-    return "every surface" in context and "no reviewer" in context
+    return bool(re.search(r"\brender\w* the same\b", context, re.I)) and bool(re.search(r"\breview\w*\b", context, re.I))
 
 
-_COSTS = ("cannot tune", "kit release", "every product's ci", "reaches every product")
-_HEDGES = r"\b(probably|seems|we think|we have decided|might|perhaps)\b"
+# Finding 2, history. The notes carry five dated events; a context that
+# retells three or more of them is history whatever else it names.
+_HISTORY_EVENTS = (r"\bfirst portal\b", r"\b(took that file|changed two selectors|copied)\b", r"\bMarch\b",
+                   r"\bJune\b", r"\b(tried twice|two attempts|twice)\b")
+
+
+def _history_events(answer: dict) -> int:
+    context = " ".join(_adr_sections(answer)["context"].split())
+    return sum(bool(re.search(p, context, re.I)) for p in _HISTORY_EVENTS)
+
+
+def _context_is_history(answer: dict) -> bool:
+    return "\n\n" in _adr_sections(answer)["context"] or not _names_constraint(answer) or _history_events(answer) >= 3
+
+
+# Finding 2, hedges: "should" and its relatives join the list. "may" stays
+# out: "products may add" is a permission, not a hedge.
+_HEDGES = r"\b(probably|perhaps|seems|likely|should|could|we think|we believe|we propose|we have decided|we intend|for now)\b"
+
+# Finding 2, costs. Each cost from the notes needs both of its anchors in one
+# sentence, so "kit release" alone ("The kit release notes get shorter")
+# names no cost.
+_COST_SENTENCES = (
+    re.compile(r"\b(cannot|can no longer|no longer|not)\b[^.]*\btune\b", re.I),
+    re.compile(r"\bkit release\b[^.]*\b(every|each|all) products?\b|\b(every|each|all) products?\b[^.]*\bkit release\b", re.I),
+    re.compile(r"\bcheck\b[^.]*\b(every|each|all) product'?s'? ci\b|\b(every|each|all) product'?s'? ci\b[^.]*\bcheck\b", re.I),
+)
+
+
+def _names_cost(answer: dict) -> bool:
+    text = " ".join(_adr_sections(answer)["consequences"].split())
+    return any(p.search(s) for s in _sentences(text) for p in _COST_SENTENCES)
+
 
 # signal -> predicate over (answer, fixture). Each is a necessary condition
 # of the signal read off the text; a must_not predicate is also sufficient.
@@ -351,22 +474,19 @@ COPY_SIGNAL_CHECKS = {
     "summary_carries_number_or_path": lambda a, f: _summary_carries_detail(_closeout_parts(a)),
     "not_tested_dropped": lambda a, f: not all(w in _closeout_parts(a)["closeout"] for w in ("Windows", "Redis")),
     # short-answer-stays-one-line
-    "one_line_answer": lambda a, f: len(_reply_lines(a)) == 1,
-    "answer_states_yes_or_no": lambda a, f: bool(re.match(r"(yes|no)\b", _reply_lines(a)[0], re.I)),
-    "no_lead_before_answer": lambda a, f: bool(re.match(r"(yes|no)\b", _reply_lines(a)[0], re.I)),
-    "lead_before_short_answer": lambda a, f: not re.match(r"(yes|no)\b", _reply_lines(a)[0], re.I),
-    "heading_in_short_answer": lambda a, f: any(line.startswith("#") for line in _reply_lines(a)),
-    "recap_after_answer": lambda a, f: any(re.match(r"(in short|in summary|to sum up)\b", line, re.I)
-        for line in _reply_lines(a)[1:]),
+    "one_line_answer": lambda a, f: _one_paragraph_answer(a),
+    "answer_states_yes_or_no": lambda a, f: bool(re.match(r"(yes|no)\b", _reply_paragraphs(a)[0], re.I)),
+    "no_lead_before_answer": lambda a, f: bool(re.match(r"(yes|no)\b", _reply_paragraphs(a)[0], re.I)),
+    "lead_before_short_answer": lambda a, f: not re.match(r"(yes|no)\b", _reply_paragraphs(a)[0], re.I),
+    "heading_in_short_answer": lambda a, f: any(line.lstrip().startswith("#") for line in _reply_lines(a)),
+    "recap_after_answer": lambda a, f: any(re.match(r"(in short|in summary|to sum up)\b", p, re.I)
+        for p in _reply_paragraphs(a)[1:]),
     "summary_padding": lambda a, f: any(line.lstrip().startswith(("- ", "* ")) for line in _reply_lines(a))
-        or len(_reply_lines(a)) > 2,
+        or len(_reply_paragraphs(a)) > 1,
     # first-section-of-a-new-skill
-    "imperative_plain_sentences": lambda a, f: all(
-        step.split()[0].lower() in {"find", "verify", "run", "hand", "record", "check", "confirm", "use"}
-        for step in re.findall(r"^\d+\. (.+)$", _skill_text(a), re.M))
+    "imperative_plain_sentences": lambda a, f: all(map(_step_is_imperative, re.findall(r"^\d+\. (.+)$", _skill_text(a), re.M)))
         and not re.search(r"\b(let me|i will|i'll|we will)\b", _skill_text(a), re.I),
-    "actor_named_when_not_reader": lambda a, f: bool(re.search(
-        r"\bthe operator (runs|says|merges|approves|decides)\b", _skill_text(a))),
+    "actor_named_when_not_reader": lambda a, f: _actor_named(_skill_text(a)),
     "no_slogan": lambda a, f: not re.search(r"with confidence|made easy|done right|peace of mind", _skill_text(a), re.I),
     "no_contrast_turn": lambda a, f: not re.search(r"\bis not (a|an) [^,.;]+, it is\b", _skill_text(a), re.I),
     "no_policy_character": lambda a, f: not _DASH.search(_skill_text(a)),
@@ -381,14 +501,12 @@ COPY_SIGNAL_CHECKS = {
     "context_names_constraint": lambda a, f: _names_constraint(a),
     "one_decision_paragraph_as_fact": lambda a, f: (lambda d: "\n\n" not in d
         and not re.search(_HEDGES, d, re.I))(_adr_sections(a)["decision"]),
-    "consequences_name_a_cost": lambda a, f: any(c in " ".join(_adr_sections(a)["consequences"].split()).lower()
-        for c in _COSTS),
-    "context_is_history": lambda a, f: "\n\n" in _adr_sections(a)["context"] or not _names_constraint(a),
+    "consequences_name_a_cost": lambda a, f: _names_cost(a),
+    "context_is_history": lambda a, f: _context_is_history(a),
     "decision_spread_over_paragraphs": lambda a, f: "\n\n" in _adr_sections(a)["decision"],
     "decision_hedged": lambda a, f: bool(re.search(_HEDGES, _adr_sections(a)["decision"], re.I)),
-    "consequences_without_cost": lambda a, f: not any(c in " ".join(_adr_sections(a)["consequences"].split()).lower()
-        for c in _COSTS),
-    "alternatives_inside_decision": lambda a, f: bool(re.search(r"reject|shared package|override block|instead of",
+    "consequences_without_cost": lambda a, f: not _names_cost(a),
+    "alternatives_inside_decision": lambda a, f: bool(re.search(r"reject|dropped|shared package|override block|instead of",
         _adr_sections(a)["decision"], re.I)),
 }
 # Signals no text check can decide; the grader judges them against the
@@ -863,8 +981,8 @@ class SuiteContractTests(unittest.TestCase):
     def test_copy_controls_grade_committed_answers(self) -> None:
         # TSK-073: committed control answers for every new case of the
         # copy-guide pack. The kit computes each recorded decision from the
-        # grader's signals; every faulty control fails and the short-answer
-        # positive control passes; the form signals agree with the answer.
+        # grader's signals; every faulty control fails and every passing
+        # control passes; the form signals agree with the answer.
         directory = ROOT / "evals/model-artifacts/copy-controls"
         controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
         cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
@@ -874,11 +992,8 @@ class SuiteContractTests(unittest.TestCase):
         texts = {}
         for case_id, entries in controls["cases"].items():
             case = cases[case_id]
-            # Every new case has a faulty control and a passing one, except
-            # the closeout case, whose positive control is the one-line
-            # answer on its companion's own prompt.
-            roles = {"faulty"} if case_id == "task-closeout-from-evidence" else {"passing", "faulty"}
-            self.assertEqual(roles, {entry["role"] for entry in entries}, case_id)
+            # Every new case has a passing control and a faulty one.
+            self.assertEqual({"passing", "faulty"}, {entry["role"] for entry in entries}, case_id)
             for entry in entries:
                 with self.subTest(case=case_id, answer=entry["answer"]):
                     trial = control_trial(case, entry["signals"])
@@ -907,7 +1022,8 @@ class SuiteContractTests(unittest.TestCase):
                 self.assertEqual([], copy_signal_problems(cases[case_id], entry["signals"], answer, fixture))
                 if entry["role"] == "passing":
                     self.assertFalse(_DASH.search(text), "a passing control carries no policy character")
-                if name.startswith("adr-") and entry["role"] == "faulty":
+                # The single-defect ADR controls carry no dash on purpose.
+                if name == "adr-0104-history.json":
                     self.assertTrue(_DASH.search(text), "the mannered ADR control keeps its dash")
 
     def test_copy_signal_binding_rejects_an_answer_that_lacks_a_claimed_signal(self) -> None:

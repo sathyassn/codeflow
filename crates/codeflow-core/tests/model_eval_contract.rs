@@ -3680,6 +3680,128 @@ fn copy_guide_cases_keep_controls_and_blind_prompts() {
     }
 }
 
+/// Fixture files that must carry a word on a copy-guide leak list, each with
+/// the reason the file needs it: (fixture, file, [(word, reason)]). A word
+/// here is data or structure the file must hold, never a statement of a rule.
+type CopyGuideAllowance = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+const COPY_GUIDE_FIXTURE_ALLOWANCE: [CopyGuideAllowance; 6] = [
+    (
+        "guide-release-flow-figure",
+        "docs/figures/release-flow.json",
+        &[
+            ("caption", "declaration schema field name"),
+            ("title", "declaration schema field name"),
+            ("style", "declaration schema field name of a draw item"),
+            ("rule", "declaration deco kind, a drawn horizontal rule"),
+        ],
+    ),
+    (
+        "app-search-dialog",
+        "app/search.html",
+        &[
+            (
+                "empty",
+                "data-copy slot of the empty state and the kit class",
+            ),
+            ("placeholder", "HTML attribute name"),
+        ],
+    ),
+    (
+        "app-search-dialog",
+        "app/README.md",
+        &[
+            ("title", "a thing the dialog searches by"),
+            ("heading", "a thing the dialog searches by"),
+        ],
+    ),
+    (
+        "closeout-evidence-tsk-231",
+        "project-management/tasks/TSK-231.md",
+        &[("title", "task frontmatter key")],
+    ),
+    (
+        "gate-evidence-tsk-231",
+        "project-management/tasks/TSK-231.md",
+        &[("title", "task frontmatter key")],
+    ),
+    (
+        "adr-notes-figure-sheet",
+        "docs/decisions/template.md",
+        &[
+            ("title", "ADR frontmatter key"),
+            ("context", "ADR section heading the shape requires"),
+            ("consequences", "ADR section heading the shape requires"),
+        ],
+    ),
+];
+
+/// TSK-073, leakage review. A subject reads the fixture as well as the
+/// prompt, so every file materialized for a case this task adds, and
+/// TASK.md, which is the prompt, passes the prompt test's word check. The
+/// grading note in state.grading is never materialized, so it is not
+/// scanned. A listed word fails unless the allowance names it for that file,
+/// and every allowance must still be needed.
+#[test]
+fn copy_guide_fixtures_do_not_name_the_rule_under_test() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    let mut leaked = Vec::new();
+    let mut used = BTreeSet::new();
+    for (case_id, _, _, added, leaks) in COPY_GUIDE_INVENTORY {
+        if !added {
+            continue;
+        }
+        let case = indexed
+            .get(case_id)
+            .unwrap_or_else(|| panic!("missing case {case_id}"));
+        let fixture = case["fixture"].as_str().expect("case fixture");
+        let mut files = fixture_overlay(fixture);
+        let prompt = case["prompt"].as_str().expect("prompt").trim_end();
+        files.insert("TASK.md".to_string(), format!("{prompt}\n"));
+        for (path, text) in &files {
+            let allowed = COPY_GUIDE_FIXTURE_ALLOWANCE
+                .iter()
+                .find(|(id, file, _)| *id == fixture && file == path)
+                .map_or(&[][..], |entry| entry.2);
+            let lowered = text.to_lowercase();
+            let words: BTreeSet<&str> = lowered
+                .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+                .filter(|word| COPY_GUIDE_PROMPT_LEAKS.contains(word) || leaks.contains(word))
+                .collect();
+            for word in words {
+                if allowed.iter().any(|(name, _)| *name == word) {
+                    used.insert((fixture, path.clone(), word.to_string()));
+                } else {
+                    leaked.push(format!("{case_id}: {fixture}/{path}: {word}"));
+                }
+            }
+        }
+    }
+    assert!(
+        leaked.is_empty(),
+        "fixture names the rule under test:\n{}",
+        leaked.join("\n")
+    );
+    for (fixture, path, words) in COPY_GUIDE_FIXTURE_ALLOWANCE {
+        for (word, _) in words {
+            assert!(
+                used.contains(&(fixture, path.to_string(), word.to_string())),
+                "stale allowance {fixture}/{path}: {word}"
+            );
+        }
+    }
+}
+
 /// TSK-073. The copy guide requirements are hard, owned by the guide, and
 /// each is read by a case of the copy-guide pack.
 #[test]

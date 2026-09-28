@@ -1,0 +1,5 @@
+{
+  "files": {
+    "project-management/tasks/TSK-231.md#Closeout": "## Closeout\n\nEach tenant now has its own retry budget, finished in revision\nfour-f-two-c-nine-a-one, and EVIDENCE.md holds the gate.\n\nTested revision 4f2c9a1 with `codeflow test --mode essential --strict`:\n\n```text\nessential gate: PASS (412 tests, 0 failed, 0 skipped) in 41.2 s\nTOTAL coverage 84.2% (statements, crates/queue and crates/tenant)\n```\n\n| Criterion | Evidence |\n|---|---|\n| AC-1 over budget is delayed, not dropped | retry_budget, 38 passed |\n| AC-2 budget resets on the tenant's clock | tenant_clock, 12 passed |\n| AC-3 gate green, coverage at or above 80 percent | 84.2 percent over crates/queue and crates/tenant |\n\nNot tested: the Windows path, because no Windows runner is attached to this\nrepository; queue isolation ran against the in-memory queue, not Redis.\n"
+  }
+}

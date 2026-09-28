@@ -16,7 +16,7 @@
       },
       {
         "name": "agent",
-        "means": "Step CI runs"
+        "means": "CI runs this step"
       },
       {
         "name": "merge",
@@ -24,7 +24,7 @@
       },
       {
         "name": "human",
-        "means": "Approval by the maintainer on call"
+        "means": "Maintainer publishes the package"
       },
       {
         "name": "stop",
