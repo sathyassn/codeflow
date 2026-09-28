@@ -1,0 +1,11 @@
+id = "TSK-156"
+uid = "f20b3d93-5d32-48a5-8e46-70e65a850fa3"
+kind = "TSK"
+title = "commit pins read as ids even when all digits"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T00:13:01Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
