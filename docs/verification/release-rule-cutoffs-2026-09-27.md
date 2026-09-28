@@ -66,8 +66,12 @@ TSK-101 again with its AC-14 waiver naming `dc62ef03f`. A release branch
 that imports EPC-020 only at or after `dc62ef03f` never brings the old
 waiver. A release branch that imported EPC-020 between #590 and #639, as
 the rehearsal did at `7f8d3bc47`, `0583c69ba`, `0b2eee788` and
-`cd0ac7e74`, keeps the refusal, because each brought completion is bound
-at the import that brought it.
+`cd0ac7e74`, brought the old completion too. A later import of the repair
+supersedes it (SPC-013 R-120): a completion brought later from the task's
+own line, which binds where it was introduced there, becomes the
+completion in force. The old waiver is never accepted; it stops being the
+completion in force. An invalid later completion, or one that reaches the
+release through another line, leaves the old finding in place.
 
 ## The reconstructed candidate
 
@@ -90,41 +94,42 @@ The candidate of TSK-145 AC-6 was rebuilt on a disposable authority
 
 | Run | Legacy notices | Blocking findings |
 |---|---|---|
-| Pre-push (`git push` from the release checkout)[^tree] | the seven | 3, the same as CI |
-| CI, release range from the authority's `main` | the seven | 3 |
-| Final pull request into `main` (`--into main`) | the seven | 3 |
+| Pre-push (`git push` from the release checkout)[^tree] | the seven | 2, the same as CI |
+| CI, release range from the authority's `main` | the seven | 2 |
+| Final pull request into `main` (`--into main`) | the seven | 2 |
 
 [^tree]: Pre-push judged the range from the authority's `main`. Its tree
     checks (`validate --docs` and the quick targets) were kept out by a
     changed tracked file: the replayed tree is not a buildable release.
 
-The three blocking findings:
+The release-line judge reports no blocking finding. The TSK-101 waiver's
+refusal is gone because the EPC-020 import at its cutoff brings the
+re-completion of PR #640. The two remaining findings come from the records
+rule, and TSK-140 owns both:
 
-- `work.acceptance_binding`: the TSK-101 waiver naming `7dd43bed5`,
-  first brought by the replayed EPC-020 import of `7f8d3bc47` (TSK-101 is
-  still `todo` at the earlier import `787e53448`).
-- `work.records`: SPC-002 becomes `approved` in a range that also changes
-  code. The EPC-020 line approved it in planning PR #655 (`e4ff8eb4e`), but the
-  records rule judges spec approval across the whole range, not where it
-  was introduced.
-- `work.records`: TSK-069 is complete without an acceptance block. Its
-  only change against `main` is the `uid` backfill that EPC-020 landed in
-  #654 (`a579cf17a`); naming the EPC-020 cutoff in the records baseline
-  does not clear it.
+| Rule | Finding | Owner |
+|---|---|---|
+| `work.records` | SPC-002 becomes `approved` in a range that also changes code. EPC-020 approved it in planning PR #655 (`e4ff8eb4e`), but the rule judges spec approval across the whole range, not where it was introduced. | TSK-140 AC-11 |
+| `work.records` | TSK-069 is complete without an acceptance block. Its only change against `main` is the `uid` backfill EPC-020 landed in #654 (`a579cf17a`); naming the EPC-020 cutoff in the records baseline does not clear it. | TSK-140 AC-12 |
 
-The last two come from the records rule, not the release-line judge. The
-rule raises both on any pull request into this `main` that brings
-EPC-020's current records with code.
-Importing the current line tips (EPC-016 at `385218852`, EPC-020 at
-`99ad91a78`) with the same cutoffs gives the same seven notices and the
-same three findings: none of the criteria changes this candidate brings
-landed with code after a cutoff, and the cutoff values need no change.
+The rule raises both on any pull request into this `main` that brings
+EPC-020's current records with code, so they would block the real 3.0.0
+pull request. Importing the current line tips (EPC-016 at `385218852`,
+EPC-020 at `99ad91a78`) with the same cutoffs gives the same seven
+notices and the same two findings: none of the criteria changes this
+candidate brings landed with code after a cutoff, and the cutoff values
+need no change.
 
-The first reconstructions also showed two judge faults, fixed with this
-record: a new release branch's push was judged from one line's tip, which
-re-checked 1,221 commits including history `main` already has, and a
-completion that a release branch first held in one form and later brought,
-block and all, from its own line was still bound at the release head.
+The first reconstructions also showed three judge faults, fixed with this
+record:
+
+- A new release branch's push was judged from one line's tip, which
+  re-checked 1,221 commits including history `main` already has.
+- A completion that the release branch first held in one form and later
+  brought, block and all, from its own line was still bound at the release
+  head.
+- An earlier brought completion that a valid re-completion from the task's
+  own line had replaced still refused (the TSK-101 waiver above).
 
 ## Cutoffs to record
 
