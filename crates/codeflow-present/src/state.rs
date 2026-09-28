@@ -98,8 +98,22 @@ pub struct SessionRecord {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RevisionContent {
-    Supported { document: PresentationDocument },
-    Unsupported { schema_version: u32, raw: String },
+    Supported {
+        document: PresentationDocument,
+    },
+    Unsupported {
+        schema_version: u32,
+        raw: String,
+    },
+    /// A revision a pre-release build stored with the removed diagram block.
+    /// Only the stored record reader produces it, from
+    /// a record it never rewrites; it is never read back from disk, and it is
+    /// shown read only with the conversion notice.
+    #[serde(skip_deserializing)]
+    Retired {
+        document: serde_json::Value,
+        diagram_ids: Vec<String>,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -1028,10 +1042,7 @@ impl SessionStore {
                 session.id
             )));
         }
-        let record: RevisionRecord = read_json(
-            &self.revision_path(id, revision),
-            limits::MAX_REVISION_STATE_BYTES,
-        )?;
+        let record = read_revision_record(&self.revision_path(id, revision))?;
         if record.state_schema_version != STATE_SCHEMA_VERSION || record.revision != revision {
             return Err(PresentError::CorruptState(format!(
                 "revision {revision} has an unsupported or mismatched state schema"
@@ -1139,8 +1150,7 @@ impl SessionStore {
             current if current == marker.from_revision => {
                 match fs::symlink_metadata(&revision_path) {
                     Ok(metadata) if metadata.is_file() && !is_link_like(&metadata) => {
-                        let record: RevisionRecord =
-                            read_json(&revision_path, limits::MAX_REVISION_STATE_BYTES)?;
+                        let record = read_revision_record(&revision_path)?;
                         if record.revision != marker.to_revision {
                             return Err(PresentError::CorruptState(format!(
                                 "session {id} has a mismatched interrupted revision"
@@ -1155,8 +1165,7 @@ impl SessionStore {
                 remove_file_if_regular(&marker_path)?;
             }
             current if current == marker.to_revision => {
-                let record: RevisionRecord =
-                    read_json(&revision_path, limits::MAX_REVISION_STATE_BYTES)?;
+                let record = read_revision_record(&revision_path)?;
                 if record.revision != marker.to_revision {
                     return Err(PresentError::CorruptState(format!(
                         "session {id} has a mismatched committed revision"
@@ -1209,10 +1218,7 @@ impl SessionStore {
         })?;
         let mut revisions = Vec::with_capacity(capacity);
         for revision in 1..=session.current_revision {
-            let record: RevisionRecord = read_json(
-                &self.revision_path(id, revision),
-                limits::MAX_REVISION_STATE_BYTES,
-            )?;
+            let record = read_revision_record(&self.revision_path(id, revision))?;
             if record.state_schema_version != STATE_SCHEMA_VERSION || record.revision != revision {
                 return Err(PresentError::CorruptState(format!(
                     "revision {revision} has an unsupported or mismatched state schema"
@@ -1550,7 +1556,47 @@ impl SessionStore {
         let session = self.load(id)?;
         let revision = self.revision(id, session.current_revision)?;
         let events = self.read_events_unlocked(id)?;
-        build_feedback_snapshot(&events, &revision.content, session.current_revision)
+        let retired = self.retired_diagram_ids(id, &events, &revision)?;
+        build_feedback_snapshot(
+            &events,
+            &revision.content,
+            session.current_revision,
+            &retired,
+        )
+    }
+
+    /// The diagram ids of each revision that visible notes were written on,
+    /// when that revision is a retired one, so a note on a removed diagram
+    /// orphans with a reason that names it.
+    fn retired_diagram_ids(
+        &self,
+        id: Uuid,
+        events: &[FeedbackEvent],
+        current: &RevisionRecord,
+    ) -> Result<RetiredDiagramIds> {
+        let mut sources: Vec<u64> = events
+            .iter()
+            .filter_map(|event| match event {
+                FeedbackEvent::Received { envelope, .. } if !envelope.notes.is_empty() => {
+                    Some(envelope.revision)
+                }
+                _ => None,
+            })
+            .collect();
+        sources.sort_unstable();
+        sources.dedup();
+        let mut retired = RetiredDiagramIds::new();
+        for revision in sources {
+            let content = if revision == current.revision {
+                current.content.clone()
+            } else {
+                self.revision(id, revision)?.content
+            };
+            if let RevisionContent::Retired { diagram_ids, .. } = content {
+                retired.insert(revision, diagram_ids);
+            }
+        }
+        Ok(retired)
     }
 
     pub fn clear(
@@ -2192,6 +2238,18 @@ fn validate_feedback_note(note: &FeedbackNote, content: &RevisionContent) -> Res
             limits::MAX_FEEDBACK_TEXT_UTF16
         )));
     }
+    if let RevisionContent::Retired { diagram_ids, .. } = content {
+        return Err(PresentError::InvalidDocument(
+            if diagram_ids.contains(&note.block_id) {
+                format!(
+                    "feedback block {} is a diagram block, which was removed with Mermaid; convert it and run present update before commenting on it",
+                    note.block_id
+                )
+            } else {
+                "the current revision holds a diagram block, which was removed with Mermaid, so it is read only until present update converts it".to_string()
+            },
+        ));
+    }
     let block = content_block(content, &note.block_id).ok_or_else(|| {
         PresentError::InvalidDocument(format!(
             "feedback block {} is not present in the current revision",
@@ -2300,7 +2358,7 @@ fn validate_feedback_target(note: &FeedbackNote, block: &crate::document::Block)
 
 fn content_block<'a>(content: &'a RevisionContent, id: &str) -> Option<&'a crate::document::Block> {
     match content {
-        RevisionContent::Unsupported { .. } => None,
+        RevisionContent::Unsupported { .. } | RevisionContent::Retired { .. } => None,
         RevisionContent::Supported { document } => find_block(&document.blocks, id),
     }
 }
@@ -2323,10 +2381,13 @@ fn find_block<'a>(
     })
 }
 
+type RetiredDiagramIds = std::collections::HashMap<u64, Vec<String>>;
+
 fn build_feedback_snapshot(
     events: &[FeedbackEvent],
     current: &RevisionContent,
     current_revision: u64,
+    retired: &RetiredDiagramIds,
 ) -> Result<FeedbackSnapshot> {
     let mut lifecycle = std::collections::HashMap::new();
     let mut received = Vec::new();
@@ -2373,7 +2434,18 @@ fn build_feedback_snapshot(
                     .selector
                     .as_ref()
                     .map(|selector| selector.exact.clone()),
-                anchor: reanchor_note(note, envelope.revision, current, current_revision),
+                anchor: retired
+                    .get(&envelope.revision)
+                    .filter(|ids| ids.contains(&note.block_id))
+                    .map_or_else(
+                        || reanchor_note(note, envelope.revision, current, current_revision),
+                        |_| FeedbackAnchor::Orphaned {
+                            reason: format!(
+                                "the diagram block {} was removed with Mermaid; convert it to reanchor this note",
+                                note.block_id
+                            ),
+                        },
+                    ),
             })
             .collect();
         items.push(FeedbackView {
@@ -2398,10 +2470,18 @@ fn reanchor_note(
     current: &RevisionContent,
     current_revision: u64,
 ) -> FeedbackAnchor {
-    let RevisionContent::Supported { document } = current else {
-        return FeedbackAnchor::Orphaned {
-            reason: "current document schema is unsupported".to_string(),
-        };
+    let document = match current {
+        RevisionContent::Supported { document } => document,
+        RevisionContent::Unsupported { .. } => {
+            return FeedbackAnchor::Orphaned {
+                reason: "current document schema is unsupported".to_string(),
+            };
+        }
+        RevisionContent::Retired { .. } => {
+            return FeedbackAnchor::Orphaned {
+                reason: "the current revision holds a diagram block, which was removed with Mermaid, and is read only".to_string(),
+            };
+        }
     };
     let Some(block) = find_block(&document.blocks, &note.block_id) else {
         return FeedbackAnchor::Orphaned {
@@ -3138,6 +3218,128 @@ fn ensure_safe_dir(path: &Path) -> Result<()> {
 }
 
 fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, max_bytes: u64) -> Result<T> {
+    serde_json::from_slice(&read_state_bytes(path, max_bytes)?).map_err(PresentError::from)
+}
+
+/// Read one stored revision. A record that fails typed parsing only because
+/// its document holds diagram blocks in their pre-removal shape loads as the
+/// read-only retired kind; the file is never rewritten, and any other failure
+/// keeps its own error.
+fn read_revision_record(path: &Path) -> Result<RevisionRecord> {
+    let bytes = read_state_bytes(path, limits::MAX_REVISION_STATE_BYTES)?;
+    let error = match serde_json::from_slice::<RevisionRecord>(&bytes) {
+        Ok(record) => return Ok(record),
+        Err(error) => PresentError::from(error),
+    };
+    // A plain `Value` keeps only the last of duplicate keys, which typed
+    // parsing refuses, so the fallback reads the bytes with duplicates
+    // refused at every depth: a corrupt record never loads as retired.
+    let stored = match serde_json::from_slice::<UniqueKeys>(&bytes) {
+        Ok(UniqueKeys(stored)) => stored,
+        Err(duplicate) if duplicate.is_data() => return Err(PresentError::from(duplicate)),
+        Err(_) => return Err(error),
+    };
+    let Some(document) = stored
+        .pointer("/content/document")
+        .filter(|_| stored.pointer("/content/kind") == Some(&serde_json::Value::from("supported")))
+    else {
+        return Err(error);
+    };
+    let Some((substituted, diagram_ids)) = crate::retired::legacy_document(document) else {
+        return Err(error);
+    };
+    let mut candidate = stored.clone();
+    candidate["content"]["document"] = substituted;
+    let checked: RevisionRecord = serde_json::from_value(candidate)?;
+    Ok(RevisionRecord {
+        content: RevisionContent::Retired {
+            document: document.clone(),
+            diagram_ids,
+        },
+        ..checked
+    })
+}
+
+/// A JSON value read with duplicate object keys refused at every depth.
+struct UniqueKeys(serde_json::Value);
+
+impl<'de> Deserialize<'de> for UniqueKeys {
+    fn deserialize<D: serde::Deserializer<'de>>(
+        deserializer: D,
+    ) -> std::result::Result<Self, D::Error> {
+        deserializer
+            .deserialize_any(UniqueKeysVisitor)
+            .map(UniqueKeys)
+    }
+}
+
+struct UniqueKeysVisitor;
+
+impl<'de> serde::de::Visitor<'de> for UniqueKeysVisitor {
+    type Value = serde_json::Value;
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON value")
+    }
+
+    fn visit_bool<E>(self, value: bool) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_i64<E>(self, value: i64) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_u64<E>(self, value: u64) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_f64<E>(self, value: f64) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_str<E>(self, value: &str) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_string<E>(self, value: String) -> std::result::Result<Self::Value, E> {
+        Ok(value.into())
+    }
+
+    fn visit_unit<E>(self) -> std::result::Result<Self::Value, E> {
+        Ok(serde_json::Value::Null)
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(
+        self,
+        mut items: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
+        let mut values = Vec::new();
+        while let Some(UniqueKeys(value)) = items.next_element()? {
+            values.push(value);
+        }
+        Ok(serde_json::Value::Array(values))
+    }
+
+    fn visit_map<A: serde::de::MapAccess<'de>>(
+        self,
+        mut entries: A,
+    ) -> std::result::Result<Self::Value, A::Error> {
+        let mut object = serde_json::Map::new();
+        while let Some(key) = entries.next_key::<String>()? {
+            if object.contains_key(&key) {
+                return Err(serde::de::Error::custom(format_args!(
+                    "duplicate field `{key}`"
+                )));
+            }
+            let UniqueKeys(value) = entries.next_value()?;
+            object.insert(key, value);
+        }
+        Ok(serde_json::Value::Object(object))
+    }
+}
+
+fn read_state_bytes(path: &Path, max_bytes: u64) -> Result<Vec<u8>> {
     let metadata = fs::symlink_metadata(path).map_err(|error| match error.kind() {
         std::io::ErrorKind::NotFound => PresentError::SessionNotFound(path.display().to_string()),
         _ => PresentError::io(path, error),
@@ -3176,7 +3378,7 @@ fn read_json<T: for<'de> Deserialize<'de>>(path: &Path, max_bytes: u64) -> Resul
             path.display()
         )));
     }
-    serde_json::from_slice(&bytes).map_err(PresentError::from)
+    Ok(bytes)
 }
 
 pub(crate) fn write_json_atomic<T: Serialize>(path: &Path, value: &T) -> Result<()> {
@@ -3327,6 +3529,49 @@ fn directory_size_bounded(root: &Path, byte_limit: u64) -> Result<u64> {
         }
     }
     Ok(total)
+}
+
+/// The captured pre-removal records that the retired revision tests load.
+#[cfg(test)]
+pub(crate) mod retired_fixture {
+    use std::fs;
+
+    use uuid::Uuid;
+
+    use super::SessionStore;
+    use crate::document::{Block, ParsedDocument, PresentationDocument, Provenance};
+
+    /// Revision 1 of a session a pre-removal build stored, with a top-level
+    /// diagram `flow` and a diagram `handshake` inside a disclosure.
+    pub const REVISION: &str = include_str!("../tests/fixtures/retired-diagram/revision.json");
+    /// Its feedback log: one received review with a text note on `flow`.
+    pub const EVENTS: &str = include_str!("../tests/fixtures/retired-diagram/events.jsonl");
+    /// The session id the capture ran under, replaced on install.
+    pub const CAPTURED_SESSION: &str = "c17874f5-9568-45f6-a657-180848fae57d";
+
+    /// A session whose revision 1 and feedback log on disk are `revision` and
+    /// the captured log.
+    pub fn install(store: &SessionStore, revision: &str) -> Uuid {
+        let session = store
+            .create(ParsedDocument::Supported(PresentationDocument {
+                schema_version: 1,
+                title: "Qualification review".to_string(),
+                language: None,
+                provenance: Provenance::default(),
+                blocks: vec![Block::Narrative {
+                    id: "summary".to_string(),
+                    markdown: "Placeholder".to_string(),
+                }],
+            }))
+            .unwrap();
+        fs::write(store.revision_path(session.id, 1), revision).unwrap();
+        fs::write(
+            store.events_path(session.id),
+            EVENTS.replace(CAPTURED_SESSION, &session.id.to_string()),
+        )
+        .unwrap();
+        session.id
+    }
 }
 
 #[cfg(test)]
@@ -4651,5 +4896,195 @@ mod tests {
                 & 0o777,
             0o600
         );
+    }
+
+    #[test]
+    fn a_stored_diagram_revision_loads_read_only_and_is_never_rewritten() {
+        let (_temp, store) = store();
+        let id = retired_fixture::install(&store, retired_fixture::REVISION);
+        let path = store.revision_path(id, 1);
+        let before = fs::read(&path).unwrap();
+
+        let record = store.current_revision(id).unwrap();
+        let RevisionContent::Retired {
+            document,
+            diagram_ids,
+        } = &record.content
+        else {
+            panic!("expected the retired kind, got {:?}", record.content);
+        };
+        assert_eq!(diagram_ids, &["flow", "handshake"]);
+        let stored: serde_json::Value = serde_json::from_str(retired_fixture::REVISION).unwrap();
+        assert_eq!(document, &stored["content"]["document"]);
+        assert_eq!(record.revision, 1);
+
+        let history = serde_json::to_value(store.history(id).unwrap()).unwrap();
+        assert_eq!(history["revisions"][0]["content"]["kind"], "retired");
+        assert_eq!(
+            history["revisions"][0]["content"]["diagram_ids"],
+            serde_json::json!(["flow", "handshake"])
+        );
+        assert_eq!(store.list().unwrap().len(), 1);
+
+        // The recorded note is still delivered with its block and selector.
+        let pending = store.pending_feedback(id).unwrap();
+        assert_eq!(pending.len(), 1);
+        let note = &pending[0].notes[0];
+        assert_eq!(note.block_id, "flow");
+        assert_eq!(note.selector.as_ref().unwrap().exact, "Review");
+        let orphaned = FeedbackAnchor::Orphaned {
+            reason:
+                "the diagram block flow was removed with Mermaid; convert it to reanchor this note"
+                    .to_string(),
+        };
+        let snapshot = store.feedback_snapshot(id).unwrap();
+        assert_eq!(snapshot.items[0].notes[0].anchor, orphaned);
+        assert_eq!(snapshot.items[0].lifecycle, FeedbackLifecycle::Received);
+
+        // A new note on the retired revision is refused with a named reason.
+        let mut review = feedback(id, Uuid::new_v4());
+        review.notes = vec![FeedbackNote {
+            id: Uuid::new_v4(),
+            block_id: "flow".to_string(),
+            block_label: "Qualification flow".to_string(),
+            kind: FeedbackKind::Comment,
+            body: "A new note".to_string(),
+            selector: None,
+            element_selector: None,
+            region_selector: None,
+            excerpt: None,
+        }];
+        let refused = store
+            .append_feedback(review.clone())
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refused
+                .contains("feedback block flow is a diagram block, which was removed with Mermaid"),
+            "{refused}"
+        );
+        review.notes[0].block_id = "summary".to_string();
+        let refused = store.append_feedback(review).unwrap_err().to_string();
+        assert!(
+            refused.contains("read only until present update"),
+            "{refused}"
+        );
+
+        // Recorded notes still resolve.
+        let event_id = pending[0].event_id;
+        store.mark_delivered(id, &[event_id]).unwrap();
+        store
+            .resolve_feedback(id, event_id, 2, FeedbackResolution::Addressed)
+            .unwrap();
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "loading rewrote the stored record"
+        );
+
+        // A converted update succeeds and the old note orphans on the removed block,
+        // even though the converted html block reuses its id.
+        let converted = crate::document::parse_document(
+            br#"{"schema_version":1,"title":"Qualification review","blocks":[
+              {"type":"html","id":"flow","title":"Qualification flow",
+               "html":"<figure role='img' aria-label='Input moves through review to evidence'><svg viewBox='0 0 300 40'><text x='0' y='24'>Input, Review, Evidence</text></svg></figure>"}
+            ]}"#,
+        )
+        .unwrap();
+        assert_eq!(store.update_document(id, converted).unwrap(), 2);
+        let snapshot = store.feedback_snapshot(id).unwrap();
+        assert_eq!(snapshot.items[0].notes[0].anchor, orphaned);
+        assert!(matches!(
+            store.current_revision(id).unwrap().content,
+            RevisionContent::Supported { .. }
+        ));
+        assert!(matches!(
+            store.revision(id, 1).unwrap().content,
+            RevisionContent::Retired { .. }
+        ));
+        assert_eq!(
+            fs::read(&path).unwrap(),
+            before,
+            "update rewrote the stored record"
+        );
+    }
+
+    #[test]
+    fn a_broken_record_keeps_its_own_error_and_never_loads_as_retired() {
+        let stored: serde_json::Value = serde_json::from_str(retired_fixture::REVISION).unwrap();
+        let variant = |change: &dyn Fn(&mut serde_json::Value)| {
+            let mut record = stored.clone();
+            change(&mut record);
+            serde_json::to_string_pretty(&record).unwrap()
+        };
+        let truncated =
+            retired_fixture::REVISION[..retired_fixture::REVISION.len() / 2].to_string();
+        let unknown_only = variant(&|record| {
+            record["content"]["document"]["blocks"] =
+                serde_json::json!([{"type": "sketch", "id": "summary"}]);
+        });
+        let unknown_beside_diagram = variant(&|record| {
+            record["content"]["document"]["blocks"][0]["type"] = "sketch".into();
+        });
+        let malformed_diagram = variant(&|record| {
+            record["content"]["document"]["blocks"][1]["theme"] = "dark".into();
+        });
+        // Duplicate keys beside a valid legacy diagram: typed parsing refuses
+        // them, and the fallback must not keep only the last one.
+        let duplicate = |old: &str, new: &str| {
+            assert_eq!(retired_fixture::REVISION.matches(old).count(), 1, "{old}");
+            retired_fixture::REVISION.replacen(old, new, 1)
+        };
+        let duplicate_revision = duplicate(
+            "\n  \"revision\": 1,",
+            "\n  \"revision\": 2,\n  \"revision\": 1,",
+        );
+        let duplicate_title = duplicate(
+            "\"title\": \"Qualification review\",",
+            "\"title\": \"Forged\", \"title\": \"Qualification review\",",
+        );
+        let duplicate_source = duplicate(
+            "\"source\": \"flowchart LR",
+            "\"source\": \"graph TD\", \"source\": \"flowchart LR",
+        );
+        for (name, revision, expected) in [
+            ("truncated", truncated, "EOF while parsing"),
+            ("unknown block", unknown_only, "unknown variant `sketch`"),
+            (
+                "unknown block beside a diagram",
+                unknown_beside_diagram,
+                "unknown variant `sketch`",
+            ),
+            (
+                "malformed diagram",
+                malformed_diagram,
+                "unknown variant `diagram`",
+            ),
+            (
+                "duplicate revision",
+                duplicate_revision,
+                "duplicate field `revision`",
+            ),
+            (
+                "duplicate document title",
+                duplicate_title,
+                "duplicate field `title`",
+            ),
+            (
+                "duplicate diagram source",
+                duplicate_source,
+                "duplicate field `source`",
+            ),
+        ] {
+            let (_temp, store) = store();
+            let id = retired_fixture::install(&store, &revision);
+            let error = store.current_revision(id).unwrap_err();
+            assert!(
+                matches!(error, PresentError::Json(_)) && error.to_string().contains(expected),
+                "{name}: {error}"
+            );
+            assert!(store.history(id).is_err(), "{name}");
+            assert!(store.feedback_snapshot(id).is_err(), "{name}");
+        }
     }
 }

@@ -36,7 +36,10 @@ use crate::{
     error::{PresentError, Result},
     limits,
     platform::is_link_like,
-    render::{render_document, render_unsupported, sandbox_id, RenderIdentity, RenderOptions},
+    render::{
+        render_document, render_retired, render_unsupported, sandbox_id, RenderIdentity,
+        RenderOptions,
+    },
     state::{
         create_private_dir_all, write_json_atomic, ElementSelector, FeedbackEnvelope,
         FeedbackExcerpt, FeedbackKind, FeedbackNote, FeedbackVerdict, RegionSelector,
@@ -534,13 +537,15 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
             schema_version,
             raw,
         } => render_unsupported(&raw, schema_version),
+        RevisionContent::Retired { document, .. } => render_retired(&document),
     };
     let prepaint_hash = prepaint
         .map(|asset| format!("'{}'", asset.csp_sha256))
         .unwrap_or_default();
-    // Mermaid necessarily creates transient inline SVG styles while rendering.
-    // The document renderer drops raw HTML, isolates explicit HTML blocks, and
-    // the final SVG sanitizer rejects active attributes and external CSS URLs.
+    // Two things still need the inline style allowance: the project utility
+    // token style element, and the interactive `html` block, which is inlined
+    // with its scoped style elements and validated style attributes. The
+    // document renderer drops raw HTML and scopes those styles to their block.
     // Split directives keep scripts strict while allowing only local/inline CSS.
     let csp = format!(
         "default-src 'none'; script-src 'self' {prepaint_hash}; style-src 'self'; style-src-elem 'self' 'unsafe-inline'; style-src-attr 'unsafe-inline'; font-src data:; img-src data: blob:; media-src data:; connect-src 'self'; frame-src 'self'; object-src 'none'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'"
