@@ -71,7 +71,9 @@ never enters a line at all.
   that binds every judgement it read, and scoring counts a saved pass only
   when the receipt verifies and those retained judgements rederive it, so a
   signed judgement of another excerpt, or a signed failure, pointed at by
-  an edited grade, is not measured. The evaluator key is the trust
+  an edited grade, is not measured. A receipt counts only for the run it
+  names and while its workspace holds the final state it graded, and any
+  receipt fault is not measured, whichever way the grade was changed. The evaluator key is the trust
   boundary: its holder is trusted. The holdout's
   scripted judge misses controls by design and tests transport and
   fail-closed binding only; its synthetic oracle meets them and tests the

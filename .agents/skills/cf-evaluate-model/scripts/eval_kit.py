@@ -1159,7 +1159,7 @@ def retention_report(document: Any, pack_id: str) -> tuple[str, bool]:
                     "one session is one trial"
                 )
             sessions[ref] = label
-        status = computed_trial_status(trial, case)
+        status = computed_trial_status(trial, case, document.get("run_id"))
         tally[line].append(status)
         if status != "pass" and case["session"]["gate"] == "hard":
             failures.append(f"{label}: {status}")
@@ -4448,6 +4448,7 @@ def grade_trial(
         "case_digest": record["case_digest"],
         "grader_digest": grader_digest(),
         "fixture_digest": record["fixture_digest"],
+        "path": record["path"],
         "final_digest": final_digest,
         "events_digest": events_digest,
         "judgements_digest": judgements_digest,
@@ -4684,10 +4685,14 @@ def retained_file(trial: dict, digest: Any) -> Path | None:
     return None
 
 
-def saved_grade_errors(grade: dict, trial: dict, case: dict) -> list[str]:
+def saved_grade_errors(grade: dict, trial: dict, case: dict, run_id: str | None) -> list[str]:
     """Why a saved grade cannot be counted as it stands. Its receipt must
     verify under the evaluator key, so nothing in it changed after grading,
-    and what it binds must still hold: each calibration it cites is retained
+    and what it binds must still hold: it names the run `run_id` of the
+    result that holds it and this trial's case, number and fixture; the
+    workspace it signed still holds the final state it graded; the ledger,
+    judgements and calibrations it cites are among the trial's evidence;
+    each calibration it cites is retained
     as a file with those bytes at an absolute evidence path and, against the
     suite's current controls, still qualifies the judge it recorded; each
     judgement it read is in the retained judgements file, signed, with the
@@ -4703,6 +4708,23 @@ def saved_grade_errors(grade: dict, trial: dict, case: dict) -> list[str]:
     if not isinstance(receipt, str) or not hmac.compare_digest(receipt, receipt_signature(key, grade)):
         return ["the grade receipt does not verify under the evaluator key"]
     errors: list[str] = []
+    if grade.get("run_id") != run_id:
+        errors.append(f"the grade belongs to run {grade.get('run_id')!r}, not this result's run {run_id!r}")
+    if (grade.get("case_id"), grade.get("trial")) != (trial.get("case_id"), trial.get("trial")):
+        errors.append("the grade names another trial")
+    if grade.get("fixture_digest") != trial.get("fixture_digest"):
+        errors.append("the grade was made from another fixture")
+    path = Path(grade["path"]) if isinstance(grade.get("path"), str) and os.path.isabs(grade["path"]) else None
+    if path is None or path.is_symlink() or not path.is_dir():
+        errors.append(f"the final state the grade signed is not retained at {grade.get('path')!r}")
+    elif state_digest(path) != grade.get("final_digest"):
+        errors.append(f"the state at {path} is no longer the final state the grade signed")
+    evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
+    retained = {item.get("digest") for item in evidence if isinstance(item, dict)}
+    cited = [grade.get("events_digest"), grade.get("judgements_digest"), *grade.get("calibration_digests", [])]
+    for digest in cited:
+        if digest is not None and digest not in retained:
+            errors.append(f"{digest}, which the grade read, is not among the trial's evidence")
     if grade.get("result") != grade_result(grade):
         errors.append(f"the grade computes {grade_result(grade)}, not the {grade.get('result')!r} it records")
     controls = suite_judge_controls()
@@ -4750,7 +4772,12 @@ def saved_grade_errors(grade: dict, trial: dict, case: dict) -> list[str]:
     return errors
 
 
-def computed_trial_status(trial: dict, case: dict) -> str:
+def computed_trial_status(trial: dict, case: dict, run_id: str | None = None) -> str:
+    """A trial's status. A graded trial's saved grade counts only for the
+    result run `run_id` it names, and only once its receipt and everything
+    it binds verify: any fault there is `error`, whichever way the grade
+    was changed, before a pass or a failed assertion is counted."""
+
     outcome = trial.get("outcome")
     if outcome == "error" and graded_case(case):
         # A graded session that errored still ran: it keeps its grade and
@@ -4765,13 +4792,15 @@ def computed_trial_status(trial: dict, case: dict) -> str:
         return "error"
     if graded_case(case):
         grade = trial.get("grade")
+        if not isinstance(grade, dict):
+            return "fail"
+        if saved_grade_errors(grade, trial, case, run_id):
+            # The receipt or what it binds does not verify: not measured.
+            return "error"
         if grade_errors(grade, case, trial) or any(
             result["result"] == "fail" for result in grade["assertions"]
         ):
             return "fail"
-        if saved_grade_errors(grade, trial, case):
-            # The receipt or the evidence it binds does not verify: not measured.
-            return "error"
         if not grade["qualification"]["eligible"]:
             # Nothing failed, but a transport-only grade or an ungraded
             # judgement of meaning is not a measured pass.
@@ -5133,7 +5162,7 @@ def validate_result(result: Any, *, require_approval: bool = False) -> list[str]
                         )
                     except EvalError as error:
                         errors.append(str(error))
-        computed = computed_trial_status(trial, cases[case_id])
+        computed = computed_trial_status(trial, cases[case_id], result.get("run_id"))
         if trial.get("status") != computed:
             errors.append(
                 f"{label}.status is {trial.get('status')!r}; "
@@ -5258,7 +5287,7 @@ def score_result(result: Any) -> dict:
         case_id = trial.get("case_id")
         if case_id not in cases:
             raise EvalError(f"trials[{index}] has unknown case {case_id!r}")
-        trial["status"] = computed_trial_status(trial, cases[case_id])
+        trial["status"] = computed_trial_status(trial, cases[case_id], scored.get("run_id"))
     scored["summary"] = expected_summary(trials, cases)
     errors = validate_result(scored)
     if errors:

@@ -141,20 +141,25 @@ def watch_cadence_signals(calls: list[dict]) -> set[str]:
     return signals
 
 
-def passing_grade(case: dict, number: int, fixture_digest: str) -> dict:
-    """A structurally valid, all-pass grade for a graded case, with its
-    receipt under the test evaluator key."""
+def passing_grade(case: dict, number: int, fixture_digest: str, run_id: str) -> dict:
+    """A structurally valid, all-pass grade for a graded case of `run_id`,
+    with a retained final state and its receipt under the test evaluator
+    key."""
 
     fixtures = {item["id"]: item for item in eval_kit.suite_documents()[2]["fixtures"]}
+    state = Path(tempfile.mkdtemp(prefix="final-state-", dir=EVALUATOR_HOME.name)) / "repository"
+    state.mkdir()
+    (state / "README.md").write_text(f"{case['id']} trial {number}\n", encoding="utf-8")
     return eval_kit.sign_grade({
         "schema_version": 1,
-        "run_id": "test",
+        "run_id": run_id,
         "case_id": case["id"],
         "trial": number,
         "case_digest": eval_kit.case_digest(case, fixtures[case["fixture"]]),
         "grader_digest": eval_kit.grader_digest(),
         "fixture_digest": fixture_digest,
-        "final_digest": "sha256:" + "e" * 64,
+        "path": str(state),
+        "final_digest": eval_kit.state_digest(state),
         "events_digest": None,
         "judgements_digest": None,
         "controls_digest": None,
@@ -221,7 +226,7 @@ def valid_result(suite: str = "canary", harness: str = "codex-app") -> dict:
                 }
             )
             if eval_kit.graded_case(case):
-                trials[-1]["grade"] = passing_grade(case, number, trials[-1]["fixture_digest"])
+                trials[-1]["grade"] = passing_grade(case, number, trials[-1]["fixture_digest"], f"test-{suite}")
     result = {
         "schema_version": 1,
         "run_id": f"test-{suite}",
@@ -2653,7 +2658,7 @@ print(json.dumps(seen, sort_keys=True))
             case = cases[trial["case_id"]]
             self.assertIn("review_is_coherent", [item["id"] for item in trial["grade"]["assertions"]])
             self.assertEqual([], eval_kit.grade_errors(trial["grade"], case, trial))
-            self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
+            self.assertEqual("pass", eval_kit.computed_trial_status(trial, case, result["run_id"]))
 
             def consumed(change) -> tuple[str, list[str], int]:
                 """The status, the calibration faults and the passes that
@@ -2663,8 +2668,8 @@ print(json.dumps(seen, sort_keys=True))
                 changed = copy.deepcopy(result)
                 change(changed["trials"][0])
                 try:
-                    status = eval_kit.computed_trial_status(changed["trials"][0], case)
-                    faults = eval_kit.saved_grade_errors(changed["trials"][0]["grade"], changed["trials"][0], case)
+                    status = eval_kit.computed_trial_status(changed["trials"][0], case, changed["run_id"])
+                    faults = eval_kit.saved_grade_errors(changed["trials"][0]["grade"], changed["trials"][0], case, changed["run_id"])
                     try:
                         counted = eval_kit.score_result(changed)["summary"]["pass"]
                     except eval_kit.EvalError as error:
@@ -2779,7 +2784,7 @@ print(json.dumps(seen, sort_keys=True))
                 trial["grade"] = dict(copy.deepcopy(sibling["grade"]), trial=trial["trial"])
             self.assertEqual(("error", passes - 1), consumed(moved)[::2])
             status, _, refused = consumed(lambda trial: trial.update(grade=copy.deepcopy(sibling["grade"])))
-            self.assertEqual("fail", status)
+            self.assertEqual("error", status)
             self.assertIn("grade names another trial", refused)
 
             def judgements_changed(trial: dict) -> None:
@@ -2792,11 +2797,11 @@ print(json.dumps(seen, sort_keys=True))
             # A grade rewritten to name another judge, or graded against
             # other controls, is refused outright.
             status, _, refused = consumed(rewritten_as_another_judge)
-            self.assertEqual("fail", status)
+            self.assertEqual("error", status)
             self.assertIn("counted_judges must be judges its calibrations qualified", refused)
             try:
                 status, _, refused = consumed(moved_controls)
-                self.assertEqual("fail", status)
+                self.assertEqual("error", status)
                 self.assertIn("controls_digest does not match", refused)
             finally:
                 eval_kit.write_json(suite / "judge-controls.json", {"schema_version": 1, "controls": [control]})
@@ -2901,10 +2906,40 @@ print(json.dumps(seen, sort_keys=True))
                 change(changed["grade"])
                 if sign:
                     changed["grade"] = eval_kit.sign_grade(changed["grade"])
-                return eval_kit.computed_trial_status(changed, case), eval_kit.grade_errors(changed["grade"], case, changed)
+                status = eval_kit.computed_trial_status(changed, case, result["run_id"])
+                return status, eval_kit.grade_errors(changed["grade"], case, changed)
 
             self.assertEqual(("pass", []), status(lambda grade: None))
             self.assertEqual("pass", grade["result"])
+
+            # T111-R10-2: a failure written into a signed grade after grading
+            # is not measured; the same failure graded and signed is a fail.
+            def failed(grade: dict) -> None:
+                grade["assertions"][0]["result"] = "fail"
+                grade["safety_failures"] = eval_kit.derived_safety_failures(case, grade["assertions"])
+                grade["result"] = "fail"
+            self.assertEqual("error", status(failed, sign=False)[0])
+            self.assertEqual("fail", status(failed)[0])
+
+            # T111-R10-1: an intact receipt counts only for the run and the
+            # final state it signed. Another run of the same case, trial and
+            # fixture; a result that names no run; a final state changed or
+            # gone after grading: each is not measured.
+            state = Path(grade["path"])
+            self.assertEqual(grade["final_digest"], eval_kit.state_digest(state))
+            for label, run_id in (("another run", "a later run"), ("no run", None)):
+                with self.subTest(label):
+                    self.assertEqual("error", eval_kit.computed_trial_status(trial, case, run_id))
+            self.assertIn(f"the grade belongs to run {result['run_id']!r}, not this result's run 'a later run'",
+                          eval_kit.saved_grade_errors(grade, trial, case, "a later run"))
+            (state / "later.txt").write_text("written after grading\n", encoding="utf-8")
+            try:
+                self.assertEqual("error", eval_kit.computed_trial_status(trial, case, result["run_id"]))
+            finally:
+                (state / "later.txt").unlink()
+            self.assertEqual("pass", eval_kit.computed_trial_status(trial, case, result["run_id"]))
+            self.assertEqual("error", status(lambda grade: grade.update(path=str(state.parent / "gone")))[0])
+            self.assertEqual("error", status(lambda grade: grade.update(events_digest="sha256:" + "d" * 64))[0])
             # A grade with no receipt, or read where there is no evaluator
             # key, is not measured.
             self.assertEqual(("error", []), status(lambda grade: grade.pop("receipt"), sign=False))

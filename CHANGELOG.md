@@ -400,8 +400,9 @@ publication date._
   evaluator key kept in the evaluator's CodeFlow home, and grading and
   scoring count only judgements whose signature verifies. Grading signs the
   whole grade, with every judgement it read, as a receipt under the same key,
-  and scoring counts a pass only when that receipt verifies and the retained
-  judgements rederive it. Graded cases live in a graded
+  and scoring counts a pass or a failure only when that receipt verifies,
+  names the result's run and the workspace still holding the graded final
+  state, and the retained judgements rederive it. Graded cases live in a graded
   suite outside the shipped kit (`--graded-suite`); a qualification holdout
   stays outside the published repository, and `holdout-check` fails when a
   holdout path, file, JSON object or copied run of text appears in the tracked
