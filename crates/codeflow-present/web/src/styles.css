@@ -857,6 +857,15 @@ code { font-family: var(--cf-font-mono); }
   flex-wrap: wrap;
 }
 .cf-hint.on { display: flex; }
+/* A saved area while Comment is on: a faint outline under the markers. */
+.cf-region-saved {
+  position: absolute;
+  z-index: 33;
+  pointer-events: none;
+  border-radius: 4px;
+  border: 1px dashed color-mix(in srgb, var(--cf-accent) 55%, transparent);
+  background: color-mix(in srgb, var(--cf-accent) 5%, transparent);
+}
 /* Region marquee — document coordinates inside the marker layer, so the
    persistent rectangle scrolls with the content it covers */
 .cf-region-draft {

@@ -73,8 +73,15 @@ interface PendingPin {
   readonly clientY: number;
   /** The element an element pin resolved to, for "select enclosing". */
   readonly element?: Element;
+  /** The top of the selected line, where a text note's marker points. */
+  readonly lineTop?: number;
 }
 type Focusable = HTMLElement | SVGElement;
+interface PinOptions {
+  readonly openComposer?: boolean;
+  readonly element?: Element;
+  readonly lineTop?: number;
+}
 interface DragGesture {
   x0: number;
   y0: number;
@@ -187,14 +194,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const lastPinnedSelectionRef = useRef<string>("");
   const composerOpenRef = useRef(false);
   const pendingPinRef = useRef<PendingPin | null>(null);
-  const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: { openComposer?: boolean; element?: Element }) => void>(() => undefined);
+  const pinCaptureRef = useRef<(c: CapturedTarget, x: number, y: number, o?: PinOptions) => void>(() => undefined);
   const saveComposerRef = useRef<() => void>(() => undefined);
   const settingsOpenRef = useRef(false);
   const shiftRef = useRef(false);
   const hotRef = useRef<Element | null>(null);
   const hotSelRef = useRef<Element | null>(null);
   // Client-side marker placement hints (never sent to the server): for a text
-  // note, the selection's vertical fraction inside its anchor block.
+  // note, the vertical fraction of the selection's first line in its block.
   const markerMetaRef = useRef(new Map<string, { ay: number }>());
   // Where an edit was initiated (marker or note row) — positions the composer.
   const editAtRef = useRef<{ x: number; y: number } | null>(null);
@@ -525,7 +532,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         lastPinnedSelectionRef.current = identity;
         const rect = selection.getRangeAt(0).getBoundingClientRect();
         const cx = rect.left + rect.width / 2 - 40;
-        pinCaptureRef.current(live, cx, rect.bottom, { openComposer: false });
+        pinCaptureRef.current(live, cx, rect.bottom, { openComposer: false, lineTop: rect.top });
       }, 160);
     };
 
@@ -750,7 +757,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   }, [composerOpen]);
 
   /* ─── Pin → float → composer (qualified Comment flow) ─── */
-  function pinCapture(captured: CapturedTarget, clientX: number, clientY: number, opts?: { openComposer?: boolean; element?: Element }): void {
+  function pinCapture(captured: CapturedTarget, clientX: number, clientY: number, opts?: PinOptions): void {
     if (submittingRef.current) {
       setStatus("The review is being sent. Add the note when it is done.");
       return;
@@ -762,7 +769,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     }
     if (!commentModeRef.current) armComment(true);
     else if (!sheetLayout()) setPanelOpen(true);
-    setPendingPin({ captured, clientX, clientY, ...(opts?.element ? { element: opts.element } : {}) });
+    setPendingPin({
+      captured,
+      clientX,
+      clientY,
+      ...(opts?.element ? { element: opts.element } : {}),
+      ...(opts?.lineTop !== undefined ? { lineTop: opts.lineTop } : {}),
+    });
     setComposerBody("");
     setEditingId(null);
     // Default open composer (tools + a11y). Gestures pass openComposer:false for float-first.
@@ -798,7 +811,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       if (c.selector) {
         const block = documentRoot.querySelector<HTMLElement>(`[data-cf-block-id="${CSS.escape(c.blockId)}"]`);
         const rect = block?.getBoundingClientRect();
-        const ay = rect && rect.height > 0 ? Math.min(1, Math.max(0, (pendingPin.clientY - rect.top) / rect.height)) : 0;
+        const lineY = pendingPin.lineTop ?? pendingPin.clientY;
+        const ay = rect && rect.height > 0 ? Math.min(1, Math.max(0, (lineY - rect.top) / rect.height)) : 0;
         markerMetaRef.current.set(clientId, { ay });
       }
       let excerptText = c.excerptText?.trim() || c.selector?.exact?.trim() || "";
@@ -1075,6 +1089,12 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         ? createPortal(
             <>
               {regionDraft ? <div class="cf-region-draft" style={regionDraftStyle(regionDraft)} aria-hidden="true" /> : null}
+              {/* A saved area keeps a faint outline while Comment is on, so its
+                  extent stays visible after the marquee is gone. */}
+              {notes.map((note) => {
+                const outline = savedRegionStyle(documentRoot, note, markerEpoch);
+                return outline ? <div key={`area-${note.client_id}`} class="cf-region-saved" data-testid="saved-area" style={outline} aria-hidden="true" /> : null;
+              })}
               {notes.map((note, index) => {
                 const at = markerPlacement(documentRoot, note, markerMetaRef.current.get(note.client_id), index, markerEpoch);
                 if (!at) return null;
@@ -1617,9 +1637,11 @@ function noteQuote(note: PendingFeedback): string {
 }
 
 /**
- * Pass10 marker placement in document coordinates: text and element markers
- * park in the gutter immediately left of their anchor (flipping right when the
- * anchor hugs the edge); region markers sit inside the region's top-left.
+ * Pass10 marker placement in document coordinates: every marker parks in the
+ * gutter immediately left of the line it points at (a text note's selected
+ * line, else the top of its element or area). With no gutter, as for a full
+ * width block on a phone, it sits right of a narrow anchor, else above the
+ * line at the anchor's right end: never on the words or area it marks.
  */
 function markerPlacement(
   documentRoot: HTMLElement,
@@ -1634,14 +1656,30 @@ function markerPlacement(
   if (root.width <= 0) return null;
   const left = rect.left - root.left;
   const top = rect.top - root.top;
-  const kind = targetKindOf(note);
   const width = 38 + 8 * (String(index + 1).length - 1);
   const clamp = (x: number): number => Math.max(2 - root.left, Math.min(x, innerWidth - root.left - width * 1.03 - 8));
-  if (kind === "region") return { left: clamp(left + 8), top: top + 8 };
-  const y = kind === "text" ? top + (meta?.ay ?? 0) * rect.height - 4 : top;
+  const line = targetKindOf(note) === "text" ? top + (meta?.ay ?? 0) * rect.height : top;
   const gutter = left - width - 8;
-  const x = gutter >= 2 ? gutter : Math.min(left + rect.width + 8, root.width - width - 2);
-  return { left: clamp(Math.max(2, x)), top: Math.max(2, y) };
+  if (gutter >= 2) return { left: clamp(gutter), top: Math.max(2, line - 2) };
+  const right = left + rect.width + 8;
+  if (right + width <= root.width - 2) return { left: clamp(right), top: Math.max(2, line - 2) };
+  const end = Math.min(left + rect.width, root.width - 2) - width;
+  return { left: clamp(Math.max(2, end)), top: Math.max(2, line - markerHeight() - 4) };
+}
+
+/** A marker's height: 26 px, raised by the button minimum of 2.25rem (styles.css). */
+function markerHeight(): number {
+  return Math.max(26, 2.25 * (parseFloat(getComputedStyle(document.documentElement).fontSize) || 16));
+}
+
+/** The faint outline of a saved area, in document coordinates; none for a whole-document note. */
+function savedRegionStyle(documentRoot: HTMLElement, note: PendingFeedback, markerEpoch: number): string | null {
+  const selector = note.region_selector;
+  if (!selector || (selector.scope === "document" && selector.width_ppm === 1_000_000 && selector.height_ppm === 1_000_000)) return null;
+  const rect = targetRect(documentRoot, note, markerEpoch);
+  if (!rect || rect.width <= 0 || rect.height <= 0) return null;
+  const root = documentRoot.getBoundingClientRect();
+  return `left:${rect.left - root.left}px;top:${rect.top - root.top}px;width:${rect.width}px;height:${rect.height}px`;
 }
 
 function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpoch: number): DOMRect | null {
