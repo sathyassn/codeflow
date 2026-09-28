@@ -160,7 +160,9 @@ fn classify(argv: &[String], depth: usize) -> Found {
             ),
             "find" => return find_exec(rest, depth),
             // A package runner starts the package's binary (TSK-141 AC-6).
-            "npx" | "bunx" | "pnpx" => return package_run(rest, depth),
+            // pnpm 11 also answers to `pn` and `pnx`.
+            "npx" | "bunx" | "pnpx" | "pnx" => return package_run(rest, depth),
+            "pn" => return runner("pnpm", rest, depth),
             "npm" | "pnpm" | "yarn" | "bun" => return runner(&name, rest, depth),
             _ => return Found::Nothing,
         };
@@ -219,7 +221,8 @@ fn runner_exits(arg: &str) -> bool {
 
 /// Where the first word after a runner's options may be. An option the
 /// grammar does not know may or may not take the next word, so both are
-/// kept; a help or version option ends the run.
+/// kept, though never an option word, which it does not take (npm reads
+/// `--unknown --help` as help); a help or version option ends the run.
 fn after_runner_options(args: &[String]) -> Vec<usize> {
     let mut out = Vec::new();
     let mut stack = vec![0];
@@ -240,7 +243,9 @@ fn after_runner_options(args: &[String]) -> Vec<usize> {
             Some(arg) if RUNNER_VALUES.contains(&arg.as_str()) => stack.push(at + 2),
             Some(_) => {
                 stack.push(at + 1);
-                stack.push(at + 2);
+                if takes_next(args, at) {
+                    stack.push(at + 2);
+                }
             }
         }
     }
@@ -273,6 +278,13 @@ fn runner(name: &str, args: &[String], depth: usize) -> Found {
         }
     }
     found
+}
+
+/// Whether an option the grammar does not know may take the word after
+/// it as its value: not when that word is an option itself.
+fn takes_next(args: &[String], at: usize) -> bool {
+    args.get(at + 1)
+        .is_some_and(|next| !next.starts_with('-') || next == "-")
 }
 
 /// A run over an unresolved command over nothing.
@@ -342,7 +354,9 @@ fn package_run(args: &[String], depth: usize) -> Found {
                 }
                 _ => {
                     stack.push((at + 1, package_given));
-                    stack.push((at + 2, package_given));
+                    if takes_next(args, at) {
+                        stack.push((at + 2, package_given));
+                    }
                     continue;
                 }
             }

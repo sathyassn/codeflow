@@ -947,8 +947,9 @@ publication date._
 <!-- codeflow:release-impact patch -->
 - **A peer CLI started through a package runner counts as a headless run.**
   `npx @anthropic-ai/claude-code -p`, `bunx @openai/codex exec`, and the
-  same through `npm exec`, `npm x`, `bun x`, `pnpm dlx`, `yarn dlx` or an
-  installed peer through `pnpm exec`, are now judged as the direct
+  same through `npm exec`, `npm x`, `bun x`, `pnpm dlx`, `yarn dlx`, pnpm
+  11's `pnx` and `pn dlx`, or an installed peer through `pnpm exec` or
+  `pn exec`, are now judged as the direct
   `claude -p` or `codex exec` is, under `security.headless_peer_runs` at
   both `warn` and `block`; before, they passed unreported. The runner's own
   `--help` or `--version` runs nothing and passes.

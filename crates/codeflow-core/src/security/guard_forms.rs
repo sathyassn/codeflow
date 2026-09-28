@@ -935,6 +935,78 @@ pub const PACKAGE_RUNNER_PAIRS: &[(&str, &str)] = &[
         "npm exec --help @openai/codex exec x",
     ),
     ("codex --help exec x", "npx prettier codex exec x"),
+    // Round three runner probes, pnpm 11 aliases (`pn`, `pnx`) among them;
+    // an unknown option never takes a following help flag as its value.
+    (
+        "codex exec x",
+        "yarn --cwd . dlx -q @openai/codex@0.157.1 exec x",
+    ),
+    ("codex exec x", "yarn dlx -p @openai/codex codex exec x"),
+    ("codex exec x", "npx --package @openai/codex codex exec x"),
+    ("codex exec x", "npx --package=@openai/codex codex exec x"),
+    (
+        "codex exec x",
+        "npx -p prettier -p @openai/codex codex exec x",
+    ),
+    ("codex exec x", "npx --unknown value @openai/codex exec x"),
+    (
+        "codex exec x",
+        "pnpm --filter app dlx @openai/codex@0.157.1 exec x",
+    ),
+    ("codex exec x", "pnpm dlx -p @openai/codex codex exec x"),
+    ("codex exec x", "pnpm codex exec x"),
+    ("codex exec x", "pnpx @openai/codex exec x"),
+    ("codex exec x", "pnx @openai/codex exec x"),
+    ("codex exec x", "pn dlx @openai/codex exec x"),
+    ("codex exec x", "pn exec codex exec x"),
+    ("codex exec x", "pn codex exec x"),
+    ("codex exec x", "bunx @openai/codex exec x"),
+    ("codex exec x", "bunx --bun @openai/codex@0.157.1 exec x"),
+    ("codex exec x", "bunx --package @openai/codex codex exec x"),
+    (
+        "codex exec -- --help",
+        "npx --package @openai/codex codex exec -- --help",
+    ),
+    (
+        "codex --help exec x",
+        "npx --package @openai/codex --help codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "npx --package @openai/codex codex exec --help",
+    ),
+    (
+        "codex --help exec x",
+        "npx --yes --help @openai/codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "npx --unknown --help @openai/codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "yarn --cwd . --help dlx @openai/codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "yarn dlx --help @openai/codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "pnpm --filter app --help dlx @openai/codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "pnpm dlx --help @openai/codex exec x",
+    ),
+    (
+        "codex --help exec x",
+        "bunx --bun --help @openai/codex exec x",
+    ),
+    ("codex --help exec x", "bun x --help @openai/codex exec x"),
+    ("codex --help exec x", "yarn dlx prettier codex exec x"),
+    ("codex --help exec x", "pnpm dlx prettier codex exec x"),
+    ("codex --help exec x", "bunx prettier codex exec x"),
 ];
 
 /// The control structures and sequences a form is nested in: each `{}` is
