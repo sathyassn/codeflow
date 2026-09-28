@@ -690,9 +690,9 @@ def tool_walk(window: list[dict]) -> tuple[bool, bool]:
     """Walks a turn's own entries in order and returns whether its tool
     events held their native order, and whether the turn finished.
 
-    A call counts only in an assistant message and needs a new string id; a
-    result counts only in a user message and answers a call still
-    outstanding. Anything else is broken evidence. The turn finishes at its
+    A call counts only in a native assistant message and needs a new string
+    id; a result counts only in a native user message and answers a call
+    still outstanding. Anything else is broken evidence. The turn finishes at its
     last assistant reply when that reply carries a finishing stop reason and
     no call is outstanding at that point.
     """
@@ -704,14 +704,13 @@ def tool_walk(window: list[dict]) -> tuple[bool, bool]:
     for entry in window:
         kind = entry.get("type")
         message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
-        role = message.get("role")
         content = message.get("content")
         for block in content if isinstance(content, list) else []:
             if not isinstance(block, dict):
                 continue
             if block.get("type") == "tool_use":
                 call = block.get("id")
-                if (kind, role) != ("assistant", "assistant") or not isinstance(call, str) or (
+                if not native_message(entry, "assistant") or not isinstance(call, str) or (
                     not call or call in seen
                 ):
                     ordered = False
@@ -720,7 +719,7 @@ def tool_walk(window: list[dict]) -> tuple[bool, bool]:
                     outstanding.add(call)
             elif block.get("type") == "tool_result":
                 call = block.get("tool_use_id")
-                native = (kind, role) == ("user", "user") and not entry.get("isMeta")
+                native = native_message(entry, "user")
                 if native and isinstance(call, str) and call in outstanding:
                     outstanding.discard(call)
                 else:
@@ -728,6 +727,20 @@ def tool_walk(window: list[dict]) -> tuple[bool, bool]:
         if kind == "assistant":
             finished = message.get("stop_reason") in FINISHED_STOP_REASONS and not outstanding
     return ordered, ordered and finished
+
+
+def native_message(entry: dict, role: str) -> bool:
+    """A message the harness wrote for `role` itself: not a compaction
+    summary or a meta record, which carry no real tool call or result."""
+
+    message = entry.get("message")
+    return (
+        entry.get("type") == role
+        and isinstance(message, dict)
+        and message.get("role") == role
+        and not entry.get("isMeta")
+        and not entry.get("isCompactSummary")
+    )
 
 
 def turn_finished(window: list[dict]) -> bool:

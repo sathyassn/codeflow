@@ -275,7 +275,7 @@
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "ad23ce4b99208964b751b18519880c99b6dddbef2f29f6e9f79edec9099651c0",
+      "sha256": "3c8284e5174906a380a4365bbe4fa51b076042fc2cebfff5a3decdf237752253",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/fake_client.py": {
@@ -953,7 +953,7 @@
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "ad23ce4b99208964b751b18519880c99b6dddbef2f29f6e9f79edec9099651c0",
+      "sha256": "3c8284e5174906a380a4365bbe4fa51b076042fc2cebfff5a3decdf237752253",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/fake_client.py": {

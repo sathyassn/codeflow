@@ -680,6 +680,18 @@ class CheckSessionTests(unittest.TestCase):
             transcript.add({"type": kind, "message": {"role": role, "content": [
                 {"type": "tool_result", "tool_use_id": "a", "content": "ok"}]}})
             misplaced[f"result in {kind}"] = transcript.reply("Here is the page.")
+        # R4-1 residual: a summary or meta record is no native message, so a
+        # tool block inside one is never a real call or result. (A sidechain
+        # record never joins the turn at all.)
+        for flag in ("isCompactSummary", "isMeta"):
+            transcript = Transcript().typed(case["prompt"]).assistant([{**skill, "id": "a"}], "tool_use")
+            transcript.add({"type": "user", flag: True, "message": {"role": "user", "content": [
+                {"type": "tool_result", "tool_use_id": "a", "content": "ok"}]}})
+            misplaced[f"result in an {flag} record"] = transcript.reply("Here is the page.")
+            transcript = Transcript().typed(case["prompt"])
+            transcript.add({"type": "assistant", flag: True, "message": {
+                "role": "assistant", "content": [{**skill, "id": "a"}], "stop_reason": "tool_use"}})
+            misplaced[f"call in an {flag} record"] = transcript.add(result("a")).reply("Here is the page.")
         late = Transcript().typed(case["prompt"]).assistant([{**skill, "id": "a"}], "end_turn")
         late.add(result("a"))
         answered_late = Transcript().typed(case["prompt"]).assistant([{**skill, "id": "a"}], "tool_use")
@@ -721,6 +733,36 @@ class CheckSessionTests(unittest.TestCase):
         checked = self.check(case, several)
         self.assertTrue(checked["valid"], checked["problems"])
         self.assertEqual(["cf_present_opened"], checked["detected_signals"])
+
+    def test_a_summary_never_answers_a_call_at_the_compaction_boundary(self) -> None:
+        # R4-1 residual: warm-up turn 7's read is answered only by the summary.
+        case = case_for("complex-explanation-spontaneous-present", "after-compaction")
+        plan = plan_for(case)
+        transcript = Transcript()
+        for number, prompt in enumerate(plan["warmup"], 1):
+            transcript.typed(prompt)
+            if number != 7:
+                transcript.reply("Warm-up complete.", {"name": "Read", "input": {
+                    "file_path": f"archive/week-{number:02d}.md"}})
+                continue
+            transcript.assistant([{"type": "tool_use", "id": "warmup-read", "name": "Read",
+                                   "input": {"file_path": "archive/week-07.md"}}], "tool_use")
+            transcript.compact()
+            summary = next(entry for entry in reversed(transcript.entries)
+                           if entry.get("isCompactSummary"))
+            summary["message"]["content"] = [
+                {"type": "tool_result", "tool_use_id": "warmup-read", "content": "Summary."}]
+            transcript.reply("Warm-up complete.")
+        transcript.typed(plan["probe_prompt"]).reply(
+            "Page opened.", {"name": "Skill", "input": {"skill": "cf-present"}})
+        checked = self.check(case, transcript)
+        self.assertFalse(checked["valid"])
+        self.assertIn("turn 7: a tool result or call breaks the call order", checked["problems"])
+        self.assertIn("turn 7 had not finished when the next was typed", checked["problems"])
+        # The normal summary and its re-injection hook stay valid.
+        normal = full_session(case, "Page opened.", {"name": "Skill", "input": {"skill": "cf-present"}})
+        checked = self.check(case, normal)
+        self.assertTrue(checked["valid"], checked["problems"])
 
     def test_events_are_bound_in_their_native_order(self) -> None:
         # R2-3: a parent that comes later, or a repeated identity, is corrupt.
