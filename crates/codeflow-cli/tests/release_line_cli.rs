@@ -1343,6 +1343,206 @@ fn a_valid_re_completion_from_its_line_supersedes_a_brought_one() {
     assert_eq!(count(&other), 1, "{}", other.1);
 }
 
+/// Line A lands, one after another, TSK-001 completed with code between
+/// its reviewed commit and the completion (L1), then reopened and
+/// completed again at its reviewed head (L2), then completed once more
+/// with a block naming a reviewed commit that new code follows (L3). The
+/// release imports L1. Returns the fixture and the L2 and L3 tips.
+fn three_completions_on_line_a() -> (Fx, String, String) {
+    let fx = Fx::new(false);
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-work", LINE_A]);
+    fx.write("src/one.rs", "// one\n");
+    let reviewed = fx.commit("feat: build the work");
+    fx.write("src/late.rs", "// late\n");
+    fx.commit("feat: a late change");
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "complete", CRITERIA, &block(&reviewed)),
+    );
+    fx.commit("docs(records): complete the task");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.cut_release();
+    fx.import(LINE_A);
+
+    fx.git(&["switch", "-q", "-C", "plan/reopen-TSK-001", LINE_A]);
+    let reopened = verb(
+        &fx,
+        &[
+            "task",
+            "status",
+            "TSK-001",
+            "todo",
+            "--reason",
+            "late change",
+        ],
+    );
+    passes(&reopened, "the reopen verb");
+    fx.commit("docs(records): reopen TSK-001");
+    fx.land(LINE_A, "plan/reopen-TSK-001");
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-again", LINE_A]);
+    fx.write("src/late.rs", "// late, reviewed\n");
+    let again = fx.commit("fix: review the late change");
+    let yaml = fx.root.parent().unwrap().join("again.yaml");
+    std::fs::write(
+        &yaml,
+        format!(
+            "acceptance:\n  reviewed: {again}\n  review: https://example.test/pr/2#review\n  criteria:\n    AC-1: verified | cargo test | 3 passed\n    AC-2: verified | journey ran\n  journey: verified | tests/journey.rs\n  not_verified: none\n  follow_ups: none: nothing deferred\n  verdict: approved\n"
+        ),
+    )
+    .unwrap();
+    let completed = verb(
+        &fx,
+        &[
+            "task",
+            "status",
+            "TSK-001",
+            "complete",
+            "--acceptance",
+            yaml.to_str().unwrap(),
+        ],
+    );
+    passes(&completed, "the re-completion verb");
+    fx.commit("docs(records): complete TSK-001 again");
+    let l2 = fx.land(LINE_A, "task/TSK-001-again");
+
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-third", LINE_A]);
+    fx.write("src/newlate.rs", "// new, unreviewed\n");
+    fx.commit("feat: a change after the review");
+    let file = fx.root.join(path("TSK-001"));
+    let text = std::fs::read_to_string(&file).unwrap();
+    let named = format!("reviewed: {again}");
+    assert!(text.contains(&named), "{text}");
+    std::fs::write(&file, text.replace(&named, &format!("reviewed: {l2}"))).unwrap();
+    fx.commit("docs(records): name the line's reviewed commit");
+    let l3 = fx.land(LINE_A, "task/TSK-001-third");
+    fx.git(&["switch", "-q", RELEASE]);
+    fx.git(&["fetch", "-q", "origin"]);
+    (fx, l2, l3)
+}
+
+/// AC-8, AC-11 (Codex R145-R3-2): an octopus that names the task line's
+/// newest tip and, as a later parent, an older tip of the same line cannot
+/// make the older completion the expected import or the one in force: the
+/// merge restoring it is a resolution, and L3's invalid completion stands.
+/// The real git merge of the same tips is the control.
+#[test]
+fn an_older_octopus_parent_cannot_hide_a_newer_completion() {
+    let needle = "src/newlate.rs changed after the reviewed commit";
+    let (fx, l2, l3) = three_completions_on_line_a();
+    let release = fx.head();
+    // The real merge: git drops L2, which L3 contains.
+    fx.git(&["merge", "-q", "--no-ff", "-m", "merge: import", &l3, &l2]);
+    let control = fx.ci("main", "HEAD", RELEASE, Some("main"));
+    blocks(&control, "the real merge of both tips", &[needle]);
+
+    // The synthetic octopus: L3's tree with L2's record, parents in the
+    // order release, L3, L2.
+    fx.git(&["reset", "-q", "--hard", &release]);
+    fx.git(&["merge", "-q", "--no-ff", "--no-commit", &l3]);
+    let older = fx.git(&["show", &format!("{l2}:{}", path("TSK-001"))]);
+    fx.write(&path("TSK-001"), &format!("{older}\n"));
+    fx.git(&["add", "-A"]);
+    let tree = fx.git(&["write-tree"]);
+    fx.git(&["merge", "--abort"]);
+    let octopus = fx.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &release,
+        "-p",
+        &l3,
+        "-p",
+        &l2,
+        "-m",
+        "merge: import line A",
+    ]);
+    fx.git(&["reset", "-q", "--hard", &octopus]);
+    let result = fx.ci("main", "HEAD", RELEASE, Some("main"));
+    // The earlier completion's finding still stands.
+    blocks(
+        &result,
+        "the octopus restoring L2",
+        &["TSK-001", "src/late.rs changed after the reviewed commit"],
+    );
+    assert!(
+        result.1.contains(&format!(
+            "release path: {}: import with 1 resolved path(s)",
+            &octopus[..9]
+        )),
+        "{}",
+        result.1
+    );
+    let pushed = fx.pre_push(
+        RELEASE,
+        &octopus,
+        &fx.git(&["rev-parse", &format!("origin/{RELEASE}")]),
+    );
+    assert_eq!(pushed.0, 1, "{}", pushed.1);
+}
+
+/// AC-2, AC-11 (Codex R145-R3-3): a completion made directly on the release
+/// line stays bound at the head when a valid completion of the task arrives
+/// through another line; only a valid completion from the task's own line
+/// supersedes it.
+#[test]
+fn a_foreign_import_never_clears_a_direct_completion() {
+    for (through, clears) in [(LINE_B, false), (LINE_A, true)] {
+        let fx = Fx::new(true);
+        fx.cut_release();
+        fx.write("src/fix.rs", "// fix\n");
+        let reviewed = fx.commit("fix: integrate");
+        fx.write(
+            &path("TSK-001"),
+            &record("TSK-001", "complete", CRITERIA, &block(&reviewed)),
+        );
+        let made = fx.commit("docs(records): complete TSK-001 on the release line");
+        fx.write("src/later.rs", "// later\n");
+        fx.commit("fix: a later integration change");
+        let stale = format!(
+            "TSK-001 (completed directly on the release line at {})",
+            &made[..9]
+        );
+
+        // TSK-001 completes validly on its own line; line B syncs it.
+        fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+        fx.land(LINE_A, "task/TSK-001-work");
+        if through == LINE_B {
+            fx.git(&["switch", "-q", LINE_B]);
+            fx.merge(LINE_A);
+            fx.git(&["push", "-q", "origin", LINE_B]);
+        }
+        fx.git(&["switch", "-q", RELEASE]);
+        fx.git(&["fetch", "-q", "origin"]);
+        let line = format!("origin/{through}");
+        let conflicted =
+            !run_git_status(&fx.root, &["merge", "-q", "--no-ff", "--no-commit", &line]);
+        if conflicted {
+            fx.git(&["checkout", "-q", "--theirs", "--", &path("TSK-001")]);
+            fx.git(&["add", "--", &path("TSK-001")]);
+        }
+        let import = fx.commit("merge: import the line");
+        fx.write(
+            &path(HOLDER),
+            &record(HOLDER, "todo", CRITERIA, &block(&import)),
+        );
+        passes(&fx.status_complete(HOLDER), "the holder completes");
+        fx.commit("docs(records): complete the release integration");
+        let result = fx.ci("main", "HEAD", RELEASE, Some("main"));
+        if clears {
+            passes(&result, "a valid completion from the task's own line");
+            assert!(!result.1.contains(&stale), "{}", result.1);
+        } else {
+            blocks(
+                &result,
+                "a valid completion through another line",
+                &[&stale],
+            );
+            let pushed = fx.pre_push_release();
+            assert_eq!(findings(&pushed), findings(&result), "{}", pushed.1);
+        }
+    }
+}
+
 /// AC-1, AC-6: a completion made on the release line and later brought,
 /// block and all, from the task's own line is judged where the line landed
 /// it; the earlier direct completion no longer stands at the head.

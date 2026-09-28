@@ -479,23 +479,31 @@ fn changes(repo: &Repository, from: Option<Oid>, to: Oid) -> Result<Changes, Str
 }
 
 /// The expected import of `merge`: the clean merge of its parents, taking
-/// the incoming parent's entry for a path that conflicts. Parents after the
-/// second merge in turn into the result so far.
+/// the incoming parent's entry for a path that conflicts. As git merges an
+/// octopus, each later parent merges into the result so far from its merge
+/// base with every parent merged before it, so a parent that an earlier one
+/// already contains adds nothing and never makes an older snapshot the
+/// expected import.
 fn expected_import(
     repo: &Repository,
     merge: &git2::Commit<'_>,
 ) -> Result<BTreeMap<String, Entry>, String> {
     let error = |error: git2::Error| format!("{}: {}", merge.id(), error.message());
-    let parents: Vec<git2::Commit<'_>> = merge.parents().collect();
-    let first = &parents[0];
+    let all: Vec<git2::Commit<'_>> = merge.parents().collect();
+    let first = &all[0];
+    let parents: Vec<&git2::Commit<'_>> = all.iter().skip(1).collect();
     let mut ours = first.tree().map_err(error)?;
+    let mut merged = vec![first.id()];
     let mut result = BTreeMap::new();
-    for (position, incoming) in parents.iter().enumerate().skip(1) {
+    for (position, incoming) in parents.iter().enumerate() {
+        let mut bases = vec![incoming.id()];
+        bases.extend(merged.iter().copied());
         let ancestor = repo
-            .merge_base(first.id(), incoming.id())
+            .merge_base_many(&bases)
             .and_then(|base| repo.find_commit(base))
             .and_then(|base| base.tree())
             .map_err(error)?;
+        merged.push(incoming.id());
         let theirs = incoming.tree().map_err(error)?;
         let index = repo
             .merge_trees(&ancestor, &ours, &theirs, None)
@@ -554,6 +562,8 @@ struct Lines<'a> {
     /// Advertised epic lines and their tips.
     candidates: Vec<(String, Oid)>,
     chains: HashMap<Oid, HashSet<Oid>>,
+    /// First-parent chains in order, oldest first.
+    ordered: HashMap<Oid, Vec<Oid>>,
     verified: HashMap<String, bool>,
     fetched: bool,
 }
@@ -572,6 +582,7 @@ impl<'a> Lines<'a> {
             destination,
             candidates,
             chains: HashMap::new(),
+            ordered: HashMap::new(),
             verified: HashMap::new(),
             fetched: false,
         }
@@ -668,6 +679,38 @@ impl<'a> Lines<'a> {
         None
     }
 
+    /// Where `line`'s first-parent chain, as advertised now, first holds
+    /// `commit`: the index from the oldest end of the chain of the first
+    /// chain commit that is `commit` or descends from it. `None` when the
+    /// line is not advertised or never holds it.
+    fn position(&mut self, line: &str, commit: Oid) -> Option<usize> {
+        let tip = self
+            .candidates
+            .iter()
+            .chain(self.destination.default.iter())
+            .find(|(name, _)| name == line)
+            .map(|(_, tip)| *tip)?;
+        let repo = self.repo;
+        let order = self.ordered.entry(tip).or_insert_with(|| {
+            let mut order = Vec::new();
+            let mut at = Some(tip);
+            while let Some(oid) = at {
+                order.push(oid);
+                at = repo
+                    .find_commit(oid)
+                    .ok()
+                    .and_then(|found| found.parent_id(0).ok());
+            }
+            order.reverse();
+            order
+        });
+        // Holding `commit` is monotone along the chain.
+        let at = order.partition_point(|chain| {
+            *chain != commit && !repo.graph_descendant_of(*chain, commit).unwrap_or(false)
+        });
+        (at < order.len()).then_some(at)
+    }
+
     /// The line whose first-parent chain holds `commit`: the default
     /// target, or a verified epic line. Never the judged branch's own ref.
     fn line_of(&mut self, commit: Oid) -> Result<Option<String>, String> {
@@ -684,6 +727,61 @@ impl<'a> Lines<'a> {
         }
         Ok(None)
     }
+}
+
+/// A task's brought completions in a release range. Only a completion
+/// brought from the task's own line that binds where it was introduced
+/// there, and that the line landed after every completion of the task
+/// brought before, becomes the completion in force; an earlier completion
+/// is never accepted, its findings only stop standing. Order is the
+/// position on that line's first-parent chain, never parent or import
+/// order.
+#[derive(Default)]
+struct Held {
+    /// The findings of brought completions that still stand.
+    findings: Vec<Finding>,
+    /// The latest position of a completion brought from the task's line.
+    latest: Option<usize>,
+}
+
+/// The position on the task's line `target` of the completion an import
+/// `merge` brings at `path`, when it comes from that line as the line
+/// stands at the newest of the merge's parents on it: the record must be
+/// the one that parent holds, so an older parent of the same line cannot
+/// stand in for a newer one. `None` when no parent is on the line or the
+/// record is not the newest parent's.
+fn own_line_position(
+    repo: &Repository,
+    lines: &mut Lines<'_>,
+    merge: &git2::Commit<'_>,
+    target: &str,
+    path: &str,
+    now: &RecordView,
+    introduced: Oid,
+) -> Result<Option<usize>, String> {
+    let mut newest: Option<(usize, Oid)> = None;
+    for parent in merge.parent_ids().skip(1) {
+        if lines.line_of(parent)?.as_deref() != Some(target) {
+            continue;
+        }
+        if let Some(at) = lines.position(target, parent) {
+            if newest.is_none_or(|(was, _)| at > was) {
+                newest = Some((at, parent));
+            }
+        }
+    }
+    let Some((_, parent)) = newest else {
+        return Ok(None);
+    };
+    let same = record_at(repo, parent, path).is_some_and(|there| {
+        there.criteria.signature() == now.criteria.signature()
+            && active_block(&there) == active_block(now)
+    });
+    Ok(if same {
+        lines.position(target, introduced)
+    } else {
+        None
+    })
 }
 
 /// A task record at `commit`, when the path holds one that parses.
@@ -826,11 +924,8 @@ pub fn release_findings(
     let mut work: Vec<Work> = Vec::new();
     // Each task completed directly, with the commit that made it.
     let mut direct_completions: BTreeMap<String, Oid> = BTreeMap::new();
-    // The findings of each task's brought completions. A later completion
-    // brought from the task's own line that binds where it was introduced
-    // there becomes the completion in force: an earlier brought one's
-    // findings no longer stand, and nothing earlier is accepted.
-    let mut brought_completions: BTreeMap<String, Vec<Finding>> = BTreeMap::new();
+    // Each task's brought completions: see [`Held`].
+    let mut brought_completions: BTreeMap<String, Held> = BTreeMap::new();
     let mut report = Vec::new();
 
     for commit_oid in &path {
@@ -979,10 +1074,6 @@ pub fn release_findings(
                 if completion_changed(then.as_ref(), &now) {
                     match (source, active_block(&now)) {
                         (Some(source), Some(block)) => {
-                            // The record is now the one its line landed, so
-                            // an earlier completion made on the release line
-                            // no longer stands at the head.
-                            direct_completions.remove(&now.id);
                             let introduced = introduced_at(&repo, &now, &block, source);
                             let bound = bind_completion(
                                 &repo,
@@ -991,17 +1082,34 @@ pub fn release_findings(
                                 Landing::Commit(introduced),
                                 default_tip,
                             );
-                            let own_line = match now.integration_target.as_deref() {
-                                Some(target) => {
-                                    lines.line_of(source)?.as_deref() == Some(target.trim())
-                                }
-                                None => false,
+                            // Where the task's own line landed it, when the
+                            // import brings it from that line.
+                            let target = now
+                                .integration_target
+                                .as_deref()
+                                .map(str::trim)
+                                .filter(|line| !line.is_empty());
+                            let position = match target {
+                                Some(target) => own_line_position(
+                                    &repo, &mut lines, &commit, target, path, &now, introduced,
+                                )?,
+                                None => None,
                             };
-                            let in_force = brought_completions.entry(now.id.clone()).or_default();
-                            if own_line && bound.is_empty() {
-                                in_force.clear();
+                            let task_held = brought_completions.entry(now.id.clone()).or_default();
+                            let newer = position
+                                .is_some_and(|at| task_held.latest.is_none_or(|was| at > was));
+                            if newer && bound.is_empty() {
+                                // It becomes the completion in force: the
+                                // findings of every earlier one, brought or
+                                // made on the release line, no longer stand.
+                                task_held.findings.clear();
+                                direct_completions.remove(&now.id);
                             } else {
-                                in_force.extend(bound);
+                                task_held.findings.extend(bound);
+                            }
+                            if let Some(at) = position {
+                                task_held.latest =
+                                    Some(task_held.latest.map_or(at, |was| was.max(at)));
                             }
                         }
                         _ => {
@@ -1176,7 +1284,11 @@ pub fn release_findings(
             }
         }
     }
-    findings.extend(brought_completions.into_values().flatten());
+    findings.extend(
+        brought_completions
+            .into_values()
+            .flat_map(|held| held.findings),
+    );
     let mut seen = HashSet::new();
     findings.retain(|found| seen.insert((found.rule, found.message.clone())));
     Ok(Judgement {
