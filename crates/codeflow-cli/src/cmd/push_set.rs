@@ -251,15 +251,21 @@ fn release_preflight(
     });
     match result {
         Ok(outcome) => {
-            report.notes.extend(outcome.notes.iter().map(|note| {
-                Finding::new(
-                    format!("release preflight ({branch}): {note}"),
-                    remedy::RELEASE_PREFLIGHT_NOTE.with(&[
-                        ("script", codeflow_core::release_local::SCRIPT),
-                        ("branch", branch),
-                    ]),
-                )
-            }));
+            for note in &outcome.notes {
+                let line = format!("release preflight ({branch}): {note}");
+                // A valid tree is a result, not a finding: nothing to clear.
+                if note.starts_with(codeflow_core::release_local::TREE_VALID) {
+                    report.status.push(line);
+                } else {
+                    report.notes.push(Finding::new(
+                        line,
+                        remedy::RELEASE_PREFLIGHT_NOTE.with(&[
+                            ("script", codeflow_core::release_local::SCRIPT),
+                            ("branch", branch),
+                        ]),
+                    ));
+                }
+            }
             if outcome.blocked() {
                 report.violations.push(violation(
                     policy,
@@ -352,7 +358,7 @@ fn run_check(
         Err(error) => report.violations.push(violation(
             policy,
             format!("push set check could not run: `{shown}`: {error}"),
-            check_remedy(&rerun),
+            codeflow_core::remedy::PUSH_SET_BY_HAND.remedy(),
         )),
     }
 }

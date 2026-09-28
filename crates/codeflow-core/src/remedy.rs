@@ -141,9 +141,12 @@ impl Finding {
     /// `notice`), with the step that clears it on the next line.
     #[must_use]
     pub fn line(&self, plane: &str, kind: &str) -> String {
+        // A finding's own text can span lines (a tool's error); they stay
+        // indented under it, so the remedy line stays with its finding.
         format!(
             "{plane}: {kind}: {}\n  clear it: {}",
-            self.text, self.remedy
+            self.text.trim_end().replace('\n', "\n  "),
+            self.remedy
         )
     }
 }
@@ -224,9 +227,18 @@ catalog! {
     /// A record added by hand, outside the id registry.
     ID_REGISTRY = Step::Codeflow("codeflow ids admit"),
         "issue ids with `codeflow task|epic|spec new`; a maintainer admits a hand-written record with `codeflow ids admit`";
+    /// Records added in a checkout that has not fetched the id registry.
+    ID_REGISTRY_UNFETCHED = Step::Git("git fetch"),
+        "fetch the registry with its history (`git fetch origin codeflow/registry:refs/remotes/origin/codeflow/registry`), then rerun `codeflow ci`; a maintainer seeds a missing one once with `codeflow ids seed`";
+    /// A record whose id the registry gives another record.
+    ID_REGISTRY_RETARGET = Step::Codeflow("codeflow ids retarget"),
+        "renumber this branch's record with `codeflow ids retarget <id>`, which moves it to a free number, then rerun `codeflow ci`";
+    /// A record whose written uid the range changes.
+    ID_REGISTRY_UID = Step::Git("git restore"),
+        "restore the record's `uid` line as the target has it (`git restore --source <target> -- <path>` restores the whole record), since a uid is written once";
     /// An acceptance block bound to a commit other than the reviewed head.
     ACCEPTANCE_BINDING = Step::Codeflow("codeflow task status"),
-        "review the pull request head and record it in the acceptance block (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
+        "review the pull request head, then record it: reopen the task (`codeflow task status <id> todo --reason \"review the head\"`) and complete it with the new review (`codeflow task status <id> complete --acceptance <file>`); a waiver names the planning amendment commit on the target ({note})";
     /// A task without a journey criterion for an adopter-facing range.
     JOURNEY_CRITERION = Step::Edit("{path}"),
         "add a `(journey)` criterion to {path} by a planning pull request, or serve the epic's journey criterion there with `(serves EPC-NNN AC-n)`";
@@ -439,12 +451,31 @@ catalog! {
     /// A project without its codeflow configuration.
     DOCTOR_INIT = Step::Codeflow("codeflow init"),
         "run `codeflow init` in the project root";
-    /// A prerequisite outside the project, which doctor can observe.
-    DOCTOR_EXTERNAL = Step::Codeflow("codeflow doctor"),
-        "{step}, then `codeflow doctor --check {check}` confirms it";
-    /// A state doctor cannot read: the manual confirmation.
+    /// A tool doctor looks for on PATH and does not find.
+    DOCTOR_TOOL_MISSING = Step::Codeflow("codeflow doctor"),
+        "install {tool} on PATH, then `codeflow doctor --check {check}` confirms it";
+    /// Git hooks another hook manager owns, whose stages do not call the
+    /// codeflow shims.
+    DOCTOR_HOOK_MANAGER = Step::Edit("{path}"),
+        "call each codeflow shim from the matching hook in {path} (its pre-commit hook runs `.codeflow/git-hooks/pre-commit \"$@\"`, and so on for {hooks}), then `codeflow doctor --check hooks` confirms it";
+    /// Hooks that another harness runs only once approved there.
+    DOCTOR_HARNESS_APPROVAL = Step::Codeflow("codeflow doctor"),
+        "{step} (an approval inside that harness), then `codeflow doctor --check {check}` confirms it";
+    /// A network doctor cannot reach.
+    DOCTOR_NETWORK = Step::Codeflow("codeflow doctor"),
+        "restore network access to github.com, then `codeflow doctor --check network` confirms it";
+    /// Delegation prerequisites missing or signed out.
+    DOCTOR_DELEGATES = Step::Codeflow("codeflow doctor"),
+        "install or sign in to each missing piece named (a sign-in uses the operator's own account), then `codeflow doctor --check delegates` confirms it";
+    /// A model binding whose harness or settings changed since it qualified.
+    DOCTOR_REQUALIFY = Step::Codeflow("codeflow doctor"),
+        "requalify each binding named with the /cf-evaluate-model skill, whose promotion needs a human's explicit approval, then `codeflow doctor --check model-bindings` confirms it";
+    /// Harness trust doctor cannot read: the manual confirmation.
     DOCTOR_UNSEEN = Step::Manual("{step}"),
-        "{step}; `codeflow doctor` cannot verify it";
+        "{step} (inside that harness); `codeflow doctor` cannot verify it";
+    /// A model binding doctor cannot observe: the manual confirmation.
+    DOCTOR_CANARY = Step::Manual("confirm each binding named with a native canary"),
+        "confirm each binding named with a native canary (/cf-evaluate-model) when freshness matters; `codeflow doctor` cannot verify it";
     /// A policy or release setting that awaits a project decision.
     DOCTOR_POLICY_DECISION = Step::Edit(".codeflow/policy.json"),
         "record the decision in .codeflow/policy.json ({decision}), then `codeflow doctor --check adopter-fit` confirms it";
@@ -495,20 +526,21 @@ catalog! {
         "delegate through an interactive seat instead: Claude Code to Codex through the Codex plugin, Codex to Claude through `codeflow delegate` over the interactive `claude` CLI, or a named Herdr tab (cf-delegate); {enforcement} (policy security.headless_peer_runs)";
     /// A hook that could not evaluate and let the operation through.
     HOOK_UNEVALUATED = Step::Codeflow("codeflow doctor"),
-        "fix the cause named above, then rerun the git command; `codeflow doctor` checks the hook setup";
+        "fix the cause named above (a hook manager must pass git's arguments and stdin through to the codeflow shim), then rerun the git command; `codeflow doctor --check hooks` checks the hook wiring";
     /// A git hook that could not read its input from git.
     HOOK_STDIN_UNREAD = Step::Git("git push"),
-        "rerun `git push` so git hands the hook its refs; server-side CI stays authoritative meanwhile";
+        "rerun `git push` so git hands the hook its refs on stdin: a hook manager must pass its stdin through to the codeflow shim, and a branch whose name is not UTF-8 is pushed under a UTF-8 name (`git branch <new> <old>`, then push <new>); server-side CI stays authoritative meanwhile";
     /// A session guard payload that did not parse.
     GUARD_PAYLOAD_UNREAD = Step::Codeflow("codeflow doctor"),
-        "run `codeflow doctor`: its hooks, claude and codex checks name wiring out of date with this binary, which `codeflow update` refreshes";
+        "this codeflow build cannot read the payload the harness sent (the error names the field): install a codeflow release build that reads it, then `codeflow doctor --check hooks` confirms the hooks answer";
     /// A session summary that could not be written.
-    SESSION_SUMMARY_UNWRITTEN = Step::Codeflow("codeflow doctor"),
-        "run `codeflow doctor`: its config and permissions checks name what keeps .codeflow/ from being written";
+    SESSION_SUMMARY_UNWRITTEN = Step::Edit("{path}"),
+        "make {path} a writable directory: the session ledger lives there, under git's common directory, and the next session end writes it";
     /// The per-user project registry that could not be written.
-    REGISTRY_UNWRITTEN = Step::Edit("~/.codeflow/registry.json"),
-        "make ~/.codeflow/registry.json writable, or delete it; the next codeflow command writes it again";
+    REGISTRY_UNWRITTEN = Step::Edit("{path}"),
+        "repair or delete {path}, the per-user project registry; the next codeflow command writes it again";
 
+    /// A privilege escalation proposed from a session.
     PRIVILEGE_ESCALATION = Step::Edit(".codeflow/policy.json"),
         "privilege escalation needs applicable operator authority: an operator runs it outside the session; {enforcement}; the effective harness may show no permission prompt (security.privilege_escalation in `.codeflow/policy.json`)";
 }

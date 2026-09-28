@@ -264,7 +264,12 @@ fn commit_msg(
             "commit-msg: missing message file argument".to_string(),
         )
     })?;
-    let message = std::fs::read_to_string(&msg_file)?;
+    let message = std::fs::read_to_string(&msg_file).map_err(|e| {
+        codeflow_core::error::HookError::Config(format!(
+            "commit-msg: cannot read the message file {}: {e}",
+            msg_file.display()
+        ))
+    })?;
     // The contract-surface tripwire needs the files this commit stages
     // (ADR-0020); empty on any error, so it simply does not fire.
     let mut report = git_hook::commit_msg_with_files(

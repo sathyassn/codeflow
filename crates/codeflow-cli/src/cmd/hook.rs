@@ -326,14 +326,22 @@ fn gh_pr_base_blocking(arg: &str) -> Option<String> {
 fn session_summary(stdin: &str) -> i32 {
     let cwd = std::env::current_dir().unwrap_or_else(|_| ".".into());
     match session_summary::record(&super::project_root(&cwd), stdin) {
-        Ok(path) => {
+        Ok(Some(path)) => {
             eprintln!("codeflow session-summary: recorded to {}", path.display());
             0
         }
+        Ok(None) => {
+            eprintln!("codeflow session-summary: not in a git repository, nothing to record");
+            0
+        }
         Err(e) => {
+            let path = e.path.display().to_string();
             let finding = codeflow_core::remedy::Finding::new(
-                format!("{e}; session unaffected"),
-                codeflow_core::remedy::SESSION_SUMMARY_UNWRITTEN.remedy(),
+                format!(
+                    "session ledger not written ({path}: {}); session unaffected",
+                    e.cause
+                ),
+                codeflow_core::remedy::SESSION_SUMMARY_UNWRITTEN.with(&[("path", &path)]),
             );
             eprintln!("{}", finding.line("codeflow session-summary", "warning"));
             0

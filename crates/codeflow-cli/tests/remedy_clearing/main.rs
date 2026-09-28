@@ -5,8 +5,10 @@
 //! command that exists. This file proves the stronger claim: for each row of
 //! the remedy catalogue, a test raises the finding, runs the step exactly as
 //! the output prints it, and sees the finding gone on the next run. A row
-//! whose step cannot run in a test says why in [`ROWS`]; the coverage test
-//! fails on a row that is neither proven nor justified.
+//! whose step acts outside this machine names that boundary in [`ROWS`],
+//! from a closed set ([`Boundary`]); the coverage test fails on a row that
+//! is neither proven nor excluded, and on an exclusion whose remedy does
+//! not name the party beyond the boundary.
 //!
 //! A proof takes the command it runs from the printed remedy, so a remedy
 //! that names a real command which does not clear its finding fails here.
@@ -17,22 +19,50 @@ use std::sync::OnceLock;
 
 use codeflow_core::remedy::{Clearing, Step, CATALOG};
 
+mod guards;
+mod push;
+mod records;
+
 /// How a catalogue row is covered.
 enum Proof {
-    /// A `clears_<row>` test below runs the printed step.
+    /// A `clears_<row>` test runs the printed step.
     Runs,
-    /// Why no test can run the step; stated per row.
-    Justified(&'static str),
+    /// The step acts beyond this boundary, so no test can take it.
+    Excluded(Boundary),
 }
 
-use Proof::{Justified, Runs};
+/// Where a step acts that no test can reach. The set is closed: setup cost,
+/// elapsed time, a local git remote or synthetic planning state is never
+/// one of them (TSK-147 review F5).
+#[derive(Clone, Copy, Debug)]
+enum Boundary {
+    /// Settings a hosting platform keeps for a remote, such as branch
+    /// rules; a git remote a test can host is not this.
+    HostingRemote,
+    /// A service reached over the network: a download or a live model run.
+    Network,
+    /// An approval inside another harness's own interface.
+    HarnessApproval,
+    /// A decision or a credential that belongs to a human operator.
+    HumanAuthority,
+}
 
-const GUARD: &str = "a session guard's verdict on a command the agent proposes: nothing \
-                     persists to clear, the step is to issue a different command, and the \
-                     guard's own tests hold the verdicts";
-const PROTECTED: &str = "a refusal of an action on a protected branch or the enforcement \
-                         plane; the step is a human-authorized landing or policy change, \
-                         which no test performs on the operator's behalf";
+impl Boundary {
+    /// Words one of which the row's remedy must use to name the party
+    /// beyond the boundary, so a row cannot claim a boundary its step does
+    /// not cross.
+    fn named_by(self) -> &'static [&'static str] {
+        match self {
+            Self::HostingRemote => &["host rules"],
+            Self::Network => &["network", "release build", "native canary"],
+            Self::HarnessApproval => &["inside that harness"],
+            Self::HumanAuthority => &["operator", "a human", "sign in"],
+        }
+    }
+}
+
+use Boundary::{HarnessApproval, HostingRemote, HumanAuthority, Network};
+use Proof::{Excluded, Runs};
 
 /// Every catalogue row and how it is covered.
 const ROWS: &[(&str, Proof)] = &[
@@ -41,90 +71,36 @@ const ROWS: &[(&str, Proof)] = &[
     ("SUPERSEDED_CITATION", Runs),
     ("SPEC_NO_CONSUMER", Runs),
     ("SPEC_WRITTEN_IMPLEMENTED", Runs),
-    (
-        "BASELINE_HISTORY",
-        Justified(
-            "needs a clone missing the commit that introduced work_records_baseline; the \
-             step is `git fetch --unshallow` against a real upstream",
-        ),
-    ),
+    ("BASELINE_HISTORY", Runs),
     ("DUAL_IDENTITY", Runs),
-    (
-        "STANDALONE_SPLIT",
-        Justified(
-            "needs several merged pull requests delivering one standalone task; the step \
-             is a planning edit that a reviewed planning pull request lands",
-        ),
-    ),
+    ("STANDALONE_SPLIT", Runs),
     ("DOCS_LAYER_ABSENT", Runs),
     ("DOCS_EPICS_UNCHECKED", Runs),
     ("DOCS_SPECS_UNCHECKED", Runs),
     ("DOCS_ADRS_UNCHECKED", Runs),
     ("DOCS_CAPABILITIES_UNCHECKED", Runs),
-    (
-        "WORK_START_RECONCILE",
-        Justified(
-            "raised when a task branch's planning disagrees with a target that moved; \
-             reconciling is a merge the operator reviews",
-        ),
-    ),
-    (
-        "WORK_START_MERGE_PLANNING",
-        Justified(
-            "the step merges a planning pull request into the target, a reviewed landing \
-             no test performs",
-        ),
-    ),
-    (
-        "TASK_RECORD_MISSING",
-        Justified(
-            "the step plans a task on a planning branch and merges it into the target \
-             before implementation, a reviewed landing",
-        ),
-    ),
+    ("WORK_START_RECONCILE", Runs),
+    ("WORK_START_MERGE_PLANNING", Runs),
+    ("TASK_RECORD_MISSING", Runs),
     ("WORKGRAPH_INVALID", Runs),
-    (
-        "ID_REGISTRY",
-        Justified(
-            "needs the `codeflow/registry` authority on a remote, and `ids admit` is a \
-             maintainer's decision",
-        ),
-    ),
-    (
-        "ACCEPTANCE_BINDING",
-        Justified(
-            "the step records a review of the pull request head, which a reviewer \
-             performs",
-        ),
-    ),
-    (
-        "JOURNEY_CRITERION",
-        Justified(
-            "the step lands a planning pull request that adds the criterion; the check \
-             reads the criterion at the merge-base",
-        ),
-    ),
-    (
-        "RECORD_BASELINE_EXEMPT",
-        Justified(
-            "the warning is for an older record the baseline exempts; fixing the record \
-             is a planning edit whose next status change applies the rules",
-        ),
-    ),
-    (
-        "BASELINE_REVIEW",
-        Justified("the notice ends when the change lands on its target, a human merge"),
-    ),
+    ("ID_REGISTRY", Runs),
+    ("ID_REGISTRY_UNFETCHED", Runs),
+    ("ID_REGISTRY_RETARGET", Runs),
+    ("ID_REGISTRY_UID", Runs),
+    ("ACCEPTANCE_BINDING", Runs),
+    ("JOURNEY_CRITERION", Runs),
+    ("RECORD_BASELINE_EXEMPT", Runs),
+    ("BASELINE_REVIEW", Runs),
     ("POLICY_DEPRECATED", Runs),
     ("TARGET_BEHIND_UPSTREAM", Runs),
-    ("PROTECTED_BRANCH", Justified(PROTECTED)),
-    ("PROTECTED_DELETE", Justified(PROTECTED)),
-    ("PROTECTED_REWRITE", Justified(PROTECTED)),
-    ("REMOTE_TRACKING_REF", Justified(GUARD)),
-    ("FORCE_PUSH", Justified(GUARD)),
-    ("PR_MERGE_PROTECTED", Justified(PROTECTED)),
+    ("PROTECTED_BRANCH", Runs),
+    ("PROTECTED_DELETE", Runs),
+    ("PROTECTED_REWRITE", Runs),
+    ("REMOTE_TRACKING_REF", Runs),
+    ("FORCE_PUSH", Runs),
+    ("PR_MERGE_PROTECTED", Runs),
     ("BRANCH_NAME", Runs),
-    ("HOOK_INTEGRITY", Justified(PROTECTED)),
+    ("HOOK_INTEGRITY", Runs),
     ("COMMIT_TYPE", Runs),
     ("COMMIT_LENGTH", Runs),
     ("COMMIT_BLANK_LINE", Runs),
@@ -148,144 +124,81 @@ const ROWS: &[(&str, Proof)] = &[
     ("PR_PRESENTATION", Runs),
     ("PR_RELEASE_IMPACT", Runs),
     ("CI_BASE_UNRESOLVED", Runs),
-    (
-        "CI_RANGE_UNREADABLE",
-        Justified(
-            "needs a range git cannot list, a shallow CI checkout; the step fetches the \
-             missing history from the platform's remote",
-        ),
-    ),
+    ("CI_RANGE_UNREADABLE", Runs),
     ("CI_BRANCH_UNRESOLVED", Runs),
     ("CI_BODY_UNSUPPLIED", Runs),
-    (
-        "SCAFFOLD_MANIFEST_BROKEN",
-        Justified("needs a damaged codeflow build; the step installs a release build"),
-    ),
+    ("SCAFFOLD_MANIFEST_BROKEN", Excluded(Network)),
     ("ENV_FILE_STAGED", Runs),
-    (
-        "SECRET_SCAN_INCOMPLETE",
-        Justified("needs a staged diff git cannot hand the scanner"),
-    ),
+    ("SECRET_SCAN_INCOMPLETE", Runs),
     ("SECRET_STAGED", Runs),
     ("PUSH_SET_FAILED", Runs),
     ("PUSH_SET_CI", Runs),
     ("PUSH_SET_VALIDATE", Runs),
-    (
-        "PUSH_SET_BY_HAND",
-        Justified("needs a push set that cannot start its own checks (no binary to run)"),
-    ),
+    ("PUSH_SET_BY_HAND", Runs),
     ("PUSH_TREE_UNCHECKED", Runs),
     ("PUSH_RANGE_UNRESOLVED", Runs),
-    (
-        "PUSH_DESTINATION_SILENT",
-        Justified("needs a destination that does not answer: network or credentials"),
-    ),
+    ("PUSH_DESTINATION_SILENT", Runs),
     ("PUSH_REWRITE", Runs),
-    (
-        "PUSH_OVER_BUDGET_TARGET",
-        Justified("needs a push set that runs longer than 60 seconds"),
-    ),
-    (
-        "PUSH_OVER_BUDGET_BUILTIN",
-        Justified("needs a push set that runs longer than 60 seconds"),
-    ),
+    ("PUSH_OVER_BUDGET_TARGET", Runs),
+    ("PUSH_OVER_BUDGET_BUILTIN", Runs),
     ("PUSH_TARGETS_UNCONFIGURED", Runs),
     ("PUSH_TARGETS_NONE", Runs),
-    (
-        "IDS_PENDING_LOCAL",
-        Justified("needs id reservations and the registry authority on a remote"),
-    ),
-    (
-        "IDS_SYNC_FAILED",
-        Justified("needs a registry authority that does not answer"),
-    ),
-    (
-        "RELEASE_PREFLIGHT_NOTE",
-        Justified(
-            "runs only where scripts/release.py exists (CodeFlow's own repository); \
-             scripts/test_release.py holds the preflight cases",
-        ),
-    ),
-    (
-        "RELEASE_PREFLIGHT_UNRUN",
-        Justified("needs a release script that cannot run (no python3, a damaged script)"),
-    ),
-    (
-        "RELEASE_PREFLIGHT",
-        Justified(
-            "runs only where scripts/release.py exists (CodeFlow's own repository); \
-             scripts/test_release.py holds the preflight cases",
-        ),
-    ),
+    ("IDS_PENDING_LOCAL", Runs),
+    ("IDS_SYNC_FAILED", Runs),
+    ("RELEASE_PREFLIGHT_NOTE", Runs),
+    ("RELEASE_PREFLIGHT_UNRUN", Runs),
+    ("RELEASE_PREFLIGHT", Runs),
     ("TEST_CONFIG_REPAIR", Runs),
     ("DOCTOR_HOOKS_PATH", Runs),
     ("DOCTOR_INIT", Runs),
-    (
-        "DOCTOR_EXTERNAL",
-        Justified(
-            "the step is an approval inside another harness (`/hooks` in Codex, \
-             `/hooks-trust` in Grok), which only the operator gives",
-        ),
-    ),
-    (
-        "DOCTOR_UNSEEN",
-        Justified("a manual confirmation of state doctor says it cannot verify"),
-    ),
+    ("DOCTOR_TOOL_MISSING", Runs),
+    ("DOCTOR_HOOK_MANAGER", Runs),
+    ("DOCTOR_HARNESS_APPROVAL", Excluded(HarnessApproval)),
+    ("DOCTOR_NETWORK", Excluded(Network)),
+    ("DOCTOR_DELEGATES", Excluded(HumanAuthority)),
+    ("DOCTOR_REQUALIFY", Excluded(HumanAuthority)),
+    ("DOCTOR_UNSEEN", Excluded(HarnessApproval)),
+    ("DOCTOR_CANARY", Excluded(Network)),
     ("DOCTOR_POLICY_DECISION", Runs),
     ("DOCTOR_RELEASE_BACKEND", Runs),
     ("DOCTOR_CI_PLACEHOLDER", Runs),
     ("DOCTOR_TRACKING_UNKNOWN", Runs),
-    (
-        "DOCTOR_ID_REGISTRY",
-        Justified("needs the registry authority on a remote"),
-    ),
-    (
-        "DOCTOR_REGISTRY_UNPROTECTED",
-        Justified("the step applies branch rules on the hosting platform"),
-    ),
+    ("DOCTOR_ID_REGISTRY", Runs),
+    ("DOCTOR_REGISTRY_UNPROTECTED", Excluded(HostingRemote)),
     ("DOCTOR_MANAGED_DRIFT", Runs),
     ("DOCTOR_CUSTOMIZATION", Runs),
     ("DOCTOR_INSTRUCTIONS", Runs),
     ("DOCTOR_READING", Runs),
     ("DOCTOR_TEST_CONFIG", Runs),
-    ("GUARD_UNCLASSIFIABLE", Justified(GUARD)),
-    ("GUARD_UNRESOLVED", Justified(GUARD)),
-    ("GUARD_ALIAS", Justified(GUARD)),
-    ("HEADLESS_PEER_RUN", Justified(GUARD)),
-    (
-        "HOOK_UNEVALUATED",
-        Justified("needs a hook that fails to evaluate (an unreadable repository or policy)"),
-    ),
-    (
-        "HOOK_STDIN_UNREAD",
-        Justified("needs git to withhold the refs a pre-push hook reads"),
-    ),
-    (
-        "GUARD_PAYLOAD_UNREAD",
-        Justified("needs a harness that sends a payload the guard cannot parse"),
-    ),
-    (
-        "SESSION_SUMMARY_UNWRITTEN",
-        Justified("needs a .codeflow/ the session hook cannot write"),
-    ),
-    (
-        "REGISTRY_UNWRITTEN",
-        Justified("needs a per-user registry file that cannot be written"),
-    ),
-    ("PRIVILEGE_ESCALATION", Justified(GUARD)),
+    ("GUARD_UNCLASSIFIABLE", Runs),
+    ("GUARD_UNRESOLVED", Runs),
+    ("GUARD_ALIAS", Runs),
+    ("HEADLESS_PEER_RUN", Runs),
+    ("HOOK_UNEVALUATED", Runs),
+    ("HOOK_STDIN_UNREAD", Runs),
+    ("GUARD_PAYLOAD_UNREAD", Excluded(Network)),
+    ("SESSION_SUMMARY_UNWRITTEN", Runs),
+    ("REGISTRY_UNWRITTEN", Runs),
+    ("PRIVILEGE_ESCALATION", Excluded(HumanAuthority)),
 ];
 
 #[test]
-fn every_catalogued_row_is_proven_or_justified() {
-    let source = include_str!("remedy_clearing.rs");
+fn every_catalogued_row_is_proven_or_excluded_at_a_boundary() {
+    let source = [
+        include_str!("main.rs"),
+        include_str!("guards.rs"),
+        include_str!("push.rs"),
+        include_str!("records.rs"),
+    ]
+    .concat();
     let listed: Vec<&str> = ROWS.iter().map(|(name, _)| *name).collect();
-    let catalogued: Vec<&str> = CATALOG.iter().map(|clearing| clearing.name).collect();
-    let mut missing: Vec<&str> = catalogued
+    let names: Vec<&str> = CATALOG.iter().map(|clearing| clearing.name).collect();
+    let mut missing: Vec<&str> = names
         .iter()
         .filter(|name| !listed.contains(name))
         .copied()
         .collect();
-    missing.extend(listed.iter().filter(|name| !catalogued.contains(name)));
+    missing.extend(listed.iter().filter(|name| !names.contains(name)));
     assert!(
         missing.is_empty(),
         "rows missing from ROWS or from the catalogue: {missing:?}"
@@ -299,7 +212,15 @@ fn every_catalogued_row_is_proven_or_justified() {
                     "{name} is marked Runs but has no `{test}` test"
                 );
             }
-            Justified(why) => assert!(why.len() > 20, "{name}: say why"),
+            Excluded(boundary) => {
+                let text = catalogued(name).text;
+                assert!(
+                    boundary.named_by().iter().any(|word| text.contains(word)),
+                    "{name} is excluded at {boundary:?}, but its remedy names no party \
+                     beyond it ({:?}): {text}",
+                    boundary.named_by()
+                );
+            }
         }
     }
 }
@@ -2054,6 +1975,83 @@ fn clears_doctor_test_config() {
             write(&root, ".codeflow/test-config.json", QUICK_CONFIG);
             let step = printed_command(printed, "DOCTOR_TEST_CONFIG", Some("codeflow doctor"));
             run_printed(&root, &step, &[], &[]);
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_tool_missing() {
+    let dir = scaffolded("--standard");
+    let root = project(&dir);
+    // PATH holds only this directory, so doctor finds exactly what is here.
+    let bin = tempfile::tempdir().unwrap();
+    let check = || {
+        text(
+            &command(exe().to_str().unwrap(), &root)
+                .env("PATH", bin.path())
+                .args(["doctor", "--check", "claude"])
+                .output()
+                .unwrap(),
+        )
+    };
+    prove(
+        "DOCTOR_TOOL_MISSING",
+        "claude CLI not found",
+        check,
+        |printed| {
+            assert!(
+                printed.contains("install the claude CLI on PATH"),
+                "{printed}"
+            );
+            // Doctor looks the CLI up on PATH; a stand-in is what it can see.
+            let claude = bin.path().join("claude");
+            std::fs::write(&claude, "#!/bin/sh\nexit 0\n").unwrap();
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                std::fs::set_permissions(&claude, std::fs::Permissions::from_mode(0o755)).unwrap();
+            }
+        },
+    );
+}
+
+#[test]
+fn clears_doctor_hook_manager() {
+    // A project whose git hooks another manager owned before `codeflow init`,
+    // which records them as unwired and leaves them alone.
+    let dir = tempfile::tempdir().unwrap();
+    let root = dir.path().join("p");
+    std::fs::create_dir(&root).unwrap();
+    git(&root, &["init", "-q", "-b", "main"]);
+    write(&root, ".husky/pre-commit", "#!/bin/sh\ntrue\n");
+    git(&root, &["config", "core.hooksPath", ".husky"]);
+    let out = codeflow(&root, &["init", "--yes", "--standard"]);
+    assert!(
+        read(&root, ".codeflow/project.toml").contains("git_hooks = \"unwired\""),
+        "{out}"
+    );
+    let shims: Vec<String> = std::fs::read_dir(root.join(".codeflow/git-hooks"))
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    prove(
+        "DOCTOR_HOOK_MANAGER",
+        "another hook manager owns",
+        || doctor(&root, "hooks"),
+        |printed| {
+            assert!(printed.contains("in .husky"), "{printed}");
+            // Each manager hook calls its codeflow shim, as the text says.
+            for name in &shims {
+                assert!(
+                    printed.contains(name.as_str()),
+                    "{name} not named:\n{printed}"
+                );
+                write(
+                    &root,
+                    &format!(".husky/{name}"),
+                    &format!("#!/bin/sh\ntrue\n.codeflow/git-hooks/{name} \"$@\"\n"),
+                );
+            }
         },
     );
 }

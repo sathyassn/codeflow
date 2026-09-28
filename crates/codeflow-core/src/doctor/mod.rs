@@ -432,14 +432,25 @@ fn hooks_wiring_warning(root: &Path) -> Option<Finding> {
     if wired {
         return None;
     }
+    let uncalled = shims_not_called(&active, &shims);
+    if uncalled.is_empty() {
+        return None; // another hook manager's stages call every shim
+    }
 
     let recorded_unwired = ProjectState::exists(root)
         && ProjectState::load(root).is_ok_and(|s| s.git_hooks == GIT_HOOKS_UNWIRED);
     Some(if recorded_unwired {
-        let step = format!("call the {CODEFLOW_HOOKS_PATH}/ shims from that manager's stages");
+        let path = active
+            .strip_prefix(root)
+            .unwrap_or(&active)
+            .display()
+            .to_string();
         Finding::new(
-            "codeflow shims are not git's active hooks (recorded git_hooks = \"unwired\": another hook manager owns them)",
-            remedy::DOCTOR_EXTERNAL.with(&[("step", &step), ("check", "hooks")]),
+            format!(
+                "codeflow shims are not git's active hooks (recorded git_hooks = \"unwired\": another hook manager owns {path}), and its hooks do not call: {}",
+                uncalled.join(", ")
+            ),
+            remedy::DOCTOR_HOOK_MANAGER.with(&[("path", &path), ("hooks", &uncalled.join(", "))]),
         )
     } else {
         Finding::new(
@@ -447,6 +458,29 @@ fn hooks_wiring_warning(root: &Path) -> Option<Finding> {
             remedy::DOCTOR_HOOKS_PATH.with(&[("hooks", CODEFLOW_HOOKS_PATH)]),
         )
     })
+}
+
+/// The shims in `shims` that git's active hooks in `active` do not call:
+/// a hook calls its shim when the hook of the same name names
+/// `.codeflow/git-hooks/<name>`.
+fn shims_not_called(active: &Path, shims: &Path) -> Vec<String> {
+    use crate::scaffold::detect::CODEFLOW_HOOKS_PATH;
+    let mut names: Vec<String> = std::fs::read_dir(shims)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .filter(|entry| entry.path().is_file())
+        .map(|entry| entry.file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .filter(|name| {
+            std::fs::read_to_string(active.join(name)).map_or(true, |hook| {
+                !hook.contains(&format!("{CODEFLOW_HOOKS_PATH}/{name}"))
+            })
+        })
+        .collect()
 }
 
 fn check_claude(opts: &Options) -> CheckResult {
@@ -463,10 +497,10 @@ fn check_claude(opts: &Options) -> CheckResult {
         // plane (charter section 9); codeflow works without a harness.
         Err(_) => CheckResult {
             name: "claude".into(),
-            status: Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[
-                ("step", "install the claude CLI on PATH"),
-                ("check", "claude"),
-            ])),
+            status: Status::Warn(
+                remedy::DOCTOR_TOOL_MISSING
+                    .with(&[("tool", "the claude CLI"), ("check", "claude")]),
+            ),
             message: "claude CLI not found in PATH (Claude-layer hooks inactive)".into(),
             duration: start.elapsed(),
         },
@@ -512,7 +546,7 @@ fn check_codex(opts: &Options) -> CheckResult {
             ),
         ),
         Ok((trusted, total)) => (
-            Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[("step", approve), ("check", "codex")])),
+            Status::Warn(remedy::DOCTOR_HARNESS_APPROVAL.with(&[("step", approve), ("check", "codex")])),
             format!(
                 ".codex/hooks.json present, {presence}: codex runs {trusted} of {total} hooks; an untrusted, changed or disabled hook does not run (git hooks and CI enforce regardless)"
             ),
@@ -831,7 +865,7 @@ fn check_grok(opts: &Options) -> CheckResult {
             format!(".grok/hooks present, {presence}: grok folder trust is turned off, so project hooks load ungated"),
         ),
         GrokTrust::Untrusted => (
-            Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[("step", trust), ("check", "grok")])),
+            Status::Warn(remedy::DOCTOR_HARNESS_APPROVAL.with(&[("step", trust), ("check", "grok")])),
             format!(
                 ".grok/hooks present, {presence}: grok does not trust this folder, so its project hooks are skipped (git hooks and CI enforce regardless)"
             ),
@@ -843,7 +877,7 @@ fn check_grok(opts: &Options) -> CheckResult {
         GrokTrust::Unreadable(why) => {
             let step = format!("repair or remove {}, then {trust}", opts.grok_home().join("trusted_folders.toml").display());
             (
-                Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[("step", &step), ("check", "grok")])),
+                Status::Warn(remedy::DOCTOR_HARNESS_APPROVAL.with(&[("step", &step), ("check", "grok")])),
                 format!(
                     ".grok/hooks present, {presence}: grok cannot read its trust store, so it trusts no folder and skips project hooks ({why})"
                 ),
@@ -1161,10 +1195,7 @@ fn check_promoted_model_bindings(
     if !drift.is_empty() {
         return model_binding_result(
             start,
-            Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[
-                ("step", "requalify each binding named with the /cf-evaluate-model skill"),
-                ("check", "model-bindings"),
-            ])),
+            Status::Warn(remedy::DOCTOR_REQUALIFY.remedy()),
             format!(
                 "binding requalification required: {}. Requested model/effort remain native-session observations, never inferred by doctor",
                 drift
@@ -1178,10 +1209,7 @@ fn check_promoted_model_bindings(
     if !unobservable.is_empty() {
         return model_binding_result(
             start,
-            Status::Note(remedy::DOCTOR_UNSEEN.with(&[(
-                "step",
-                "confirm each binding named with a native canary (/cf-evaluate-model) when freshness matters",
-            )])),
+            Status::Note(remedy::DOCTOR_CANARY.remedy()),
             format!(
                 "{} approved binding(s) are structurally valid; {}",
                 records.len(),
@@ -1595,9 +1623,9 @@ fn check_permissions(opts: &Options) -> CheckResult {
 
 fn check_network(opts: &Options) -> CheckResult {
     let start = Instant::now();
-    let warn = |message: String, step: &str| CheckResult {
+    let warn = |message: String, remedy: remedy::Remedy| CheckResult {
         name: "network".into(),
-        status: Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[("step", step), ("check", "network")])),
+        status: Status::Warn(remedy),
         message,
         duration: start.elapsed(),
     };
@@ -1607,7 +1635,7 @@ fn check_network(opts: &Options) -> CheckResult {
     if opts.do_look_path("host").is_err() {
         return warn(
             "`host` not found; skipping connectivity probe".into(),
-            "install the `host` tool on PATH",
+            remedy::DOCTOR_TOOL_MISSING.with(&[("tool", "the `host` tool"), ("check", "network")]),
         );
     }
 
@@ -1620,7 +1648,7 @@ fn check_network(opts: &Options) -> CheckResult {
         },
         Err(_) => warn(
             "network connectivity check failed (offline?)".into(),
-            "restore network access to github.com",
+            remedy::DOCTOR_NETWORK.remedy(),
         ),
     }
 }
@@ -1691,10 +1719,7 @@ fn check_delegates(opts: &Options) -> CheckResult {
     } else {
         CheckResult {
             name: "delegates".into(),
-            status: Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[
-                ("step", "install or sign in to each missing piece named"),
-                ("check", "delegates"),
-            ])),
+            status: Status::Warn(remedy::DOCTOR_DELEGATES.remedy()),
             message: format!(
                 "cross-vendor delegation is partially unavailable (optional): {}. Verify Claude auth with an interactive TTY canary; status output alone is not authoritative{agy_note}",
                 gaps.join("; ")

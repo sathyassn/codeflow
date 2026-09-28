@@ -2773,7 +2773,11 @@ fn hook_session_summary_never_fails_outside_repo() {
         "{}",
     );
     assert_eq!(out.status.code(), Some(0), "must never fail the session");
-    assert!(String::from_utf8_lossy(&out.stderr).contains("warning"));
+    // No repository, no session to record: nothing to clear, so no warning
+    // (TSK-147 review F5).
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("nothing to record"), "{stderr}");
+    assert!(!stderr.contains("warning"), "{stderr}");
 }
 
 // ---------------------------------------------------------------------------

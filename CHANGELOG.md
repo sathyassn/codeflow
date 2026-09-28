@@ -623,14 +623,20 @@ publication date._
   `doctor` reads Codex hook trust from `~/.codex/config.toml` (or
   `$CODEX_HOME`) and Grok folder trust from `~/.grok/trusted_folders.toml`
   (or `$GROK_HOME`) with each harness's own rules: a Codex hook counts only
-  when its record is valid, its hash matches and it is enabled, and Grok's
-  gate follows `GROK_FOLDER_TRUST`, then its config files. A record the
-  harness would reject is not trust; a Grok store it cannot read is a
-  warning, and where the state cannot be read at all doctor prints a note
-  saying it cannot verify it. A commit on a `git.breaking_watch_paths`
-  surface now prints a note, not a warning, pointing at the pull request's
-  Release impact, and `codeflow ci` given a body that states `Breaking: no`
-  with a `Rationale`, outside code and quotes, reports nothing for it.
+  when its record is valid, it is enabled and its hash matches the hook as
+  Codex normalizes it, and a linked worktree takes Grok's trust from its
+  main checkout. A record the harness would reject is not trust; a Grok
+  store it cannot read is a warning. Where doctor cannot reproduce the
+  harness's decision (a matcher Codex rejects, an empty command, Grok
+  `version_overrides`, a relative `GROK_HOME`, a Grok-managed worktree) it
+  prints a note saying it cannot verify it. `doctor --check hooks` passes
+  when another hook manager's hooks call each codeflow shim. The session
+  summary names the path that keeps its ledger from being written, and
+  outside a git repository records nothing instead of warning. A commit on
+  a `git.breaking_watch_paths` surface now prints a note, not a warning,
+  pointing at the pull request's Release impact, and `codeflow ci` and
+  `scripts/release.py` given a body that states `Breaking: no` with a
+  `Rationale`, outside code and quotes, report nothing for it.
 
 <!-- codeflow:release-impact minor -->
 - **One full gate at a time, running the suite once.** Public behaviour

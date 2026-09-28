@@ -11,7 +11,6 @@ use std::path::{Path, PathBuf};
 
 use git2::Repository;
 
-use crate::error::HookError;
 use crate::ledger::{files, Event, JsonlWriter, LedgerWriter};
 
 use super::policy::Policy;
@@ -30,6 +29,17 @@ pub struct SessionRecord {
     pub timestamp: String,
 }
 
+/// The session ledger could not be written.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LedgerUnwritten {
+    /// What keeps the ledger from being written: the first part of the
+    /// ledger directory that exists and is not a directory, else the ledger
+    /// directory itself.
+    pub path: PathBuf,
+    /// The error the write gave.
+    pub cause: String,
+}
+
 /// Build and append the session record for the repo containing `root`.
 ///
 /// `payload_json` is the `SessionEnd` hook payload from stdin; unknown or
@@ -37,15 +47,17 @@ pub struct SessionRecord {
 ///
 /// # Errors
 ///
-/// Returns [`HookError`] when `root` is not in a git repository or the
-/// ledger append fails. Callers treat errors as warnings (exit 0).
-pub fn record(root: &Path, payload_json: &str) -> Result<PathBuf, HookError> {
+/// Returns [`LedgerUnwritten`] when the ledger append fails; callers treat
+/// it as a warning (exit 0). Outside a git repository there is no session
+/// to record: `Ok(None)`.
+pub fn record(root: &Path, payload_json: &str) -> Result<Option<PathBuf>, LedgerUnwritten> {
     let payload: serde_json::Value =
         serde_json::from_str(payload_json.trim()).unwrap_or(serde_json::Value::Null);
-    let info = RepoInfo::discover(root)
-        .ok_or_else(|| HookError::Config("not inside a git repository".to_string()))?;
+    let Some(info) = RepoInfo::discover(root) else {
+        return Ok(None);
+    };
     let summary = build(&info, &payload);
-    append(&info, &summary)
+    append(&info, &summary).map(Some)
 }
 
 /// Gather the session facts from the repository state.
@@ -119,8 +131,16 @@ fn diff_stats(root: &Path, base: Option<&str>) -> (Option<String>, usize, usize)
 }
 
 /// Append the record to the sessions ledger under the shared state dir.
-fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, HookError> {
+fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, LedgerUnwritten> {
     let ledger_dir = info.ledger_dir();
+    let unwritten = |cause: String| LedgerUnwritten {
+        path: ledger_dir
+            .ancestors()
+            .find(|part| part.exists())
+            .filter(|part| !part.is_dir())
+            .map_or_else(|| ledger_dir.clone(), Path::to_path_buf),
+        cause,
+    };
     let session_id = summary
         .session_id
         .as_ref()
@@ -152,10 +172,10 @@ fn append(info: &RepoInfo, summary: &SessionRecord) -> Result<PathBuf, HookError
     };
 
     let writer = JsonlWriter::new_with_session(&ledger_dir, session_id.clone())
-        .map_err(|e| HookError::Config(e.to_string()))?;
+        .map_err(|e| unwritten(e.to_string()))?;
     writer
         .append_event(event)
-        .map_err(|e| HookError::Config(e.to_string()))?;
+        .map_err(|e| unwritten(e.to_string()))?;
 
     let file = match &session_id {
         Some(sid) => format!("{t}/{t}-{sid}.jsonl", t = files::SESSIONS),
@@ -221,7 +241,7 @@ mod tests {
         repo_with_branch_work(dir.path());
         let payload = r#"{"session_id":"abc123","reason":"clear","hook_event_name":"SessionEnd"}"#;
 
-        let path = record(dir.path(), payload).unwrap();
+        let path = record(dir.path(), payload).unwrap().unwrap();
         assert!(
             path.ends_with("sessions/sessions-ses-abc123.jsonl"),
             "{path:?}"
@@ -251,7 +271,7 @@ mod tests {
     fn test_record_without_session_id_uses_base_file() {
         let dir = tempfile::tempdir().unwrap();
         repo_with_branch_work(dir.path());
-        let path = record(dir.path(), "{}").unwrap();
+        let path = record(dir.path(), "{}").unwrap().unwrap();
         assert!(path.ends_with("sessions/sessions.jsonl"), "{path:?}");
         assert!(path.exists());
     }
@@ -261,14 +281,29 @@ mod tests {
         // Zero ceremony: malformed payloads must not lose the record.
         let dir = tempfile::tempdir().unwrap();
         repo_with_branch_work(dir.path());
-        let path = record(dir.path(), "not json at all").unwrap();
+        let path = record(dir.path(), "not json at all").unwrap().unwrap();
         assert!(path.exists());
     }
 
     #[test]
-    fn test_record_outside_repo_errors_for_caller_to_soften() {
+    fn test_record_outside_repo_records_nothing() {
         let dir = tempfile::tempdir().unwrap();
-        assert!(record(dir.path(), "{}").is_err());
+        assert_eq!(record(dir.path(), "{}"), Ok(None));
+    }
+
+    #[test]
+    fn a_ledger_blocked_by_a_file_names_that_file() {
+        // TSK-147 review F5: the warning names what keeps the ledger from
+        // being written, under git's common directory, not `.codeflow/`.
+        let dir = tempfile::tempdir().unwrap();
+        repo_with_branch_work(dir.path());
+        let blocker = dir.path().join(".git/codeflow");
+        std::fs::write(&blocker, "not a directory").unwrap();
+        let err = record(dir.path(), "{}").unwrap_err();
+        assert_eq!(
+            err.path.canonicalize().unwrap(),
+            blocker.canonicalize().unwrap()
+        );
     }
 
     #[test]
@@ -281,7 +316,9 @@ mod tests {
         git(dir.path(), &["add", "."]);
         git(dir.path(), &["commit", "-m", "chore: init"]);
 
-        let path = record(dir.path(), r#"{"session_id":"s1"}"#).unwrap();
+        let path = record(dir.path(), r#"{"session_id":"s1"}"#)
+            .unwrap()
+            .unwrap();
         let line = std::fs::read_to_string(&path).unwrap();
         let event: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(event["commits_on_branch"], 0);
@@ -292,7 +329,9 @@ mod tests {
     fn test_record_unborn_head_degrades_to_zero() {
         let dir = tempfile::tempdir().unwrap();
         git(dir.path(), &["init", "-b", "main"]);
-        let path = record(dir.path(), r#"{"session_id":"s2"}"#).unwrap();
+        let path = record(dir.path(), r#"{"session_id":"s2"}"#)
+            .unwrap()
+            .unwrap();
         let line = std::fs::read_to_string(&path).unwrap();
         let event: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
         assert_eq!(event["changed_files"], 0);
@@ -304,7 +343,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         repo_with_branch_work(dir.path());
         let payload = r#"{"session_id":"s3","timestamp":"2026-06-12T10:00:00Z"}"#;
-        let path = record(dir.path(), payload).unwrap();
+        let path = record(dir.path(), payload).unwrap().unwrap();
         let line = std::fs::read_to_string(&path).unwrap();
         assert!(line.contains("2026-06-12T10:00:00Z"));
     }
@@ -321,7 +360,7 @@ mod tests {
             &["worktree", "add", wt.to_str().unwrap(), "-b", "feat/wt"],
         );
 
-        let path = record(&wt, r#"{"session_id":"wt1"}"#).unwrap();
+        let path = record(&wt, r#"{"session_id":"wt1"}"#).unwrap().unwrap();
         // The record lands in the MAIN repo's .git/codeflow, not the worktree's.
         assert!(
             path.canonicalize()

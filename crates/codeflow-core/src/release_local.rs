@@ -29,6 +29,10 @@ pub fn adopted(root: &Path) -> bool {
     matches!(release_backend(root), Ok(ReleaseBackend::Codeflow)) && root.join(SCRIPT).is_file()
 }
 
+/// How `release.py preflight` opens the note that reports a valid release
+/// tree, a result with nothing to clear.
+pub const TREE_VALID: &str = "release tree valid at ";
+
 /// What `release.py preflight` found for one pushed branch.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Preflight {
@@ -122,6 +126,15 @@ fn failure(output: &std::process::Output) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_valid_tree_note_is_the_one_release_py_prints() {
+        let script = include_str!("../../../scripts/release.py");
+        assert!(
+            script.contains(&format!("f\"{TREE_VALID}{{")),
+            "release.py no longer opens its valid-tree note with {TREE_VALID:?}"
+        );
+    }
 
     fn project(backend: &str, script: Option<&str>) -> tempfile::TempDir {
         let dir = tempfile::tempdir().unwrap();

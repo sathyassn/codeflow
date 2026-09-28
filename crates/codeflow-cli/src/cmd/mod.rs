@@ -134,9 +134,10 @@ pub fn touch_registry_best_effort() {
     };
     if let Some(root) = registry::find_repo_root(&cwd) {
         if let Err(e) = registry::touch_registry(&home, &root) {
+            let path = registry::registry_path(&home).display().to_string();
             let finding = codeflow_core::remedy::Finding::new(
                 format!("registry touch failed: {e}"),
-                codeflow_core::remedy::REGISTRY_UNWRITTEN.remedy(),
+                codeflow_core::remedy::REGISTRY_UNWRITTEN.with(&[("path", &path)]),
             );
             eprintln!("{}", finding.line("codeflow", "warning"));
         }
