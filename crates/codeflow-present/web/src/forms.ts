@@ -356,18 +356,20 @@ class FormController {
         return;
       case "answer_exists": {
         // One form holds one original answer (SPC-014 B6): another page
-        // stored it. Show that answer with its state and offer a
-        // correction; the draft stays for it, unsent.
-        if (typeof details.answer_id !== "string") break;
+        // stored it. Take what a reload would show: the original, which a
+        // correction names, and the latest answer or correction, whose state
+        // is shown and followed. The draft stays, unsent.
+        if (typeof details.answer_id !== "string" || typeof details.latest_answer_id !== "string") break;
         this.refusedDefinitively(target);
         const answered: AnswerDelivery = details.state === "delivered" || details.state === "acknowledged" ? details.state : "pending";
         this.original = details.answer_id;
-        this.latest = details.answer_id;
+        this.latest = details.latest_answer_id;
         this.article.dataset.cfAnswerId = details.answer_id;
         this.amending = false;
         this.declining = false;
         const words = answered === "pending" ? STORED_TEXT : DELIVERY_TEXT[answered];
-        this.render(`${words}. This question was answered on another page; your draft was not sent.`, answered === "pending" ? "stored" : answered);
+        this.render(`${words}. This question was already answered from another copy of this page; your draft is kept here, unsent. Use Correct this answer to send it as a correction.`, answered === "pending" ? "stored" : answered);
+        this.showDelivery();
         return;
       }
       case "answer_too_large":

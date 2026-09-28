@@ -293,8 +293,9 @@ impl Ledger {
     }
 
     /// One form digest holds at most one original answer (B6): a second is
-    /// refused with the stored answer and the state a reload shows, so the
-    /// page can show it and offer a correction.
+    /// refused with what a reload shows, so the page can show it and offer a
+    /// correction: the original answer (what `amends` names), the latest
+    /// answer or correction, and that latest record's state (C120-1).
     fn check_no_answer(&self, form_id: &str, form_digest: &str) -> Result<()> {
         let answers = crate::delivery::form_answers_of(&self.events);
         match answers.get(&(form_id.to_string(), form_digest.to_string())) {
@@ -307,6 +308,7 @@ impl Ledger {
                 ),
                 serde_json::json!({
                     "answer_id": stored.original,
+                    "latest_answer_id": stored.latest,
                     "state": stored.status.page_state(),
                 }),
             )),
@@ -1193,11 +1195,17 @@ mod tests {
                 } else {
                     "d-scope"
                 };
-                // The form's original answer: the one digest never changes
-                // here, so a form holds at most one.
+                // The form's original answer and its latest answer or
+                // correction: the one digest never changes here, so a form
+                // holds at most one original.
                 let original = sent
                     .iter()
                     .find(|earlier| earlier.form == form && !earlier.amendment)
+                    .map(|earlier| earlier.receipt.answer_id);
+                let latest = sent
+                    .iter()
+                    .rev()
+                    .find(|earlier| earlier.form == form)
                     .map(|earlier| earlier.receipt.answer_id);
                 match next(7) {
                     // A new answer: stored, or refused when the form has one.
@@ -1212,7 +1220,11 @@ mod tests {
                                     ..
                                 }) => assert_eq!(
                                     details,
-                                    serde_json::json!({ "answer_id": original, "state": "stored" }),
+                                    serde_json::json!({
+                                        "answer_id": original,
+                                        "latest_answer_id": latest,
+                                        "state": "stored",
+                                    }),
                                     "{context}"
                                 ),
                                 other => panic!("{context}: {other:?}"),

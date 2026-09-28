@@ -1694,7 +1694,7 @@ mod tests {
         let (_, exists) = post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
         assert_eq!(
             exists["details"],
-            serde_json::json!({ "answer_id": original, "state": "stored" })
+            serde_json::json!({ "answer_id": original, "latest_answer_id": original, "state": "stored" })
         );
         // Exactly 64 KiB is inside the bound: trailing whitespace keeps the
         // JSON valid and the correction stores.

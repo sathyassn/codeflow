@@ -658,14 +658,19 @@ mod tests {
     fn a_second_original_answer_names_the_stored_one_and_its_state() {
         let session = FormsSession::open();
         let first = answer(&session);
-        let exists = |state: &str| {
+        // What a reload shows: the original, the latest answer or
+        // correction, and the latest record's state (C120-1).
+        let exists = |latest: Uuid, state: &str| {
             let before = session.ledger_bytes();
             match try_answer(&session, None) {
                 Err(PresentError::Review {
                     code: "answer_exists",
                     details,
                     ..
-                }) => assert_eq!(details, json!({ "answer_id": first, "state": state })),
+                }) => assert_eq!(
+                    details,
+                    json!({ "answer_id": first, "latest_answer_id": latest, "state": state })
+                ),
                 other => panic!("{state}: {other:?}"),
             }
             assert_eq!(
@@ -674,15 +679,19 @@ mod tests {
                 "{state}: the ledger changed"
             );
         };
-        exists("stored");
+        exists(first, "stored");
         session.store.deliver(session.id, &[first]).unwrap();
-        exists("delivered");
+        exists(first, "delivered");
         assert!(session.store.acknowledge(session.id, first).unwrap());
-        exists("acknowledged");
-        let correction = try_answer(&session, Some(first)).unwrap();
-        // The correction is the answer a reload shows, and it is pending.
-        exists("stored");
-        assert_ne!(correction.answer_id, first);
+        exists(first, "acknowledged");
+        // A pending correction of an acknowledged original: the refusal
+        // names the correction and its state, never the original's.
+        let correction = try_answer(&session, Some(first)).unwrap().answer_id;
+        exists(correction, "stored");
+        session.store.deliver(session.id, &[correction]).unwrap();
+        exists(correction, "delivered");
+        assert!(session.store.acknowledge(session.id, correction).unwrap());
+        exists(correction, "acknowledged");
     }
 
     fn pending() -> EventFilter {
