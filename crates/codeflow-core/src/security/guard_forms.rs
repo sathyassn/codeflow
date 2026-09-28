@@ -284,7 +284,7 @@ pub const REVIEW_PROBES: &[(&str, &str, bool)] = &[
     ("printf-data", "printf '%s' 'find / -delete'", false),
 ];
 
-/// The verdict a round 2 probe is held to.
+/// The verdict a review probe is held to.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Expect {
     /// Refused, naming the protected target it reaches.
@@ -841,6 +841,591 @@ pub const REVIEW_ROUND_TWO_PROBES: &[(&str, &str, Expect)] = &[
     (
         "control-source-absolute",
         "source ./env.sh; rm -rf /Users/alice/project/target",
+        Expect::Allowed,
+    ),
+];
+
+/// Every command of the Codex round 3 deletion probe (`new-cases.json`,
+/// 32 cases, read in the same project as round 2), then the closed-world
+/// reader's own probes: each construct it does not model exactly, and
+/// the cleanups it still proves.
+pub const REVIEW_ROUND_THREE_PROBES: &[(&str, &str, Expect)] = &[
+    (
+        "eval-variable",
+        "E=eval; D=build; $E 'D=/'; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "wrapped-eval-variable",
+        "C=builtin; D=build; $C eval 'D=/'; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "wrapped-cd-variable",
+        "C=command; $C cd /; rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "command-p-cd",
+        "command -p cd /; rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "command-p-eval",
+        "D=build; command -p eval 'D=/'; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "read-here-string",
+        "read D <<< /; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "read-process-substitution",
+        "D=build; read D < <(printf /); rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "process-substitution-sink",
+        "cat <(D=/; rm -rf \"$D\")",
+        Expect::Protected,
+    ),
+    (
+        "trap-variable-late",
+        "D=build; trap 'rm -rf \"$D\"' EXIT; D=/",
+        Expect::Protected,
+    ),
+    (
+        "trap-cd-root-star",
+        "trap 'cd /' DEBUG; rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "coproc-protected",
+        "coproc { D=/; rm -rf \"$D\"; }",
+        Expect::Protected,
+    ),
+    (
+        "coproc-cwd-parent-safe",
+        "coproc { cd /; }; rm -rf build",
+        Expect::Allowed,
+    ),
+    (
+        "arith-index",
+        "D=(/ build); i=1; ((i=0)); rm -rf \"${D[i]}\"",
+        Expect::Protected,
+    ),
+    (
+        "arith-expansion-side",
+        "D=(/ build); i=1; : $((i=0)); rm -rf \"${D[i]}\"",
+        Expect::Protected,
+    ),
+    (
+        "arith-param-side",
+        "unset D; : $(( ${D:=1} )); rm -rf /${D%1}",
+        Expect::Protected,
+    ),
+    (
+        "env-s-quoted-shell",
+        "env -S 'sh -c \"rm -rf /\"'",
+        Expect::Protected,
+    ),
+    (
+        "env-s-inline",
+        "env --split-string='rm -rf /'",
+        Expect::Protected,
+    ),
+    ("env-s-short-inline", "env -S'rm -rf /'", Expect::Protected),
+    (
+        "exec-redir",
+        "exec >/dev/null; D=/; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "exec-rm-redir",
+        "D=/; exec rm -rf \"$D\" >/dev/null",
+        Expect::Protected,
+    ),
+    (
+        "exec-here-read",
+        "exec <<< /; read D; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "safe-here-string",
+        "read D <<< build; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "safe-eval-literal",
+        "D=/; eval 'D=build'; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "safe-function-local",
+        "D=build; f(){ local D=/; :; }; f; rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "unknown-eval-taint",
+        "D=build; eval \"$BODY\"; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "safe-after-literal-cd",
+        "source ./unseen.sh; cd build; rm -rf dist",
+        Expect::Unproven,
+    ),
+    (
+        "safe-absolute-cleanup",
+        "source ./unseen.sh; rm -rf /private/tmp/codeflow-review-artifact",
+        Expect::Allowed,
+    ),
+    (
+        "eval-printf-v",
+        "D=build; E=eval; $E 'printf -v D /'; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-read-variable",
+        "D=build; trap 'D=/' DEBUG; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "readonly-prefix",
+        "D=build; builtin readonly D=/; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "quoted-brace-control",
+        "D=/; rm -rf '{build,$D}'",
+        Expect::Allowed,
+    ),
+    (
+        "literal-repo-cleanup",
+        "cargo test && git log | head; rm -rf build",
+        Expect::Allowed,
+    ),
+    ("value-names-cd", "X=cd; $X /; rm -rf *", Expect::Protected),
+    (
+        "value-holds-cd-line",
+        "X='cd /'; $X; rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "output-names-command",
+        "X=$(git rev-parse --show-toplevel); $X; rm -rf build",
+        Expect::Unproven,
+    ),
+    (
+        "enable-then-cd",
+        "enable -n cd; cd build; rm -rf *",
+        Expect::Unproven,
+    ),
+    ("emulate", "emulate sh; rm -rf build", Expect::Unproven),
+    (
+        "hash-path",
+        "hash -p /bin/sh rm; rm -rf build",
+        Expect::Unproven,
+    ),
+    (
+        "autoload",
+        "autoload -U f; f; rm -rf build",
+        Expect::Unproven,
+    ),
+    ("history-rerun", "fc -s; rm -rf build", Expect::Unproven),
+    (
+        "print-assigns",
+        "print -v D /; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "module-load",
+        "zmodload zsh/files; rm -rf build",
+        Expect::Unproven,
+    ),
+    (
+        "integer-declaration",
+        "integer i=1; rm -rf build",
+        Expect::Unproven,
+    ),
+    (
+        "declare-integer",
+        "declare -i n; n='a[${D:=/}]'; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "builtin-with-option",
+        "builtin -f ./lib.so x; rm -rf build",
+        Expect::Unproven,
+    ),
+    (
+        "inert-builtins",
+        "echo hi; true; type rm; which ls; kill -0 $$; umask 022; rm -rf build",
+        Expect::Allowed,
+    ),
+    (
+        "command-v-prints",
+        "command -v cd; rm -rf build",
+        Expect::Allowed,
+    ),
+    (
+        "function-maybe-unset",
+        "cd(){ :; }; if test -f x; then unset -f cd; fi; cd /; rm -rf *",
+        Expect::Protected,
+    ),
+    ("quoted-builtin", "'cd' /; rm -rf *", Expect::Protected),
+    ("escaped-builtin", "\\cd /; rm -rf *", Expect::Protected),
+    (
+        "positional-assignment",
+        "1=/; rm -rf \"$1\"",
+        Expect::Unproven,
+    ),
+    (
+        "trap-signal-variable",
+        "trap 'D=/' USR1; D=build; kill -USR1 $$; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-cleanup-idiom",
+        "tmp=$(mktemp -d); trap 'rm -rf \"$tmp\"' EXIT; echo hi; rm -rf build",
+        Expect::Allowed,
+    ),
+    (
+        "trap-function",
+        "TRAPDEBUG() { cd /; }; rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "hook-function",
+        "chpwd() { D=/; }; D=build; cd empty; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "trap-unknown-action",
+        "trap \"$ACTION\" EXIT; rm -rf build",
+        Expect::Unproven,
+    ),
+    (
+        "trap-reset",
+        "trap - EXIT; trap '' INT; rm -rf build",
+        Expect::Allowed,
+    ),
+    (
+        "coproc-named-parent-safe",
+        "coproc worker { cd /; }; rm -rf build",
+        Expect::Allowed,
+    ),
+    ("coproc-home", "coproc rm -rf \"$HOME\"", Expect::Protected),
+    (
+        "zsh-brace-close",
+        "{ D=/ }; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "zsh-short-if",
+        "if true { cd / }; rm -rf *",
+        Expect::Unproven,
+    ),
+    ("zsh-repeat", "repeat 1 cd /; rm -rf *", Expect::Protected),
+    (
+        "zsh-foreach",
+        "foreach d (/) rm -rf $d; end",
+        Expect::Unproven,
+    ),
+    (
+        "zsh-glob-qualifier-code",
+        "rm -rf *(e:'reply=(/)':)",
+        Expect::Unproven,
+    ),
+    (
+        "zsh-glob-alternation",
+        "cd /; rm -rf (etc|usr)",
+        Expect::Unproven,
+    ),
+    (
+        "zsh-anonymous-function",
+        "() { rm -rf \"$1\"; } /",
+        Expect::Protected,
+    ),
+    (
+        "zsh-anonymous-function-keyword",
+        "function { cd /; }; rm -rf *",
+        Expect::Protected,
+    ),
+    ("zsh-subscript", "D=/usrx; rm -rf $D[1,4]", Expect::Unproven),
+    ("zsh-modifier", "D=/usr/x; rm -rf $D:h", Expect::Unproven),
+    ("zsh-named-directory", "D=/; rm -rf ~D", Expect::Protected),
+    ("zsh-split-flag", "D=\"/ x\"; rm -rf $=D", Expect::Unproven),
+    ("zsh-numeric-glob", "rm -rf /lib<->", Expect::Unproven),
+    ("zsh-equals", "rm -rf =ls", Expect::Unproven),
+    (
+        "recursive-glob-root",
+        "cd /; rm -rf **/etc",
+        Expect::Protected,
+    ),
+    (
+        "recursive-glob-system",
+        "cd /usr/local; rm -rf **/x",
+        Expect::Protected,
+    ),
+    (
+        "recursive-glob-project",
+        "cd /Users/alice/project && rm -rf **/node_modules",
+        Expect::Allowed,
+    ),
+    ("recursive-glob-links", "rm -rf ***/x", Expect::Protected),
+    ("range-either-case", "rm -rf /[T-V]sr", Expect::Protected),
+    ("unclosed-test", "[[ -f x ] && rm -rf /", Expect::Protected),
+    (
+        "case-subject-substitution",
+        "D=/; case $(rm -rf \"$D\") in *) ;; esac",
+        Expect::Protected,
+    ),
+    (
+        "case-subject-assigns",
+        "case ${D:=/} in *) ;; esac; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "for-list-assigns",
+        "for x in ${D:=/}; do :; done; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "redirect-target-assigns",
+        ": > \"${D:=/}\"; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "subscript-substitution",
+        "a[$(rm -rf \"$HOME\")]=1",
+        Expect::Protected,
+    ),
+    (
+        "expansion-subscript-substitution",
+        "echo \"${a[$(rm -rf \"$HOME\")]}\"",
+        Expect::Protected,
+    ),
+    (
+        "opaque-substitution",
+        "D=/; echo ${X/a/$(rm -rf \"$D\")}",
+        Expect::Protected,
+    ),
+    (
+        "opaque-assigns",
+        "echo ${X/a/${D:=/}}; rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "arith-value-injection",
+        "x='a[$(rm -rf \"$HOME\")]'; (( x ))",
+        Expect::Protected,
+    ),
+    (
+        "arith-sets-ifs",
+        "D=/0usr; (( IFS = 0 )); rm -rf $D",
+        Expect::Unproven,
+    ),
+    (
+        "arith-for-loop",
+        "for ((i=0; i<1; i++)); do rm -rf \"build/x$i\"; done",
+        Expect::Allowed,
+    ),
+    (
+        "arith-number",
+        "D=build; (( D = 5 )); rm -rf \"$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "arith-substitution",
+        "(( $(rm -rf \"$HOME\") ))",
+        Expect::Protected,
+    ),
+    (
+        "arith-old-form",
+        "echo $[ $(rm -rf \"$HOME\") ]",
+        Expect::Protected,
+    ),
+    (
+        "let-assigns",
+        "let \"D=5\" x=1; rm -rf build",
+        Expect::Allowed,
+    ),
+    (
+        "echo-output",
+        "D=$(echo /); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "echo-flags",
+        "D=$(echo -ne /); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "echo-octal",
+        "D=$(echo '\\0057'); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "printf-octal",
+        "D=$(printf '\\057usr'); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "printf-b",
+        "D=$(printf '%b' '\\0057'); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "output-before-last",
+        "D=$(echo /; true); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "output-of-group",
+        "D=$( { echo /; } ); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "output-of-function",
+        "f(){ echo /; }; D=$(f); rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "output-pwd",
+        "D=$(cd / && pwd); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    ("output-dirs", "D=$(dirs); rm -rf \"$D\"", Expect::Unproven),
+    (
+        "output-program",
+        "D=$(git rev-parse --show-toplevel); rm -rf \"$D/build\"",
+        Expect::Allowed,
+    ),
+    (
+        "output-cat-here-string",
+        "D=$(cat <<< /); rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "output-print",
+        "D=$(print -r /); rm -rf \"$D\"",
+        Expect::Protected,
+    ),
+    (
+        "output-command-v",
+        "D=$(command -v ls); rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "output-if",
+        "D=$(if true; then echo /; fi); rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    ("ansi-octal", "rm -rf $'\\057'", Expect::Protected),
+    ("ansi-hex", "rm -rf $'\\x2f'", Expect::Protected),
+    (
+        "cd-may-fail",
+        "cd /; cd missing-dir-xyz; rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "cd-may-fail-and",
+        "cd /; cd missing-dir-xyz && rm -rf *",
+        Expect::Allowed,
+    ),
+    (
+        "cd-may-fail-or",
+        "cd /; cd missing-dir-xyz || rm -rf *",
+        Expect::Protected,
+    ),
+    (
+        "cd-negated",
+        "cd /; ! cd /private/tmp && rm -rf *",
+        Expect::Allowed,
+    ),
+    (
+        "cd-physical",
+        "cd -P root-link/..; rm -rf *",
+        Expect::Protected,
+    ),
+    ("cd-logical", "cd root-link/..; rm -rf *", Expect::Allowed),
+    (
+        "cd-stack",
+        "cd /; cd build; cd +1; rm -rf *",
+        Expect::Protected,
+    ),
+    ("cd-two-operands", "cd usr etc; rm -rf *", Expect::Unproven),
+    ("env-chdir-attached", "env -C/ rm -rf *", Expect::Protected),
+    (
+        "sudo-chdir-attached",
+        "sudo -D/ rm -rf *",
+        Expect::Protected,
+    ),
+    ("sudo-login-shell", "sudo -i rm -rf *", Expect::Unproven),
+    ("env-cluster-split", "env -iS'rm -rf /'", Expect::Protected),
+    ("cdpath", "CDPATH=/; cd etc; rm -rf *", Expect::Unproven),
+    (
+        "bash-env",
+        "BASH_ENV=./x bash -c 'rm -rf build'",
+        Expect::Unproven,
+    ),
+    ("pwd-assigned", "PWD=/; cd .; rm -rf *", Expect::Unproven),
+    ("last-argument", "ls /; rm -rf \"$_\"", Expect::Protected),
+    (
+        "last-argument-project",
+        "mkdir -p build/out && cd \"$_\" && rm -rf dist",
+        Expect::Allowed,
+    ),
+    (
+        "regex-match",
+        "[[ / =~ .* ]]; rm -rf \"${BASH_REMATCH[0]}\"",
+        Expect::Unproven,
+    ),
+    ("home-unset", "unset HOME; rm -rf ~", Expect::Protected),
+    ("argv-read", "set -- /; rm -rf \"$argv\"", Expect::Unproven),
+    (
+        "function-named-root",
+        "/(){ rm -rf \"$0\"; }; /",
+        Expect::Protected,
+    ),
+    ("global-alias", "alias -g X=/; rm -rf X", Expect::Unproven),
+    (
+        "option-autocd",
+        "setopt autocd; rm -rf build",
+        Expect::Unproven,
+    ),
+    (
+        "option-inert",
+        "set -e; set -o pipefail; shopt -s nullglob; rm -rf build",
+        Expect::Allowed,
+    ),
+    ("option-keyword", "set -k; rm -rf build", Expect::Unproven),
+    (
+        "option-dotglob",
+        "shopt -s dotglob; rm -rf build",
+        Expect::Unproven,
+    ),
+    ("zsh-set-array", "set -A D /; rm -rf $D", Expect::Unproven),
+    (
+        "zsh-tied",
+        "typeset -T D d; d=(/); rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "zsh-justify",
+        "typeset -L4 D; D=/usrX; rm -rf \"$D\"",
+        Expect::Unproven,
+    ),
+    (
+        "numeric-arith-value",
+        "D=$((1)); rm -rf \"build/$D\"",
+        Expect::Allowed,
+    ),
+    (
+        "declare-integer-number",
+        "declare -i n=5; n+=2; rm -rf build",
         Expect::Allowed,
     ),
 ];

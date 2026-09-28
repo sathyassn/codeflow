@@ -930,10 +930,13 @@ publication date._
   that may hold a protected value on any path is refused too, and the
   message then says so. Functions, `local`, positional parameters, arrays,
   `read`, `IFS`, aliases, `eval`, `command cd` and `builtin cd` are
-  followed as the shell runs them. A deletion whose target depends on
-  something exec-guard does not follow exactly, such as a sourced file,
-  `declare -n`, `${V/x/y}` or `read` from a command it cannot see, is
-  refused as unproven, and the message asks for the project path written
+  followed as the shell runs them, and so are traps, zsh hook functions,
+  `coproc`, arithmetic and a `cd` that may fail. exec-guard allows only the
+  shell it models: after anything else, such as a sourced file,
+  `declare -n`, `enable`, `emulate`, `set -k`, a trap it cannot read, an
+  assignment to `CDPATH` or `BASH_ENV`, zsh-only syntax, or a command named
+  by a value it cannot see, a deletion whose target depends on the state
+  is refused as unproven, and the message asks for the project path written
   literally. A deletion inside the project, such as
   `find . -name '*.o' -delete`, still runs.
 

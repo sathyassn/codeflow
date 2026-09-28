@@ -172,10 +172,13 @@ roots and Windows drive, system, profile, disk, recovery, and permission
 operations. A composed deletion is read as scoped shell: each variable,
 positional parameter and the working directory carry every value they may
 hold through subshells, branches, loops and function calls, and the deletion
-is refused when any of them reaches a protected location. A construct the
-reader does not model exactly (a sourced file, a name reference, an
-unresolved parameter expansion) makes what it may change unknown, and a
-deletion that depends on an unknown value is refused as unproven (TSK-141).
+is refused when any of them reaches a protected location. The reader is
+closed-world: its module doc lists the grammar it models, traps and zsh
+hook functions included, and anything else in command position or between
+commands (a sourced file, a name reference, an unmodelled builtin or
+option, zsh-only syntax, a command named by an unknown value) makes the
+state unknown, so a deletion that depends on it is refused as unproven
+(TSK-141).
 macOS and Linux use native harness
 sandboxes; WSL2 follows the Linux path. Native Windows Codex selects its
 elevated sandbox, while native Windows Claude has no equivalent OS sandbox
