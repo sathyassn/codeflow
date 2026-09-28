@@ -6,7 +6,6 @@
 
 use std::io::Read;
 use std::path::{Path, PathBuf};
-use std::process::Command;
 
 use clap::Args;
 use codeflow_core::hooks::{git_hook, policy::Policy, policy_schema};
@@ -298,7 +297,7 @@ fn pending_cleanup(root: &Path) -> git_hook::GitCleanup {
 /// The NUL-separated entries of one `git config -z` read in `root`, exact
 /// bytes, value text unchanged; empty when unset or unreadable.
 fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["config", "-z"])
@@ -320,7 +319,7 @@ fn git_config_values(root: &Path, args: &[&str]) -> Vec<String> {
 /// the subject text, so a normal one-parent commit named `Merge ...` is still
 /// format- and body-checked.
 fn merge_in_progress(root: &Path) -> bool {
-    let git_dir = Command::new("git")
+    let git_dir = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--git-dir"])
@@ -338,7 +337,7 @@ fn merge_in_progress(root: &Path) -> bool {
 /// the contract-surface tripwire. Empty on any error — the tripwire is advisory,
 /// so an unavailable file list simply means no nudge.
 fn staged_files(root: &Path) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["diff", "--cached", "--name-only"])

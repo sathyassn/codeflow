@@ -2852,7 +2852,7 @@ mod tests {
     /// git in a tempdir, isolated from the host config (mirrors orient's
     /// test helper — both surfaces resolve hook wiring the same way).
     fn git(dir: &Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

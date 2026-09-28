@@ -9,7 +9,6 @@
 //! policy, so the same rule holds in every project that installs it.
 
 use std::path::Path;
-use std::process::Command;
 
 use codeflow_core::hooks::{GitPolicy, PolicyLevel, Violation};
 use codeflow_core::workgraph::acceptance::{journey_requirement_at, JOURNEY_RULE};
@@ -546,7 +545,7 @@ pub(super) fn range_changes(
     base: &str,
     head: &str,
 ) -> Result<Vec<(String, String)>, String> {
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args([

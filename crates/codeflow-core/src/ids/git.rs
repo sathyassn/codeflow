@@ -31,7 +31,7 @@ impl Git {
     }
 
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new("git");
+        let mut command = crate::git::command();
         command
             .arg("-C")
             .arg(&self.root)

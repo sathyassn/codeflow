@@ -693,7 +693,7 @@ fn awaiting_selection_errors(
 /// from merge commit subjects (`Merge pull request #N from <prefix>/TSK-NNN-...`
 /// or `Merge branch '<prefix>/TSK-NNN-...'`). Zero when git is unavailable.
 fn landed_pull_requests(repo_root: &Path, task_id: &str) -> usize {
-    let Ok(out) = std::process::Command::new("git")
+    let Ok(out) = crate::git::command()
         .arg("-C")
         .arg(repo_root)
         .args(["log", "--merges", "--format=%s", "HEAD"])

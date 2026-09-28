@@ -17,7 +17,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 
 mod acceptance;
 mod adopter;
@@ -1190,7 +1190,7 @@ fn resolve_base(root: &Path, candidates: &[String]) -> Option<String> {
 /// `git rev-parse --verify --quiet <rev>^{commit}` — returns the resolved sha,
 /// or `None` when the rev does not name a commit.
 fn rev_parse(root: &Path, rev: &str) -> Option<String> {
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["rev-parse", "--verify", "--quiet"])
@@ -1208,7 +1208,7 @@ fn rev_parse(root: &Path, rev: &str) -> Option<String> {
 /// message) records flagged merge or not. Uses a NUL-delimited `git log` so
 /// multi-line bodies parse unambiguously.
 fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRecord>, String> {
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["log", "-z", "--format=%H %P%n%B"])
@@ -1312,7 +1312,7 @@ fn read_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeMap<String, Vec<u8>>, 
     if blobs.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let mut child = Command::new("git")
+    let mut child = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["cat-file", "--batch"])
@@ -1367,7 +1367,7 @@ fn parse_batch(stdout: &[u8], queried: &[&str]) -> Result<BTreeMap<String, Vec<u
 
 /// Run `git -C root <args>` and return its stdout, or its stderr as the error.
 fn git_stdout(root: &Path, args: &[&str]) -> Result<String, String> {
-    let out = Command::new("git")
+    let out = codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(args)
@@ -1506,7 +1506,7 @@ fn hunk_header(header: &str) -> Option<(usize, usize, usize)> {
 /// Empty on any error — the tripwire is advisory, so an unavailable list means
 /// no nudge.
 fn commit_files(root: &Path, sha: &str) -> Vec<String> {
-    Command::new("git")
+    codeflow_core::git::command()
         .arg("-C")
         .arg(root)
         .args(["diff-tree", "--no-commit-id", "--name-only", "-r", sha])

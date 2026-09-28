@@ -3,7 +3,6 @@
 //! `git init`, config get/set, staged adds, and the scaffold commit.
 
 use std::path::Path;
-use std::process::Command;
 
 use super::ScaffoldError;
 
@@ -16,7 +15,7 @@ fn git_env(
     args: &[&str],
     envs: &[(&str, &str)],
 ) -> Result<std::process::Output, ScaffoldError> {
-    Command::new("git")
+    crate::git::command()
         .arg("-C")
         .arg(root)
         .args(args)

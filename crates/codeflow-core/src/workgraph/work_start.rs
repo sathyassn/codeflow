@@ -1464,7 +1464,7 @@ mod tests {
     }
 
     fn git(root: &Path, args: &[&str]) {
-        let status = Command::new("git")
+        let status = crate::git::command()
             .arg("-C")
             .arg(root)
             .args(args)
@@ -1528,7 +1528,7 @@ mod tests {
     fn anchored_graph_passes_without_mutating_repo() {
         let dir = fixture();
         let before_head = fs::read_to_string(dir.path().join(".git/HEAD")).expect("HEAD readable");
-        let before_status = Command::new("git")
+        let before_status = crate::git::command()
             .arg("-C")
             .arg(dir.path())
             .args(["status", "--porcelain"])
@@ -1543,7 +1543,7 @@ mod tests {
             fs::read_to_string(dir.path().join(".git/HEAD")).unwrap(),
             before_head
         );
-        let after_status = Command::new("git")
+        let after_status = crate::git::command()
             .arg("-C")
             .arg(dir.path())
             .args(["status", "--porcelain"])

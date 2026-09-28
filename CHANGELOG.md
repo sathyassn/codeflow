@@ -919,6 +919,16 @@ publication date._
   they were refused. The same word as a prompt, an option's value or after
   `--`, as in `codex exec -- --help`, is still reported.
 
+<!-- codeflow:release-impact patch -->
+- **A git hook runs the codeflow that started git.** When a `codeflow`
+  command ran git, such as `task new` pushing its reservation to the
+  registry, the hook git fired ran whichever `codeflow` was first on PATH;
+  an older one there refused the registry push. codeflow now names its own
+  binary in `CODEFLOW_HOOK_BINARY` for its git children only, and the hook
+  shims run that binary, failing the hook when it is missing or not
+  executable. Git run outside codeflow still uses the `codeflow` on PATH.
+  Run `codeflow update` to install the new shims.
+
 ### Changed
 
 <!-- codeflow:release-impact major legacy-group=pre-policy-v3 sha256=2e372b00f9ef20009024ba30733d75525345a0537bc419e2eb65a2b60aa59e9e -->

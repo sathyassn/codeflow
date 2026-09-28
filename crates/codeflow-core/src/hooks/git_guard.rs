@@ -98,7 +98,7 @@ pub type AliasLookup<'a> = Option<&'a dyn Fn(&AliasQuery<'_>) -> AliasAnswer>;
 /// [`AliasAnswer::Unreadable`].
 #[must_use]
 pub fn read_alias(cwd: &std::path::Path, query: &AliasQuery<'_>) -> AliasAnswer {
-    let mut cmd = std::process::Command::new("git");
+    let mut cmd = crate::git::command();
     cmd.current_dir(cwd).stdin(std::process::Stdio::null());
     match query.target {
         Some(t) if t.git_dir => {
@@ -7039,7 +7039,7 @@ mod tests {
 
     /// Run git in `dir` with the developer's configuration isolated.
     fn run_git(dir: &std::path::Path, args: &[&str]) {
-        let out = std::process::Command::new("git")
+        let out = crate::git::command()
             .args(args)
             .current_dir(dir)
             .env("GIT_CONFIG_GLOBAL", "/dev/null")

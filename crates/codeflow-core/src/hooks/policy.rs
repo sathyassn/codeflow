@@ -1087,7 +1087,7 @@ mod tests {
     /// the given `policy_armed` value.
     fn committed_repo_with_armed(dir: &Path, armed: bool) {
         let run = |args: &[&str]| {
-            let ok = std::process::Command::new("git")
+            let ok = crate::git::command()
                 .args(args)
                 .current_dir(dir)
                 .env("GIT_CONFIG_GLOBAL", "/dev/null")
@@ -1135,7 +1135,7 @@ mod tests {
         // repo with an unborn HEAD (no commit yet) and policy_armed=false is
         // graced, so the first scaffold commit is not walled.
         let dir = tempfile::tempdir().unwrap();
-        std::process::Command::new("git")
+        crate::git::command()
             .args(["init", "-b", "main"])
             .current_dir(dir.path())
             .env("GIT_CONFIG_GLOBAL", "/dev/null")
