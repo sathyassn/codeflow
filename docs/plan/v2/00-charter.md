@@ -183,7 +183,7 @@ so every host reports the same number; line counts are not measured.
 | Skill | Guideline | Skill | Guideline |
 |---|---:|---|---:|
 | `cf-consult` | 7 KiB | `cf-herdr` | 9 KiB |
-| `cf-customize` | 22 KiB | `cf-method` | 19 KiB + 512 B |
+| `cf-customize` | 22 KiB + 512 B | `cf-method` | 19 KiB + 512 B |
 | `cf-delegate` | 20 KiB + 512 B | `cf-model-orchestrator` | 29 KiB |
 | `cf-design` | 19 KiB + 512 B | `cf-plan` | 9 KiB |
 | `cf-develop` | 5 KiB | `cf-present` | 8 KiB |

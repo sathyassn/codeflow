@@ -1779,3 +1779,83 @@ fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes
     assert!(report.contains("move detail behind a trigger"), "{report}");
     assert!(report.contains("per-task reading chain"), "{report}");
 }
+
+/// The `codeflow` commands a text names in code spans, each as its command
+/// path (up to two lower-case words) and the long flags written with it.
+fn named_commands(text: &str) -> Vec<(Vec<String>, Vec<String>)> {
+    let mut commands = Vec::new();
+    for (index, span) in text.split('`').enumerate() {
+        if index % 2 == 0 || !span.starts_with("codeflow ") {
+            continue;
+        }
+        let words: Vec<&str> = span.split_whitespace().skip(1).collect();
+        let path: Vec<String> = words
+            .iter()
+            .take_while(|word| {
+                !word.is_empty()
+                    && word.chars().all(|c| c.is_ascii_lowercase() || c == '-')
+                    && !word.starts_with('-')
+            })
+            .take(2)
+            .map(|word| (*word).to_string())
+            .collect();
+        let flags: Vec<String> = words
+            .iter()
+            .filter(|word| word.starts_with("--"))
+            .map(|word| word.split(['=', '|']).next().unwrap().to_string())
+            .collect();
+        commands.push((path, flags));
+    }
+    commands
+}
+
+#[test]
+fn a_fresh_project_installs_the_work_lifecycle_and_every_command_it_names_runs() {
+    // TSK-108 AC-7 (journey, SPC-013 R-34): at each tier that ships the
+    // method, the lifecycle section is installed and each command it names,
+    // with each flag it writes, exists in the binary the project runs.
+    let rel = "cf-method/references/project-organization.md";
+    let asset = normalize_crlf(&read(
+        &repo_root(),
+        &format!("assets/base/claude/skills/{rel}"),
+    ));
+    let start = asset
+        .find("\n## The work lifecycle\n")
+        .expect("the asset holds the work lifecycle section");
+    let rest = &asset[start + 1..];
+    let section = &rest[..rest[3..].find("\n## ").map_or(rest.len(), |at| at + 3)];
+    let commands = named_commands(section);
+    assert!(
+        commands.len() >= 10,
+        "the section names the lifecycle verbs: {commands:?}"
+    );
+    for flag in ["--standard", "--full"] {
+        let (_tmp, root) = fresh(flag);
+        for tree in [".claude/skills", ".agents/skills"] {
+            assert_eq!(
+                normalize_crlf(&read(&root, &format!("{tree}/{rel}"))),
+                asset,
+                "{flag}: {tree}/{rel} is the shipped lifecycle reference"
+            );
+        }
+        for (path, flags) in &commands {
+            let mut args: Vec<&str> = path.iter().map(String::as_str).collect();
+            args.push("--help");
+            let out = codeflow(&root, &args);
+            assert!(
+                out.status.success(),
+                "{flag}: `codeflow {}` named by the lifecycle section does not run: {}",
+                path.join(" "),
+                output_text(&out)
+            );
+            let help = output_text(&out);
+            for named in flags {
+                assert!(
+                    help.contains(named.as_str()),
+                    "{flag}: `codeflow {}` has no {named} flag",
+                    path.join(" ")
+                );
+            }
+        }
+    }
+}

@@ -1571,17 +1571,17 @@
         {
           "path": ".agents/skills/cf-method/references/project-organization.md",
           "markers": [
-            "merged into the task's declared `integration_target` before implementation",
-            "`codeflow work start` is a read-only preflight",
-            "CI repeats both"
+            "merged into each task's declared `integration_target` before implementation",
+            "It is a read-only preflight",
+            "CI repeats both",
+            "never on a task branch that could authorize itself",
+            "remote-tracking branch, never `HEAD`, a tag"
           ]
         },
         {
           "path": ".agents/skills/cf-plan/SKILL.md",
           "markers": [
             "Merge the planning PR into every task's",
-            "A task branch is never an integration target",
-            "real local or remote-tracking branch",
             "preflight is read-only"
           ]
         }
@@ -1617,7 +1617,7 @@
         {
           "path": ".agents/skills/cf-method/references/project-organization.md",
           "markers": [
-            "From discussion to delivered work",
+            "The work lifecycle",
             "implement -> verify -> cross-lineage review -> integrated judgment -> ship",
             "Material discovery"
           ]
@@ -1649,7 +1649,7 @@
           "markers": [
             "Partition a task set by coherent durable outcomes",
             "A batch is not an epic boundary",
-            "For each multi-task epic, first create one shared",
+            "For each multi-task epic, the shared",
             "Select this shape autonomously",
             "do not ask the operator merely to choose the routine landing mechanism",
             "per-task review occurs before integration",
@@ -1679,7 +1679,7 @@
           "path": ".agents/skills/cf-method/references/project-organization.md",
           "markers": [
             "the request boundary is not automatically an epic",
-            "for every task in a multi-task epic",
+            "every task in a multi-task epic uses",
             "Create that one shared branch from the intended protected target"
           ]
         }

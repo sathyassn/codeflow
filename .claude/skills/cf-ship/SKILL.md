@@ -10,7 +10,9 @@ description: Land finished work — docs and capability updates, then a PR throu
    After review, a task PR's last commit runs `codeflow task status <id>
    complete --acceptance <file>`; its block names the reviewed code commit
    (late: the clean landing merge's second parent). After-release criteria
-   stay `deferred`, never verified at build time.
+   stay `deferred`, never verified at build time. When a work item is planned,
+   started, blocked, completed or cancelled, follow
+   [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle).
    `codeflow test` and `codeflow validate --docs` remain required wherever the
    installed/project ship gate requires them, including for docs-only changes;
    report such a run as repository-gate evidence, not invented code coverage or
@@ -27,9 +29,9 @@ description: Land finished work — docs and capability updates, then a PR throu
      `validate --docs` stays clean — it does not gate epic close);
    - an ADR finalized if a Tier-3 decision was made; `docs/architecture.md`
      updated when the ADR declares architecture impact;
-   - an approved spec transitioned to frozen (`status: implemented`) when its
-     consuming work ships; already-frozen specs remain historical; epic and
-     task statuses updated through their applicable change control.
+   - no spec status is written at ship: `implemented` is derived once every
+     consumer is complete, and already-frozen specs remain historical; epic
+     and task statuses change only as the work lifecycle states.
 3. Re-run `codeflow validate --docs` after the doc updates — it must pass.
    If `.codeflow/docs-portal.json` exists and this change materially affects
    authoritative docs, relationships, version context, portal configuration,

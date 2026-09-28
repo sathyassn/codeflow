@@ -78,7 +78,7 @@ pub const ROUTING_SKILLS: &[&str] = &["cf-delegate", "cf-model-orchestrator"];
 /// prompt to move detail behind a trigger, never to cut a duty.
 pub const SKILL_GUIDELINES: &[(&str, usize)] = &[
     ("cf-consult", 7 * KIB),
-    ("cf-customize", 22 * KIB),
+    ("cf-customize", 22 * KIB + 512),
     ("cf-delegate", 20 * KIB + 512),
     ("cf-design", 19 * KIB + 512),
     ("cf-develop", 5 * KIB),
@@ -243,6 +243,8 @@ const ROUTE_STATUS: &str = "cf-model-orchestrator/resources/routing/route-status
 const ROUTING_DESIGN: &str = "cf-model-orchestrator/resources/routing/design.md";
 const OVERRIDES: &str = "cf-model-orchestrator/references/model-overrides.md";
 const ORGANIZATION: &str = "cf-method/references/project-organization.md";
+/// TSK-108: the moment a stage skill reads the work lifecycle section.
+const LIFECYCLE_MOMENT: &str = "work item is planned, started, blocked, completed or cancelled";
 
 /// Reads outside the per-task chain, each with its trigger and reason.
 pub const CONDITIONAL_READS: &[ConditionalRead] = &[
@@ -392,6 +394,31 @@ pub const CONDITIONAL_READS: &[ConditionalRead] = &[
         TASK_GRAPH,
         "For CodeFlow multi-task work",
         "only for a multi-task plan",
+    ),
+    // TSK-108: the stage skills follow the one work lifecycle section.
+    conditional(
+        "cf-method/SKILL.md",
+        ORGANIZATION,
+        LIFECYCLE_MOMENT,
+        "only when a work item's record, branch or status changes",
+    ),
+    conditional(
+        "cf-plan/SKILL.md",
+        ORGANIZATION,
+        LIFECYCLE_MOMENT,
+        "only when a work item's record, branch or status changes",
+    ),
+    conditional(
+        "cf-develop/SKILL.md",
+        ORGANIZATION,
+        LIFECYCLE_MOMENT,
+        "only when a work item's record, branch or status changes",
+    ),
+    conditional(
+        "cf-ship/SKILL.md",
+        ORGANIZATION,
+        LIFECYCLE_MOMENT,
+        "only when a work item's record, branch or status changes",
     ),
     conditional(
         ROUTING,

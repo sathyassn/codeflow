@@ -12,9 +12,10 @@ records the required interactive seat unavailable and the reduced assurance.
 1. Locate the work and its acceptance criteria (epic, task, spec, or the user's
    prompt). No stated criteria → stop and run the clarity gate from `cf-plan`
    first. For a durable task, use `task/TSK-NNN-<slug>` and run
-   `codeflow work start TSK-NNN` before product edits; a missing stable planning
-   anchor, parent/standalone rationale, approved spec, or completed predecessor
-   returns to planning rather than being bypassed.
+   `codeflow work start TSK-NNN` before product edits; its refusal returns to
+   planning, never a bypass. When a work item is planned, started, blocked,
+   completed or cancelled, follow
+   [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle).
 2. Consult `docs/capabilities.md` and `docs/architecture.md` before touching
    code; name the bounded impact set (quality contract). For a material
    product, UX, interaction, or visual-design change, require the plan's
