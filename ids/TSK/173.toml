@@ -1,0 +1,11 @@
+id = "TSK-173"
+uid = "532d6804-574f-4685-8df7-2046d3b07aba"
+kind = "TSK"
+title = "guard runtime: fail closed, contract and seat readiness"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T23:25:45Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
