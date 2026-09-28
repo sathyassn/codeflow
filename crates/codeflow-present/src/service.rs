@@ -1832,6 +1832,101 @@ mod tests {
         assert_eq!(ledger_bytes(&state), Some(corrupt));
     }
 
+    /// The ledger's line and byte bounds sit exactly where the constants
+    /// say: the answer that reaches a bound is stored, the next is a typed
+    /// 503 naming the bound, and nothing past it is stored. The bounds are
+    /// lowered on this thread only (`fault::lower_bounds`, test-only), so
+    /// the same checks as for 100,000 lines and 64 MiB run on a few lines.
+    #[tokio::test]
+    async fn answers_route_stops_at_the_ledger_line_and_byte_bounds() {
+        use crate::responses::fault::lower_bounds;
+
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let length = |state: &AppState| ledger_bytes(state).map_or(0, |bytes| bytes.len());
+        let lines = |state: &AppState| {
+            ledger_bytes(state).map_or(0, |bytes| String::from_utf8_lossy(&bytes).lines().count())
+        };
+        let stored = |status: StatusCode, receipt: &serde_json::Value, sequence: u64| {
+            assert_eq!(
+                (
+                    status,
+                    receipt["replayed"].as_bool(),
+                    receipt["sequence"].as_u64()
+                ),
+                (StatusCode::OK, Some(false), Some(sequence)),
+                "{receipt}"
+            );
+        };
+        let refused = |status: StatusCode, body: &serde_json::Value, cause: &str| {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{body}");
+            assert_eq!(body["error"], "store_unavailable");
+            assert!(body.get("answer_id").is_none(), "a receipt: {body}");
+            let message = body["message"].as_str().unwrap();
+            assert!(message.contains(cause), "{message}");
+            assert!(message.contains("no receipt was given"), "{message}");
+        };
+
+        // The line bound, lowered to 2: the second answer reaches it and is
+        // stored; the third is refused and the ledger is unchanged.
+        lower_bounds(Some(2), None);
+        for sequence in 1..=2 {
+            let (status, receipt) =
+                post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+            stored(status, &receipt, sequence);
+        }
+        let full = ledger_bytes(&state);
+        let third = answer_body(&state, |_| {});
+        let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
+        refused(status, &body, "the answer ledger holds at most 2 lines");
+        assert_eq!(ledger_bytes(&state), full, "line bound: the ledger changed");
+        assert_eq!(lines(&state), 2);
+
+        // The byte bound. Every line here has the same length, so one byte
+        // short of three lines refuses the third, exactly three lines stores
+        // it, and the fourth is refused.
+        let bytes = full.unwrap();
+        let line = bytes.len() / 2;
+        assert_eq!(
+            bytes.iter().position(|byte| *byte == b'\n'),
+            Some(line - 1),
+            "the lines differ in length"
+        );
+        let bound = |lines: usize| u64::try_from(lines * line).unwrap();
+        lower_bounds(None, Some(bound(3) - 1));
+        let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
+        refused(
+            status,
+            &body,
+            &format!("the answer ledger reached its {} byte bound", bound(3) - 1),
+        );
+        assert_eq!(length(&state), 2 * line, "byte bound: the ledger changed");
+        lower_bounds(None, Some(bound(3)));
+        let (status, receipt) = post_answer(&state, headers.clone(), third).await;
+        stored(status, &receipt, 3);
+        assert_eq!(
+            length(&state),
+            3 * line,
+            "the ledger does not end at its bound"
+        );
+        let at_bound = ledger_bytes(&state);
+        let (status, body) =
+            post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
+        refused(
+            status,
+            &body,
+            &format!("the answer ledger reached its {} byte bound", bound(3)),
+        );
+        assert_eq!(
+            ledger_bytes(&state),
+            at_bound,
+            "byte bound: the ledger changed"
+        );
+        assert_eq!(lines(&state), 3);
+        lower_bounds(None, None);
+    }
+
     #[test]
     fn expired_bootstrap_closes_session_and_removes_capability_file() {
         let (_temp, state) = app_state();

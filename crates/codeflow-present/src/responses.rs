@@ -152,16 +152,16 @@ impl Ledger {
             .metadata()
             .map_err(|error| PresentError::io(&path, error))?
             .len();
-        if length > limits::MAX_RESPONSE_LOG_BYTES {
+        if length > max_log_bytes() {
             return Err(PresentError::CorruptState(format!(
                 "{} exceeds the {} byte ledger bound",
                 path.display(),
-                limits::MAX_RESPONSE_LOG_BYTES
+                max_log_bytes()
             )));
         }
         let mut bytes = Vec::new();
         std::io::Read::by_ref(&mut file)
-            .take(limits::MAX_RESPONSE_LOG_BYTES + 1)
+            .take(max_log_bytes() + 1)
             .read_to_end(&mut bytes)
             .map_err(|error| PresentError::io(&path, error))?;
         if bytes.len() as u64 != length {
@@ -240,10 +240,10 @@ impl Ledger {
     /// next open cuts a torn line, and a resend with the same request id
     /// replays a whole one, so a resend is always safe.
     fn append(&mut self, store: &SessionStore, event: ResponseEvent) -> Result<()> {
-        if self.events.len() >= limits::MAX_RESPONSE_EVENTS {
+        if self.events.len() >= max_events() {
             return Err(PresentError::ServiceUnavailable(format!(
                 "the answer ledger holds at most {} lines",
-                limits::MAX_RESPONSE_EVENTS
+                max_events()
             )));
         }
         let mut line = serde_json::to_vec(&event)?;
@@ -255,10 +255,10 @@ impl Ledger {
         }
         line.push(b'\n');
         let grown = self.length + line.len() as u64;
-        if grown > limits::MAX_RESPONSE_LOG_BYTES {
+        if grown > max_log_bytes() {
             return Err(PresentError::ServiceUnavailable(format!(
                 "the answer ledger reached its {} byte bound",
-                limits::MAX_RESPONSE_LOG_BYTES
+                max_log_bytes()
             )));
         }
         store.enforce_retention_unlocked()?;
@@ -277,6 +277,25 @@ impl Ledger {
         self.events.push(event);
         Ok(())
     }
+}
+
+/// The ledger's line bound. Only a test can lower it, on its own thread:
+/// the override lives in the test-only `fault` module.
+fn max_events() -> usize {
+    #[cfg(test)]
+    if let Some(events) = fault::lowered_events() {
+        return events;
+    }
+    limits::MAX_RESPONSE_EVENTS
+}
+
+/// The ledger's byte bound, lowered only by a test as `max_events` is.
+fn max_log_bytes() -> u64 {
+    #[cfg(test)]
+    if let Some(bytes) = fault::lowered_log_bytes() {
+        return bytes;
+    }
+    limits::MAX_RESPONSE_LOG_BYTES
 }
 
 fn write_line(file: &mut File, line: &[u8]) -> std::io::Result<()> {
@@ -339,8 +358,8 @@ fn validate_ledger(path: &Path, events: &[ResponseEvent], session_id: Uuid) -> R
             path.display()
         )))
     };
-    if events.len() > limits::MAX_RESPONSE_EVENTS {
-        return corrupt(format!("more than {} lines", limits::MAX_RESPONSE_EVENTS));
+    if events.len() > max_events() {
+        return corrupt(format!("more than {} lines", max_events()));
     }
     let mut answers = HashSet::new();
     let mut requests = HashSet::new();
@@ -526,7 +545,8 @@ fn current_form<'a>(
 /// Test-only store faults for the next append on this thread: a write
 /// that fails part way, or a sync that fails after the whole line was
 /// written and whose cut back fails too, leaving the line in the file;
-/// and ledger syncs before a replay that fail a given number of times.
+/// ledger syncs before a replay that fail a given number of times; and
+/// lowered ledger bounds.
 #[cfg(test)]
 pub(crate) mod fault {
     use std::cell::Cell;
@@ -541,6 +561,23 @@ pub(crate) mod fault {
         static NEXT: Cell<Option<Fault>> = const { Cell::new(None) };
         static CUT_BACK_FAILS: Cell<bool> = const { Cell::new(false) };
         static SYNC_FAILURES: Cell<u32> = const { Cell::new(0) };
+        static EVENTS: Cell<Option<usize>> = const { Cell::new(None) };
+        static LOG_BYTES: Cell<Option<u64>> = const { Cell::new(None) };
+    }
+
+    /// Lowers the ledger's line and byte bounds on this thread, so a test
+    /// reaches them without 100,000 lines or 64 MiB; `None` restores one.
+    pub(crate) fn lower_bounds(events: Option<usize>, log_bytes: Option<u64>) {
+        EVENTS.set(events);
+        LOG_BYTES.set(log_bytes);
+    }
+
+    pub(super) fn lowered_events() -> Option<usize> {
+        EVENTS.get()
+    }
+
+    pub(super) fn lowered_log_bytes() -> Option<u64> {
+        LOG_BYTES.get()
     }
 
     /// The next `times` ledger syncs before a replay fail.
