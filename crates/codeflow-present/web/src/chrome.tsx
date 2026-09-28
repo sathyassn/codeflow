@@ -997,9 +997,6 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   /* ─── Tool helpers (secondary path; selection captured on pointerdown so click does not clear it) ─── */
   const stashSelection = (): void => {
-    // The tool press takes the selection, so its pending pin must not land
-    // between the press and its click; under load that lost the click (TSK-159).
-    window.clearTimeout(selectionPinTimerRef.current);
     const selected = captureSelection(documentRoot);
     toolbarSelectionRef.current = selected?.selector && selected.selector.exact.length <= config.review_limits.max_selector_utf16
       ? selected : null;
@@ -1611,7 +1608,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         {/* Advanced tools — secondary path for a11y + qualification bridges */}
         <details class="cf-tools">
           <summary>Tools</summary>
-          <div class="cf-capture-tools" aria-label="Choose feedback target">
+          {/* A tool press takes over from the selection, so a pending selection
+              pin must not land between the press and its click; under load
+              that lost the click (TSK-159). */}
+          <div
+            class="cf-capture-tools"
+            aria-label="Choose feedback target"
+            onPointerDown={() => window.clearTimeout(selectionPinTimerRef.current)}
+          >
             <button
               class="cf-secondary-action"
               type="button"

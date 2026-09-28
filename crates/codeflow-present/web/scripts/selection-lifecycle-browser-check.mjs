@@ -170,16 +170,18 @@ export async function checkSelectionLifecycle(browser, origin) {
     assert.equal(await chip.count(), 0, "Oversized toolbar fallback pinned a stale selection");
 
     // TSK-159: under CPU load the 160 ms selection pin comes due while the
-    // main thread is busy, so it runs after an Add text press that followed
-    // the selection. It must neither land mid-press (in the load traces the
+    // main thread is busy, so it runs after a tool press that followed the
+    // selection. It must neither land mid-press (in the load traces the
     // press then lost its click) nor close the composer the tool opened.
-    // The page stalls itself past the debounce to make that order certain.
-    for (const [start, press] of [[2, false], [3, true]]) {
+    // The page stalls itself past the debounce so the overdue pin is queued
+    // ahead of the effect cleanup; browsers still order those tasks
+    // themselves, so each case is an adversarial ordering, not a proof.
+    for (const [start, testId, press] of [[2, "tool-add-text", false], [3, "tool-add-text", true], [4, "tool-whole-doc", true]]) {
       await page.evaluate(() => getSelection().removeAllRanges());
       await page.waitForTimeout(240);
-      const outcome = await page.evaluate(async ({ start, press }) => {
+      const outcome = await page.evaluate(async ({ start, testId, press }) => {
         const text = document.getElementById("selection-limit").firstChild;
-        const tool = document.querySelector('[data-testid="tool-add-text"]');
+        const tool = document.querySelector(`[data-testid="${testId}"]`);
         const quote = text.data.slice(start, start + 6);
         // Resolves inside the selectionchange task, after the chrome's own
         // listener (installed first) has armed its pin.
@@ -213,10 +215,10 @@ export async function checkSelectionLifecycle(browser, origin) {
         tool.click();
         await new Promise((resolve) => setTimeout(resolve, 400));
         return { midPress, after: shown() };
-      }, { start, press });
-      const label = press ? "pointer press" : "keyboard activation";
-      if (press) assert.equal(outcome.midPress.chip, false, `A selection pin landed during the Add text ${label}`);
-      assert.deepEqual(outcome.after, { composer: true, chip: false }, `The Add text ${label} lost its composer to a starved selection pin`);
+      }, { start, testId, press });
+      const label = `${testId} ${press ? "pointer press" : "keyboard activation"}`;
+      if (press) assert.equal(outcome.midPress.chip, false, `A selection pin landed during the ${label}`);
+      assert.deepEqual(outcome.after, { composer: true, chip: false }, `The ${label} lost its composer to a starved selection pin`);
       await page.getByTestId("composer-cancel").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });
     }
