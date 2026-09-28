@@ -144,12 +144,27 @@ def lacks_migration_guidance(value: str) -> bool:
 
 
 # Markdown structure of a PR body, read the way the Rust PR-body check reads
-# it: fenced code and HTML comments are never fields, only ATX headings at
-# column zero open sections, and a section's fields end at its first
-# subsection. `scripts/fixtures/release_impact_cases.json` holds the cases
-# both parsers must agree on.
+# it: fenced code, indented code and HTML comments are never fields, only
+# ATX headings at column zero open sections, and a section's fields end at
+# its first subsection. `scripts/fixtures/release_impact_cases.json` holds
+# the cases both parsers must agree on.
 FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
 ATX_HEADING = re.compile(r"^(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+LIST_ITEM = re.compile(r"^([ \t]*)([-*+]|\d{1,9}[.)])( {1,4}|\t|$)")
+
+
+def indent_columns(line: str) -> int:
+    """The columns of a line's leading whitespace, a tab reaching the next
+    multiple of four (CommonMark)."""
+    columns = 0
+    for char in line:
+        if char == " ":
+            columns += 1
+        elif char == "\t":
+            columns += 4 - columns % 4
+        else:
+            break
+    return columns
 
 
 def markdown_lines(body: str, *, include_code: bool) -> list[tuple[str, tuple[int, str] | None]]:
@@ -157,6 +172,12 @@ def markdown_lines(body: str, *, include_code: bool) -> list[tuple[str, tuple[in
     lines: list[tuple[str, tuple[int, str] | None]] = []
     fence: str | None = None
     in_comment = False
+    # Indented code: a line four columns past the open list item's content
+    # (or the margin) that no open paragraph can absorb, and what follows it
+    # at that depth.
+    code_indent: int | None = None
+    list_indent: int | None = None
+    paragraph = False
     for raw in body.splitlines():
         line = raw
         if fence is not None:
@@ -177,16 +198,42 @@ def markdown_lines(body: str, *, include_code: bool) -> list[tuple[str, tuple[in
                 line, in_comment = line[:start], True
                 break
             line = line[:start] + line[end + 3 :]
+        if not line.strip():
+            paragraph = False
+            if code_indent is None or include_code:
+                lines.append((line, None))
+            continue
+        columns = indent_columns(line)
+        if code_indent is not None:
+            if columns >= code_indent:
+                if include_code:
+                    lines.append((line, None))
+                continue
+            code_indent = None
+        margin = list_indent or 0
+        if not paragraph and columns >= margin + 4:
+            code_indent = margin + 4
+            if include_code:
+                lines.append((line, None))
+            continue
         opening = FENCE_OPEN.match(line)
         if opening:
-            fence = opening.group(1)
+            fence, paragraph = opening.group(1), False
             continue
         heading = ATX_HEADING.match(line)
         if heading:
             name = re.sub(r"[*_`]", "", heading.group(2) or "").strip()
             lines.append((line, (len(heading.group(1)), name)))
-        else:
-            lines.append((line, None))
+            list_indent, paragraph = None, False
+            continue
+        item = LIST_ITEM.match(line)
+        if item:
+            marker = indent_columns(item.group(1)) + len(item.group(2))
+            list_indent = marker + max(1, indent_columns(" " * marker + item.group(3)) - marker)
+        elif list_indent is not None and not paragraph and columns < list_indent:
+            list_indent = None
+        paragraph = True
+        lines.append((line, None))
     return lines
 
 

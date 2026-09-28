@@ -62,6 +62,21 @@
       "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nNot assessed yet; an example from another pull request:\n\n> - Impact: patch\n> - Breaking: no\n> - Rationale: Clarify the command output.\n> - Migration: none\n\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
     },
     {
+      "name": "invalid_fields_only_in_indented_code",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nNo assessment yet.\n\n    - Unit: codeflow\n    - Impact: minor\n    - Breaking: no\n    - Rationale: Adds a function preserving all callers.\n    - Migration: none\n    - Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "invalid_fields_only_in_tab_indented_code",
+      "valid": false,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\nNo assessment yet.\n\n\t- Unit: codeflow\n\t- Impact: minor\n\t- Breaking: no\n\t- Rationale: Adds a function preserving all callers.\n\t- Migration: none\n\t- Evidence: cargo test passed.\n"
+    },
+    {
+      "name": "valid_indented_continuation_inside_a_field_item",
+      "valid": true,
+      "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n\n    The old output stays readable by the same parsers.\n- Migration: none\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n"
+    },
+    {
       "name": "invalid_migration_borrowed_from_a_subsection",
       "valid": false,
       "body": "## Summary\n\nMake the command easier to use.\n\n## Release impact\n\n- Impact: patch\n- Breaking: no\n- Rationale: Clarify the command output.\n- Unit: codeflow\n- Evidence: CHANGELOG.md pending entry.\n\n### Notes\n\n- Migration: none\n"
