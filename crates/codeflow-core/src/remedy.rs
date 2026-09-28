@@ -181,7 +181,7 @@ catalog! {
         "reopen it with `codeflow task status {id} todo --reason \"{spec} superseded\"`, recheck its acceptance against the successor, and complete it again";
     /// An approved spec that no task delivers.
     SPEC_NO_CONSUMER = Step::Codeflow("codeflow task new"),
-        "plan a task that delivers it (`codeflow task new`, with {id} under `specs:`), or retire it with `codeflow spec status {id} superseded`";
+        "plan a task that delivers it (`codeflow task new`, with {id} under `specs:`), or replace it with a new revision that lists `supersedes: [{id}]` and run `codeflow spec status {id} superseded --by <SPC-NNN>`";
     /// A spec whose written `implemented` disagrees with its consumers.
     SPEC_WRITTEN_IMPLEMENTED = Step::Edit("{path}"),
         "set `status: approved` in {path}; `implemented` is derived from the consumers and never written (R-32)";
@@ -190,7 +190,7 @@ catalog! {
         "fetch full history (`git fetch --unshallow`, or a CI checkout with fetch-depth 0) to enforce the rules in full";
     /// A record that still carries a second, historical id.
     DUAL_IDENTITY = Step::Edit("{path}"),
-        "remove `format_id` from {path} once nothing cites the old id; new records use one stable id";
+        "in {path}, set `id:` to the `format_id` value and delete the `format_id` line once nothing cites the old id; new records use one stable id";
     /// A standalone task delivered by several pull requests.
     STANDALONE_SPLIT = Step::Edit("{path}"),
         "give {path} an `epic_id`: work that takes several pull requests belongs to an epic (SPC-013 R-66)";
@@ -381,7 +381,7 @@ catalog! {
         "fix the failing target(s), or run `codeflow test --mode quick` to reproduce";
     /// A `codeflow ci` run in the push set that found problems.
     PUSH_SET_CI = Step::Codeflow("codeflow ci"),
-        "fix the findings above, then rerun `codeflow ci {args}`";
+        "fix the findings above, then push again; `codeflow ci {args}` reruns this check on the range as pushed";
     /// A `codeflow validate` run in the push set that found problems.
     PUSH_SET_VALIDATE = Step::Codeflow("codeflow validate"),
         "fix the findings above, then rerun `codeflow validate {args}`";

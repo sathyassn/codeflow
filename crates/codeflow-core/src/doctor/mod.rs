@@ -2320,6 +2320,21 @@ fn check_instructions(opts: &Options) -> CheckResult {
 /// states the numbers; above one is a warning that names moving detail
 /// behind a trigger as the step that clears it. The Codex limit on the whole
 /// `AGENTS.md` is the `instructions` check.
+/// Where to edit to bring a reading measure within its guideline: a
+/// skill's directory, the kernel's file, or the files the chain lists.
+fn reading_location(subject: &str, skill_tree: &str) -> String {
+    if subject.starts_with("kernel") {
+        "the managed block of AGENTS.md".to_string()
+    } else if crate::reading::SKILL_GUIDELINES
+        .iter()
+        .any(|(name, _)| *name == subject)
+    {
+        format!("{skill_tree}/{subject}/")
+    } else {
+        format!("the files of the {subject}")
+    }
+}
+
 fn check_reading(opts: &Options) -> CheckResult {
     use crate::reading::{self, Inventory, Measure, SkillFiles};
     use crate::scaffold::rule_map;
@@ -2339,9 +2354,11 @@ fn check_reading(opts: &Options) -> CheckResult {
         });
     }
     let mut files = SkillFiles::new();
+    let mut skill_tree = ".claude/skills";
     for tree in [".claude/skills", ".agents/skills"] {
         reading::load_skill_tree(&root.join(tree), &mut files);
         if !files.is_empty() {
+            skill_tree = tree;
             break;
         }
     }
@@ -2392,7 +2409,7 @@ fn check_reading(opts: &Options) -> CheckResult {
     } else {
         let subjects = over
             .iter()
-            .map(|measure| measure.subject.as_str())
+            .map(|measure| reading_location(&measure.subject, skill_tree))
             .collect::<Vec<_>>()
             .join(", ");
         (
