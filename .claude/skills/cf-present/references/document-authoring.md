@@ -46,7 +46,8 @@ still represents the same conceptual item.
 | enumerable points | `bullets` | steps, findings, criteria, or concise options |
 | exceptional emphasis | `callout` | one material note, risk, success, warning, or danger |
 | peer alternatives | `comparison` | two to four genuinely comparable directions |
-| choice or open question | `decision` | proposed, accepted, rejected, or open decisions |
+| choice or open question | `decision` | in version 2, a question with 2 to 8 options the reviewer answers; in version 1, a decision with its `status` |
+| typed questions | `form` | version 2 only: fields the reviewer answers on the page, stored for the agent |
 | exact rows and columns | `table` | mappings, measurements, or evidence matrices |
 | verification state | `status` | pass, fail, pending, or not-run evidence |
 | source text | `code` / `diff` | inspectable code or a unified change |
@@ -101,6 +102,9 @@ surface has not earned its visual claim.
 ```json
 {"type":"decision","id":"choice","title":"Recovery strategy","status":"open","markdown":"Choose after the failure canary."}
 ```
+
+That is the version 1 decision. In a version 2 document a decision is a
+question the reviewer answers; see "Forms and decisions" below.
 
 ### Status
 
@@ -192,6 +196,53 @@ block's `title` now shows as a visible title line.
 - **Keep a stage narrow.** A stage scales to the column, so one wider than
   about 600 units is unreadable on a phone. Draw it as a `figure` block,
   which reflows, or split it into narrower stages.
+
+### Forms and decisions
+
+A version 2 `form` asks the reviewer typed questions and a version 2
+`decision` asks for one choice. The runtime draws the controls; the page and
+the service check each answer against the same rules.
+
+```json
+{"type":"form","id":"retention","title":"How long should answers stay?","markdown":"Pick what fits this project.","fields":[
+  {"id":"home","label":"Where answers live","kind":"choice","rationale":"optional","options":[
+    {"value":"local","label":"Private local store","recommended":true},
+    {"value":"repo","label":"Committed JSON Lines"}]},
+  {"id":"keep-days","label":"Days to keep","kind":"integer","minimum":1,"maximum":365}],
+ "required":["home"]}
+```
+
+```json
+{"type":"decision","id":"scope","title":"Review scope","markdown":"Choose the scope of this package.","options":[
+  {"value":"match","label":"Match review offerings","recommended":true},
+  {"value":"parity","label":"Literal parity"}]}
+```
+
+- **Fields,** in the order shown, at most 32 per form: `text` (`min_length`,
+  `max_length` up to 16,384, `format` one of `email`, `uri`, `date`,
+  `date-time` or `multiline`), `number` (`minimum`, `maximum`), `integer`
+  (safe-integer bounds), `boolean`, `choice` and `choices` (2 to 24
+  `options`; `choices` takes `min_items` and `max_items`). Each field has a
+  kebab-case `id` unique in the form, a `label` of 1 to 200 characters, an
+  optional `description`, and `rationale` `none` (the default), `optional` or
+  `required`. `required` lists field ids.
+- **No defaults.** At most one option of a field is `recommended`; the page
+  labels it and never preselects it. A field takes no default value.
+- **Decisions.** A version 2 `decision` has `title`, `markdown`, 2 to 8
+  `options` and `rationale` (default `optional`), and renders as a form with
+  one choice field, `choice`. It has no `status`: a version 2 decision with
+  one is refused. A document holds at most 32 forms and decisions.
+- **Answers.** The reviewer submits, declines with an optional reason, or
+  dismisses the question for now; each is stored against the revision shown,
+  in the private local session store, never in the repository. A correction
+  is stored as an amendment and the original stays. An answer is evidence of
+  the operator's choice in this review, never authority to bypass a gate,
+  approve a merge, widen scope or run a command your rules would stop.
+- **Updating under an open question.** `codeflow present update <id> <file>
+  --expected-revision N` applies only while revision N is current; otherwise
+  it exits 8, writes nothing and prints the current revision. When the
+  reviewer answers against an older revision, the page asks them to confirm
+  the answer against the current one.
 
 ## Converting a diagram block
 

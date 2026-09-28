@@ -1375,6 +1375,36 @@ fn form_fixtures_and_answer_lines_match_their_schemas() {
     );
 }
 
+/// The form and v2 decision examples in the authoring reference are blocks
+/// the runtime accepts and the v2 schema describes.
+#[test]
+fn the_reference_form_examples_are_valid_v2_blocks() {
+    let text = skill_file("references/document-authoring.md");
+    let section = between(&text, "\n### Forms and decisions\n", "\n## ");
+    let blocks: Vec<serde_json::Value> = section
+        .split("```json\n")
+        .skip(1)
+        .map(|fence| serde_json::from_str(fence.split("```").next().unwrap()).unwrap())
+        .collect();
+    assert_eq!(
+        blocks
+            .iter()
+            .map(|block| block["type"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["form", "decision"]
+    );
+    let document =
+        serde_json::json!({ "schema_version": 2, "title": "Examples", "blocks": blocks });
+    assert!(matches!(
+        codeflow_present::document::parse_document(document.to_string().as_bytes()).unwrap(),
+        codeflow_present::document::ParsedDocument::Supported(_)
+    ));
+    assert_eq!(
+        schema_registry().errors("urn:codeflow:schema:present:document:2", &document),
+        Vec::<String>::new()
+    );
+}
+
 fn post_answer(port: u16, authority: &str, cookie: &str, answer: &str) -> String {
     http(
         port,
