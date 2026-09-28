@@ -958,6 +958,14 @@ publication date._
   subshell such as `(cd <repo> && git commit)`.
 
 <!-- codeflow:release-impact patch -->
+- **Presentation cleanup on macOS no longer fails on a busy machine.**
+  Closing a presentation lists processes with `ps` to prove its browser is
+  gone. One process of any user caught mid-start could list bytes that are
+  not UTF-8, and the whole listing was refused, so cleanup failed and left
+  recovery evidence behind. Such a line is now read as it stands; it can
+  neither hide an owned browser process nor match as one.
+
+<!-- codeflow:release-impact patch -->
 - **An unquoted numeric pin is refused for its quoting.** A `depends_on`
   pin such as `pin: 70283613`, which YAML reads as a number, was reported
   as not a commit id. The message now says the pin must be quoted, as in
