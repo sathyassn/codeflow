@@ -4400,3 +4400,38 @@ fn commit_msg_on_a_watched_path_notes_the_release_impact_fields() {
         "{err}"
     );
 }
+
+#[test]
+fn a_configured_block_under_another_key_name_stops_the_push_at_warn() {
+    // The ticket rule prints as `git.commit_ticket` but its level is the
+    // `commit_ticket_required` key: a block set there keeps its level.
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "warn", "commit_ticket_required": "block", "commit_ticket_keys": ["Refs"], "commit_footer_tokens": ["Refs"]}}"#,
+        false,
+    );
+    let bad = commit_file(local.path(), "x.txt", "x\n", "feat: add x");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(1), "{err}");
+    assert!(
+        err.contains("BLOCKED — policy rule git.commit_ticket (block)"),
+        "{err}"
+    );
+    assert!(err.contains("codeflow pre-push: push stopped"), "{err}");
+}
+
+#[test]
+fn an_unconfigured_ticket_rule_prints_at_the_push_gate_level() {
+    // Control: the ticket rule at warn keeps the push going.
+    let (_bare, local) = gate_destination(
+        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "warn", "commit_ticket_required": "warn", "commit_ticket_keys": ["Refs"], "commit_footer_tokens": ["Refs"]}}"#,
+        false,
+    );
+    let bad = commit_file(local.path(), "x.txt", "x\n", "feat: add x");
+    let (code, err) = push_hook(local.path(), "dest", &[("feat/x", &bad)]);
+    assert_eq!(code, Some(0), "{err}");
+    assert!(
+        err.contains("warning — policy rule git.commit_ticket (warn)"),
+        "{err}"
+    );
+    assert!(err.contains("codeflow pre-push: push not stopped"), "{err}");
+}

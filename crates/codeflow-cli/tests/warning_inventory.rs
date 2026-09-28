@@ -226,3 +226,50 @@ fn a_policy_violation_is_built_only_with_a_catalogued_remedy() {
         .render("ci")
         .contains("codeflow task status TSK-001"));
 }
+
+#[test]
+fn every_emitted_git_rule_reads_its_own_level_key() {
+    // A rule printed under one name and configured under another must map to
+    // the key the project sets (TSK-147 F1), or a configured block would be
+    // lowered as if unset. Each `git.` rule a violation is built with either
+    // maps to a level key of the policy, or is one whose level no project key
+    // sets (always-blocking, guard-only or a fixed warning).
+    let fixed = [
+        "git.secret_scan",
+        "git.commit_to_protected",
+        "git.push_to_protected",
+        "git.merge_to_protected",
+        "git.force_push_protected",
+        "git.delete_protected",
+        "git.local_ref_protection",
+        "git.hook_integrity",
+        "git.no_verify_bypass",
+        "git.override_token_laundering",
+        "git.pr_merge_delete_branch",
+        "git.breaking_watch_paths",
+    ];
+    let mut rules = BTreeSet::new();
+    for path in rust_files(&workspace().join("crates")) {
+        let text = production(&path);
+        for (at, _) in text.match_indices("Violation::new(") {
+            let rest = text[at + "Violation::new(".len()..].trim_start();
+            if let Some(rule) = rest.strip_prefix('"').and_then(|r| r.split('"').next()) {
+                rules.insert(rule.to_string());
+            }
+        }
+    }
+    rules.insert(codeflow_core::hooks::git_hook::WATCHED_PATH_RULE.to_string());
+    assert!(rules.contains("git.commit_ticket"), "{rules:?}");
+    for rule in rules.iter().filter(|rule| rule.starts_with("git.")) {
+        match codeflow_core::hooks::adjustable_key(rule) {
+            Some(key) => assert!(
+                codeflow_core::hooks::LEVEL_KEYS.contains(&key),
+                "{rule} maps to {key}, which is not a level key"
+            ),
+            None => assert!(
+                fixed.contains(&rule.as_str()),
+                "{rule} has no level key: map it in hooks::adjustable_key or list it as fixed"
+            ),
+        }
+    }
+}

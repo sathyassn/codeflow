@@ -191,19 +191,62 @@ const ALWAYS_BLOCKING_GIT: &[&str] = &[
     "hook_integrity",
 ];
 
+/// The level keys of the `git` policy: every field of
+/// [`policy::GitPolicy`] that holds a [`PolicyLevel`].
+pub const LEVEL_KEYS: &[&str] = &[
+    "commit_to_protected",
+    "push_to_protected",
+    "force_push_protected",
+    "force_push_unprotected",
+    "delete_protected",
+    "hard_reset_protected",
+    "merge_to_protected",
+    "pr_merge_to_protected",
+    "local_ref_protection",
+    "hook_integrity",
+    "commit_format",
+    "commit_body",
+    "commit_ticket_required",
+    "ai_attribution",
+    "commit_emoji",
+    "policy_characters",
+    "pr_sections",
+    "pr_release_impact",
+    "work_records",
+    "work_planning",
+    "branch_naming",
+    "secret_scan",
+    "test_gate_on_push",
+    "security_review",
+    "dep_audit",
+];
+
+/// The rules whose level is set by a key of another name.
+const RULE_KEYS: &[(&str, &str)] = &[
+    ("git.commit_ticket", "commit_ticket_required"),
+    ("work.acceptance_binding", "work_records"),
+    ("work.journey_criterion", "work_records"),
+    ("work.valid_graph", "work_planning"),
+    ("work.stable_planning_anchor", "work_planning"),
+    ("work.task_record", "work_planning"),
+];
+
 /// The `git` policy key that sets `rule`'s level, when an adopter may adjust
-/// it (the Adjustable column of R-80); `None` for a rule with a fixed level.
+/// it (the Adjustable column of R-80); `None` for a rule with a fixed level,
+/// and for any rule without a level key, which then keeps its level.
 #[must_use]
-pub fn adjustable_key(rule: &str) -> Option<&str> {
-    match rule {
-        "work.acceptance_binding" | "work.journey_criterion" => Some("work_records"),
-        "work.valid_graph" | "work.stable_planning_anchor" | "work.task_record" => {
-            Some("work_planning")
-        }
-        _ => rule
-            .strip_prefix("git.")
-            .filter(|key| !ALWAYS_BLOCKING_GIT.contains(key)),
+pub fn adjustable_key(rule: &str) -> Option<&'static str> {
+    if let Some((_, key)) = RULE_KEYS.iter().find(|(named, _)| *named == rule) {
+        return Some(key);
     }
+    let key = rule.strip_prefix("git.")?;
+    if ALWAYS_BLOCKING_GIT.contains(&key) {
+        return None;
+    }
+    LEVEL_KEYS
+        .iter()
+        .copied()
+        .find(|level_key| *level_key == key)
 }
 
 /// `true` when any violation in the slice is at block level.
@@ -325,6 +368,47 @@ mod tests {
         );
         assert_eq!(adjustable_key("work.valid_graph"), Some("work_planning"));
         assert_eq!(adjustable_key("work.classification"), None);
+        // A rule named apart from its key reads that key (TSK-147 F1), and
+        // a rule with no level key is not adjustable.
+        assert_eq!(
+            adjustable_key("git.commit_ticket"),
+            Some("commit_ticket_required")
+        );
+        assert_eq!(adjustable_key("git.breaking_watch_paths"), None);
+        let raw = Ok(Some(
+            serde_json::json!({"git": {"commit_ticket_required": "block"}}),
+        ));
+        assert_eq!(
+            finding("git.commit_ticket", PolicyLevel::Block).level_under(PolicyLevel::Warn, &raw),
+            PolicyLevel::Block
+        );
+    }
+
+    #[test]
+    fn the_level_keys_are_every_level_field_of_the_git_policy() {
+        let defaults = serde_json::to_value(policy::GitPolicy::default()).unwrap();
+        let fields: std::collections::BTreeSet<&str> = defaults
+            .as_object()
+            .unwrap()
+            .iter()
+            .filter(|(key, value)| {
+                // A level field holds a level and refuses a string that is
+                // not one; a plain string field (such as `direct_changes`)
+                // takes it.
+                if serde_json::from_value::<PolicyLevel>((*value).clone()).is_err() {
+                    return false;
+                }
+                let mut probe = defaults.clone();
+                probe[key.as_str()] = "not-a-level".into();
+                serde_json::from_value::<policy::GitPolicy>(probe).is_err()
+            })
+            .map(|(key, _)| key.as_str())
+            .collect();
+        let listed: std::collections::BTreeSet<&str> = LEVEL_KEYS.iter().copied().collect();
+        assert_eq!(listed, fields);
+        for (_, key) in RULE_KEYS {
+            assert!(LEVEL_KEYS.contains(key), "{key}");
+        }
     }
 
     #[test]
