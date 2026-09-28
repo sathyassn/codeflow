@@ -360,7 +360,7 @@ see = [".codeflow/rules/workflow-discipline.md"]
 [[moment]]
 key = "branch"
 when = "branch, open a worktree, commit, rebase or clean up"
-action = "work-start check first (identity, intent-match, currency); one worktree per session; cleanup needs merge proof"
+action = "work-start check first (identity, intent-match, currency); one worktree per session; the root checkout stays on its root branch and takes no task work; cleanup needs merge proof"
 see = [".codeflow/rules/worktrees.md", ".codeflow/rules/git-rules.md"]
 
 [[moment]]

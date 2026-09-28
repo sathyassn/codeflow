@@ -5,8 +5,22 @@ Managed by `codeflow update`.
 
 ## Where work happens
 
-Develop in a worktree per session. Checkouts go under `.worktrees/<slug>`
-(gitignored), not sibling folders. Protected branches stay at the repo root.
+Develop in a worktree per session: a linked worktree on a feature branch,
+under `.worktrees/<slug>` (gitignored) or in the folder a harness manages
+for its own worktrees. Never use a sibling folder.
+
+The root checkout, the repository's main working tree, stays on its root
+branch and takes no task edits. The root branch is the repository's default
+branch unless `git.root_branch` in `.codeflow/policy.json` names another.
+Change it only for an umbrella repository whose root is a working checkout
+(workspace mode): its convention is `integration/workspace`, and
+`codeflow init --workspace` sets it up.
+
+git-guard refuses an agent's commit at the root checkout on any other branch
+(`git.root_checkout_commits`). The git hooks refuse it too when a harness
+marks the session, and only warn a human at their own terminal. `codeflow
+doctor` reports the root branch, a root checkout off it or holding task
+edits, and a linked worktree outside `git.worktree_locations`.
 
 ## Work-start check
 
