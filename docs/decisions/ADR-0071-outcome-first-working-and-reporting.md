@@ -140,7 +140,7 @@ SPC-013 R-117 adaptation: the running report and the attention heading that
 rules 5 and 6 give to `autonomy.md` live in the lifecycle reply rule and the
 orchestrator's joint closeout, and rule 7 is reconciled here by the
 ADR-0067 note of 2026-09-25 and the removal of the pull request Summary
-warnings for a code span or a path.
+warnings for a code span, a path or more than three sentences.
 
 On this line the requirement named CF-OUT-006 above is CF-OUT-007:
 TSK-130 had already landed a different CF-OUT-006, on naming each item by

@@ -65,7 +65,8 @@ publication date._
   it, then what the reader must do. Items the operator must act on go once
   under NEED YOUR ATTENTION, and not at all when nothing is owed. Em and en
   dashes are a prose guideline judged in review. `codeflow ci` no longer
-  warns on a code span or a path in a pull request Summary. The evaluation
+  warns on a code span, a path or the sentence count of a pull request
+  Summary. The evaluation
   kit adds requirement CF-OUT-007, an amended CF-OUT-002 and an
   `outcome-first` pack.
 

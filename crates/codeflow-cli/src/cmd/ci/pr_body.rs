@@ -335,23 +335,9 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
             "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
         ));
     }
+    // ADR-0071 rule 7: a Summary is judged by whether it anchors the reader,
+    // which review and evaluation grade; no count stands in for that.
     for section in outline.sections {
-        if section.matches("Summary") {
-            let text = visible_text(section.content(), false);
-            // Advisory heuristic: punctuation ending a word, not dots inside paths.
-            let sentences = text
-                .split_whitespace()
-                .filter(|word| {
-                    word.trim_end_matches(['\'', '"', ')'])
-                        .ends_with(['.', '!', '?'])
-                })
-                .count();
-            if sentences > 3 {
-                warn(format!(
-                    "PR Summary has about {sentences} sentences; aim for at most three"
-                ));
-            }
-        }
         if section.matches("Testing")
             && !visible_text(section.content(), false)
                 .lines()
@@ -830,21 +816,15 @@ mod tests {
     fn presentation_warnings_are_advisory_and_respect_off() {
         let body = format!("## Summary\nOne. Two. Three. Four. Update `thing` in src/thing.py.\n## Testing\nPassed.\n```\n{}```\n{}", "output\n".repeat(13), "long word ".repeat(800));
         let findings = presentation(&GitPolicy::default(), &body, false);
-        for reason in [
-            "sentences",
-            "Not tested:",
-            "13 lines",
-            "rendered rows",
-            "160 characters",
-        ] {
+        for reason in ["Not tested:", "13 lines", "rendered rows", "160 characters"] {
             assert!(
                 findings.iter().any(|v| v.message.contains(reason)),
                 "missing {reason}: {findings:?}"
             );
         }
         // ADR-0071 rule 7: a key file name or code span may anchor the
-        // Summary, so neither draws a warning.
-        for retired in ["code span", "contains a path"] {
+        // Summary, and its length is judgment, so none draws a warning.
+        for retired in ["code span", "contains a path", "sentences"] {
             assert!(
                 !findings.iter().any(|v| v.message.contains(retired)),
                 "retired Summary warning {retired}: {findings:?}"
@@ -856,6 +836,19 @@ mod tests {
             ..GitPolicy::default()
         };
         assert!(presentation(&git, &body, false).is_empty());
+    }
+
+    /// ADR-0071 rule 7 (Codex TSK-108 review, R108-1): a Summary is judged
+    /// by whether it anchors the reader, never by counting its sentences.
+    #[test]
+    fn presentation_never_counts_summary_sentences() {
+        let body = "Task: none: isolated summary-warning review probe\n\n## Summary\n\n\
+            The installer now preserves local settings. Existing projects can update safely. \
+            Fresh projects keep the standard defaults. The change is ready for review.\n\n\
+            ## Changes\n\n- Preserve local settings during updates.\n\n## Testing\n\n\
+            Docs-only review fixture.\nNew tests: none.\nNot tested: live model behavior.\n";
+        let findings = presentation(&GitPolicy::default(), body, false);
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     #[test]
