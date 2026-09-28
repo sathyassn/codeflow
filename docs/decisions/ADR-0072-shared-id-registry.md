@@ -258,3 +258,19 @@ Accepted 2026-09-26 with one amendment from the TSK-100 host proof: the
 enforcing registry check runs on `pull_request_target`, so its workflow comes
 from the target branch and never from the pull request it judges (SPC-013
 R-109).
+
+## Amendment: 2026-09-28 (appended, TSK-143)
+
+The acceptance note above says the enforcing registry check's workflow
+comes from the target branch. GitHub does not run it that way: a
+`pull_request_target` workflow runs from the repository's default branch,
+whatever branch the pull request targets, and that event's default
+checkout is the default branch too. The enforcing jobs therefore check out
+the pull request's base commit explicitly, so the target's pin and policy
+judge the pull request (TSK-107 review round 2, R2-1; SPC-013 R-109 as
+amended 2026-09-27). The guarantee the note gave still holds: the workflow
+never comes from the pull request it judges, and the pull request's head
+is read only as git data. The accepted text above is unchanged. The same
+correction applies to Finding 1 of the TSK-100 host proof
+(`docs/verification/tsk-100-registry-proof.md`), which says
+`pull_request_target` uses the base branch's workflow.
