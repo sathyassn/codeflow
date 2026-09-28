@@ -1,0 +1,11 @@
+id = "TSK-163"
+uid = "13d5f1ba-67c7-4e35-b208-8d658ccff010"
+kind = "TSK"
+title = "the delegated Claude turn rules read once, in the adapter"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T18:22:08Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
