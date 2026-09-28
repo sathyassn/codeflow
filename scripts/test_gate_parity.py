@@ -10,6 +10,7 @@ suite, so every way of running less must read as drift.
 import copy
 import importlib.util
 import json
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -19,7 +20,10 @@ parity = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(parity)
 
 CONFIG = json.loads(parity.CONFIG.read_text())
-CI = parity.ci_rust_job_commands(parity.WORKFLOW.read_text())
+WORKFLOW = parity.WORKFLOW.read_text()
+CI = parity.ci_rust_job_commands(WORKFLOW)
+PORTAL = "docs-portal"
+PRESENT = "cf-present-qualification"
 
 
 def target(cfg: dict, name: str) -> dict:
@@ -102,6 +106,92 @@ class GateParityControls(unittest.TestCase):
     def test_any_disabled_rust_check_is_drift(self):
         cfg = mutated(lambda c: target(c, "rust-clippy").update(enabled=False))
         self.assertNotEqual(parity.local_rust_commands(cfg), CI)
+
+
+class NodePinControls(unittest.TestCase):
+    """TSK-142 AC-1: each Node target runs on the version its version file
+    pins, and every CI job that installs Node for that directory pins the
+    same version, including the job that runs the full gate."""
+
+    def problems(self, cfg: dict, workflow: str = WORKFLOW, root: Path = parity.ROOT):
+        return parity.node_pin_problems(cfg, workflow, root)
+
+    def assert_problem(self, problems: list[str], *needles: str) -> None:
+        self.assertTrue(any(all(n in p for n in needles) for p in problems),
+                        f"{needles} not in {problems}")
+
+    def test_the_committed_config_and_workflow_agree(self):
+        self.assertEqual(self.problems(CONFIG), [])
+
+    def test_each_node_target_runs_through_its_version_file(self):
+        for name, pin in ((PORTAL, "docs-portal/.node-version"),
+                          (PRESENT, "crates/codeflow-present/web/.node-version")):
+            with self.subTest(name=name):
+                self.assertEqual(parity.node_pin(full_command(CONFIG, name)), pin)
+
+    def test_a_node_target_without_a_pin_is_refused(self):
+        for name in (PORTAL, PRESENT):
+            def unpin(c, n=name):
+                modes = target(c, n)["modes"]["full"]
+                modes["command"] = parity.with_node_parts(modes["command"])[1]
+            with self.subTest(name=name):
+                self.assert_problem(self.problems(mutated(unpin)), name, "without a Node pin")
+
+    def test_a_ci_pin_that_differs_from_the_version_file_is_refused(self):
+        workflow = WORKFLOW.replace("node-version: 24.18.0", "node-version: 24.17.0")
+        self.assert_problem(self.problems(CONFIG, workflow), "24.17.0",
+                            "docs-portal/.node-version", "24.18.0")
+
+    def test_a_full_gate_job_without_the_pinned_node_is_refused(self):
+        gates, rest = WORKFLOW.split("\n  rust:\n", 1)
+        step = gates[gates.index("      - uses: actions/setup-node@"):]
+        step = step[:step.index("\n      - ", 1) + 1]
+        self.assertIn("docs-portal/package-lock.json", step)
+        workflow = gates.replace(step, "") + "\n  rust:\n" + rest
+        self.assert_problem(self.problems(CONFIG, workflow), "gates",
+                            "24.18.0", "docs-portal")
+
+    def test_a_missing_or_malformed_version_file_is_refused(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "docs-portal").mkdir()
+            (root / "crates/codeflow-present/web").mkdir(parents=True)
+            (root / "crates/codeflow-present/web/.node-version").write_text("26.4.0\n")
+            self.assert_problem(self.problems(CONFIG, WORKFLOW, root),
+                                "docs-portal/.node-version", "does not exist")
+            (root / "docs-portal/.node-version").write_text("lts/*\n")
+            self.assert_problem(self.problems(CONFIG, WORKFLOW, root),
+                                "docs-portal/.node-version", "one exact Node version")
+
+    def test_an_exact_engines_pin_must_match_the_version_file(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            web = root / "crates/codeflow-present/web"
+            web.mkdir(parents=True)
+            (root / "docs-portal").mkdir()
+            (root / "docs-portal/.node-version").write_text("24.18.0\n")
+            (web / ".node-version").write_text("26.4.0\n")
+            (web / "package.json").write_text(json.dumps({"engines": {"node": "26.3.0"}}))
+            self.assert_problem(self.problems(CONFIG, WORKFLOW, root),
+                                "engines", "26.3.0", "26.4.0")
+
+
+class GateBinaryControls(unittest.TestCase):
+    """TSK-142 AC-2: the real-browser check runs the binary the gate built,
+    wherever CARGO_TARGET_DIR points."""
+
+    def test_the_committed_config_passes_the_gate_binary(self):
+        self.assertEqual(parity.gate_binary_problems(CONFIG), [])
+
+    def test_a_real_browser_check_without_the_gate_binary_is_refused(self):
+        for replacement in ("", "CF_PRESENT_CODEFLOW=target/debug/codeflow "):
+            def drop(c, r=replacement):
+                modes = target(c, PRESENT)["modes"]["full"]
+                modes["command"] = modes["command"].replace(parity.GATE_BINARY + " ", r)
+            with self.subTest(replacement=replacement):
+                problems = parity.gate_binary_problems(mutated(drop))
+                self.assertTrue(any(PRESENT in p and "CARGO_TARGET_DIR" in p
+                                    for p in problems), problems)
 
 
 if __name__ == "__main__":
