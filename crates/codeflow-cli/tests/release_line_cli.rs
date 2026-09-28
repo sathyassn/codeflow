@@ -1480,6 +1480,139 @@ fn an_older_octopus_parent_cannot_hide_a_newer_completion() {
     assert_eq!(pushed.0, 1, "{}", pushed.1);
 }
 
+/// Merge `side` into the checked-out branch, taking `side`'s entry for a
+/// path that conflicts; returns the merge.
+fn merge_take(fx: &Fx, side: &str) -> String {
+    if !run_git_status(&fx.root, &["merge", "-q", "--no-ff", "--no-commit", side]) {
+        for file in fx.git(&["diff", "--name-only", "--diff-filter=U"]).lines() {
+            fx.git(&["checkout", "-q", "--theirs", "--", file]);
+            fx.git(&["add", "--", file]);
+        }
+    }
+    fx.commit(&format!("merge: take {side}"))
+}
+
+/// A merge commit of `tree` with `parents`, checked out on the release
+/// branch; asserts git's own merge of the same parents writes that tree,
+/// so the merge is a faithful import.
+fn faithful_merge(fx: &Fx, tree: &str, parents: &[&str]) -> String {
+    fx.git(&["switch", "-q", "--detach", parents[0]]);
+    let mut args = vec!["merge", "-q", "--no-ff", "--no-commit"];
+    args.extend_from_slice(&parents[1..]);
+    fx.git(&args);
+    assert_eq!(
+        fx.git(&["write-tree"]),
+        tree,
+        "git merges {parents:?} to another tree"
+    );
+    fx.git(&["merge", "--abort"]);
+    let mut args = vec!["commit-tree", tree];
+    for parent in parents {
+        args.extend(["-p", parent]);
+    }
+    args.extend(["-m", "merge: import"]);
+    let merge = fx.git(&args);
+    fx.git(&["switch", "-q", RELEASE]);
+    fx.git(&["reset", "-q", "--hard", &merge]);
+    merge
+}
+
+/// AC-11 (Codex round 4): both supersession guards are reachable through
+/// faithful imports. Line A lands TSK-001 three times: L1 with a late
+/// unreviewed change, L2 a valid repair, L3 a stale completion after new
+/// code. Line B takes A at L3, then a merge with L2 restores L2's record.
+/// - Newest parent: the release imports L3 and B together. L2's record
+///   arrives through B, but A's newest parent is L3, whose record differs,
+///   so L1's finding stands.
+/// - Order: the release first imports L3, then B together with the older
+///   L2. L2's completion lands before L3's on A, so it cannot supersede
+///   L3's finding.
+#[test]
+fn both_supersession_guards_hold_through_faithful_imports() {
+    let fx = Fx::new(false);
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-work", LINE_A]);
+    fx.write("src/one.rs", "// one\n");
+    let reviewed = fx.commit("feat: build the work");
+    fx.write("src/late.rs", "// late\n");
+    fx.commit("feat: a late change");
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "complete", CRITERIA, &block(&reviewed)),
+    );
+    fx.commit("docs(records): complete the task");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.cut_release();
+    let release_l1 = fx.import(LINE_A);
+
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-repair", LINE_A]);
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "todo", CRITERIA, "Pending.\n"),
+    );
+    fx.write("src/late.rs", "// late, reviewed\n");
+    let repaired = fx.commit("fix: review the late change");
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "complete", CRITERIA, &block(&repaired)),
+    );
+    fx.commit("docs(records): complete the repair");
+    let l2 = fx.land(LINE_A, "task/TSK-001-repair");
+
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-third", LINE_A]);
+    fx.write("src/newlate.rs", "// new, unreviewed\n");
+    fx.commit("feat: a change after the review");
+    let main = fx.git(&["rev-parse", "main"]);
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "complete", CRITERIA, &block(&main)),
+    );
+    fx.commit("docs(records): a stale completion");
+    let l3 = fx.land(LINE_A, "task/TSK-001-third");
+
+    fx.git(&["switch", "-q", LINE_B]);
+    let synced = merge_take(&fx, LINE_A);
+    let older = fx.git(&["show", &format!("{l2}:{}", path("TSK-001"))]);
+    fx.write(&path("TSK-001"), &format!("{older}\n"));
+    fx.git(&["add", "-A"]);
+    let tree = fx.git(&["write-tree"]);
+    let foreign = fx.git(&[
+        "commit-tree",
+        &tree,
+        "-p",
+        &synced,
+        "-p",
+        &l2,
+        "-m",
+        "merge: restore L2's record",
+    ]);
+    fx.git(&["reset", "-q", "--hard", &foreign]);
+    fx.git(&["push", "-q", "origin", LINE_B]);
+
+    // L1's finding names its reviewed commit, L3's names main.
+    let l1_finding = format!("src/late.rs changed after the reviewed commit {reviewed}");
+    let l3_finding = format!("src/late.rs changed after the reviewed commit {main}");
+    for sides in [[&l3, &foreign], [&foreign, &l3]] {
+        let merge = faithful_merge(&fx, &tree, &[&release_l1, sides[0], sides[1]]);
+        let result = fx.ci("main", "HEAD", RELEASE, Some("main"));
+        assert!(
+            result
+                .1
+                .contains(&format!("release path: {}: import", &merge[..9])),
+            "{}",
+            result.1
+        );
+        blocks(&result, "L2 through B beside the newer L3", &[&l1_finding]);
+    }
+
+    let l3_tree = fx.git(&["rev-parse", &format!("{l3}^{{tree}}")]);
+    let newer = faithful_merge(&fx, &l3_tree, &[&release_l1, &l3]);
+    for sides in [[&l2, &foreign], [&foreign, &l2]] {
+        faithful_merge(&fx, &tree, &[&newer, sides[0], sides[1]]);
+        let result = fx.ci("main", "HEAD", RELEASE, Some("main"));
+        blocks(&result, "the older L2 after L3", &[&l3_finding]);
+    }
+}
+
 /// AC-2, AC-11 (Codex R145-R3-3): a completion made directly on the release
 /// line stays bound at the head when a valid completion of the task arrives
 /// through another line; only a valid completion from the task's own line
