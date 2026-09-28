@@ -4449,6 +4449,7 @@ def grade_trial(
         "grader_digest": grader_digest(),
         "fixture_digest": record["fixture_digest"],
         "path": record["path"],
+        "record": str(record_path.expanduser().resolve()),
         "final_digest": final_digest,
         "events_digest": events_digest,
         "judgements_digest": judgements_digest,
@@ -4474,11 +4475,12 @@ def grade_trial(
 
 
 # The grade receipt. Grading signs the whole grade under the
-# evaluator key: the trial it names, the final state digest, the evidence
-# digests, every judgement it read (where, its excerpt digest, verdict, judge
-# and entry digest), each assertion result and the computed result. A
-# consumer counts a pass only from a receipt that verifies and whose bound
-# evidence, read again, rederives it (saved_grade_errors).
+# evaluator key: the trial and trial record it names, the final state
+# digest, the evidence digests, every judgement it read (where, its excerpt
+# digest, verdict, judge and entry digest), each assertion result and the
+# computed result. A consumer counts a pass only from a receipt that
+# verifies and whose trial, graded again from what it retains, gives the
+# same outcome (saved_grade_errors, regraded_errors).
 GRADE_RECEIPT = "codeflow-eval-grade-receipt-v1"
 
 
@@ -4599,6 +4601,9 @@ def grade_errors(grade: Any, case: dict, trial: dict) -> list[str]:
         errors.append("grade.fixture_digest differs from the trial's fixture")
     if not isinstance(grade.get("final_digest"), str) or not DIGEST.fullmatch(grade["final_digest"]):
         errors.append("grade.final_digest must be canonical sha256")
+    for field in ("path", "record"):
+        if not isinstance(grade.get(field), str) or not os.path.isabs(grade[field]):
+            errors.append(f"grade.{field} must be an absolute path")
     evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
     retained = {item.get("digest") for item in evidence if isinstance(item, dict)}
     for field in ("events_digest", "judgements_digest"):
@@ -4690,16 +4695,17 @@ def saved_grade_errors(grade: dict, trial: dict, case: dict, run_id: str | None)
     verify under the evaluator key, so nothing in it changed after grading,
     and what it binds must still hold: it names the run `run_id` of the
     result that holds it and this trial's case, number and fixture; the
-    workspace it signed still holds the final state it graded; the ledger,
-    judgements and calibrations it cites are among the trial's evidence;
+    ledger, judgements and calibrations it cites are among the trial's
+    evidence;
     each calibration it cites is retained
     as a file with those bytes at an absolute evidence path and, against the
     suite's current controls, still qualifies the judge it recorded; each
     judgement it read is in the retained judgements file, signed, with the
     same verdict, judge and entry digest, from a judge those calibrations
-    qualify; and those judgements, alone, rederive every judged pass. The
-    grade's own list of counted judges is never trusted for this. Any fault
-    leaves the trial not measured."""
+    qualify; those judgements, alone, rederive every judged pass; and the
+    retained trial, graded again now, gives the same outcome
+    (regraded_errors). The grade's own list of counted judges is never
+    trusted for this. Any fault leaves the trial not measured."""
 
     key = evaluator_key()
     if key is None:
@@ -4714,11 +4720,6 @@ def saved_grade_errors(grade: dict, trial: dict, case: dict, run_id: str | None)
         errors.append("the grade names another trial")
     if grade.get("fixture_digest") != trial.get("fixture_digest"):
         errors.append("the grade was made from another fixture")
-    path = Path(grade["path"]) if isinstance(grade.get("path"), str) and os.path.isabs(grade["path"]) else None
-    if path is None or path.is_symlink() or not path.is_dir():
-        errors.append(f"the final state the grade signed is not retained at {grade.get('path')!r}")
-    elif state_digest(path) != grade.get("final_digest"):
-        errors.append(f"the state at {path} is no longer the final state the grade signed")
     evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
     retained = {item.get("digest") for item in evidence if isinstance(item, dict)}
     cited = [grade.get("events_digest"), grade.get("judgements_digest"), *grade.get("calibration_digests", [])]
@@ -4769,6 +4770,95 @@ def saved_grade_errors(grade: dict, trial: dict, case: dict, run_id: str | None)
                 errors.append(f"{item['id']} was judged by {judge_name(found[1])}, whom no retained calibration qualifies")
         if results[item["id"]] == "pass" and not rederived_pass(item, record):
             errors.append(f"{item['id']} passes, but the judgements it read do not pass it")
+    if errors:
+        return errors
+    return regraded_errors(grade, trial)
+
+
+# The fields of a grade that decide what it measured. A consumer grades the
+# retained trial again and requires each of them to come out the same;
+# assertion details are prose and may carry volatile tool output, so only
+# each assertion's result is compared.
+REGRADED_FIELDS = (
+    "run_id",
+    "case_id",
+    "trial",
+    "case_digest",
+    "grader_digest",
+    "fixture_digest",
+    "path",
+    "record",
+    "final_digest",
+    "events_digest",
+    "judgements_digest",
+    "controls_digest",
+    "calibration_digests",
+    "calibration_judges",
+    "counted_judges",
+    "transport_only",
+    "judged",
+    "safety_failures",
+    "result",
+)
+
+
+def regraded_errors(grade: dict, trial: dict) -> list[str]:
+    """Why the trial a saved grade names no longer grades as it did.
+
+    Nothing about the retained state is trusted from a digest: the consumer
+    grades the trial again, now, from its record, its workspace, the run and
+    subjects roots and the ledger, judgements and calibrations the trial
+    retains, so every mechanical assertion reads the Git refs, configuration,
+    boundary and files as they are. Judgements are the one input grading
+    cannot reproduce; each counts again only for the excerpt digest its judge
+    signed, so it binds to the state the judge saw. Any change that moves an
+    outcome, or that grading refuses, leaves the trial not measured."""
+
+    for field, label in (("record", "trial record"), ("path", "workspace")):
+        value = grade.get(field)
+        if not isinstance(value, str) or not os.path.isabs(value) or os.path.realpath(value) != os.path.normpath(value):
+            return [f"the {label} the grade signed is not retained at {value!r} as a path without links"]
+    record_path = Path(grade["record"])
+    if not record_path.is_file():
+        return [f"the trial record the grade signed is not retained at {record_path}"]
+    try:
+        marker = load_json(record_path.parent.parent / RUN_MARKER)
+    except EvalError as error:
+        return [f"the run holding the trial record has no readable marker: {error}"]
+    if not isinstance(marker, dict) or marker.get("run_id") != grade.get("run_id"):
+        return [f"the run root holding {record_path.name} no longer names run {grade.get('run_id')!r}"]
+    retained: dict[str, Path] = {}
+    for digest in [grade.get("events_digest"), grade.get("judgements_digest"), *grade.get("calibration_digests", [])]:
+        if digest is None:
+            continue
+        path = retained_file(trial, digest)
+        if path is None:
+            return [f"{digest}, which the grade read, is not retained as a file with those bytes"]
+        retained[digest] = path
+    try:
+        fresh = grade_trial(
+            record_path,
+            events=retained.get(grade.get("events_digest")),
+            judgements=retained.get(grade.get("judgements_digest")),
+            calibrations=[retained[digest] for digest in grade.get("calibration_digests", [])],
+            transport_only=grade.get("transport_only") is True,
+        )
+    except (EvalError, OSError, subprocess.SubprocessError) as error:
+        return [f"the retained trial no longer grades: {error}"]
+    errors = [
+        f"graded again, the retained trial gives a different {field}"
+        for field in REGRADED_FIELDS
+        if fresh.get(field) != grade.get(field)
+    ]
+    saved = {item.get("id"): item.get("result") for item in grade.get("assertions", []) if isinstance(item, dict)}
+    now = {item["id"]: item["result"] for item in fresh["assertions"]}
+    errors.extend(
+        f"graded again, {assertion} is {now.get(assertion)!r}, not the {saved.get(assertion)!r} the grade saved"
+        for assertion in sorted(set(saved) | set(now))
+        if saved.get(assertion) != now.get(assertion)
+    )
+    if fresh["qualification"]["eligible"] != (grade.get("qualification") or {}).get("eligible"):
+        errors.append("graded again, the retained trial differs in whether it may count")
     return errors
 
 

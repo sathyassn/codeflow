@@ -36,13 +36,47 @@ def project_root() -> Path:
 # gives each test its own.
 EVALUATOR_HOME = tempfile.TemporaryDirectory(prefix="evaluator-home-")
 EVALUATOR = patch.dict(os.environ, {"CODEFLOW_HOME": str(Path(EVALUATOR_HOME.name) / ".codeflow")})
+SYNTHETIC_STATES = Path(EVALUATOR_HOME.name) / "synthetic"
+REGRADED_ERRORS = eval_kit.regraded_errors
+
+
+def regraded_or_synthetic(grade: dict, trial: dict) -> list[str]:
+    """A synthetic grade (passing_grade) stands for a trial that was never
+    materialized, so there is nothing to grade again; every other grade is
+    graded again for real. RegradeTests and the private holdout prove the
+    regrade on real trials."""
+
+    path = grade.get("path")
+    if isinstance(path, str) and Path(path).is_relative_to(SYNTHETIC_STATES):
+        return []
+    return REGRADED_ERRORS(grade, trial)
+
+
+SYNTHETIC_REGRADE = patch.object(eval_kit, "regraded_errors", regraded_or_synthetic)
+
+
+def kit_cli_with_synthetic_regrade(*args: str) -> list[str]:
+    """The kit's command line with the same synthetic-grade seam, for a CLI
+    run over results that hold passing_grade grades."""
+
+    kit = ROOT / "assets/base/agents/skills/cf-evaluate-model/scripts"
+    program = (
+        "import sys; from pathlib import Path; sys.path.insert(0, sys.argv[1]); import eval_kit; "
+        "synthetic, real = Path(sys.argv[2]), eval_kit.regraded_errors; "
+        "eval_kit.regraded_errors = lambda grade, trial: [] if Path(grade.get('path', '/')).is_relative_to(synthetic) "
+        "else real(grade, trial); "
+        "sys.argv = ['eval_kit.py', *sys.argv[3:]]; raise SystemExit(eval_kit.main())"
+    )
+    return [sys.executable, "-B", "-c", program, str(kit), str(SYNTHETIC_STATES), *args]
 
 
 def setUpModule() -> None:
     EVALUATOR.start()
+    SYNTHETIC_REGRADE.start()
 
 
 def tearDownModule() -> None:
+    SYNTHETIC_REGRADE.stop()
     EVALUATOR.stop()
     EVALUATOR_HOME.cleanup()
 
@@ -147,7 +181,8 @@ def passing_grade(case: dict, number: int, fixture_digest: str, run_id: str) -> 
     key."""
 
     fixtures = {item["id"]: item for item in eval_kit.suite_documents()[2]["fixtures"]}
-    state = Path(tempfile.mkdtemp(prefix="final-state-", dir=EVALUATOR_HOME.name)) / "repository"
+    SYNTHETIC_STATES.mkdir(exist_ok=True)
+    state = Path(tempfile.mkdtemp(prefix="final-state-", dir=SYNTHETIC_STATES)) / "repository"
     state.mkdir()
     (state / "README.md").write_text(f"{case['id']} trial {number}\n", encoding="utf-8")
     return eval_kit.sign_grade({
@@ -159,6 +194,7 @@ def passing_grade(case: dict, number: int, fixture_digest: str, run_id: str) -> 
         "grader_digest": eval_kit.grader_digest(),
         "fixture_digest": fixture_digest,
         "path": str(state),
+        "record": str(state.parent / "trial.fixture.json"),
         "final_digest": eval_kit.state_digest(state),
         "events_digest": None,
         "judgements_digest": None,
@@ -1764,14 +1800,14 @@ def git(root: Path, *args: str) -> str:
     ).stdout.strip()
 
 
-def graded_workspace(temp: Path) -> tuple[dict, Path, Path]:
+def graded_workspace(temp: Path, case_id: str = "synthetic") -> tuple[dict, Path, Path]:
     """A small fixture with a local origin in a real run root and subjects
     root, recorded as the materializer records it."""
 
     run_root = (temp / "run").resolve().parent / "run"
     marker = eval_kit.ensure_run_root(run_root)
     subjects = Path(marker["subjects_root"])
-    opaque = eval_kit.trial_opaque_id(marker["run_id"], "synthetic", 1)
+    opaque = eval_kit.trial_opaque_id(marker["run_id"], case_id, 1)
     root = subjects / opaque / "repository"
     root.mkdir(parents=True)
     files = {
@@ -1796,7 +1832,7 @@ def graded_workspace(temp: Path) -> tuple[dict, Path, Path]:
     record = {
         "schema_version": 1,
         "run_id": marker["run_id"],
-        "case_id": "synthetic",
+        "case_id": case_id,
         "trial": 1,
         "path": str(root),
         "base_commit": git(root, "rev-parse", "HEAD"),
@@ -2810,9 +2846,8 @@ print(json.dumps(seen, sort_keys=True))
             elsewhere = Path(self.temp.name) / "elsewhere"
             elsewhere.mkdir()
             eval_kit.write_json(elsewhere / "result.json", result)
-            kit = ROOT / "assets/base/agents/skills/cf-evaluate-model/scripts/eval_kit.py"
             score = lambda: subprocess.run(
-                [sys.executable, "-B", str(kit), "score", "result.json", "--output", "scored.json", "--graded-suite", str(suite)],
+                kit_cli_with_synthetic_regrade("score", "result.json", "--output", "scored.json", "--graded-suite", str(suite)),
                 cwd=elsewhere, capture_output=True, text=True,
             )
             self.assertEqual(0, score().returncode)
@@ -2921,24 +2956,16 @@ print(json.dumps(seen, sort_keys=True))
             self.assertEqual("error", status(failed, sign=False)[0])
             self.assertEqual("fail", status(failed)[0])
 
-            # T111-R10-1: an intact receipt counts only for the run and the
-            # final state it signed. Another run of the same case, trial and
-            # fixture; a result that names no run; a final state changed or
-            # gone after grading: each is not measured.
-            state = Path(grade["path"])
-            self.assertEqual(grade["final_digest"], eval_kit.state_digest(state))
+            # T111-R10-1: an intact receipt counts only for the run it
+            # signed. Another run of the same case, trial and fixture, or a
+            # result that names no run, is not measured. What the retained
+            # trial still grades as is RegradeTests' subject.
             for label, run_id in (("another run", "a later run"), ("no run", None)):
                 with self.subTest(label):
                     self.assertEqual("error", eval_kit.computed_trial_status(trial, case, run_id))
             self.assertIn(f"the grade belongs to run {result['run_id']!r}, not this result's run 'a later run'",
                           eval_kit.saved_grade_errors(grade, trial, case, "a later run"))
-            (state / "later.txt").write_text("written after grading\n", encoding="utf-8")
-            try:
-                self.assertEqual("error", eval_kit.computed_trial_status(trial, case, result["run_id"]))
-            finally:
-                (state / "later.txt").unlink()
             self.assertEqual("pass", eval_kit.computed_trial_status(trial, case, result["run_id"]))
-            self.assertEqual("error", status(lambda grade: grade.update(path=str(state.parent / "gone")))[0])
             self.assertEqual("error", status(lambda grade: grade.update(events_digest="sha256:" + "d" * 64))[0])
             # A grade with no receipt, or read where there is no evaluator
             # key, is not measured.
@@ -3157,6 +3184,162 @@ def unicode_escaped(text: str) -> str:
     """A JSON string literal with every character written as a \\u escape."""
 
     return '"' + "".join(f"\\u{ord(char):04x}" for char in text) + '"'
+
+
+class RegradeTests(unittest.TestCase):
+    """T111-R11-1: a saved grade counts only while its retained trial, graded
+    again now, gives the same outcome. Each probe grades a real trial (a git
+    fixture, run root, subjects root and trial record, as the materializer
+    writes them, without a CodeFlow binary), changes what grading reads and
+    leaves every signed field alone."""
+
+    RUBRIC = "the review means what its verdict says"
+    JUDGE = ["model: m", "prompt p1"]
+
+    def setUp(self) -> None:
+        self.temp = tempfile.TemporaryDirectory()
+        self.base = Path(self.temp.name)
+        self.suite = self.base / "suite"
+        shutil.copytree(DEV_SUITE, self.suite)
+        control = {"label": "a coherent rejection", "assertion": "rejects", "rubric": eval_kit.REVIEW_COHERENCE_RUBRIC,
+                   "excerpt": REVIEW, "expected": "pass"}
+        eval_kit.write_json(self.suite / "judge-controls.json", {"schema_version": 1, "controls": [control]})
+        cases_doc = json.loads((self.suite / "cases.json").read_text())
+        case = cases_doc["cases"][0]
+        case["expected"]["files"] = [
+            {"id": "readme_on_main", "in": ["branch:main"], "path": "README.md", "matches": ["^fixture$"]},
+            {"id": "review_is_coherent", "path": "REVIEW.md", "judged": {"rubric": self.RUBRIC}},
+        ]
+        case["expected"]["effects"] = [
+            {"id": "branches_kept", "kind": "refs_unchanged", "in": ["branch:*"]},
+            {"id": "git_hooks_wired", "kind": "git_config", "key": "core.hooksPath", "equals": ".codeflow/git-hooks"},
+        ]
+        eval_kit.write_json(self.suite / "cases.json", cases_doc)
+        eval_kit.set_graded_suite(self.suite)
+        self.case = next(item for item in eval_kit.suite_documents()[1]["cases"] if item["id"] == case["id"])
+        self.count = 0
+
+    def tearDown(self) -> None:
+        eval_kit.set_graded_suite(None)
+        self.temp.cleanup()
+
+    def graded(self) -> tuple[dict, dict, Path, Path, str]:
+        """A fresh trial of the case, graded and signed: its result trial,
+        grade, workspace, run root and run id."""
+
+        self.count += 1
+        temp = self.base / f"trial-{self.count}"
+        temp.mkdir()
+        record, root, run_root = graded_workspace(temp, self.case["id"])
+        (root / "REVIEW.md").write_text(REVIEW, encoding="utf-8")
+        fixtures = {item["id"]: item for item in eval_kit.suite_documents()[2]["fixtures"]}
+        record.update(
+            fixture_digest=eval_kit.tree_digest(root),
+            case_digest=eval_kit.case_digest(self.case, fixtures[self.case["fixture"]]),
+            subject_codeflow=record["codeflow_executable"]["path"],
+            settled_trials=[],
+        )
+        record_path = eval_kit.trial_record_path(run_root, self.case["id"], 1)
+        eval_kit.write_json(record_path, record)
+        judged = self.case["expected"]["files"][1]
+        calibration = temp / "calibration.json"
+        eval_kit.write_json(calibration, {"schema_version": 1, "judgements": [eval_kit.signed_judgement(
+            {"assertion": "rejects", "excerpt_digest": eval_kit.excerpt_digest(REVIEW), "verdict": "pass",
+             "judge": self.JUDGE[0], "judge_config": self.JUDGE[1], "rationale": "synthetic"})]})
+        judgements = temp / "judgements.json"
+        eval_kit.write_json(judgements, {"schema_version": 1, "judgements": [eval_kit.signed_judgement(
+            {"assertion": judged["id"], "excerpt_digest": eval_kit.excerpt_digest(eval_kit.judged_excerpt(judged, REVIEW)),
+             "verdict": "pass", "judge": self.JUDGE[0], "judge_config": self.JUDGE[1], "rationale": "synthetic"})]})
+        grade = eval_kit.grade_trial(record_path, judgements=judgements, calibrations=[calibration])
+        trial = {
+            "case_id": self.case["id"],
+            "trial": 1,
+            "fixture_digest": record["fixture_digest"],
+            "outcome": "completed",
+            "observed": {"route": self.case["expected"]["routes"][0], "signals": self.case["expected"]["signals"],
+                         "violations": [], "references": self.case["expected"]["references"]},
+            "evidence": [{"kind": "session", "ref": "sessions/1", "digest": "sha256:" + "b" * 64}]
+            + [{"kind": "file", "ref": str(path), "digest": eval_kit.raw_file_digest(path)} for path in (judgements, calibration)],
+            "trace_ref": "traces/1",
+            "validity_flags": [],
+            "grade": grade,
+        }
+        return trial, grade, root, run_root, record["run_id"]
+
+    def consumed(self, change) -> tuple[str, list[str]]:
+        """The status and faults a consumer finds after `change` on a fresh
+        genuinely passing trial."""
+
+        trial, grade, root, run_root, run_id = self.graded()
+        self.assertEqual("pass", grade["result"])
+        self.assertEqual(("pass", []), (eval_kit.computed_trial_status(trial, self.case, run_id),
+                                        eval_kit.saved_grade_errors(grade, trial, self.case, run_id)))
+        change(root, run_root)
+        return eval_kit.computed_trial_status(trial, self.case, run_id), eval_kit.saved_grade_errors(grade, trial, self.case, run_id)
+
+    def test_an_unchanged_trial_regrades_to_its_saved_pass(self) -> None:
+        self.assertEqual(("pass", []), self.consumed(lambda root, run_root: None))
+
+    def test_a_retained_trial_that_no_longer_grades_the_same_is_not_measured(self) -> None:
+        def without_git(root: Path, run_root: Path) -> None:
+            # Every working file, copied back to the signed path, without
+            # the repository: the worktree digest alone would still match.
+            copy = root.parent / "copied"
+            shutil.copytree(root, copy, ignore=shutil.ignore_patterns(".git"))
+            shutil.rmtree(root)
+            copy.rename(root)
+        def ref_moved(root: Path, run_root: Path) -> None:
+            git(root, "commit", "-q", "--allow-empty", "-m", "chore: move main")
+        def ref_added(root: Path, run_root: Path) -> None:
+            git(root, "branch", "extra")
+        def config_changed(root: Path, run_root: Path) -> None:
+            git(root, "config", "core.hooksPath", "/dev/null")
+        def ancestor_symlink(root: Path, run_root: Path) -> None:
+            trial_dir = root.parent
+            moved = trial_dir.parent.parent / "moved-trial"
+            trial_dir.rename(moved)
+            trial_dir.symlink_to(moved, target_is_directory=True)
+        def marker_edited(root: Path, run_root: Path) -> None:
+            marker = json.loads((run_root / eval_kit.RUN_MARKER).read_text())
+            eval_kit.write_json(run_root / eval_kit.RUN_MARKER, {**marker, "note": "edited after grading"})
+        def marker_renamed(root: Path, run_root: Path) -> None:
+            marker = json.loads((run_root / eval_kit.RUN_MARKER).read_text())
+            eval_kit.write_json(run_root / eval_kit.RUN_MARKER, {**marker, "run_id": marker["run_id"] + "-other"})
+        def boundary_written(root: Path, run_root: Path) -> None:
+            (run_root / "later.txt").write_text("written after grading\n", encoding="utf-8")
+        def judged_text_changed(root: Path, run_root: Path) -> None:
+            (root / "REVIEW.md").write_text(REVIEW.replace("drops the comma", "keeps the comma"), encoding="utf-8")
+        def worktree_file_added(root: Path, run_root: Path) -> None:
+            (root / "later.txt").write_text("written after grading\n", encoding="utf-8")
+        def record_removed(root: Path, run_root: Path) -> None:
+            for path in (run_root / "records").iterdir():
+                path.unlink()
+        for label, change in (
+            (".git removed", without_git),
+            ("graded ref moved", ref_moved),
+            ("ref added", ref_added),
+            ("graded config changed", config_changed),
+            ("ancestor symlink", ancestor_symlink),
+            ("run marker edited", marker_edited),
+            ("run marker renamed", marker_renamed),
+            ("boundary written", boundary_written),
+            ("judged text changed", judged_text_changed),
+            ("worktree file added", worktree_file_added),
+            ("trial record removed", record_removed),
+        ):
+            with self.subTest(label):
+                status, faults = self.consumed(change)
+                self.assertEqual("error", status)
+                self.assertTrue(faults)
+
+    def test_the_regrade_names_what_moved(self) -> None:
+        def config_changed(root: Path, run_root: Path) -> None:
+            git(root, "config", "core.hooksPath", "/dev/null")
+        faults = self.consumed(config_changed)[1]
+        self.assertIn("graded again, git_hooks_wired is 'fail', not the 'pass' the grade saved", faults)
+        def without_git(root: Path, run_root: Path) -> None:
+            shutil.rmtree(root / ".git")
+        self.assertTrue(any(fault.startswith("the retained trial no longer grades:") for fault in self.consumed(without_git)[1]))
 
 
 class HoldoutSeparationTests(unittest.TestCase):

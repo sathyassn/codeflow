@@ -369,9 +369,9 @@ order, with the case, grader, materialized and final fixture digests, the
 digests of the ledger, judgements and calibration files, which must also be
 among the trial's evidence digests, and the digest of the suite's judge
 controls. It records every judgement it read, where, with its excerpt digest,
-verdict, judge and entry digest, the workspace `path` it graded and its
-computed `result`, and grading signs all of it as a `receipt` under the
-evaluator key. Put it in the trial as `grade`; `score` recomputes the status
+verdict, judge and entry digest, the workspace `path` it graded, the trial
+`record` it graded from and its computed `result`, and grading signs all of
+it as a `receipt` under the evaluator key. Put it in the trial as `grade`; `score` recomputes the status
 from it. A result that holds grades takes the run root's `run_id` (from its
 marker) as its own, since each grade names that run. A grade from another
 case, fixture or grader revision is refused, so a changed grader
@@ -450,15 +450,24 @@ not gradable, never passes it.
   path, and every consumer (`score`, `validate-result`) counts a pass or a
   failed assertion only from a grade whose receipt verifies and whose bound
   evidence, read again, holds: the grade names the result's run and the
-  trial's case, number and fixture; the workspace it graded still holds the
-  final state it signed; each file it read is in the trial's evidence; each
-  judgement it read is in the retained file, signed, as read, from a judge a
-  retained calibration still qualifies; and those judgements alone pass each
-  judged assertion it passes. A missing or mismatched receipt, a grade from
-  another run, a final state that changed or is gone, a file that is
-  missing or changed, or any other fault leaves the trial `error`, whichever
-  way the grade was changed. Keep the subject workspaces, like the retained
-  files, until the result is scored, validated and any binding recorded. `--transport-only`
+  trial's case, number and fixture; each file it read is in the trial's
+  evidence; each judgement it read is in the retained file, signed, as read,
+  from a judge a retained calibration still qualifies; those judgements
+  alone pass each judged assertion it passes; and the trial, graded again
+  from its record, workspace, run and subjects roots and retained files,
+  gives the same outcome. The regrade reads the Git refs, configuration,
+  boundary and files as they are now, so no digest has to name every input
+  grading uses; a judgement counts again only for the excerpt its judge
+  signed, so it binds to the state the judge saw. A missing or mismatched
+  receipt, a grade from another run, a workspace or record that is gone or
+  reached through a link, a file that is missing or changed, an outcome
+  that grades differently, or any other fault leaves the trial `error`,
+  whichever way the grade was changed. Each consumer grades every graded
+  trial again, so scoring takes as long as grading. Keep the run root, the
+  subject workspaces and the retained files until every consumer that will
+  read the result has run: scoring, validation, the retention report,
+  comparison and any binding. After cleanup a result can no longer be
+  validated or compared. `--transport-only`
   grades uncalibrated judgements as recorded, to test that judgements reach
   the grade and fail closed, and marks the grade ineligible. A scripted or
   synthetic judge only exercises this plumbing; its passing runs are never
