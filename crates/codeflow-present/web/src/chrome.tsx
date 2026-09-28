@@ -364,14 +364,22 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     if (captureMode !== "element") return undefined;
     // Keyboard stops (SPC-014 B3): entities and annotatable elements in
     // document order. Arrows move, Enter pins, Shift+Enter climbs to the
-    // enclosing entity, then the block.
-    const candidates = annotatableElements(documentRoot).filter((el): el is Focusable => el instanceof HTMLElement || el instanceof SVGElement);
+    // enclosing entity, then the block. The stops are read again on every
+    // move: a code block highlighted or a figure drawn while the mode is on
+    // replaces its elements, and the stop that had focus can leave the page.
+    const stops = (): Focusable[] => annotatableElements(documentRoot).filter((el): el is Focusable => el instanceof HTMLElement || el instanceof SVGElement);
+    const initial = stops();
     const previousFocus = document.activeElement instanceof HTMLElement ? document.activeElement : null;
-    const touched = new Map<Focusable, string | null>(candidates.map((el) => [el, el.getAttribute("tabindex")]));
-    let activeIndex = Math.max(0, candidates.findIndex((el) => el.contains(previousFocus)));
-    const focusCandidate = (index: number): void => {
+    const touched = new Map<Focusable, string | null>();
+    let activeIndex = Math.max(0, initial.findIndex((el) => el.contains(previousFocus)));
+    // The stop last moved to, focused or not: one inside a closed disclosure
+    // takes no focus, and the next move still goes past it.
+    let current: Element | null = null;
+    const focusCandidate = (candidates: Focusable[], index: number): void => {
       activeIndex = (index + candidates.length) % candidates.length;
+      current = candidates[activeIndex] ?? null;
       candidates.forEach((el, i) => {
+        if (!touched.has(el)) touched.set(el, el.getAttribute("tabindex"));
         el.tabIndex = i === activeIndex ? 0 : -1;
       });
       candidates[activeIndex]?.focus();
@@ -384,7 +392,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       outer.tabIndex = -1;
       outer.focus();
       setHot(outer);
-      const index = candidates.indexOf(outer);
+      current = outer;
+      const index = stops().indexOf(outer);
       if (index >= 0) activeIndex = index;
     };
     const complete = (target: Element): void => {
@@ -418,15 +427,22 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       }
       const offset =
         event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
-      if (offset !== 0 && candidates.length > 0 && document.activeElement instanceof Element && documentRoot.contains(document.activeElement)) {
-        event.preventDefault();
-        focusCandidate(activeIndex + offset);
-      }
+      if (offset === 0) return;
+      const active = document.activeElement;
+      // Focus on the page itself means the stop that had it was replaced;
+      // the move resumes from that stop's place in the order.
+      const lost = active === null || active === document.body;
+      if (!lost && !(active instanceof Element && documentRoot.contains(active))) return;
+      const candidates = stops();
+      if (candidates.length === 0) return;
+      event.preventDefault();
+      const at = current instanceof HTMLElement || current instanceof SVGElement ? candidates.indexOf(current) : -1;
+      focusCandidate(candidates, (at >= 0 ? at : activeIndex) + offset);
     };
     documentRoot.dataset.cfCaptureMode = "element";
     documentRoot.addEventListener("click", pick, { capture: true });
     documentRoot.ownerDocument.addEventListener("keydown", keydown, { capture: true });
-    if (candidates.length > 0) focusCandidate(activeIndex);
+    if (initial.length > 0) focusCandidate(initial, activeIndex);
     return () => {
       delete documentRoot.dataset.cfCaptureMode;
       documentRoot.removeEventListener("click", pick, { capture: true });
