@@ -656,22 +656,8 @@ fn codex_hook_trust(hooks_json: &Path, codex_home: &Path) -> Result<(usize, usiz
         for (g, group) in groups.iter().enumerate() {
             for (h, handler) in group.hooks.iter().enumerate() {
                 total += 1;
-                let normalized = normalized_codex_handler(handler).ok_or_else(|| {
-                    format!("{event} hook {g}:{h} has a shape doctor cannot hash")
-                })?;
-                // Codex builds the identity through a TOML value, which cannot
-                // hold an absent matcher: the key is left out (discovery.rs).
-                let matcher = group
-                    .matcher
-                    .as_deref()
-                    .map_or_else(String::new, |matcher| {
-                        format!(",\"matcher\":{}", serde_json::Value::from(matcher))
-                    });
-                let identity = format!(
-                    "{{\"event_name\":{},\"hooks\":[{normalized}]{matcher}}}",
-                    serde_json::Value::from(event_name.as_str()),
-                );
-                let hash = format!("sha256:{}", sha256_hex(identity.as_bytes()));
+                let hash = codex_hook_hash(event, group.matcher.as_deref(), handler)
+                    .map_err(|why| format!("{event} hook {g}:{h} {why}"))?;
                 let runs = paths.iter().any(|path| {
                     states
                         .get(&format!("{path}:{event_name}:{g}:{h}"))
@@ -688,6 +674,68 @@ fn codex_hook_trust(hooks_json: &Path, codex_home: &Path) -> Result<(usize, usiz
         return Err("hooks.json wires no hook codex reads".into());
     }
     Ok((running, total))
+}
+
+/// The trust hash Codex records for one handler of an `event` group, over
+/// the identity Codex hashes once it has normalized the hook (discovery.rs
+/// `append_matcher_groups`, `normalize_command_hook` and `hook_hash`,
+/// 36650394): no matcher on `UserPromptSubmit`, `Stop` and `Interrupt`
+/// (common.rs `matcher_pattern_for_event`), and the timeout at its default,
+/// floor or cap. `Err` for what Codex skips, a matcher that does not
+/// compile or an empty command, and for a handler shape doctor cannot hash.
+fn codex_hook_hash(
+    event: &str,
+    matcher: Option<&str>,
+    handler: &CodexHandler,
+) -> Result<String, String> {
+    let matcher = match event {
+        "UserPromptSubmit" | "Stop" | "Interrupt" => None,
+        _ => matcher,
+    };
+    if let Some(pattern) = matcher {
+        let plain = pattern.is_empty()
+            || pattern == "*"
+            || pattern
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '_' || c == '|');
+        if !plain && regex::Regex::new(pattern).is_err() {
+            return Err(format!(
+                "has a matcher {pattern:?} codex rejects, so codex skips its group"
+            ));
+        }
+    }
+    let CodexHandler::Command {
+        command,
+        command_windows: None,
+        timeout_sec,
+        asynchronous,
+        status_message: None,
+        additional_context_limit: None,
+    } = handler
+    else {
+        return Err("has a shape doctor cannot hash".into());
+    };
+    if command.trim().is_empty() {
+        return Err("has an empty command, which codex skips".into());
+    }
+    let timeout = match event {
+        "SessionEnd" | "Interrupt" => timeout_sec.unwrap_or(1).clamp(1, 3),
+        _ => timeout_sec.unwrap_or(600).max(1),
+    };
+    let handler = format!(
+        "{{\"async\":{asynchronous},\"command\":{},\"timeout\":{timeout},\"type\":\"command\"}}",
+        serde_json::Value::from(command.as_str())
+    );
+    // Codex builds the identity through a TOML value, which cannot hold an
+    // absent matcher: the key is left out (discovery.rs).
+    let matcher = matcher.map_or_else(String::new, |matcher| {
+        format!(",\"matcher\":{}", serde_json::Value::from(matcher))
+    });
+    let identity = format!(
+        "{{\"event_name\":{},\"hooks\":[{handler}]{matcher}}}",
+        serde_json::Value::from(snake_case(event).as_str()),
+    );
+    Ok(format!("sha256:{}", sha256_hex(identity.as_bytes())))
 }
 
 /// The user's hook state records as Codex merges them: each record read
@@ -719,26 +767,6 @@ fn codex_hook_states(config: &toml::Table) -> BTreeMap<String, CodexHookState> {
         }
     }
     states
-}
-
-/// A Codex command handler as its trust hash sees it, in sorted-key JSON;
-/// `None` for any other shape.
-fn normalized_codex_handler(handler: &CodexHandler) -> Option<String> {
-    let CodexHandler::Command {
-        command,
-        command_windows: None,
-        timeout_sec: Some(timeout),
-        asynchronous,
-        status_message: None,
-        additional_context_limit: None,
-    } = handler
-    else {
-        return None;
-    };
-    Some(format!(
-        "{{\"async\":{asynchronous},\"command\":{},\"timeout\":{timeout},\"type\":\"command\"}}",
-        serde_json::Value::from(command.as_str())
-    ))
 }
 
 /// `PreToolUse` as Codex keys it: `pre_tool_use`.
@@ -808,6 +836,10 @@ fn check_grok(opts: &Options) -> CheckResult {
                 ".grok/hooks present, {presence}: grok does not trust this folder, so its project hooks are skipped (git hooks and CI enforce regardless)"
             ),
         ),
+        GrokTrust::Unverifiable(why) => (
+            Status::Note(remedy::DOCTOR_UNSEEN.with(&[("step", trust)])),
+            format!(".grok/hooks present, {presence}: grok trust not read ({why})"),
+        ),
         GrokTrust::Unreadable(why) => {
             let step = format!("repair or remove {}, then {trust}", opts.grok_home().join("trusted_folders.toml").display());
             (
@@ -835,6 +867,8 @@ enum GrokTrust {
     /// Folder trust is turned off by `GROK_FOLDER_TRUST`, the user config or
     /// the managed config.
     Ungated,
+    /// Grok decides from state doctor cannot reproduce.
+    Unverifiable(String),
 }
 
 /// A Grok trust store as Grok reads it (`TrustDocument` and `FolderTrust`
@@ -867,47 +901,97 @@ fn grok_bool(value: &str) -> Option<bool> {
 /// `GROK_FOLDER_TRUST`, then `[folder_trust] enabled` in the user config,
 /// then in the managed config, else on (`feature_enabled` in
 /// `folder_trust.rs`). A config Grok cannot parse is skipped, as Grok skips
-/// it. Doctor cannot see Grok's remote setting, which can only turn the
-/// gate off, or whether the binary is a local build, which never gates.
-fn grok_gate_enabled(env: Option<&str>, grok_home: &Path) -> bool {
+/// it. `Err` for a layer with `[[version_overrides]]`, which Grok applies
+/// for its own version before it reads the setting (loader.rs
+/// `load_config_file`). Doctor cannot see Grok's remote setting, which can
+/// only turn the gate off, or whether the binary is a local build, which
+/// never gates.
+fn grok_gate_enabled(env: Option<&str>, grok_home: &Path) -> Result<bool, String> {
     if let Some(value) = env.and_then(grok_bool) {
-        return value;
+        return Ok(value);
     }
-    let layer = |name: &str| {
-        std::fs::read_to_string(grok_home.join(name))
+    for name in ["config.toml", "managed_config.toml"] {
+        let Some(table) = std::fs::read_to_string(grok_home.join(name))
             .ok()
             .and_then(|text| text.parse::<toml::Table>().ok())
-            .and_then(|table| {
-                table
-                    .get("folder_trust")
-                    .and_then(|trust| trust.get("enabled"))
-                    .and_then(toml::Value::as_bool)
-            })
-    };
-    layer("config.toml")
-        .or_else(|| layer("managed_config.toml"))
-        .unwrap_or(true)
+        else {
+            continue;
+        };
+        if table.contains_key("version_overrides") {
+            return Err(format!(
+                "{name} has version_overrides, which grok applies for its own version"
+            ));
+        }
+        if let Some(enabled) = table
+            .get("folder_trust")
+            .and_then(|trust| trust.get("enabled"))
+            .and_then(toml::Value::as_bool)
+        {
+            return Ok(enabled);
+        }
+    }
+    Ok(true)
 }
 
-/// The folder Grok keys a path's trust by: its git working tree, else the
-/// path itself (`workspace_key`).
-fn grok_workspace(path: &Path) -> PathBuf {
-    let existing = path.ancestors().find(|p| p.exists()).unwrap_or(path);
-    git2::Repository::discover(existing)
+fn canonical_or_owned(path: &Path) -> PathBuf {
+    path.canonicalize().unwrap_or_else(|_| path.to_path_buf())
+}
+
+/// A key Grok never lets decide: relative, a filesystem root or the home
+/// directory (`is_unsafe_trust_root`).
+fn grok_unsafe_root(path: &Path, home: Option<&Path>) -> bool {
+    !path.is_absolute()
+        || path.parent().is_none()
+        || home == Some(canonical_or_owned(path).as_path())
+}
+
+/// The key Grok trusts a folder by (`workspace_key` in trust.rs, f0e3be11):
+/// a linked worktree's main checkout, else its git working tree, else the
+/// folder, and the folder itself where that key would be a root Grok never
+/// trusts. A worktree under Grok's own `worktrees/` is keyed by its
+/// registry, which the caller reports as unverifiable first.
+fn grok_workspace_key(path: &Path, home: Option<&Path>) -> PathBuf {
+    let derived = git2::Repository::discover(path)
         .ok()
-        .and_then(|repo| repo.workdir().map(Path::to_path_buf))
-        .and_then(|dir| dir.canonicalize().ok())
-        .unwrap_or_else(|| existing.to_path_buf())
+        .and_then(|repo| {
+            if repo.is_worktree() {
+                let main = git2::Repository::open(repo.commondir()).ok();
+                if let Some(main_dir) = main.as_ref().and_then(git2::Repository::workdir) {
+                    if canonical_or_owned(&main_dir.join(".git"))
+                        == canonical_or_owned(repo.commondir())
+                    {
+                        return Some(canonical_or_owned(main_dir));
+                    }
+                }
+            }
+            repo.workdir().map(canonical_or_owned)
+        })
+        .unwrap_or_else(|| canonical_or_owned(path));
+    if grok_unsafe_root(&derived, home) {
+        canonical_or_owned(path)
+    } else {
+        derived
+    }
 }
 
-/// Read Grok's folder trust for `root` as `TrustStore::is_trusted` decides
-/// it: the canonical folder, the recorded keys as written, the longest key
-/// that covers it within the same working tree decides, and a tie trusts
-/// only when every tied record does. Keys that are relative, a filesystem
-/// root or the home directory never count.
+/// Read Grok's folder trust for `root` as Grok decides it: its workspace
+/// key, the recorded keys as written, the longest key that covers it within
+/// the same workspace decides, and a tie trusts only when every tied record
+/// does (`TrustStore::is_trusted`). Keys that are relative, a filesystem
+/// root or the home directory never count. What doctor cannot reproduce is
+/// `Unverifiable`: a relative `GROK_HOME`, which Grok refuses for its store
+/// and reads its config against its own working directory
+/// (`default_path_in`), config patches, and Grok's managed worktrees.
 fn grok_folder_trust(root: &Path, grok_home: &Path, env: Option<&str>) -> GrokTrust {
-    if !grok_gate_enabled(env, grok_home) {
-        return GrokTrust::Ungated;
+    if !grok_home.is_absolute() {
+        return GrokTrust::Unverifiable(
+            "GROK_HOME is relative, which grok resolves against its own working directory".into(),
+        );
+    }
+    match grok_gate_enabled(env, grok_home) {
+        Ok(false) => return GrokTrust::Ungated,
+        Err(why) => return GrokTrust::Unverifiable(why),
+        Ok(true) => {}
     }
     let path = grok_home.join("trusted_folders.toml");
     let document = match std::fs::read_to_string(&path) {
@@ -918,20 +1002,27 @@ fn grok_folder_trust(root: &Path, grok_home: &Path, env: Option<&str>) -> GrokTr
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => GrokTrustDocument::default(),
         Err(e) => return GrokTrust::Unreadable(format!("trusted_folders.toml: {e}")),
     };
-    let query = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
-    let workspace = grok_workspace(&query);
+    let folder = canonical_or_owned(root);
+    if folder.starts_with(canonical_or_owned(&grok_home.join("worktrees"))) {
+        return GrokTrust::Unverifiable(
+            "a grok worktree, whose trust key grok reads from its worktrees.db".into(),
+        );
+    }
     let home = user_home().canonicalize().ok();
+    let home = home.as_deref();
+    let workspace = |path: &Path| {
+        grok_workspace_key(path.ancestors().find(|p| p.exists()).unwrap_or(path), home)
+    };
+    let query = canonical_or_owned(&grok_workspace_key(&folder, home));
+    let query_id = workspace(&query);
     let mut best: Option<usize> = None;
     let mut trusted = false;
-    for (folder, record) in &document.folders {
-        let folder = Path::new(folder);
-        let unsafe_root = !folder.is_absolute()
-            || folder.parent().is_none()
-            || home.as_deref() == Some(folder.canonicalize().unwrap_or_default().as_path());
-        if unsafe_root || !query.starts_with(folder) || grok_workspace(folder) != workspace {
+    for (key, record) in &document.folders {
+        let key = Path::new(key);
+        if grok_unsafe_root(key, home) || !query.starts_with(key) || workspace(key) != query_id {
             continue;
         }
-        let depth = folder.components().count();
+        let depth = key.components().count();
         match best {
             Some(d) if depth < d => {}
             Some(d) if depth == d => trusted &= record.trusted,
@@ -3368,6 +3459,225 @@ mod tests {
                 && warn_remedy(&r).contains("/hooks-trust"),
             "{}",
             warn_remedy(&r)
+        );
+    }
+
+    fn is_note(result: &CheckResult) -> bool {
+        matches!(&result.status, Status::Note(remedy) if remedy.contains("cannot verify"))
+    }
+
+    #[test]
+    fn a_grok_config_with_version_overrides_is_unverified() {
+        // TSK-147 F3 round 2: grok applies `[[version_overrides]]` for its own
+        // version before it reads `folder_trust.enabled` (loader.rs
+        // load_config_file), which doctor cannot reproduce: no Pass.
+        let patched = "[folder_trust]\nenabled = false\n\n[[version_overrides]]\n\
+                       [version_overrides.folder_trust]\nenabled = true\n";
+        for layer in ["config.toml", "managed_config.toml"] {
+            let (_dir, opts, home) = grok_project(None);
+            std::fs::write(home.join(".grok").join(layer), patched).unwrap();
+            let r = check_grok(&opts);
+            assert!(is_note(&r), "{layer}: {:?} {}", r.status, r.message);
+        }
+        // A user config that decides the gate without patches is read as
+        // written, and the managed config's patches never apply then.
+        let (_dir, opts, home) = grok_project(None);
+        std::fs::write(
+            home.join(".grok/config.toml"),
+            "[folder_trust]\nenabled = false\n",
+        )
+        .unwrap();
+        std::fs::write(home.join(".grok/managed_config.toml"), patched).unwrap();
+        assert_eq!(check_grok(&opts).status, Status::Pass);
+        // The environment outranks every config layer.
+        let (_dir, mut opts, home) = grok_project(None);
+        std::fs::write(home.join(".grok/config.toml"), patched).unwrap();
+        opts.env_var = Some(grok_env_off);
+        assert_eq!(check_grok(&opts).status, Status::Pass);
+    }
+
+    #[test]
+    fn a_relative_grok_home_is_unverified() {
+        // Grok refuses a relative trust-store home and reads its config
+        // against its own working directory (trust.rs default_path_in).
+        fn env(name: &str) -> Option<String> {
+            (name == "GROK_HOME").then(|| "relative-grok".to_string())
+        }
+        let (_dir, mut opts, _) = grok_project(None);
+        opts.harness_home = None;
+        opts.env_var = Some(env);
+        let r = check_grok(&opts);
+        assert!(is_note(&r), "{:?} {}", r.status, r.message);
+    }
+
+    #[test]
+    fn a_linked_worktree_takes_its_grok_trust_from_the_main_checkout() {
+        // Grok keys a linked worktree by its main checkout (trust.rs
+        // git_derived_workspace_key), so only a grant covering the main
+        // checkout trusts it.
+        let dir = tempfile::tempdir().unwrap();
+        let main = dir.path().join("main");
+        std::fs::create_dir_all(&main).unwrap();
+        git(&main, &["init", "-q", "-b", "main"]);
+        std::fs::write(main.join("tracked"), "x").unwrap();
+        git(&main, &["add", "tracked"]);
+        git(
+            &main,
+            &[
+                "-c",
+                "user.name=T",
+                "-c",
+                "user.email=t@example.test",
+                "commit",
+                "-qm",
+                "seed",
+            ],
+        );
+        let linked = dir.path().join("linked");
+        git(
+            &main,
+            &[
+                "worktree",
+                "add",
+                "-q",
+                "-b",
+                "wt",
+                linked.to_str().unwrap(),
+            ],
+        );
+        std::fs::create_dir_all(linked.join(".grok/hooks")).unwrap();
+        std::fs::write(linked.join(".grok/hooks/codeflow.json"), "{}").unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".grok")).unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = linked.to_string_lossy().into_owned();
+        opts.harness_home = Some(home.clone());
+        let grant = |folder: &Path| {
+            std::fs::write(
+                home.join(".grok/trusted_folders.toml"),
+                format!(
+                    "[folders.\"{}\"]\ntrusted = true\n",
+                    folder.canonicalize().unwrap().display()
+                ),
+            )
+            .unwrap();
+        };
+        grant(&linked);
+        let r = check_grok(&opts);
+        assert!(r.status.is_warn(), "{:?} {}", r.status, r.message);
+        grant(&main);
+        let r = check_grok(&opts);
+        assert_eq!(r.status, Status::Pass, "{}", r.message);
+    }
+
+    #[test]
+    fn a_grok_managed_worktree_is_unverified() {
+        // Grok keys a worktree under its home's worktrees/ through its
+        // worktrees.db registry, which doctor does not read.
+        let (dir, mut opts, home) = grok_project(None);
+        let managed = home.join(".grok/worktrees/repo/wt");
+        std::fs::create_dir_all(managed.join(".grok/hooks")).unwrap();
+        std::fs::write(managed.join(".grok/hooks/codeflow.json"), "{}").unwrap();
+        std::fs::write(
+            home.join(".grok/trusted_folders.toml"),
+            format!(
+                "[folders.\"{}\"]\ntrusted = true\n",
+                managed.canonicalize().unwrap().display()
+            ),
+        )
+        .unwrap();
+        opts.project_dir = managed.to_string_lossy().into_owned();
+        let r = check_grok(&opts);
+        assert!(is_note(&r), "{:?} {}", r.status, r.message);
+        drop(dir);
+    }
+
+    /// A project whose `.codex/hooks.json` wires `groups` under `event`, and
+    /// a Codex config trusting its first handler at `hash`.
+    fn codex_single(event: &str, groups: &str, hash: &str) -> CheckResult {
+        let hooks = format!(r#"{{"hooks": {{"{event}": {groups}}}}}"#);
+        let key = format!("{}:0:0", snake_case(event));
+        let (_dir, opts) = codex_project(&hooks, &[(&key, hash)]);
+        check_codex(&opts)
+    }
+
+    #[test]
+    fn codex_hooks_are_hashed_after_codex_normalizes_them() {
+        // TSK-147 F2 round 2, the reviewer's probes: each hash below is the
+        // one doctor computed before Codex's normalization (discovery.rs
+        // append_matcher_groups, normalize_command_hook), so none is trust.
+        let ignored_matcher = codex_single(
+            "UserPromptSubmit",
+            r#"[{"matcher":"bogus","hooks":[{"type":"command","command":"codeflow hook session-orient","timeout":10}]}]"#,
+            "sha256:8cae15bf3a1950e8e9b95a6945dd894e1c3eedd8ae9e72843f01e09e5c97e099",
+        );
+        assert!(
+            ignored_matcher.status.is_warn(),
+            "{}",
+            ignored_matcher.message
+        );
+        let zero_timeout = codex_single(
+            "PreToolUse",
+            r#"[{"matcher":"^Bash$","hooks":[{"type":"command","command":"x","timeout":0}]}]"#,
+            "sha256:de305438036e547f0be717966bc7968b34e3c7da64088816f6bddbab0f9ef872",
+        );
+        assert!(zero_timeout.status.is_warn(), "{}", zero_timeout.message);
+        // Codex skips a group whose matcher does not compile and a hook
+        // whose command is empty: doctor cannot say what then runs.
+        let invalid_matcher = codex_single(
+            "PreToolUse",
+            r#"[{"matcher":"[","hooks":[{"type":"command","command":"x","timeout":10}]}]"#,
+            "sha256:20a7b5a3325c6c3477af23788f7be368fcc8ed32b060cbb5dc84cc1af89ac28c",
+        );
+        assert!(is_note(&invalid_matcher), "{:?}", invalid_matcher.status);
+        let empty_command = codex_single(
+            "PreToolUse",
+            r#"[{"matcher":"^Bash$","hooks":[{"type":"command","command":"   ","timeout":10}]}]"#,
+            "sha256:218d05af2d3beb588aeb86a90ed64aef17344d31dc8bbd286883ed090ecefc77",
+        );
+        assert!(is_note(&empty_command), "{:?}", empty_command.status);
+    }
+
+    #[test]
+    fn codex_normalization_gives_equivalent_hooks_one_hash() {
+        // The identity Codex hashes: no matcher on UserPromptSubmit, Stop
+        // and Interrupt; a missing or zero timeout at its default or floor.
+        let hash = |event: &str, matcher: Option<&str>, timeout: Option<u64>| {
+            let handler = CodexHandler::Command {
+                command: "x".into(),
+                command_windows: None,
+                timeout_sec: timeout,
+                asynchronous: false,
+                status_message: None,
+                additional_context_limit: None,
+            };
+            codex_hook_hash(event, matcher, &handler).unwrap()
+        };
+        for event in ["UserPromptSubmit", "Stop", "Interrupt"] {
+            assert_eq!(
+                hash(event, Some("bogus"), Some(2)),
+                hash(event, None, Some(2))
+            );
+        }
+        assert_ne!(
+            hash("PreToolUse", Some("Bash"), Some(10)),
+            hash("PreToolUse", None, Some(10))
+        );
+        assert_eq!(
+            hash("PreToolUse", None, None),
+            hash("PreToolUse", None, Some(600))
+        );
+        assert_eq!(
+            hash("PreToolUse", None, Some(0)),
+            hash("PreToolUse", None, Some(1))
+        );
+        assert_eq!(
+            hash("SessionEnd", None, None),
+            hash("SessionEnd", None, Some(1))
+        );
+        assert_eq!(
+            hash("SessionEnd", None, Some(9)),
+            hash("SessionEnd", None, Some(3))
         );
     }
 
