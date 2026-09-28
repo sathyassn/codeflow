@@ -4,17 +4,24 @@
 //! `Command::new("git")`, or as `Command::new(program)` where `program`
 //! may hold git, would dispatch its hooks by PATH again.
 //!
-//! The scan reads each production source with comments and string contents
-//! set aside, finds every `Command::new(...)` however it is spaced, and
-//! judges its argument. A literal that names git (`git`, `git.exe`,
-//! `/usr/bin/git` and the like) is refused. Any other argument that is not
-//! a literal must be listed in [`DYNAMIC`] with the reason it never holds
-//! git, so a new spawn built from a variable has to be looked at. Renaming
-//! `Command` on import would hide a spawn from the scan, so it is refused.
+//! The scan reads each production source as Rust tokens: comments are
+//! dropped wherever they fall, and string literals are decoded (escapes,
+//! raw strings, line continuations). It enforces a supported subset, in
+//! which every spawn is written `…Command::new(ARG)` or
+//! `<…Command>::new(ARG)`, and judges each argument. A literal that names
+//! git (`git`, `git.exe`, `/usr/bin/git` and the like) is refused. Any other
+//! argument that is not one literal must be listed in [`DYNAMIC`] with the
+//! reason it never holds git, so a new spawn built from a value has to be
+//! looked at. The forms that would hide a spawn from that reading are
+//! refused outright: renaming `Command` on import, a type alias of it, the
+//! constructor taken as a value, and a macro that builds `$name::new` from
+//! a metavariable.
 //!
-//! Not covered: a shell that runs git from its own script text, such as a
-//! test target the runner starts through `sh -c`. That git is the user's
-//! command, not one codeflow builds.
+//! Outside the subset, and so not seen: a procedural macro that assembles
+//! the name, and a process API other than `Command` (no production source
+//! uses one). A shell that runs git from its own script text, such as a
+//! test target the runner starts through `sh -c`, is the user's command,
+//! not one codeflow builds.
 
 use std::path::{Path, PathBuf};
 
@@ -94,167 +101,276 @@ fn rust_files(dir: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// One character of source and whether it is code (not a comment and not
-/// inside a string or character literal).
-struct Source {
-    chars: Vec<char>,
-    code: Vec<bool>,
+/// One Rust token, as far as the scan needs: comments and whitespace are
+/// gone and a string literal holds its decoded value.
+#[derive(Debug, Clone, PartialEq)]
+enum Token {
+    Ident(String),
+    Punct(char),
+    Str(String),
+    /// A number or character literal, or a lifetime.
+    Other(String),
 }
 
-impl Source {
-    fn new(text: &str) -> Self {
-        let chars: Vec<char> = text.chars().collect();
-        let mut code = vec![true; chars.len()];
-        let mut i = 0;
-        let mark = |code: &mut Vec<bool>, from: usize, to: usize| {
-            for flag in &mut code[from..to.min(chars.len())] {
-                *flag = false;
-            }
-        };
-        while i < chars.len() {
-            let rest = |n: usize| chars.get(i + n).copied();
-            match chars[i] {
-                '/' if rest(1) == Some('/') => {
-                    let end = (i..chars.len())
-                        .find(|&j| chars[j] == '\n')
-                        .unwrap_or(chars.len());
-                    mark(&mut code, i, end);
-                    i = end;
-                }
-                '/' if rest(1) == Some('*') => {
-                    let (mut depth, mut j) = (0_usize, i);
-                    while j < chars.len() {
-                        if chars[j] == '/' && chars.get(j + 1) == Some(&'*') {
-                            depth += 1;
-                            j += 2;
-                        } else if chars[j] == '*' && chars.get(j + 1) == Some(&'/') {
-                            depth -= 1;
-                            j += 2;
-                            if depth == 0 {
-                                break;
-                            }
-                        } else {
-                            j += 1;
-                        }
-                    }
-                    mark(&mut code, i, j);
-                    i = j;
-                }
-                'r' if !ident(i.checked_sub(1).map(|p| chars[p]))
-                    && matches!(rest(1), Some('"' | '#')) =>
-                {
-                    let hashes = (i + 1..chars.len())
-                        .take_while(|&j| chars[j] == '#')
-                        .count();
-                    let open = i + 1 + hashes;
-                    if chars.get(open) != Some(&'"') {
-                        i += 1;
-                        continue;
-                    }
-                    let mut j = open + 1;
-                    while j < chars.len()
-                        && !(chars[j] == '"'
-                            && (1..=hashes).all(|h| chars.get(j + h) == Some(&'#')))
-                    {
-                        j += 1;
-                    }
-                    mark(&mut code, open + 1, j);
-                    i = j + 1 + hashes;
-                }
-                '"' => {
-                    let mut j = i + 1;
-                    while j < chars.len() && chars[j] != '"' {
-                        j += if chars[j] == '\\' { 2 } else { 1 };
-                    }
-                    mark(&mut code, i + 1, j);
-                    i = j + 1;
-                }
-                '\'' if rest(1) == Some('\\') => {
-                    let end = (i + 2..chars.len())
-                        .find(|&j| chars[j] == '\'')
-                        .unwrap_or(chars.len());
-                    mark(&mut code, i + 1, end);
-                    i = end + 1;
-                }
-                '\'' if rest(2) == Some('\'') => {
-                    mark(&mut code, i + 1, i + 2);
-                    i += 3;
-                }
-                _ => i += 1,
-            }
+impl Token {
+    /// The token as written, for listing a dynamic argument.
+    fn text(&self) -> String {
+        match self {
+            Token::Ident(text) | Token::Other(text) => text.clone(),
+            Token::Punct(c) => c.to_string(),
+            Token::Str(value) => format!("{value:?}"),
         }
-        Self { chars, code }
     }
 
-    /// The code text with whitespace removed, and for each character its
-    /// index in `chars`.
-    fn compact(&self) -> (String, Vec<usize>) {
-        let mut text = String::new();
-        let mut at = Vec::new();
-        for (i, &c) in self.chars.iter().enumerate() {
-            if !self.code[i] || !c.is_whitespace() {
-                text.push(if self.code[i] { c } else { '\u{0}' });
-                at.push(i);
-            }
-        }
-        (text, at)
+    fn is(&self, word: &str) -> bool {
+        matches!(self, Token::Ident(text) if text == word)
+    }
+
+    fn punct(&self, c: char) -> bool {
+        *self == Token::Punct(c)
     }
 }
 
-fn ident(c: Option<char>) -> bool {
-    c.is_some_and(|c| c.is_alphanumeric() || c == '_')
+fn ident_char(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
 }
 
-/// The argument of each `Command::new(...)` in `text`, whitespace removed,
-/// with the literal's value when the argument is one string literal.
-fn spawns(text: &str) -> Vec<(String, Option<String>)> {
-    let source = Source::new(text);
-    let (compact, at) = source.compact();
-    let marker = "Command::new(";
-    let mut found = Vec::new();
-    let mut from = 0;
-    while let Some(offset) = compact[from..].find(marker) {
-        let start = from + offset;
-        from = start + marker.len();
-        let before = at[start].checked_sub(1).map(|i| source.chars[i]);
-        if ident(before) {
-            continue;
-        }
-        let open = at[start + marker.len() - 1];
-        let mut depth = 0_usize;
-        let mut close = open;
-        for (j, &c) in source.chars.iter().enumerate().skip(open) {
-            if !source.code[j] {
-                continue;
+/// The tokens of `text`.
+fn tokens(text: &str) -> Vec<Token> {
+    let chars: Vec<char> = text.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        let c = chars[i];
+        let at = |n: usize| chars.get(i + n).copied();
+        if c.is_whitespace() {
+            i += 1;
+        } else if c == '/' && at(1) == Some('/') {
+            while i < chars.len() && chars[i] != '\n' {
+                i += 1;
             }
-            match c {
-                '(' => depth += 1,
-                ')' => {
+        } else if c == '/' && at(1) == Some('*') {
+            let mut depth = 0_usize;
+            while i < chars.len() {
+                if chars[i] == '/' && chars.get(i + 1) == Some(&'*') {
+                    depth += 1;
+                    i += 2;
+                } else if chars[i] == '*' && chars.get(i + 1) == Some(&'/') {
                     depth -= 1;
+                    i += 2;
                     if depth == 0 {
-                        close = j;
                         break;
                     }
+                } else {
+                    i += 1;
                 }
-                _ => {}
+            }
+        } else if let Some((value, next)) = raw_string(&chars, i) {
+            out.push(Token::Str(value));
+            i = next;
+        } else if c == '"' || (c == 'b' && at(1) == Some('"')) {
+            let (value, next) = string(&chars, if c == 'b' { i + 1 } else { i });
+            out.push(Token::Str(value));
+            i = next;
+        } else if c == '\'' {
+            // A character literal, or a lifetime.
+            let end = if at(1) == Some('\\') {
+                (i + 2..chars.len()).find(|&j| chars[j] == '\'')
+            } else if at(2) == Some('\'') {
+                Some(i + 2)
+            } else {
+                None
+            };
+            if let Some(end) = end {
+                out.push(Token::Other(chars[i..=end].iter().collect()));
+                i = end + 1;
+            } else {
+                out.push(Token::Punct('\''));
+                i += 1;
+            }
+        } else if ident_char(c) {
+            let start = i;
+            while i < chars.len() && ident_char(chars[i]) {
+                i += 1;
+            }
+            let word: String = chars[start..i].iter().collect();
+            if c.is_ascii_digit() {
+                out.push(Token::Other(word));
+            } else {
+                out.push(Token::Ident(word));
+            }
+        } else {
+            out.push(Token::Punct(c));
+            i += 1;
+        }
+    }
+    out
+}
+
+/// A raw string (`r"…"`, `r#"…"#`, `br"…"`) at `chars[i]`: its value and
+/// the index after it.
+fn raw_string(chars: &[char], i: usize) -> Option<(String, usize)> {
+    if i > 0 && ident_char(chars[i - 1]) {
+        return None;
+    }
+    let r = match (chars.get(i), chars.get(i + 1)) {
+        (Some('r'), _) => i,
+        (Some('b'), Some('r')) => i + 1,
+        _ => return None,
+    };
+    let hashes = chars[r + 1..].iter().take_while(|&&c| c == '#').count();
+    let open = r + 1 + hashes;
+    if chars.get(open) != Some(&'"') {
+        return None;
+    }
+    let mut j = open + 1;
+    while j < chars.len()
+        && !(chars[j] == '"' && (1..=hashes).all(|h| chars.get(j + h) == Some(&'#')))
+    {
+        j += 1;
+    }
+    Some((
+        chars[open + 1..j.min(chars.len())].iter().collect(),
+        j + 1 + hashes,
+    ))
+}
+
+/// A string literal opening at `chars[open]`, decoded, and the index after
+/// it.
+fn string(chars: &[char], open: usize) -> (String, usize) {
+    let mut value = String::new();
+    let mut j = open + 1;
+    while j < chars.len() && chars[j] != '"' {
+        if chars[j] != '\\' {
+            value.push(chars[j]);
+            j += 1;
+            continue;
+        }
+        let escaped = chars.get(j + 1).copied().unwrap_or('\\');
+        j += 2;
+        match escaped {
+            'n' => value.push('\n'),
+            'r' => value.push('\r'),
+            't' => value.push('\t'),
+            '0' => value.push('\0'),
+            'x' => {
+                let hex: String = chars[j..(j + 2).min(chars.len())].iter().collect();
+                value.extend(u8::from_str_radix(&hex, 16).ok().map(char::from));
+                j += 2;
+            }
+            'u' => {
+                let end = (j..chars.len())
+                    .find(|&k| chars[k] == '}')
+                    .unwrap_or(chars.len());
+                let hex: String = chars[(j + 1).min(end)..end].iter().collect();
+                value.extend(u32::from_str_radix(&hex, 16).ok().and_then(char::from_u32));
+                j = end + 1;
+            }
+            // A line continuation drops the newline and the blanks after it.
+            '\n' => {
+                while j < chars.len() && chars[j].is_whitespace() {
+                    j += 1;
+                }
+            }
+            other => value.push(other),
+        }
+    }
+    (value, j + 1)
+}
+
+/// Whether `toks[at..]` starts with `::new`.
+fn at_new(toks: &[Token], at: usize) -> bool {
+    matches!(toks.get(at..at + 3), Some([a, b, new]) if a.punct(':') && b.punct(':') && new.is("new"))
+}
+
+/// Each `Command::new(...)` or `<…Command>::new(...)` in `toks`: its
+/// argument as written, with the literal's value when it is one string.
+fn spawns(toks: &[Token]) -> Vec<(String, Option<String>)> {
+    let mut found = Vec::new();
+    for (k, tok) in toks.iter().enumerate() {
+        if !tok.is("Command") {
+            continue;
+        }
+        let new = if at_new(toks, k + 1) {
+            k + 4
+        } else if toks.get(k + 1).is_some_and(|t| t.punct('>')) && at_new(toks, k + 2) {
+            k + 5
+        } else {
+            continue;
+        };
+        if !toks.get(new).is_some_and(|t| t.punct('(')) {
+            continue;
+        }
+        let mut depth = 0_usize;
+        let mut end = toks.len();
+        for (j, t) in toks.iter().enumerate().skip(new) {
+            if t.punct('(') {
+                depth += 1;
+            } else if t.punct(')') {
+                depth -= 1;
+                if depth == 0 {
+                    end = j;
+                    break;
+                }
             }
         }
-        let argument: String = source.chars[open + 1..close]
-            .iter()
-            .filter(|c| !c.is_whitespace())
-            .collect();
-        found.push((argument.clone(), literal(&argument)));
+        let argument = &toks[new + 1..end];
+        let text: String = argument.iter().map(Token::text).collect();
+        let value = match argument {
+            [Token::Str(value)] => Some(value.clone()),
+            _ => None,
+        };
+        found.push((text, value));
     }
     found
 }
 
-/// The value of `argument` when it is exactly one string literal.
-fn literal(argument: &str) -> Option<String> {
-    let body = argument.strip_prefix('r').unwrap_or(argument);
-    let hashes = body.chars().take_while(|&c| c == '#').count();
-    let inner = body[hashes..].strip_prefix('"')?;
-    let inner = inner.strip_suffix(&"#".repeat(hashes))?.strip_suffix('"')?;
-    Some(inner.replace("\\\\", "\\"))
+/// The forms that would hide a spawn from [`spawns`].
+fn hidden_spawns(file: &str, toks: &[Token]) -> Vec<String> {
+    let mut out = Vec::new();
+    for (k, tok) in toks.iter().enumerate() {
+        let next = |n: usize| toks.get(k + n);
+        if tok.is("Command") && next(1).is_some_and(|t| t.is("as")) {
+            out.push(format!(
+                "{file}: renames Command on import, which hides its spawns"
+            ));
+        }
+        let new = if at_new(toks, k + 1) {
+            Some(k + 4)
+        } else if next(1).is_some_and(|t| t.punct('>')) && at_new(toks, k + 2) {
+            Some(k + 5)
+        } else {
+            None
+        };
+        if let Some(new) = new.filter(|_| tok.is("Command")) {
+            if !toks.get(new).is_some_and(|t| t.punct('(')) {
+                out.push(format!(
+                    "{file}: takes Command::new as a value, which hides its spawns"
+                ));
+            }
+        }
+        if tok.punct('$') && matches!(next(1), Some(Token::Ident(_))) && at_new(toks, k + 2) {
+            out.push(format!(
+                "{file}: a macro builds a constructor from a metavariable, which hides its spawns"
+            ));
+        }
+        if tok.is("type") && matches!(next(1), Some(Token::Ident(_))) {
+            let Some(eq) = toks[k..].iter().position(|t| t.punct('=') || t.punct(';')) else {
+                continue;
+            };
+            let rhs: Vec<&Token> = toks[k + eq + 1..]
+                .iter()
+                .take_while(|t| !t.punct(';'))
+                .collect();
+            let path = rhs
+                .iter()
+                .all(|t| matches!(t, Token::Ident(_)) || t.punct(':'));
+            if toks[k + eq].punct('=') && path && rhs.last().is_some_and(|t| t.is("Command")) {
+                out.push(format!("{file}: aliases Command, which hides its spawns"));
+            }
+        }
+    }
+    out
 }
 
 /// Whether a program name runs git: its last path part, without an
@@ -267,15 +383,10 @@ fn names_git(program: &str) -> bool {
 
 /// Why `text`, read as the file `file`, breaks the contract.
 fn violations(file: &str, text: &str) -> Vec<String> {
-    let mut out = Vec::new();
-    let (compact, _) = Source::new(text).compact();
-    if compact.contains("Commandas") {
-        out.push(format!(
-            "{file}: renames Command on import, which hides its spawns"
-        ));
-    }
+    let toks = tokens(text);
+    let mut out = hidden_spawns(file, &toks);
     let mut dynamic: Vec<(String, usize)> = Vec::new();
-    for (argument, value) in spawns(text) {
+    for (argument, value) in spawns(&toks) {
         match value {
             Some(program) if names_git(&program) => out.push(format!(
                 "{file}: Command::new({argument}) starts git; use codeflow_core::git"
@@ -328,7 +439,7 @@ fn every_git_process_is_built_by_the_one_constructor() {
         let text = std::fs::read_to_string(file).unwrap();
         offenders.extend(violations(&name, &text));
         seen.extend(
-            spawns(&text)
+            spawns(&tokens(&text))
                 .into_iter()
                 .filter(|(_, value)| value.is_none())
                 .map(|(argument, _)| (name.clone(), argument)),
@@ -357,6 +468,19 @@ fn the_scan_sees_every_way_a_git_spawn_is_written() {
         "let program = pick(); let c = Command::new(program);",
         "let c = match Command::new(program) {};",
         "use std::process::Command as Spawn;",
+        // Round 2 (Codex F8): comments between tokens, escaped literals,
+        // an alias, a qualified type, a macro and the constructor as a
+        // value.
+        "fn make() -> std::process::Command { std::process::Command /* spawn */ ::new(\"git\") }",
+        r#"fn make() -> std::process::Command { std::process::Command::new("\x67it") }"#,
+        r#"fn make() -> std::process::Command { std::process::Command::new("\u{67}it") }"#,
+        "use std::process::Command /* builder */ as Spawn; fn make() -> Spawn { Spawn::new(\"git\") }",
+        "type Spawn = std::process::Command; fn make() -> Spawn { Spawn::new(\"git\") }",
+        r#"fn make() -> std::process::Command { <std::process::Command>::new("git") }"#,
+        "macro_rules! launch { ($c:ident, $p:expr) => { $c::new($p) }; } \
+         fn make() -> Command { launch!(Command, \"git\") }",
+        r#"let make = Command::new; let c = make("git");"#,
+        "let c = Command::new(\"gi\\\n    t\");",
     ];
     for source in refused {
         assert!(
@@ -374,6 +498,11 @@ fn the_scan_sees_every_way_a_git_spawn_is_written() {
         r#"let c = MyCommand::new("git");"#,
         r#"let c = match Command::new("sh").status() {};"#,
         "let q = '\"'; let c = Command::new(\"sh\");",
+        r#"let c = Command::new("gh") /* not git */;"#,
+        "use std::process::{Command, Stdio}; fn f(c: &mut Command) -> Option<Command> { None }",
+        "type Modes = BTreeMap<String, ModeCommand>;",
+        r#"let s = "type X = Command; Command::new(\"git\")";"#,
+        r#"let c = Command::new("my tool");"#,
     ];
     for source in passed {
         assert!(
