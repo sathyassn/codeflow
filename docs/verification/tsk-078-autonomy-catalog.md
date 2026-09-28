@@ -152,6 +152,16 @@ target directory (`codeflow 3.0.0`, SHA-256 prefix `834438d3f492f3e6`).
 The real-tree model-name scan is part of `model_catalog_surfaces` and passes
 at this head.
 
+**Update journey and identity canary.** Their evidence at `5a4d54a53` still
+holds at this head. `git diff --stat 5a4d54a53..c72f80396` changes 28 files:
+`autonomy.md`, the orchestrator skill, the quality contract,
+`pipeline.workflow.js` and their mirrors, two contract tests,
+`.codeflow/manifest.json` and task records. It touches none of the five
+copies of `current-ensemble.json` and no file under `crates/*/src`, so the
+catalog the canary checked and the update mechanism the journey ran are
+unchanged. The new hashes in `.codeflow/manifest.json` are covered by
+`manifest_consistency`, which passes 23 of 23 above.
+
 **Ratchet move.** The "no ratchet changed" finding above no longer holds.
 TSK-154's `58031bc7d` raised the orchestrator skill ratchet and the routing
 skill ceiling from 29 KiB (29,696 bytes) to 29 KiB + 512 (30,208 bytes). The
@@ -178,9 +188,11 @@ reference is the only full list of what belongs to the operator.
   rule. `codeflow models resolve` returns participants with pinned ids, or
   an open duty. `doctor --check model-bindings` labels its rows
   illustrative.
-  - Breaking: the managed catalog moves from schema 4 to schema 5, and an
-    adopter runs `codeflow update` (TSK-085, marked `major` in the
-    changelog).
+  - Breaking: the managed catalog moves from schema 4 to schema 5, and the
+    binary no longer reads schema 4. Until an adopter runs `codeflow
+    update`, `codeflow doctor --check model-bindings` fails and `codeflow
+    models resolve` refuses on the older tree (TSK-085, marked `major` in
+    the changelog).
 - **Autonomy reference (ADR-0070).** `cf-method/references/autonomy.md`
   holds the finish line, the four-rung ladder, the operator-owned list, the
   trust prompt rule and settled dissent. The skills continue where they used
@@ -226,7 +238,9 @@ reference is the only full list of what belongs to the operator.
     units.
   - TSK-139, `blocked`: native qualification after settings units 1 and 3,
     unit 5's D1 spike and the D10 fixture route.
-  - TSK-125: record reconciliation after the line syncs from `main`.
+  - TSK-125, on `integration/EPC-020-delivery-system`: record
+    reconciliation after this line syncs from `main`. The record is not on
+    this line; it resolves once the release branch merges both lines.
   - The workspace "Seats and models" and trust bullets, and
     `RELEASE-PLAN.md`, are updated on `docs/workspace` to point at the
     catalog.
