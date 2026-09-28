@@ -224,6 +224,87 @@ try {
     await page.keyboard.press("Escape");
     await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10_000 }).catch(() => undefined);
     assert.deepEqual(await controls(), pristine, "form control, an area: a control changed");
+    // A selection made just before a press on a form control arms the pin;
+    // the press cancels it, nothing opens while the button is held, and the
+    // selection pins on release (TSK-160).
+    {
+      await armComment(page);
+      const option = page.locator("[data-cf-block-id='survey'] input[value='repo']").first();
+      await option.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+      const box = await option.boundingBox();
+      assert.ok(box, "form control, a held press after a selection: no box");
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      const selected = await page.evaluate(() => {
+        const paragraph = document.querySelector("[data-cf-block-id='prose'] p");
+        const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.data.indexOf("runtime draws");
+          if (at < 0) continue;
+          const range = document.createRange();
+          range.setStart(node, at);
+          range.setEnd(node, at + "runtime draws".length);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+          document.dispatchEvent(new Event("selectionchange"));
+          return String(getSelection());
+        }
+        return "";
+      });
+      assert.equal(selected, "runtime draws", "form control, a held press after a selection: the selection was not made");
+      await page.mouse.down();
+      await page.waitForTimeout(400);
+      assert.equal(await page.getByTestId("float-chip").count(), 0, "form control, a held press after a selection: a chip opened while the button was held");
+      await page.mouse.up();
+      await discard("a held press after a selection");
+    }
+    // A selection begun on a link inside the review text is document text,
+    // not a control: it pins on release even when no selection change
+    // follows the release (TSK-160, Codex confirm C160-1).
+    {
+      await armComment(page);
+      const link = await page.evaluate(() => {
+        const paragraph = document.querySelector("[data-cf-block-id='prose'] p");
+        const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.data.indexOf("runtime draws");
+          if (at < 0) continue;
+          const words = node.splitText(at);
+          words.splitText("runtime draws".length);
+          const anchor = document.createElement("a");
+          anchor.id = "t160-prose-link";
+          words.replaceWith(anchor);
+          anchor.append(words);
+          anchor.scrollIntoView({ block: "center", behavior: "instant" });
+          const box = anchor.getBoundingClientRect();
+          return { x: box.left + box.width / 2, y: box.top + box.height / 2 };
+        }
+        return null;
+      });
+      assert.ok(link, "a press on a prose link: no link was made");
+      await page.mouse.move(link.x, link.y);
+      await page.mouse.down();
+      const selected = await page.evaluate(() => {
+        const text = document.getElementById("t160-prose-link").firstChild;
+        const range = document.createRange();
+        range.setStart(text, 0);
+        range.setEnd(text, text.data.length);
+        getSelection().removeAllRanges();
+        getSelection().addRange(range);
+        document.dispatchEvent(new Event("selectionchange"));
+        return String(getSelection());
+      });
+      assert.equal(selected, "runtime draws", "a press on a prose link: the selection was not made");
+      await page.waitForTimeout(400);
+      assert.equal(await page.getByTestId("float-chip").count(), 0, "a press on a prose link: a chip opened while the button was held");
+      await page.mouse.up();
+      await discard("a press on a prose link");
+      await page.evaluate(() => {
+        const anchor = document.getElementById("t160-prose-link");
+        anchor.replaceWith(...anchor.childNodes);
+        anchor.parentNode?.normalize();
+        document.querySelector("[data-cf-block-id='prose'] p").normalize();
+      });
+    }
     assert.ok(await choice.locator("[data-cf-decline-reason]").isVisible(), "form control: the decline box closed");
     assert.deepEqual(answerRequests, [], "form control: an answer was sent");
     assert.equal(await findFile(root, "responses.jsonl"), null, "form control: the answer store was written");
@@ -242,9 +323,10 @@ try {
         range.selectNodeContents(line);
         return range.getBoundingClientRect();
       };
-      const [first, last] = [lines[4], lines[6]].map((line) => ({ line: line.getBoundingClientRect(), text: text(line) }));
+      const [first, middle, last] = [lines[4], lines[5], lines[6]].map((line) => ({ line: line.getBoundingClientRect(), text: text(line) }));
       return {
         from: { x: first.text.right + 24, y: first.line.top + first.line.height / 2 },
+        hold: { x: middle.text.right + 40, y: middle.line.top + middle.line.height / 2 },
         to: { x: Math.min(last.line.right - 8, last.text.right + 160), y: last.line.top + last.line.height / 2 },
         blank: first.line.right - first.text.right,
       };
@@ -252,7 +334,14 @@ try {
     assert.ok(drag.blank > 60, `diff whitespace: the line has no blank end to drag from: ${JSON.stringify(drag)}`);
     await page.mouse.move(drag.from.x, drag.from.y);
     await page.mouse.down();
-    await page.mouse.move(drag.to.x, drag.to.y, { steps: 12 });
+    // The reader pauses on the middle line past the pin's settle delay. A
+    // drag pins on release only, so no chip opens under it (TSK-160).
+    await page.mouse.move(drag.hold.x, drag.hold.y, { steps: 6 });
+    const partial = await page.evaluate(() => String(getSelection()));
+    assert.ok(partial.includes("256 * 1024") && !partial.includes("bytes <= limit"), `diff whitespace: the held drag has no partial selection: ${JSON.stringify(partial)}`);
+    await page.waitForTimeout(400);
+    assert.equal(await page.getByTestId("float-chip").count(), 0, "diff whitespace: a chip opened while the drag was held");
+    await page.mouse.move(drag.to.x, drag.to.y, { steps: 6 });
     await page.mouse.up();
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText({ timeout: 10_000 })).trim();
     const quote = await page.evaluate(() => String(getSelection()));
@@ -262,7 +351,7 @@ try {
     assert.doesNotMatch(summary, /Added|Removed|(^|\n|: )[+-] /u, `diff whitespace: the chip quotes ${JSON.stringify(summary)}`);
     await saveNote(page, "matrix: diff whitespace");
     expected.push({ type: "diff", gesture: "text", block: "change", where: "diff whitespace", recipe: { seen: ["256 * 1024", "bytes <= limit"] }, summary });
-    process.stdout.write(`diff whitespace passed: a plain drag over the blank ends of three diff lines selects them as text, not the whole diff, quoted as ${JSON.stringify(summary)}\n`);
+    process.stdout.write(`diff whitespace passed: a plain drag over the blank ends of three diff lines, held 400 ms on the middle one, opens no chip until release and then selects them as text, not the whole diff, quoted as ${JSON.stringify(summary)}\n`);
   }
   // Markers park beside what they mark, and a saved area keeps a faint
   // outline while Comment is on (P2-2): no area marker sits on its area.
