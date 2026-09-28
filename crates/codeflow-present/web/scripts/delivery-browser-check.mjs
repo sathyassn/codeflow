@@ -16,7 +16,10 @@
 //   delivered once and a later wait finds nothing;
 // - a closure binds every form to its answer as a reload renders it, before
 //   the forms latch closed: a tab following an original the other tab
-//   corrected, a page that never saw an answer, and a state not yet seen.
+//   corrected, a page that never saw an answer, and a state not yet seen;
+// - a tab whose answer is refused as closed (410) before its poll hears the
+//   closure marks its words as last known, then takes the closure's answer
+//   when the poll brings it, and stays closed.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -320,47 +323,48 @@ try {
     passed.push("restart: after the service is killed and show restarts it, the pending answer is delivered once and the next wait times out (exit 6)");
   }
 
-  // C120-R2-1, on a second session. Tab A stores the original O and
-  // follows it; tab B loads after it and stores the correction M; both are
-  // delivered and acknowledged; then the session closes. A's polls and
-  // those of page C, which loaded before any answer, are held from the
-  // start, so the closure is the first state either one hears. The closure
-  // body is the one the service sent B. A reload shows M acknowledged, so
-  // A and C must close on it, with the original kept for a correction.
-  {
-    const copy = join(project, "forms-closure.json");
+  // Closure cases run on their own sessions. Tab A stores the original O
+  // with its polls held from the start; tab B, loaded after, stores the
+  // correction M; the agent takes both and acknowledges them; then the
+  // session closes. The closure body a held poll gets is the one the
+  // service sent B. Page C, when asked for, loads before any answer.
+  const inTab = (tab, id) => tab.locator(`article[data-cf-form='${id}']`);
+  const shownIn = async (tab, id) => ({
+    state: await inTab(tab, id).getAttribute("data-cf-form-state"),
+    says: (await inTab(tab, id).locator("[data-cf-form-state]").innerText()).trim(),
+    original: await inTab(tab, id).getAttribute("data-cf-answer-id"),
+  });
+  const stateIn = (tab, id, state) => tab.waitForFunction(({ id, state }) => document.querySelector(`article[data-cf-form='${id}']`)?.getAttribute("data-cf-form-state") === state, { id, state }, { timeout: 20_000 });
+  const closeAfterCorrection = async (name, withC) => {
+    const copy = join(project, `${name}.json`);
     await writeFile(copy, await readFile(fixture, "utf8"));
     const opened = run(["present", "open", copy, "--no-launch"]);
-    const secondId = opened.match(/session ([0-9a-f-]+) ready/u)?.[1];
-    const secondBootstrap = opened.match(/owner-private bootstrap file (.+?) in a qualified/u)?.[1];
-    if (!secondId || !secondBootstrap) throw new Error(`could not parse present open output: ${opened}`);
-    const secondPort = JSON.parse(run(["present", "list"])).find((entry) => entry.id === secondId)?.service_port;
+    const id = opened.match(/session ([0-9a-f-]+) ready/u)?.[1];
+    const bootstrap = opened.match(/owner-private bootstrap file (.+?) in a qualified/u)?.[1];
+    if (!id || !bootstrap) throw new Error(`could not parse present open output: ${opened}`);
+    const port = JSON.parse(run(["present", "list"])).find((entry) => entry.id === id)?.service_port;
     let release;
     const gate = new Promise((done) => { release = done; });
-    let closure = null;
+    const session = { id, release, closure: null, tabs: [] };
     const held = async () => {
       const tab = await context.newPage();
       tab.on("pageerror", (error) => errors.push(error.message));
       await tab.route("**/app/api/events/poll", async (route) => {
         await gate;
-        await route.fulfill({ status: 200, contentType: "application/json", body: closure });
+        await route.fulfill({ status: 200, contentType: "application/json", body: session.closure });
       });
+      session.tabs.push(tab);
       return tab;
     };
     const tabA = await held();
-    await tabA.goto(pathToFileURL(secondBootstrap).href, { waitUntil: "commit", timeout: 120_000 });
-    await tabA.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${secondPort}/app/`, "u"), { waitUntil: "domcontentloaded", timeout: 60_000 });
+    await tabA.goto(pathToFileURL(bootstrap).href, { waitUntil: "commit", timeout: 120_000 });
+    await tabA.waitForURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/app/`, "u"), { waitUntil: "domcontentloaded", timeout: 60_000 });
     await tabA.locator("#cf-comment-toggle").waitFor({ state: "visible" });
-    const tabC = await held();
-    await tabC.goto(tabA.url(), { waitUntil: "domcontentloaded" });
-    await tabC.locator("#cf-comment-toggle").waitFor({ state: "visible" });
-    const inTab = (tab, id) => tab.locator(`article[data-cf-form='${id}']`);
-    const shownIn = async (tab, id) => ({
-      state: await inTab(tab, id).getAttribute("data-cf-form-state"),
-      says: (await inTab(tab, id).locator("[data-cf-form-state]").innerText()).trim(),
-      original: await inTab(tab, id).getAttribute("data-cf-answer-id"),
-    });
-    const stateIn = (tab, id, state) => tab.waitForFunction(({ id, state }) => document.querySelector(`article[data-cf-form='${id}']`)?.getAttribute("data-cf-form-state") === state, { id, state }, { timeout: 20_000 });
+    if (withC) {
+      session.tabC = await held();
+      await session.tabC.goto(tabA.url(), { waitUntil: "domcontentloaded" });
+      await session.tabC.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    }
 
     const a = inTab(tabA, "store-choice");
     await a.locator("[data-cf-field='home'] input[value='local']").check();
@@ -370,6 +374,7 @@ try {
 
     const tabB = await context.newPage();
     tabB.on("pageerror", (error) => errors.push(error.message));
+    session.tabs.push(tabB);
     await tabB.goto(tabA.url(), { waitUntil: "domcontentloaded" });
     await tabB.locator("#cf-comment-toggle").waitFor({ state: "visible" });
     await stateIn(tabB, "store-choice", "stored");
@@ -380,33 +385,82 @@ try {
     await b.locator("[data-cf-form-action='submit']").click();
     await stateIn(tabB, "store-choice", "stored");
 
-    const [original, correction] = lines(run(["present", "responses", "list", secondId, "--form", "store-choice"]));
+    const [original, correction] = lines(run(["present", "responses", "list", id, "--form", "store-choice"]));
     assert.equal(correction.kind, "amendment");
-    const delivered = cli(["present", "feedback", secondId, "--wait", "--timeout", "10", "--format", "v2"]);
+    const delivered = cli(["present", "feedback", id, "--wait", "--timeout", "10", "--format", "v2"]);
     assert.equal(delivered.status, 0, delivered.stderr);
     assert.deepEqual(lines(delivered.stdout).map((line) => line.event_id), [original.event_id, correction.event_id]);
-    run(["present", "ack", secondId, original.event_id]);
-    run(["present", "ack", secondId, correction.event_id]);
+    run(["present", "ack", id, original.event_id]);
+    run(["present", "ack", id, correction.event_id]);
     await stateIn(tabB, "store-choice", "acknowledged");
-    assert.equal((await shownIn(tabA, "store-choice")).state, "stored", "closure: tab A heard a state before the closure");
+    assert.equal((await shownIn(tabA, "store-choice")).state, "stored", `${name}: tab A heard a state before the closure`);
 
     const closed = tabB.waitForResponse(async (response) => new URL(response.url()).pathname === "/app/api/events/poll"
       && (await response.json().catch(() => ({}))).kind === "session_closed", { timeout: 30_000 });
-    run(["present", "close", secondId]);
-    closure = await (await closed).text();
-    release();
+    run(["present", "close", id]);
+    session.closure = await (await closed).text();
+    return Object.assign(session, { tabA, original, correction });
+  };
+  const finish = async (session) => {
+    for (const tab of session.tabs) await tab.close();
+    run(["present", "clear", session.id, "--older-than", "0d"]);
+  };
+
+  // C120-R2-1: the closure is the first state A and C hear. A reload shows M
+  // acknowledged, so A and C must close on it, with the original kept for a
+  // correction.
+  {
+    const session = await closeAfterCorrection("forms-closure", true);
+    const { tabA, tabC, original } = session;
+    session.release();
     for (const tab of [tabA, tabC]) await stateIn(tab, "store-choice", "closed").catch(() => undefined);
     const results = { A: await shownIn(tabA, "store-choice"), C: await shownIn(tabC, "store-choice"), C_decision: await shownIn(tabC, "d-scope") };
     const expected = "Acknowledged by agent. This session is now closed; nothing more can be sent.";
     assert.deepEqual(
       { A: [results.A.state, results.A.says, results.A.original], C: [results.C.state, results.C.says, results.C.original] },
       { A: ["closed", expected, original.event_id], C: ["closed", expected, original.event_id] },
-      `closure: tabs close where a reload would; the closure was ${closure}`,
+      `closure: tabs close where a reload would; the closure was ${session.closure}`,
     );
     assert.equal(results.C_decision.says, "This session is closed. Your draft is kept here; nothing can be sent.");
-    for (const tab of [tabA, tabB, tabC]) await tab.close();
-    run(["present", "clear", secondId, "--older-than", "0d"]);
+    await finish(session);
     passed.push(`closure rebinding: a tab following the original and a page that never saw an answer both close on the correction the other tab stored, "${expected}", with the original kept for a correction`);
+  }
+
+  // C120-R3-2: tab A's correction is refused as closed (410) before its
+  // poll hears the closure. The refusal carries no answer, so A's words
+  // are marked as last known; the held poll then brings the closure, and A
+  // takes M acknowledged with the original kept. Nothing reopens, the
+  // draft stays, and nothing is stored. The 410 is fulfilled by the test
+  // with the service's refusal: a closed session's service stops.
+  {
+    const session = await closeAfterCorrection("forms-refused", false);
+    const { tabA, original, correction } = session;
+    const a = inTab(tabA, "store-choice");
+    await a.locator("[data-cf-form-action='amend']").click();
+    await a.locator("[data-cf-field='keep-days'] input").fill("90");
+    await tabA.route("**/app/api/answers", (route) => route.fulfill({
+      status: 410,
+      contentType: "application/json",
+      body: JSON.stringify({ error: "session_closed", message: "session is closed", details: {} }),
+    }), { times: 1 });
+    await a.locator("[data-cf-form-action='submit']").click();
+    await stateIn(tabA, "store-choice", "closed");
+    const refused = await shownIn(tabA, "store-choice");
+    session.release();
+    const expected = "Acknowledged by agent. This session is now closed; nothing more can be sent.";
+    await tabA.waitForFunction((words) => document.querySelector("article[data-cf-form='store-choice'] [data-cf-form-state]")?.textContent === words, expected, { timeout: 20_000 }).catch(() => undefined);
+    const after = await shownIn(tabA, "store-choice");
+    assert.deepEqual([after.state, after.says, after.original], ["closed", expected, original.event_id],
+      `refused first: the closure after a 410 was not taken; the tab says ${JSON.stringify(after)} after ${JSON.stringify(refused)}; the closure was ${session.closure}`);
+    assert.equal(refused.says, "Last known: Stored, waiting for agent. This session is now closed; nothing more can be sent.");
+    assert.equal(await a.locator("[data-cf-field='keep-days'] input").inputValue(), "90", "refused first: the draft changed");
+    assert.ok(await a.locator("[data-cf-field='keep-days'] input").isDisabled(), "refused first: the draft is editable");
+    assert.equal(await tabA.locator("[data-cf-form] [data-cf-form-action]:visible").count(), 0, "refused first: an action is offered");
+    assert.equal((await shownIn(tabA, "d-scope")).says, "This session is closed. Your draft is kept here; nothing can be sent.");
+    const stored = lines(run(["present", "responses", "list", session.id, "--form", "store-choice"]));
+    assert.deepEqual(stored.map((line) => line.event_id), [original.event_id, correction.event_id], "refused first: something was stored");
+    await finish(session);
+    passed.push(`refused first: a correction refused as closed before the poll says "${refused.says}", then the closure makes it "${expected}" with the original kept, the draft read only and nothing stored`);
   }
 
   // The closure carries the states the page has not seen: the agent
@@ -440,8 +494,10 @@ try {
     const closed = await stateOf(form);
     assert.equal(closed.says, "Acknowledged by agent. This session is now closed; nothing more can be sent.");
     assert.equal(await form.locator(".cf-form__state-stored").innerText(), "Acknowledged by agent");
+    // The decision is not in this closure, as a form past its bound would
+    // not be: its words are the last known ones, and say so.
     const other = await stateOf(decision);
-    assert.equal(other.says, "Delivered to agent. This session is now closed; nothing more can be sent.");
+    assert.equal(other.says, "Last known: Delivered to agent. This session is now closed; nothing more can be sent.");
     passed.push(`closure: a closure carrying an acknowledgment the page had not seen shows "${closed.says}"`);
   }
 

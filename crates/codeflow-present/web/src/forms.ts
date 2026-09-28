@@ -149,6 +149,9 @@ class FormController {
   // The state of the stored answer this form shows last, which a closed
   // form keeps showing whatever reply lands after the closure.
   private answered: "stored" | "delivered" | "acknowledged" | null = null;
+  // A closure snapshot named this form's answer: its words are what a reload
+  // shows. Until one does, a closed form marks its words as last known.
+  private confirmed = false;
 
   public constructor(
     private readonly article: HTMLElement,
@@ -203,14 +206,17 @@ class FormController {
 
   // Takes the answer a reload would render for this form and digest: the
   // original stays the correction target, the latest's state is shown. The
-  // draft stays in the controls; nothing is sent.
+  // draft stays in the controls; nothing is sent. A form already closed,
+  // by a refused request before the snapshot came, takes it too: it only
+  // updates the words shown, and nothing reopens.
   public bind(entries: readonly FormAnswerEntry[]): void {
-    if (this.closed) return;
     const entry = entries.find((candidate) => candidate.form_id === this.id && candidate.form_digest === this.digest);
     if (!entry) return;
     this.original = entry.answer_id;
     this.latest = entry.latest_answer_id;
     this.article.dataset.cfAnswerId = entry.answer_id;
+    this.answered = entry.state;
+    this.confirmed = true;
     this.sent = null;
     this.stale = null;
     this.amending = false;
@@ -328,6 +334,13 @@ class FormController {
   }
 
   private stored(text: string, target: StaleTarget | null): void {
+    if (this.closed && this.confirmed) {
+      // The closure snapshot already holds this receipt's answer, as a
+      // reload shows it: a late receipt changes nothing.
+      this.sent = null;
+      this.render(STORED_TEXT, "stored");
+      return;
+    }
     let receipt: Receipt;
     try {
       receipt = JSON.parse(text) as Receipt;
@@ -396,6 +409,10 @@ class FormController {
         // is shown and followed. The draft stays, unsent.
         if (typeof details.answer_id !== "string" || typeof details.latest_answer_id !== "string") break;
         this.refusedDefinitively(target);
+        if (this.closed && this.confirmed) {
+          this.render(STORED_TEXT, "stored");
+          return;
+        }
         const answered: AnswerDelivery = details.state === "delivered" || details.state === "acknowledged" ? details.state : "pending";
         this.original = details.answer_id;
         this.latest = details.latest_answer_id;
@@ -541,7 +558,7 @@ class FormController {
       // the stored colour, as a reload shows it.
       const words = this.gone ? answerState : this.answered ?? answerState;
       if (words) {
-        storedLate = stateText(words);
+        storedLate = this.confirmed ? stateText(words) : `Last known: ${stateText(words)}`;
         message = "This session is now closed; nothing more can be sent.";
       } else {
         message = CLOSED_TEXT;
