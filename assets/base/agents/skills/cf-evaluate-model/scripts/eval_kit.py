@@ -692,9 +692,10 @@ def tool_walk(window: list[dict]) -> tuple[bool, bool]:
 
     A call counts only in a native assistant message and needs a new string
     id; a result counts only in a native user message and answers a call
-    still outstanding. Anything else is broken evidence. The turn finishes at its
-    last assistant reply when that reply carries a finishing stop reason and
-    no call is outstanding at that point.
+    still outstanding. Anything else is broken evidence. The turn finishes at
+    its last native assistant reply when that reply carries a finishing stop
+    reason and no call is outstanding at that point; a summary or meta record
+    shaped like a reply neither finishes the turn nor undoes its finish.
     """
 
     outstanding: set[str] = set()
@@ -702,7 +703,6 @@ def tool_walk(window: list[dict]) -> tuple[bool, bool]:
     ordered = True
     finished = False
     for entry in window:
-        kind = entry.get("type")
         message = entry.get("message") if isinstance(entry.get("message"), dict) else {}
         content = message.get("content")
         for block in content if isinstance(content, list) else []:
@@ -724,7 +724,7 @@ def tool_walk(window: list[dict]) -> tuple[bool, bool]:
                     outstanding.discard(call)
                 else:
                     ordered = False
-        if kind == "assistant":
+        if native_message(entry, "assistant"):
             finished = message.get("stop_reason") in FINISHED_STOP_REASONS and not outstanding
     return ordered, ordered and finished
 
@@ -924,7 +924,8 @@ def check_session(record: dict, transcript: Path) -> dict:
     texts: list[str] = []
     tool_uses: list[dict] = []
     for entry in own:
-        message = entry.get("message") if entry.get("type") == "assistant" else None
+        # Only a native reply is graded; summary or meta text is not the model's.
+        message = entry.get("message") if native_message(entry, "assistant") else None
         for block in (message or {}).get("content") or []:
             if not isinstance(block, dict):
                 continue

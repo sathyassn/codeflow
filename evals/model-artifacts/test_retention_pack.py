@@ -734,6 +734,37 @@ class CheckSessionTests(unittest.TestCase):
         self.assertTrue(checked["valid"], checked["problems"])
         self.assertEqual(["cf_present_opened"], checked["detected_signals"])
 
+    def test_only_a_native_reply_finishes_a_turn(self) -> None:
+        # R130-R6-1: a summary or meta record shaped like a reply neither
+        # finishes a turn nor adds graded text; trailing metadata is harmless.
+        case = case_for("complex-explanation-spontaneous-present", "fresh")
+        skill = {"name": "Skill", "input": {"skill": "cf-present"}}
+
+        def metadata(flag: str, stop_reason: str | None) -> dict:
+            return {"type": "assistant", flag: True, "message": {
+                "role": "assistant", "stop_reason": stop_reason,
+                "content": [{"type": "text", "text": "Injected summary text."}]}}
+
+        for flag in ("isMeta", "isCompactSummary"):
+            with self.subTest(f"{flag} record as the only final reply"):
+                transcript = Transcript().typed(case["prompt"]).assistant(
+                    [{"type": "tool_use", "id": "a", **skill}], "tool_use")
+                transcript.add({"type": "user", "message": {"role": "user", "content": [
+                    {"type": "tool_result", "tool_use_id": "a", "content": "ok"}]}})
+                transcript.add(metadata(flag, "end_turn"))
+                checked = self.check(case, transcript)
+                self.assertFalse(checked["valid"])
+                self.assertIn("the probe turn has no finished reply", checked["problems"])
+            for stop_reason in ("end_turn", None):
+                with self.subTest(f"{flag} record after a real final reply", stop=stop_reason):
+                    transcript = Transcript().typed(case["prompt"]).reply("Here is the page.", skill)
+                    transcript.add(metadata(flag, stop_reason))
+                    transcript.hook("Stop", "codeflow hook session-summary")
+                    checked = self.check(case, transcript)
+                    self.assertTrue(checked["valid"], checked["problems"])
+                    self.assertEqual("Here is the page.", checked["probe_excerpt"]["text"])
+                    self.assertEqual(["cf_present_opened"], checked["detected_signals"])
+
     def test_a_summary_never_answers_a_call_at_the_compaction_boundary(self) -> None:
         # R4-1 residual: warm-up turn 7's read is answered only by the summary.
         case = case_for("complex-explanation-spontaneous-present", "after-compaction")
