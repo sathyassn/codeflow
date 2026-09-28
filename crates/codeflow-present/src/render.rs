@@ -1033,19 +1033,23 @@ pub(crate) mod tests {
                 Some(canonical.as_str())
             );
             let compact = |text: &str| text.split_whitespace().collect::<String>();
-            let reviewed: String = roots[0]
-                .descendants()
-                .filter_map(|node| node.value().as_text().map(|text| (node, text)))
-                .filter(|(node, _)| {
-                    !node
-                        .ancestors()
-                        .filter_map(ElementRef::wrap)
-                        .any(|element| element.value().attr("data-cf-review-skip").is_some())
-                })
-                .map(|(_, text)| text.to_string())
-                .collect();
-            assert_eq!(compact(&reviewed), compact(&canonical));
+            assert_eq!(compact(&reviewed_text(roots[0])), compact(&canonical));
         }
+    }
+
+    /// The text a reader can quote from a review root: every text node but
+    /// those under `data-cf-review-skip`.
+    fn reviewed_text(root: ElementRef<'_>) -> String {
+        root.descendants()
+            .filter_map(|node| node.value().as_text().map(|text| (node, text)))
+            .filter(|(node, _)| {
+                !node
+                    .ancestors()
+                    .filter_map(ElementRef::wrap)
+                    .any(|element| element.value().attr("data-cf-review-skip").is_some())
+            })
+            .map(|(_, text)| text.to_string())
+            .collect()
     }
 
     #[test]
