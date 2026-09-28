@@ -1,0 +1,11 @@
+id = "TSK-176"
+uid = "d2ed47ed-a9bb-4152-b8c1-d2021c3408e7"
+kind = "TSK"
+title = "a reloaded form shows and corrects its sent answer"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T23:50:30Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
