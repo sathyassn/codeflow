@@ -461,10 +461,9 @@ impl<'a> FormView<'a> {
                     errors.push(FieldError::new("reason", FieldErrorCode::UnknownField));
                 }
                 for field in self.fields.iter() {
-                    let value = request
-                        .values
-                        .get(&field.id)
-                        .filter(|value| !value.is_null());
+                    // A present null is a value of no field's kind, never an
+                    // absent answer: it is refused as wrong_kind (B6).
+                    let value = request.values.get(&field.id);
                     if value.is_none_or(is_empty_answer) && self.is_required(&field.id) {
                         errors.push(FieldError::new(&field.id, FieldErrorCode::Required));
                     } else if let Some(value) = value {

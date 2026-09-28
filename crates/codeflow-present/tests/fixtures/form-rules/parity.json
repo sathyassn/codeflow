@@ -431,14 +431,16 @@
       ]
     },
     {
-      "name": "an empty string and null answer nothing",
+      "name": "an empty string answers nothing; a present null is the wrong kind",
       "form": "all-kinds",
       "outcome": "submit",
       "values": {
         "name": "",
         "flag": null
       },
-      "rationales": {},
+      "rationales": {
+        "flag": "because"
+      },
       "errors": [
         [
           "name",
@@ -446,7 +448,71 @@
         ],
         [
           "flag",
-          "required"
+          "wrong_kind"
+        ]
+      ]
+    },
+    {
+      "name": "a present null is the wrong kind for every optional field",
+      "form": "all-kinds",
+      "outcome": "submit",
+      "values": {
+        "name": "ab",
+        "flag": true,
+        "mail": null,
+        "link": null,
+        "day": null,
+        "when": null,
+        "note": null,
+        "ratio": null,
+        "count": null,
+        "big": null,
+        "pick": null,
+        "many": null
+      },
+      "rationales": {
+        "flag": "because"
+      },
+      "errors": [
+        [
+          "mail",
+          "wrong_kind"
+        ],
+        [
+          "link",
+          "wrong_kind"
+        ],
+        [
+          "day",
+          "wrong_kind"
+        ],
+        [
+          "when",
+          "wrong_kind"
+        ],
+        [
+          "note",
+          "wrong_kind"
+        ],
+        [
+          "ratio",
+          "wrong_kind"
+        ],
+        [
+          "count",
+          "wrong_kind"
+        ],
+        [
+          "big",
+          "wrong_kind"
+        ],
+        [
+          "pick",
+          "wrong_kind"
+        ],
+        [
+          "many",
+          "wrong_kind"
         ]
       ]
     },

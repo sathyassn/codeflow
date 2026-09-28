@@ -68,8 +68,8 @@ export function validateAnswer(form: FormRules, draft: AnswerDraft): FieldError[
   if (draft.outcome === "submit") {
     if (draft.reason !== undefined) errors.push({ field: "reason", code: "unknown_field" });
     for (const field of form.fields) {
-      const raw = Object.hasOwn(draft.values, field.id) ? draft.values[field.id] : undefined;
-      const value = raw === null ? undefined : raw;
+      // A present null is a value of no field's kind, never an absent answer.
+      const value = Object.hasOwn(draft.values, field.id) ? draft.values[field.id] : undefined;
       if ((value === undefined || isEmptyAnswer(value)) && form.required.includes(field.id)) {
         errors.push({ field: field.id, code: "required" });
       } else if (value !== undefined) {
