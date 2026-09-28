@@ -595,6 +595,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         return;
       }
       setHintMode("text");
+      // A drag pins on release (onPointerUp), never mid-gesture: a float
+      // opened under a held drag takes the rest of the drag (TSK-160).
+      if (dragGestureRef.current) return;
       selectionPinTimerRef.current = window.setTimeout(() => {
         // A composer opened since the selection (the Add text tool) owns it.
         if (!commentModeRef.current || captureModeRef.current || composerOpenRef.current) return;
@@ -739,7 +742,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       // Text selection wins — the selectionchange pin already owns the float.
       const sel = window.getSelection();
       if (sel && !sel.isCollapsed && String(sel).trim().length >= 2) {
-        if (captureSelection(documentRoot)?.selector) return;
+        if (captureSelection(documentRoot)?.selector) {
+          // The drag has ended, so the settled selection pins now.
+          onSelection();
+          return;
+        }
         // A selection the review text cannot hold, such as a figure's label,
         // pins the part the label names; it is never a dead gesture (QA
         // defect 5 in its figure form).
@@ -800,6 +807,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       dragGestureRef.current = null;
       regionDraftRef.current = null;
       setRegionDraft(null);
+      // A cancelled drag has no release to pin its selection.
+      onSelection();
     };
     document.addEventListener("selectionchange", onSelection);
     documentRoot.addEventListener("dragstart", onDragStart);
