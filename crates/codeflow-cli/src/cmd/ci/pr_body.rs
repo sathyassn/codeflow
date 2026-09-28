@@ -351,14 +351,6 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
                     "PR Summary has about {sentences} sentences; aim for at most three"
                 ));
             }
-            if Parser::new(section.content()).any(|event| matches!(event, Event::Code(_))) {
-                warn(
-                    "PR Summary contains a code span; put implementation details in Changes".into(),
-                );
-            }
-            if text.split_whitespace().any(looks_like_path) {
-                warn("PR Summary contains a path; put file details in Changes".into());
-            }
         }
         if section.matches("Testing")
             && !visible_text(section.content(), false)
@@ -423,27 +415,6 @@ fn long_prose_line(body: &str) -> bool {
                 .iter()
                 .any(|span| span.start < range.end && range.start < span.end)
     })
-}
-
-/// A file path, not a word pair such as read/write, I/O or GitHub/GitLab:
-/// a rooted or relative prefix, a trailing slash, two or more separators, or a
-/// final segment with a file extension.
-fn looks_like_path(word: &str) -> bool {
-    let word = word.trim_matches(['(', ')', ',', '.', ';', ':', '"', '\'']);
-    if word.contains("://") || !word.chars().any(char::is_alphabetic) {
-        return false;
-    }
-    let separators = word.matches(['/', '\\']).count();
-    let last = word.rsplit(['/', '\\']).next().unwrap_or_default();
-    separators > 0
-        && (["./", "../", "~/", "/", ".\\", "\\"]
-            .iter()
-            .any(|prefix| word.starts_with(prefix))
-            || word.ends_with(['/', '\\'])
-            || separators >= 2
-            || last.rsplit_once('.').is_some_and(|(stem, ext)| {
-                !stem.is_empty() && ext.starts_with(|ch: char| ch.is_ascii_alphabetic())
-            }))
 }
 
 fn wrapped_rows(line: &str) -> usize {
@@ -861,8 +832,6 @@ mod tests {
         let findings = presentation(&GitPolicy::default(), &body, false);
         for reason in [
             "sentences",
-            "code span",
-            "path",
             "Not tested:",
             "13 lines",
             "rendered rows",
@@ -871,6 +840,14 @@ mod tests {
             assert!(
                 findings.iter().any(|v| v.message.contains(reason)),
                 "missing {reason}: {findings:?}"
+            );
+        }
+        // ADR-0071 rule 7: a key file name or code span may anchor the
+        // Summary, so neither draws a warning.
+        for retired in ["code span", "contains a path"] {
+            assert!(
+                !findings.iter().any(|v| v.message.contains(retired)),
+                "retired Summary warning {retired}: {findings:?}"
             );
         }
         assert!(findings.iter().all(|v| v.level == PolicyLevel::Warn));
@@ -911,31 +888,6 @@ mod tests {
                 presentation(&GitPolicy::default(), &body, false).is_empty(),
                 "{label}"
             );
-        }
-    }
-
-    #[test]
-    fn path_warning_needs_a_real_path_shape() {
-        for word in [
-            "read/write",
-            "I/O",
-            "GitHub/GitLab",
-            "and/or",
-            "24/7",
-            "https://example.com/a/b.md",
-        ] {
-            assert!(!looks_like_path(word), "{word}");
-        }
-        for word in [
-            "src/thing.py",
-            "docs/",
-            "./run",
-            "../x",
-            "/usr/bin",
-            "crates/codeflow-cli/src",
-            "(src\\main.rs).",
-        ] {
-            assert!(looks_like_path(word), "{word}");
         }
     }
 
