@@ -41,10 +41,9 @@ chrome or Comment.
 ## 2. Shape the information before encoding it
 
 Anchor purpose, audience, decision/action, verified evidence, uncertainty, and
-needed depth. Apply `cf-editorial-review` to substantial prose. Keep language
-plain, direct, calm, faithful to the session and project voice; preserve exact
-identifiers and technical terms; invent no personality, certainty,
-familiarity, research, or decorative emoji.
+needed depth. Apply `cf-editorial-review` to substantial prose and write copy
+by `cf-editorial-review/references/copy-guide.md`; invent no personality,
+certainty, familiarity, research, or decorative emoji.
 
 ### How to think (mandatory)
 

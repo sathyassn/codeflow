@@ -288,12 +288,13 @@ a portal form; in present an `html` block keeps only the two uses above.
   to assess it.
 - Separate verified, inferred, pending, and not-run claims. Link evidence by
   exact identifiers or bounded text, not fabricated certainty.
-- Keep titles literal and findable. Avoid cryptic labels, canned enthusiasm,
-  generic filler, and a wall of repeated cards.
+- Write titles, labels, leads and captions by the copy guide
+  (`cf-editorial-review/references/copy-guide.md`); avoid a wall of repeated
+  cards.
 - Adapt terminology and depth to demonstrated context without pretending to
   know the reader personally.
-- Apply the consuming project's documented voice when it exists. Utility
-  language remains neutral when no project voice is established.
+- Apply the consuming project's documented voice when it exists; otherwise
+  the copy guide's voice holds.
 
 ## Feedback and revision integrity
 

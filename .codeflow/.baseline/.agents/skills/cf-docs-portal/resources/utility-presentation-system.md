@@ -168,7 +168,8 @@ An imported raster diagram is never a carrier: redraw it in a family.
 
 Exact, calm, subject-led, full-width with breathing margins. **Structure
 carries meaning before prose.** Progressive altitude: each level complete, not
-a teaser dump.
+a teaser dump. Every string follows the copy guide
+(`cf-editorial-review/references/copy-guide.md`).
 
 ### Altitude grammar
 

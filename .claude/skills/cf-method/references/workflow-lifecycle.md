@@ -158,7 +158,10 @@ cost, or saving. Transport or background completion is not the peer result.
 Shape deliverables for their audience and medium. Layer concept before detail;
 never cut key information merely to condense. Presentation is contextual and
 proportionate: a simple answer stays simple. Use prose or bullets according to
-the content. The figure families are the same nine the presentation skills
+the content. To explain, follow the explanation method
+(`cf-present/resources/explanation-method.md`); to write each string, follow
+the copy guide (`cf-editorial-review/references/copy-guide.md`).
+The figure families are the same nine the presentation skills
 use (flow, structure, layering, sequence, state, coverage, extent, derivation,
 graph); the medium changes the marks, not the choice. Draw a figure only when
 a relationship carries the point, then draw the family that relationship names,
@@ -179,8 +182,8 @@ meaning; never fabricate personality, experience, feelings, familiarity, or
 slang.
 
 Operator-facing replies follow the written content policy (ADR-0067). When
-the point is a flow, dependency, structure, state change, or comparison that
-is clearer drawn, the reply carries a figure. Match the form to the surface.
+a relationship carries the point, the reply carries a figure. Match the form
+to the surface.
 
 - Where the harness renders one, use an inline HTML figure, or a
   `cf-present` page when the figure needs a full page or anchored review.
