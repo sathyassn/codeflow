@@ -82,13 +82,13 @@ impl ProjectState {
     ///
     /// IO failures, or an existing file that is not valid TOML.
     pub fn store(&self, root: &Path) -> Result<(), ScaffoldError> {
-        let path = Self::path(root);
         let ours = toml::Table::try_from(self).map_err(|e| ScaffoldError::InvalidState {
             what: PROJECT_TOML.to_string(),
             detail: e.to_string(),
         })?;
-        let merged = match std::fs::read_to_string(&path) {
-            Ok(existing) => {
+        // Read without following a link, as the write below refuses one.
+        let merged = match read_beneath_root(root, PROJECT_TOML)? {
+            Some(existing) => {
                 let mut table: toml::Table =
                     toml::from_str(&existing).map_err(|e| ScaffoldError::InvalidState {
                         what: PROJECT_TOML.to_string(),
@@ -99,14 +99,13 @@ impl ProjectState {
                 }
                 table
             }
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => ours,
-            Err(e) => return Err(ScaffoldError::io(&path, e)),
+            None => ours,
         };
         let text = toml::to_string_pretty(&merged).map_err(|e| ScaffoldError::InvalidState {
             what: PROJECT_TOML.to_string(),
             detail: e.to_string(),
         })?;
-        write_record(&path, text.as_bytes())
+        write_record(root, PROJECT_TOML, text.as_bytes())
     }
 }
 
@@ -262,7 +261,7 @@ impl InstalledManifest {
     pub fn store(&self, root: &Path) -> Result<(), ScaffoldError> {
         let mut text = serde_json::to_string_pretty(self)?;
         text.push('\n');
-        write_record(&Self::path(root), text.as_bytes())
+        write_record(root, INSTALLED_MANIFEST, text.as_bytes())
     }
 }
 
@@ -291,8 +290,7 @@ impl Baseline {
     ///
     /// IO failures, or a symlinked baseline path (refused, not followed).
     pub fn write(root: &Path, dest: &str, content: &str) -> Result<(), ScaffoldError> {
-        let path = guard_beneath_root(root, Path::new(&Self::rel(dest)))?;
-        write_record(&path, content.as_bytes())
+        write_record(root, &Self::rel(dest), content.as_bytes())
     }
 
     /// Removes the baseline copy for `dest`. A missing baseline is not an error.
@@ -360,15 +358,17 @@ pub(crate) fn write_file(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError>
 }
 
 /// Writes a state record (a baseline copy, the manifest, `project.toml`)
+/// at repo-relative `rel`, refusing a symlink on the way (leaf or ancestor),
 /// that says earlier writes are in place.
 ///
 /// Inside a batch, every directory an earlier write renamed into is synced
 /// first, and any other device holding those files is flushed, so the
 /// record never reaches the disk ahead of the files it describes: after a
 /// crash, a record that survived means those files did.
-pub(crate) fn write_record(path: &Path, bytes: &[u8]) -> Result<(), ScaffoldError> {
-    sync::settle_before(path)?;
-    write_file(path, bytes)
+pub(crate) fn write_record(root: &Path, rel: &str, bytes: &[u8]) -> Result<(), ScaffoldError> {
+    let path = guard_beneath_root(root, Path::new(rel))?;
+    sync::settle_before(&path)?;
+    write_file(&path, bytes)
 }
 
 /// One scaffold run's deferred directory syncs and device flushes (TSK-153).
@@ -666,16 +666,21 @@ mod sync {
         Ok(handle.metadata()?.dev())
     }
 
-    /// The device `path` is on, or will be on once written: that of its
-    /// nearest existing ancestor.
+    /// The device a write to `path` lands on: that of its nearest existing
+    /// parent directory. The write renames a temp file beside `path`,
+    /// replacing whatever is there, so a link at `path` never decides it.
     #[cfg(target_vendor = "apple")]
     fn device_at(path: &Path) -> std::io::Result<u64> {
         use std::os::unix::fs::MetadataExt;
+        let parent = path.parent().unwrap_or(path);
+        let existing = parent
+            .ancestors()
+            .find(|dir| dir.exists())
+            .unwrap_or(parent);
         #[cfg(test)]
-        if let Some(device) = interruption::device(path) {
+        if let Some(device) = interruption::device_stat(existing) {
             return Ok(device);
         }
-        let existing = path.ancestors().find(|dir| dir.exists()).unwrap_or(path);
         Ok(std::fs::metadata(existing)?.dev())
     }
 
@@ -914,6 +919,26 @@ pub(crate) mod interruption {
     #[cfg_attr(not(target_vendor = "apple"), allow(dead_code))]
     pub(super) fn refused(command: i32) -> bool {
         REFUSE.with(Cell::get) == Some(command)
+    }
+
+    /// The fake device a `stat` of `path` would report: that of the path it
+    /// resolves to, following links as `stat` does.
+    #[cfg(target_vendor = "apple")]
+    pub(super) fn device_stat(path: &Path) -> Option<u64> {
+        let resolved = std::fs::canonicalize(path).ok()?;
+        DEVICES.with(|list| {
+            list.borrow()
+                .iter()
+                .map(|(prefix, device)| {
+                    (
+                        std::fs::canonicalize(prefix).unwrap_or_else(|_| prefix.clone()),
+                        *device,
+                    )
+                })
+                .filter(|(prefix, _)| resolved.starts_with(prefix))
+                .max_by_key(|(prefix, _)| prefix.as_os_str().len())
+                .map(|(_, device)| device)
+        })
     }
 
     #[cfg_attr(not(unix), allow(dead_code))]
@@ -1614,6 +1639,114 @@ mod tests {
             2 * device_flush_ops().len()
         );
         interruption::arm(None);
+    }
+
+    #[cfg(target_vendor = "apple")]
+    #[test]
+    fn a_record_is_on_its_directory_device_whatever_its_leaf() {
+        // T153-R3-1: the write replaces a link beside it, so the record lands
+        // on its directory's device, never on the old link target's.
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join("project");
+        let other = dir.path().join("other");
+        std::fs::create_dir_all(root.join(".codeflow")).unwrap();
+        std::fs::create_dir_all(&other).unwrap();
+        std::fs::write(root.join(".codeflow/present.json"), "{}").unwrap();
+        std::fs::write(other.join("old.json"), "{}").unwrap();
+        std::os::unix::fs::symlink(other.join("old.json"), root.join(".codeflow/link.json"))
+            .unwrap();
+        interruption::fake_devices(vec![(root.clone(), 1), (other.clone(), 2)]);
+        let flushes = || {
+            interruption::events()
+                .iter()
+                .filter(|event| matches!(event, interruption::Event::Flushed(p) if *p == other))
+                .count()
+        };
+        for (case, rel) in [
+            ("an existing record", ".codeflow/present.json"),
+            ("a missing record", ".codeflow/new/record.json"),
+            ("a leaf link to the other device", ".codeflow/link.json"),
+        ] {
+            interruption::arm(None);
+            let batch = SyncBatch::begin();
+            write_file(&other.join("payload"), case.as_bytes()).unwrap();
+            sync::settle_before(&root.join(rel)).unwrap();
+            assert_eq!(flushes(), 1, "{case}: the other device is flushed first");
+            batch.finish().unwrap();
+        }
+        // Flushed, a device stays clean until it is written again.
+        interruption::arm(None);
+        let batch = SyncBatch::begin();
+        write_file(&other.join("payload"), b"one").unwrap();
+        write_record(&root, ".codeflow/present.json", b"1").unwrap();
+        write_record(&root, ".codeflow/present.json", b"2").unwrap();
+        assert_eq!(
+            flushes(),
+            1,
+            "a same-device record after the flush adds none"
+        );
+        write_file(&other.join("payload"), b"two").unwrap();
+        write_record(&root, ".codeflow/present.json", b"3").unwrap();
+        assert_eq!(
+            flushes(),
+            2,
+            "a new write on the other device needs a new flush"
+        );
+        batch.finish().unwrap();
+        interruption::fake_devices(Vec::new());
+        interruption::arm(None);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_symlinked_state_record_is_refused_and_left_alone() {
+        // T153-R3-1: every state record refuses a link, as baselines did.
+        type Store<'a> = Box<dyn Fn(&Path) -> Result<(), ScaffoldError> + 'a>;
+        let state = ProjectState {
+            schema_version: 1,
+            tier: Tier::Standard,
+            scaffold_version: "2.0.0".to_string(),
+            stack: "rust".to_string(),
+            areas: Vec::new(),
+            policy_armed: true,
+            git_hooks: GIT_HOOKS_WIRED.to_string(),
+            permission_preset: "default".to_string(),
+            product_one_liner: "demo".to_string(),
+        };
+        let records: [(&str, Store); 3] = [
+            (
+                INSTALLED_MANIFEST,
+                Box::new(|root| InstalledManifest::new("3.0.0").store(root)),
+            ),
+            (PROJECT_TOML, Box::new(|root| state.store(root))),
+            (
+                ".codeflow/.baseline/a.txt",
+                Box::new(|root| Baseline::write(root, "a.txt", "x")),
+            ),
+        ];
+        for (rel, store) in records {
+            let dir = tempfile::tempdir().unwrap();
+            let root = dir.path().join("project");
+            let leaf = root.join(rel);
+            std::fs::create_dir_all(leaf.parent().unwrap()).unwrap();
+            let outside = dir.path().join("outside");
+            std::fs::write(&outside, "outside\n").unwrap();
+            std::os::unix::fs::symlink(&outside, &leaf).unwrap();
+            let refused = store(&root);
+            assert!(
+                matches!(refused, Err(ScaffoldError::UnsafeSymlink { .. })),
+                "{rel}: {refused:?}"
+            );
+            assert!(
+                leaf.symlink_metadata().unwrap().file_type().is_symlink(),
+                "{rel}"
+            );
+            assert_eq!(
+                std::fs::read_to_string(&outside).unwrap(),
+                "outside\n",
+                "{rel}"
+            );
+        }
     }
 
     #[cfg(unix)]

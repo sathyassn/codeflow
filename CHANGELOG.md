@@ -799,8 +799,12 @@ publication date._
   cut leaves every file whole. A directory is synced before any baseline,
   manifest or project state that records its files, and when those files
   sit on another disk than the record, that disk is flushed first, so a
-  record never survives a crash ahead of them. macOS gets one full disk
-  flush per disk the run touched instead of about four per file. A standard init made
+  record never survives a crash ahead of them. With the project on one
+  disk, the usual case, macOS gets one full disk flush per run instead of
+  about four per file; a disk that gets new writes after its flush is
+  flushed again before the next record on another disk. A symlinked
+  manifest or `project.toml` is refused, as a symlinked baseline already
+  was. A standard init made
   about 1,000 such flushes, most of its wall time. The installed files are
   unchanged.
 
