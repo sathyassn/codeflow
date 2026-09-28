@@ -660,12 +660,17 @@ impl SecurityModule for DangerousModule {
         if let Some(v) = check_recursive_delete(cmd) {
             return Some(v);
         }
-        if let Some(target) = super::deletion::composed_deletion(cmd) {
-            return Some(block(
-                "Dangerous Command",
-                "Recursive deletion of a protected location",
-                target,
-            ));
+        if let Some(found) = super::deletion::composed_deletion(cmd) {
+            // A target reached on only some paths through the line is still
+            // refused (TSK-141 round 1); the message says why.
+            let reason = if found.ambiguous {
+                "Recursive deletion of a protected location: it is one of several values \
+                 the command may reach here (after a branch, loop, subshell or earlier \
+                 value), and any of them is refused; name the target directly"
+            } else {
+                "Recursive deletion of a protected location"
+            };
+            return Some(block("Dangerous Command", reason, found.target));
         }
 
         // Disk operation checks.

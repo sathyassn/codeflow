@@ -223,10 +223,21 @@ mod tests {
                 assert_eq!(refused.len(), 1, "{nested}");
                 assert!(any_blocking(&v), "{nested}");
                 if *nesting == "{}" {
-                    assert_eq!(
-                        refused[0].message, expected[0].message,
-                        "{form} as {equivalent}"
-                    );
+                    // A target reached on only some paths says so; the
+                    // pattern it names is the equivalent's either way.
+                    let pattern = |m: &str| m.rfind("(pattern").map(|at| m[at..].to_string());
+                    if refused[0].message.contains("one of several values") {
+                        assert_eq!(
+                            pattern(&refused[0].message),
+                            pattern(&expected[0].message),
+                            "{form} as {equivalent}"
+                        );
+                    } else {
+                        assert_eq!(
+                            refused[0].message, expected[0].message,
+                            "{form} as {equivalent}"
+                        );
+                    }
                 }
             }
         }
