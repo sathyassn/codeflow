@@ -1361,28 +1361,36 @@ fn an_escaped_pipe_or_extra_cell_does_not_hide_an_empty_classification() {
     }
 }
 
-/// T150-R2-2: a row of a `Read` index table that is not one section link and
-/// its classification fails instead of being skipped.
+/// T150-R2-2 and R3-2: a row of a `Read` index table that is not one section
+/// link and its classification fails instead of being skipped, whether the
+/// header is plain or styled.
 #[test]
 fn a_malformed_index_row_fails() {
-    let mut files = skill_trees();
-    files
-        .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
-        .expect("quality index")
-        .push_str("| See [codex](quality/codex-new.md) too | every task |\n");
-    files.insert(
-        format!("{ORCH}/resources/quality/codex-new.md"),
-        "A duty.".into(),
-    );
-    let faults = structure_faults(&files, &Inventory::SHIPPED);
-    assert!(
-        faults.contains(&format!(
-            "{ORCH}/resources/quality-contract.md: the index row \
-             `| See [codex](quality/codex-new.md) too | every task |` is not one section \
-             link and its load classification"
-        )),
-        "{faults:?}"
-    );
+    for header in ["| Section | Read |", "| Section | **Read** |"] {
+        let mut files = skill_trees();
+        let index = files
+            .get_mut(&format!("{ORCH}/resources/quality-contract.md"))
+            .expect("quality index");
+        assert!(
+            index.contains("| Section | Read |"),
+            "the index header moved"
+        );
+        *index = index.replace("| Section | Read |", header);
+        index.push_str("| See [codex](quality/codex-new.md) too | every task |\n");
+        files.insert(
+            format!("{ORCH}/resources/quality/codex-new.md"),
+            "A duty.".into(),
+        );
+        let faults = structure_faults(&files, &Inventory::SHIPPED);
+        assert!(
+            faults.contains(&format!(
+                "{ORCH}/resources/quality-contract.md: the index row \
+                 `| See [codex](quality/codex-new.md) too | every task |` is not one section \
+                 link and its load classification"
+            )),
+            "{header}: {faults:?}"
+        );
+    }
 }
 
 /// T150-R2-3: a reference-style link, a link with a title and an

@@ -26,6 +26,14 @@
 //! comments are examples or retired text, never a pointer. Index rows come
 //! from the parser's table cells.
 //!
+//! Known limit: a code span that names a reading file counts as a pointer
+//! whatever its sentence says, so "do not read `x.md`" still reaches `x.md`.
+//! Backticked paths are how the shipped docs point at files, and a mention
+//! of an obsolete file is a review matter, not a structure matter. The check
+//! catches authoring mistakes, such as a file that lost its pointer or a read
+//! without its trigger; it is not a boundary against Markdown written to
+//! fool it.
+//!
 //! Structure is the test's failure. Size is a reported measure with a
 //! guideline number, never a failure: the one byte check that still fails is
 //! the complete generated `AGENTS.md` against Codex's instruction limit
@@ -731,6 +739,8 @@ struct Frame {
 #[derive(Default)]
 struct Cell {
     raw: String,
+    /// The visible text, with inline markup such as emphasis stripped.
+    text: String,
     /// Each top-level link: the reading file it names, if any.
     links: Vec<Option<String>>,
     /// Content outside a link.
@@ -803,13 +813,13 @@ impl<'t> Scanner<'t> {
                 Event::Start(tag) => self.start(&tag, range),
                 Event::End(tag) => self.end(tag, range),
                 Event::Code(code) => {
-                    self.content(true);
+                    self.content(&code);
                     if is_code_path(&code) {
                         self.pointer(range, code.to_string());
                     }
                     self.scan.code_spans.push(code.to_string());
                 }
-                Event::Text(text) => self.content(!text.trim().is_empty()),
+                Event::Text(text) => self.content(&text),
                 _ => {}
             }
         }
@@ -822,14 +832,16 @@ impl<'t> Scanner<'t> {
         self.scan
     }
 
-    /// Content at the top level of a table cell, outside any link.
-    fn content(&mut self, present: bool) {
-        if let Some(table) = self.table.as_mut() {
-            if present && table.in_cell && table.link_depth == 0 {
-                if let Some(cell) = table.row.last_mut() {
-                    cell.other = true;
-                }
-            }
+    /// Visible text or code in a table cell: kept as the cell's text, and
+    /// marked as content outside a link when it is at the top level.
+    fn content(&mut self, text: &str) {
+        let Some(table) = self.table.as_mut().filter(|t| t.in_cell) else {
+            return;
+        };
+        let outside = table.link_depth == 0 && !text.trim().is_empty();
+        if let Some(cell) = table.row.last_mut() {
+            cell.text.push_str(text);
+            cell.other |= outside;
         }
     }
 
@@ -916,8 +928,9 @@ impl<'t> Scanner<'t> {
             TagEnd::TableHead => table.header = std::mem::take(&mut table.row),
             TagEnd::TableRow => {
                 let row = std::mem::take(&mut table.row);
-                let read_table =
-                    table.header.len() == 2 && table.header[1].raw.eq_ignore_ascii_case("read");
+                // The header matches on its visible text, so `**Read**` is Read.
+                let read_table = table.header.len() == 2
+                    && table.header[1].text.trim().eq_ignore_ascii_case("read");
                 let target = row
                     .first()
                     .filter(|cell| !cell.other && cell.links.len() == 1)
@@ -1576,7 +1589,8 @@ mod tests {
                     | [Short](quality/s.md) |\n\
                     | Plain text | every task |\n\
                     | [Two](a.md) [links](b.md) | every task |\n\n\
-                    | File | Purpose | When |\n|---|---|---|\n| [a](a.md) | b | c |\n";
+                    | File | Purpose | When |\n|---|---|---|\n| [a](a.md) | b | c |\n\n\
+                    | Section | **Read** |\n|---|---|\n| See [it](quality/x.md) too | every task |\n";
         let row = |target: &str, classification: &str| IndexRow::Row {
             target: target.into(),
             classification: classification.into(),
@@ -1591,6 +1605,7 @@ mod tests {
                 row("quality/s.md", ""),
                 IndexRow::Malformed("| Plain text | every task |".into()),
                 IndexRow::Malformed("| [Two](a.md) [links](b.md) | every task |".into()),
+                IndexRow::Malformed("| See [it](quality/x.md) too | every task |".into()),
             ]
         );
     }
@@ -1707,11 +1722,12 @@ mod tests {
         ),
     ];
 
-    /// The switch to the parser changed no shipped reading: on the frozen
-    /// corpus it finds every edge with the sentence that holds it, every index
-    /// row and every kernel entry that the line scanner it replaced found
-    /// (`expected.tsv`, recorded from that scanner). The whole shipped tree
-    /// matched the same way at the switch; this corpus keeps the proof.
+    /// A sample of the switch to the parser: on five frozen shipped files and
+    /// the standard kernel template it finds every edge with the sentence
+    /// that holds it, every index row and every kernel entry that the line
+    /// scanner it replaced found (`expected.tsv`, recorded from that
+    /// scanner). The whole-tree counts are pinned by
+    /// `the_whole_shipped_tree_keeps_its_graph_counts`.
     #[test]
     fn the_parser_reads_the_frozen_corpus_as_the_line_scanner_did() {
         let kernel = include_str!("../tests/fixtures/reading-corpus/AGENTS.md.tmpl");
@@ -1742,5 +1758,61 @@ mod tests {
         let mut expected: Vec<&str> = expected.lines().collect();
         expected.sort_unstable();
         assert_eq!(found, expected);
+    }
+
+    /// The whole shipped tree's reading graph, computed from the live skill
+    /// trees and instruction templates, keeps the counts both scanners found
+    /// at the switch to the parser (TSK-150): 260 edges, 25 index rows and 45
+    /// kernel entries. A change that adds or removes a pointer, an index row
+    /// or a kernel entry updates the number here in the same change, once
+    /// the difference is shown to be intended.
+    #[test]
+    fn the_whole_shipped_tree_keeps_its_graph_counts() {
+        let base = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../assets/base");
+        let mut files = SkillFiles::new();
+        for tree in ["agents/skills", "claude/skills"] {
+            load_skill_tree(&base.join(tree), &mut files);
+        }
+        let (mut edges_found, mut rows, mut malformed) = (0, 0, Vec::new());
+        for (path, text) in &files {
+            if !has_extension(path, "md") {
+                continue;
+            }
+            let scanned = scan(text);
+            edges_found += scanned.pointers.len();
+            for row in scanned.rows {
+                match row {
+                    IndexRow::Row { .. } => rows += 1,
+                    IndexRow::Malformed(row) => malformed.push(format!("{path}: {row}")),
+                }
+            }
+        }
+        let kernels: Vec<(&str, usize)> = [
+            "AGENTS.md.tmpl",
+            "AGENTS.full.md.tmpl",
+            "AGENTS.minimal.md.tmpl",
+            "CLAUDE.md.tmpl",
+            "CLAUDE.minimal.md.tmpl",
+        ]
+        .into_iter()
+        .map(|template| {
+            let text = std::fs::read_to_string(base.join(template)).expect(template);
+            (template, kernel_entries(&text).len())
+        })
+        .collect();
+        assert_eq!(edges_found, 260, "edges in the shipped skill trees");
+        assert_eq!(rows, 25, "index rows in the shipped skill trees");
+        assert!(malformed.is_empty(), "{malformed:?}");
+        assert_eq!(
+            kernels,
+            [
+                ("AGENTS.md.tmpl", 19),
+                ("AGENTS.full.md.tmpl", 19),
+                ("AGENTS.minimal.md.tmpl", 0),
+                ("CLAUDE.md.tmpl", 6),
+                ("CLAUDE.minimal.md.tmpl", 1),
+            ]
+        );
+        assert_eq!(kernels.iter().map(|(_, n)| n).sum::<usize>(), 45);
     }
 }
