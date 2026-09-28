@@ -1919,8 +1919,10 @@ mod tests {
     }
 
     /// The ledger's line and byte bounds sit exactly where the constants
-    /// say: the answer that reaches a bound is stored, the next is a typed
-    /// 503 naming the bound, and nothing past it is stored. The bounds are
+    /// say, counting the delivered and acknowledged lines each stored
+    /// answer keeps room for (R120-1): the answer that reaches a bound is
+    /// stored, the next is a typed 503 naming the bound, and nothing past
+    /// it is stored. The bounds are
     /// lowered on this thread only (`fault::lower_bounds`, test-only), so
     /// the same checks as for 100,000 lines and 64 MiB run on a few lines.
     #[tokio::test]
@@ -1954,9 +1956,9 @@ mod tests {
             assert!(message.contains("no receipt was given"), "{message}");
         };
 
-        // The line bound, lowered to 2: the second answer reaches it and is
-        // stored; the third is refused and the ledger is unchanged.
-        lower_bounds(Some(2), None);
+        // The line bound, lowered to 6: two answers and the four lines kept
+        // for them reach it; the third is refused and the ledger is unchanged.
+        lower_bounds(Some(6), None);
         for sequence in 1..=2 {
             let (status, receipt) =
                 post_answer(&state, headers.clone(), answer_body(&state, |_| {})).await;
@@ -1965,13 +1967,18 @@ mod tests {
         let full = ledger_bytes(&state);
         let third = answer_body(&state, |_| {});
         let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
-        refused(status, &body, "the answer ledger holds at most 2 lines");
+        refused(
+            status,
+            &body,
+            "the answer ledger holds at most 6 lines, with room kept",
+        );
         assert_eq!(ledger_bytes(&state), full, "line bound: the ledger changed");
         assert_eq!(lines(&state), 2);
 
-        // The byte bound. Every line here has the same length, so one byte
-        // short of three lines refuses the third, exactly three lines stores
-        // it, and the fourth is refused.
+        // The byte bound. Every line here has the same length, and each
+        // answer keeps room for two state lines, so one byte short of three
+        // answers and their room refuses the third, exactly that stores it,
+        // and the fourth is refused.
         let bytes = full.unwrap();
         let line = bytes.len() / 2;
         assert_eq!(
@@ -1979,7 +1986,10 @@ mod tests {
             Some(line - 1),
             "the lines differ in length"
         );
-        let bound = |lines: usize| u64::try_from(lines * line).unwrap();
+        let bound = |answers: usize| {
+            u64::try_from(answers * line).unwrap()
+                + u64::try_from(answers).unwrap() * 2 * crate::responses::STATE_LINE_BYTES
+        };
         lower_bounds(None, Some(bound(3) - 1));
         let (status, body) = post_answer(&state, headers.clone(), third.clone()).await;
         refused(

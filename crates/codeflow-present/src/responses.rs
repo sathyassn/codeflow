@@ -19,7 +19,7 @@
 //! rewritten.
 
 use std::{
-    collections::{BTreeMap, HashSet},
+    collections::{BTreeMap, HashMap, HashSet},
     fs::File,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
@@ -227,6 +227,47 @@ impl Ledger {
             .map_err(|error| PresentError::io(&self.path, error))
     }
 
+    /// How many of the delivered and acknowledged lines an answer or
+    /// amendment will need are not written yet: two, one or none.
+    fn open_transitions(&self, answer_id: Uuid) -> usize {
+        let mut open = 0_usize;
+        for event in &self.events {
+            match event {
+                ResponseEvent::Answer(record) | ResponseEvent::Amendment(record)
+                    if record.answer_id == answer_id =>
+                {
+                    open = 2;
+                }
+                ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state)
+                    if state.target == answer_id =>
+                {
+                    open = open.saturating_sub(1);
+                }
+                _ => {}
+            }
+        }
+        open
+    }
+
+    /// The lines every stored answer still needs for its delivery and
+    /// acknowledgment, kept free under both ledger bounds.
+    fn reserved_lines(&self) -> usize {
+        let mut open = HashMap::new();
+        for event in &self.events {
+            match event {
+                ResponseEvent::Answer(record) | ResponseEvent::Amendment(record) => {
+                    open.insert(record.answer_id, 2_usize);
+                }
+                ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state) => {
+                    if let Some(left) = open.get_mut(&state.target) {
+                        *left = left.saturating_sub(1);
+                    }
+                }
+            }
+        }
+        open.values().sum()
+    }
+
     pub(crate) fn next_sequence(&self) -> u64 {
         self.events.len() as u64 + 1
     }
@@ -266,11 +307,26 @@ impl Ledger {
     /// fails too, the line stays whole or torn: no receipt was given, the
     /// next open cuts a torn line, and a resend with the same request id
     /// replays a whole one, so a resend is always safe.
+    ///
+    /// Each stored answer keeps room for its delivered and acknowledged
+    /// lines: an answer or amendment is admitted only when those fit too,
+    /// and a line that draws on that room needs only the bounds themselves,
+    /// so capacity never strands an accepted answer (R120-1).
     pub(crate) fn append(&mut self, store: &SessionStore, event: ResponseEvent) -> Result<()> {
-        if self.events.len() >= max_events() {
+        let kept = match &event {
+            ResponseEvent::Answer(_) | ResponseEvent::Amendment(_) => self.reserved_lines() + 2,
+            ResponseEvent::Delivered(state) | ResponseEvent::Acknowledged(state)
+                if self.open_transitions(state.target) > 0 =>
+            {
+                0
+            }
+            ResponseEvent::Delivered(_) | ResponseEvent::Acknowledged(_) => self.reserved_lines(),
+        };
+        if self.events.len() + 1 + kept > max_events() {
             return Err(PresentError::ServiceUnavailable(format!(
-                "the answer ledger holds at most {} lines",
-                max_events()
+                "the answer ledger holds at most {} lines{}",
+                max_events(),
+                if kept > 0 { KEPT_ROOM } else { "" }
             )));
         }
         let mut line = serde_json::to_vec(&event)?;
@@ -282,10 +338,11 @@ impl Ledger {
         }
         line.push(b'\n');
         let grown = self.length + line.len() as u64;
-        if grown > max_log_bytes() {
+        if grown + kept as u64 * STATE_LINE_BYTES > max_log_bytes() {
             return Err(PresentError::ServiceUnavailable(format!(
-                "the answer ledger reached its {} byte bound",
-                max_log_bytes()
+                "the answer ledger reached its {} byte bound{}",
+                max_log_bytes(),
+                if kept > 0 { KEPT_ROOM } else { "" }
             )));
         }
         store.enforce_retention_unlocked()?;
@@ -312,6 +369,15 @@ impl Ledger {
         Ok(())
     }
 }
+
+/// The most bytes a `delivered` or `acknowledged` line takes with its
+/// newline: its largest sequence and time come to 136. Each stored answer
+/// keeps this much room twice under the byte bound.
+pub(crate) const STATE_LINE_BYTES: u64 = 136;
+
+/// Why a bound refuses a line while the ledger may still have room: that
+/// room is kept for the answers it already holds.
+const KEPT_ROOM: &str = ", with room kept to deliver and acknowledge each stored answer";
 
 /// The ledger's line bound. Only a test can lower it, on its own thread:
 /// the override lives in the test-only `fault` module.
@@ -698,6 +764,20 @@ mod crash {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The room each answer keeps holds the longest state line there is.
+    #[test]
+    fn a_state_line_fits_the_room_an_answer_keeps() {
+        for event in [ResponseEvent::Delivered, ResponseEvent::Acknowledged] {
+            let line = serde_json::to_vec(&event(StateRecord {
+                sequence: u64::MAX,
+                target: Uuid::max(),
+                at_unix: u64::MAX,
+            }))
+            .unwrap();
+            assert!((line.len() as u64) < STATE_LINE_BYTES, "{}", line.len());
+        }
+    }
 
     /// The largest record the bounds allow, with every part at its worst:
     /// question text of control characters (a six-byte escape each), the

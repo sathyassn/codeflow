@@ -545,14 +545,76 @@ mod tests {
     }
 
     /// The valid submit fixture as a new request on the current revision.
-    fn answer(session: &FormsSession) -> Uuid {
+    fn try_answer(session: &FormsSession) -> Result<crate::responses::AnswerReceipt> {
         let mut request = fixture_json("answers/submit-valid.json");
         request["request_id"] = json!(Uuid::new_v4());
         request["revision"] = json!(current_revision(session));
-        session
-            .submit(&session.body(&request, &[]))
-            .unwrap()
-            .answer_id
+        session.submit(&session.body(&request, &[]))
+    }
+
+    fn answer(session: &FormsSession) -> Uuid {
+        try_answer(session).unwrap().answer_id
+    }
+
+    /// R120-1: an answer is admitted only with room for its delivered and
+    /// acknowledged lines under both bounds. A ledger at a bound still
+    /// delivers and acknowledges the answer it holds; a new answer sent
+    /// while that answer is pending, delivered or acknowledged is refused
+    /// as the store at its capacity, and a review's acknowledgment cannot
+    /// take the room kept for the answer.
+    #[test]
+    fn a_full_ledger_still_delivers_and_acknowledges_its_answers() {
+        use crate::responses::{fault::lower_bounds, STATE_LINE_BYTES};
+
+        for bound in ["lines", "bytes"] {
+            let session = FormsSession::open();
+            let reviewed = review(&session);
+            session.store.deliver(session.id, &[reviewed]).unwrap();
+            let first = answer(&session);
+            let line = session.ledger_bytes().unwrap().len() as u64;
+            if bound == "lines" {
+                lower_bounds(Some(3), None);
+            } else {
+                lower_bounds(None, Some(line + 2 * STATE_LINE_BYTES));
+            }
+            let refused = |when: &str| {
+                let before = session.ledger_bytes();
+                match try_answer(&session) {
+                    Err(PresentError::ServiceUnavailable(message)) => {
+                        assert!(message.contains("room kept"), "{bound}, {when}: {message}");
+                    }
+                    other => panic!("{bound}, {when}: a new answer was not refused: {other:?}"),
+                }
+                assert_eq!(
+                    session.ledger_bytes(),
+                    before,
+                    "{bound}, {when}: the ledger changed"
+                );
+            };
+            refused("pending");
+            match session.store.acknowledge(session.id, reviewed) {
+                Err(PresentError::ServiceUnavailable(message)) => {
+                    assert!(message.contains("room kept"), "{bound}: {message}");
+                }
+                other => panic!("{bound}: a review ack took the kept room: {other:?}"),
+            }
+            session.store.deliver(session.id, &[first]).unwrap();
+            refused("delivered");
+            assert!(
+                session.store.acknowledge(session.id, first).unwrap(),
+                "{bound}"
+            );
+            refused("acknowledged");
+            lower_bounds(None, None);
+            assert_eq!(
+                statuses(&session.store, session.id),
+                vec![
+                    (reviewed, DeliveryStatus::Delivered),
+                    (first, DeliveryStatus::Acknowledged)
+                ],
+                "{bound}"
+            );
+        }
     }
 
     fn pending() -> EventFilter {
