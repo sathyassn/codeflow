@@ -89,7 +89,7 @@ const LEVEL_VALID: &str = "off | warn | allow | block";
 /// The complete key schema: every leaf key the [`Policy`] structs deserialize,
 /// in file order (top-level, then `git`, `security` and `guidance`). A drift-guard test
 /// pins this table to the serde fields in both directions.
-pub const SCHEMA: [KeySpec; 49] = [
+pub const SCHEMA: [KeySpec; 52] = [
     // ---- top-level -------------------------------------------------------
     KeySpec {
         path: "schema_version",
@@ -181,6 +181,33 @@ pub const SCHEMA: [KeySpec; 49] = [
         purpose: "Tampering with the enforcement plane itself (hooksPath flips, hook-skip envs, hook/policy writes).",
         notes: "git-guard only (ADR-0009); suspended only in the \
                 pre-first-commit bootstrap window.",
+    },
+    // ---- git: root checkout ----------------------------------------------
+    KeySpec {
+        path: "git.root_branch",
+        kind: KeyKind::String,
+        valid: "empty, or a valid branch name",
+        purpose: "The branch the root checkout holds; empty means the repository's default branch.",
+        notes: "Set it only for an umbrella repository whose root is a working \
+                checkout; `codeflow init --workspace` writes the convention name.",
+    },
+    KeySpec {
+        path: "git.root_checkout_commits",
+        kind: KeyKind::Level,
+        valid: LEVEL_VALID,
+        purpose: "A commit at the root checkout on any branch other than git.root_branch.",
+        notes: "git-guard applies the level to agents; the git hooks apply it \
+                when a harness marker is set and only warn otherwise. \
+                Suspended in the pre-first-commit bootstrap window.",
+    },
+    KeySpec {
+        path: "git.worktree_locations",
+        kind: KeyKind::StringList,
+        valid: "folders: relative to the root checkout, absolute, ~/..., \
+                $CODEX_HOME/... or $GROK_HOME/...",
+        purpose: "Where linked worktrees may live; doctor reports one outside them.",
+        notes: "The default covers .worktrees and the folders the Claude \
+                desktop app, Codex and Grok manage.",
     },
     // ---- git: commit format ----------------------------------------------
     KeySpec {
@@ -728,7 +755,49 @@ pub fn validate_policy_str(data: &str) -> Result<(), Vec<PolicyError>> {
 
 /// Validate one leaf `path`/`value` pair against its [`KeySpec`]; a path the
 /// schema does not know is an unknown-key error.
+/// The value checks for the root-checkout keys that their kind alone does
+/// not catch: `git.root_branch` must be a branch name, and each
+/// `git.worktree_locations` entry must be a folder `doctor` can expand.
+fn validate_root_checkout_key(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    match path {
+        "git.root_branch" => {
+            if let Some(s) = value.as_str() {
+                if !s.is_empty() && !crate::root_checkout::is_valid_branch_name(s) {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!(
+                            "invalid value '{s}' for {path}; not a valid branch name (empty \
+                             means the default branch)"
+                        ),
+                    });
+                }
+            }
+        }
+        "git.worktree_locations" => {
+            for entry in value
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(Value::as_str)
+            {
+                if !crate::root_checkout::is_valid_location(entry) {
+                    errors.push(PolicyError {
+                        key: path.to_string(),
+                        message: format!(
+                            "invalid entry '{entry}' in {path}; use a folder relative to the \
+                             root checkout, an absolute folder, ~/..., $CODEX_HOME/... or \
+                             $GROK_HOME/..."
+                        ),
+                    });
+                }
+            }
+        }
+        _ => {}
+    }
+}
+
 fn validate_leaf(path: &str, value: &Value, errors: &mut Vec<PolicyError>) {
+    validate_root_checkout_key(path, value, errors);
     let Some(spec) = spec_for(path) else {
         errors.push(PolicyError {
             key: path.to_string(),

@@ -178,6 +178,24 @@ pub struct GitPolicy {
     /// stay the hard line (charter D19). Suspended only in the
     /// pre-first-commit bootstrap window.
     pub hook_integrity: PolicyLevel,
+    /// The branch the root checkout holds: the repository's main working
+    /// tree, where no task work happens. Empty (the default) means the
+    /// repository's default branch. Change it only for an umbrella
+    /// repository whose root is a working checkout; the convention is
+    /// [`WORKSPACE_ROOT_BRANCH`](crate::root_checkout::WORKSPACE_ROOT_BRANCH),
+    /// which `codeflow init --workspace` sets.
+    pub root_branch: String,
+    /// A commit at the root checkout on any branch other than
+    /// [`root_branch`](GitPolicy::root_branch). Level; default `block`.
+    /// git-guard applies the level to agents; the git hooks apply it when a
+    /// harness marker is set and warn otherwise, so a human at their own
+    /// terminal is never stopped. Suspended in the bootstrap window.
+    pub root_checkout_commits: PolicyLevel,
+    /// Folders where linked worktrees may live: a path relative to the root
+    /// checkout, an absolute path, `~/...`, or `$CODEX_HOME/...` or
+    /// `$GROK_HOME/...`. The default covers `.worktrees` and the folders the
+    /// harnesses manage; `doctor` reports a linked worktree outside them.
+    pub worktree_locations: Vec<String>,
     pub commit_format: PolicyLevel,
     pub commit_types: Vec<String>,
     /// Max length of the commit *description* — the text after `type(scope): `.
@@ -343,6 +361,12 @@ impl Default for GitPolicy {
             pr_merge_to_protected: PolicyLevel::Block,
             local_ref_protection: PolicyLevel::Block,
             hook_integrity: PolicyLevel::Block,
+            root_branch: String::new(),
+            root_checkout_commits: PolicyLevel::Block,
+            worktree_locations: crate::root_checkout::DEFAULT_WORKTREE_LOCATIONS
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
             commit_format: PolicyLevel::Block,
             commit_types: [
                 "feat", "fix", "docs", "refactor", "test", "chore", "ci", "perf", "build", "revert",
@@ -674,6 +698,7 @@ impl GitPolicy {
         self.pr_merge_to_protected = PolicyLevel::Off;
         self.local_ref_protection = PolicyLevel::Off;
         self.hook_integrity = PolicyLevel::Off;
+        self.root_checkout_commits = PolicyLevel::Off;
         self.commit_format = PolicyLevel::Off;
         self.commit_body = PolicyLevel::Off;
         // Neutralize the footer/ticket opt-ins so the scaffold commit is never
