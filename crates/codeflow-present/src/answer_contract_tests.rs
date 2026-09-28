@@ -4,10 +4,15 @@
 
 use scraper::{ElementRef, Html, Node, Selector};
 
+use serde_json::Value;
+use uuid::Uuid;
+
 use crate::{
-    contract_tests::{find, fixture_bytes, index_entries, render, supported},
-    document::{parse_document, Block, Framing, ParsedDocument},
-    state::block_digest,
+    contract_tests::{find, fixture_bytes, fixture_json, index_entries, render, supported},
+    document::{parse_document, Block, Framing, ParsedDocument, PresentationDocument},
+    responses::{Actor, AnswerReceipt, ResponseEvent, RESPONSES_FILE},
+    state::{block_digest, SessionStore},
+    PresentError,
 };
 
 /// What each refused document fixture's error must name.
@@ -350,4 +355,370 @@ fn a_decision_defaults_to_an_optional_rationale_and_a_form_to_none() {
     assert!(
         form.is_required("home") && form.is_required("keep-days") && !form.is_required("share")
     );
+}
+
+// The answer fixtures, against a live session of `documents/v2-forms.json`.
+
+/// The session id the answer fixtures name; the harness puts the live
+/// session's id in its place.
+const FIXTURE_SESSION: &str = "7c1e2d3a-0000-4000-8000-000000000001";
+
+pub(crate) struct FormsSession {
+    pub(crate) _temp: tempfile::TempDir,
+    pub(crate) store: SessionStore,
+    pub(crate) id: Uuid,
+    pub(crate) document: PresentationDocument,
+}
+
+impl FormsSession {
+    pub(crate) fn open() -> Self {
+        let (temp, store) = crate::contract_tests::store();
+        let document = supported("documents/v2-forms.json");
+        let id = store
+            .create(ParsedDocument::Supported(document.clone()))
+            .unwrap()
+            .id;
+        Self {
+            _temp: temp,
+            store,
+            id,
+            document,
+        }
+    }
+
+    pub(crate) fn ledger_path(&self) -> std::path::PathBuf {
+        self.store.session_dir(self.id).join(RESPONSES_FILE)
+    }
+
+    /// The ledger bytes, or `None` while no answer was stored.
+    pub(crate) fn ledger_bytes(&self) -> Option<Vec<u8>> {
+        std::fs::read(self.ledger_path()).ok()
+    }
+
+    /// One request of a fixture as the page would send it: the session id,
+    /// the form digests and earlier answer ids filled in.
+    pub(crate) fn body(&self, request: &Value, answers: &[Uuid]) -> Vec<u8> {
+        let mut text = serde_json::to_string(request).unwrap();
+        text = text.replace(FIXTURE_SESSION, &self.id.to_string());
+        for block in self.document.walk() {
+            text = text.replace(
+                &format!("{{{{form_digest:{}}}}}", block.id()),
+                &block_digest(block),
+            );
+        }
+        for (index, answer) in answers.iter().enumerate() {
+            text = text.replace(&format!("{{{{answer_id:{index}}}}}"), &answer.to_string());
+        }
+        assert!(!text.contains("{{"), "unfilled placeholder in {text:.200}");
+        text.into_bytes()
+    }
+
+    pub(crate) fn submit(&self, body: &[u8]) -> crate::Result<AnswerReceipt> {
+        self.store.submit_answer(self.id, body)
+    }
+
+    pub(crate) fn digest(&self, form: &str) -> String {
+        block_digest(find(&self.document, form))
+    }
+}
+
+/// A refusal's code and details.
+fn refusal(result: crate::Result<AnswerReceipt>) -> (&'static str, Value) {
+    match result {
+        Err(PresentError::Review { code, details, .. }) => (code, details),
+        other => panic!("expected a typed refusal, got {other:?}"),
+    }
+}
+
+fn field_errors(details: &Value) -> Vec<(String, String)> {
+    let mut fields: Vec<(String, String)> = details["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|entry| {
+            (
+                entry["field"].as_str().unwrap().to_string(),
+                entry["code"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    fields.sort();
+    fields
+}
+
+fn pairs(expected: &[(&str, &str)]) -> Vec<(String, String)> {
+    let mut pairs: Vec<(String, String)> = expected
+        .iter()
+        .map(|(field, code)| ((*field).to_string(), (*code).to_string()))
+        .collect();
+    pairs.sort();
+    pairs
+}
+
+/// Each answer fixture stores or refuses as `index.json` says, and a
+/// refusal leaves the ledger exactly as it was.
+#[test]
+#[allow(clippy::too_many_lines)]
+fn every_tsk119_answer_fixture_is_stored_or_refused_as_indexed() {
+    let mut seen = 0;
+    for entry in index_entries("TSK-119") {
+        let file = entry["file"].as_str().unwrap();
+        if !file.starts_with("answers/") {
+            continue;
+        }
+        seen += 1;
+        let session = FormsSession::open();
+        let fixture = fixture_json(file);
+        let requests: Vec<Value> = fixture.get("requests").map_or_else(
+            || vec![fixture.clone()],
+            |list| list.as_array().unwrap().clone(),
+        );
+        let mut answers = Vec::new();
+        let mut results = Vec::new();
+        let mut before_last = None;
+        for (index, request) in requests.iter().enumerate() {
+            if index + 1 == requests.len() {
+                before_last = Some(session.ledger_bytes());
+            }
+            let body = session.body(request, &answers);
+            let result = session.submit(&body);
+            if let Ok(receipt) = &result {
+                answers.push(receipt.answer_id);
+            }
+            results.push((body, result));
+        }
+        let before_last = before_last.unwrap();
+        let events = session.store.responses(session.id).unwrap();
+        let name = file
+            .trim_start_matches("answers/")
+            .trim_end_matches(".json");
+        let last = results.pop().unwrap().1;
+        let refused_unchanged = |last: crate::Result<AnswerReceipt>| {
+            let refused = refusal(last);
+            assert_eq!(
+                session.ledger_bytes(),
+                before_last,
+                "{file}: ledger changed"
+            );
+            refused
+        };
+        match name {
+            "submit-valid" | "decline" | "cancel" => {
+                let receipt = last.unwrap();
+                assert_eq!(
+                    (receipt.state.as_str(), receipt.replayed, receipt.sequence),
+                    ("stored", false, 1),
+                    "{file}"
+                );
+                assert_eq!(events.len(), 1, "{file}");
+                let ResponseEvent::Answer(record) = &events[0] else {
+                    panic!("{file}: not an answer line")
+                };
+                let body = session.body(&requests[0], &[]);
+                assert_eq!(record.payload_digest, crate::form::sha256_hex(&body));
+                assert_eq!(record.form_digest, session.digest("store-choice"));
+                assert_eq!(record.actor, Actor::Operator);
+                assert_eq!(record.session_id, session.id);
+                assert_eq!(record.answer_id, receipt.answer_id);
+                assert_eq!(record.created_at_unix, receipt.stored_at_unix);
+                assert_eq!(record.question.title, "Where should answers live?");
+                assert_eq!(record.question.fields.len(), 6);
+                assert_eq!(Value::Object(record.values.clone()), requests[0]["values"]);
+                assert_eq!(
+                    record.reason.as_deref(),
+                    requests[0]["reason"].as_str(),
+                    "{file}"
+                );
+                if name != "submit-valid" {
+                    assert!(record.values.is_empty(), "{file}");
+                }
+            }
+            "missing-required" => {
+                let (code, details) = refused_unchanged(last);
+                assert_eq!(code, "invalid_answer");
+                assert_eq!(field_errors(&details), pairs(&[("keep-days", "required")]));
+            }
+            "malformed-values" => {
+                let (code, details) = refused_unchanged(last);
+                assert_eq!(code, "invalid_answer");
+                assert_eq!(
+                    field_errors(&details),
+                    pairs(&[
+                        ("home", "unknown_option"),
+                        ("keep-days", "not_integer"),
+                        ("share", "wrong_kind"),
+                        ("channels", "too_many"),
+                        ("contact", "format"),
+                        ("extra", "unknown_field"),
+                    ])
+                );
+            }
+            "rationale-not-allowed" => {
+                let (code, details) = refused_unchanged(last);
+                assert_eq!(code, "invalid_answer");
+                assert_eq!(
+                    field_errors(&details),
+                    pairs(&[("notes", "rationale_not_allowed")])
+                );
+            }
+            "stale-revision" => {
+                let (code, details) = refused_unchanged(last);
+                assert_eq!(code, "stale_revision");
+                assert_eq!(
+                    details,
+                    serde_json::json!({
+                        "current_revision": 1,
+                        "form_present": true,
+                        "current_form_digest": session.digest("store-choice"),
+                    })
+                );
+            }
+            "form-digest-mismatch" => {
+                assert_eq!(refused_unchanged(last).0, "form_digest_mismatch");
+            }
+            "oversized" => {
+                let (code, details) = refused_unchanged(last);
+                assert_eq!(code, "answer_too_large");
+                assert_eq!(details["limit_bytes"], 65_536);
+            }
+            "retry-identical" => {
+                assert_eq!(fixture["drop_first_response"], true);
+                // The first response is dropped: only the retry's receipt
+                // reaches the page, and it is the original one.
+                let receipt = last.unwrap();
+                assert!(receipt.replayed);
+                assert_eq!(receipt.sequence, 1);
+                assert_eq!(receipt.answer_id, answers[0]);
+                assert_eq!(receipt.stored_at_unix, events[0].record().created_at_unix);
+                assert_eq!(events.len(), 1);
+            }
+            "request-id-conflict" => {
+                let (code, details) = refused_unchanged(last);
+                assert_eq!(code, "request_id_conflict");
+                assert_eq!(details["request_id"], requests[1]["request_id"]);
+                assert_eq!(events.len(), 1);
+            }
+            "amendment" => {
+                let receipt = last.unwrap();
+                assert_eq!((receipt.sequence, receipt.replayed), (2, false));
+                assert_eq!(events.len(), 2);
+                assert!(
+                    matches!(&events[0], ResponseEvent::Answer(record) if record.amends.is_none())
+                );
+                assert!(matches!(&events[1], ResponseEvent::Amendment(record)
+                    if record.amends == Some(answers[0]) && record.values["home"] == "repo"));
+            }
+            "amend-an-amendment" => {
+                let (code, details) = refused_unchanged(last);
+                assert_eq!(code, "invalid_amendment");
+                assert_eq!(details["amends"], answers[1].to_string());
+                assert_eq!(events.len(), 2);
+            }
+            other => panic!("{file}: no expectation for {other}"),
+        }
+    }
+    assert_eq!(seen, 13);
+}
+
+/// I4: a torn final line is cut when the ledger is opened; the complete
+/// line before it stays and the next append takes the next sequence.
+#[test]
+fn a_torn_ledger_tail_is_truncated_on_open() {
+    let session = FormsSession::open();
+    let fixture = String::from_utf8(fixture_bytes("ledger/torn-tail.jsonl"))
+        .unwrap()
+        .replace(FIXTURE_SESSION, &session.id.to_string());
+    let whole_line = fixture.find('\n').unwrap() + 1;
+    assert!(!fixture.ends_with('\n'), "the fixture's last line is torn");
+    std::fs::write(session.ledger_path(), &fixture).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        std::fs::set_permissions(
+            session.ledger_path(),
+            std::fs::Permissions::from_mode(0o600),
+        )
+        .unwrap();
+    }
+    let events = session.store.responses(session.id).unwrap();
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].record().outcome, crate::form::Outcome::Cancel);
+    assert_eq!(
+        session.ledger_bytes().unwrap(),
+        fixture.as_bytes()[..whole_line]
+    );
+    let mut request = fixture_json("answers/submit-valid.json");
+    request["request_id"] = Value::String("3f2a0c11-0000-4000-8000-0000000000c9".into());
+    let receipt = session.submit(&session.body(&request, &[])).unwrap();
+    assert_eq!((receipt.sequence, receipt.replayed), (2, false));
+    let events = session.store.responses(session.id).unwrap();
+    assert_eq!(events.len(), 2);
+    assert!(session.ledger_bytes().unwrap().ends_with(b"}\n"));
+}
+
+/// B6: a request for a closed session, for another session, for a form the
+/// revision lacks, or amending an answer of another form is refused, and
+/// the ledger stays as it was; the ledger file is owner-only.
+#[test]
+fn answers_are_refused_for_closed_sessions_unknown_forms_and_foreign_amendments() {
+    let session = FormsSession::open();
+    let valid = fixture_json("answers/submit-valid.json");
+    let receipt = session.submit(&session.body(&valid, &[])).unwrap();
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt as _;
+        let mode = std::fs::metadata(session.ledger_path())
+            .unwrap()
+            .permissions()
+            .mode();
+        assert_eq!(mode & 0o777, 0o600, "the ledger is owner-only");
+    }
+    let before = session.ledger_bytes();
+    let with = |field: &str, value: Value| {
+        let mut request = valid.clone();
+        request["request_id"] = Value::String(Uuid::new_v4().to_string());
+        request[field] = value;
+        session.body(&request, &[])
+    };
+    // Another session's id: refused before the store is touched.
+    let foreign = String::from_utf8(with("revision", 1.into()))
+        .unwrap()
+        .replace(&session.id.to_string(), &Uuid::new_v4().to_string());
+    assert_eq!(
+        refusal(session.submit(foreign.as_bytes())).0,
+        "invalid_answer"
+    );
+    let unknown = with("form_id", "no-such-form".into());
+    let (code, details) = refusal(session.submit(&unknown));
+    assert_eq!(
+        (code, details["form_id"].as_str()),
+        ("unknown_form", Some("no-such-form"))
+    );
+    // A v2 decision is a form too; amending an answer of `store-choice`
+    // from `d-scope` names an answer of another form.
+    let mut decision = serde_json::json!({
+        "request_id": Uuid::new_v4(), "session_id": FIXTURE_SESSION, "revision": 1,
+        "form_id": "d-scope", "form_digest": "{{form_digest:d-scope}}", "outcome": "submit",
+        "values": { "choice": "a" }, "rationales": {}, "amends": receipt.answer_id,
+    });
+    let (code, _) = refusal(session.submit(&session.body(&decision, &[])));
+    assert_eq!(code, "invalid_amendment");
+    decision["amends"] = Value::String(Uuid::new_v4().to_string());
+    assert_eq!(
+        refusal(session.submit(&session.body(&decision, &[]))).0,
+        "invalid_amendment"
+    );
+    let malformed = b"{\"request_id\": 7}";
+    assert_eq!(refusal(session.submit(malformed)).0, "invalid_answer");
+    assert_eq!(session.ledger_bytes(), before);
+    session.store.close(session.id).unwrap();
+    let late = with("revision", 1.into());
+    assert!(matches!(
+        session.submit(&late),
+        Err(PresentError::SessionClosed(_))
+    ));
+    // A retry of the stored request still gets its receipt after close.
+    let retry = session.submit(&session.body(&valid, &[])).unwrap();
+    assert!(retry.replayed);
+    assert_eq!(session.ledger_bytes(), before);
 }

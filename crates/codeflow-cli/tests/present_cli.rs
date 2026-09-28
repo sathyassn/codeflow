@@ -784,6 +784,7 @@ fn schema_registry() -> json_schema::Registry {
             "document-v2.schema.json",
             "session-history-v1.schema.json",
             "session-history-v2.schema.json",
+            "session-responses-v1.schema.json",
         ]
         .map(|name| {
             serde_json::from_slice::<serde_json::Value>(&fs::read(schemas.join(name)).unwrap())
@@ -1309,6 +1310,69 @@ fn schema_v2_fixtures_match_the_v2_schemas_and_v1_stays_on_v1() {
         Vec::<String>::new()
     );
     assert!(!registry.errors(document_v2, &v1).is_empty());
+}
+
+/// TSK-119: the form and v2 decision fixtures match the v2 document schema,
+/// a v2 decision with a status and a field with a default do not, and an
+/// answer line of the ledger fixture matches the responses schema. Required
+/// ids and a single recommended option are runtime rules.
+#[test]
+fn form_fixtures_and_answer_lines_match_their_schemas() {
+    let registry = schema_registry();
+    let document_v2 = "urn:codeflow:schema:present:document:2";
+    for valid in [
+        "documents/v2-forms.json",
+        "documents/delivery-v2.json",
+        "documents/v2-form-required-unknown.json",
+        "documents/v2-form-two-recommended.json",
+    ] {
+        let value: serde_json::Value = serde_json::from_str(&contract_fixture(valid)).unwrap();
+        assert_eq!(
+            registry.errors(document_v2, &value),
+            Vec::<String>::new(),
+            "{valid}"
+        );
+    }
+    let every_block: serde_json::Value = serde_json::from_str(
+        &fs::read_to_string(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../codeflow-present/tests/fixtures/annotation/every-block.json"),
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        registry.errors(document_v2, &every_block),
+        Vec::<String>::new()
+    );
+    for invalid in [
+        "documents/v2-decision-with-status.json",
+        "documents/v2-form-default-value.json",
+    ] {
+        let value: serde_json::Value = serde_json::from_str(&contract_fixture(invalid)).unwrap();
+        assert!(
+            !registry.errors(document_v2, &value).is_empty(),
+            "{invalid}"
+        );
+    }
+    let responses = "urn:codeflow:schema:present:session-responses:1";
+    let ledger = contract_fixture("ledger/torn-tail.jsonl");
+    let line: serde_json::Value = serde_json::from_str(ledger.lines().next().unwrap()).unwrap();
+    assert_eq!(registry.errors(responses, &line), Vec::<String>::new());
+    let mut amendment = line.clone();
+    amendment["event"] = "amendment".into();
+    assert!(
+        !registry.errors(responses, &amendment).is_empty(),
+        "amends is required"
+    );
+    amendment["amends"] = line["answer_id"].clone();
+    assert_eq!(registry.errors(responses, &amendment), Vec::<String>::new());
+    let mut delivered = line;
+    delivered["event"] = "delivered".into();
+    assert!(
+        !registry.errors(responses, &delivered).is_empty(),
+        "responses v1 describes answer and amendment lines only"
+    );
 }
 
 #[test]

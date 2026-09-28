@@ -1268,6 +1268,12 @@
       "sha256": "6ad84cfe23761d8de3662e5448587fd56dcbfe461e6e15939d3085ae4ceb0a5a",
       "exec": false
     },
+    ".codeflow/schemas/present/session-responses-v1.schema.json": {
+      "src": "present/schemas/session-responses-v1.schema.json",
+      "ownership": "managed",
+      "sha256": "368d5cf6d1d75a537219a490425fc7053927f9ebd3bb33cea87764c1ad8387f6",
+      "exec": false
+    },
     ".codeflow/schemas/present/utility-tokens-v1.schema.json": {
       "src": "present/schemas/utility-tokens-v1.schema.json",
       "ownership": "managed",

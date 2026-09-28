@@ -21,6 +21,7 @@ pub mod limits;
 mod media;
 mod platform;
 pub mod render;
+pub mod responses;
 pub mod retired;
 mod safe_html;
 mod scoped_css;

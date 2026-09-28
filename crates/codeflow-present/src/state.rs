@@ -1444,7 +1444,7 @@ impl SessionStore {
         self.enforce_retention_unlocked()
     }
 
-    fn enforce_retention_unlocked(&self) -> Result<Vec<Uuid>> {
+    pub(crate) fn enforce_retention_unlocked(&self) -> Result<Vec<Uuid>> {
         let now = now_unix()?;
         let mut closed: Vec<_> = self
             .list_unlocked()?
@@ -1917,7 +1917,7 @@ impl SessionStore {
         Ok(())
     }
 
-    fn session_dir(&self, id: Uuid) -> PathBuf {
+    pub(crate) fn session_dir(&self, id: Uuid) -> PathBuf {
         self.root.join("sessions").join(id.to_string())
     }
 
@@ -1956,7 +1956,7 @@ impl SessionStore {
         Ok(lease)
     }
 
-    fn prepare_control_mutation(&self) -> Result<File> {
+    pub(crate) fn prepare_control_mutation(&self) -> Result<File> {
         let lease = self.lock_project_mutation()?;
         let sessions = self.root.join("sessions");
         Self::cleanup_staged_creates_unlocked(&sessions)?;
@@ -1966,7 +1966,7 @@ impl SessionStore {
         Ok(lease)
     }
 
-    fn ensure_project_capacity_unlocked(
+    pub(crate) fn ensure_project_capacity_unlocked(
         &self,
         additional_bytes: u64,
         preserve_control_reserve: bool,
@@ -2010,7 +2010,7 @@ impl SessionStore {
         write_json_atomic(&self.session_path(id), session)
     }
 
-    fn lock_session(&self, id: Uuid) -> Result<File> {
+    pub(crate) fn lock_session(&self, id: Uuid) -> Result<File> {
         let lock = self.open_lock_raw(id)?;
         lock.lock_exclusive()
             .map_err(|error| PresentError::io(self.session_dir(id).join(".lock"), error))?;
@@ -2037,7 +2037,7 @@ impl SessionStore {
         open_private_append(&dir.join(".lock"))
     }
 
-    fn ensure_session_layout(&self, id: Uuid) -> Result<()> {
+    pub(crate) fn ensure_session_layout(&self, id: Uuid) -> Result<()> {
         let sessions = self.root.join("sessions");
         ensure_safe_dir(&sessions)?;
         let session = self.session_dir(id);
@@ -3363,7 +3363,7 @@ fn validated_home(home: Option<std::ffi::OsString>) -> Result<PathBuf> {
     Ok(home)
 }
 
-fn now_unix() -> Result<u64> {
+pub(crate) fn now_unix() -> Result<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|duration| duration.as_secs())
@@ -3579,7 +3579,7 @@ fn add_no_follow(options: &mut OpenOptions) {
 #[cfg(not(any(unix, windows)))]
 fn add_no_follow(_options: &mut OpenOptions) {}
 
-fn open_private_append(path: &Path) -> Result<File> {
+pub(crate) fn open_private_append(path: &Path) -> Result<File> {
     #[cfg(windows)]
     {
         let file = match crate::platform::open_private_create_new(path) {
@@ -3642,9 +3642,23 @@ fn open_private_append(path: &Path) -> Result<File> {
     }
 }
 
-fn open_private_read(path: &Path) -> Result<File> {
+pub(crate) fn open_private_read(path: &Path) -> Result<File> {
     let mut options = OpenOptions::new();
     options.read(true);
+    add_no_follow(&mut options);
+    let file = options
+        .open(path)
+        .map_err(|error| PresentError::io(path, error))?;
+    #[cfg(any(unix, windows))]
+    validate_private_file(path, &file)?;
+    Ok(file)
+}
+
+/// Opens an existing owner-private file to read and to cut back, never
+/// following a link.
+pub(crate) fn open_private_rw(path: &Path) -> Result<File> {
+    let mut options = OpenOptions::new();
+    options.read(true).write(true);
     add_no_follow(&mut options);
     let file = options
         .open(path)
