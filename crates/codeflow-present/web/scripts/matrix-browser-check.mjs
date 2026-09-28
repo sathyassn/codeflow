@@ -153,12 +153,42 @@ try {
   // above, a click on an option, on a text field and on Submit answer, a
   // drag across option labels and a box over the form each pin a note and
   // leave every control, the draft and the store as they were; nothing is
-  // sent.
+  // sent. The draft is a populated one: values, a rationale, and a decline
+  // reason with the decision's decline box open.
   {
-    const controls = () => page.evaluate(() => [...document.querySelectorAll("[data-cf-form] [data-cf-value], [data-cf-form] [data-cf-rationale-input]")]
+    const controls = () => page.evaluate(() => [...document.querySelectorAll("[data-cf-form] [data-cf-value], [data-cf-form] [data-cf-rationale-input], [data-cf-form] [data-cf-decline-reason]")]
       .map((control) => (control.type === "radio" || control.type === "checkbox" ? `${control.id}:${control.checked}` : `${control.id}=${control.value}`)));
+    const blank = await controls();
+    assert.ok(blank.length > 10 && blank.every((state) => state.endsWith(":false") || state.endsWith("=")), `form control: the form cells changed a control: ${blank.join(" ")}`);
+    if (await page.locator(".cf-hint.on").count() > 0) {
+      await page.locator("#cf-comment-toggle").click();
+      await page.waitForFunction(() => !document.querySelector(".cf-hint.on"));
+    }
+    const survey = page.locator("[data-cf-block-id='survey']");
+    await survey.locator("[data-cf-field='store'] input[value='local']").check();
+    await survey.locator("[data-cf-field='store'] [data-cf-rationale-input]").fill("Kept through the annotation gestures");
+    await survey.locator("[data-cf-field='keep-days'] input").fill("30");
+    await survey.locator("[data-cf-field='channels'] input[value='rail']").check();
+    await survey.locator("[data-cf-field='notify'] input[value='false']").check();
+    await survey.locator("[data-cf-field='contact'] input").fill("reviewer@example.org");
+    const choice = page.locator("[data-cf-block-id='choice']");
+    await choice.locator("input[value='jpeg']").check();
+    await choice.locator("[data-cf-form-action='decline']").click();
+    await choice.locator("[data-cf-decline-reason]").fill("A reason typed before commenting");
     const pristine = await controls();
-    assert.ok(pristine.length > 10 && pristine.every((state) => state.endsWith(":false") || state.endsWith("=")), `form control: the form cells changed a control: ${pristine.join(" ")}`);
+    for (const expected of [
+      "cf-form-survey-store-0:true",
+      "cf-form-survey-store-rationale=Kept through the annotation gestures",
+      "cf-form-survey-keep-days=30",
+      "cf-form-survey-channels-0:true",
+      "cf-form-survey-notify-1:true",
+      "cf-form-survey-contact=reviewer@example.org",
+      "cf-form-choice-choice-0:true",
+      "cf-form-choice-reason=A reason typed before commenting",
+    ]) {
+      assert.ok(pristine.includes(expected), `form control: the populated draft lacks ${expected}: ${pristine.join(" ")}`);
+    }
+    assert.ok(await choice.locator("[data-cf-decline-reason]").isVisible(), "form control: the decline box is closed");
     const discard = async (what) => {
       await page.getByTestId("float-chip").waitFor({ timeout: 10_000 }).catch((error) => {
         throw new Error(`form control, ${what}: no note was pinned`, { cause: error });
@@ -194,9 +224,10 @@ try {
     await page.keyboard.press("Escape");
     await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10_000 }).catch(() => undefined);
     assert.deepEqual(await controls(), pristine, "form control, an area: a control changed");
+    assert.ok(await choice.locator("[data-cf-decline-reason]").isVisible(), "form control: the decline box closed");
     assert.deepEqual(answerRequests, [], "form control: an answer was sent");
     assert.equal(await findFile(root, "responses.jsonl"), null, "form control: the answer store was written");
-    process.stdout.write("form control passed: clicks on options, a label, a text field, a decision option and Submit answer, a text selection across option labels and an area over the form pin notes and leave every control, the draft and the store unchanged; no answer is sent\n");
+    process.stdout.write("form control passed: on a populated draft (values, a rationale, a decline reason in an open decline box), clicks on options, a label, a text field, a decision option and Submit answer, a text selection across option labels and an area over the form pin notes and leave every control, the draft and the store unchanged; no answer is sent\n");
   }
   // A plain drag (no Shift) over the blank ends of diff lines selects those
   // lines as text; it never pins the whole diff as one element (QA defect 6).
@@ -457,12 +488,20 @@ try {
   await reveal(page, "points");
   await gesture(page, pictureCell);
   await saveNote(page, "draft: an element note loses its picture");
+  // An area over the screenshot has no words: its only excerpt is a picture.
+  await armComment(page);
+  await reveal(page, "screenshot", RECIPES.media.area.box);
+  await gesture(page, { type: "media", gesture: "area", block: "screenshot", recipe: RECIPES.media.area });
+  await saveNote(page, "draft: a picture-only area note");
   const storedDraft = await page.waitForFunction((key) => {
     const kept = sessionStorage.getItem(key);
-    return kept?.includes("an element note loses its picture") ? kept : null;
+    return kept?.includes("a picture-only area note") ? kept : null;
   }, `cf-present-draft:${sessionId}`, { timeout: 10_000 }).then((handle) => handle.jsonValue());
   assert.doesNotMatch(storedDraft, /data_base64|"image"/u, "lifecycle, draft: the stored draft holds a picture");
   assert.ok(JSON.parse(storedDraft).notes.every((note) => !note.excerpt || Object.keys(note.excerpt).length > 0), "lifecycle, draft: an empty excerpt is stored");
+  const storedArea = JSON.parse(storedDraft).notes.find((note) => note.body === "draft: a picture-only area note");
+  assert.ok(storedArea.region_selector, "lifecycle, draft: the area note is not an area");
+  assert.equal(storedArea.excerpt, undefined, "lifecycle, draft: the area note kept an excerpt, so it had words");
   // update: a revision that keeps the prose and drops the decision re-anchors
   // the prose note and orphans the decision notes with their reason.
   const revised = JSON.parse(await readFile(fixture, "utf8"));
@@ -474,20 +513,28 @@ try {
   await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
   await armComment(page);
   const restored = await page.getByTestId("toast").innerText();
-  assert.match(restored, /Restored 2 unsent notes from revision 1\./u, "lifecycle, draft: no restore notice");
+  assert.match(restored, /Restored 3 unsent notes from revision 1\./u, "lifecycle, draft: no restore notice");
   await armComment(page);
-  assert.equal(await page.getByTestId("note-row").count(), 2, "lifecycle, draft: an unsent note is gone");
+  assert.equal(await page.getByTestId("note-row").count(), 3, "lifecycle, draft: an unsent note is gone");
   await page.getByLabel("Verdict").selectOption("approve_with_notes");
   await page.getByTestId("submit-all").click();
   const kept = await nextEnvelope();
   assert.equal(kept.revision, 2);
-  assert.deepEqual(kept.notes.map((note) => note.body), ["draft: kept across the reload", "draft: an element note loses its picture"], "lifecycle, draft: delivered notes");
+  assert.deepEqual(kept.notes.map((note) => note.body), ["draft: kept across the reload", "draft: an element note loses its picture", "draft: a picture-only area note"], "lifecycle, draft: delivered notes");
   // A restored element note is sent without a picture and accepted: its
   // label excerpt and selector stay; nothing re-captures it.
   const restoredElement = kept.notes[1];
   assert.ok(restoredElement.element_selector, "lifecycle, draft: the element note lost its selector");
   assert.equal(restoredElement.excerpt?.image, undefined, "lifecycle, draft: the restored element note carries a picture");
   assert.ok(restoredElement.excerpt?.text, "lifecycle, draft: the restored element note lost its text excerpt");
+  // A restored picture-only area note is sent with its selector and block
+  // label and no excerpt at all, and the service accepts it. (The rail's
+  // target summary is the page's own; a review request never carries it.)
+  const restoredArea = kept.notes[2];
+  assert.ok(restoredArea.region_selector, "lifecycle, draft: the area note lost its region selector");
+  assert.equal(restoredArea.block_id, "screenshot", "lifecycle, draft: the area note lost its block");
+  assert.ok(restoredArea.block_label, "lifecycle, draft: the area note lost its block label");
+  assert.equal(restoredArea.excerpt, undefined, "lifecycle, draft: the restored area note carries an excerpt");
   assert.equal(await page.evaluate((id) => sessionStorage.getItem(`cf-present-draft:${id}`), sessionId), null, "lifecycle, draft: kept after submit");
   await armComment(page);
   const earlier = page.getByTestId("feedback-history");
@@ -543,7 +590,7 @@ try {
   assert.throws(() => run(["present", "history", sessionId]), "lifecycle, clear: history still readable");
   const cleared = sessionId;
   sessionId = null;
-  process.stdout.write(`lifecycle passed: an approval with no notes, unsent text and element notes kept across update and reload with no picture in storage, the element note sent without its picture and accepted, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, an unsent note dropped from session storage when the session closes, close and clear of ${cleared}\n`);
+  process.stdout.write(`lifecycle passed: an approval with no notes, unsent text, element and picture-only area notes kept across update and reload with no picture in storage, the element note sent without its picture and the area note with no excerpt, both accepted, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, an unsent note dropped from session storage when the session closes, close and clear of ${cleared}\n`);
   process.stdout.write(`cf-present annotation matrix passed: ${cells.length} cells and a whole-document note over ${matrix.size} block types (${cells.filter((cell) => cell.gesture === "text").length} text, ${cells.filter((cell) => cell.gesture === "element").length} element, ${cells.filter((cell) => cell.gesture === "area").length} area), each delivered with its kind and selector; ${decoded.length} JPEG crops sized to the rectangle each note reloads, not one colour, and ${decoded.filter((crop) => crop.inside !== undefined).length} of them at least ${LIKENESS_FLOOR} like the page inside that rectangle, more like it than just outside, and in register with the same rectangle moved 4 or 12 px\n`);
   for (const cell of expected) {
     const crop = decoded.find((item) => item.where === cell.where);
