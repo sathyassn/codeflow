@@ -1,0 +1,11 @@
+id = "TSK-158"
+uid = "8e9a30bc-b800-4603-acca-dcb945e9bce4"
+kind = "TSK"
+title = "present note markers on adjacent lines stay apart"
+issuer = "admit:26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T07:15:14Z"
+target = "integration/EPC-016-visual-guide"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
