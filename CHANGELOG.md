@@ -403,7 +403,9 @@ publication date._
   and scoring counts a pass or a failure only when that receipt verifies,
   names the result's run, the retained judgements rederive it, and the
   trial, graded again from its retained record, workspace and files, gives
-  the same outcome. Keep a run's roots until every consumer has read it. Graded cases live in a graded
+  the same outcome. Trial records and reservations are signed under the
+  evaluator key, so a rewritten baseline or a forged registration counts as
+  an error. Keep a run's roots until every consumer has read it. Graded cases live in a graded
   suite outside the shipped kit (`--graded-suite`); a qualification holdout
   stays outside the published repository, and `holdout-check` fails when a
   holdout path, file, JSON object or copied run of text appears in the tracked

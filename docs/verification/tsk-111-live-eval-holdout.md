@@ -74,8 +74,9 @@ never enters a line at all.
   an edited grade, is not measured. A receipt counts only for the run it
   names and while its trial, graded again from what it retains (the Git
   refs, configuration, boundary and files as they are now), gives the same
-  outcome; any receipt fault is not measured, whichever way the grade was
-  changed. The evaluator key is the trust
+  outcome against its evaluator-signed trial record; a rewritten baseline or
+  an unsigned registration is not the evaluator's, and any receipt fault is
+  not measured, whichever way the grade was changed. The evaluator key is the trust
   boundary: its holder is trusted. The holdout's
   scripted judge misses controls by design and tests transport and
   fail-closed binding only; its synthetic oracle meets them and tests the
