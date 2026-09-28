@@ -6,9 +6,11 @@
 // `codeflow present feedback` must return each note with its kind and
 // selector, a text note its quote with prefix and suffix, and every element
 // and area note a JPEG crop of what it anchors: the size of the rectangle the
-// note reloads (within 2 px at the capture scale), not one colour, and more
-// like the page inside that rectangle than the same-size rectangle just
-// outside it. A cell that fails names its block, its gesture and the step.
+// note reloads (within 2 px at the capture scale), not one colour, at least
+// LIKENESS_FLOOR like the page inside that rectangle, more like it than the
+// same-size rectangle just outside it, and in register: no less like it than
+// the same rectangle moved 4 or 12 px any way (likeness.mjs). A cell that fails
+// names its block, its gesture and the step.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -16,6 +18,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
+import { LIKENESS_FLOOR, NEARBY_OFFSETS, REGISTRATION_SLACK, gridShape, inkGrid, likeness, placed } from "./likeness.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
@@ -251,90 +254,59 @@ try {
       assert.equal(note.region_selector.scope, cell.gesture === "document" ? "document" : "block", `${cell.where}, delivery: region scope`);
     }
     assert.equal(note.excerpt?.image?.media_type, "image/jpeg", `${cell.where}, delivery: crop format`);
-    images.push({ where: cell.where, data: note.excerpt.image.data_base64, box: cell.box, inside: cell.inside, outside: cell.outside });
+    images.push({ where: cell.where, data: note.excerpt.image.data_base64, box: cell.box, inside: cell.inside, outside: cell.outside, nearby: cell.nearby });
   }
   // Decode each crop in the browser: its size against the rectangle the note
   // reloads at the capture scale, more than one colour, and its picture
   // against the page inside that rectangle and just outside it.
-  const decoded = await page.evaluate(async (items) => {
+  // The ink grid and likeness come from likeness.mjs, the same functions
+  // likeness.test.mjs holds to a stripe field and shifted ink.
+  const decodeCrops = async (items, inkGrid, likeness, gridShape) => {
     const load = async (type, data) => {
       const image = new Image();
       image.src = `data:${type};base64,${data}`;
       await image.decode();
       return image;
     };
-    // Where the ink is: each pixel that stands apart from the picture's own
-    // ground (its median brightness), counted into a grid of cells. The
-    // runtime paints its own crop, so the pictures are compared by where the
-    // words, lines and shapes fall, not pixel for pixel.
-    const grid = (image, columns, rows) => {
+    const pixelsOf = (image) => {
       const canvas = document.createElement("canvas");
       canvas.width = image.width;
       canvas.height = image.height;
       const context = canvas.getContext("2d");
       context.drawImage(image, 0, 0);
-      const pixels = context.getImageData(0, 0, image.width, image.height).data;
-      const light = new Float32Array(image.width * image.height);
-      for (let index = 0; index < light.length; index += 1) light[index] = 0.2126 * pixels[index * 4] + 0.7152 * pixels[index * 4 + 1] + 0.0722 * pixels[index * 4 + 2];
-      const ground = [...light].sort((left, right) => left - right)[light.length >> 1];
-      const ink = new Float32Array(columns * rows);
-      const count = new Float32Array(columns * rows);
-      for (let y = 0; y < image.height; y += 1) {
-        for (let x = 0; x < image.width; x += 1) {
-          const cell = Math.min(rows - 1, Math.floor(y * rows / image.height)) * columns + Math.min(columns - 1, Math.floor(x * columns / image.width));
-          count[cell] += 1;
-          if (Math.abs(light[y * image.width + x] - ground) > 48) ink[cell] += 1;
-        }
-      }
-      return [...ink].map((value, cell) => value / Math.max(1, count[cell]));
+      return context.getImageData(0, 0, image.width, image.height).data;
     };
-    // Likeness: the correlation of two ink grids, so a line drawn across both
-    // (an underline the runtime does not paint) shifts neither; 0 for a
-    // picture with no ink structure at all.
-    const likeness = (left, right) => {
-      const mean = (values) => values.reduce((sum, value) => sum + value, 0) / values.length;
-      const [a, b] = [mean(left), mean(right)];
-      let product = 0;
-      let first = 0;
-      let second = 0;
-      for (const [index, value] of left.entries()) {
-        product += (value - a) * (right[index] - b);
-        first += (value - a) ** 2;
-        second += (right[index] - b) ** 2;
-      }
-      return first > 1e-9 && second > 1e-9 ? product / Math.sqrt(first * second) : 0;
-    };
-    return Promise.all(items.map(async ({ where, data, inside, outside }) => {
+    const grid = (image, columns, rows) => inkGrid(pixelsOf(image), image.width, image.height, columns, rows);
+    return Promise.all(items.map(async ({ where, data, inside, outside, nearby }) => {
       const image = await load("image/jpeg", data);
-      const canvas = document.createElement("canvas");
-      canvas.width = image.width;
-      canvas.height = image.height;
-      const context = canvas.getContext("2d");
-      context.drawImage(image, 0, 0);
-      const pixels = context.getImageData(0, 0, image.width, image.height).data;
+      const pixels = pixelsOf(image);
       const colours = new Set();
       for (let index = 0; index < pixels.length && colours.size < 3; index += 16) {
         colours.add(`${pixels[index] >> 4},${pixels[index + 1] >> 4},${pixels[index + 2] >> 4}`);
       }
       const result = { where, width: image.width, height: image.height, colours: colours.size };
       if (!inside) return result;
-      const columns = 48;
-      const rows = Math.min(32, Math.max(4, Math.round(columns * image.height / image.width)));
-      const crop = grid(image, columns, rows);
+      const { columns, rows } = gridShape(image.width, image.height);
+      const crop = inkGrid(pixels, image.width, image.height, columns, rows);
       result.inside = likeness(crop, grid(await load("image/png", inside), columns, rows));
       result.outside = likeness(crop, grid(await load("image/png", outside), columns, rows));
+      result.nearby = [];
+      for (const shot of nearby) result.nearby.push(likeness(crop, grid(await load("image/png", shot), columns, rows)));
       return result;
     }));
-  }, images.map(({ where, data, inside, outside }) => ({ where, data, inside, outside })));
+  };
+  const payload = images.map(({ where, data, inside, outside, nearby }) => ({ where, data, inside, outside, nearby: nearby ?? [] }));
+  const decoded = await page.evaluate(`(${decodeCrops})(${JSON.stringify(payload)}, ${inkGrid}, ${likeness}, ${gridShape})`);
   // One saved crop per cell for the verification record, on request.
   if (process.env.CF_PRESENT_EVIDENCE_DIR) {
     await mkdir(process.env.CF_PRESENT_EVIDENCE_DIR, { recursive: true });
-    for (const { where, data, inside, outside } of images) {
+    for (const { where, data, inside, outside, nearby } of images) {
       const name = where.replace(/\s+/gu, "-");
       await writeFile(join(process.env.CF_PRESENT_EVIDENCE_DIR, `${name}.jpg`), Buffer.from(data, "base64"));
       // The page inside the rectangle the note reloads, and just outside it.
       if (inside) await writeFile(join(process.env.CF_PRESENT_EVIDENCE_DIR, `${name}.page.png`), Buffer.from(inside, "base64"));
       if (outside) await writeFile(join(process.env.CF_PRESENT_EVIDENCE_DIR, `${name}.outside.png`), Buffer.from(outside, "base64"));
+      for (const [index, shot] of (nearby ?? []).entries()) await writeFile(join(process.env.CF_PRESENT_EVIDENCE_DIR, `${name}.nearby-${index}.png`), Buffer.from(shot, "base64"));
     }
   }
   for (const [index, crop] of decoded.entries()) {
@@ -344,11 +316,14 @@ try {
       `${crop.where}, crop: ${crop.width} x ${crop.height} px for bounds ${box.width.toFixed(1)} x ${box.height.toFixed(1)} at scale ${scale.toFixed(3)}`);
     assert.ok(crop.colours > 1, `${crop.where}, crop: one colour`);
   }
-  // Every crop's picture against the page, all listed before any failure.
-  const misplaced = decoded.filter((crop) => crop.inside !== undefined && !(crop.inside > crop.outside));
+  // Every crop's picture against the page, all listed before any failure: it
+  // must clear the likeness floor, beat the page just outside, and be at
+  // least as like its own rectangle as the same rectangle moved 4 or 12 px.
+  const fitOf = (crop) => `${crop.inside.toFixed(2)} inside, ${crop.outside.toFixed(2)} outside, ${crop.nearby.length ? Math.max(...crop.nearby).toFixed(2) : "none"} best nearby`;
+  const misplaced = decoded.filter((crop) => crop.inside !== undefined && !placed(crop.inside, crop.outside, crop.nearby));
   if (misplaced.length) {
-    for (const crop of decoded.filter((item) => item.inside !== undefined)) process.stderr.write(`  ${crop.where}: ${crop.inside.toFixed(3)} inside, ${crop.outside.toFixed(3)} outside\n`);
-    assert.fail(misplaced.map((crop) => `${crop.where}, crop: the picture is no more like the page inside its rectangle (${crop.inside.toFixed(3)}) than just outside it (${crop.outside.toFixed(3)})`).join("; "));
+    for (const crop of decoded.filter((item) => item.inside !== undefined)) process.stderr.write(`  ${crop.where}: likeness ${fitOf(crop)}\n`);
+    assert.fail(misplaced.map((crop) => `${crop.where}, crop: likeness ${fitOf(crop)}; it needs at least ${LIKENESS_FLOOR} inside, more than outside, and no less than ${REGISTRATION_SLACK} below the best nearby`).join("; "));
   }
   // Lifecycle on the same session (TSK-071 criterion 4).
   // An approval with no notes can be sent (QA defect 9). Submitting turned
@@ -423,10 +398,10 @@ try {
   const cleared = sessionId;
   sessionId = null;
   process.stdout.write(`lifecycle passed: an approval with no notes, an unsent note kept across update and reload, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, close and clear of ${cleared}\n`);
-  process.stdout.write(`cf-present annotation matrix passed: ${cells.length} cells and a whole-document note over ${matrix.size} block types (${cells.filter((cell) => cell.gesture === "text").length} text, ${cells.filter((cell) => cell.gesture === "element").length} element, ${cells.filter((cell) => cell.gesture === "area").length} area), each delivered with its kind and selector; ${decoded.length} JPEG crops sized to the rectangle each note reloads, not one colour, and ${decoded.filter((crop) => crop.inside !== undefined).length} of them more like the page inside that rectangle than just outside it\n`);
+  process.stdout.write(`cf-present annotation matrix passed: ${cells.length} cells and a whole-document note over ${matrix.size} block types (${cells.filter((cell) => cell.gesture === "text").length} text, ${cells.filter((cell) => cell.gesture === "element").length} element, ${cells.filter((cell) => cell.gesture === "area").length} area), each delivered with its kind and selector; ${decoded.length} JPEG crops sized to the rectangle each note reloads, not one colour, and ${decoded.filter((crop) => crop.inside !== undefined).length} of them at least ${LIKENESS_FLOOR} like the page inside that rectangle, more like it than just outside, and in register with the same rectangle moved 4 or 12 px\n`);
   for (const cell of expected) {
     const crop = decoded.find((item) => item.where === cell.where);
-    const fit = crop?.inside !== undefined ? ` (likeness ${crop.inside.toFixed(2)} inside, ${crop.outside.toFixed(2)} outside)` : "";
+    const fit = crop?.inside !== undefined ? ` (likeness ${fitOf(crop)})` : "";
     process.stdout.write(`  ${cell.where}: ${cell.summary}${fit}\n`);
   }
 } finally {
@@ -572,7 +547,7 @@ async function gesture(page, cell) {
  */
 async function anchoredPage(page, session) {
   await page.mouse.move(2, 2);
-  const target = await page.evaluate((session) => {
+  const target = await page.evaluate(({ session, NEARBY_OFFSETS }) => {
     const notes = JSON.parse(sessionStorage.getItem(`cf-present-draft:${session}`) ?? "null")?.notes ?? [];
     const note = notes.at(-1);
     const root = document.getElementById("cf-present-document");
@@ -609,8 +584,13 @@ async function anchoredPage(page, session) {
     const shift = Math.min(box.height + 1, room) * (innerHeight - (box.y + box.height) >= box.y - chrome ? 1 : -1);
     const outside = { ...box, y: box.y + shift };
     const fits = Math.abs(shift) >= box.height / 4 && Math.min(box.y, outside.y) >= chrome - 0.5 && Math.max(box.y, outside.y) + box.height <= innerHeight + 0.5;
-    return { box, outside, fits };
-  }, session);
+    // The same rectangle moved 4 or 12 px each way, where it stays on screen
+    // below the chrome: a crop in place is at least as like its own rectangle.
+    const nearby = NEARBY_OFFSETS
+      .map(([dx, dy]) => ({ ...box, x: box.x + dx, y: box.y + dy }))
+      .filter((rect) => rect.x >= 0 && rect.x + rect.width <= innerWidth && rect.y >= chrome - 0.5 && rect.y + rect.height <= innerHeight + 0.5);
+    return { box, outside, nearby, fits };
+  }, { session, NEARBY_OFFSETS });
   if (!target) throw new Error("the saved selector resolves to nothing");
   const style = await page.addStyleTag({ content: ".cf-marker-layer, .cf-toast { visibility: hidden !important; } .cf-hot, .cf-hot-sel { outline: none !important; background: none !important; }" });
   try {
@@ -621,7 +601,9 @@ async function anchoredPage(page, session) {
       Object.assign(clip, { width: Math.min(width, viewport.width - clip.x), height: Math.min(height, viewport.height - clip.y) });
       return (await page.screenshot({ clip, animations: "disabled", caret: "hide" })).toString("base64");
     };
-    return { box: { width: target.box.width, height: target.box.height }, inside: await shot(target.box), outside: await shot(target.outside) };
+    const nearby = [];
+    for (const rect of target.nearby) nearby.push(await shot(rect));
+    return { box: { width: target.box.width, height: target.box.height }, inside: await shot(target.box), outside: await shot(target.outside), nearby };
   } finally {
     await style.evaluate((element) => element.remove());
   }
