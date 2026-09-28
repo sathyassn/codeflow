@@ -48,15 +48,83 @@ a shared target directory is a legitimate adopter setup". The round 1
 brief told the reviewer the change was coming, and round 1 judged the
 warning behaviour on its merits. No separate task is needed.
 
-## The one known remaining blocker
+## The TSK-101 waiver
 
-TSK-101's AC-14 waiver names `7dd43bed5` as its planning amendment, and
-that commit also changes `CHANGELOG.md`, so the binding check refuses the
-waiver (`work.acceptance_binding`). The cutoff does not exempt it: the
-exemption covers only the brought criteria-landing finding. It is a
-post-landing correction to the Closeout of a completed task, which
-TSK-140's one structural rule is meant to handle. It is the one known
-blocker left for the reconstructed 3.0.0 candidate, owned by TSK-140.
+TSK-101's first completion waives AC-14 against `7dd43bed5` as its
+planning amendment. That commit is not a planning amendment and not a
+Closeout correction: it is a commit on `task/TSK-101-id-registry` made
+before the task landed (parent `ae318a7a8`, the task still `todo` on both
+sides), and besides `TSK-101.md` it changes `CHANGELOG.md`,
+`docs/architecture.md` and two ADRs. The binding check therefore refuses
+the waiver (`work.acceptance_binding`), and the cutoff does not exempt it:
+the exemption covers only the brought criteria-landing finding.
+
+The EPC-020 line has since repaired it through the ordinary route, before
+its cutoff `2921df9f5`: planning PR #639 (`dc62ef03f`) restates AC-14 and
+records the old block as superseded, and PR #640 (`f6cd1c3c3`) completes
+TSK-101 again with its AC-14 waiver naming `dc62ef03f`. A release branch
+that imports EPC-020 only at or after `dc62ef03f` never brings the old
+waiver. A release branch that imported EPC-020 between #590 and #639, as
+the rehearsal did at `7f8d3bc47`, `0583c69ba`, `0b2eee788` and
+`cd0ac7e74`, keeps the refusal, because each brought completion is bound
+at the import that brought it.
+
+## The reconstructed candidate
+
+The candidate of TSK-145 AC-6 was rebuilt on a disposable authority
+(labelled a reconstruction, not the historical commits):
+
+- The authority's `main` is the real `main` (`2c9c77f5c`) plus the
+  cutoffs below. Each line is advertised at its cutoff tip; EPC-020 also
+  carries a planning merge that gives TSK-010 `role: release-integration`.
+- The rehearsal (`cbc0b2ec8`) was cut from the EPC-020 line at
+  `405caf064`. Here that point is an import merge from `main`, and every
+  later first-parent commit of the rehearsal is replayed with its own tree
+  and second parent, the cutoff table kept.
+- Left out are the direct record edits the EPC-014 line has since landed
+  itself: `1dc0033a2` (the TSK-049 completion), `08aef53c0` (landed there
+  as `3f9c7b0dd`) and the EPC-014 part of `082d36488` (landed as
+  `ccfb1d8f0`).
+- Each line is then imported at its cutoff tip, the records baseline names
+  those tips, and TSK-010 completes at the head.
+
+| Run | Legacy notices | Blocking findings |
+|---|---|---|
+| Pre-push (`git push` from the release checkout)[^tree] | the seven | 3, the same as CI |
+| CI, release range from the authority's `main` | the seven | 3 |
+| Final pull request into `main` (`--into main`) | the seven | 3 |
+
+[^tree]: Pre-push judged the range from the authority's `main`. Its tree
+    checks (`validate --docs` and the quick targets) were kept out by a
+    changed tracked file: the replayed tree is not a buildable release.
+
+The three blocking findings:
+
+- `work.acceptance_binding`: the TSK-101 waiver naming `7dd43bed5`,
+  first brought by the replayed EPC-020 import of `7f8d3bc47` (TSK-101 is
+  still `todo` at the earlier import `787e53448`).
+- `work.records`: SPC-002 becomes `approved` in a range that also changes
+  code. The EPC-020 line approved it in planning PR #655 (`e4ff8eb4e`), but the
+  records rule judges spec approval across the whole range, not where it
+  was introduced.
+- `work.records`: TSK-069 is complete without an acceptance block. Its
+  only change against `main` is the `uid` backfill that EPC-020 landed in
+  #654 (`a579cf17a`); naming the EPC-020 cutoff in the records baseline
+  does not clear it.
+
+The last two come from the records rule, not the release-line judge. The
+rule raises both on any pull request into this `main` that brings
+EPC-020's current records with code.
+Importing the current line tips (EPC-016 at `385218852`, EPC-020 at
+`99ad91a78`) with the same cutoffs gives the same seven notices and the
+same three findings: none of the criteria changes this candidate brings
+landed with code after a cutoff, and the cutoff values need no change.
+
+The first reconstructions also showed two judge faults, fixed with this
+record: a new release branch's push was judged from one line's tip, which
+re-checked 1,221 commits including history `main` already has, and a
+completion that a release branch first held in one form and later brought,
+block and all, from its own line was still bound at the release head.
 
 ## Cutoffs to record
 
