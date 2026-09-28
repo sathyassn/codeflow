@@ -96,7 +96,7 @@ impl Options {
         if let Some(f) = self.exec_command {
             f(cmd, args)
         } else {
-            let output = std::process::Command::new(cmd)
+            let output = crate::git::process(cmd)
                 .args(args)
                 .output()
                 .map_err(|e| e.to_string())?;
@@ -125,7 +125,7 @@ impl Options {
         if let Some(f) = self.exec_command_stdin {
             f(cmd, args, stdin)
         } else {
-            let mut child = std::process::Command::new(cmd)
+            let mut child = crate::git::process(cmd)
                 .args(args)
                 .stdin(Stdio::piped())
                 .stdout(Stdio::piped())
@@ -851,7 +851,7 @@ struct ProbeCapture {
 }
 
 fn run_bounded_command(cmd: &str, args: &[&str], timeout: Duration) -> Result<String, String> {
-    let mut command = Command::new(cmd);
+    let mut command = crate::git::process(cmd);
     command
         .args(args)
         .stdout(Stdio::piped())
