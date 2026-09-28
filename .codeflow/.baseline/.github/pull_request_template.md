@@ -15,9 +15,10 @@ Task: `TSK-NNN | none: <reason>`
 
 ## Summary
 
-<!-- One to three short sentences of context: what this is, why, and the
-     outcome, for a reader with no context. No file names, identifiers,
-     numbers or caveats; details go in Changes. Cover the whole branch:
+<!-- A few lines of plain prose that anchor a reader with no context: the
+     result this gives its consumer, why it matters and where it stands. A
+     key file name or number belongs here when it is part of that context;
+     other details go in Changes. Cover the whole branch:
      derive from `git log --oneline <base>..<head>` and
      `git diff --stat <base>...<head>`, and inspect the full diff. Do not
      write from the last conversation turn, review round or commit. -->

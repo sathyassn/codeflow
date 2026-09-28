@@ -15,7 +15,7 @@ and the rest appear only when their condition holds.
 
 | Section | When | Content |
 |---|---|---|
-| Summary | always | one to three short sentences of context (rule below) |
+| Summary | always | a few lines that anchor the reader (rule below) |
 | Changes | always | one bullet per logical change, most important first; numbered only for a sequence; one line per task for an epic |
 | Testing | always; evidence required when the range is code | tested revision and command, fenced gate summary lines, `Coverage:` when the range is code, `New tests:`, `Not tested:` |
 | Reviews | always | one row per current review: reviewer, scope, verdict; `None: reason` when unreviewed |
@@ -47,16 +47,17 @@ and the rest appear only when their condition holds.
   is a fenced ASCII block, a full page is a linked `cf-present` page, and
   Mermaid is never used.
 
-**Summary** gives context only: what the PR is and why it exists, in plain
-words a reader with no context understands.
+**Summary** anchors a zero-context reader in a few lines of plain language:
+the result the change gives its consumer, why it matters and where it
+stands.
 
-- Write it as one to three short sentences.
-- Keep every detail out of it: no mechanism, file name, identifier, number,
-  rule list, or caveat.
+- It is judgment, not a sentence count or a list of banned items. A key file
+  name or number belongs there when it is part of that context.
 - Put the details after it as bullets, one point each, in a logical order:
   problem, change, effect, limits, or the order of the flow.
-- Judge it by what it carries. A short summary that already holds the
-  details fails.
+- A summary that buries the anchor in detail fails, however short it is.
+- The NEED YOUR ATTENTION heading of operator replies never appears in a PR
+  body.
 
 ## Release impact and evidence
 
@@ -148,7 +149,8 @@ Classify each red or stuck check with the quality contract's redness classes:
   says. Do not rerun the same job without a new reason.
 
 Never merge. When every required check is green, or the thirty minutes end,
-send one readiness report without being asked. It gives the PR URL exactly as
+send one readiness report without being asked. It opens with the result the
+change gives its consumer and where it stands. It gives the PR URL exactly as
 `gh pr create` or `gh pr view --json url` printed it, never one built from a
 number or guessed. It lists each required check with its state, any missing
 evidence with its reason, and the next action. For a green PR the next action

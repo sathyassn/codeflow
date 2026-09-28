@@ -244,7 +244,13 @@ confirms the final content.
   event. Never seed forecasts, calibration tables or `.codeflow/estimate.json`
   automatically; a setup walkthrough does not authorize method adoption.
 - **Releases** — follow `cf-ship/references/release-policy.md` for setup.
-- **`.codeflow/policy.json`** — gate levels: harden `dep_audit` /
+- **Issue tracker**: when a work item is planned, started, blocked, completed
+  or cancelled, any board gets a one-way projection that follows
+  [the work lifecycle](../cf-method/references/project-organization.md#the-work-lifecycle);
+  record which MCP or CLI projects which events.
+- **`.codeflow/policy.json`**: A change to `.codeflow/policy.json` needs a
+  human: propose the exact change, and a human makes or approves it, since the
+  policy is the gate the agent works under. Gate levels: harden `dep_audit` /
   `security_review` from `warn` → `block` once the project's scanners and
   allowlists are ready; protected-branch globs; branch prefixes. **Footer
   policy** — the commit body is `-` bullets + a `BREAKING CHANGE:` footer only by

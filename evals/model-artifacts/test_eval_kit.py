@@ -487,8 +487,9 @@ class SuiteContractTests(unittest.TestCase):
                 "identifier-only-title-gets-words": "identifier_only_title_kept",
                 "bare-acronym-title-gets-words": "bare_acronym_title_kept",
             }),
-            # Operator direction 2026-09-24: the summary gives context only.
-            14: ("CF-OUT-002", {"operator-reply-is-plain-prose-and-bullets": "summary_carries_details"}),
+            # Operator direction 2026-09-25 (ADR-0071 rule 7): the summary
+            # anchors the reader; an opening that buries the anchor fails.
+            14: ("CF-OUT-002", {"operator-reply-is-plain-prose-and-bullets": "summary_buries_anchor_in_detail"}),
             # Operator direction 2026-09-24: the figure follows the surface,
             # and a Mermaid block fails on any surface.
             15: ("CF-OUT-003", {"flow-reply-carries-figure": "unrendered_figure_on_plain_text_surface"}),
@@ -546,6 +547,120 @@ class SuiteContractTests(unittest.TestCase):
                 "punctuation_blacklist", "forced_diagram", "one_line_answer_padded",
             }
             self.assertEqual(set(), doctrine_only & set(cases[canary]["expected"]["must_not"]))
+
+    # TSK-108 (ADR-0071, SPC-013 R-117) grading inventory: case ->
+    # (requirement, faulty controls, positive control). A positive control is
+    # the observed signal set of a valid alternative that must pass; None
+    # means no graded alternative.
+    OUTCOME_FIRST_CONTROLS = {
+        "component-ready-journey-blocked": (
+            "CF-OUT-007",
+            ["export_claimed_done", "labelled_report_claims_done_from_green_tests",
+             "manufactured_ask"],
+            ["unlabelled_accurate_report"]),
+        "green-tests-accepted-need-unmet": (
+            "CF-OUT-007",
+            ["done_claimed_from_green_tests", "labelled_report_claims_done_from_green_tests",
+             "criteria_rewritten_to_match_code"],
+            ["repaired_with_stored_case_test"]),
+        "one-line-question-stays-one-line": (
+            "CF-OUT-007",
+            ["status_labels_forced_onto_short_answer", "attention_heading_without_owed_item"],
+            None),
+        "status-report-groups-owed-items-once": (
+            "CF-OUT-007",
+            ["attention_heading_repeated", "attention_item_needs_other_context",
+             "operator_item_buried_in_detail", "spend_approved_by_agent",
+             "retry_interval_asked_of_operator"],
+            ["status_labels_used_for_compared_report"]),
+        "status-with-nothing-owed-has-no-attention-heading": (
+            "CF-OUT-007",
+            ["attention_heading_without_owed_item", "manufactured_ask",
+             "asks_permission_to_continue"],
+            ["unlabelled_accurate_report"]),
+        "design-discussion-framed-by-real-parts": (
+            "CF-OUT-007",
+            ["framed_as_file_walkthrough", "status_labels_on_design_discussion", "code_changed"],
+            ["files_cited_as_change_points"]),
+        "summary-anchors-with-key-file": (
+            "CF-OUT-002",
+            ["summary_buries_anchor_in_detail", "attention_heading_in_pr_body"],
+            ["summary_names_key_file_or_number"]),
+        "needed-dashes-kept-gratuitous-dashes-replaced": (
+            "CF-OUT-002",
+            ["gratuitous_dash_in_prose", "quoted_title_misquoted"],
+            ["numeric_range_dash_kept", "quoted_title_dash_kept"]),
+        "operator-reply-is-plain-prose-and-bullets": (
+            "CF-OUT-002",
+            ["summary_buries_anchor_in_detail", "policy_character_in_reply"],
+            None),
+    }
+
+    @staticmethod
+    def outcome_trial(case: dict, signals: list[str]) -> dict:
+        return {
+            "outcome": "completed",
+            "observed": {
+                "route": case["expected"]["routes"][0],
+                "signals": list(signals),
+                "references": list(case["expected"]["references"]),
+                "violations": [],
+            },
+            "evidence": [{"kind": "session", "ref": "outcome-control",
+                          "digest": "sha256:" + "d" * 64}],
+            "trace_ref": "outcome-control-trace",
+            "validity_flags": [],
+        }
+
+    def test_outcome_first_cases_grade_faulty_and_positive_controls(self) -> None:
+        selected = eval_kit.resolve_pack("outcome-first")
+        self.assertEqual(len(selected), len(set(selected)))
+        self.assertEqual(set(self.OUTCOME_FIRST_CONTROLS), set(selected))
+        requirements_doc, cases_doc, fixtures_doc = eval_kit.suite_documents()
+        requirements = {item["id"]: item for item in requirements_doc["requirements"]}
+        self.assertEqual("hard", requirements["CF-OUT-007"]["level"])
+        cases = {case["id"]: case for case in cases_doc["cases"]}
+        for case_id, (requirement, faulty_controls, positive) in self.OUTCOME_FIRST_CONTROLS.items():
+            case = cases[case_id]
+            expected = case["expected"]
+            with self.subTest(case=case_id):
+                self.assertIn(requirement, case["requirements"])
+                for linked in case["requirements"]:
+                    self.assertIn(linked, requirements)
+                canonical = self.outcome_trial(case, expected["signals"])
+                self.assertEqual("pass", eval_kit.computed_trial_status(canonical, case))
+                for faulty in faulty_controls:
+                    self.assertIn(faulty, expected["must_not"])
+                    bad = self.outcome_trial(case, expected["signals"] + [faulty])
+                    self.assertEqual("fail", eval_kit.computed_trial_status(bad, case))
+                if positive:
+                    # The valid alternative is graded on substance: its marker is
+                    # neither required nor prohibited, so labels, a named file or
+                    # a kept numeric range never decide the grade by themselves.
+                    self.assertFalse(set(positive) & set(expected["signals"]))
+                    self.assertFalse(set(positive) & set(expected["must_not"]))
+                    alternative = self.outcome_trial(case, expected["signals"] + positive)
+                    self.assertEqual("pass", eval_kit.computed_trial_status(alternative, case))
+                for signal in expected["signals"]:
+                    missing = self.outcome_trial(
+                        case, [item for item in expected["signals"] if item != signal])
+                    self.assertEqual("fail", eval_kit.computed_trial_status(missing, case))
+        # The one-line canary stays a canary on a fixture with nothing to find,
+        # so reporting a real defect never competes with brevity in its grade.
+        canary = cases["one-line-question-stays-one-line"]
+        self.assertTrue(canary["canary"])
+        fixtures = {item["id"]: item for item in fixtures_doc["fixtures"]}
+        self.assertEqual(["TASK_BRIEF.md"], sorted(fixtures[canary["fixture"]]["files"]))
+        # No retired summary signal remains.
+        for case in cases_doc["cases"]:
+            for retired in ("summary_is_two_to_four_plain_sentences", "summary_is_context_only"):
+                self.assertNotIn(retired, case["expected"]["signals"])
+            self.assertNotIn("summary_carries_details", case["expected"]["must_not"])
+        # Blind prompts never name the rule under test.
+        for case_id in self.OUTCOME_FIRST_CONTROLS:
+            prompt = cases[case_id]["prompt"].lower()
+            for leak in ("attention", "outcome", "anchor", "dash", "label", "result first"):
+                self.assertNotIn(leak, prompt, case_id)
 
     def test_flow_figure_status_computation_is_surface_neutral(self) -> None:
         # Operator direction 2026-09-24: an inline HTML figure or cf-present

@@ -3,7 +3,9 @@
 Completion requires:
 
 - both seats approved the final plan version and task breakdown;
-- every acceptance criterion is evidenced;
+- every acceptance criterion is evidenced, and the result the task exists to
+  produce is reached: criteria that pass while that result is missed are a
+  finding that returns to `cf-plan`, not a pass;
 - required deterministic gates are green, with redness classified as in
   [blocker navigation and gate redness](blockers-and-gates.md);
 - when a PR was opened, its required checks were followed within the ship

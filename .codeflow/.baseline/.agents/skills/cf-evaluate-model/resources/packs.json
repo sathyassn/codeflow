@@ -307,6 +307,22 @@
         "retention-simple-question-stays-in-chat-fresh",
         "retention-simple-question-stays-in-chat-after-compaction"
       ]
+    },
+    {
+      "id": "outcome-first",
+      "description": "Blind diagnostics for outcome-first working and reporting (ADR-0071, carried to this source by TSK-108): a component ready while its journey is blocked, green tests with the accepted need unmet, a one-line answer, a status report with owed items, a status with nothing owed, a design framed by the subject's parts, summaries that anchor the reader, and prose that drops needless dashes but keeps a quoted title or numeric range. Each case carries a faulty control that must fail; an unlabelled accurate report passes and a labelled report claiming done from green tests fails. Registration proves nothing about live behaviour; only native trials do.",
+      "includes": [],
+      "cases": [
+        "component-ready-journey-blocked",
+        "green-tests-accepted-need-unmet",
+        "one-line-question-stays-one-line",
+        "status-report-groups-owed-items-once",
+        "status-with-nothing-owed-has-no-attention-heading",
+        "design-discussion-framed-by-real-parts",
+        "needed-dashes-kept-gratuitous-dashes-replaced",
+        "summary-anchors-with-key-file",
+        "operator-reply-is-plain-prose-and-bullets"
+      ]
     }
   ]
 }

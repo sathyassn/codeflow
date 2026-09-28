@@ -335,31 +335,9 @@ pub(super) fn presentation(git: &GitPolicy, body: &str, epic_into_main: bool) ->
             "PR body opens an HTML <{tag}> block that never closes; its later headings still count as sections, but close it with </{tag}>"
         ));
     }
+    // ADR-0071 rule 7: a Summary is judged by whether it anchors the reader,
+    // which review and evaluation grade; no count stands in for that.
     for section in outline.sections {
-        if section.matches("Summary") {
-            let text = visible_text(section.content(), false);
-            // Advisory heuristic: punctuation ending a word, not dots inside paths.
-            let sentences = text
-                .split_whitespace()
-                .filter(|word| {
-                    word.trim_end_matches(['\'', '"', ')'])
-                        .ends_with(['.', '!', '?'])
-                })
-                .count();
-            if sentences > 3 {
-                warn(format!(
-                    "PR Summary has about {sentences} sentences; aim for at most three"
-                ));
-            }
-            if Parser::new(section.content()).any(|event| matches!(event, Event::Code(_))) {
-                warn(
-                    "PR Summary contains a code span; put implementation details in Changes".into(),
-                );
-            }
-            if text.split_whitespace().any(looks_like_path) {
-                warn("PR Summary contains a path; put file details in Changes".into());
-            }
-        }
         if section.matches("Testing")
             && !visible_text(section.content(), false)
                 .lines()
@@ -423,27 +401,6 @@ fn long_prose_line(body: &str) -> bool {
                 .iter()
                 .any(|span| span.start < range.end && range.start < span.end)
     })
-}
-
-/// A file path, not a word pair such as read/write, I/O or GitHub/GitLab:
-/// a rooted or relative prefix, a trailing slash, two or more separators, or a
-/// final segment with a file extension.
-fn looks_like_path(word: &str) -> bool {
-    let word = word.trim_matches(['(', ')', ',', '.', ';', ':', '"', '\'']);
-    if word.contains("://") || !word.chars().any(char::is_alphabetic) {
-        return false;
-    }
-    let separators = word.matches(['/', '\\']).count();
-    let last = word.rsplit(['/', '\\']).next().unwrap_or_default();
-    separators > 0
-        && (["./", "../", "~/", "/", ".\\", "\\"]
-            .iter()
-            .any(|prefix| word.starts_with(prefix))
-            || word.ends_with(['/', '\\'])
-            || separators >= 2
-            || last.rsplit_once('.').is_some_and(|(stem, ext)| {
-                !stem.is_empty() && ext.starts_with(|ch: char| ch.is_ascii_alphabetic())
-            }))
 }
 
 fn wrapped_rows(line: &str) -> usize {
@@ -859,18 +816,18 @@ mod tests {
     fn presentation_warnings_are_advisory_and_respect_off() {
         let body = format!("## Summary\nOne. Two. Three. Four. Update `thing` in src/thing.py.\n## Testing\nPassed.\n```\n{}```\n{}", "output\n".repeat(13), "long word ".repeat(800));
         let findings = presentation(&GitPolicy::default(), &body, false);
-        for reason in [
-            "sentences",
-            "code span",
-            "path",
-            "Not tested:",
-            "13 lines",
-            "rendered rows",
-            "160 characters",
-        ] {
+        for reason in ["Not tested:", "13 lines", "rendered rows", "160 characters"] {
             assert!(
                 findings.iter().any(|v| v.message.contains(reason)),
                 "missing {reason}: {findings:?}"
+            );
+        }
+        // ADR-0071 rule 7: a key file name or code span may anchor the
+        // Summary, and its length is judgment, so none draws a warning.
+        for retired in ["code span", "contains a path", "sentences"] {
+            assert!(
+                !findings.iter().any(|v| v.message.contains(retired)),
+                "retired Summary warning {retired}: {findings:?}"
             );
         }
         assert!(findings.iter().all(|v| v.level == PolicyLevel::Warn));
@@ -879,6 +836,19 @@ mod tests {
             ..GitPolicy::default()
         };
         assert!(presentation(&git, &body, false).is_empty());
+    }
+
+    /// ADR-0071 rule 7 (Codex TSK-108 review, R108-1): a Summary is judged
+    /// by whether it anchors the reader, never by counting its sentences.
+    #[test]
+    fn presentation_never_counts_summary_sentences() {
+        let body = "Task: none: isolated summary-warning review probe\n\n## Summary\n\n\
+            The installer now preserves local settings. Existing projects can update safely. \
+            Fresh projects keep the standard defaults. The change is ready for review.\n\n\
+            ## Changes\n\n- Preserve local settings during updates.\n\n## Testing\n\n\
+            Docs-only review fixture.\nNew tests: none.\nNot tested: live model behavior.\n";
+        let findings = presentation(&GitPolicy::default(), body, false);
+        assert!(findings.is_empty(), "{findings:?}");
     }
 
     #[test]
@@ -911,31 +881,6 @@ mod tests {
                 presentation(&GitPolicy::default(), &body, false).is_empty(),
                 "{label}"
             );
-        }
-    }
-
-    #[test]
-    fn path_warning_needs_a_real_path_shape() {
-        for word in [
-            "read/write",
-            "I/O",
-            "GitHub/GitLab",
-            "and/or",
-            "24/7",
-            "https://example.com/a/b.md",
-        ] {
-            assert!(!looks_like_path(word), "{word}");
-        }
-        for word in [
-            "src/thing.py",
-            "docs/",
-            "./run",
-            "../x",
-            "/usr/bin",
-            "crates/codeflow-cli/src",
-            "(src\\main.rs).",
-        ] {
-            assert!(looks_like_path(word), "{word}");
         }
     }
 

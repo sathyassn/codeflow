@@ -60,9 +60,9 @@ An epic exists to make one question answerable before any code is written:
 *what does done look like, verifiably?*
 
 **An epic is optional — reach for one only when the work needs it.** Warrant an
-epic for a body of work that is **more than one PR**, **more than one session**,
-or **spans multiple capabilities**. Anything smaller is a single task with
-acceptance criteria and no epic; an epic never gates a single task. The clarity
+epic only when the work fails the standalone test in the work lifecycle
+reference; otherwise it is a single task with acceptance criteria and no
+epic, and an epic never gates a single task. The clarity
 checklist below applies either way — to the epic when there is one, otherwise to
 the task.
 
@@ -122,7 +122,9 @@ freeze a particular work agreement.
 Load `references/project-organization.md` for new-project boundary choices,
 brownfield adoption, monorepos, artifact/authority selection, or implementation
 discoveries. It supplies the decision model and fixed-path limits; an obvious
-bounded task needs no extra reading. When authoring or editing a skill, load
+bounded task needs no extra reading. When a work item is planned, started,
+blocked, completed or cancelled, follow
+[the work lifecycle](references/project-organization.md#the-work-lifecycle). When authoring or editing a skill, load
 `references/skill-authoring.md` for description-trigger rules.
 
 ## Managing a body of work
@@ -154,23 +156,20 @@ loop before landing, including qualified Claude judgment at material design or
 decision points. The final combined-diff review is an additional integration
 layer for cross-task and emergent behavior, not a substitute for those reviews.
 
-1. **Integration branch.** Cut `integration/<epic-id>-<slug>` off the current
-   protected target and push it. It is **non-protected** — agents merge into it
-   freely.
-   Establish this stable target before task allocation; an implementation task
-   cannot target a missing branch.
+1. **Integration branch.** Before task allocation, cut and push
+   `integration/<epic-id>-<slug>` off the current protected target
+   (`epic new --integration`). It is **non-protected**: agents merge into it.
 2. **Plan and anchor.** One epic with per-task acceptance criteria. Materialize the
    dual-approved `TASK_GRAPH vN` from `cf-model-orchestrator` into canonical
-   `depends_on` task frontmatter. Bare edges are finish-before-start; guarded
-   edges are only pre-settled decision points. Parallel eligibility follows
-   topology, but actual fan-out still needs a critical-path benefit and safe
-   isolation. Set each task's `integration_target` to the integration branch,
+   `depends_on` task frontmatter; the task graph owns edge meaning. Parallel
+   eligibility follows topology, but actual fan-out still needs a
+   critical-path benefit and safe isolation. Set each task's `integration_target` to the integration branch,
    validate the graph, and merge the planning PR there before implementation.
 3. **Task branches.** Each task on `task/<task-id>-<slug>`, branched *from
    the integration branch*: serial tasks branch from the updated integration
    after their predecessor lands; parallel tasks branch concurrently, one
    agent + worktree each. Run `codeflow work start <task-id>` before product
-   edits; it proves the task, specs, and predecessors from the target merge-base.
+   edits.
    Before fan-out, assign one writer per file/component and a single owner for
    shared schemas, migrations, lockfiles, generated registries, and other merge
    hotspots. Set a concurrency cap from observed host memory, CPU, disk, and
@@ -287,7 +286,8 @@ Specs are **inputs to work, not living documents.**
 - `status: approved` only after open questions are empty; draft specs block
   `codeflow work start`.
 - Consumed during `/cf-develop`.
-- **Frozen at ship:** `status: implemented` when the epic completes. After
+- **Frozen at ship:** `implemented` is derived once every consumer is
+  complete, never written. After
   that, truth lives in architecture, capabilities, and tests — the spec is
   allowed to be historical. Never "update" a frozen spec to match later
   reality; that is what architecture.md is for.

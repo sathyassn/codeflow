@@ -335,7 +335,10 @@ verification and review.
 
 ### 6. Joint closeout
 
-Both seats approve the final diff and evidence ledger. The host reports:
+Both seats approve the final diff and evidence ledger. The report opens with
+the result reached for its consumer and what still depends on other work;
+items the operator must act on follow once under NEED YOUR ATTENTION, as the
+lifecycle reply rule sets out. Then the host reports:
 
 - final plan version and both approvals;
 - session roles and every responsible-primary/executor/reviewer assignment with

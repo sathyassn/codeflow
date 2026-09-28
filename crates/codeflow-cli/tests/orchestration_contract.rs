@@ -1489,3 +1489,174 @@ fn writing_reference_carries_the_copy_guide_with_sourced_examples() {
     let reordered = writing.replacen("### Leads", "### Lead paragraphs", 1);
     assert!(copy_guide_examples(&reordered).is_err());
 }
+
+/// Every shipped Markdown or template text under `assets/base`, whitespace
+/// normalised, keyed by its path.
+fn shipped_texts() -> BTreeMap<String, String> {
+    fn walk(dir: &std::path::Path, out: &mut BTreeMap<String, String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(&path, out);
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext == "md" || ext == "tmpl")
+            {
+                let rel = path
+                    .strip_prefix(repo_root())
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/");
+                out.insert(
+                    rel,
+                    normalize_whitespace(&std::fs::read_to_string(&path).unwrap()),
+                );
+            }
+        }
+    }
+    let mut out = BTreeMap::new();
+    walk(&repo_root().join("assets/base"), &mut out);
+    out
+}
+
+/// The `## The work lifecycle` section of cf-method's project-organization
+/// reference, up to the next level-two heading.
+fn lifecycle_section(text: &str) -> String {
+    let start = text
+        .find("\n## The work lifecycle\n")
+        .expect("cf-method has one work lifecycle section");
+    let rest = &text[start + 1..];
+    let end = rest[3..].find("\n## ").map_or(rest.len(), |at| at + 3);
+    rest[..end].to_string()
+}
+
+/// R-63, R-65, R-66: each rule is stated in one place across every
+/// shipped text, and that place is the lifecycle reference. Each rule is
+/// matched by the phrasings a restatement would use, case-insensitively,
+/// so a paraphrase elsewhere counts as a second statement (Codex review of
+/// TSK-108: cf-method once restated the standalone test in its own words).
+fn each_rule_is_stated_once(texts: &BTreeMap<String, String>) {
+    for (rule, phrasings) in [
+        (
+            "research folder",
+            &["one file per question", "a file per question"][..],
+        ),
+        ("spec and epic", &["many to many", "many-to-many"][..]),
+        (
+            "standalone test",
+            &[
+                "reviewable pull request",
+                "reviewable pr",
+                "one pull request",
+                "single pull request",
+            ][..],
+        ),
+    ] {
+        let holders: Vec<&String> = texts
+            .iter()
+            .filter(|(_, text)| {
+                let text = text.to_lowercase();
+                phrasings.iter().any(|phrase| text.contains(phrase))
+            })
+            .map(|(path, _)| path)
+            .collect();
+        assert_eq!(
+            holders,
+            vec!["assets/base/claude/skills/cf-method/references/project-organization.md"],
+            "the {rule} rule must be stated once, in the lifecycle reference"
+        );
+    }
+}
+
+#[test]
+fn lifecycle_guidance_is_one_section_the_skills_follow() {
+    // TSK-108 AC-1 to AC-3 (SPC-013 R-34, R-43, R-63, R-65, R-66, R-112).
+    let organization =
+        read("assets/base/claude/skills/cf-method/references/project-organization.md");
+    assert_eq!(
+        organization.matches("\n## The work lifecycle\n").count(),
+        1,
+        "cf-method holds exactly one work lifecycle section"
+    );
+    let section = normalize_whitespace(&lifecycle_section(&organization));
+    for required in [
+        // The verbs of R-34 as shipped.
+        "codeflow epic new",
+        "--integration",
+        "codeflow spec new --for",
+        "codeflow task new --epic",
+        "--standalone-reason",
+        "--follow-up-of",
+        "codeflow adr new",
+        "codeflow work next",
+        "codeflow work claim",
+        "codeflow work start",
+        "codeflow task status",
+        "--acceptance",
+        "--owner",
+        "--revisit",
+        "--scope",
+        "codeflow spec status",
+        "codeflow epic status",
+        // Planning and dependency rules.
+        "planning PR",
+        "kind: research",
+        "pin:",
+        "awaiting_selection",
+        "execution base",
+        // Status rules.
+        "in_progress",
+        "`implemented` is derived",
+    ] {
+        assert!(
+            section.contains(required),
+            "the work lifecycle section lost: {required}"
+        );
+    }
+
+    let texts = shipped_texts();
+    each_rule_is_stated_once(&texts);
+    for stale in [
+        "`status: implemented` when",
+        "frozen (`status: implemented`)",
+        "It lists every direct candidate predecessor, including mutually exclusive guarded candidates",
+    ] {
+        let holders: Vec<&String> = texts
+            .iter()
+            .filter(|(_, text)| text.contains(stale))
+            .map(|(path, _)| path)
+            .collect();
+        assert!(holders.is_empty(), "stale lifecycle text `{stale}` in {holders:?}");
+    }
+
+    // AC-2: the stage skills follow the section instead of restating it.
+    for skill in [
+        "assets/base/claude/skills/cf-method/SKILL.md",
+        "assets/base/agents/skills/cf-plan/SKILL.md",
+        "assets/base/agents/skills/cf-develop/SKILL.md",
+        "assets/base/agents/skills/cf-ship/SKILL.md",
+        "assets/base/agents/skills/cf-customize/SKILL.md",
+    ] {
+        let text = normalize_whitespace(&read(skill));
+        assert!(
+            text.contains("project-organization.md#the-work-lifecycle"),
+            "{skill} must point to the work lifecycle section"
+        );
+    }
+    let customize = normalize_whitespace(&read("assets/base/agents/skills/cf-customize/SKILL.md"));
+    assert!(
+        customize.contains("A change to `.codeflow/policy.json` needs a human"),
+        "cf-customize states that policy edits need a human"
+    );
+    let graph = normalize_whitespace(&read(
+        "assets/base/agents/skills/cf-model-orchestrator/resources/task-graph.md",
+    ));
+    for required in [
+        "Only the selected branch of a decision is written into `depends_on`",
+        "awaiting_selection",
+        "kind: research | decision",
+        "lands only by a planning PR",
+    ] {
+        assert!(graph.contains(required), "task-graph.md lost: {required}");
+    }
+}

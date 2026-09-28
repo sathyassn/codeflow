@@ -14,8 +14,14 @@ documentation, repair and ship. Load only the stage owners the work needs.
 
 ## The kernel
 
-- **Work to the outcome.** Know the task's intent and what tangible result
-  means *done* before acting. Then work in small, verifiable steps: a failed
+- **Work to the outcome.** Before acting, name the result the work exists to
+  produce, who uses it in their terms, and the evidence that would establish
+  it; keep the larger result it serves in view only where it changes scope,
+  priority or completion. Let that result decide each choice: what next, what
+  to skip, when a step is done, when to stop. A gate or criterion is evidence
+  toward the result, never the result. Separate what is done here from what
+  still depends on other work, recheck when evidence or the plan changes, and
+  stay within scope and authority. Work in small, verifiable steps: a failed
   gate or review is input to the next step, not the end. Iterate until the
   outcome is verified, or stop and surface a genuine blocker promptly and well
   framed: the situation, the options weighed, and a recommendation; never

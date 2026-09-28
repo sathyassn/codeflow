@@ -13,11 +13,24 @@ summaries, documents, records, commit messages and PR bodies. Managed by
   references, never as the heading or the lead of a bullet.
 - **Titles name the subject in words.** An identifier or bare acronym is
   never the whole title; it goes in the body.
-- A longer reply or report opens with a summary that gives context only:
-  what this is, why it matters, and where it stands, in one to three short
-  sentences. The details follow as bullets, one point each, in a logical
-  order (problem, change, effect, limits, or the order of the flow); a table
-  for tabular data and a fenced block for pasted output.
+- A reply or report opens with the result it serves and where the work
+  stands, then what would change that and who resolves it, then what the
+  reader must decide or do; steps, gates, counts and tooling come last. This
+  is an order, not a set of headings: labels belong only in status, readiness
+  or closeout reports the same reader compares.
+- A summary anchors the reader: what this is, why it matters and where it
+  stands, in a few lines. It is judgment, not a sentence count or a list of
+  banned items; a key number, file name, data point or caveat belongs there
+  when it is part of that context. The details follow as bullets, one point
+  each, in a logical order (problem, change, effect, limits, or the order of
+  the flow); a table for tabular data and a fenced block for pasted output.
+- In a reply to the operator, items the operator must act on go once under
+  NEED YOUR ATTENTION, after the opening and before the detail. Each starts
+  with what is needed (Decide, Do, Confirm, Clarify or Note) and stands on its
+  own with the subject, the options and a recommendation. With nothing owed
+  there is no heading. It never appears in a pull request body, document,
+  commit message or machine payload; a project may rename or drop it in its
+  own section of `AGENTS.md`.
 - A simple answer stays simple: no figure, no headings, no recap, and a
   one-line answer stays one line.
 - Durations for agent-delivered work are agentic estimates with stated bases;
@@ -63,8 +76,10 @@ prose.
 
 ## Written content policy
 
-The written content policy (ADR-0067): no em or en dash in new text; use a
-comma, colon, full stop or hyphen instead. `git.policy_characters` checks
+The written content policy (ADR-0067): avoid em and en dashes in prose; use a
+comma, colon, full stop or hyphen instead, and keep a dash only where it is
+really needed, such as a quoted title or a numeric range in data. This is a
+writing guideline that review and evaluation judge. `git.policy_characters` checks
 commit messages, PR bodies and added lines under `docs/`,
 `project-management/` and skill trees (warn by default; a project may set
 block); old lines are exempt. Write plainly: no slogans, no "not X but Y"
@@ -141,9 +156,9 @@ Example, from CodeFlow's `docs/verification/evidence/tsk-006/prototype.html`:
 
 ### Summaries
 
-A substantive summary follows the summary rule under Replies and status:
-context only, in one to three short sentences, before the list or table it
-leads into. A short answer is its own summary and takes no lead.
+A substantive summary follows the summary rule under Replies and status: it
+anchors the reader in a few lines before the list or table it leads into. A
+short answer is its own summary and takes no lead.
 
 Example, from CodeFlow's `docs/decisions/ADR-0067-written-content-policy.md`:
 
