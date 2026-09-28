@@ -168,9 +168,63 @@ export async function checkSelectionLifecycle(browser, origin) {
     await page.getByText("Selected text is too long. Select at most 16 characters.").waitFor();
     assert.equal(await page.getByTestId("composer").count(), 0, "Oversized live toolbar fallback opened a composer");
     assert.equal(await chip.count(), 0, "Oversized toolbar fallback pinned a stale selection");
+
+    // TSK-159: under CPU load the 160 ms selection pin comes due while the
+    // main thread is busy, so it runs after a tool press that followed the
+    // selection. It must neither land mid-press (in the load traces the
+    // press then lost its click) nor close the composer the tool opened.
+    // The page stalls itself past the debounce so the overdue pin is queued
+    // ahead of the effect cleanup; browsers still order those tasks
+    // themselves, so each case is an adversarial ordering, not a proof.
+    for (const [start, testId, press] of [[2, "tool-add-text", false], [3, "tool-add-text", true], [4, "tool-whole-doc", true]]) {
+      await page.evaluate(() => getSelection().removeAllRanges());
+      await page.waitForTimeout(240);
+      const outcome = await page.evaluate(async ({ start, testId, press }) => {
+        const text = document.getElementById("selection-limit").firstChild;
+        const tool = document.querySelector(`[data-testid="${testId}"]`);
+        const quote = text.data.slice(start, start + 6);
+        // Resolves inside the selectionchange task, after the chrome's own
+        // listener (installed first) has armed its pin.
+        const armed = new Promise((resolve) => {
+          const seen = () => {
+            if (String(getSelection()) !== quote) return;
+            document.removeEventListener("selectionchange", seen);
+            resolve();
+          };
+          document.addEventListener("selectionchange", seen);
+        });
+        getSelection().setBaseAndExtent(text, start, text, start + 6);
+        await armed;
+        const stall = () => {
+          const until = performance.now() + 250;
+          while (performance.now() < until) { /* a starved main thread */ }
+        };
+        const shown = () => ({
+          composer: Boolean(document.querySelector('[data-testid="composer-text"]')),
+          chip: Boolean(document.querySelector('[data-testid="float-chip"]')),
+        });
+        let midPress = null;
+        if (press) {
+          tool.dispatchEvent(new PointerEvent("pointerdown", { bubbles: true, button: 0, pointerType: "mouse" }));
+          stall();
+          await new Promise((resolve) => setTimeout(resolve, 0)); // the overdue pin runs first
+          midPress = shown();
+        } else {
+          stall(); // keyboard activation: a click with no press before it
+        }
+        tool.click();
+        await new Promise((resolve) => setTimeout(resolve, 400));
+        return { midPress, after: shown() };
+      }, { start, testId, press });
+      const label = `${testId} ${press ? "pointer press" : "keyboard activation"}`;
+      if (press) assert.equal(outcome.midPress.chip, false, `A selection pin landed during the ${label}`);
+      assert.deepEqual(outcome.after, { composer: true, chip: false }, `The ${label} lost its composer to a starved selection pin`);
+      await page.getByTestId("composer-cancel").click();
+      await page.getByTestId("composer").waitFor({ state: "detached" });
+    }
     assert.deepEqual(errors, []);
     await assertNoPolicyViolations(page, "selection lifecycle");
-    process.stdout.write("selection lifecycle: invalidation, recovery, limits, occurrence and toolbar anchors passed\n");
+    process.stdout.write("selection lifecycle: invalidation, recovery, limits, occurrence, toolbar anchors and starved pins passed\n");
   } finally {
     await context.close();
   }
