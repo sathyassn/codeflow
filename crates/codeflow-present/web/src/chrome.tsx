@@ -165,6 +165,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   const composerTextRef = useRef<HTMLTextAreaElement>(null);
   const regionDraftRef = useRef<RegionDraft | null>(null);
   const submitAttemptRef = useRef<{ fingerprint: string; eventId: string } | null>(null);
+  // Held from the first step of a submit to its end (C071-1): crop fitting
+  // awaits, and nothing that goes into the review may change meanwhile.
+  const submittingRef = useRef(false);
+  const notesRef = useRef<readonly PendingFeedback[]>(notes);
   const commentModeRef = useRef(false);
   const captureModeRef = useRef<CaptureMode>(null);
   const notesCountRef = useRef(0);
@@ -191,6 +195,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   commentModeRef.current = commentMode;
   captureModeRef.current = captureMode;
   notesCountRef.current = notes.length;
+  notesRef.current = notes;
   composerOpenRef.current = composerOpen;
   pendingPinRef.current = pendingPin;
   // The float is placed near the pointer, then kept inside the viewport by
@@ -731,6 +736,10 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
 
   /* ─── Pin → float → composer (qualified Comment flow) ─── */
   function pinCapture(captured: CapturedTarget, clientX: number, clientY: number, opts?: { openComposer?: boolean; element?: Element }): void {
+    if (submittingRef.current) {
+      setStatus("The review is being sent. Add the note when it is done.");
+      return;
+    }
     if (notesCountRef.current >= config.review_limits.max_notes) {
       setStatus(noteLimitMessage(config.review_limits.max_notes));
       if (!commentModeRef.current) armComment(true);
@@ -753,6 +762,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   }
 
   async function saveComposer(): Promise<void> {
+    if (submittingRef.current) return;
     const body = composerBody.trim();
     if (!body) {
       setStatus("Write a note before saving.");
@@ -849,6 +859,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   }
 
   function openNoteEditor(note: PendingFeedback, at?: { x: number; y: number }): void {
+    if (submittingRef.current) return;
     editAtRef.current = at ?? null;
     setEditingId(note.client_id);
     setComposerBody(note.body);
@@ -882,61 +893,72 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   };
 
   const submitReview = async (): Promise<void> => {
-    const normalizedNotes = notes.map(({ target_summary: _s, ...note }) => ({ ...note, body: note.body.trim() }));
+    if (submittingRef.current) return;
+    // What this review carries: exactly these notes and this instruction.
+    const sentNotes = notes;
+    const sentInstruction = instruction;
+    const normalizedNotes = sentNotes.map(({ target_summary: _s, ...note }) => ({ ...note, body: note.body.trim() }));
     if (normalizedNotes.some((n) => !n.body)) {
       setStatus("Write each pending note before submitting the review.");
       return;
     }
-    if (verdict === "request_changes" && !instruction.trim()) {
+    if (verdict === "request_changes" && !sentInstruction.trim()) {
       setStatus("Request changes needs a clear instruction.");
       return;
     }
     if (
-      instruction.length > config.review_limits.max_text_utf16 ||
+      sentInstruction.length > config.review_limits.max_text_utf16 ||
       normalizedNotes.some((n) => n.body.length > config.review_limits.max_text_utf16)
     ) {
       setStatus(`Each note or review summary is limited to ${config.review_limits.max_text_utf16} characters.`);
       return;
     }
-    const payloadOf = (list: readonly (typeof normalizedNotes)[number][]) => ({
-      session_id: config.session_id,
-      revision: config.revision,
-      verdict,
-      notes: [...list],
-      ...(instruction.trim() ? { instruction: instruction.trim() } : {}),
-    });
-    // Crops share what the notes leave of the body limit (QA defect 3): a
-    // crop is made smaller, or left out, and no note is lost.
-    const requestBytes = (list: readonly (typeof normalizedNotes)[number][]): number =>
-      new TextEncoder().encode(JSON.stringify({ event_id: crypto.randomUUID(), ...payloadOf(list) })).byteLength;
-    setStatus("Preparing the review…");
-    const fitted = await fitCrops(normalizedNotes, config.review_limits.max_payload_bytes, requestBytes);
-    const payload = payloadOf(fitted.notes);
-    const cropNotice = fitted.reduced || fitted.dropped
-      ? ` To fit the review limit, ${[
-        fitted.reduced ? `${fitted.reduced} ${fitted.reduced === 1 ? "picture was" : "pictures were"} made smaller` : "",
-        fitted.dropped ? `${fitted.dropped} ${fitted.dropped === 1 ? "picture was" : "pictures were"} left out` : "",
-      ].filter(Boolean).join(" and ")}; every note was kept.`
-      : "";
-    const fingerprint = JSON.stringify(payload);
-    const previous = submitAttemptRef.current;
-    const eventId = previous?.fingerprint === fingerprint ? previous.eventId : crypto.randomUUID();
-    submitAttemptRef.current = { fingerprint, eventId };
-    const request: ReviewRequest = { event_id: eventId, ...payload };
-    if (new TextEncoder().encode(JSON.stringify(request)).byteLength > config.review_limits.max_payload_bytes) {
-      setStatus(`This review is too large to submit. Shorten it below ${config.review_limits.max_payload_bytes} bytes.`);
-      return;
-    }
+    // The guard and the disabled controls come before the first await, so
+    // nothing is edited or sent twice while the crops are fitted (C071-1).
+    submittingRef.current = true;
     setBusy(true);
-    setStatus("Submitting review…");
     try {
+      const payloadOf = (list: readonly (typeof normalizedNotes)[number][]) => ({
+        session_id: config.session_id,
+        revision: config.revision,
+        verdict,
+        notes: [...list],
+        ...(sentInstruction.trim() ? { instruction: sentInstruction.trim() } : {}),
+      });
+      // Crops share what the notes leave of the body limit (QA defect 3): a
+      // crop is made smaller, or left out, and no note is lost.
+      const requestBytes = (list: readonly (typeof normalizedNotes)[number][]): number =>
+        new TextEncoder().encode(JSON.stringify({ event_id: crypto.randomUUID(), ...payloadOf(list) })).byteLength;
+      setStatus("Preparing the review…");
+      const fitted = await fitCrops(normalizedNotes, config.review_limits.max_payload_bytes, requestBytes);
+      const payload = payloadOf(fitted.notes);
+      const cropNotice = fitted.reduced || fitted.dropped
+        ? ` To fit the review limit, ${[
+          fitted.reduced ? `${fitted.reduced} ${fitted.reduced === 1 ? "picture was" : "pictures were"} made smaller` : "",
+          fitted.dropped ? `${fitted.dropped} ${fitted.dropped === 1 ? "picture was" : "pictures were"} left out` : "",
+        ].filter(Boolean).join(" and ")}; every note was kept.`
+        : "";
+      const fingerprint = JSON.stringify(payload);
+      const previous = submitAttemptRef.current;
+      const eventId = previous?.fingerprint === fingerprint ? previous.eventId : crypto.randomUUID();
+      submitAttemptRef.current = { fingerprint, eventId };
+      const request: ReviewRequest = { event_id: eventId, ...payload };
+      if (new TextEncoder().encode(JSON.stringify(request)).byteLength > config.review_limits.max_payload_bytes) {
+        setStatus(`This review is too large to submit. Shorten it below ${config.review_limits.max_payload_bytes} bytes.`);
+        return;
+      }
+      setStatus("Submitting review…");
       const response = await postJson<ReviewResponse>("/app/api/reviews", request);
-      clearDraft(config.session_id);
-      setNotes([]);
-      setInstruction("");
+      // Only what was sent is cleared: a note whose save finished while the
+      // review was on its way stays pending, and so does its draft.
+      const sent = new Set(sentNotes);
+      const left = notesRef.current.filter((note) => !sent.has(note)).length;
+      setNotes((current) => current.filter((note) => !sent.has(note)));
+      setInstruction((current) => (current === sentInstruction ? "" : current));
       submitAttemptRef.current = null;
-      armComment(false);
-      const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"} (${response.event_id}).${cropNotice}`;
+      if (left === 0 && !composerOpenRef.current) armComment(false);
+      const pending = left ? ` ${left} ${left === 1 ? "note saved while it was sent is" : "notes saved while it was sent are"} still pending.` : "";
+      const confirmation = `${response.state === "duplicate" ? "Review already received" : "Review received"}.${cropNotice}${pending}`;
       setStatus(confirmation);
       showToast(confirmation);
     } catch (error) {
@@ -948,6 +970,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setStatus(notice);
       showToast(notice, { sticky: true });
     } finally {
+      submittingRef.current = false;
       setBusy(false);
     }
   };
@@ -1297,7 +1320,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
             onInput={(e) => setComposerBody(e.currentTarget.value)}
           />
           <div class="row">
-            <button type="button" class="pri" data-testid="composer-save" onClick={saveComposer}>
+            <button type="button" class="pri" data-testid="composer-save" disabled={busy} onClick={saveComposer}>
               Save note
             </button>
             {editingId ? (
@@ -1305,6 +1328,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 type="button"
                 class="danger"
                 data-testid="composer-delete"
+                disabled={busy}
                 onClick={() => {
                   setNotes((c) => c.filter((n) => n.client_id !== editingId));
                   cancelComposer();
@@ -1384,6 +1408,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                       type="button"
                       class="cf-text-action"
                       data-testid="note-remove"
+                      disabled={busy}
                       aria-label={`Remove note ${index + 1}`}
                       onClick={(e) => {
                         e.stopPropagation();

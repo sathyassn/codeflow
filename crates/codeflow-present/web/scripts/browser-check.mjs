@@ -36,7 +36,10 @@ const server = createServer(async (request, response) => {
         "Content-Security-Policy": applicationCsp,
       });
       const fixture = url.searchParams.get("case");
-      response.end(fixtureHtml(["prose", "selection", "iframe"].includes(fixture), fixture === "selection", fixture === "iframe"));
+      // The submit race needs room for four short notes and a body limit a
+      // crop does not fit in, so fitting re-encodes it.
+      const limits = fixture === "race" ? { max_notes: 4, max_text_utf16: 200, max_selector_utf16: 64, max_payload_bytes: 1500 } : {};
+      response.end(fixtureHtml(["prose", "selection", "iframe"].includes(fixture), fixture === "selection", fixture === "iframe", limits));
       return;
     }
     if (url.pathname === "/export") {
@@ -121,6 +124,7 @@ try {
   await checkProseLazyPath(browser, origin);
   await checkSelectionLifecycle(browser, origin);
   await checkIframeComments(browser, origin);
+  await checkSubmitRace(browser, origin, reviewPosts);
   await checkInteractiveSurface(browser, origin, reviewPosts);
   await checkStaticExportModes(browser, origin);
   process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, figure blocks, zero CSP violations, axe, and 320 px reflow\n");
@@ -163,6 +167,118 @@ async function assertPrimary(button) {
     const p = getComputedStyle(probe);
     const result = [s.fontFamily === p.fontFamily, s.fontWeight, s.backgroundColor === p.backgroundColor, s.color === p.color]; probe.remove(); return result;
   }), [true, '600', true, true]);
+}
+
+/**
+ * C071-1: a review is fixed from its first step. While its crops are fitted
+ * (held open here), Submit, the notes, the instruction and the verdict take
+ * no edit and a second press sends nothing; a note whose save was already
+ * under way is not in the review, and it stays pending after the review is
+ * received, with its draft, until the next submit sends it.
+ */
+async function checkSubmitRace(browser, origin, reviewPosts) {
+  const context = await browser.newContext({ viewport: { width: 1280, height: 900 } });
+  try {
+    const page = await context.newPage();
+    // The page loads an image to make a drawing's crop (a blob URL) and to
+    // re-encode a crop (decode); each waits while its gate is held.
+    await page.addInitScript(() => {
+      const gate = () => {
+        const state = { held: false, waiting: 0 };
+        state.open = new Promise((done) => { state.release = () => { state.held = false; done(); }; });
+        return state;
+      };
+      const gates = { blob: gate(), decode: gate() };
+      window.__gates = gates;
+      const decode = HTMLImageElement.prototype.decode;
+      HTMLImageElement.prototype.decode = async function held() {
+        if (gates.decode.held) {
+          gates.decode.waiting += 1;
+          await gates.decode.open;
+        }
+        return decode.call(this);
+      };
+      const source = Object.getOwnPropertyDescriptor(HTMLImageElement.prototype, "src");
+      Object.defineProperty(HTMLImageElement.prototype, "src", {
+        configurable: true,
+        get() { return source.get.call(this); },
+        set(value) {
+          if (gates.blob.held && String(value).startsWith("blob:")) {
+            gates.blob.waiting += 1;
+            void gates.blob.open.then(() => source.set.call(this, value));
+            return;
+          }
+          source.set.call(this, value);
+        },
+      });
+    });
+    await page.goto(`${origin}/app?case=race`, { waitUntil: "networkidle" });
+    await page.getByTestId("comment-btn").click();
+    await page.locator("#cf-feedback-panel[data-open='true']").waitFor();
+    // The first note: an element, whose crop is drawn at once.
+    await page.evaluate(() => { document.querySelector("details.cf-tools").open = true; });
+    await page.getByTestId("tool-pick-element").click();
+    await page.locator("#cf-present-document[data-cf-capture-mode='element'] :focus").waitFor();
+    await page.keyboard.press("Enter");
+    await page.getByTestId("composer-text").fill("Sent note.");
+    await page.getByTestId("composer-save").click();
+    await page.getByTestId("composer").waitFor({ state: "detached" });
+    await page.locator("#cf-feedback-panel textarea").fill("Sent instruction.");
+
+    // The second note: an area on the stage drawing, whose crop loads an
+    // image, so its save is still under way when Submit is pressed.
+    await page.evaluate(() => { window.__gates.blob.held = true; window.__gates.decode.held = true; });
+    const stage = page.locator("figure[aria-label='Stage fixture'] svg");
+    await stage.scrollIntoViewIfNeeded();
+    const box = await stage.boundingBox();
+    await page.keyboard.down("Shift");
+    await page.mouse.move(box.x + 10, box.y + 6);
+    await page.mouse.down();
+    await page.mouse.move(box.x + 200, box.y + 30, { steps: 10 });
+    await page.mouse.up();
+    await page.keyboard.up("Shift");
+    await page.getByTestId("float-comment").click();
+    await page.getByTestId("composer-text").fill("Held note.");
+    await page.getByTestId("composer-save").click();
+    await page.waitForFunction(() => window.__gates.blob.waiting === 1);
+    assert.equal(await page.getByTestId("composer").count(), 1, "the held save finished early");
+
+    reviewPosts.length = 0;
+    await page.getByTestId("submit-all").evaluate((button) => button.click());
+    await page.waitForFunction(() => window.__gates.decode.waiting === 1);
+    // Fitting is under way: nothing that goes into the review takes an edit.
+    for (const [name, locator] of [
+      ["Submit", page.getByTestId("submit-all")],
+      ["the instruction", page.locator("#cf-feedback-panel textarea")],
+      ["the verdict", page.locator("#cf-review-verdict")],
+      ["Remove", page.getByTestId("note-remove").first()],
+      ["Save", page.getByTestId("composer-save")],
+    ]) assert.equal(await locator.isDisabled(), true, `${name} took input while the review was prepared`);
+    await page.getByTestId("submit-all").evaluate((button) => button.click());
+    await page.getByTestId("note-remove").first().evaluate((button) => button.click());
+    await page.getByTestId("note-row").first().evaluate((row) => row.click());
+    assert.equal(await page.getByTestId("composer-text").inputValue(), "Held note.", "an edit opened while the review was prepared");
+    // The save begun before Submit lands while the review is prepared.
+    await page.evaluate(() => window.__gates.blob.release());
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=note-row]").length === 2);
+    await page.evaluate(() => window.__gates.decode.release());
+    await page.getByTestId("toast").getByText(/Review received.* 1 note saved while it was sent is still pending\./u).waitFor({ timeout: 10_000 });
+    assert.equal(reviewPosts.length, 1, "a second press sent the review again");
+    assert.deepEqual(reviewPosts[0].notes.map((note) => note.body), ["Sent note."]);
+    assert.equal(reviewPosts[0].instruction, "Sent instruction.");
+    assert.deepEqual(await page.getByTestId("note-row").locator(".b").allInnerTexts(), ["Held note."], "the held note did not stay pending");
+    assert.equal(await page.locator("#cf-feedback-panel textarea").inputValue(), "", "the sent instruction was kept");
+    const draft = await page.evaluate(() => JSON.parse(sessionStorage.getItem("cf-present-draft:019f9b53-a341-7fa7-84c2-5f198ceea001") ?? "null"));
+    assert.deepEqual(draft?.notes.map((note) => note.body), ["Held note."], "the held note left the draft");
+
+    await page.getByTestId("submit-all").click();
+    await page.waitForFunction(() => document.querySelectorAll("[data-testid=note-row]").length === 0);
+    assert.equal(reviewPosts.length, 2);
+    assert.deepEqual(reviewPosts[1].notes.map((note) => note.body), ["Held note."]);
+    process.stdout.write("submit race passed: fitting holds the review fixed, a second press sends nothing, and a note saved meanwhile stays pending until it is sent\n");
+  } finally {
+    await context.close();
+  }
 }
 
 async function checkStaticExportModes(browser, origin) {
@@ -495,6 +611,8 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     await assertPrimary(page.getByTestId("submit-all"));
     await page.getByTestId("submit-all").click();
     await page.getByTestId("toast").getByText(/Review received/).waitFor({ timeout: 10000 });
+    // The reviewer reads a plain receipt; the event id is the agent's (P3-4).
+    assert.equal(await page.getByTestId("toast").innerText(), "Review received.");
     if (capturedReviews.length !== 1) {
       throw new Error(`Expected one review POST, got ${capturedReviews.length}`);
     }
@@ -736,7 +854,7 @@ function assertNetworkStayedLoopback({ responses, externalRoutes }) {
   assertLoopbackOnly(responses);
 }
 
-function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
+function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false, limits = {}) {
   const enhancements = proseOnly
     ? ""
     : `<section data-cf-block-id="block-code" data-cf-block-label="Implementation" data-cf-block-digest="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa">
@@ -778,6 +896,7 @@ function fixtureHtml(proseOnly, selectionOnly = false, iframeOnly = false) {
       max_text_utf16: 32,
       max_selector_utf16: 16,
       max_payload_bytes: 262144,
+      ...limits,
     },
     identity: {
       src: "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=",
