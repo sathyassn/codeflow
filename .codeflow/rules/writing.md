@@ -16,8 +16,8 @@ summaries, documents, records, commit messages and PR bodies. Managed by
 - A reply or report opens with the result it serves and where the work
   stands, then what would change that and who resolves it, then what the
   reader must decide or do; steps, gates, counts and tooling come last, and
-  only where they explain those. This is an order, not a set of headings: a
-  design discussion leads with the result in prose, labels belong only in
+  only where they explain those. This is an order, not a set of headings. A
+  design discussion leads with the result in prose; labels belong only in
   status, readiness or closeout reports the same reader compares, and labels
   forced onto a short answer are a defect.
 - A running report on long work opens with the result the work serves and
@@ -39,7 +39,7 @@ summaries, documents, records, commit messages and PR bodies. Managed by
   a hard gate that waits on the operator; other work keeps moving. With
   nothing owed there is no heading, and a manufactured ask is a defect. The
   heading never appears in a pull request body, document, commit message,
-  outbound draft or machine payload; a project may rename or drop it in its
+  outbound draft or machine payload. A project may rename or drop it in its
   own section of `AGENTS.md`.
 - A simple answer stays simple: no figure, no headings, no recap, and a
   one-line answer stays one line.

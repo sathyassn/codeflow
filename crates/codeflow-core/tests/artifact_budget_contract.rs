@@ -1642,25 +1642,26 @@ fn no_owner_keeps_the_retired_summary_or_dash_wording() {
 /// clause that states it there and the clause that states it in the writing
 /// reference. The writing reference is what an agent reads at the moment it
 /// reports, at every tier: the rule map routes "report status" to it, and the
-/// minimal tier installs no lifecycle.
+/// minimal tier installs no lifecycle. A clause that ends the owner's
+/// sentence carries its full stop, so a qualifier appended to it fails.
 const REPLY_DUTIES_AT_THE_REPORTING_MOMENT: &[(&str, &str, &str)] = &[
     ("report order", "A reply or report opens with the result it serves and where the work stands", "A reply or report opens with the result it serves and where the work stands"),
-    ("steps last", "steps, gates, counts and tooling come last, and only where they explain those", "steps, gates, counts and tooling come last, and only where they explain those"),
-    ("order not headings", "This is an order, not a set of headings", "This is an order, not a set of headings"),
-    ("design talk in prose", "A design discussion leads with the result in prose", "a design discussion leads with the result in prose"),
-    ("no forced labels", "labels forced onto a short answer are a defect", "labels forced onto a short answer are a defect"),
+    ("steps last", "steps, gates, counts and tooling come last, and only where they explain those.", "steps, gates, counts and tooling come last, and only where they explain those."),
+    ("order not headings", "This is an order, not a set of headings.", "This is an order, not a set of headings."),
+    ("design talk in prose", "A design discussion leads with the result in prose", "A design discussion leads with the result in prose"),
+    ("no forced labels", "labels forced onto a short answer are a defect.", "labels forced onto a short answer are a defect."),
     ("running report", "A running report on long work opens with the result the work serves and where it stands", "A running report on long work opens with the result the work serves and where it stands"),
     ("anchoring summary", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines.", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines."),
-    ("detail after the anchor", "detail that does not help the reader orient comes after it", "detail that does not help the reader orient comes after it"),
+    ("detail after the anchor", "detail that does not help the reader orient comes after it.", "detail that does not help the reader orient comes after it."),
     ("buried anchor", "A summary that buries the anchor in detail fails, however short it is.", "A summary that buries the anchor in detail fails, however short it is."),
-    ("attention placement", "NEED YOUR ATTENTION, at most once per reply, after the opening and before the detail", "go once under NEED YOUR ATTENTION, after the opening and before the detail"),
+    ("attention placement", "NEED YOUR ATTENTION, at most once per reply, after the opening and before the detail.", "go once under NEED YOUR ATTENTION, after the opening and before the detail."),
     ("attention verbs", "(Decide, Do, Confirm, Clarify or Note)", "(Decide, Do, Confirm, Clarify or Note)"),
     ("operator-only items", "the decisions, actions and confirmations only the operator can give", "the decisions, actions and confirmations only the operator can give"),
-    ("hard gate", "including a hard gate that waits on the operator; other work keeps moving", "including a hard gate that waits on the operator; other work keeps moving"),
+    ("hard gate", "including a hard gate that waits on the operator; other work keeps moving.", "including a hard gate that waits on the operator; other work keeps moving."),
     ("no manufactured ask", "With nothing owed there is no heading, and a manufactured ask is a defect.", "With nothing owed there is no heading, and a manufactured ask is a defect."),
-    ("heading exclusions", "never appears in a pull request body, document, commit message, outbound draft or machine payload", "never appears in a pull request body, document, commit message, outbound draft or machine payload"),
+    ("heading exclusions", "never appears in a pull request body, document, commit message, outbound draft or machine payload.", "never appears in a pull request body, document, commit message, outbound draft or machine payload."),
     ("simple answer", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line."),
-    ("figure by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders"),
+    ("figure by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders.", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders."),
     ("no Mermaid", "Never use Mermaid", "Never use Mermaid"),
     ("exact links", "Never guess a URL, port, or pull request number; state an unknown link as unknown.", "Never guess a URL, port, or pull request number; state an unknown link as unknown."),
     ("dash guideline", "Avoid em and en dashes in prose", "avoid em and en dashes in prose"),
@@ -1700,16 +1701,125 @@ fn reply_duties_read_when_reporting_match_their_owner() {
         assert!(missing.is_empty(), "{path}: {missing:#?}");
     }
 
-    // Negative controls: a duty dropped from either side is named.
-    let reporting = read_text(&root.join("assets/base/rules/writing.md"));
+    // Negative controls: a duty dropped from either side, or qualified after
+    // the owner's full stop, is named.
+    let reporting = normalized(&read_text(&root.join("assets/base/rules/writing.md")));
     let dropped = reporting.replacen("a manufactured ask is a defect", "an ask is fine", 1);
     assert_eq!(
         missing_reply_duties(&owner, &dropped),
         vec!["writing reference lacks no manufactured ask".to_string()]
     );
+    let qualified = reporting.replacen(
+        "labels forced onto a short answer are a defect.",
+        "labels forced onto a short answer are a defect unless the operator asks for them.",
+        1,
+    );
+    assert_eq!(
+        missing_reply_duties(&owner, &qualified),
+        vec!["writing reference lacks no forced labels".to_string()]
+    );
     let owner_dropped = owner.replacen("other work keeps moving", "all work waits", 1);
     assert_eq!(
         missing_reply_duties(&owner_dropped, &reporting),
         vec!["owner lost hard gate".to_string()]
+    );
+}
+
+/// The figure proportionality duties, as the author reads them in the
+/// lifecycle (CF-OUT-003), the reviewer grades them in the duo quality
+/// contract and the editor applies them in `cf-editorial-review`. Each clause
+/// is that file's own wording, ending at its full stop where its sentence
+/// ends there.
+const FIGURE_DUTIES_BY_READER: &[(&str, [&str; 3])] = &[
+    (
+        "form follows the surface",
+        [
+            "Match the form to the surface.",
+            "in the form the surface renders as the lifecycle reply rule sets out.",
+            "in the form the surface renders as the lifecycle reply rule sets out.",
+        ],
+    ),
+    (
+        "scope fits the explanation",
+        [
+            "Use a diagram whose scope and detail fit the explanation",
+            "diagram whose scope and detail fit the explanation",
+            "diagram whose scope and detail fit the explanation",
+        ],
+    ),
+    (
+        "least complicated complete form",
+        [
+            "prefer the least complicated form that remains complete, not the physically smallest;",
+            "Prefer the least complicated form that remains complete, not the physically smallest;",
+            "Prefer the least complicated form that remains complete, not the physically smallest;",
+        ],
+    ),
+    (
+        "complex subjects may need more",
+        [
+            "complex subjects may need a larger, layered, or multi-view diagram",
+            "complex subjects may need a larger, layered, or multi-view diagram.",
+            "complex subjects may need a larger, layered, or multi-view diagram.",
+        ],
+    ),
+    (
+        "caption or legend",
+        [
+            "caption or legend when it aids orientation.",
+            "caption or legend when it aids orientation.",
+            "caption or legend when it aids orientation.",
+        ],
+    ),
+    (
+        "nothing decorative or forced",
+        [
+            "Never add decorative or forced diagrams, headings, tables, or recaps.",
+            "Decorative or forced diagrams, headings, tables, and recaps are findings, not polish.",
+            "A decorative or forced diagram, heading, table, or recap is a defect, not polish.",
+        ],
+    ),
+];
+
+const FIGURE_DUTY_READERS: [&str; 3] = [
+    "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+    "assets/base/agents/skills/cf-model-orchestrator/resources/quality/editorial.md",
+    "assets/base/agents/skills/cf-editorial-review/SKILL.md",
+];
+
+fn missing_figure_duties(texts: &[String; 3]) -> Vec<String> {
+    let mut missing = Vec::new();
+    for (duty, clauses) in FIGURE_DUTIES_BY_READER {
+        for ((path, text), clause) in FIGURE_DUTY_READERS.iter().zip(texts).zip(clauses) {
+            if !normalized(text).contains(clause) {
+                missing.push(format!("{path} lacks {duty}"));
+            }
+        }
+    }
+    missing
+}
+
+/// TSK-138 AC-1: the author, reviewer and editor copies of the figure
+/// proportionality rule state the same duties, each in its reader's voice.
+#[test]
+fn figure_duties_match_for_author_reviewer_and_editor() {
+    let root = repo_root();
+    let texts = FIGURE_DUTY_READERS.map(|path| read_text(&root.join(path)));
+    let missing = missing_figure_duties(&texts);
+    assert!(missing.is_empty(), "{missing:#?}");
+
+    // Negative control: a qualifier after the reviewer's full stop is named.
+    let mut qualified = texts.clone().map(|text| normalized(&text));
+    qualified[1] = qualified[1].replacen(
+        "are findings, not polish.",
+        "are findings, not polish, unless the author prefers them.",
+        1,
+    );
+    assert_eq!(
+        missing_figure_duties(&qualified),
+        vec![format!(
+            "{} lacks nothing decorative or forced",
+            FIGURE_DUTY_READERS[1]
+        )]
     );
 }
