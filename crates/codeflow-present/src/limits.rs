@@ -126,10 +126,10 @@ pub const MAX_SNAPSHOT_TEXT_BYTES: usize = MAX_TITLE_BYTES * MAX_JSON_CHAR_BYTES
             + MAX_FIELD_OPTIONS * 2 * MAX_FORM_LABEL_CHARS * MAX_JSON_CHAR_BYTES);
 /// What a record repeats from its request: values, rationales and reason
 /// are at most the request's own bytes (`serde_json` never writes a string
-/// or key longer than the request spelled it), plus a number's growth for
-/// each of the at most 32 fields.
-pub const MAX_RECORD_REQUEST_BYTES: usize =
-    MAX_ANSWER_REQUEST_BYTES + MAX_FORM_FIELDS * MAX_JSON_NUMBER_GROWTH;
+/// or key longer than the request spelled it). A number can grow when it is
+/// written again, but a number field has no options, so a form with one
+/// repeats far less question text than the largest form (checked below).
+pub const MAX_RECORD_REQUEST_BYTES: usize = MAX_ANSWER_REQUEST_BYTES;
 /// The rest of a record at its largest: its JSON structure for 32 fields of
 /// 24 options, the member names, the longest event and outcome names,
 /// numbers at `u64::MAX`, the UUIDs and digests. Pinned by the test that
@@ -147,6 +147,11 @@ const _: () = {
         2 * MAX_TITLE_BYTES * MAX_JSON_CHAR_BYTES
             + MAX_DECISION_OPTIONS * 2 * MAX_FORM_LABEL_CHARS * MAX_JSON_CHAR_BYTES
             < MAX_FORM_FIELDS * MAX_FIELD_OPTIONS * 2 * MAX_FORM_LABEL_CHARS * MAX_JSON_CHAR_BYTES
+    );
+    // Every number growing at once is less than one field's options.
+    assert!(
+        MAX_FORM_FIELDS * MAX_JSON_NUMBER_GROWTH
+            < MAX_FIELD_OPTIONS * 2 * MAX_FORM_LABEL_CHARS * MAX_JSON_CHAR_BYTES
     );
     // A decline reason is part of the request, within its bound.
     assert!(MAX_DECLINE_REASON_BYTES < MAX_ANSWER_REQUEST_BYTES);
