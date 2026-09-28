@@ -1533,6 +1533,17 @@ class PrBodyReaderTests(unittest.TestCase):
             with self.assertRaisesRegex(release.ReleaseError, "reader protocol"):
                 release.read_pr_bodies(["x"], bare)
 
+    def test_a_finding_rejects_a_legacy_contract_only_block(self) -> None:
+        # TSK-147 round 6: codeflow ci reads the legacy Contract field with
+        # the transition rules, so no declaration is exempt from its findings.
+        body = Repository.body("minor", contract="compatible")
+        reading = release.read_pr_bodies([body])[0]
+        self.assertEqual([], reading["findings"])
+        self.assertEqual("no", release.parse_release_impact(body, reading=reading)["breaking"])
+        reading["findings"] = ["a finding codeflow ci reports"]
+        with self.assertRaisesRegex(release.ReleaseError, "codeflow ci rejects"):
+            release.parse_release_impact(body, reading=reading)
+
     def test_release_py_and_codeflow_ci_agree_on_every_shared_case(self) -> None:
         cases = json.loads(IMPACT_CASES.read_text(encoding="utf-8"))["cases"]
         bodies = [case["body"] for case in cases]

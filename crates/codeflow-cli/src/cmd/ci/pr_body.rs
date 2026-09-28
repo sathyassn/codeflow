@@ -506,8 +506,50 @@ pub(super) fn reading(body: &str) -> serde_json::Value {
     })
 }
 
-/// Whether the body's one Release impact section states `Breaking: no` with
-/// a `Rationale` that gives a reason (TSK-147 AC-4).
+/// The legacy three-state `Contract` field and the `Breaking` value each
+/// state means (`CONTRACT_BREAKING` in `scripts/release.py`). A block may
+/// state Contract alone during the transition, or beside Breaking when the
+/// two agree (`docs/releasing.md`).
+const CONTRACT_BREAKING: [(&str, &str); 3] = [
+    ("not-applicable", "no"),
+    ("compatible", "no"),
+    ("breaking", "yes"),
+];
+
+fn contract_breaking(contract: &str) -> Option<&'static str> {
+    CONTRACT_BREAKING
+        .iter()
+        .find(|(state, _)| state.eq_ignore_ascii_case(contract))
+        .map(|(_, breaking)| *breaking)
+}
+
+/// What a block declares about breaking: `Breaking` lower-cased, or, when
+/// only the legacy `Contract` appears, the Breaking value its state means
+/// (empty for an unknown state). `legacy` is that Contract-only case.
+struct Declared {
+    breaking: String,
+    legacy: bool,
+}
+
+fn declared(fields: &std::collections::BTreeMap<String, &str>) -> Declared {
+    match (fields.get("breaking"), fields.get("contract")) {
+        (None, Some(contract)) => Declared {
+            breaking: contract_breaking(contract).unwrap_or_default().to_string(),
+            legacy: true,
+        },
+        (breaking, _) => Declared {
+            breaking: breaking.copied().unwrap_or_default().to_ascii_lowercase(),
+            legacy: false,
+        },
+    }
+}
+
+/// Whether the body's one Release impact section declares no break, by
+/// `Breaking: no`, a legacy `Contract: compatible`, or both, and has a
+/// `Rationale` that gives a reason (TSK-147 AC-4). A legacy
+/// `not-applicable` says no contract was touched, which a watched surface
+/// contradicts, so `scripts/release.py check-pr` refuses it there and it
+/// settles nothing here.
 pub(super) fn declares_no_break(body: &str) -> bool {
     let Some(fields) = release_fields(body) else {
         return false;
@@ -523,7 +565,13 @@ pub(super) fn declares_no_break(body: &str) -> bool {
             _ => None,
         }
     };
-    field("breaking").is_some_and(|value| value.eq_ignore_ascii_case("no"))
+    let stated = |name: &str| fields.iter().any(|(key, _)| key == name);
+    let holds = |name: &str, meaning: &str| {
+        !stated(name) || field(name).is_some_and(|value| value.eq_ignore_ascii_case(meaning))
+    };
+    (stated("breaking") || stated("contract"))
+        && holds("breaking", "no")
+        && holds("contract", "compatible")
         && field("rationale").is_some_and(|value| !value.is_empty() && !placeholder(value))
 }
 
@@ -548,14 +596,22 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
     };
     let mut fields = std::collections::BTreeMap::new();
     for (key, value) in &lines {
-        if ["impact", "breaking", "rationale", "migration"].contains(&key.as_str())
+        if ["impact", "breaking", "contract", "rationale", "migration"].contains(&key.as_str())
             && fields.insert(key.clone(), value.as_str()).is_some()
         {
             issue(format!("PR Release impact has duplicate {key} fields"));
         }
     }
-    for key in ["impact", "breaking", "rationale", "migration"] {
-        if fields.get(key).is_none_or(|value| value.is_empty()) {
+    let declared = declared(&fields);
+    // A legacy Contract-only block states its break through Contract, and
+    // Migration is required with Breaking only, as `scripts/release.py` reads it.
+    let required: &[&str] = if declared.legacy {
+        &["impact", "rationale"]
+    } else {
+        &["impact", "breaking", "rationale", "migration"]
+    };
+    for key in required {
+        if fields.get(*key).is_none_or(|value| value.is_empty()) {
             issue(format!(
                 "PR Release impact requires a non-empty {key} field"
             ));
@@ -580,17 +636,21 @@ pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec
         .copied()
         .unwrap_or_default()
         .to_ascii_lowercase();
-    let breaking = fields
-        .get("breaking")
-        .copied()
-        .unwrap_or_default()
-        .to_ascii_lowercase();
+    let breaking = declared.breaking;
     let levels = ["none", "patch", "minor", "major"];
     if !levels.contains(&impact.as_str()) {
         issue("PR Impact must be none, patch, minor or major".into());
     }
-    if !["yes", "no"].contains(&breaking.as_str()) {
+    let contract = fields.get("contract").copied();
+    if contract.is_some_and(|value| contract_breaking(value).is_none()) {
+        issue("PR Contract must be not-applicable, compatible or breaking".into());
+    } else if !declared.legacy && !["yes", "no"].contains(&breaking.as_str()) {
         issue("PR Breaking must be yes or no".into());
+    } else if contract
+        .and_then(contract_breaking)
+        .is_some_and(|meant| meant != breaking)
+    {
+        issue("PR Contract disagrees with Breaking".into());
     }
     let below_floor = levels.iter().position(|level| *level == impact)
         < levels
@@ -1133,6 +1193,35 @@ mod tests {
             "none | steps | \"see Breaking change\"",
         ] {
             assert!(!substantive(placeholder), "{placeholder}");
+        }
+    }
+
+    /// TSK-147 round 6: a legacy `Contract: compatible` settles a watched
+    /// surface as `Breaking: no` does; `not-applicable` there is refused by
+    /// `scripts/release.py check-pr`, so it settles nothing.
+    #[test]
+    fn a_legacy_contract_declares_no_break_as_breaking_would() {
+        let block = |lines: &str| {
+            format!("## Release impact\n{lines}- Rationale: Preserve the public behavior.\n")
+        };
+        for no_break in [
+            "- Contract: compatible\n",
+            "- Contract: Compatible\n",
+            "- Contract: compatible\n- Breaking: no\n",
+        ] {
+            assert!(declares_no_break(&block(no_break)), "{no_break}");
+        }
+        for not_settled in [
+            "- Contract: breaking\n",
+            "- Contract: breaking\n- Breaking: no\n",
+            "- Contract: compatible\n- Breaking: yes\n",
+            "- Contract: maybe\n",
+            "- Contract: not-applicable\n",
+            "- Contract: not-applicable\n- Breaking: no\n",
+            "- Contract: compatible\n- Contract: compatible\n",
+            "- Breaking: no\n- Breaking: no\n",
+        ] {
+            assert!(!declares_no_break(&block(not_settled)), "{not_settled}");
         }
     }
 

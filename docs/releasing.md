@@ -28,7 +28,10 @@ An edit of a pending major entry is assessed at major, so it declares the
 break and keeps its migration guidance, and a field left at the template's
 alternatives fails.
 The legacy `Contract` field is accepted during the transition and must agree
-with `Breaking` when both appear. `scripts/release.py check-pr` compares
+with `Breaking` when both appear. Alone, `not-applicable` and `compatible`
+mean `Breaking: no` and `breaking` means `Breaking: yes`, with `Migration`
+then needed only for a break; `codeflow ci` and `release.py` read it alike.
+`scripts/release.py check-pr` compares
 the declaration with the current target, actual proposed merge tree, pending
 annotations, coupled stamps, and conventional-marker floor. It checks known
 contradictions and watched contracts; it does not infer compatibility. It

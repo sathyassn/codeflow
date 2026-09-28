@@ -317,7 +317,8 @@ fn release_py_and_codeflow_ci_agree_on_a_generated_corpus() {
     let mut bodies: Vec<String> = (0..CORPUS_SIZE).map(|_| corpus_body(&mut rng)).collect();
     // Every hand-picked shared case rides along, so a class found in review
     // (TSK-147 round 5: Breaking change sections holding only a template
-    // alternative or a self-reference, a Kelvin-sign key) stays compared.
+    // alternative or a self-reference, a Kelvin-sign key; round 6: the
+    // legacy Contract field alone and beside Breaking) stays compared.
     let shared: serde_json::Value = serde_json::from_str(include_str!(
         "../../../scripts/fixtures/release_impact_cases.json"
     ))

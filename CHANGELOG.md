@@ -658,6 +658,8 @@ publication date._
   the checked-out tree. A project that runs `release.py check-pr` itself
   passes a `codeflow` built from its tree. The reader's answer carries a
   protocol version, and `release.py` refuses a binary that answers another.
+  `codeflow ci` accepts the legacy `Contract` field as `release.py` does,
+  alone or agreeing with `Breaking`, so the two no longer disagree on it.
 
 <!-- codeflow:release-impact minor -->
 - **One full gate at a time, running the suite once.** Public behaviour

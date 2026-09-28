@@ -232,7 +232,6 @@ def parse_release_impact(
     pairs = release_impact_fields(reading)
     if pairs is None:
         fail("PR body must contain exactly one '## Release impact' section")
-    declared = {key for key, _ in pairs}
     fields: dict[str, str] = {}
     for key, value in pairs:
         if key in fields:
@@ -240,7 +239,7 @@ def parse_release_impact(
                 fail(f"release impact field {key} is duplicated")
             continue
         fields[key] = value
-    for key in ["impact", "breaking"]:
+    for key in ["impact", "breaking", "contract"]:
         if key in fields:
             fields[key] = fields[key].translate(ASCII_LOWER)
     for key in ["unit", "impact", "rationale", "evidence"]:
@@ -274,9 +273,9 @@ def parse_release_impact(
         fail("a breaking change requires migration guidance")
     # The rules `codeflow ci` applies are this check's too, whatever this
     # file adds (TSK-147 round 5): a finding it reports rejects the block.
-    # A legacy block that states only Contract is the one exception; its
-    # transition rules are this file's alone.
-    if "breaking" in declared and reading["findings"]:
+    # It reads a legacy Contract-only block with the transition rules above
+    # (round 6), so no declaration is exempt.
+    if reading["findings"]:
         fail("codeflow ci rejects the Release impact block: " + "; ".join(reading["findings"]))
     return fields
 

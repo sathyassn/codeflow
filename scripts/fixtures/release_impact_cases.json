@@ -1,5 +1,5 @@
 {
-  "description": "One fixture set for both checks of a pull request's Release impact block (SPC-013 R-96, TSK-106 AC-8): scripts/release.py (parse_release_impact) and the Rust PR-body check (codeflow ci, pr_body::release at the default policy). Both read the body with one parser, the codeflow binary (codeflow ci --read-release-impact, TSK-147 F4). Each case is a whole PR body and whether its block is valid. The cases cover the block's shared structure and field rules; CodeFlow's own rules (Unit and Evidence, the legacy Contract field, and Breaking if and only if major) are tested by scripts/test_release.py alone, so every body carries Unit and Evidence.",
+  "description": "One fixture set for both checks of a pull request's Release impact block (SPC-013 R-96, TSK-106 AC-8): scripts/release.py (parse_release_impact) and the Rust PR-body check (codeflow ci, pr_body::release at the default policy). Both read the body with one parser, the codeflow binary (codeflow ci --read-release-impact, TSK-147 F4). Each case is a whole PR body and whether its block is valid. The cases cover the block's shared structure and field rules; The legacy Contract field is a transitional declaration both read alike (TSK-147 round 6): alone it maps to Breaking, and beside Breaking it must agree. CodeFlow's own rules (Unit and Evidence, and Breaking if and only if major) are tested by scripts/test_release.py alone, so every body carries Unit and Evidence.",
   "cases": [
     {
       "name": "valid_patch",
@@ -259,6 +259,76 @@
     {
       "name": "invalid_breaking_key_spelled_with_a_kelvin_sign",
       "body": "## Summary\n\nRemoves an item.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nBreaKing: no\nRationale: Remove the old command.\nMigration: none\nEvidence: cargo test passed.\n",
+      "valid": false
+    },
+    {
+      "name": "valid_legacy_contract_not_applicable_alone",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: none\nContract: not-applicable\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_legacy_contract_compatible_alone",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: compatible\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_legacy_contract_breaking_with_steps",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: breaking\nRationale: Clarify wording without a contract change.\nMigration: Rename old to new.\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_legacy_contract_alone_without_migration",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: none\nContract: not-applicable\nRationale: Clarify wording without a contract change.\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_legacy_contract_in_upper_case",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: Compatible\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "invalid_legacy_contract_breaking_refers_to_itself",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: breaking\nRationale: Clarify wording without a contract change.\nMigration: see Breaking change\nEvidence: Documentation reviewed.\n\n## Breaking change\n\nsee Breaking change\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_legacy_contract_breaking_without_migration",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: breaking\nRationale: Clarify wording without a contract change.\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_legacy_contract_of_an_unknown_state",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: maybe\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_legacy_contract_duplicated",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: compatible\nContract: compatible\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "valid_dual_fields_agree_on_no_break",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: none\nContract: not-applicable\nBreaking: no\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "valid_dual_fields_agree_on_a_break",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: breaking\nBreaking: yes\nRationale: Clarify wording without a contract change.\nMigration: Rename old to new.\nEvidence: Documentation reviewed.\n",
+      "valid": true
+    },
+    {
+      "name": "invalid_dual_fields_contract_breaking_says_no",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: breaking\nBreaking: no\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_dual_fields_contract_compatible_says_yes",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: major\nContract: compatible\nBreaking: yes\nRationale: Clarify wording without a contract change.\nMigration: Rename old to new.\nEvidence: Documentation reviewed.\n",
+      "valid": false
+    },
+    {
+      "name": "invalid_dual_fields_contract_of_an_unknown_state",
+      "body": "## Summary\n\nClarifies the guide.\n\n## Changes\n\n- Clarify the guide wording.\n\n## Release impact\n\nUnit: codeflow\nImpact: minor\nContract: maybe\nBreaking: no\nRationale: Clarify wording without a contract change.\nMigration: none\nEvidence: Documentation reviewed.\n",
       "valid": false
     }
   ]
