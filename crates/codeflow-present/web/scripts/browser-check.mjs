@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { access, readFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import axe from "axe-core";
@@ -107,6 +108,17 @@ await new Promise((resolve, reject) => {
 const address = server.address();
 if (!address || typeof address === "string") throw new Error("Browser-check server did not bind TCP");
 const origin = `http://127.0.0.1:${address.port}`;
+// Every browser this check launches keeps its profile in a directory the
+// check owns, never the operator's, and each close must empty its part
+// (TSK-096 AC-4). Playwright makes the profiles under the temp directory.
+const browserHome = await mkdtemp(join(tmpdir(), "cf-present-browsers-"));
+process.env.TMPDIR = browserHome;
+async function closeOwned(name, instance) {
+  await instance.close();
+  const left = (await readdir(browserHome)).filter((entry) => entry.startsWith(`playwright_${name}dev_profile`));
+  if (left.length) throw new Error(`${name}: its profile outlived the browser: ${left.join(", ")}`);
+  process.stdout.write(`${name}: teardown passed: headless browser closed, its own profile under ${browserHome} removed\n`);
+}
 const executablePath = await findBrowser();
 const browser = await chromium.launch({ executablePath, headless: true });
 
@@ -114,7 +126,7 @@ try {
   for (const [name, engine] of [['chromium', chromium], ['firefox', firefox], ['webkit', webkit]]) {
     const chromeBrowser = name === 'chromium' ? browser : await engine.launch();
     try { await checkSavedAppearance(chromeBrowser, origin, name); }
-    finally { if (chromeBrowser !== browser) await chromeBrowser.close(); }
+    finally { if (chromeBrowser !== browser) await closeOwned(name, chromeBrowser); }
   }
   await checkSelectionOccurrences(browser);
   await checkResolverRules(browser);
@@ -136,12 +148,13 @@ try {
       reviewPosts.length = 0;
       await checkInteractiveSurface(other, origin, reviewPosts);
       process.stdout.write(`${name}: interactive surface and comment chip cases passed\n`);
-    } finally { await other.close(); }
+    } finally { await closeOwned(name, other); }
   }
   await checkStaticExportModes(browser, origin);
   process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, figure blocks, zero CSP violations, axe, and 320 px reflow\n");
 } finally {
-  await browser.close();
+  await closeOwned("chromium", browser);
+  await rm(browserHome, { recursive: true, force: true });
   await new Promise((resolve) => server.close(resolve));
 }
 
