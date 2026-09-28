@@ -1304,6 +1304,43 @@ fn stale_words_warn() {
     );
 }
 
+#[test]
+fn the_named_step_clears_a_stale_in_progress_task() {
+    // TSK-147 AC-3, the TSK-013 shape: `in_progress` with no branch warns and
+    // names `codeflow task status <id> todo`; running that step (the status
+    // verb the command drives) clears the warning.
+    let repo = Repo::new();
+    repo.write(
+        "project-management/tasks/TSK-002.md",
+        &task("TSK-002", "in_progress", CRITERIA, "Pending."),
+    );
+    repo.commit("records");
+    let stale = validate_lifecycle(repo.root());
+    let warning = stale
+        .warnings
+        .iter()
+        .find(|w| {
+            w.text
+                .contains("in_progress with no active branch carrying TSK-002")
+        })
+        .unwrap_or_else(|| panic!("{:?}", stale.warnings));
+    assert!(
+        warning
+            .remedy
+            .contains("`codeflow task status TSK-002 todo`"),
+        "{warning}"
+    );
+
+    set_status(repo.root(), RecordKind::Task, "TSK-002", &change("todo")).unwrap();
+    repo.commit("back to todo");
+    let cleared = validate_lifecycle(repo.root());
+    assert!(
+        !cleared.warnings.iter().any(|w| w.text.contains("TSK-002")),
+        "the named step clears the warning: {:?}",
+        cleared.warnings
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Mutation-driven edges of the transition rules
 // ---------------------------------------------------------------------------
