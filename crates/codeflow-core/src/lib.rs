@@ -17,6 +17,7 @@ pub mod integrate;
 pub mod ledger;
 pub mod model_qualification;
 pub mod models;
+pub mod reading;
 pub mod recall;
 pub mod registry;
 pub mod remote;

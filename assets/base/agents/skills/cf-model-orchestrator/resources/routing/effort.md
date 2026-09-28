@@ -10,8 +10,8 @@ owning Claude primary invokes that named `subagent_type`. In an existing
 session, verify a supported definition is loaded before invoking it. Never
 invent a missing Agent argument or install a permanent fleet of worker roles.
 
-On a Codex host, before launching a Claude worker through the delegated
-lifecycle, **read and follow**
+On a Codex, Grok or other non-Claude host, before launching a Claude worker
+through the delegated lifecycle, **read and follow**
 `.claude/skills/cf-delegate/resources/claude-turn-completion.md`. Its
 "Sequential turns" section governs that lifecycle (`wait --until terminal`,
 continuation records): there, collect the worker result before the primary

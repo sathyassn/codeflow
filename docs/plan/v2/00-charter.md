@@ -134,96 +134,93 @@ Tier is recorded in `project.toml`; re-running init at a higher tier is an **ide
 2. **Managed-region** (AGENTS.md markers; settings.json keys identified by `codeflow` command prefix): only the region/keys are touched; everything else is yours.
 3. **User-owned, schema-versioned** (policy.json, project.toml, product.md, all docs/): updates may *add* new keys with defaults and report them; never mutate user values.
 
-### 4.4 Managed-artifact effectiveness (semantic duties + byte ratchets)
+### 4.4 Managed-artifact effectiveness (reading structure, sizes reported)
 
 v1's instruction corpus is the anti-pattern: duplicated, always loaded, and
 expensive to maintain. v2 keeps only artifacts that have an evidenced job and
-moves justified depth behind on-demand references. That principle does not make
-shortness the objective. **A smaller artifact is not a better artifact when it
-has lost behavior, context, safety, review, or verification duties.**
+loads them progressively: a small always-read kernel, and everything else
+reached through an index entry or a trigger at the moment it is needed. That
+principle does not make shortness the objective. **A smaller artifact is not
+a better artifact when it has lost behavior, context, safety, review, or
+verification duties.**
 
-Bytes are the deterministic gate because they are stable across formatting and
-platforms and approximate loaded context without pretending to measure model
-tokens. Line counts are diagnostic only: they may expose unreadable density or
-fragmentation, but they never pass or fail an artifact. A budget failure never
-authorizes deleting or compressing doctrine merely to make the number green.
-First remove true duplication, then move independently loadable detail into a
-linked resource. If neither preserves the full contract, use a narrow,
-evidence-backed exception naming the exact skill and durable rationale.
+**Structure is the gate.** `crates/codeflow-core/tests/artifact_budget_contract.rs`
+fails when the reading structure breaks, using the one implementation in
+`codeflow_core::reading` that `codeflow doctor` also uses (TSK-150):
 
-The repository architecture-fitness test owns these ratchets. The two tables
-below are a historical measurement at integration base `e9a872f2`, not current
-headroom. Historical headroom is that revision's ratchet minus measured bytes.
-Use `artifact_budget_contract.rs` and current file measurements for a new change;
-later justified adjustments are recorded below without rewriting old evidence.
+- the kernel is the managed block of `AGENTS.md`, rendered from
+  `assets/base/rule-map.toml`, plus the session-start digest, and it names
+  every entry point of the per-task reading chain;
+- every read on that chain is either required or recorded as a conditional
+  read whose sentence carries its reviewed trigger, and a changed or stale
+  trigger fails until it is reviewed;
+- no conditional read is recorded without a trigger;
+- no shipped Markdown or JSON file under a skill is orphaned: each is reached
+  from its skill's `SKILL.md` through an index entry or a trigger.
 
-| Governed artifact | Baseline bytes | Baseline ratchet | Baseline headroom | Why this boundary exists |
-|---|---:|---:|---:|---|
-| Dogfood root `AGENTS.md` | 32,595 B | 32 KiB hard | 173 B | Includes the shipped standard contract plus CodeFlow-owned operating detail while remaining within common harness instruction limits. |
-| Shipped standard/full `AGENTS.md` | 29,906 B | 30 KiB | 814 B | The always-loaded portable operating contract. |
-| Shipped minimal `AGENTS.md` | 15,441 B | 16 KiB | 943 B | The behavioral and safety floor without absent method machinery. |
-| Dogfood root `CLAUDE.md` | 3,758 B | 6 KiB | 2,386 B | Standard-tier Claude routing and sandbox addenda only. |
-| Shipped standard/full `CLAUDE.md` | 3,681 B | 6 KiB | 2,463 B | `@AGENTS.md` plus Claude-specific routing and autonomy differences. |
-| Shipped minimal `CLAUDE.md` | 1,486 B | 3 KiB | 1,586 B | Minimal-tier session and enforcement wiring only. |
-| `cf-reviewer` agent definition | 8,161 B | 9 KiB | 1,055 B | Independent acceptance, implementation-quality, and verification duties without absorbing security review. |
-| `cf-security-reviewer` agent definition | 11,390 B | 12 KiB | 898 B | The deterministic-plus-agentic, cross-vendor security contract with structured evidence and blocking rules intact. |
+Semantic pins in the same test keep each duty in the place it is read, so
+content can move between the kernel, an index and a triggered section without
+losing one. When content moves, the pull request carries a duty map showing
+each duty's new home; it is review evidence, not a byte ledger.
 
-Skills have two different limits. The **reviewed per-source ratchet** is the
-normal gate and must be deliberately updated when justified content grows. The
-**absolute class ceiling** is only a backstop: 29 KiB for the two
-routing/orchestration skills and 24 KiB for every other skill. A newly
-manifested `SKILL.md` fails until it receives one explicit ratchet; stale or
-duplicate ratchets also fail.
+**Sizes are reported measures.** `codeflow doctor` (the `reading` check)
+reports the kernel, the per-task reading chain and each shipped skill against
+the guideline numbers below, as information within the guideline and as a
+warning above it. A size above its guideline is a prompt to move detail
+behind a trigger; it never fails a build, and it never authorizes deleting or
+compressing a duty to make a number smaller. Bytes are measured LF-normalized,
+so every host reports the same number; line counts are not measured.
 
-| Manifest skill source | Baseline bytes | Baseline ratchet | Baseline headroom | Absolute class ceiling |
-|---|---:|---:|---:|---:|
-| `agents/skills/cf-model-orchestrator/SKILL.md` | 26,321 B | 27 KiB | 1,327 B | 28 KiB |
-| `agents/skills/cf-customize/SKILL.md` | 20,903 B | 21 KiB | 601 B | 24 KiB |
-| `claude/skills/cf-delegate/SKILL.md` | 19,318 B | 20 KiB | 1,162 B | 28 KiB |
-| `claude/skills/cf-method/SKILL.md` | 18,626 B | 19 KiB | 830 B | 24 KiB |
-| `agents/skills/cf-design/SKILL.md` | 12,902 B | 14 KiB | 1,434 B | 24 KiB |
-| `agents/skills/cf-evaluate-model/SKILL.md` | 8,598 B | 9 KiB | 618 B | 24 KiB |
-| `agents/skills/cf-docs-portal/SKILL.md` | 7,911 B | 9 KiB | 1,305 B | 24 KiB |
-| `agents/skills/cf-plan/SKILL.md` | 7,402 B | 8 KiB | 790 B | 24 KiB |
-| `agents/skills/cf-present/SKILL.md` | 7,070 B | 8 KiB | 1,122 B | 24 KiB |
-| `agents/skills/cf-editorial-review/SKILL.md` | 5,645 B | 6 KiB | 499 B | 24 KiB |
-| `agents/skills/cf-ship/SKILL.md` | 5,372 B | 6 KiB | 772 B | 24 KiB |
-| `agents/skills/cf-consult/SKILL.md` | 4,965 B | 6 KiB | 1,179 B | 24 KiB |
-| `agents/skills/cf-develop/SKILL.md` | 3,300 B | 4 KiB | 796 B | 24 KiB |
-| `agents/skills/cf-stack/SKILL.md` | 3,251 B | 4 KiB | 845 B | 24 KiB |
+| Measure | Guideline |
+|---|---:|
+| Kernel: one tier's `AGENTS.md` managed block | 10 KiB |
+| Always rules in one tier's map | 12 rules, 450 B per rule line |
+| Per-task reading chain | 150 KiB |
+| Shipped `CLAUDE.md` (standard and full / minimal) | 6 KiB / 3 KiB |
+| `cf-reviewer` / `cf-security-reviewer` agent definition | 10 KiB / 12 KiB |
+| Routing skill without its own number / any other skill | 29 KiB / 24 KiB |
 
-The same test resolves AGENTS/CLAUDE sources through the scaffold manifest,
-checks the manifest-selected reviewer agents and every shipped skill source plus
-active Claude/Codex mirrors and managed baselines, and pins the semantic duties
-most vulnerable to token-driven dilution. Crossing an absolute class ceiling
-requires an exception naming one exact manifest source, its reviewed byte
-ratchet, and an existing durable `docs/` evidence file. No exception exists at
-this measurement. On-demand references, eval fixtures, and other resource data
-are not forced under one instruction-file cap; their schemas and runtime purpose
-own their proportional bounds. Stale historical line snapshots are not treated
-as current caps.
+| Skill | Guideline | Skill | Guideline |
+|---|---:|---|---:|
+| `cf-consult` | 7 KiB | `cf-herdr` | 9 KiB |
+| `cf-customize` | 22 KiB | `cf-method` | 19 KiB + 512 B |
+| `cf-delegate` | 20 KiB + 512 B | `cf-model-orchestrator` | 29 KiB |
+| `cf-design` | 19 KiB + 512 B | `cf-plan` | 9 KiB |
+| `cf-develop` | 5 KiB | `cf-present` | 8 KiB |
+| `cf-docs-portal` | 9 KiB | `cf-ship` | 6 KiB + 896 B |
+| `cf-editorial-review` | 6 KiB | `cf-stack` | 4 KiB |
+| `cf-estimate` | 6 KiB | `cf-evaluate-model` | 9 KiB + 256 B |
 
-TSK-016 adds the optional agentic operating/estimation method without changing
-these absolute class ceilings. The new cf-estimate entry has a 6 KiB
-ratchet; its detailed rubric, allocation format, operating procedure and worked
-example are on-demand resources. Active offer/preview/confirmation needs short
-routes in cf-customize (22 KiB ratchet), cf-plan (9 KiB) and the orchestrator
-(28 KiB, now equal to the routing class ceiling). Those increments preserve
-every existing duty; they do not move the
-whole method into always-loaded instructions. The root AGENTS route stays
-inside the existing 32 KiB full-tier and 30 KiB standard-tier caps; minimal
-receives no method machinery.
-TSK-016's dogfood root measures 32,762 bytes (6 bytes of full-tier headroom),
-so the historical root headroom above must not be used for further additions.
-Its portable template is 30,073 bytes (647 bytes below the standard cap);
-the rendered managed baseline is 29,539 bytes (1,181 bytes below that cap).
+The numbers live in `codeflow_core::reading` and
+`codeflow_core::scaffold::rule_map`. Every shipped file sits within its
+number, so a fresh install reports clean and a warning always points at
+something that changed. A new skill gets its own number in the same change,
+and a change that moves a shipped file past its number sets the new number
+in the same change, with the reason in the pull request.
 
-TSK-022 and ADR-0060 factor worker-route mechanics into the on-demand canonical
-resource while keeping accountability, author-relative review, qualification,
-and design-execution duties visible at their entry points. The reviewed caps are
-therefore root `AGENTS.md` 32 KiB + 256 B, routing class and orchestrator 29 KiB,
-`cf-design` 19 KiB + 512 B, `cf-evaluate-model` 9 KiB + 256 B, and
-`cf-delegate` 20 KiB + 512 B. The ratchet test is the executable authority.
+**One byte check still fails.** The complete generated `AGENTS.md` with a
+realistic project section must fit Codex's 32 KiB instruction limit
+(`CODEX_INSTRUCTION_LIMIT_BYTES`, checked by `init_e2e` and
+`rule_map_contract`), because past it the host silently cuts the end of the
+file, where the project section and then shipped rules live. It is a host
+truncation point, not a reading budget. An adopter whose own instruction
+chain passes it gets a `codeflow doctor` warning (the `instructions` check).
+
+On-demand references, eval fixtures, and other resource data keep the bounds
+their schemas and runtime purpose set; the runtime's own semantic and byte
+limits (for example the present document limits) are product limits, not
+reading guidelines.
+
+#### History: byte ratchets before TSK-150
+
+Until TSK-150 (operator direction, 2026-09-27) the numbers above were byte
+ratchets and class ceilings that failed the build, and the reading chain had
+a hard cap. The measurement at integration base `e9a872f2` stays in
+`01-execution-status.md`, and the earlier text of this section, with the
+TSK-016 and TSK-022 increments, is in git history; both are history, not
+current limits. A read-only audit of content removed to meet those budgets is
+`docs/verification/tsk-150-byte-cut-audit.md`, with the disposition of every
+lost passage.
 
 ### 4.5 Responsibility split
 

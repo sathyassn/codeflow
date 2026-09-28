@@ -33,7 +33,8 @@ test strength, read
 [resources/verification-selection.md](resources/verification-selection.md).
 For a new or materially reshaped user-facing surface, load `cf-design` before
 settling Plan vN; a bounded change may record its explicit `conform` or `N/A`
-path instead.
+path instead. Staged routes keep startup concise: read each resource at the
+moment its trigger names, not all of them up front.
 
 ## Outcome modes
 
@@ -167,8 +168,10 @@ exhaust qualified routes before recorded solo fallback.
    - Use `cf-delegate` for the preferred/fallback native lanes, lifecycle,
      sibling Stop-hook preflight, exact-byte delivery, and bounded cleanup. Use
      `cf-herdr` when `HERDR_ENV=1` and its degraded TTY route otherwise. On a
-     Codex host, before every Claude worker or same-session reviewer launch,
-     load the `claude-turn-completion.md` foreground-return contract.
+     Codex, Grok or other non-Claude host, before every Claude worker or
+     same-session reviewer launch through the delegated lifecycle, load the
+     `.claude/skills/cf-delegate/resources/claude-turn-completion.md`
+     foreground-return contract.
    - Use only the ensemble's recorded same-family fallback after native
      preflight, and never report the fallback as the selected primary.
    - Never use a headless peer command or third-party substitute. Authentication

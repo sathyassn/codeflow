@@ -187,7 +187,11 @@ durable home; raw history is not replayed automatically.
 ## Utility tokens
 
 Optional primitive tokens are project-owned and explicitly configured through
-`.codeflow/present/config.toml`. Validate their JSON against
+`.codeflow/present/config.toml`. Use
+[config.example.toml](../assets/config.example.toml) and
+[primitive-tokens.example.json](../assets/primitive-tokens.example.json) only
+during an explicit `cf-customize` opt-in; they are examples, not files to
+copy automatically. Validate their JSON against
 `.codeflow/schemas/present/utility-tokens-v1.schema.json`. The closed import may
 set declared colours, font-family names, reading measure, spacing scale, radius,
 and an embedded PNG/WebP identity image. It cannot import CSS, paths, fonts,

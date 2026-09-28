@@ -51,8 +51,10 @@ itself a blocker finding — return changes_requested.
    policy, and contextual voice defects as findings, not taste preferences.
 4. Run the mechanical gates and capture their output:
    - `codeflow test`
-   - `codeflow validate --docs` wherever `docs/` is installed (it skips an
-     absent layer with a note); plain `codeflow validate` at minimal tier
+   - `codeflow validate --docs` wherever `docs/` is installed: the docs spine
+     ships from standard tier up, and `--docs` skips an absent layer with a
+     note; plain `codeflow validate` at minimal tier, which ships no docs
+     spine
    - the project's coverage command; require at least 80% aggregate
      production-code line coverage where supported and target 90%+, while
      honoring any stronger repository gate (CodeFlow itself enforces 90%)

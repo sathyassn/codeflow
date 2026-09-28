@@ -31,6 +31,15 @@ without relaxing task safety or review. Headless task execution remains
 prohibited (CodeFlow ADR-0018), independently of whether a particular
 harness can run hooks in that mode.
 
+The local planes are fast feedback that an agent on the host can edit or
+skip; required CI and remote rules are the server-side boundary, and only
+where they are configured and enforced for the actor's permissions. Arm the
+remote plane with `codeflow remote protect` where the host supports it, then
+verify that it succeeded and read the live rules before claiming that
+boundary. An override env (`CODEFLOW_HUMAN_OVERRIDE`, gate tokens) is not
+authentication and creates no boundary. At the standard and full tiers,
+cf-method's "Why the git boundary is remote" gives the full rationale.
+
 A team may deliberately change specific rules in `.codeflow/policy.json`, but
 first assess their consumers: weakening commit discipline can break a
 commit-driven release process. The consuming project owns its release units,

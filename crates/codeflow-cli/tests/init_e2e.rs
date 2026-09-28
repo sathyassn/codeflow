@@ -17,7 +17,6 @@ const PRESENT_SKILL_FILES: &[&str] = &[
     "resources/how-presentation-works.md",
     "resources/utility-presentation-system.md",
     "resources/present-document.example.json",
-    "assets/review-document.example.json",
     "assets/config.example.toml",
     "assets/primitive-tokens.example.json",
     "agents/openai.yaml",
@@ -643,7 +642,14 @@ fn fresh_scaffolds_install_the_rule_map_at_every_tier() {
             &"- Keep the ledger double-entry invariant on every change.\n".repeat(16 * 1024 / 58),
         );
         std::fs::write(root.join("AGENTS.md"), &grown).unwrap();
-        assert!(grown.len() <= 32 * 1024, "{flag}: {} bytes", grown.len());
+        // TSK-150: the one byte failure left, the complete document against
+        // Codex's instruction limit.
+        assert_eq!(
+            codeflow_core::scaffold::rule_map::codex_overflow(&grown),
+            None,
+            "{flag}: {} bytes",
+            grown.len()
+        );
         let sixteen = doctor("16 KiB section");
         assert!(!sixteen.contains("over Codex"), "{flag}: {sixteen}");
 
@@ -1692,4 +1698,84 @@ fn older_binary_never_refuses_a_prompt_through_either_host() {
             }
         }
     }
+}
+
+/// TSK-150 AC-7 (journey): in a freshly scaffolded standard-tier project
+/// driven by the installed CLI, the kernel is loaded at session start (the
+/// managed block of `AGENTS.md` and the session-start digest), a triggered
+/// section is reachable from its index entry in the installed tree, and
+/// `codeflow doctor` reports sizes without failing when a skill is over its
+/// guideline. This proves structure and installation; the live load of a
+/// triggered section at its moment is TSK-128's re-injection, proved there.
+#[test]
+fn a_fresh_standard_project_loads_the_kernel_reaches_a_trigger_and_reports_sizes() {
+    use codeflow_core::reading::{self, Inventory, SkillFiles};
+    use codeflow_core::scaffold::rule_map::managed_block;
+
+    let (_tmp, root) = fresh("--standard");
+
+    // The kernel: the managed block is installed, and the session-start hook
+    // wired in the Claude settings gives the digest through the real binary.
+    let agents = read(&root, "AGENTS.md");
+    assert!(managed_block(&agents).is_some(), "no managed block");
+    let claude: serde_json::Value =
+        serde_json::from_str(&read(&root, ".claude/settings.json")).unwrap();
+    assert_eq!(
+        wired_hooks(&claude, "SessionStart"),
+        vec![(Some(CLAUDE_SOURCES.to_string()), ADVISORY.to_string())]
+    );
+    let startup = run_wired_hook(&root, ADVISORY, &start("startup"));
+    assert_eq!(startup.status.code(), Some(0));
+    assert!(String::from_utf8(startup.stdout)
+        .unwrap()
+        .contains("# orient"));
+
+    // A triggered section: the installed quality index names the findings
+    // section on its trigger row, the section is installed, and the
+    // installed tree holds the reading structure with the section outside
+    // the per-task chain.
+    let index = read(
+        &root,
+        ".claude/skills/cf-model-orchestrator/resources/quality-contract.md",
+    );
+    assert!(index.contains(
+        "| [Review findings and repair](quality/findings.md) | when a defect is fixed, or review findings are briefed, written or acted on |"
+    ));
+    assert!(root
+        .join(".claude/skills/cf-model-orchestrator/resources/quality/findings.md")
+        .is_file());
+    let mut installed = SkillFiles::new();
+    reading::load_skill_tree(&root.join(".claude/skills"), &mut installed);
+    let chain = reading::reading_chain(&installed, &Inventory::SHIPPED);
+    assert!(chain.errors.is_empty(), "{:?}", chain.errors);
+    assert!(!chain
+        .files
+        .iter()
+        .any(|file| file.path.ends_with("quality/findings.md")));
+    assert_eq!(reading::orphans(&installed), Vec::<String>::new());
+
+    // Doctor reports sizes: the fresh install is within every guideline, so
+    // the report is clean; a skill doubled past its guideline then warns and
+    // names the step that clears it, and doctor still exits 0.
+    let fresh_report = codeflow(&root, &["doctor", "--check", "reading"]);
+    let clean = output_text(&fresh_report);
+    assert_eq!(fresh_report.status.code(), Some(0), "{clean}");
+    assert!(
+        clean.starts_with("ok    reading: within guidelines:"),
+        "{clean}"
+    );
+    assert!(!clean.contains("differ from the shipped map"), "{clean}");
+    let skill = root.join(".claude/skills/cf-herdr/SKILL.md");
+    let text = std::fs::read_to_string(&skill).unwrap();
+    std::fs::write(&skill, format!("{text}\n{text}")).unwrap();
+    let out = codeflow(&root, &["doctor", "--check", "reading"]);
+    let report = output_text(&out);
+    assert_eq!(out.status.code(), Some(0), "{report}");
+    assert!(
+        report.contains("warn  reading: above guideline:"),
+        "{report}"
+    );
+    assert!(report.contains("cf-herdr "), "{report}");
+    assert!(report.contains("move detail behind a trigger"), "{report}");
+    assert!(report.contains("per-task reading chain"), "{report}");
 }

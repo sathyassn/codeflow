@@ -10,8 +10,8 @@ skill for the consult doctrine and lane details. Consult is read-only: the
 delegate reads and reasons, never edits. Use `cf-delegate`'s preferred lanes or
 qualified native fallback—never headless (`codex exec`, `claude -p`).
 
-The peer must be another vendor. Same-vendor scrutiny never counts as
-independent cross-lineage review.
+The peer must be another vendor. Same-vendor scrutiny is useful, but it never
+counts as independent cross-lineage review.
 
 1. Frame the ask: state exactly what to review (paths, diff, or question) and
    the criteria to judge against, and ask for an explicit closing verdict line
@@ -87,7 +87,8 @@ independent cross-lineage review.
    or `axis: spec`; when both apply, label both so one cannot mask the other.
    For task acceptance, ask `cf-reviewer`'s two questions per criterion and
    refuse a block copied from an older commit. Disposition
-   stays `fix now`, `track once`, or `drop`. Note which seat raised each item.
+   stays `fix now`, `track once`, or `drop` (the same vocabulary as the
+   quality contract and `cf-reviewer`). Note which seat raised each item.
    Branch on the verdict line, then re-derive the findings. Meet the `cf-delegate` five-obligation evidence
    contract (launch/provenance/return/failure/recheck): a Codex reply counts
    only with its native thread ID, and a Claude reply only with its lifecycle

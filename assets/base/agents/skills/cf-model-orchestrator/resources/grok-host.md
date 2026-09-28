@@ -18,7 +18,10 @@ when Grok hosts Claude.
 
 ## Launch
 
-Take selector and effort from the current ensemble record. Production host:
+Before a Grok seat takes work, `grok --version` succeeds and a short
+**interactive** Grok canary authenticates; an authentication failure stops
+for operator action. Take selector and effort from the current ensemble
+record. Production host:
 
 ```text
 grok --model <selector> --reasoning-effort <effort> --always-approve
@@ -38,7 +41,8 @@ Codex through the official `codex` CLI, which talks to the local app-server
 daemon — start `codex app-server daemon start` when the socket is missing,
 then Herdr `codex` (tmux degraded). If the daemon cannot start, keep the
 interactive CLI in Herdr. Do not install third-party Grok Codex plugins. The
-Claude-Code `codex-plugin-cc` is not a Grok-host lane.
+Claude-Code `codex-plugin-cc` is not a Grok-host lane. Neither lane is
+claimed complete until its own canary succeeds on this host.
 
 Grok-started Claude schema-v2 (Herdr `send-text` of the armed file) and
 Codex Herdr consult canaries are recorded in the CodeFlow repository under

@@ -1,7 +1,8 @@
 # Claude turn lifecycle adapter (schema v2)
 
-Use this adapter for the codex-hosted, interactive Claude CLI lane. A Claude
-host does not load it: an in-session Agent launch follows capability-routing.
+Use this adapter for the interactive Claude CLI lane that a Codex, Grok or
+other non-Claude host drives through the delegated lifecycle. A Claude host
+does not load it: an in-session Agent launch follows capability-routing.
 CodeFlow owns the durable lifecycle records; the host launches the harness and
 delivers the bytes. The protocol proves three things a terminal signal alone
 cannot: the session started cleanly, the delivered prompt was accepted as the

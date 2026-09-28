@@ -334,11 +334,11 @@ adrs: [ADR-0002, ADR-0007, ADR-0025, ADR-0054]
 `codeflow remote protect` applies the policy's `protected_branches` to the
 provider (GitHub via `gh api`: require PR + green CI, block force-push and
 deletion) with a legible report of anything the plan tier cannot apply.
-`codeflow doctor` runs eighteen health checks: hooks, Claude wiring, Codex wiring, Grok wiring, config,
+`codeflow doctor` runs nineteen health checks: hooks, Claude wiring, Codex wiring, Grok wiring, config,
 permissions, network, delegates, qualified model bindings, delegate round-trip, repo integrity, CI
 perimeter, managed-region
 drift, consuming-project customization, always-loaded instruction size (a warning when the
-`AGENTS.md` chain Codex loads for any directory, root to nested, exceeds its 32 KiB limit), test config, the id registry, and adopter fit. The Grok check reports
+`AGENTS.md` chain Codex loads for any directory, root to nested, exceeds its 32 KiB limit), reading sizes (the kernel, the per-task reading chain and each shipped skill against guideline numbers: information within, a warning above that names moving detail behind a trigger, never a failure), test config, the id registry, and adopter fit. The Grok check reports
 structural `.grok/hooks` wiring and the one-time `/hooks-trust` step; it does
 not inspect trust state (ADR-0054). The customization
 check remains quiet for minimal/non-method repos, warns while product,

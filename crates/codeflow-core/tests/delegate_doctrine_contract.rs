@@ -432,7 +432,7 @@ fn worker_dispatch_propagates_unavailability_and_requires_foreground_return() {
         &[
             "Propagate current observed unavailability into every later worker choice",
             "do not infer that sibling models or another account are unavailable",
-            "On a Codex host, before launching a Claude worker through the delegated lifecycle, **read and follow**",
+            "On a Codex, Grok or other non-Claude host, before launching a Claude worker through the delegated lifecycle, **read and follow**",
             "claude-turn-completion.md",
             "A Claude host does not load it.",
             "collect the worker result before the primary returns",

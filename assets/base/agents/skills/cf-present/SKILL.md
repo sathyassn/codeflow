@@ -6,7 +6,7 @@ description: Create, open, revise, and close a structured local CodeFlow review 
 # cf-present — interactive review documents
 
 Turn substantial session content into one inspectable, feedback-aware document
-from CodeFlow's declarative blocks and local runtime; never a new
+from CodeFlow's declarative blocks and bounded local runtime; never a new
 page app per response.
 
 Each invocation **reuses the utility design system**. Author **this session's**
