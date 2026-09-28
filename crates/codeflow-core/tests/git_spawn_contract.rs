@@ -27,7 +27,12 @@ const DYNAMIC: &[(&str, &str, usize, &str)] = &[
         1,
         "the git constructor itself",
     ),
-    ("codeflow-core/src/remote.rs", "&self.gh", 1, "the gh client"),
+    (
+        "codeflow-core/src/remote.rs",
+        "&self.gh",
+        1,
+        "the gh client",
+    ),
     (
         "codeflow-core/src/remote.rs",
         "path",

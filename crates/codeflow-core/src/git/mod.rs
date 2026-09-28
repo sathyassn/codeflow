@@ -68,7 +68,13 @@ mod tests {
 
     #[test]
     fn a_program_runs_git_by_its_last_path_part() {
-        for program in ["git", "GIT", "git.exe", "/usr/bin/git", r"C:\Git\cmd\git.exe"] {
+        for program in [
+            "git",
+            "GIT",
+            "git.exe",
+            "/usr/bin/git",
+            r"C:\Git\cmd\git.exe",
+        ] {
             assert!(runs_git(OsStr::new(program)), "{program}");
         }
         for program in ["gh", "gitleaks", "git-lfs", "/opt/git/bin/sh", "digit"] {

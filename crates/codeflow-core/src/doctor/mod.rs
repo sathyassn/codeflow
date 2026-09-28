@@ -9,7 +9,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::Stdio;
 use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
@@ -921,7 +921,7 @@ fn terminate_process_tree(child: &mut std::process::Child) {
     {
         // Spawn without waiting so an unavailable or wedged helper cannot
         // extend the probe deadline. The direct-child kill below is immediate.
-        let _ = Command::new("taskkill.exe")
+        let _ = std::process::Command::new("taskkill.exe")
             .args(["/PID", &child.id().to_string(), "/T", "/F"])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
