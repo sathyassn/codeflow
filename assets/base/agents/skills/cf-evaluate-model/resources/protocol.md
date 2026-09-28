@@ -368,11 +368,14 @@ The grade holds one `pass`, `fail` or `ungraded` per assertion, in case
 order, with the case, grader, materialized and final fixture digests, the
 digests of the ledger, judgements and calibration files, which must also be
 among the trial's evidence digests, and the digest of the suite's judge
-controls. Put it in the trial as `grade`; `score` recomputes the status from
-it. A grade from another case, fixture or grader revision is refused, so a
-changed grader requalifies. `--output` may not point inside the run root or
-the subjects root. Grading never changes the fixture; a check that cannot run
-fails its assertion as not gradable, never passes it.
+controls. It records every judgement it read, where, with its excerpt digest,
+verdict, judge and entry digest, and its computed `result`, and grading signs
+all of it as a `receipt` under the evaluator key. Put it in the trial as
+`grade`; `score` recomputes the status from it. A grade from another case,
+fixture or grader revision is refused, so a changed grader requalifies.
+`--output` may not point inside the run root or the subjects root. Grading
+never changes the fixture; a check that cannot run fails its assertion as
+not gradable, never passes it.
 
 - A file assertion selects `path` or `glob` (`*` crosses `/`), optionally only
   files `new` since materialization, in the states named by `in`: `worktree`,
@@ -441,12 +444,13 @@ fails its assertion as not gradable, never passes it.
   never counts such a trial as a pass: with no failed assertion its status
   is `error`, not measured; `grade` exits 1 for it. The trial retains the
   judgements file and each calibration file in its evidence by absolute
-  path, and every consumer (`score`, `validate-result`) reads them again.
-  The judges of a judged result are read from the judgements file, never
-  from the grade's own list, and each must be qualified by a retained
-  calibration: a file that is missing, whose bytes no longer match the
-  grade's digest, or that no longer qualifies that exact judge leaves the
-  trial `error`. `--transport-only`
+  path, and every consumer (`score`, `validate-result`) counts a pass only
+  from a grade whose receipt verifies and whose bound evidence, read again,
+  rederives it: each judgement the grade read is in the retained file,
+  signed, as read, from a judge a retained calibration still qualifies, and
+  those judgements alone pass each judged assertion it passes. A missing or
+  mismatched receipt, a file that is missing or changed, or any other fault
+  leaves the trial `error`. `--transport-only`
   grades uncalibrated judgements as recorded, to test that judgements reach
   the grade and fail closed, and marks the grade ineligible. A scripted or
   synthetic judge only exercises this plumbing; its passing runs are never

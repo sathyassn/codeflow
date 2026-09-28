@@ -67,7 +67,11 @@ never enters a line at all.
   calibration of the judge who wrote it is edited, removed or swapped.
   Every judgement and calibration is signed under the evaluator key when it
   is recorded, so a verdict relabelled as another judge, or signed under
-  another key, counts as no judge's. The evaluator key is the trust
+  another key, counts as no judge's. Grading signs each grade with a receipt
+  that binds every judgement it read, and scoring counts a saved pass only
+  when the receipt verifies and those retained judgements rederive it, so a
+  signed judgement of another excerpt, or a signed failure, pointed at by
+  an edited grade, is not measured. The evaluator key is the trust
   boundary: its holder is trusted. The holdout's
   scripted judge misses controls by design and tests transport and
   fail-closed binding only; its synthetic oracle meets them and tests the

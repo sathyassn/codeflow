@@ -32,6 +32,21 @@ def project_root() -> Path:
     return ROOT
 
 
+# Every test signs and verifies under a disposable evaluator key; GraderTests
+# gives each test its own.
+EVALUATOR_HOME = tempfile.TemporaryDirectory(prefix="evaluator-home-")
+EVALUATOR = patch.dict(os.environ, {"CODEFLOW_HOME": str(Path(EVALUATOR_HOME.name) / ".codeflow")})
+
+
+def setUpModule() -> None:
+    EVALUATOR.start()
+
+
+def tearDownModule() -> None:
+    EVALUATOR.stop()
+    EVALUATOR_HOME.cleanup()
+
+
 # The public development suite; qualification holdouts never live here.
 DEV_SUITE = ROOT / "evals/grader-dev"
 DEV_PACK = "grader-dev"
@@ -127,10 +142,11 @@ def watch_cadence_signals(calls: list[dict]) -> set[str]:
 
 
 def passing_grade(case: dict, number: int, fixture_digest: str) -> dict:
-    """A structurally valid, all-pass grade for a graded case."""
+    """A structurally valid, all-pass grade for a graded case, with its
+    receipt under the test evaluator key."""
 
     fixtures = {item["id"]: item for item in eval_kit.suite_documents()[2]["fixtures"]}
-    return {
+    return eval_kit.sign_grade({
         "schema_version": 1,
         "run_id": "test",
         "case_id": case["id"],
@@ -150,9 +166,14 @@ def passing_grade(case: dict, number: int, fixture_digest: str) -> dict:
             {"id": item["id"], "result": "pass", "safety": item.get("safety", False), "detail": "test"}
             for item in eval_kit.case_assertions(case)
         ],
+        "judged": [
+            {"assertion": item["id"], "states": [], "judgements": []}
+            for item in eval_kit.case_assertions(case)
+            if eval_kit.assertion_rubric(item) is not None
+        ],
         "safety_failures": [],
         "qualification": {"eligible": True, "reasons": []},
-    }
+    })
 
 
 def valid_result(suite: str = "canary", harness: str = "codex-app") -> dict:
@@ -2563,17 +2584,23 @@ print(json.dumps(seen, sort_keys=True))
             result["trials"] = [trial for trial in result["trials"] if trial["case_id"] in pack]
             mine, theirs = calibration("mine.json", judge), calibration("theirs.json", other)
             judgements = Path(self.temp.name) / "judgements.json"
-            eval_kit.write_json(judgements, {"schema_version": 1, "judgements": [eval_kit.signed_judgement(
+            entry = eval_kit.signed_judgement(
                 {"assertion": "review_is_coherent", "excerpt_digest": eval_kit.excerpt_digest(REVIEW), "verdict": "pass",
-                 "judge": judge[0], "judge_config": judge[1], "rationale": "synthetic"})]})
+                 "judge": judge[0], "judge_config": judge[1], "rationale": "synthetic"})
+            eval_kit.write_json(judgements, {"schema_version": 1, "judgements": [entry]})
+            reading = {"state": "worktree", "where": "REVIEW.md", "excerpt_digest": entry["excerpt_digest"], "verdict": "pass",
+                       "judge": judge, "judgement": eval_kit.canonical_digest(entry)}
             for each in result["trials"]:
-                each["grade"].update(
+                # Graded, and signed, by the evaluator.
+                each["grade"] = eval_kit.sign_grade(dict(
+                    each["grade"],
                     controls_digest=eval_kit.suite_judge_controls()[1],
                     judgements_digest=eval_kit.raw_file_digest(judgements),
                     calibration_digests=[eval_kit.raw_file_digest(theirs), eval_kit.raw_file_digest(mine)],
                     calibration_judges=[other, judge],
                     counted_judges=[judge],
-                )
+                    judged=[{"assertion": "review_is_coherent", "states": ["worktree"], "judgements": [dict(reading)]}],
+                ))
                 # Trial 1 cites these files; the others keep copies, so a
                 # change below reaches trial 1 alone.
                 for path in (theirs, mine, judgements):
@@ -2598,7 +2625,7 @@ print(json.dumps(seen, sort_keys=True))
                 change(changed["trials"][0])
                 try:
                     status = eval_kit.computed_trial_status(changed["trials"][0], case)
-                    faults = eval_kit.calibration_evidence_errors(changed["trials"][0]["grade"], changed["trials"][0], case)
+                    faults = eval_kit.saved_grade_errors(changed["trials"][0]["grade"], changed["trials"][0], case)
                     try:
                         counted = eval_kit.score_result(changed)["summary"]["pass"]
                     except eval_kit.EvalError as error:
@@ -2642,7 +2669,18 @@ print(json.dumps(seen, sort_keys=True))
                 )
                 trial["evidence"] = [item for item in trial["evidence"] if item["ref"] != str(mine)]
                 mine.unlink()
+            unsigned = ["the grade receipt does not verify under the evaluator key"]
             status, faults, counted = consumed(substituted)
+            self.assertEqual(("error", passes - 1, unsigned), (status, counted, faults))
+
+            def resigned(change):
+                # The same rewrite signed again by the evaluator key: the
+                # receipt verifies, and the evidence it binds still does not.
+                def apply(trial: dict) -> None:
+                    change(trial)
+                    trial["grade"] = eval_kit.sign_grade(trial["grade"])
+                return apply
+            status, faults, counted = consumed(resigned(substituted))
             self.assertEqual(("error", passes - 1), (status, counted))
             self.assertEqual(["review_is_coherent was judged by model: m (prompt p1), whom no retained calibration qualifies"], faults)
 
@@ -2660,8 +2698,50 @@ print(json.dumps(seen, sort_keys=True))
                     if item["ref"] == str(judgements):
                         item["digest"] = digest
             status, faults, counted = consumed(relabelled)
+            self.assertEqual(("error", passes - 1, unsigned), (status, counted, faults))
+            status, faults, counted = consumed(resigned(relabelled))
             self.assertEqual(("error", passes - 1), (status, counted))
-            self.assertEqual(["review_is_coherent was judged by a judgement not signed under the evaluator key, whom no retained calibration qualifies"], faults)
+            self.assertEqual([f"review_is_coherent: the judgement of {entry['excerpt_digest']} is not in the retained judgements file as read"], faults)
+
+            # A signed receipt whose own record of what it read does not
+            # pass the assertion it passes.
+            def read_a_failure(trial: dict) -> None:
+                trial["grade"]["judged"][0]["judgements"][0]["verdict"] = "fail"
+            status, faults, counted = consumed(resigned(read_a_failure))
+            self.assertEqual(("error", passes - 1), (status, counted))
+            self.assertIn("review_is_coherent passes, but the judgements it read do not pass it", faults)
+
+            def replayed(label: str, change_entry) -> None:
+                # Intact signed judgements from elsewhere, signed when they
+                # were collected: nothing is re-signed here, only the grade's
+                # judgements digest and the trial's evidence point at them.
+                document = json.loads(judgements.read_text())
+                document["judgements"] = [eval_kit.signed_judgement(change_entry(dict(entry))) for entry in document["judgements"]]
+                historical = Path(self.temp.name) / "historical" / f"{label}.json"
+                historical.parent.mkdir(exist_ok=True)
+                eval_kit.write_json(historical, document)
+
+                def point(trial: dict) -> None:
+                    digest = eval_kit.raw_file_digest(historical)
+                    trial["grade"]["judgements_digest"] = digest
+                    trial["evidence"] = [item for item in trial["evidence"] if item["ref"] != str(judgements)]
+                    trial["evidence"].append({"kind": "file", "ref": str(historical), "digest": digest})
+                status, _, counted = consumed(point)
+                self.assertEqual(("error", passes - 1), (status, counted), label)
+
+            replayed("another excerpt", lambda entry: dict(entry, excerpt_digest=eval_kit.excerpt_digest("an earlier review")))
+            replayed("signed failures", lambda entry: dict(entry, verdict="fail"))
+
+            # A receipt moved onto another trial of the same case: renamed,
+            # it no longer verifies; left naming its own trial, it is refused.
+            sibling = next(each for each in result["trials"][1:] if each["case_id"] == trial["case_id"])
+
+            def moved(trial: dict) -> None:
+                trial["grade"] = dict(copy.deepcopy(sibling["grade"]), trial=trial["trial"])
+            self.assertEqual(("error", passes - 1), consumed(moved)[::2])
+            status, _, refused = consumed(lambda trial: trial.update(grade=copy.deepcopy(sibling["grade"])))
+            self.assertEqual("fail", status)
+            self.assertIn("grade names another trial", refused)
 
             def judgements_changed(trial: dict) -> None:
                 judgements.write_text(judgements.read_text().replace('"pass"', '"fail"'))
@@ -2775,12 +2855,22 @@ print(json.dumps(seen, sort_keys=True))
             case = cases[trial["case_id"]]
             grade = trial["grade"]
 
-            def status(change) -> tuple[str, list[str]]:
+            def status(change, *, sign: bool = True) -> tuple[str, list[str]]:
+                # Each change is graded, and signed, by the evaluator unless
+                # `sign` is false.
                 changed = copy.deepcopy(trial)
                 change(changed["grade"])
+                if sign:
+                    changed["grade"] = eval_kit.sign_grade(changed["grade"])
                 return eval_kit.computed_trial_status(changed, case), eval_kit.grade_errors(changed["grade"], case, changed)
 
             self.assertEqual(("pass", []), status(lambda grade: None))
+            self.assertEqual("pass", grade["result"])
+            # A grade with no receipt, or read where there is no evaluator
+            # key, is not measured.
+            self.assertEqual(("error", []), status(lambda grade: grade.pop("receipt"), sign=False))
+            with patch.dict(os.environ, {"CODEFLOW_HOME": str(Path(EVALUATOR_HOME.name) / "elsewhere")}):
+                self.assertEqual(("error", []), status(lambda grade: None, sign=False))
 
             def transport(grade: dict) -> None:
                 grade.update(transport_only=True, qualification={"eligible": False, "reasons": ["transport only"]})

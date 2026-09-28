@@ -3111,6 +3111,13 @@ def read_judgements(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge]
     judgement whose signature does not verify under the evaluator key keeps
     its verdict but has the judge UNSIGNED."""
 
+    entries, digest = read_judgement_entries(path)
+    return {key: (verdict, judge) for key, (verdict, judge, _) in entries.items()}, digest
+
+
+def read_judgement_entries(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge, str]], str]:
+    """read_judgements, with the digest of the entry each verdict came from."""
+
     document = load_json(path)
     if (
         not isinstance(document, dict)
@@ -3119,7 +3126,7 @@ def read_judgements(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge]
     ):
         raise EvalError("judgements must be {schema_version: 1, judgements: [...]}")
     key = evaluator_key()
-    entries: dict[tuple[str, str], tuple[str, Judge]] = {}
+    entries: dict[tuple[str, str], tuple[str, Judge, str]] = {}
     declarations: dict[tuple[str, str], tuple[str, str, str]] = {}
     for index, entry in enumerate(document["judgements"]):
         label = f"judgements[{index}]"
@@ -3144,7 +3151,7 @@ def read_judgements(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge]
         declarations[excerpt] = declared
         if excerpt in entries and entries[excerpt][1] != judge:
             judge = UNSIGNED
-        entries[excerpt] = (entry["verdict"], judge)
+        entries[excerpt] = (entry["verdict"], judge, canonical_digest(entry))
     return entries, raw_file_digest(path)
 
 
@@ -3194,6 +3201,7 @@ class GradeContext:
         judges: dict[tuple[str, str], Judge] | None = None,
         calibrated: set[Judge] | None = None,
         assertions: list[dict] | None = None,
+        entry_digests: dict[tuple[str, str], str] | None = None,
     ) -> None:
         self.record = record
         self.fixture = Path(record["path"])
@@ -3209,6 +3217,12 @@ class GradeContext:
         self.uncalibrated: dict[str, set[Judge | None]] = defaultdict(set)
         # The calibrated judges whose judgements the grade counted.
         self.counted: set[Judge] = set()
+        # Every judgement read, by assertion, where it was read, and the
+        # states a judged file assertion counted in: what a consumer needs
+        # to rederive each judged result (judged_records).
+        self.entry_digests = entry_digests or {}
+        self.consumed: dict[str, list[dict]] = defaultdict(list)
+        self.judged_states: dict[str, list[str]] = {}
         self.assertions = {item["id"]: item for item in assertions or []}
         self.base_commit = record["base_commit"]
         self.snapshot = record["refs"]
@@ -3332,13 +3346,21 @@ class GradeContext:
             hidden.append(GRADED_SUITE)
         return hidden
 
-    def judgement(self, assertion: str, digest: str) -> str | None:
+    def judgement(self, assertion: str, digest: str, state: str, where: str) -> str | None:
         verdict = self.judgements.get((assertion, digest))
         judge = self.judges.get((assertion, digest))
         if verdict is not None and judge in self.calibrated:
             self.counted.add(judge)
         elif verdict is not None:
             self.uncalibrated[assertion].add(judge)
+        self.consumed[assertion].append({
+            "state": state,
+            "where": where,
+            "excerpt_digest": digest,
+            "verdict": verdict,
+            "judge": list(judge) if verdict is not None and judge is not None else None,
+            "judgement": self.entry_digests.get((assertion, digest)) if verdict is not None else None,
+        })
         return verdict
 
     def require_events(self) -> list[dict]:
@@ -3644,6 +3666,8 @@ def assertion_rubric(item: dict) -> str | None:
 
 def grade_file(context: GradeContext, item: dict) -> tuple[bool, str]:
     trees = context.trees(item.get("in", ["worktree"]))
+    if assertion_rubric(item) is not None:
+        context.judged_states[item["id"]] = [tree.label for tree in trees]
     base_files = context.base.files()
     count = item.get("count", {"min": 1})
     counts: dict[str, int] = {}
@@ -3659,7 +3683,7 @@ def grade_file(context: GradeContext, item: dict) -> tuple[bool, str]:
                 qualifies, reason = registry_consistent(context, text)
             if qualifies and assertion_rubric(item) is not None:
                 digest = excerpt_digest(judged_excerpt(item, text))
-                verdict = context.judgement(item["id"], digest)
+                verdict = context.judgement(item["id"], digest, tree.label, path)
                 if verdict != "pass":
                     qualifies = False
                     reason = f"no recorded judgement for {digest}" if verdict is None else f"judged fail ({digest})"
@@ -4056,7 +4080,7 @@ def agent_verdict(context: "GradeContext", item: dict, event: dict) -> tuple[boo
     if not held:
         return False, reason
     digest = excerpt_digest(output)
-    judged = context.judgement(item["id"], digest)
+    judged = context.judgement(item["id"], digest, "events", f"seq {event['seq']}")
     if judged != "pass":
         return False, f"no recorded judgement for {digest}" if judged is None else f"judged incoherent ({digest})"
     return True, "holds"
@@ -4312,16 +4336,16 @@ def grade_trial(
     a judgement from any other judge is `ungraded` and the grade is not
     eligible for qualification. `transport_only` grades such judgements as
     recorded, to test that they reach the grade and fail closed, and marks
-    the whole grade ineligible."""
+    the whole grade ineligible. The grade carries its receipt (sign_grade)."""
 
     record, case, run_root = graded_trial_context(record_path)
     for root in (run_root, Path(record["subjects_root"])):
         if nested(evaluator_key_path(), root.resolve()):
             raise EvalError(f"the evaluator key lies inside {root}, where a trial can reach it")
     event_list, events_digest = load_events(events) if events is not None else (None, None)
-    entries, judgements_digest = read_judgements(judgements) if judgements is not None else ({}, None)
-    verdicts = {key: verdict for key, (verdict, _) in entries.items()}
-    judges = {key: judge for key, (_, judge) in entries.items()}
+    entries, judgements_digest = read_judgement_entries(judgements) if judgements is not None else ({}, None)
+    verdicts = {key: verdict for key, (verdict, _, _) in entries.items()}
+    judges = {key: judge for key, (_, judge, _) in entries.items()}
     controls = suite_judge_controls()
     controls_digest = controls[1] if controls is not None else None
     calibrated: set[Judge] = set()
@@ -4354,6 +4378,7 @@ def grade_trial(
             judges=judges,
             calibrated=calibrated,
             assertions=assertions,
+            entry_digests={key: digest for key, (_, _, digest) in entries.items()},
         )
         passed_seq: dict[str, int] = {}
         for item in assertions:
@@ -4409,10 +4434,97 @@ def grade_trial(
         "counted_judges": sorted(list(judge) for judge in context.counted),
         "transport_only": transport_only,
         "assertions": results,
+        "judged": [
+            {
+                "assertion": item["id"],
+                "states": context.judged_states.get(item["id"], ["events"] if item["kind"] == "event" else []),
+                "judgements": context.consumed.get(item["id"], []),
+            }
+            for item in assertions
+            if assertion_rubric(item) is not None
+        ],
     }
     grade["safety_failures"] = derived_safety_failures(case, results)
     grade["qualification"] = {"eligible": qualification_eligible(grade), "reasons": reasons}
-    return grade
+    return sign_grade(grade)
+
+
+# The grade receipt. Grading signs the whole grade under the
+# evaluator key: the trial it names, the final state digest, the evidence
+# digests, every judgement it read (where, its excerpt digest, verdict, judge
+# and entry digest), each assertion result and the computed result. A
+# consumer counts a pass only from a receipt that verifies and whose bound
+# evidence, read again, rederives it (saved_grade_errors).
+GRADE_RECEIPT = "codeflow-eval-grade-receipt-v1"
+
+
+def grade_result(grade: dict) -> str:
+    """What a grade computes: `fail` with any failed assertion, `ungraded`
+    when it is not eligible, otherwise `pass`."""
+
+    if any(isinstance(item, dict) and item.get("result") == "fail" for item in grade.get("assertions", [])):
+        return "fail"
+    return "pass" if qualification_eligible(grade) else "ungraded"
+
+
+def receipt_signature(key: bytes, grade: dict) -> str:
+    body = {name: value for name, value in grade.items() if name != "receipt"}
+    message = json.dumps([GRADE_RECEIPT, body], ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return "hmac-sha256:" + hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def sign_grade(grade: dict) -> dict:
+    """`grade` with its computed result and its receipt under the evaluator
+    key, made on first use."""
+
+    key = evaluator_key(create=True)
+    assert key is not None
+    signed = {name: value for name, value in grade.items() if name != "receipt"}
+    signed["result"] = grade_result(signed)
+    signed["receipt"] = receipt_signature(key, signed)
+    return signed
+
+
+def rederived_pass(item: dict, judged: dict) -> bool:
+    """Whether the judgements a grade read, alone, pass a judged assertion,
+    exactly as grading counts them: a judged file qualifies only when its
+    judgement is `pass`, and a verdict assertion needs a `pass` judgement of
+    the decisive review."""
+
+    readings = judged["judgements"]
+    if item["kind"] != "file":
+        return any(reading["verdict"] == "pass" for reading in readings)
+    counts = {state: 0 for state in judged["states"]}
+    for reading in readings:
+        if reading["verdict"] == "pass" and reading["state"] in counts:
+            counts[reading["state"]] += 1
+    count = item.get("count", {"min": 1})
+    minimum, maximum = count.get("min"), count.get("max")
+    return (minimum is None or any(value >= minimum for value in counts.values())) and (
+        maximum is None or all(value <= maximum for value in counts.values())
+    )
+
+
+def judged_records(grade: dict, case: dict) -> list[tuple[dict, dict]] | None:
+    """Each judged assertion of the case with the grade's record of the
+    judgements it read, in case order; None when the record is malformed."""
+
+    items = [item for item in case_assertions(case) if assertion_rubric(item) is not None]
+    records = grade.get("judged")
+    reading_fields = {"state", "where", "excerpt_digest", "verdict", "judge", "judgement"}
+    if (
+        not isinstance(records, list)
+        or [record.get("assertion") if isinstance(record, dict) else None for record in records] != [item["id"] for item in items]
+        or not all(
+            isinstance(record.get("states"), list)
+            and all(isinstance(state, str) for state in record["states"])
+            and isinstance(record.get("judgements"), list)
+            and all(isinstance(reading, dict) and set(reading) == reading_fields for reading in record["judgements"])
+            for record in records
+        )
+    ):
+        return None
+    return list(zip(items, records))
 
 
 def judge_name(judge: Judge | None) -> str:
@@ -4549,19 +4661,28 @@ def retained_file(trial: dict, digest: Any) -> Path | None:
     return None
 
 
-def calibration_evidence_errors(grade: dict, trial: dict, case: dict) -> list[str]:
-    """Why a grade's judged results cannot be verified now. Every judge that
-    wrote a judgement of a graded judged assertion, read from the retained
-    judgements file itself, must be qualified by a calibration the trial
-    retains: a file named by absolute path whose bytes still hash to the
-    recorded digest and which, against the suite's current controls, still
-    qualifies that judge with its exact configuration. The grade's own list
-    of counted judges is never trusted for this. An edited, moved or removed
-    file, or a judge no retained calibration qualifies, leaves the trial not
-    measured."""
+def saved_grade_errors(grade: dict, trial: dict, case: dict) -> list[str]:
+    """Why a saved grade cannot be counted as it stands. Its receipt must
+    verify under the evaluator key, so nothing in it changed after grading,
+    and what it binds must still hold: each calibration it cites is retained
+    as a file with those bytes at an absolute evidence path and, against the
+    suite's current controls, still qualifies the judge it recorded; each
+    judgement it read is in the retained judgements file, signed, with the
+    same verdict, judge and entry digest, from a judge those calibrations
+    qualify; and those judgements, alone, rederive every judged pass. The
+    grade's own list of counted judges is never trusted for this. Any fault
+    leaves the trial not measured."""
 
-    controls = suite_judge_controls()
+    key = evaluator_key()
+    if key is None:
+        return ["there is no evaluator key here to verify the grade receipt"]
+    receipt = grade.get("receipt")
+    if not isinstance(receipt, str) or not hmac.compare_digest(receipt, receipt_signature(key, grade)):
+        return ["the grade receipt does not verify under the evaluator key"]
     errors: list[str] = []
+    if grade.get("result") != grade_result(grade):
+        errors.append(f"the grade computes {grade_result(grade)}, not the {grade.get('result')!r} it records")
+    controls = suite_judge_controls()
     qualified: set[Judge] = set()
     for digest, judge in zip(grade.get("calibration_digests", []), grade.get("calibration_judges", [])):
         path = retained_file(trial, digest)
@@ -4577,27 +4698,32 @@ def calibration_evidence_errors(grade: dict, trial: dict, case: dict) -> list[st
             errors.append(f"calibration {digest} does not qualify the judge the grade recorded")
         elif found is not None:
             qualified.add(found)
-    judged = {
-        item["id"]: result["result"]
-        for item, result in zip(case_assertions(case), grade.get("assertions", []))
-        if assertion_rubric(item) is not None and isinstance(result, dict) and result.get("result") in {"pass", "fail"}
-    }
-    if not judged:
-        return errors
-    path = retained_file(trial, grade.get("judgements_digest"))
-    if path is None:
-        return [*errors, "the judgements file is not retained as a file with those bytes at an absolute evidence path"]
-    try:
-        entries = read_judgements(path)[0]
-    except EvalError as error:
-        return [*errors, f"the judgements file does not read: {error}"]
-    for assertion, result in judged.items():
-        authors = {judge for (name, _), (_, judge) in entries.items() if name == assertion}
-        if result == "pass" and not authors:
-            errors.append(f"{assertion} passes with no judgement of it in the judgements file")
-        for judge in sorted(authors):
-            if judge not in qualified:
-                errors.append(f"{assertion} was judged by {judge_name(judge)}, whom no retained calibration qualifies")
+    records = judged_records(grade, case)
+    if records is None:
+        return [*errors, "grade.judged does not hold the judgements read for each judged assertion, in case order"]
+    results = {result.get("id"): result.get("result") for result in grade.get("assertions", []) if isinstance(result, dict)}
+    graded = [(item, record) for item, record in records if results.get(item["id"]) in {"pass", "fail"}]
+    if not any(reading["verdict"] is not None for _, record in graded for reading in record["judgements"]):
+        entries: dict[tuple[str, str], tuple[str, Judge, str]] = {}
+    else:
+        path = retained_file(trial, grade.get("judgements_digest"))
+        if path is None:
+            return [*errors, "the judgements file is not retained as a file with those bytes at an absolute evidence path"]
+        try:
+            entries = read_judgement_entries(path)[0]
+        except EvalError as error:
+            return [*errors, f"the judgements file does not read: {error}"]
+    for item, record in graded:
+        for reading in record["judgements"]:
+            if reading["verdict"] is None:
+                continue
+            found = entries.get((item["id"], reading["excerpt_digest"]))
+            if found is None or (found[0], list(found[1]), found[2]) != (reading["verdict"], reading["judge"], reading["judgement"]):
+                errors.append(f"{item['id']}: the judgement of {reading['excerpt_digest']} is not in the retained judgements file as read")
+            elif found[1] not in qualified:
+                errors.append(f"{item['id']} was judged by {judge_name(found[1])}, whom no retained calibration qualifies")
+        if results[item["id"]] == "pass" and not rederived_pass(item, record):
+            errors.append(f"{item['id']} passes, but the judgements it read do not pass it")
     return errors
 
 
@@ -4620,8 +4746,8 @@ def computed_trial_status(trial: dict, case: dict) -> str:
             result["result"] == "fail" for result in grade["assertions"]
         ):
             return "fail"
-        if calibration_evidence_errors(grade, trial, case):
-            # The calibration the grade cites no longer verifies: not measured.
+        if saved_grade_errors(grade, trial, case):
+            # The receipt or the evidence it binds does not verify: not measured.
             return "error"
         if not grade["qualification"]["eligible"]:
             # Nothing failed, but a transport-only grade or an ungraded
