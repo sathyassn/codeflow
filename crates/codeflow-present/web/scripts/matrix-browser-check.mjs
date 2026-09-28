@@ -119,7 +119,7 @@ try {
   for (const shown of ["prose", "more", "views"]) assert.ok(listed.includes(`#${shown}`), `the sections list lacks ${shown}: ${listed.join(" ")}`);
   await phoneWidth(page);
   for (const width of [1280, 375]) await closeMarkers(page, width);
-  process.stdout.write("close markers passed: at 1280 and 375 px, thirteen notes (two adjacent diff lines, two adjacent code lines, nine on one prose line, three of them on the same words) have markers that do not overlap and sit off their anchors, each in the gutter level with its line on a desktop, clear of the sections list, or just above it on a phone, leaving that row only once it is full, and a click at each marker's centre opens its own note\n");
+  process.stdout.write("close markers passed: at 1280 and 375 px, thirteen notes (two adjacent diff lines, two adjacent code lines, nine on one prose line, three of them on the same words) have markers that do not overlap and sit off their anchors, each in the gutter level with its line on a desktop, 2 px clear of the sections list, or just above it on a phone, leaving that row only when no free stretch of it holds the marker, also after widening from 375 px with the rail closed, and a click at each marker's centre opens its own note\n");
   process.stdout.write("sections and phone width passed: no hidden block in the sections list; at 375 px the sheet stays closed on arming, a gesture, a save and a pin, the float keeps ESC on screen, markers stay off the heading and the selected line, Comment opens the sheet and dismisses the save hint, and Done leaves\n");
 
   const expected = [];
@@ -716,52 +716,41 @@ async function phoneWidth(page) {
 }
 
 // Notes whose anchors lie closer than a marker's height keep their markers
-// apart (TSK-158): no two marker boxes meet; each marker is level with its
-// own line (its vertical range meets the line's) or sits just above it (its
-// bottom within 8 px of the line's top), and never on its anchor; a click at
-// a marker's centre opens that marker's own note.
+// apart (TSK-158, AC-1 as amended): no two marker boxes meet, none sits on
+// its anchor or within 2 px of the sections list, and each is where the
+// placement rule for the width puts it, level with its line in the gutter on
+// a desktop or just above it on a phone, leaving that row only when no free
+// stretch of the row holds it; a click at a marker's centre opens that
+// marker's own note. The phone run then widens the window with the rail
+// still closed and checks the desktop rule again.
 async function closeMarkers(page, width) {
-  const where = (what) => `close markers at ${width} px, ${what}`;
-  await page.setViewportSize({ width, height: width < 800 ? 812 : 900 });
   const notes = [];
-  const pageBox = (rect) => page.evaluate((rect) => ({ left: rect.x + scrollX, top: rect.y + scrollY, right: rect.x + rect.width + scrollX, bottom: rect.y + rect.height + scrollY }), rect);
   const save = async (body) => {
     await page.getByTestId("composer-text").fill(body);
     await page.getByTestId("composer-save").click();
     await page.getByTestId("composer").waitFor({ state: "detached" });
   };
-  try {
-    await armComment(page);
-    for (const [block, click] of [["change", "del"], ["change", "ins"], ["snippet", ".cf-line:nth-of-type(2)"], ["snippet", ".cf-line:nth-of-type(3)"]]) {
-      await reveal(page, block);
-      const cell = { gesture: "element", block, recipe: { click, label: "" } };
-      await gesture(page, cell).catch((error) => { throw new Error(where(`${block} ${click}: ${error.message}`)); });
-      const anchor = await pageBox(await page.locator(`[data-cf-block-id='${block}'] ${click}`).first().boundingBox());
-      const body = `close ${notes.length + 1}`;
-      await save(body);
-      notes.push({ body, anchor, what: `${block} ${click}` });
+  // Each anchor is measured when the layout is checked, so a check after a
+  // resize compares the markers with the lines where they are now.
+  const measure = (note) => page.evaluate(({ block, click, words }) => {
+    let rect;
+    if (words) {
+      const node = [...document.querySelector(`[data-cf-block-id='${block}'] p`).childNodes].find((child) => child.nodeType === Node.TEXT_NODE && child.data.includes(words));
+      const range = document.createRange();
+      const at = node.data.indexOf(words);
+      range.setStart(node, at);
+      range.setEnd(node, at + words.length);
+      rect = range.getClientRects()[0];
+    } else {
+      rect = document.querySelector(`[data-cf-block-id='${block}'] ${click}`).getBoundingClientRect();
     }
-    // Nine on one prose line, three of them on the same words: the line's
-    // markers take a row, and the notes from the tenth on have two-digit,
-    // wider markers. At 375 px the row above the line fills and overflows.
-    for (const words of ["Every block", "runtime draws", "Every block", "block type", "the runtime", "Every block", "type the", "runtime", "draws"]) {
-      await reveal(page, "prose");
-      await gesture(page, { gesture: "text", block: "prose", recipe: { in: "p", words } });
-      const line = await page.evaluate((words) => {
-        const node = [...document.querySelector("[data-cf-block-id='prose'] p").childNodes].find((child) => child.nodeType === Node.TEXT_NODE && child.data.includes(words));
-        const range = document.createRange();
-        const at = node.data.indexOf(words);
-        range.setStart(node, at);
-        range.setEnd(node, at + words.length);
-        const rect = range.getClientRects()[0];
-        return { left: rect.left + scrollX, top: rect.top + scrollY, right: rect.right + scrollX, bottom: rect.bottom + scrollY };
-      }, words);
-      const body = `close ${notes.length + 1}`;
-      await save(body);
-      notes.push({ body, anchor: line, what: `prose "${words}"` });
-    }
-    for (const note of notes.slice(5)) assert.equal(note.anchor.top, notes[4].anchor.top, where(`${note.what} is not on the first prose line`));
-    // Every check runs on the final layout, after all the notes are saved.
+    return { left: rect.left + scrollX, top: rect.top + scrollY, right: rect.right + scrollX, bottom: rect.bottom + scrollY };
+  }, note);
+  const checkLayout = async (layoutWidth, label) => {
+    const where = (what) => `close markers ${label}, ${what}`;
+    const anchors = [];
+    for (const note of notes) anchors.push(await measure(note));
+    for (const [i, anchor] of anchors.entries()) if (i > 4) assert.equal(anchor.top, anchors[4].top, where(`${notes[i].what} is not on the first prose line`));
     const markers = await page.getByTestId("note-marker").evaluateAll((all) => all.map((marker) => {
       const rect = marker.getBoundingClientRect();
       return { left: rect.left + scrollX, top: rect.top + scrollY, right: rect.right + scrollX, bottom: rect.bottom + scrollY };
@@ -769,11 +758,7 @@ async function closeMarkers(page, width) {
     assert.equal(markers.length, notes.length, where("a marker is missing"));
     assert.ok(markers[9].right - markers[9].left > markers[0].right - markers[0].left, where("the tenth marker is not the wider two-digit one"));
     const meets = (a, b) => a.left < b.right && b.left < a.right && a.top < b.bottom && b.top < a.bottom;
-    // The placement rule for this width: the gutter left of the line on a
-    // desktop, level with it; above the line on a phone, in the row just
-    // above it. A marker leaves its line's row, down the gutter, or on a
-    // phone to below the line, only once that row is full.
-    const gutter = width >= 800;
+    const gutter = layoutWidth >= 800;
     // The sections list is fixed at the left on a desktop, so no marker may
     // sit in its column: an entry under a marker could not be uncovered.
     const route = await page.locator(".cf-section-route").evaluate((el) => {
@@ -783,14 +768,15 @@ async function closeMarkers(page, width) {
     assert.equal(route !== null, gutter, where(`the sections list is ${route ? "shown" : "hidden"}`));
     const overflowed = [];
     for (const [i, marker] of markers.entries()) {
-      const { anchor, what } = notes[i];
+      const anchor = anchors[i];
+      const { what } = notes[i];
       const name = `marker ${i + 1} (${what}) ${JSON.stringify(marker)}`;
       for (const [j, other] of markers.entries()) {
         if (j > i) assert.ok(!meets(marker, other), where(`markers ${i + 1} (${what}) and ${j + 1} (${notes[j].what}) overlap: ${JSON.stringify([marker, other])}`));
       }
       assert.ok(!meets(marker, anchor), where(`${name} sits on its anchor`));
       if (gutter) {
-        assert.ok(marker.left >= route.right, where(`${name} covers the sections list, which ends at ${route.right}`));
+        assert.ok(marker.left >= route.right + 2, where(`${name} is not 2 px clear of the sections list, which ends at ${route.right}`));
         assert.ok(marker.right <= anchor.left, where(`${name} is not in the gutter left of its line ${JSON.stringify(anchor)}`));
         const level = marker.top < anchor.bottom && anchor.top < marker.bottom;
         if (!level) {
@@ -805,37 +791,67 @@ async function closeMarkers(page, width) {
       }
     }
     // Only the nine-note prose row may overflow, and only once it is full:
-    // no gap between its markers, or between the row and its left bound (the
-    // sections list on a desktop, else the page edge), holds the marker.
-    const row = markers.filter((marker, i) => i >= 4 && !overflowed.includes(i)).sort((a, b) => a.left - b.left);
-    const bound = (route ? route.right : await page.evaluate(() => scrollX)) + 2;
+    // no free stretch of the row, from its left bound (past the sections list
+    // on a desktop, else the page edge) to the overflowed marker's own place,
+    // holds that marker.
+    const row = markers.filter((marker, i) => i >= 4 && !overflowed.includes(i));
+    const bound = route ? route.right + 2 : (await page.evaluate(() => scrollX)) + 2;
     for (const i of overflowed) {
       const { what } = notes[i];
-      const size = markers[i].right - markers[i].left;
       assert.ok(i >= 4, where(`marker ${i + 1} (${what}) left its line's row`));
-      for (const [k, next] of row.entries()) {
-        const start = k === 0 ? bound : row[k - 1].right + 2;
-        assert.ok(next.left - size - 2 < start, where(`marker ${i + 1} (${what}) left its row while ${start} to ${next.left} was free`));
-      }
+      const free = freeStretch(row, bound, markers[i].right, markers[i].right - markers[i].left);
+      assert.ok(free === null, where(`marker ${i + 1} (${what}) left its row while ${JSON.stringify(free)} was free`));
       // An overflow chain starts at its line: each overflowed marker is just
       // below the line or directly under another marker.
       const under = markers.some((other, j) => j !== i && other.left < markers[i].right && markers[i].left < other.right && markers[i].top - other.bottom >= 0 && markers[i].top - other.bottom <= 3);
-      assert.ok(under || markers[i].top - notes[i].anchor.bottom <= 12, where(`marker ${i + 1} (${what}) ${JSON.stringify(markers[i])} is far below its line with a free place above it`));
+      assert.ok(under || markers[i].top - anchors[i].bottom <= 12, where(`marker ${i + 1} (${what}) ${JSON.stringify(markers[i])} is far below its line with a free place above it`));
     }
     if (!gutter) assert.ok(overflowed.length > 0, where("nine markers on one line fit one phone row, so no overflow was exercised"));
-    const side = (i) => (markers[i].top >= notes[i].anchor.bottom ? "below" : "above");
-    console.log(`close markers at ${width} px: ${markers.length} disjoint, ${row.length} in the prose row, overflow ${overflowed.map((i) => `${i + 1} ${side(i)}`).join(", ") || "none"}`);
+    const side = (i) => (markers[i].top >= anchors[i].bottom ? "below" : "above");
+    console.log(`close markers ${label}: ${markers.length} disjoint, ${row.length} in the prose row, overflow ${overflowed.map((i) => `${i + 1} ${side(i)}`).join(", ") || "none"}`);
+  };
+  await page.setViewportSize({ width, height: width < 800 ? 812 : 900 });
+  try {
+    await armComment(page);
+    for (const [block, click] of [["change", "del"], ["change", "ins"], ["snippet", ".cf-line:nth-of-type(2)"], ["snippet", ".cf-line:nth-of-type(3)"]]) {
+      await reveal(page, block);
+      const cell = { gesture: "element", block, recipe: { click, label: "" } };
+      await gesture(page, cell).catch((error) => { throw new Error(`close markers at ${width} px, ${block} ${click}: ${error.message}`); });
+      const body = `close ${notes.length + 1}`;
+      await save(body);
+      notes.push({ body, block, click, what: `${block} ${click}` });
+    }
+    // Nine on one prose line, three of them on the same words: the line's
+    // markers take a row, and the notes from the tenth on have two-digit,
+    // wider markers.
+    for (const words of ["Every block", "runtime draws", "Every block", "block type", "the runtime", "Every block", "type the", "runtime", "draws"]) {
+      await reveal(page, "prose");
+      await gesture(page, { gesture: "text", block: "prose", recipe: { in: "p", words } });
+      const body = `close ${notes.length + 1}`;
+      await save(body);
+      notes.push({ body, block: "prose", words, what: `prose "${words}"` });
+    }
+    // Every check runs on the final layout, after all the notes are saved.
+    await checkLayout(width, `at ${width} px`);
     // A click at each marker's centre must reach that marker (Playwright
     // clicks the centre and waits until the marker is the hit target there).
     for (const [i, { body, what }] of notes.entries()) {
       // Centred first, so the sticky comment hint never covers the marker.
       const marker = page.getByTestId("note-marker").nth(i);
       await marker.evaluate((el) => el.scrollIntoView({ block: "center", behavior: "instant" }));
-      await marker.click({ timeout: 5000 }).catch((error) => { throw new Error(where(`marker ${i + 1} (${what}) takes no click at its centre: ${error.message.split("\n")[0]}`)); });
+      await marker.click({ timeout: 5000 }).catch((error) => { throw new Error(`close markers at ${width} px, marker ${i + 1} (${what}) takes no click at its centre: ${error.message.split("\n")[0]}`); });
       await page.getByTestId("composer").waitFor();
-      assert.equal(await page.getByTestId("composer-text").inputValue(), body, where(`marker ${i + 1} (${what}) opened another note`));
+      assert.equal(await page.getByTestId("composer-text").inputValue(), body, `close markers at ${width} px, marker ${i + 1} (${what}) opened another note`);
       await page.getByTestId("composer-cancel").click();
       await page.getByTestId("composer").waitFor({ state: "detached" });
+    }
+    if (width < 800) {
+      // Armed at phone width, the rail stays closed; widened, the desktop
+      // rule applies with the sections list shown and the rail still closed.
+      await page.setViewportSize({ width: 1280, height: 900 });
+      await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => requestAnimationFrame(done))));
+      assert.equal(await page.locator("#cf-feedback-panel").getAttribute("data-open"), "false", "close markers after widening: the rail opened");
+      await checkLayout(1280, `widened from ${width} to 1280 px with the rail closed`);
     }
   } finally {
     // The last marker drawn is on top, so it takes the click even where
@@ -850,6 +866,26 @@ async function closeMarkers(page, width) {
     await page.setViewportSize({ width: 1280, height: 900 });
   }
 }
+
+// The first stretch of a marker row, between `start` and `end`, wide enough
+// for a marker of `size` with a 2 px gap on each side; null when the row is
+// full. Row markers outside the stretch do not matter.
+function freeStretch(row, start, end, size) {
+  const inside = row.filter((marker) => marker.right + 2 > start && marker.left - 2 < end).sort((a, b) => a.left - b.left);
+  let from = start;
+  for (const marker of [...inside, { left: end + 2, right: end }]) {
+    if (marker.left - 2 - from >= size) return { from, to: marker.left - 2 };
+    from = Math.max(from, marker.right + 2);
+  }
+  return null;
+}
+
+// Negative controls for the row oracle (Codex C158-R2-2): a row with one
+// marker at its left bound and room after it is not full, nor is one with a
+// gap in the middle; a packed row is.
+assert.deepEqual(freeStretch([{ left: 2, right: 40 }], 2, 360, 38), { from: 42, to: 360 });
+assert.deepEqual(freeStretch([{ left: 2, right: 40 }, { left: 122, right: 160 }], 2, 160, 38), { from: 42, to: 120 });
+assert.equal(freeStretch([{ left: 2, right: 40 }, { left: 42, right: 80 }, { left: 82, right: 120 }], 2, 120, 38), null);
 
 async function saveNote(page, body) {
   const composer = page.getByTestId("composer");

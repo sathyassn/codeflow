@@ -1737,6 +1737,16 @@ function lineHeightOf(documentRoot: HTMLElement, blockId: string): number {
 }
 
 /**
+ * The leftmost place a marker may start, in document coordinates: 2 px from
+ * the window's edge, or past the sections list while it shows (it is fixed,
+ * so a marker over it would hide an entry that no scroll can uncover).
+ */
+function markerFloor(root: DOMRect): number {
+  const route = document.querySelector<HTMLElement>(".cf-section-route")?.getBoundingClientRect();
+  return route && route.width > 0 ? route.right + 2 - root.left : 2 - root.left;
+}
+
+/**
  * Pass10 marker placement in document coordinates: every marker parks in the
  * gutter immediately left of the line it points at (a text note's selected
  * line, else the top of its element or area). With no gutter, as for a full
@@ -1757,15 +1767,18 @@ function markerPlacement(
   const left = rect.left - root.left;
   const top = rect.top - root.top;
   const width = markerWidth(index);
-  const clamp = (x: number): number => Math.max(2 - root.left, Math.min(x, innerWidth - root.left - width * 1.03 - 8));
+  const floor = markerFloor(root);
+  const clamp = (x: number): number => Math.max(floor, Math.min(x, innerWidth - root.left - width * 1.03 - 8));
   const text = targetKindOf(note) === "text";
   const line = text ? top + (meta?.ay ?? 0) * rect.height : top;
   // A marker beside its line may move down while it still covers 10 px of
   // the line: of the selected line for a text note, else of its anchor.
   const extent = text ? lineHeightOf(documentRoot, note.block_id) : rect.height;
   const reach = Math.max(0, extent - 10);
-  const gutter = left - width - 8;
-  if (gutter >= 2) return { left: clamp(gutter), top: Math.max(2, line - 2), width, side: "gutter", reach, below: 0 };
+  // A gutter narrowed by the sections list keeps the marker past the list,
+  // closer to its line, up to touching it but never over it.
+  const gutter = Math.max(left - width - 8, floor);
+  if (gutter >= 2 && gutter + width <= left) return { left: clamp(gutter), top: Math.max(2, line - 2), width, side: "gutter", reach, below: 0 };
   const right = left + rect.width + 8;
   if (right + width <= root.width - 2) return { left: clamp(right), top: Math.max(2, line - 2), width, side: "right", reach, below: 0 };
   const end = Math.min(left + rect.width, root.width - 2) - width;
@@ -1796,10 +1809,7 @@ function markerPlacements(
   const height = markerHeight();
   const gap = 2;
   const root = documentRoot.getBoundingClientRect();
-  // Lanes stop short of the sections list while it shows (it is fixed, so a
-  // marker over it would hide an entry that no scroll can uncover).
-  const route = document.querySelector<HTMLElement>(".cf-section-route")?.getBoundingClientRect();
-  const floor = route && route.width > 0 ? route.right + gap - root.left : 2 - root.left;
+  const floor = markerFloor(root);
   const ceiling = innerWidth - root.left - 8;
   const placed: MarkerSpot[] = [];
   const hit = (box: MarkerSpot): MarkerSpot | undefined =>
