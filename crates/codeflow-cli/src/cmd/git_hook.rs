@@ -267,13 +267,16 @@ fn commit_msg(
     let message = std::fs::read_to_string(&msg_file)?;
     // The contract-surface tripwire needs the files this commit stages
     // (ADR-0020); empty on any error, so it simply does not fire.
-    Ok(git_hook::commit_msg_with_files(
+    let mut report = git_hook::commit_msg_with_files(
         &policy.git,
         &message,
         &staged_files(root),
         merge_in_progress(root),
         &git_hook::MessageSource::Pending(pending_cleanup(root)),
-    ))
+    );
+    // A commit has no pull request body to settle it with (TSK-147 AC-4).
+    git_hook::note_watched_paths(&mut report);
+    Ok(report)
 }
 
 /// The hook's best-effort inference of Git's cleanup of the commit-msg

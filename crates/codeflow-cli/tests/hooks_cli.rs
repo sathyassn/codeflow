@@ -4356,3 +4356,47 @@ fn a_configured_block_on_a_never_exempt_rule_stops_the_push_at_warn() {
     );
     assert!(err.contains("codeflow pre-push: push stopped"), "{err}");
 }
+
+// ---------------------------------------------------------------------------
+// TSK-147 AC-4: a commit on a watched contract path gets a local note.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn commit_msg_on_a_watched_path_notes_the_release_impact_fields() {
+    let dir = tempfile::tempdir().unwrap();
+    init_repo(dir.path(), "feat/x");
+    write_policy(
+        dir.path(),
+        r#"{"git": {"breaking_watch_paths": ["api/**"]}}"#,
+    );
+    std::fs::create_dir_all(dir.path().join("api")).unwrap();
+    std::fs::write(dir.path().join("api/v1.rs"), "pub fn f() {}\n").unwrap();
+    git(dir.path(), &["add", "api/v1.rs"]);
+    let msg = dir.path().join("MSG");
+    std::fs::write(&msg, "feat: add the v1 api\n").unwrap();
+    let out = codeflow()
+        .args(["git-hook", "commit-msg", msg.to_str().unwrap()])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(out.status.code(), Some(0), "{err}");
+    assert!(
+        err.contains(
+            "codeflow commit-msg: note: commit touches a declared contract surface (api/v1.rs)"
+        ),
+        "{err}"
+    );
+    assert!(
+        err.contains("`Breaking: no` with a `Rationale` under Release impact"),
+        "{err}"
+    );
+    assert!(
+        !err.contains("warning"),
+        "a local run cannot settle it: {err}"
+    );
+    assert!(
+        err.contains("codeflow commit-msg: commit not stopped"),
+        "{err}"
+    );
+}

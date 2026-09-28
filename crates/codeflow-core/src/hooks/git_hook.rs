@@ -517,13 +517,31 @@ pub fn commit_msg_with_files(
     }
     if let Some(path) = standards::first_watched_path(changed_files, &policy.breaking_watch_paths) {
         report.violations.push(Violation::new(
-            "git.breaking_watch_paths",
+            WATCHED_PATH_RULE,
             PolicyLevel::Warn,
             format!("commit touches a declared contract surface ({path})"),
             crate::remedy::BREAKING_WATCH_PATH.remedy(),
         ));
     }
     report
+}
+
+/// The rule of the contract-surface tripwire.
+pub const WATCHED_PATH_RULE: &str = "git.breaking_watch_paths";
+
+/// Move each contract-surface finding into the notes (TSK-147 AC-4). A run
+/// with no pull request body cannot state the Release impact that settles
+/// it, so it is a note there that points at those fields, never a warning.
+pub fn note_watched_paths(report: &mut StageReport) {
+    let (watched, kept): (Vec<Violation>, Vec<Violation>) = std::mem::take(&mut report.violations)
+        .into_iter()
+        .partition(|v| v.rule == WATCHED_PATH_RULE);
+    report.violations = kept;
+    report.notes.extend(
+        watched
+            .into_iter()
+            .map(|v| crate::remedy::Finding::new(v.message, v.remedy)),
+    );
 }
 
 /// Drop the verbose-commit scissors section and `#` comment lines.

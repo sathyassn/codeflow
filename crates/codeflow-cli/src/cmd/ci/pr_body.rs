@@ -421,6 +421,35 @@ fn wrapped_rows(line: &str) -> usize {
     rows
 }
 
+/// Whether the body's one Release impact section states `Breaking: no` with
+/// a `Rationale` that gives a reason (TSK-147 AC-4).
+pub(super) fn declares_no_break(body: &str) -> bool {
+    let parsed = sections(body);
+    let matching = matching_sections(&parsed, "Release impact");
+    let [section] = matching.as_slice() else {
+        return false;
+    };
+    let content = section.content();
+    let end = sections(content)
+        .first()
+        .map_or(content.len(), |s| s.heading_start);
+    let text = visible_text(&content[..end], false);
+    let field = |name: &str| {
+        let values: Vec<&str> = text
+            .lines()
+            .filter_map(|line| line.trim().split_once(':'))
+            .filter(|(key, _)| key.trim().eq_ignore_ascii_case(name))
+            .map(|(_, value)| value.trim())
+            .collect();
+        match values.as_slice() {
+            [value] => Some(*value),
+            _ => None,
+        }
+    };
+    field("breaking").is_some_and(|value| value.eq_ignore_ascii_case("no"))
+        && field("rationale").is_some_and(|value| !value.is_empty() && !placeholder(value))
+}
+
 pub(super) fn release(git: &GitPolicy, body: &str, breaking_commit: bool) -> Vec<Violation> {
     if !git.pr_release_impact.is_active() {
         return Vec::new();

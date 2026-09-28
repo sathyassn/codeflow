@@ -309,7 +309,7 @@ catalog! {
 
     /// A commit on a declared contract surface.
     BREAKING_WATCH_PATH = Step::Codeflow("codeflow ci"),
-        "if it is not breaking, state `Breaking: no` with a `Rationale` under Release impact in the pull request body, which `codeflow ci --pr-body-file <body.md>` reads; if it is, mark the commit `type!:` with a `BREAKING CHANGE:` footer and the migration path";
+        "if it is not breaking, state `Breaking: no` with a `Rationale` under Release impact in the pull request body, and `codeflow ci --pr-body-file <body.md>` reports nothing; if it is, mark the commit `type!:` with a `BREAKING CHANGE:` footer and the migration path";
 
     // Pull request bodies, checked by `codeflow ci`.
 

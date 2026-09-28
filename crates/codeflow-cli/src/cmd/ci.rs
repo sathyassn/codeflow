@@ -329,10 +329,36 @@ pub fn run(args: &CiArgs) -> i32 {
         ran.push("PR-body");
     }
 
+    settle_watched_paths(&mut tagged, pr_body.as_deref());
     if let Some(running) = args.run_level {
         run_under(&root, running, &mut tagged);
     }
     report(&tagged, &ran, &skipped)
+}
+
+/// The contract-surface findings under the pull request's Release impact
+/// (TSK-147 AC-4): a body that states `Breaking: no` with a `Rationale`
+/// settles them; with no body they print as notes pointing at those fields;
+/// any other body keeps them as warnings.
+fn settle_watched_paths(tagged: &mut Vec<TaggedViolation>, body: Option<&str>) {
+    let watched = |t: &TaggedViolation| t.violation.rule == git_hook::WATCHED_PATH_RULE;
+    match body {
+        Some(body) if pr_body::declares_no_break(body) => tagged.retain(|t| !watched(t)),
+        Some(_) => {}
+        None => {
+            let (notes, kept): (Vec<TaggedViolation>, Vec<TaggedViolation>) =
+                std::mem::take(tagged).into_iter().partition(watched);
+            *tagged = kept;
+            for t in notes {
+                let text = match &t.sha {
+                    Some(sha) => format!("{} in {}", t.violation.message, short(sha)),
+                    None => t.violation.message,
+                };
+                let note = codeflow_core::remedy::Finding::new(text, t.violation.remedy);
+                eprintln!("{}", note.line("codeflow ci", "note"));
+            }
+        }
+    }
 }
 
 /// Lower each finding to its effective level under the running plane's
