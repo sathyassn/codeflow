@@ -766,19 +766,20 @@ applies the bar. Offline checks prove the kit, not live behaviour.
 
 A case may also carry `expected.files` and `expected.effects`, graded by
 `eval_kit.py grade` after the session from evidence the subject cannot fake:
-file state, coherent reviews in the reviewer's verdict format, branches,
-changed paths, commands proven by recorded process invocations, judgements
-bound to the exact text, confined product checks with expected output, and
-the shipped `codeflow validate --docs` and `codeflow ci`, which must finish
-their checks. Graded cases live in a graded suite outside the shipped kit and
-binary: a public development suite in `evals/grader-dev/`, and the live
-delivery holdout of SPC-013 R-105 on the private archive's
-`test/live-delivery-holdout` ref, which is never merged; `evals/holdout.json`
-records its paths and digests and `holdout-check` keeps it out of the tracked
-tree. Subjects work in a separate subjects root under a fixture boundary that
-covers both roots. A trial's status is recomputed from a grade bound to the
-current case, fixture and grader; a timed-out or errored session is kept and
-graded as a failure, and a pack result must keep every trial (TSK-111).
+file state, coherent reviews in the reviewer's verdict format, branches and
+their tracking, records the id registry issued, changed paths, judgements
+bound to the exact text, confined product checks with expected output, and the
+shipped `codeflow validate --docs` and `codeflow ci`, which must finish their
+checks; a command's process record is reported as supporting evidence only.
+Graded cases live in a graded suite outside the shipped kit and binary: a
+public development suite in `evals/grader-dev/`, and the live delivery holdout
+of SPC-013 R-105 on the private archive's `test/live-delivery-holdout` ref,
+which is never merged; `evals/holdout.json` records its paths and digests and
+passage fingerprints, and `holdout-check` keeps it out of the tracked tree.
+Subjects work in a separate subjects root under a fixture boundary that covers
+both roots. A trial's status is recomputed from a grade bound to the current
+case, fixture and grader; a timed-out or errored session is kept and graded as
+a failure, and a pack result must keep every trial (TSK-111).
 
 The kit separates durable doctrine from fast-changing bindings. A
 source-controlled harness catalog marks a harness `capability-supported` only

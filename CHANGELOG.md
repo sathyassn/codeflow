@@ -384,18 +384,20 @@ publication date._
   can now carry `expected.files` and `expected.effects`, and `eval_kit.py
   grade` judges them after the session from evidence the subject cannot fake:
   file content and frontmatter, reviews read only in the reviewer's verdict
-  format and only when coherent, claimed branches, the paths the session
-  changed, required commands proven by recorded process invocations rather
-  than shell text, meaning settled by recorded judgements bound to the exact
-  text, product checks run under confinement with their expected output, and
-  commit gates and acceptance blocks judged by the shipped `codeflow`
-  checkers, whose failure to finish fails the assertion. Graded cases live in
-  a graded suite outside the shipped kit (`--graded-suite`); a qualification
-  holdout stays outside the published repository, and `holdout-check` fails
-  when a holdout path, file, entry or string appears in the tracked tree.
-  Subjects work in a separate subjects root, the fixture boundary covers both
-  roots at every depth, a timed-out or errored session is kept and graded as
-  a failure, and a pack result must keep every trial.
+  format, from the verdict field alone and only when coherent and judged so,
+  claimed branches and their tracking, records the id registry issued, the
+  paths the session changed, meaning settled by recorded judgements bound to
+  the exact text, product checks run under confinement with their expected
+  output, and commit gates and acceptance blocks judged by the shipped
+  `codeflow` checkers, whose failure to finish fails the assertion. A
+  command's process record is reported beside the effect it names and never
+  decides it. Graded cases live in a graded suite outside the shipped kit
+  (`--graded-suite`); a qualification holdout stays outside the published
+  repository, and `holdout-check` fails when a holdout path, file, JSON object
+  or copied passage appears in the tracked tree. Subjects work in a separate
+  subjects root, the fixture boundary covers both roots at every depth, a
+  timed-out or errored session is kept and graded as a failure, and a pack
+  result must keep every trial.
 
 ### Changed
 

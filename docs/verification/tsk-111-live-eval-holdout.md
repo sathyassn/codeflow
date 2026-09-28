@@ -43,13 +43,19 @@ never enters a line at all.
   nothing.
 - `evals/holdout.json` records the holdout's forbidden paths
   (`evals/live-delivery/` and `evals/model-artifacts/test_live_pack.py`, where
-  it first lived on the task branch) and the digests of its files and suite
-  entries, never their content. `test_eval_kit.py` runs
-  `holdout_leaks` over the tracked tree in every `codeflow test`, so CI fails
-  on a holdout path, a copied holdout file or a copied case, fixture or pack.
-  With the checkout at hand it also fails on any string only the holdout
-  holds (case, fixture and long assertion ids, rubric openings) and on a
-  manifest that no longer matches the holdout.
+  it first lived on the task branch), the digests of its files and of every
+  JSON object in it, and fingerprints of its answers, never their content.
+  The answers are its JSON string values (prompts, fixture files,
+  expectations, rubrics) and the string literals of its code (scripted
+  solutions and reviews), fingerprinted as runs of 12 words; passages the
+  shipped scaffold under `assets/` also holds are left out.
+- `test_eval_kit.py` runs `holdout_leaks` over the tracked tree in every
+  `codeflow test`, so CI fails on a holdout path, a copied holdout file, a
+  holdout object nested anywhere in any file that parses as JSON whatever its
+  name, and a copied passage of 27 words or more (shorter ones are often
+  caught), escaped or not. With the checkout at hand it also fails on an id or
+  rubric opening only the holdout holds and on a manifest that no longer
+  matches the holdout.
 - After changing the holdout, run `eval_kit.py holdout-check --manifest
   evals/holdout.json --holdout <checkout> --update` and commit the manifest.
 
@@ -66,8 +72,9 @@ no rotation.
 
 - The check covers the tracked tree of the checkout it runs in, not other
   refs or history; the rewrite covers the task branch.
-- It catches exact copies of holdout files and suite entries without the
-  holdout, and strings only with the holdout checked out. A paraphrase of a
-  case is not caught mechanically.
+- It catches exact copies: whole files, JSON objects, and passages of 27
+  words or more without the holdout; ids and rubric openings only with it. A
+  paraphrase, a passage split by edits into runs under 12 words, or a
+  re-encoding other than JSON escaping is not caught mechanically.
 - Whether the sync from the archive publishes only `main` is the operator's
   arrangement; it was not verified here.
