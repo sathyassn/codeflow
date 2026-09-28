@@ -787,8 +787,9 @@ publication date._
   page keeps its own meaning for that key. The portal generator and
   `codeflow validate --portal` read the same forms. Like `validate --docs`,
   both refuse a task record that carries `depends_on` and `dependencies`
-  together. Run `codeflow portal setup --path <dir>` to take the fix into an
-  installed portal.
+  together, or whose dependency names something other than a task. Run
+  `codeflow portal setup --path <dir>` to take the fix into an installed
+  portal.
 
 <!-- codeflow:release-impact patch -->
 - **`git gc` works in a hooked clone.** The reference-transaction hook no

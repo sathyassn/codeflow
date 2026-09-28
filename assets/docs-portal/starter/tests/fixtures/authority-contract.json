@@ -103,6 +103,12 @@
       "yaml": "id: SPC-101\ndepends_on: [SPC-100]\ndependencies: [serde]",
       "ids": ["SPC-101"],
       "relationships": [["depends_on", "SPC-100"]]
+    },
+    {
+      "source_path": "project-management/specs/SPC-102.md",
+      "yaml": "id: SPC-102\ndepends_on: [{id: SPC-100, kind: research}]",
+      "ids": ["SPC-102"],
+      "relationships": [["depends_on", "SPC-100"]]
     }
     ],
     "rejected": [
@@ -114,6 +120,8 @@
       { "yaml": "id: TSK-101\ndepends_on: [{kind: research, pin: \"0123abcd\"}]", "error": "relationship" },
       { "yaml": "id: TSK-101\ndepends_on: [{id: not-an-id, kind: decision}]", "error": "relationship" },
       { "yaml": "id: TSK-101\ndepends_on: {id: TSK-100, kind: research}", "error": "relationship" },
+      { "yaml": "id: TSK-101\ndepends_on: [{id: CAP-100, kind: research}]", "error": "relationship" },
+      { "yaml": "id: TSK-101\ndepends_on: [CAP-100]", "error": "relationship" },
       { "yaml": "id: TSK-101\ndepends_on: [TSK-100]\ndependencies: [TSK-100]", "error": "dependencies" }
     ]
   }

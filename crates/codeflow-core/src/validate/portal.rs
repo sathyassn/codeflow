@@ -3458,7 +3458,8 @@ fn mapping_string<'a>(mapping: &'a serde_yaml::Mapping, key: &str) -> Option<&'a
 /// entry is an id, or a research or decision input written as a mapping whose
 /// `id` names it; `validate --docs` owns the other keys (`kind`, `pin`), so
 /// they are not read here. Legacy `dependencies` is a task-record key: it
-/// reads as `depends_on` only when `source_id` is a task id.
+/// reads as `depends_on` only when `source_id` is a task id. A task depends
+/// only on tasks, as `validate --docs` requires.
 fn relationships_from_mapping(
     mapping: &serde_yaml::Mapping,
     source_id: Option<&str>,
@@ -3506,7 +3507,11 @@ fn relationships_from_mapping(
                 ))
             }
         };
-        if targets.iter().any(|target| !strict_id(target)) {
+        let task_dependency = task && kind == "depends_on";
+        if targets
+            .iter()
+            .any(|target| !strict_id(target) || (task_dependency && !target.starts_with("TSK-")))
+        {
             return Err(format!(
                 "declared {field} relationship has an invalid target"
             ));
