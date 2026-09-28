@@ -1,0 +1,11 @@
+id = "TSK-170"
+uid = "ef4587c9-9d82-4b59-934c-3ce85468daf9"
+kind = "TSK"
+title = "unresolved conflict markers refused before commit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T23:02:01Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
