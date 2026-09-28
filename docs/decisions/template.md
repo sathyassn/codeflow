@@ -18,7 +18,9 @@ architecture_impact: none # none | one line naming what in architecture.md chang
 
 ## Context
 
-<!-- What forced a decision: the constraint, not the history. 2 to 5 sentences. -->
+<!-- What forced a decision: the constraint, not the history. 2 to 5 sentences.
+     The copy guide (`cf-editorial-review/references/copy-guide.md`) has the
+     ADR shape. -->
 
 ## Decision
 

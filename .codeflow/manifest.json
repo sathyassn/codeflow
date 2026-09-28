@@ -1295,7 +1295,7 @@
     ".github/pull_request_template.md": {
       "src": "ci/pull_request_template.md",
       "ownership": "managed",
-      "sha256": "f60efe6631848c2a580cbab8e9428473031e6aa005f2d27a8a95cd7be0d73bb9",
+      "sha256": "83b1ec7f725e72a1a49d2fce39170c094b7b65ccd1b2371081d434c81e1d2ff2",
       "exec": false
     },
     ".github/workflows/codeflow-ci.yml": {
@@ -1349,7 +1349,7 @@
     "docs/decisions/template.md": {
       "src": "docs/decisions/template.md",
       "ownership": "user-owned",
-      "sha256": "9d26f7cd3c5b93c3ba3c58f8135206e73a60779b0823b271c962b8bab74f0be0",
+      "sha256": "19d0fc55aa4564e71148bea56ba70b38e17a3710a60129c30314cd56494771a1",
       "exec": false
     },
     "docs/product.md": {
@@ -1361,7 +1361,7 @@
     "project-management/templates/epic.md": {
       "src": "pm/epic.md.tmpl",
       "ownership": "managed",
-      "sha256": "bd8a29bf151d3e9bfa3f4083027a47ad11c88b554fbbe9ad4971d1bee48324f0",
+      "sha256": "68fa0a028d5534a2d6299764c0b75b720627b9fc4002731633760cf8b5e32765",
       "exec": false
     },
     "project-management/templates/spec.md": {

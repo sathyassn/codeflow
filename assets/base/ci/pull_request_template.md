@@ -12,7 +12,8 @@
      numbers or caveats; details go in Changes. Cover the whole branch:
      derive from `git log --oneline <base>..<head>` and
      `git diff --stat <base>...<head>`, and inspect the full diff. Do not
-     write from the last conversation turn, review round or commit. -->
+     write from the last conversation turn, review round or commit. The
+     `cf-editorial-review` copy guide, where installed, has the full rules. -->
 
 ## Changes
 
