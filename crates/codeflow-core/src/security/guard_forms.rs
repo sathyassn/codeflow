@@ -93,6 +93,36 @@ pub const COMPOSED_PAIRS: &[(&str, &str)] = &[
     ("rsync -a --delete-after ./empty/ /", "rm -rf /"),
     ("rsync -a --del ./empty/ ~", "rm -rf ~"),
     ("rsync -a --remove-source-files / ./backup/", "rm -rf /"),
+    // A `break`, `continue` or `return` leaves its loop or function with
+    // the value it holds there, not the one the rest of the body sets.
+    (
+        "D=build; for x in a; do D=/; break; D=build; done; rm -rf $D",
+        "rm -rf /",
+    ),
+    (
+        "D=build; for x in a b; do D=/; continue; D=build; done; rm -rf $D",
+        "rm -rf /",
+    ),
+    (
+        "D=build; while true; do D=/; break; D=build; done; rm -rf $D",
+        "rm -rf /",
+    ),
+    (
+        "f() { D=/; return; D=build; }; D=build; f; rm -rf $D",
+        "rm -rf /",
+    ),
+    (
+        "cd build; for x in a; do cd /; break; cd build; done; rm -rf *",
+        "rm -rf /*",
+    ),
+    (
+        "D=build; for x in a; do for y in b; do D=/; break 2; done; D=build; done; rm -rf $D",
+        "rm -rf /",
+    ),
+    (
+        "f() { for d in / build; do return; done; }; f; rm -rf $d",
+        "rm -rf /",
+    ),
     ("rm -rf /*", "rm -rf /*"),
     ("rm -rf --no-preserve-root /", "rm -rf /"),
 ];

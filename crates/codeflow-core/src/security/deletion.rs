@@ -15,14 +15,15 @@
 //! values). A subshell, a pipeline stage, `sh -c` and a substitution run on
 //! a copy that never flows back. A branch, an `&&` or `||` operand, a `case`
 //! arm, a loop body and a function body may or may not run, so the state
-//! after them is the union of every path through them. Only an assignment,
-//! `cd` or `unset` that runs unconditionally in the same shell narrows a
-//! value. A deletion is refused when any feasible value of its target is
+//! after them is the union of every path through them. A `break`,
+//! `continue` or `return` leaves with the state it holds there, and that
+//! state joins the union too. Only an assignment, `cd` or `unset` that runs
+//! unconditionally in the same shell narrows a value. A deletion is refused when any feasible value of its target is
 //! protected, and the refusal says so when the value is one of several.
 //!
 //! **Precise where it is cheap.** Single quotes keep `$VAR` literal; a `for`
 //! over a fixed list leaves its variable at the last word when the body
-//! neither breaks nor assigns it; `${VAR:?}`, `${VAR:-…}` and `${VAR%…}`
+//! neither leaves early (`break`, `return`) nor assigns it; `${VAR:?}`, `${VAR:-…}` and `${VAR%…}`
 //! expand to their possible values; `$(printf …)`, `$(echo …)` and `$(pwd)`
 //! are read; and a path that exists is also judged where it really lands
 //! (the real path of its longest existing prefix), so a link to `/` is `/`.
@@ -62,6 +63,7 @@ pub(super) fn composed_deletion_in(command: &str, base: Option<&Path>) -> Option
         depth: 0,
         functions: BTreeMap::new(),
         pipe_input: None,
+        jumps: Vec::new(),
     };
     let mut state = State::start();
     reader.script(command, &mut state);
@@ -1165,6 +1167,10 @@ struct Reader<'a> {
     functions: BTreeMap<String, Node>,
     /// What the pipeline stage being read receives on its input.
     pipe_input: Option<Vec<Input>>,
+    /// One frame per loop or function call being read: the states at each
+    /// `break`, `continue` or `return` inside it, which leave its body
+    /// early and so reach its end without the commands after them.
+    jumps: Vec<Vec<State>>,
 }
 
 impl Reader<'_> {
@@ -1181,6 +1187,22 @@ impl Reader<'_> {
     fn report(&mut self, target: &'static str, ambiguous: bool) {
         if self.found.is_none() {
             self.found = Some(Found { target, ambiguous });
+        }
+    }
+
+    /// Read `body` from `st` as a loop pass or a function call, then join
+    /// in every state that left it early. The jumps are also handed to the
+    /// enclosing frame, since `break 2` or a `break` inside a function can
+    /// leave that too.
+    fn frame(&mut self, body: &Node, st: &mut State) {
+        self.jumps.push(Vec::new());
+        self.run(body, st);
+        let left = self.jumps.pop().unwrap_or_default();
+        for early in &left {
+            st.join(early);
+        }
+        if let Some(outer) = self.jumps.last_mut() {
+            outer.extend(left);
         }
     }
 
@@ -1229,7 +1251,7 @@ impl Reader<'_> {
                 self.run(cond, &mut acc);
                 for _ in 0..LOOP_PASSES {
                     let mut pass = acc.clone();
-                    self.run(body, &mut pass);
+                    self.frame(body, &mut pass);
                     self.run(cond, &mut pass);
                     let mut next = acc.clone();
                     next.join(&pass);
@@ -1296,7 +1318,7 @@ impl Reader<'_> {
         for _ in 0..LOOP_PASSES {
             let mut pass = acc.clone();
             pass.set(name, values.clone());
-            self.run(body, &mut pass);
+            self.frame(body, &mut pass);
             let mut next = acc.clone();
             next.join(&pass);
             if next == acc {
@@ -1372,6 +1394,12 @@ impl Reader<'_> {
             .map(|p| program_name(p))
             .unwrap_or_default();
         match program.as_str() {
+            "break" | "continue" | "return" => {
+                if let Some(frame) = self.jumps.last_mut() {
+                    frame.push(st.clone());
+                }
+                true
+            }
             "cd" | "pushd" | "popd" | "chdir" => {
                 let mut cwd = Values::new();
                 for argv in variants {
@@ -1435,7 +1463,7 @@ impl Reader<'_> {
             name if self.functions.contains_key(name) && self.depth <= MAX_DEPTH => {
                 if let Some(body) = self.functions.get(name).cloned() {
                     self.depth += 1;
-                    self.run(&body, st);
+                    self.frame(&body, st);
                     self.depth -= 1;
                 }
                 true
@@ -1502,7 +1530,7 @@ impl Reader<'_> {
                 if let Some(body) = self.functions.get(name).cloned() {
                     let mut child = st.clone();
                     self.depth += 1;
-                    self.run(&body, &mut child);
+                    self.frame(&body, &mut child);
                     self.depth -= 1;
                 }
             }
@@ -2420,13 +2448,16 @@ fn collect_simples(node: &Node, out: &mut Vec<(Vec<Word>, Vec<Redir>)>) {
     }
 }
 
-/// Whether a loop body may leave early with `break`.
+/// Whether a loop body may leave early with `break` or `return`.
 fn may_break(body: &Node) -> bool {
     let mut simples = Vec::new();
     collect_simples(body, &mut simples);
-    simples
-        .iter()
-        .any(|(words, _)| words.first().and_then(Word::plain) == Some("break"))
+    simples.iter().any(|(words, _)| {
+        matches!(
+            words.first().and_then(Word::plain),
+            Some("break" | "return")
+        )
+    })
 }
 
 /// Whether a loop body may set `name`, or runs something the reader cannot
