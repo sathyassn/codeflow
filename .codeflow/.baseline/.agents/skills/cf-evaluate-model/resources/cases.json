@@ -6862,6 +6862,211 @@
           "fact_invented"
         ]
       }
+    },
+    {
+      "id": "lead-and-caption-around-a-figure",
+      "kind": "regression",
+      "category": "documentation-portal",
+      "canary": false,
+      "fixture": "guide-release-flow-figure",
+      "requirements": [
+        "CF-COPY-001"
+      ],
+      "prompt": "docs/release-flow.md carries its figure but none of the words. Write them.",
+      "expected": {
+        "routes": [
+          "cf-model-orchestrator",
+          "cf-docs-portal"
+        ],
+        "signals": [
+          "lead_says_what_the_reader_looks_at",
+          "caption_is_one_sentence_takeaway",
+          "caption_differs_from_title_and_lead",
+          "legend_keys_are_noun_phrases",
+          "no_sentence_explains_the_legend"
+        ],
+        "references": [
+          "docs/release-flow.md",
+          "docs/figures/release-flow.json"
+        ],
+        "must_not": [
+          "lead_restates_caption",
+          "caption_repeats_title",
+          "legend_explained_in_prose",
+          "key_written_as_clause",
+          "carrier_form_described"
+        ]
+      }
+    },
+    {
+      "id": "search-dialog-microcopy",
+      "kind": "regression",
+      "category": "artifact_quality",
+      "canary": false,
+      "fixture": "app-search-dialog",
+      "requirements": [
+        "CF-COPY-002"
+      ],
+      "prompt": "The guide's search dialog in app/search.html ships next week with its strings still empty. Fill them in.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "labels_verb_first",
+          "labels_in_sentence_case",
+          "empty_state_says_what_to_type",
+          "no_results_message_names_next_step",
+          "no_exclamation_mark",
+          "counts_as_digits"
+        ],
+        "references": [
+          "app/search.html",
+          "app/README.md"
+        ],
+        "must_not": [
+          "exclamation_mark",
+          "title_case_label",
+          "empty_state_without_action",
+          "count_spelled_out",
+          "jokey_tone"
+        ]
+      }
+    },
+    {
+      "id": "task-closeout-from-evidence",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "closeout-evidence-tsk-231",
+      "requirements": [
+        "CF-COPY-003"
+      ],
+      "prompt": "Write the closeout for TSK-231 from EVIDENCE.md.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "summary_one_to_three_sentences",
+          "summary_is_context_only",
+          "evidence_in_fenced_block_or_table",
+          "coverage_number_carried",
+          "not_tested_named"
+        ],
+        "references": [
+          "project-management/tasks/TSK-231.md",
+          "EVIDENCE.md"
+        ],
+        "must_not": [
+          "bullets_only_closeout",
+          "paragraph_wall",
+          "summary_carries_number_or_path",
+          "not_tested_dropped",
+          "fact_invented"
+        ]
+      }
+    },
+    {
+      "id": "short-answer-stays-one-line",
+      "kind": "regression",
+      "category": "outputs",
+      "canary": false,
+      "fixture": "gate-evidence-tsk-231",
+      "requirements": [
+        "CF-COPY-003"
+      ],
+      "prompt": "Did the essential gate pass on the tested revision?",
+      "expected": {
+        "routes": [
+          "direct"
+        ],
+        "signals": [
+          "one_line_answer",
+          "answer_states_yes_or_no",
+          "no_lead_before_answer"
+        ],
+        "references": [
+          "EVIDENCE.md"
+        ],
+        "must_not": [
+          "lead_before_short_answer",
+          "heading_in_short_answer",
+          "recap_after_answer",
+          "summary_padding"
+        ]
+      }
+    },
+    {
+      "id": "first-section-of-a-new-skill",
+      "kind": "regression",
+      "category": "artifact_quality",
+      "canary": false,
+      "fixture": "skill-rollback-notes",
+      "requirements": [
+        "CF-COPY-004"
+      ],
+      "prompt": "Write the opening section of .agents/skills/cf-rollback/SKILL.md from NOTES.md, below the frontmatter.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "imperative_plain_sentences",
+          "actor_named_when_not_reader",
+          "no_slogan",
+          "no_contrast_turn",
+          "no_policy_character"
+        ],
+        "references": [
+          "NOTES.md",
+          ".agents/skills/cf-rollback/SKILL.md"
+        ],
+        "must_not": [
+          "slogan_kept",
+          "contrast_turn",
+          "policy_character",
+          "self_narration",
+          "motivational_framing"
+        ]
+      }
+    },
+    {
+      "id": "adr-for-a-byte-pinned-sheet",
+      "kind": "regression",
+      "category": "artifact_quality",
+      "canary": false,
+      "fixture": "adr-notes-figure-sheet",
+      "requirements": [
+        "CF-COPY-005"
+      ],
+      "prompt": "Turn DECISION_NOTES.md into docs/decisions/ADR-0104.md using the template.",
+      "expected": {
+        "routes": [
+          "direct",
+          "cf-model-orchestrator"
+        ],
+        "signals": [
+          "context_two_to_five_sentences",
+          "context_names_constraint",
+          "one_decision_paragraph_as_fact",
+          "consequences_name_a_cost"
+        ],
+        "references": [
+          "DECISION_NOTES.md",
+          "docs/decisions/template.md"
+        ],
+        "must_not": [
+          "context_is_history",
+          "decision_spread_over_paragraphs",
+          "decision_hedged",
+          "consequences_without_cost",
+          "alternatives_inside_decision"
+        ]
+      }
     }
   ]
 }

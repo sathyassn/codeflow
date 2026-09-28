@@ -154,6 +154,26 @@ EXPLANATION_METHOD_INVENTORY = {
 # TSK-073 grading inventory for the copy-guide pack, in the same shape. The
 # two EPC-017 cases are registered unchanged beside the guide's own cases.
 COPY_GUIDE_INVENTORY = {
+    "lead-and-caption-around-a-figure": (
+        "CF-COPY-001", ("lead_restates_caption", "caption_repeats_title", "legend_explained_in_prose",
+                        "key_written_as_clause", "carrier_form_described"), ()),
+    "search-dialog-microcopy": (
+        "CF-COPY-002", ("exclamation_mark", "title_case_label", "empty_state_without_action",
+                        "count_spelled_out", "jokey_tone"), ()),
+    "task-closeout-from-evidence": (
+        "CF-COPY-003", ("bullets_only_closeout", "paragraph_wall", "summary_carries_number_or_path",
+                        "not_tested_dropped", "fact_invented"), ()),
+    # The summary case's positive control, on its own yes-or-no prompt: the
+    # one-line answer with no lead passes.
+    "short-answer-stays-one-line": (
+        "CF-COPY-003", ("lead_before_short_answer", "heading_in_short_answer", "recap_after_answer",
+                        "summary_padding"), ()),
+    "first-section-of-a-new-skill": (
+        "CF-COPY-004", ("slogan_kept", "contrast_turn", "policy_character", "self_narration",
+                        "motivational_framing"), ()),
+    "adr-for-a-byte-pinned-sheet": (
+        "CF-COPY-005", ("context_is_history", "decision_spread_over_paragraphs", "decision_hedged",
+                        "consequences_without_cost", "alternatives_inside_decision"), ()),
     "operator-reply-is-plain-prose-and-bullets": (
         "CF-OUT-002", ("policy_character_in_reply", "summary_carries_details"), ()),
     "identifier-only-title-gets-words": ("CF-OUT-005", ("identifier_only_title_kept",), ()),
@@ -620,6 +640,73 @@ class SuiteContractTests(unittest.TestCase):
                     self.assertEqual(entry["decision"], eval_kit.computed_trial_status(trial, case))
                     self.assertEqual(entry["role"] == "passing", entry["decision"] == "pass")
                     self.assertTrue((directory / entry["answer"]).exists())
+
+    def test_copy_controls_grade_committed_answers(self) -> None:
+        # TSK-073: committed control answers for every new case of the
+        # copy-guide pack. The kit computes each recorded decision from the
+        # grader's signals; every faulty control fails and the short-answer
+        # positive control passes; the form signals agree with the answer.
+        directory = ROOT / "evals/model-artifacts/copy-controls"
+        controls = json.loads((directory / "controls.json").read_text(encoding="utf-8"))
+        cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+        new_cases = set(eval_kit.resolve_pack("copy-guide")) - {
+            "operator-reply-is-plain-prose-and-bullets", "identifier-only-title-gets-words"}
+        self.assertEqual(new_cases, set(controls["cases"]))
+        self.assertEqual({"passing"}, {entry["role"] for entry in controls["cases"]["short-answer-stays-one-line"]}
+                         - {"faulty"})
+        texts = {}
+        for case_id, entries in controls["cases"].items():
+            case = cases[case_id]
+            self.assertIn("faulty", {entry["role"] for entry in entries}, case_id)
+            for entry in entries:
+                with self.subTest(case=case_id, answer=entry["answer"]):
+                    trial = control_trial(case, entry["signals"])
+                    self.assertEqual(entry["decision"], eval_kit.computed_trial_status(trial, case))
+                    self.assertEqual(entry["role"] == "passing", entry["decision"] == "pass")
+                    raw = (directory / entry["answer"]).read_text(encoding="utf-8")
+                    # No committed line carries a policy character; the
+                    # mannered controls hold theirs as JSON escapes.
+                    self.assertFalse(re.search("[\u2013\u2014]", raw), entry["answer"])
+                    answer = json.loads(raw)
+                    text = "\n".join([*answer.get("files", {}).values(), answer.get("reply", ""),
+                                      json.dumps(answer.get("declaration", {}), ensure_ascii=False)])
+                    texts[entry["answer"]] = (entry, text, answer)
+        dash = re.compile("[\u2013\u2014]")
+        for name, (entry, text, answer) in texts.items():
+            signals = set(entry["signals"])
+            with self.subTest(answer=name):
+                if "policy_character" in signals or entry["role"] == "passing":
+                    self.assertEqual(bool(dash.search(text)), "policy_character" in signals)
+                if name.startswith("adr-"):
+                    self.assertTrue(dash.search(text), "the mannered ADR control keeps its dash")
+                if name.startswith("search-"):
+                    strings = re.findall(r">([^<]+)<", text) + re.findall(r'(?:aria-label|placeholder)="([^"]+)"', text)
+                    self.assertEqual(any("!" in s for s in strings), "exclamation_mark" in signals)
+                    count = re.search(r'data-copy="count"[^>]*>([^<]*)<', text).group(1)
+                    self.assertEqual(not re.search(r"\d", count), "count_spelled_out" in signals)
+                    labels = re.findall(r'<button[^>]*>([^<]+)<', text)
+                    self.assertEqual(any(any(w[0].isupper() for w in s.split()[1:]) for s in labels),
+                                     "title_case_label" in signals)
+                if name.startswith("closeout-"):
+                    closeout = answer["files"]["project-management/tasks/TSK-231.md#Closeout"].split("## Closeout", 1)[1]
+                    body = [line for line in closeout.splitlines() if line.strip()]
+                    self.assertEqual(all(line.startswith("- ") for line in body), "bullets_only_closeout" in signals)
+                    prose = " ".join(body)
+                    one_paragraph = "\n\n" not in closeout.strip()
+                    self.assertEqual(one_paragraph and len(re.findall(r"[.!?](?:\s|$)", prose)) >= 5
+                                     and not body[0].startswith("- "), "paragraph_wall" in signals)
+                if name.startswith("gate-"):
+                    lines = [line for line in answer["reply"].splitlines() if line.strip()]
+                    self.assertEqual(len(lines) == 1, "one_line_answer" in signals)
+                    self.assertEqual(lines[0].lower().startswith(("yes", "no")), "no_lead_before_answer" in signals)
+                    self.assertEqual(not lines[0].lower().startswith(("yes", "no")), "lead_before_short_answer" in signals)
+                if name.startswith("release-flow-"):
+                    page = answer["files"]["docs/release-flow.md"]
+                    self.assertEqual("The figure below shows" in page, "carrier_form_described" in signals)
+                    self.assertEqual("In the legend" in page, "legend_explained_in_prose" in signals)
+                    keys = [state["means"] for state in answer["declaration"]["states"]]
+                    self.assertEqual(any(key.startswith(("This ", "The ", "A ")) for key in keys),
+                                     "key_written_as_clause" in signals)
 
     def test_method_text_answers_carry_the_form_their_signals_claim(self) -> None:
         directory = ROOT / "evals/model-artifacts/method-controls"

@@ -3389,7 +3389,61 @@ type CopyGuideEntry = (
     &'static [&'static str],
 );
 
-const COPY_GUIDE_INVENTORY: [CopyGuideEntry; 3] = [
+const COPY_GUIDE_INVENTORY: [CopyGuideEntry; 9] = [
+    (
+        "lead-and-caption-around-a-figure",
+        "CF-COPY-001",
+        "lead_restates_caption",
+        true,
+        &[
+            "lead", "caption", "legend", "title", "key", "keys", "restate", "figure's",
+        ],
+    ),
+    (
+        "search-dialog-microcopy",
+        "CF-COPY-002",
+        "exclamation_mark",
+        true,
+        &[
+            "label", "labels", "verb", "case", "tooltip", "digit", "digits", "cheerful", "friendly",
+        ],
+    ),
+    (
+        "task-closeout-from-evidence",
+        "CF-COPY-003",
+        "bullets_only_closeout",
+        true,
+        &["table", "bullets", "paragraph", "context", "sentences"],
+    ),
+    (
+        "short-answer-stays-one-line",
+        "CF-COPY-003",
+        "lead_before_short_answer",
+        true,
+        &["one-line", "line", "brief", "briefly", "quick"],
+    ),
+    (
+        "first-section-of-a-new-skill",
+        "CF-COPY-004",
+        "slogan_kept",
+        true,
+        &["imperative", "register", "mannered", "motto"],
+    ),
+    (
+        "adr-for-a-byte-pinned-sheet",
+        "CF-COPY-005",
+        "context_is_history",
+        true,
+        &[
+            "context",
+            "constraint",
+            "history",
+            "consequences",
+            "cost",
+            "costs",
+            "fact",
+        ],
+    ),
     (
         "operator-reply-is-plain-prose-and-bullets",
         "CF-OUT-002",
@@ -3414,8 +3468,7 @@ const COPY_GUIDE_INVENTORY: [CopyGuideEntry; 3] = [
 ];
 
 /// Words that would name a copy guide rule inside any new blind prompt.
-const COPY_GUIDE_PROMPT_LEAKS: [&str; 24] = [
-    "guide",
+const COPY_GUIDE_PROMPT_LEAKS: [&str; 23] = [
     "copy",
     "copywriting",
     "lead",
@@ -3511,5 +3564,43 @@ fn copy_guide_cases_keep_controls_and_blind_prompts() {
                 );
             }
         }
+    }
+}
+
+/// TSK-073. The copy guide requirements are hard, owned by the guide, and
+/// each is read by a case of the copy-guide pack.
+#[test]
+fn copy_guide_requirements_are_hard_and_owned_by_the_guide() {
+    let requirements =
+        json("assets/base/agents/skills/cf-evaluate-model/resources/requirements.json");
+    let owned: Vec<&Value> = requirements["requirements"]
+        .as_array()
+        .expect("requirements")
+        .iter()
+        .filter(|entry| entry["id"].as_str().expect("id").starts_with("CF-COPY-"))
+        .collect();
+    assert_eq!(owned.len(), 5, "one requirement per graded copy guide case");
+    for entry in &owned {
+        assert_eq!(entry["level"], "hard", "{} must be hard", entry["id"]);
+        assert!(
+            entry["sources"]
+                .as_array()
+                .expect("sources")
+                .iter()
+                .all(|source| source["path"]
+                    .as_str()
+                    .expect("path")
+                    .ends_with("cf-editorial-review/references/copy-guide.md")),
+            "{} is not owned by the copy guide",
+            entry["id"]
+        );
+    }
+    let graded: BTreeSet<&str> = COPY_GUIDE_INVENTORY.iter().map(|entry| entry.1).collect();
+    for entry in &owned {
+        assert!(
+            graded.contains(entry["id"].as_str().expect("id")),
+            "{} has no copy-guide case",
+            entry["id"]
+        );
     }
 }

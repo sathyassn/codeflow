@@ -2634,6 +2634,98 @@
           ]
         }
       ]
+    },
+    {
+      "id": "CF-COPY-001",
+      "level": "hard",
+      "statement": "The text around a figure has three parts with three jobs: a lead above it that says what the reader is looking at and never restates the caption, title or legend; a caption of exactly one sentence that states the takeaway and never repeats the title; and legend keys that are noun phrases naming each state, one key per state, with no prose sentence explaining the legend.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "Write a lead only above a carrier",
+            "Never restate the caption, the title or the legend",
+            "Never describe the carrier's form",
+            "Write exactly one sentence, ending in a full stop.",
+            "Never repeat the title, the lead or a legend key.",
+            "Write a key as a noun phrase",
+            "Give each state one key and each key one state."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-COPY-002",
+      "level": "hard",
+      "statement": "Interface strings are written as microcopy: an action label starts with its verb in sentence case, a state is an adjective or participle, an empty state says what to do next, an error names its cause and its fix, counts are digits, a tooltip is one clause, and no string carries an exclamation mark or a joke.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "Start an action label with the verb and name its object",
+            "Name a state with an adjective or a participle, not a verb phrase",
+            "Make an empty state say what to do next",
+            "Give an error its cause and its fix in one or two sentences.",
+            "Write counts as digits",
+            "Keep a tooltip to one clause",
+            "Use no exclamation mark, joke or mascot voice anywhere in an interface."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-COPY-003",
+      "level": "hard",
+      "statement": "A closeout, a pull request body, an ADR context, a report and a reply that leads into a list or table open with a summary of one to three short sentences that gives context only, with every detail after it as bullets, a table for tabular data and a fenced block for pasted output; bullets or a table alone, or a paragraph wall, fail; a short answer is its own summary and takes no lead, heading or recap.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "A summary gives context only",
+            "Write one to three short sentences a reader with no context understands.",
+            "Keep every detail out of it",
+            "Judge a summary by what it carries.",
+            "A short answer is its own summary and takes no lead.",
+            "and a one-line answer stays one line",
+            "Never write a sentence about the reply's own format, length or structure."
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-COPY-004",
+      "level": "hard",
+      "statement": "Skill prose is written in the imperative register with the sentence and word rules: the verb first, the actor named when it is not the reader, exact identifiers in code spans, no slogan, motto, contrast turn or rhetorical triplet, no self-narration and no policy character.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "Write a rule as an instruction to the agent",
+            "Name the actor when it is not the reader",
+            "Write no slogan, motto, contrast turn or rhetorical triplet.",
+            "Use no em or en dash; the skill trees are policy surfaces.",
+            "Drop hedges, ceremony and self-narration"
+          ]
+        }
+      ]
+    },
+    {
+      "id": "CF-COPY-005",
+      "level": "hard",
+      "statement": "An ADR states its context in two to five sentences that name the constraint rather than the history, its decision in one paragraph stated as fact with no hedge and no alternatives inside it, and its consequences with the cost named; a pull request body opens with a summary of one to three sentences and then carries its changes as bullets and its test evidence as a fenced block and a table.",
+      "sources": [
+        {
+          "path": ".agents/skills/cf-editorial-review/references/copy-guide.md",
+          "markers": [
+            "two to five sentences naming the constraint",
+            "not the history that led to it",
+            "one paragraph stated as fact",
+            "with the cost named plainly",
+            "one to three short sentences of context",
+            "the measured coverage with its scope, and what was not"
+          ]
+        }
+      ]
     }
   ]
 }

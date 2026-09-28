@@ -1,0 +1,31 @@
+{
+  "files": {
+    "docs/release-flow.md": "# How a release ships\n\nThe figure below shows how a release ships, from the tag to the published\npackage, with a person approving before the publish step.\n\n<!-- cf-figure: figures/release-flow.json -->\n\nIn the legend, the solid line means the step has already run, the dashed\nline means it has not run yet, the filled dot is a step CI takes, the ring\nis where the maintainer on call decides, and the bar is the gate that stops\nthe release when a check is red.\n\nEvery step after the tag runs in CI. The person who approves the release\nis the maintainer on call.\n"
+  },
+  "declaration": {
+    "caption": "How a release ships from the tag to the published package.",
+    "description": "A tag at the left, then build, test and publish to the right, with the maintainer's approval before publish and a gate bar before it.",
+    "states": [
+      {
+        "name": "done",
+        "means": "This step has already run"
+      },
+      {
+        "name": "todo",
+        "means": "This step has not run yet"
+      },
+      {
+        "name": "agent",
+        "means": "CI takes this step"
+      },
+      {
+        "name": "human",
+        "means": "The maintainer decides here"
+      },
+      {
+        "name": "stop",
+        "means": "A red check stops the release here"
+      }
+    ]
+  }
+}
