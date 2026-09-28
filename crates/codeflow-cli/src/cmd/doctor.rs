@@ -119,6 +119,7 @@ mod tests {
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
             qualification_dir: None,
             harness_home: Some(dir.path().join("home")),
+            env_var: Some(|_| None),
         };
         (dir, opts)
     }
