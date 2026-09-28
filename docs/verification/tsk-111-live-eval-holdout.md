@@ -64,7 +64,11 @@ never enters a line at all.
   leaves its assertion ungraded and the trial not measured. Scoring re-reads
   the retained judgements and calibration files and takes each judge from
   the judgements themselves, so a saved pass stops counting once the
-  calibration of the judge who wrote it is edited, removed or swapped. The holdout's
+  calibration of the judge who wrote it is edited, removed or swapped.
+  Every judgement and calibration is signed under the evaluator key when it
+  is recorded, so a verdict relabelled as another judge, or signed under
+  another key, counts as no judge's. The evaluator key is the trust
+  boundary: its holder is trusted. The holdout's
   scripted judge misses controls by design and tests transport and
   fail-closed binding only; its synthetic oracle meets them and tests the
   binding path. Neither is evidence that meaning was judged.

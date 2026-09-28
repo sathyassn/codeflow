@@ -9,6 +9,7 @@ import importlib.util
 import json
 import os
 import shutil
+import stat
 from pathlib import Path
 import subprocess
 import sys
@@ -1861,8 +1862,12 @@ class GraderTests(unittest.TestCase):
         self.record, self.root, self.run_root = graded_workspace(Path(self.temp.name))
         self.scratch = Path(self.temp.name) / "scratch"
         self.scratch.mkdir()
+        # The evaluator's own CodeFlow home, holding the signing key.
+        self.evaluator = patch.dict(os.environ, {"CODEFLOW_HOME": str(Path(self.temp.name) / "evaluator" / ".codeflow")})
+        self.evaluator.start()
 
     def tearDown(self) -> None:
+        self.evaluator.stop()
         self.temp.cleanup()
 
     def context(self, **options):
@@ -2006,6 +2011,7 @@ def attempt(name, action):
         seen[name] = type(error).__name__
 attempt("read_run_root", lambda: Path({str(self.run_root)!r}, ".codeflow-eval-run.json").read_text())
 attempt("read_graded_suite", lambda: Path({str(DEV_SUITE)!r}, "cases.json").read_text())
+attempt("read_evaluator_key", lambda: Path({str(eval_kit.evaluator_key_path())!r}).read_text())
 attempt("read_fixture", lambda: Path({str(self.root)!r}, "README.md").read_text())
 attempt("write_fixture", lambda: Path({str(self.root)!r}, "PWNED").write_text("x"))
 attempt("network", lambda: socket.create_connection(("127.0.0.1", 9), timeout=2))
@@ -2013,11 +2019,12 @@ attempt("write_own_copy", lambda: Path("scratch.txt").write_text("x"))
 print(json.dumps(seen, sort_keys=True))
 """
         before = eval_kit.state_digest(self.root)
+        eval_kit.evaluator_key(create=True)
         with dev_suite():
             passed, detail = eval_kit.grade_effect(self.context(), {
                 "id": "probe", "kind": "command", "in": "worktree", "argv": ["python3", "-c", probe],
                 "stdout_json": {
-                    "read_run_root": "denied", "read_graded_suite": "denied", "read_fixture": "denied",
+                    "read_run_root": "denied", "read_graded_suite": "denied", "read_evaluator_key": "denied", "read_fixture": "denied",
                     "write_fixture": "denied", "network": "denied", "write_own_copy": "allowed",
                 },
             })
@@ -2454,8 +2461,8 @@ print(json.dumps(seen, sort_keys=True))
         def calibration(name: str, verdicts: list[str], judges: list[tuple[str, str]]) -> Path:
             path = Path(self.temp.name) / f"{name}.json"
             eval_kit.write_json(path, {"schema_version": 1, "judgements": [
-                {"assertion": "rejects", "excerpt_digest": eval_kit.excerpt_digest(control["excerpt"]), "verdict": verdict,
-                 "judge": who[0], "judge_config": who[1], "rationale": "synthetic"}
+                eval_kit.signed_judgement({"assertion": "rejects", "excerpt_digest": eval_kit.excerpt_digest(control["excerpt"]),
+                                           "verdict": verdict, "judge": who[0], "judge_config": who[1], "rationale": "synthetic"})
                 for control, verdict, who in zip(controls, verdicts, judges)
             ]})
             return path
@@ -2508,9 +2515,9 @@ print(json.dumps(seen, sort_keys=True))
         def calibration(name: str, who: list[str], verdict: str = "pass") -> Path:
             path = Path(self.temp.name) / "calibrations" / name
             path.parent.mkdir(exist_ok=True)
-            eval_kit.write_json(path, {"schema_version": 1, "judgements": [
+            eval_kit.write_json(path, {"schema_version": 1, "judgements": [eval_kit.signed_judgement(
                 {"assertion": "rejects", "excerpt_digest": eval_kit.excerpt_digest(REVIEW), "verdict": verdict,
-                 "judge": who[0], "judge_config": who[1], "rationale": "synthetic"}]})
+                 "judge": who[0], "judge_config": who[1], "rationale": "synthetic"})]})
             return path
 
         eval_kit.set_graded_suite(suite)
@@ -2522,9 +2529,9 @@ print(json.dumps(seen, sort_keys=True))
             result["trials"] = [trial for trial in result["trials"] if trial["case_id"] in pack]
             mine, theirs = calibration("mine.json", judge), calibration("theirs.json", other)
             judgements = Path(self.temp.name) / "judgements.json"
-            eval_kit.write_json(judgements, {"schema_version": 1, "judgements": [
+            eval_kit.write_json(judgements, {"schema_version": 1, "judgements": [eval_kit.signed_judgement(
                 {"assertion": "review_is_coherent", "excerpt_digest": eval_kit.excerpt_digest(REVIEW), "verdict": "pass",
-                 "judge": judge[0], "judge_config": judge[1], "rationale": "synthetic"}]})
+                 "judge": judge[0], "judge_config": judge[1], "rationale": "synthetic"})]})
             for each in result["trials"]:
                 each["grade"].update(
                     controls_digest=eval_kit.suite_judge_controls()[1],
@@ -2605,6 +2612,23 @@ print(json.dumps(seen, sort_keys=True))
             self.assertEqual(("error", passes - 1), (status, counted))
             self.assertEqual(["review_is_coherent was judged by model: m (prompt p1), whom no retained calibration qualifies"], faults)
 
+            def relabelled(trial: dict) -> None:
+                # The author's verdicts relabelled as the other qualified
+                # judge, who judged nothing; the file and its digest are
+                # made consistent, but the signatures no longer verify.
+                document = json.loads(judgements.read_text())
+                for entry in document["judgements"]:
+                    entry.update(judge=other[0], judge_config=other[1])
+                eval_kit.write_json(judgements, document)
+                digest = eval_kit.raw_file_digest(judgements)
+                trial["grade"].update(judgements_digest=digest, counted_judges=[other])
+                for item in trial["evidence"]:
+                    if item["ref"] == str(judgements):
+                        item["digest"] = digest
+            status, faults, counted = consumed(relabelled)
+            self.assertEqual(("error", passes - 1), (status, counted))
+            self.assertEqual(["review_is_coherent was judged by a judgement not signed under the evaluator key, whom no retained calibration qualifies"], faults)
+
             def judgements_changed(trial: dict) -> None:
                 judgements.write_text(judgements.read_text().replace('"pass"', '"fail"'))
             def judgements_removed(trial: dict) -> None:
@@ -2643,6 +2667,50 @@ print(json.dumps(seen, sort_keys=True))
             self.assertEqual((passes - 1, 1), (scored["summary"]["pass"], scored["summary"]["error"]))
         finally:
             eval_kit.set_graded_suite(None)
+
+    def test_a_judgement_counts_only_when_signed_under_the_evaluator_key(self) -> None:
+        self.assertIsNone(eval_kit.evaluator_key())
+        key = eval_kit.evaluator_key(create=True)
+        path = eval_kit.evaluator_key_path()
+        self.assertEqual((0o600, 0o700), (stat.S_IMODE(path.stat().st_mode), stat.S_IMODE(path.parent.stat().st_mode)))
+        self.assertFalse(eval_kit.nested(path, ROOT))
+        self.assertIn(path.parent, self.context().hidden_paths())
+        self.assertIn(f'(subpath "{os.path.realpath(path.parent)}")', eval_kit.sandbox_profile(self.scratch, self.context().hidden_paths()))
+        judgements = Path(self.temp.name) / "judgements.json"
+        entry = {"assertion": "a", "excerpt_digest": "sha256:" + "1" * 64, "verdict": "pass", "judge": "human: ana",
+                 "judge_config": "reads the rubric and the excerpt", "rationale": "names PAY-12"}
+        signed = eval_kit.record_judgement(judgements, entry)
+        key_of = ("a", entry["excerpt_digest"])
+        self.assertEqual(("pass", ("human: ana", "reads the rubric and the excerpt")), eval_kit.read_judgements(judgements)[0][key_of])
+        other_key = bytes(32)
+        for label, changed in (
+            ("relabelled judge", {**signed, "judge": "model: b"}),
+            ("relabelled configuration", {**signed, "judge_config": "another prompt"}),
+            ("flipped verdict", {**signed, "verdict": "fail"}),
+            ("no signature", {key: value for key, value in signed.items() if key != "signature"}),
+            ("another key", {**signed, "signature": eval_kit.judgement_signature(
+                other_key, ("human: ana", "reads the rubric and the excerpt"), "a", entry["excerpt_digest"], "pass")}),
+        ):
+            with self.subTest(label):
+                eval_kit.write_json(judgements, {"schema_version": 1, "judgements": [changed]})
+                self.assertEqual(eval_kit.UNSIGNED, eval_kit.read_judgements(judgements)[0][key_of][1])
+        self.assertEqual(key, eval_kit.evaluator_key())
+        # The command records and signs one judgement at a time; a bad one
+        # leaves the file as it was.
+        recorded = Path(self.temp.name) / "recorded.json"
+        command = [sys.executable, "-B", str(MODULE_PATH), "record-judgement", "--judgements", str(recorded),
+                   "--assertion", "a", "--excerpt-digest", entry["excerpt_digest"], "--verdict", "fail",
+                   "--judge", "human: ana", "--judge-config", "reads the rubric", "--rationale", "misses PAY-12"]
+        self.assertEqual(0, subprocess.run(command, capture_output=True, text=True).returncode)
+        self.assertEqual(("fail", ("human: ana", "reads the rubric")), eval_kit.read_judgements(recorded)[0][key_of])
+        bad = [word if word != entry["excerpt_digest"] else "not-a-digest" for word in command]
+        self.assertEqual(2, subprocess.run(bad, capture_output=True, text=True).returncode)
+        self.assertEqual(1, len(json.loads(recorded.read_text())["judgements"]))
+        # A key under the repository is refused.
+        with patch.dict(os.environ, {"CODEFLOW_HOME": str(ROOT / "evals" / ".codeflow")}):
+            with self.assertRaisesRegex(eval_kit.EvalError, "outside the repository"):
+                eval_kit.evaluator_key(create=True)
+        self.assertFalse((ROOT / "evals" / ".codeflow").exists())
 
     def test_an_ineligible_grade_never_counts_as_a_pass(self) -> None:
         with dev_suite():

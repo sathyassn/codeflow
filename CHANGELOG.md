@@ -396,7 +396,9 @@ publication date._
   counts only from a judge, with its exact configuration, whose calibration
   meets every labelled control of the graded suite (`judge-check`, `grade
   --calibration`); otherwise its assertion is ungraded and the trial is never
-  scored as a pass. Graded cases live in a graded
+  scored as a pass. `record-judgement` signs each judgement under an
+  evaluator key kept in the evaluator's CodeFlow home, and grading and
+  scoring count only judgements whose signature verifies. Graded cases live in a graded
   suite outside the shipped kit (`--graded-suite`); a qualification holdout
   stays outside the published repository, and `holdout-check` fails when a
   holdout path, file, JSON object or copied run of text appears in the tracked

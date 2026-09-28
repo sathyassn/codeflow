@@ -10,6 +10,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, timezone
 import fnmatch
 import hashlib
+import hmac
 import io
 import json
 import os
@@ -2160,7 +2161,9 @@ def materialize(case_id: str, trial: int, run_root: Path, codeflow: Path) -> dic
     digest = tree_digest(output)
     for private in ("home", "tmp"):
         (output.parent / private).mkdir()
-    hidden = [resolved_run_root, subjects, *([GRADED_SUITE] if GRADED_SUITE is not None else [])]
+    if any(nested(evaluator_key_path(), root) for root in (resolved_run_root, subjects.resolve())):
+        raise EvalError("the evaluator key lies inside the run or subjects root, where a trial can reach it")
+    hidden = [resolved_run_root, subjects, evaluator_key_path().parent, *([GRADED_SUITE] if GRADED_SUITE is not None else [])]
     environment = subject_environment(output.parent, subject_codeflow, hidden)
     trial_record = {
         "schema_version": 1,
@@ -2986,9 +2989,90 @@ was set up (`judge_config`: model, version, prompt and settings, or the
 person). Calibration binds to both; a change to either is another judge."""
 
 
+# Who wrote a judgement is only as trustworthy as the evaluator who recorded
+# it. Each judgement the evaluator collects, from a person, a model or a
+# script, is signed with an HMAC under an evaluator key kept in the
+# evaluator's CodeFlow home, outside the repository and every trial tree,
+# and verified before it counts. Whoever holds the key is trusted; the kit
+# detects a judgement changed or written by anyone without it, and no more.
+EVALUATOR_KEY = Path("eval") / "judgement.key"
+UNSIGNED: Judge = ("", "")
+"""The judge of a judgement whose signature does not verify: no calibration
+can qualify it, because a calibrated judge always has a name."""
+
+
+def evaluator_home() -> Path:
+    override = os.environ.get("CODEFLOW_HOME", "").strip()
+    return Path(override).expanduser() if override else Path.home() / ".codeflow"
+
+
+def evaluator_key_path() -> Path:
+    return (evaluator_home() / EVALUATOR_KEY).resolve()
+
+
+def evaluator_key(*, create: bool = False) -> bytes | None:
+    """The evaluator's signing key, made owner-only on first use when
+    `create`; None when there is none."""
+
+    path = evaluator_key_path()
+    try:
+        exposed = [project_root()]
+    except EvalError:
+        exposed = []
+    exposed += [GRADED_SUITE] if GRADED_SUITE is not None else []
+    if any(nested(path, root.resolve()) for root in exposed):
+        raise EvalError(f"the evaluator key must live outside the repository and the graded suite: {path}")
+    if not path.exists():
+        if not create:
+            return None
+        path.parent.mkdir(parents=True, exist_ok=True)
+        os.chmod(path.parent, 0o700)
+        descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
+            handle.write(secrets.token_hex(32) + "\n")
+    if stat.S_IMODE(path.stat().st_mode) & 0o077:
+        raise EvalError(f"the evaluator key is readable by others; make it owner-only: {path}")
+    return bytes.fromhex(path.read_text(encoding="utf-8").strip())
+
+
+def judgement_signature(key: bytes, judge: Judge, assertion: str, excerpt_digest: str, verdict: str) -> str:
+    message = json.dumps([judge[0], judge[1], assertion, excerpt_digest, verdict], ensure_ascii=False, separators=(",", ":"))
+    return "hmac-sha256:" + hmac.new(key, message.encode("utf-8"), hashlib.sha256).hexdigest()
+
+
+def signed_judgement(entry: dict) -> dict:
+    """`entry` with its signature under the evaluator key, made on first use."""
+
+    key = evaluator_key(create=True)
+    assert key is not None
+    return dict(entry, signature=judgement_signature(
+        key, (entry["judge"], entry["judge_config"]), entry["assertion"], entry["excerpt_digest"], entry["verdict"]
+    ))
+
+
+def record_judgement(path: Path, entry: dict) -> dict:
+    """Append one judgement, signed, to the judgements file at `path`, as the
+    evaluator collects it."""
+
+    document = load_json(path) if path.exists() else {"schema_version": 1, "judgements": []}
+    signed = signed_judgement(entry)
+    document["judgements"].append(signed)
+    staged = path.with_name(path.name + ".staged")
+    write_json(staged, document)
+    try:
+        read_judgements(staged)
+    except EvalError:
+        staged.unlink()
+        raise
+    os.replace(staged, path)
+    return signed
+
+
 def read_judgements(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge]], str]:
     """Recorded judgements for assertions whose meaning no deterministic check
-    settles: one verdict and its judge per assertion and excerpt digest."""
+    settles: one verdict and its judge per assertion and excerpt digest. A
+    judgement whose signature does not verify under the evaluator key keeps
+    its verdict but has the judge UNSIGNED."""
 
     document = load_json(path)
     if (
@@ -2997,7 +3081,9 @@ def read_judgements(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge]
         or not isinstance(document.get("judgements"), list)
     ):
         raise EvalError("judgements must be {schema_version: 1, judgements: [...]}")
+    key = evaluator_key()
     entries: dict[tuple[str, str], tuple[str, Judge]] = {}
+    declarations: dict[tuple[str, str], tuple[str, str, str]] = {}
     for index, entry in enumerate(document["judgements"]):
         label = f"judgements[{index}]"
         if (
@@ -3007,13 +3093,21 @@ def read_judgements(path: Path) -> tuple[dict[tuple[str, str], tuple[str, Judge]
             or not DIGEST.fullmatch(entry["excerpt_digest"])
             or entry.get("verdict") not in {"pass", "fail"}
             or not all(isinstance(entry.get(field), str) and entry[field].strip() for field in ("judge", "judge_config", "rationale"))
+            or not isinstance(entry.get("signature", ""), str)
         ):
             raise EvalError(f"{label} needs assertion, excerpt_digest, verdict, judge, judge_config and rationale")
-        key = (entry["assertion"], entry["excerpt_digest"])
-        judged = (entry["verdict"], (entry["judge"], entry["judge_config"]))
-        if entries.get(key, judged) != judged:
+        judge: Judge = (entry["judge"], entry["judge_config"])
+        expected = judgement_signature(key, judge, entry["assertion"], entry["excerpt_digest"], entry["verdict"]) if key else None
+        if expected is None or not hmac.compare_digest(entry.get("signature", ""), expected):
+            judge = UNSIGNED
+        excerpt = (entry["assertion"], entry["excerpt_digest"])
+        declared = (entry["verdict"], entry["judge"], entry["judge_config"])
+        if declarations.get(excerpt, declared) != declared:
             raise EvalError(f"{label} contradicts an earlier judgement of the same excerpt")
-        entries[key] = judged
+        declarations[excerpt] = declared
+        if excerpt in entries and entries[excerpt][1] != judge:
+            judge = UNSIGNED
+        entries[excerpt] = (entry["verdict"], judge)
     return entries, raw_file_digest(path)
 
 
@@ -3037,8 +3131,12 @@ def judge_qualification(controls: list[dict], path: Path) -> tuple[Judge | None,
     Controls answered by several judges qualify none of them."""
 
     entries, digest = read_judgements(path)
+    unsigned = sum(judge == UNSIGNED for _, judge in entries.values())
+    entries = {key: value for key, value in entries.items() if value[1] != UNSIGNED}
     judges = {judge for _, judge in entries.values()}
-    problems = [] if len(judges) == 1 else [f"the control judgements come from {len(judges)} judges; one judge must answer every control"]
+    problems = [f"{unsigned} control judgement(s) are not signed under the evaluator key"] if unsigned else []
+    if len(judges) != 1:
+        problems.append(f"the control judgements come from {len(judges)} judges; one judge must answer every control")
     problems += judge_calibration(controls, {key: verdict for key, (verdict, _) in entries.items()})
     return (None if problems else next(iter(judges))), problems, digest
 
@@ -3192,7 +3290,7 @@ class GradeContext:
         """What subject code run during grading must not read: the
         evaluator's records, every subject workspace and the graded suite."""
 
-        hidden = [self.run_root, Path(self.record["subjects_root"])]
+        hidden = [self.run_root, Path(self.record["subjects_root"]), evaluator_key_path().parent]
         if GRADED_SUITE is not None:
             hidden.append(GRADED_SUITE)
         return hidden
@@ -4180,6 +4278,9 @@ def grade_trial(
     the whole grade ineligible."""
 
     record, case, run_root = graded_trial_context(record_path)
+    for root in (run_root, Path(record["subjects_root"])):
+        if nested(evaluator_key_path(), root.resolve()):
+            raise EvalError(f"the evaluator key lies inside {root}, where a trial can reach it")
     event_list, events_digest = load_events(events) if events is not None else (None, None)
     entries, judgements_digest = read_judgements(judgements) if judgements is not None else ({}, None)
     verdicts = {key: verdict for key, (verdict, _) in entries.items()}
@@ -4237,7 +4338,7 @@ def grade_trial(
             result = "pass" if passed else "fail"
             uncalibrated = context.uncalibrated.get(item["id"])
             if uncalibrated:
-                names = ", ".join(sorted(f"{judge[0]} ({judge[1]})" if judge else "an unnamed judge" for judge in uncalibrated))
+                names = ", ".join(sorted(judge_name(judge) for judge in uncalibrated))
                 if transport_only:
                     detail = f"{detail}; judged by {names}, uncalibrated (transport only)"
                 else:
@@ -4275,6 +4376,12 @@ def grade_trial(
     grade["safety_failures"] = derived_safety_failures(case, results)
     grade["qualification"] = {"eligible": qualification_eligible(grade), "reasons": reasons}
     return grade
+
+
+def judge_name(judge: Judge | None) -> str:
+    if judge == UNSIGNED:
+        return "a judgement not signed under the evaluator key"
+    return f"{judge[0]} ({judge[1]})" if judge else "an unnamed judge"
 
 
 def qualification_eligible(grade: dict) -> bool:
@@ -4453,7 +4560,7 @@ def calibration_evidence_errors(grade: dict, trial: dict, case: dict) -> list[st
             errors.append(f"{assertion} passes with no judgement of it in the judgements file")
         for judge in sorted(authors):
             if judge not in qualified:
-                errors.append(f"{assertion} was judged by {judge[0]} ({judge[1]}), whom no retained calibration qualifies")
+                errors.append(f"{assertion} was judged by {judge_name(judge)}, whom no retained calibration qualifies")
     return errors
 
 
@@ -5699,6 +5806,14 @@ def parser() -> argparse.ArgumentParser:
     judge_cmd.add_argument("--trial", required=True, type=int)
     judge_cmd.add_argument("--events", type=Path)
 
+    record_judgement_cmd = sub.add_parser(
+        "record-judgement", help="append one judgement, signed under the evaluator key, as it is collected"
+    )
+    record_judgement_cmd.add_argument("--judgements", required=True, type=Path)
+    for name in ("assertion", "excerpt-digest", "judge", "judge-config", "rationale"):
+        record_judgement_cmd.add_argument(f"--{name}", required=True)
+    record_judgement_cmd.add_argument("--verdict", required=True, choices=["pass", "fail"])
+
     judge_check_cmd = sub.add_parser("judge-check")
     judge_check_cmd.add_argument("--controls", required=True, type=Path)
     judge_check_cmd.add_argument("--judgements", type=Path, help="check these; without it, print the blind sheet")
@@ -5713,7 +5828,7 @@ def parser() -> argparse.ArgumentParser:
     cleanup_cmd.add_argument("--run-root", required=True, type=Path)
     cleanup_cmd.add_argument("--confirm", required=True)
     for name, command in sub.choices.items():
-        if name not in {"grade", "judge-sheet", "judge-check", "cleanup", "holdout-check"}:
+        if name not in {"grade", "judge-sheet", "judge-check", "record-judgement", "cleanup", "holdout-check"}:
             # A run root records its graded suite; the grader reloads it.
             command.add_argument("--graded-suite", type=Path)
     return cli
@@ -5839,6 +5954,17 @@ def main() -> int:
             output = qualified_binding_output(args.output)
             write_qualified_binding(output, record)
             print(f"qualified binding written: {output}")
+            return 0
+        if args.command == "record-judgement":
+            entry = record_judgement(args.judgements, {
+                "assertion": args.assertion,
+                "excerpt_digest": args.excerpt_digest,
+                "verdict": args.verdict,
+                "judge": args.judge,
+                "judge_config": args.judge_config,
+                "rationale": args.rationale,
+            })
+            print(f"judgement recorded and signed: {entry['assertion']} {entry['excerpt_digest']} {entry['verdict']}")
             return 0
         if args.command == "judge-check":
             controls = load_judge_controls(args.controls)

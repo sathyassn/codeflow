@@ -411,6 +411,20 @@ fails its assertion as not gradable, never passes it.
   with its rubric and digest, including each review a verdict assertion
   reads. Each judgement names its `judge`, the judge's `judge_config`
   (model, version, prompt and settings, or the person) and a `rationale`.
+- The evaluator records each judgement as it is collected, from a person, a
+  model or a script, with `record-judgement --judgements <file> --assertion
+  <id> --excerpt-digest <digest> --verdict pass|fail --judge <id>
+  --judge-config <config> --rationale <text>`. It signs the judge, its
+  configuration, the assertion, the excerpt digest and the verdict with an
+  HMAC under an evaluator key, made owner-only on first use in the
+  evaluator's CodeFlow home (the judgement key under its eval folder), outside
+  the repository and every trial tree; subject code run while grading
+  cannot read it. Grading and every consumer verify the signature; a
+  judgement that is unsigned, changed, relabelled or signed under another
+  key counts as no judge's, so its assertion is `ungraded`. Calibration
+  judgements are signed the same way. This is the trust boundary: whoever
+  holds the evaluator key is trusted, and the kit detects a judgement
+  written or changed by anyone without it, no more.
 - A judgement counts only from a calibrated judge. The graded suite keeps
   labelled judge controls in a judge-controls.json file (texts with the
   verdict a qualified judge must record, including reversals paraphrased in
@@ -512,8 +526,7 @@ and, reported as supporting evidence only, `{"seq": 2, "kind": "process",
 "..."}` or `{"seq": 3, "kind": "shell", "command": "..."}`. The judgements
 file is `{"schema_version": 1, "judgements": [{"assertion": "...",
 "excerpt_digest": "sha256:...", "verdict": "pass | fail", "judge": "...",
-"judge_config": "...",
-"rationale": "..."}]}`.
+"judge_config": "...", "rationale": "...", "signature": "hmac-sha256:..."}]}`.
 
 ### Rendered design comparisons
 
