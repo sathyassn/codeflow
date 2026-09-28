@@ -1179,6 +1179,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setStatus(notice);
       showToast(notice, { sticky: true });
     } else if (event.kind === "session_closed") {
+      // The closure carries the answer states not reported yet: the forms
+      // show them before they latch closed.
+      if (event.answers?.length) documentRoot.dispatchEvent(new CustomEvent<AnswerStateDetail>(ANSWER_STATE_EVENT, { detail: event.answers }));
       closeSession(true);
     } else if (event.kind === "answer_state" && event.answers?.length) {
       // Each form shows its own answer's delivery and acknowledgment.

@@ -12,7 +12,9 @@
 //   original answer: it is refused (answer_exists) and shows the stored one;
 // - the rail shows a review's delivery and its acknowledgment apart;
 // - after the service is killed and restarted, a pending answer is
-//   delivered once and a later wait finds nothing.
+//   delivered once and a later wait finds nothing;
+// - a closure that carries answer states the page has not seen shows them
+//   before the forms latch closed.
 import assert from "node:assert/strict";
 import { execFileSync, spawn, spawnSync } from "node:child_process";
 import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
@@ -265,6 +267,36 @@ try {
     assert.equal(second.status, 6, "restart: a later wait found an event");
     assert.equal(second.stdout, "");
     passed.push("restart: after the service is killed and show restarts it, the pending answer is delivered once and the next wait times out (exit 6)");
+  }
+
+  // The closure carries the states the page has not seen: the agent
+  // acknowledged the correction just before the session closed. The page's
+  // next poll gets that closure (fulfilled by the test: a closed session's
+  // service stops), and the form shows the state before it latches.
+  {
+    const [correction] = lines(run(["present", "responses", "list", sessionId, "--form", "store-choice"])).slice(-1);
+    let release;
+    const gate = new Promise((done) => { release = done; });
+    await page.route("**/app/api/events/poll", async (route) => {
+      await gate;
+      await route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({ cursor: "9:9:9", kind: "session_closed", answers: [{ answer_id: correction.event_id, status: "acknowledged" }] }),
+      });
+    }, { times: 1 });
+    await page.reload({ waitUntil: "domcontentloaded" });
+    await page.locator("#cf-comment-toggle").waitFor({ state: "visible" });
+    assert.equal((await stateOf(form)).state, "delivered", "closure: the correction was not shown as delivered");
+    run(["present", "ack", sessionId, correction.event_id]);
+    release();
+    await waitState(form, "closed");
+    const closed = await stateOf(form);
+    assert.equal(closed.says, "Acknowledged by agent. This session is now closed; nothing more can be sent.");
+    assert.equal(await form.locator(".cf-form__state-stored").innerText(), "Acknowledged by agent");
+    const other = await stateOf(decision);
+    assert.equal(other.says, "Delivered to agent. This session is now closed; nothing more can be sent.");
+    passed.push(`closure: a closure carrying an acknowledgment the page had not seen shows "${closed.says}"`);
   }
 
   assert.deepEqual(errors, [], "page errors");

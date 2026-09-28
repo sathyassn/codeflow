@@ -163,8 +163,9 @@ struct SessionEvent {
     kind: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
-    /// For `answer_state`: each answer whose state changed, with its state
-    /// now (stored and pending, delivered, acknowledged).
+    /// For `answer_state`, and for `session_closed` when the page has not
+    /// seen them yet: each answer whose state changed, with its state now
+    /// (stored and pending, delivered, acknowledged).
     #[serde(skip_serializing_if = "Vec::is_empty")]
     answers: Vec<AnswerState>,
 }
@@ -924,13 +925,16 @@ fn session_event(
 ) -> Option<SessionEvent> {
     let terminal = session.status == SessionStatus::Closed;
     let revised = session.current_revision > after_revision;
-    // The answer ledger's cursor moves only with an answer_state event, so a
-    // revision or a closure never hides a delivery from the forms.
-    let answered = !terminal && !revised && answers.through > after_responses;
+    // The answer ledger's cursor moves only with the answer states it
+    // reports, so a revision never hides a delivery from the forms. A
+    // closure ends the poll, so it carries the states not yet reported.
+    let unreported = answers.through > after_responses;
+    let answered = !terminal && !revised && unreported;
     if !(revised || answered || latest > after_sequence || terminal || timed_out) {
         return None;
     }
-    let responses = if answered {
+    let carried = answered || (terminal && unreported);
+    let responses = if carried {
         answers.through
     } else {
         after_responses
@@ -954,7 +958,7 @@ fn session_event(
         } else {
             (!answered && latest > after_sequence).then(|| "Review state changed.".to_string())
         },
-        answers: if answered { answers.states } else { Vec::new() },
+        answers: if carried { answers.states } else { Vec::new() },
     })
 }
 
@@ -2473,6 +2477,32 @@ mod tests {
             .await;
             assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{cursor}");
         }
+
+        // A closure ends the poll, so it carries the answer states the page
+        // has not seen yet; with none left, it carries none.
+        let correction = post_answer(
+            &state,
+            application_headers(&state, true),
+            answer_body(&state, |body| body["amends"] = serde_json::json!(answer)),
+        )
+        .await
+        .1;
+        let correction: Uuid = serde_json::from_value(correction["answer_id"].clone()).unwrap();
+        state
+            .store
+            .deliver(state.session_id, &[correction])
+            .unwrap();
+        state.store.close(state.session_id).unwrap();
+        let event = poll("2:0:3").await;
+        assert_eq!(event["kind"], "session_closed");
+        assert_eq!(event["cursor"], "2:0:5");
+        assert_eq!(
+            event["answers"],
+            serde_json::json!([{ "answer_id": correction, "status": "delivered" }])
+        );
+        let event = poll("2:0:5").await;
+        assert_eq!(event["kind"], "session_closed");
+        assert!(event.get("answers").is_none(), "{event}");
     }
 
     /// TSK-120: the page shows each form's latest answer and its state as it

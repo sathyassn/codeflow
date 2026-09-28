@@ -185,10 +185,14 @@ class FormController {
     this.render(DELIVERY_TEXT[status], status);
   }
 
+  // An answered form keeps its answer's state words before the closed
+  // sentence; any other form keeps its draft, read only.
   public close(): void {
     if (this.closed) return;
     this.closed = true;
-    this.render(CLOSED_TEXT, "closed");
+    const state = this.state;
+    if (state === "stored" || state === "delivered" || state === "acknowledged") this.render(stateText(state), state);
+    else this.render(CLOSED_TEXT, "closed");
   }
 
   private act(action: Action): void {
@@ -494,9 +498,10 @@ class FormController {
     let storedLate: string | null = null;
     if (this.closed && state !== "closed") {
       // A reply that lands after closure may still confirm a receipt, but
-      // the form stays closed. The receipt reads first, as stored.
-      if (state === "stored") {
-        storedLate = "Stored, waiting for agent.";
+      // the form stays closed. An answer's state reads first, in the
+      // stored colour.
+      if (state === "stored" || state === "delivered" || state === "acknowledged") {
+        storedLate = stateText(state);
         message = "This session is now closed; nothing more can be sent.";
       } else {
         message = CLOSED_TEXT;
@@ -513,7 +518,7 @@ class FormController {
       const stored = document.createElement("span");
       stored.className = "cf-form__state-stored";
       stored.textContent = storedLate;
-      this.stateLine.replaceChildren(stored, ` ${message}`);
+      this.stateLine.replaceChildren(stored, `. ${message}`);
     } else {
       this.stateLine.textContent = message;
     }
@@ -538,6 +543,11 @@ class FormController {
     if (submit) submit.textContent = this.amending ? "Send correction" : "Submit answer";
     if (this.declineArea) this.declineArea.hidden = !(this.declining && editable);
   }
+}
+
+// The words for an answer's state, as the form shows them.
+function stateText(state: "stored" | "delivered" | "acknowledged"): string {
+  return state === "stored" ? STORED_TEXT : DELIVERY_TEXT[state];
 }
 
 // The field's label as the reviewer read it, without the "(required)" flag.
