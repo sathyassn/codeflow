@@ -1639,44 +1639,63 @@ fn no_owner_keeps_the_retired_summary_or_dash_wording() {
 }
 
 /// Each reply duty the lifecycle reply rule owns (SPC-013 R-117), with the
-/// clause that states it there and the clause that states it in the writing
-/// reference. The writing reference is what an agent reads at the moment it
-/// reports, at every tier: the rule map routes "report status" to it, and the
-/// minimal tier installs no lifecycle. A clause that ends the owner's
-/// sentence carries its full stop, so a qualifier appended to it fails.
-const REPLY_DUTIES_AT_THE_REPORTING_MOMENT: &[(&str, &str, &str)] = &[
-    ("report order", "A reply or report opens with the result it serves and where the work stands", "A reply or report opens with the result it serves and where the work stands"),
-    ("steps last", "steps, gates, counts and tooling come last, and only where they explain those.", "steps, gates, counts and tooling come last, and only where they explain those."),
-    ("order not headings", "This is an order, not a set of headings.", "This is an order, not a set of headings."),
-    ("design talk in prose", "A design discussion leads with the result in prose", "A design discussion leads with the result in prose"),
-    ("no forced labels", "labels forced onto a short answer are a defect.", "labels forced onto a short answer are a defect."),
-    ("running report", "A running report on long work opens with the result the work serves and where it stands", "A running report on long work opens with the result the work serves and where it stands"),
-    ("anchoring summary", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines.", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines."),
-    ("detail after the anchor", "detail that does not help the reader orient comes after it.", "detail that does not help the reader orient comes after it."),
-    ("buried anchor", "A summary that buries the anchor in detail fails, however short it is.", "A summary that buries the anchor in detail fails, however short it is."),
-    ("attention placement", "NEED YOUR ATTENTION, at most once per reply, after the opening and before the detail.", "go once under NEED YOUR ATTENTION, after the opening and before the detail."),
-    ("attention verbs", "(Decide, Do, Confirm, Clarify or Note)", "(Decide, Do, Confirm, Clarify or Note)"),
-    ("operator-only items", "the decisions, actions and confirmations only the operator can give", "the decisions, actions and confirmations only the operator can give"),
-    ("hard gate", "including a hard gate that waits on the operator; other work keeps moving.", "including a hard gate that waits on the operator; other work keeps moving."),
-    ("no manufactured ask", "With nothing owed there is no heading, and a manufactured ask is a defect.", "With nothing owed there is no heading, and a manufactured ask is a defect."),
-    ("heading exclusions", "never appears in a pull request body, document, commit message, outbound draft or machine payload.", "never appears in a pull request body, document, commit message, outbound draft or machine payload."),
-    ("simple answer", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line."),
-    ("figure by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders.", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders."),
-    ("no Mermaid", "Never use Mermaid", "Never use Mermaid"),
-    ("exact links", "Never guess a URL, port, or pull request number; state an unknown link as unknown.", "Never guess a URL, port, or pull request number; state an unknown link as unknown."),
-    ("dash guideline", "Avoid em and en dashes in prose", "avoid em and en dashes in prose"),
-    ("replies judged without a hook", "no hook sees a reply", "No hook sees a chat reply"),
+/// clause that states it in the owner's section, and the section and clause
+/// that state it in the writing reference. The writing reference is what an
+/// agent reads at the moment it reports, at every tier: the rule map routes
+/// "report status" to it, and the minimal tier installs no lifecycle. A
+/// clause that ends the owner's sentence carries its full stop, so a
+/// qualifier inside that sentence fails. A separate sentence that contradicts
+/// a duty is not caught here; review judges meaning.
+const REPLY_DUTIES_AT_THE_REPORTING_MOMENT: &[(&str, &str, &str, &str)] = &[
+    ("report order", "A reply or report opens with the result it serves and where the work stands", "Replies and status", "A reply or report opens with the result it serves and where the work stands"),
+    ("steps last", "steps, gates, counts and tooling come last, and only where they explain those.", "Replies and status", "steps, gates, counts and tooling come last, and only where they explain those."),
+    ("order not headings", "This is an order, not a set of headings.", "Replies and status", "This is an order, not a set of headings."),
+    ("design talk in prose", "A design discussion leads with the result in prose", "Replies and status", "A design discussion leads with the result in prose"),
+    ("no forced labels", "labels forced onto a short answer are a defect.", "Replies and status", "labels forced onto a short answer are a defect."),
+    ("running report", "A running report on long work opens with the result the work serves and where it stands", "Replies and status", "A running report on long work opens with the result the work serves and where it stands"),
+    ("anchoring summary", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines.", "Replies and status", "A summary anchors the reader: what this is, why it matters and where it stands, in a few lines."),
+    ("detail after the anchor", "detail that does not help the reader orient comes after it.", "Replies and status", "detail that does not help the reader orient comes after it."),
+    ("buried anchor", "A summary that buries the anchor in detail fails, however short it is.", "Replies and status", "A summary that buries the anchor in detail fails, however short it is."),
+    ("attention placement", "NEED YOUR ATTENTION, at most once per reply, after the opening and before the detail.", "Replies and status", "go once under NEED YOUR ATTENTION, after the opening and before the detail."),
+    ("attention verbs", "(Decide, Do, Confirm, Clarify or Note)", "Replies and status", "(Decide, Do, Confirm, Clarify or Note)"),
+    ("operator-only items", "the decisions, actions and confirmations only the operator can give", "Replies and status", "the decisions, actions and confirmations only the operator can give"),
+    ("hard gate", "including a hard gate that waits on the operator; other work keeps moving.", "Replies and status", "including a hard gate that waits on the operator; other work keeps moving."),
+    ("no manufactured ask", "With nothing owed there is no heading, and a manufactured ask is a defect.", "Replies and status", "With nothing owed there is no heading, and a manufactured ask is a defect."),
+    ("heading exclusions", "never appears in a pull request body, document, commit message, outbound draft or machine payload.", "Replies and status", "never appears in a pull request body, document, commit message, outbound draft or machine payload."),
+    ("simple answer", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.", "Replies and status", "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line."),
+    ("figure by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders.", "Figures by surface", "Use fenced ASCII only on a terminal or other plain-text surface, or when unsure what the surface renders."),
+    ("no Mermaid", "Never use Mermaid", "Figures by surface", "Never use Mermaid"),
+    ("exact links", "Never guess a URL, port, or pull request number; state an unknown link as unknown.", "Replies and status", "Never guess a URL, port, or pull request number; state an unknown link as unknown."),
+    ("dash guideline", "Avoid em and en dashes in prose", "Written content policy", "avoid em and en dashes in prose"),
+    ("replies judged without a hook", "no hook sees a reply", "Written content policy", "No hook sees a chat reply"),
 ];
+
+const REPLY_RULE_OWNER_SECTION: &str = "Evidence, safety, and closeout";
+
+/// The text of one `##` section of a whitespace-normalized Markdown file, or
+/// an empty string when the heading is missing.
+fn normalized_section<'a>(text: &'a str, heading: &str) -> &'a str {
+    let marker = format!("## {heading} ");
+    let start = text
+        .match_indices(&marker)
+        .find(|(at, _)| *at == 0 || text[..*at].ends_with(' '))
+        .map(|(at, _)| at + marker.len());
+    start.map_or("", |start| {
+        let rest = &text[start..];
+        &rest[..rest.find(" ## ").unwrap_or(rest.len())]
+    })
+}
 
 fn missing_reply_duties(owner: &str, reporting: &str) -> Vec<String> {
     let (owner, reporting) = (normalized(owner), normalized(reporting));
+    let owner = normalized_section(&owner, REPLY_RULE_OWNER_SECTION);
     let mut missing = Vec::new();
-    for (duty, owner_clause, reporting_clause) in REPLY_DUTIES_AT_THE_REPORTING_MOMENT {
+    for (duty, owner_clause, section, reporting_clause) in REPLY_DUTIES_AT_THE_REPORTING_MOMENT {
         if !owner.contains(owner_clause) {
             missing.push(format!("owner lost {duty}"));
         }
-        if !reporting.contains(reporting_clause) {
-            missing.push(format!("writing reference lacks {duty}"));
+        if !normalized_section(&reporting, section).contains(reporting_clause) {
+            missing.push(format!("writing reference lacks {duty} under {section}"));
         }
     }
     missing
@@ -1701,13 +1720,13 @@ fn reply_duties_read_when_reporting_match_their_owner() {
         assert!(missing.is_empty(), "{path}: {missing:#?}");
     }
 
-    // Negative controls: a duty dropped from either side, or qualified after
-    // the owner's full stop, is named.
+    // Negative controls: a duty dropped from either side, qualified inside
+    // the owner's sentence, or moved out of its section is named.
     let reporting = normalized(&read_text(&root.join("assets/base/rules/writing.md")));
     let dropped = reporting.replacen("a manufactured ask is a defect", "an ask is fine", 1);
     assert_eq!(
         missing_reply_duties(&owner, &dropped),
-        vec!["writing reference lacks no manufactured ask".to_string()]
+        vec!["writing reference lacks no manufactured ask under Replies and status".to_string()]
     );
     let qualified = reporting.replacen(
         "labels forced onto a short answer are a defect.",
@@ -1716,7 +1735,15 @@ fn reply_duties_read_when_reporting_match_their_owner() {
     );
     assert_eq!(
         missing_reply_duties(&owner, &qualified),
-        vec!["writing reference lacks no forced labels".to_string()]
+        vec!["writing reference lacks no forced labels under Replies and status".to_string()]
+    );
+    let relocated = format!(
+        "{} With nothing owed there is no heading, and a manufactured ask is a defect.",
+        reporting.replacen("a manufactured ask is a defect.", "an ask may help.", 1)
+    );
+    assert_eq!(
+        missing_reply_duties(&owner, &relocated),
+        vec!["writing reference lacks no manufactured ask under Replies and status".to_string()]
     );
     let owner_dropped = owner.replacen("other work keeps moving", "all work waits", 1);
     assert_eq!(

@@ -66,9 +66,13 @@ where the agent reads them before it reports.
 Nothing was removed. The owner, the lifecycle reply rule, is unchanged.
 The new test `reply_duties_read_when_reporting_match_their_owner` pins 21
 duties on both sides and fails, naming the duty, when either side drops
-one. A pin whose clause ends the owner's sentence carries its full stop,
-so a qualifier appended after it also fails; a negative control proves
-it. The review record is the Closeout of TSK-138.
+one. Each pin is read only in the section this map names as the duty's
+home (the owner's in "Evidence, safety, and closeout"), so a duty moved out
+of its section fails. A pin whose clause ends the owner's sentence carries
+its full stop, so a qualifier inside that sentence fails. Negative controls
+prove the dropped, qualified and moved cases. A separate sentence that
+contradicts a duty still passes; review judges meaning, as it does for the
+CF-OUT markers. The review record is the Closeout of TSK-138.
 
 ## Candidates kept
 
