@@ -1,0 +1,11 @@
+id = "TSK-175"
+uid = "38f551e1-aa08-4ae0-ab68-b29f0efd6733"
+kind = "TSK"
+title = "seat postures, operator actions, live journey and decision record"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T23:26:10Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
