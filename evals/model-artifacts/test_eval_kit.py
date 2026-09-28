@@ -197,7 +197,7 @@ EXISTING_CASES_WITH_OWN_CONTROLS = {
 # claimed by a control must hold in its text; a must_not signal must hold in
 # the text exactly when the control claims it. The signals left to the
 # grader's judgment are named, and nothing else may be unbound.
-_DASH = re.compile("[–—]")
+_DASH = re.compile("[\u2013\u2014]")
 _STOP = {"a", "an", "the", "to", "from", "of", "and", "or", "in", "on", "for", "with", "by", "how", "is"}
 
 
