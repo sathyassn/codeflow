@@ -1,0 +1,11 @@
+id = "TSK-164"
+uid = "27f9bba6-51e3-4a69-a3a6-0a0b5ab2c2d4"
+kind = "TSK"
+title = "autonomy reference follows the permission presets"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T18:54:11Z"
+target = "integration/EPC-018-autonomy-roster"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
