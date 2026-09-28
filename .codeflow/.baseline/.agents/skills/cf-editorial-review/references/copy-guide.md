@@ -72,8 +72,8 @@ a named subject, in about 25 words or fewer.
 Example, a colon that introduces an explanation (source: `cf-method/references/workflow-lifecycle.md`):
 > A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.
 
-Example, a semicolon that joins two parallel clauses (source: `cf-docs-portal/resources/design-system/portal.reference.html`):
-> One task lands as a pull request; a body of work lands task by task on an integration branch, and both end at a human merge behind green checks.
+Example, a semicolon that joins two parallel clauses (source: `cf-docs-portal/resources/explanation-method.md`):
+> The medium changes the form of a figure; the family stays the one the relationship names.
 
 ## Words
 
@@ -113,8 +113,10 @@ A title or heading is a noun phrase in words that names its subject.
   is done.
 - Use sentence case: capitalise the first word and proper nouns only. The
   uppercase mono kicker is the one exception.
-- Keep a heading literal and findable. No question, slogan, riddle or
-  clever phrase.
+- Keep a heading literal and findable: no question, slogan, riddle or
+  clever phrase. A noun clause that names a thing ("What each plane
+  checks") is not a question; a question asks one and ends in a question
+  mark.
 - End a heading without punctuation.
 
 Example, a figure title (source: `cf-docs-portal/resources/figure-grammar-specimens.md`):
@@ -124,7 +126,7 @@ Example, a how-to heading that names the outcome (source: `cf-docs-portal/resour
 > Start a task in a worktree
 
 Example, a section heading in sentence case (source: `cf-docs-portal/resources/design-system/portal.reference.html`):
-> What each plane checks
+> Commit message limits
 
 ## Leads
 
@@ -168,8 +170,9 @@ A legend key names the state its mark stands for, and the description names
 every state and every drawn fact.
 
 - Write a key as a noun phrase: the thing the mark stands for, with no
-  article and no verb clause about the reader. "Gate that stops travel",
-  not "This marks where a gate stops you".
+  article, no subject and verb, and no instruction to the reader. "Gate
+  that stops travel", not "This marks where a gate stops you" or "CI runs
+  this step".
 - Give each state one key and each key one state. Two states with one
   meaning are one state.
 - Write the description for a listener: every state, every drawn fact and
