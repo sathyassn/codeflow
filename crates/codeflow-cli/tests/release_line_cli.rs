@@ -1109,6 +1109,73 @@ fn a_direct_completion_binds_to_the_release_head() {
     assert!(!again.1.contains("work.acceptance_binding"), "{}", again.1);
 }
 
+/// AC-1, AC-6: a completion made on the release line and later brought,
+/// block and all, from the task's own line is judged where the line landed
+/// it; the earlier direct completion no longer stands at the head.
+#[test]
+fn a_completion_brought_from_its_line_replaces_a_direct_one() {
+    let fx = Fx::new(true);
+    fx.cut_release();
+    fx.write("src/fix.rs", "// fix\n");
+    let early = fx.commit("fix: integrate");
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "complete", CRITERIA, &block(&early)),
+    );
+    let made = fx.commit("docs(records): complete TSK-001 on the release line");
+    fx.write("src/later.rs", "// later\n");
+    fx.commit("fix: a later change");
+    let stale = format!(
+        "TSK-001 (completed directly on the release line at {})",
+        &made[..9]
+    );
+
+    // The task's own line lands its completion; the release takes the
+    // line's record whole.
+    fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.git(&["switch", "-q", RELEASE]);
+    fx.git(&["fetch", "-q", "origin"]);
+    let line = format!("origin/{LINE_A}");
+    let clean = run_git_status(&fx.root, &["merge", "-q", "--no-ff", "--no-commit", &line]);
+    assert!(
+        !clean,
+        "both sides completed TSK-001, so the merge conflicts"
+    );
+    fx.git(&["checkout", "-q", "--theirs", "--", &path("TSK-001")]);
+    fx.git(&["add", "--", &path("TSK-001")]);
+    let import = fx.commit("merge: import the line");
+    fx.write(
+        &path(HOLDER),
+        &record(HOLDER, "todo", CRITERIA, &block(&import)),
+    );
+    passes(&fx.status_complete(HOLDER), "the holder completes");
+    fx.commit("docs(records): complete the release integration");
+
+    let result = fx.ci("main", "HEAD", RELEASE, Some("main"));
+    passes(&result, "the brought completion replaces the direct one");
+    assert!(!result.1.contains(&stale), "{}", result.1);
+    assert!(
+        result
+            .1
+            .contains(&format!("release path: {}: import", &import[..9])),
+        "{}",
+        result.1
+    );
+}
+
+/// `git` in `dir`, returning whether it succeeded (a conflicted merge
+/// fails and is resolved by the caller).
+fn run_git_status(dir: &Path, args: &[&str]) -> bool {
+    clean_env(&mut Command::new("git"))
+        .args(args)
+        .current_dir(dir)
+        .output()
+        .unwrap()
+        .status
+        .success()
+}
+
 /// AC-2, AC-3: an import merge that adds a completion or a criteria change
 /// of its own (a clean merge's evil change) is judged as a resolution.
 #[test]

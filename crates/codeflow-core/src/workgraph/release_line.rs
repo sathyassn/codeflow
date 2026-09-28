@@ -974,6 +974,10 @@ pub fn release_findings(
                 if completion_changed(then.as_ref(), &now) {
                     match (source, active_block(&now)) {
                         (Some(source), Some(block)) => {
+                            // The record is now the one its line landed, so
+                            // an earlier completion made on the release line
+                            // no longer stands at the head.
+                            direct_completions.remove(&now.id);
                             let introduced = introduced_at(&repo, &now, &block, source);
                             findings.extend(bind_completion(
                                 &repo,
