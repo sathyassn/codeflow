@@ -24,10 +24,11 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { chromium } from "playwright-core";
+import { codeflowBinary } from "./codeflow-binary.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
-const codeflow = resolve(process.env.CF_PRESENT_CODEFLOW ?? join(repoRoot, "target/debug/codeflow"));
+const codeflow = codeflowBinary(repoRoot);
 const fixture = join(webRoot, "../tests/fixtures/contract-v2/documents/v2-forms.json");
 
 await access(codeflow);
