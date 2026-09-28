@@ -141,6 +141,8 @@ def passing_grade(case: dict, number: int, fixture_digest: str) -> dict:
         "judgements_digest": None,
         "controls_digest": None,
         "calibration_digests": [],
+        "calibration_judges": [],
+        "counted_judges": [],
         "transport_only": False,
         "assertions": [
             {"id": item["id"], "result": "pass", "safety": item.get("safety", False), "detail": "test"}
@@ -2483,6 +2485,123 @@ print(json.dumps(seen, sort_keys=True))
                 context = self.context(judgements={key: "pass"}, judges={} if judge is None else {key: judge}, calibrated={calibrated})
                 self.assertTrue(eval_kit.grade_file(context, item)[0])
                 self.assertEqual({} if counted else {"blocker_meaning": {judge}}, dict(context.uncalibrated))
+
+    def test_a_saved_pass_counts_only_while_its_calibration_verifies(self) -> None:
+        # A graded suite with judge controls, and a saved all-pass grade that
+        # counted one calibrated judge. Consumers re-read the calibration it
+        # cites: edited, removed, relatively named or no longer qualifying,
+        # the trial is not measured, through the API and the CLI alike.
+        suite = Path(self.temp.name) / "suite"
+        shutil.copytree(DEV_SUITE, suite)
+        control = {"label": "a coherent rejection", "assertion": "rejects", "rubric": eval_kit.REVIEW_COHERENCE_RUBRIC,
+                   "excerpt": REVIEW, "expected": "pass"}
+        eval_kit.write_json(suite / "judge-controls.json", {"schema_version": 1, "controls": [control]})
+        judge, other = ["model: m", "prompt p1"], ["model: n", "prompt p1"]
+
+        def calibration(name: str, who: list[str], verdict: str = "pass") -> Path:
+            path = Path(self.temp.name) / "calibrations" / name
+            path.parent.mkdir(exist_ok=True)
+            eval_kit.write_json(path, {"schema_version": 1, "judgements": [
+                {"assertion": "rejects", "excerpt_digest": eval_kit.excerpt_digest(REVIEW), "verdict": verdict,
+                 "judge": who[0], "judge_config": who[1], "rationale": "synthetic"}]})
+            return path
+
+        eval_kit.set_graded_suite(suite)
+        try:
+            result = valid_result("full")
+            cases = {case["id"]: case for case in eval_kit.suite_documents()[1]["cases"]}
+            pack = eval_kit.resolve_pack(DEV_PACK)
+            result.update(suite="pack", pack=DEV_PACK)
+            result["trials"] = [trial for trial in result["trials"] if trial["case_id"] in pack]
+            for each in result["trials"]:
+                each["grade"]["controls_digest"] = eval_kit.suite_judge_controls()[1]
+            trial = result["trials"][0]
+            case = cases[trial["case_id"]]
+            mine, theirs = calibration("mine.json", judge), calibration("theirs.json", other)
+            trial["grade"].update(
+                calibration_digests=[eval_kit.raw_file_digest(theirs), eval_kit.raw_file_digest(mine)],
+                calibration_judges=[other, judge],
+                counted_judges=[judge],
+            )
+            for path in (theirs, mine):
+                trial["evidence"].append({"kind": "file", "ref": str(path), "digest": eval_kit.raw_file_digest(path)})
+            self.assertEqual([], eval_kit.grade_errors(trial["grade"], case, trial))
+            self.assertEqual("pass", eval_kit.computed_trial_status(trial, case))
+
+            def consumed(change) -> tuple[str, list[str], int]:
+                """The status, the calibration faults and the passes that
+                scoring counts after `change`, with the files restored."""
+
+                saved = {path: path.read_bytes() for path in (mine, theirs)}
+                changed = copy.deepcopy(result)
+                change(changed["trials"][0])
+                try:
+                    status = eval_kit.computed_trial_status(changed["trials"][0], case)
+                    faults = eval_kit.calibration_evidence_errors(changed["trials"][0]["grade"], changed["trials"][0])
+                    try:
+                        counted = eval_kit.score_result(changed)["summary"]["pass"]
+                    except eval_kit.EvalError as error:
+                        counted = str(error)
+                    return status, faults, counted
+                finally:
+                    for path, body in saved.items():
+                        path.write_bytes(body)
+
+            passes = consumed(lambda trial: None)[2]
+            self.assertEqual(("pass", []), consumed(lambda trial: None)[:2])
+
+            def edited(trial: dict) -> None:
+                calibration("mine.json", judge, verdict="fail")
+            def removed(trial: dict) -> None:
+                mine.unlink()
+            def relative(trial: dict) -> None:
+                for item in trial["evidence"]:
+                    if item["ref"] == str(mine):
+                        item["ref"] = os.path.relpath(mine)
+            def rewritten_as_another_judge(trial: dict) -> None:
+                trial["grade"]["calibration_judges"] = [other, other]
+            def moved_controls(trial: dict) -> None:
+                eval_kit.write_json(suite / "judge-controls.json", {"schema_version": 1, "controls": [{**control, "expected": "fail"}]})
+            for label, change in (("edited", edited), ("removed", removed), ("named relatively", relative)):
+                with self.subTest(label):
+                    status, faults, counted = consumed(change)
+                    self.assertEqual("error", status)
+                    self.assertTrue(faults)
+                    self.assertEqual(passes - 1, counted)
+            # The other judge's calibration still verifies, but cannot stand
+            # for the edited one.
+            self.assertEqual(1, len(consumed(edited)[1]))
+            # A grade rewritten to name another judge, or graded against
+            # other controls, is refused outright.
+            status, _, refused = consumed(rewritten_as_another_judge)
+            self.assertEqual("fail", status)
+            self.assertIn("counted_judges must be judges its calibrations qualified", refused)
+            try:
+                status, _, refused = consumed(moved_controls)
+                self.assertEqual("fail", status)
+                self.assertIn("controls_digest does not match", refused)
+            finally:
+                eval_kit.write_json(suite / "judge-controls.json", {"schema_version": 1, "controls": [control]})
+
+            # The CLI, scoring the same result from another directory.
+            elsewhere = Path(self.temp.name) / "elsewhere"
+            elsewhere.mkdir()
+            eval_kit.write_json(elsewhere / "result.json", result)
+            kit = ROOT / "assets/base/agents/skills/cf-evaluate-model/scripts/eval_kit.py"
+            score = lambda: subprocess.run(
+                [sys.executable, "-B", str(kit), "score", "result.json", "--output", "scored.json", "--graded-suite", str(suite)],
+                cwd=elsewhere, capture_output=True, text=True,
+            )
+            self.assertEqual(0, score().returncode)
+            self.assertEqual(passes, json.loads((elsewhere / "scored.json").read_text())["summary"]["pass"])
+            calibration("mine.json", judge, verdict="fail")
+            (elsewhere / "scored.json").unlink()
+            done = score()
+            self.assertEqual(0, done.returncode, done.stderr)
+            scored = json.loads((elsewhere / "scored.json").read_text())
+            self.assertEqual((passes - 1, 1), (scored["summary"]["pass"], scored["summary"]["error"]))
+        finally:
+            eval_kit.set_graded_suite(None)
 
     def test_an_ineligible_grade_never_counts_as_a_pass(self) -> None:
         with dev_suite():

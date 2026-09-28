@@ -257,7 +257,7 @@
     ".agents/skills/cf-evaluate-model/resources/protocol.md": {
       "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
       "ownership": "managed",
-      "sha256": "2a5ed17d4cb72e41164571dbf4b1bfd1735a7bc8c374a8f14bf0220fe1ba8879",
+      "sha256": "a6fd57e919887f9de22e9f75bdfe3a5c4378f01b72d8423099c928d3fc138fd1",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/resources/requirements.json": {
@@ -275,7 +275,7 @@
     ".agents/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "25fa13a1aa078b301001bfdd86f0340ffb2c54854f1cccc5d52c9cdcb06a5b94",
+      "sha256": "ee7bff5648f91cf89b225b3954483e7c7fe10860ec03ab5607aac69eedad7e42",
       "exec": false
     },
     ".agents/skills/cf-evaluate-model/scripts/fake_client.py": {
@@ -935,7 +935,7 @@
     ".claude/skills/cf-evaluate-model/resources/protocol.md": {
       "src": "agents/skills/cf-evaluate-model/resources/protocol.md",
       "ownership": "managed",
-      "sha256": "2a5ed17d4cb72e41164571dbf4b1bfd1735a7bc8c374a8f14bf0220fe1ba8879",
+      "sha256": "a6fd57e919887f9de22e9f75bdfe3a5c4378f01b72d8423099c928d3fc138fd1",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/resources/requirements.json": {
@@ -953,7 +953,7 @@
     ".claude/skills/cf-evaluate-model/scripts/eval_kit.py": {
       "src": "agents/skills/cf-evaluate-model/scripts/eval_kit.py",
       "ownership": "managed",
-      "sha256": "25fa13a1aa078b301001bfdd86f0340ffb2c54854f1cccc5d52c9cdcb06a5b94",
+      "sha256": "ee7bff5648f91cf89b225b3954483e7c7fe10860ec03ab5607aac69eedad7e42",
       "exec": false
     },
     ".claude/skills/cf-evaluate-model/scripts/fake_client.py": {

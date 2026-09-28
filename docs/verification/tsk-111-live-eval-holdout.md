@@ -61,7 +61,9 @@ never enters a line at all.
   reviews whose free text reverses their verdict in paraphrase, with the
   judgement a qualified judge must record. The grader counts a judgement only
   from a judge whose calibration meets every control; any other judgement
-  leaves its assertion ungraded and the trial not measured. The holdout's
+  leaves its assertion ungraded and the trial not measured. Scoring re-reads
+  the retained calibration file, so a saved pass stops counting once that
+  file is edited or removed. The holdout's
   scripted judge misses controls by design and tests transport and
   fail-closed binding only; its synthetic oracle meets them and tests the
   binding path. Neither is evidence that meaning was judged.

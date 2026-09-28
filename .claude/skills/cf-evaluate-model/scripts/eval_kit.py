@@ -3072,6 +3072,8 @@ class GradeContext:
         # The judges, by assertion, whose judgements were read without a
         # passing calibration against the suite's controls.
         self.uncalibrated: dict[str, set[Judge | None]] = defaultdict(set)
+        # The calibrated judges whose judgements the grade counted.
+        self.counted: set[Judge] = set()
         self.assertions = {item["id"]: item for item in assertions or []}
         self.base_commit = record["base_commit"]
         self.snapshot = record["refs"]
@@ -3198,7 +3200,9 @@ class GradeContext:
     def judgement(self, assertion: str, digest: str) -> str | None:
         verdict = self.judgements.get((assertion, digest))
         judge = self.judges.get((assertion, digest))
-        if verdict is not None and judge not in self.calibrated:
+        if verdict is not None and judge in self.calibrated:
+            self.counted.add(judge)
+        elif verdict is not None:
             self.uncalibrated[assertion].add(judge)
         return verdict
 
@@ -4184,12 +4188,14 @@ def grade_trial(
     controls_digest = controls[1] if controls is not None else None
     calibrated: set[Judge] = set()
     calibration_digests: list[str] = []
+    calibration_judges: list[list[str] | None] = []
     reasons: list[str] = ["transport only: judgements count as recorded, whoever judged"] if transport_only else []
     for path in calibrations:
         if controls is None:
             raise EvalError(f"the graded suite keeps no {JUDGE_CONTROLS_FILE}; a calibration has nothing to meet")
         judge, problems, digest = judge_qualification(controls[0], path)
         calibration_digests.append(digest)
+        calibration_judges.append(list(judge) if judge is not None else None)
         if judge is None:
             reasons.append(f"calibration {digest} qualifies no judge: {problems[0]}" + (f" (and {len(problems) - 1} more)" if len(problems) > 1 else ""))
         else:
@@ -4261,6 +4267,8 @@ def grade_trial(
         "judgements_digest": judgements_digest,
         "controls_digest": controls_digest,
         "calibration_digests": calibration_digests,
+        "calibration_judges": calibration_judges,
+        "counted_judges": sorted(list(judge) for judge in context.counted),
         "transport_only": transport_only,
         "assertions": results,
     }
@@ -4329,6 +4337,16 @@ def grade_errors(grade: Any, case: dict, trial: dict) -> list[str]:
     for digest in calibrations:
         if digest not in retained:
             errors.append(f"grade calibration {digest} is not among the trial's evidence digests")
+    judges = grade.get("calibration_judges")
+    if not isinstance(judges, list) or len(judges) != len(calibrations) or not all(
+        judge is None or is_judge(judge) for judge in judges
+    ):
+        errors.append("grade.calibration_judges must name the judge each calibration qualified, or null")
+        judges = []
+    counted = grade.get("counted_judges")
+    if not isinstance(counted, list) or not all(is_judge(judge) and judge in judges for judge in counted):
+        errors.append("grade.counted_judges must be judges its calibrations qualified")
+        counted = []
     controls = suite_judge_controls()
     if grade.get("controls_digest") != (controls[1] if controls is not None else None):
         errors.append("grade.controls_digest does not match the graded suite's judge controls; recalibrate and regrade")
@@ -4353,7 +4371,7 @@ def grade_errors(grade: Any, case: dict, trial: dict) -> list[str]:
         or not isinstance(qualification.get("reasons"), list)
     ):
         errors.append("grade.qualification does not match the grade")
-    elif qualification["eligible"] and not calibrations:
+    elif qualification["eligible"] and not counted:
         # A judged assertion passes only on a calibrated judge's judgement.
         judged = [
             item["id"]
@@ -4362,6 +4380,41 @@ def grade_errors(grade: Any, case: dict, trial: dict) -> list[str]:
         ]
         if judged:
             errors.append(f"grade passes judged assertions without a judge calibration: {', '.join(judged)}")
+    return errors
+
+
+def is_judge(value: Any) -> bool:
+    return isinstance(value, list) and len(value) == 2 and all(isinstance(part, str) and part.strip() for part in value)
+
+
+def calibration_evidence_errors(grade: dict, trial: dict) -> list[str]:
+    """Why a grade's calibrations cannot be verified now. Each is retained
+    in the trial's evidence as a file named by absolute path, whose bytes
+    still hash to the recorded digest and which, against the suite's current
+    controls, still qualifies the judge the grade recorded. A grade is only
+    as good as the calibration it cites, so an edited, moved or removed file
+    leaves the trial not measured."""
+
+    controls = suite_judge_controls()
+    evidence = trial.get("evidence") if isinstance(trial.get("evidence"), list) else []
+    errors: list[str] = []
+    for digest, judge in zip(grade.get("calibration_digests", []), grade.get("calibration_judges", [])):
+        paths = [
+            Path(item["ref"])
+            for item in evidence
+            if isinstance(item, dict) and item.get("digest") == digest and isinstance(item.get("ref"), str) and os.path.isabs(item["ref"])
+        ]
+        path = next((path for path in paths if path.is_file() and raw_file_digest(path) == digest), None)
+        if path is None:
+            errors.append(f"calibration {digest} is not retained as a file with those bytes at an absolute evidence path")
+            continue
+        try:
+            qualified = judge_qualification(controls[0], path)[0] if controls is not None else None
+        except EvalError as error:
+            errors.append(f"calibration {digest} does not read: {error}")
+            continue
+        if (list(qualified) if qualified is not None else None) != judge:
+            errors.append(f"calibration {digest} does not qualify the judge the grade recorded")
     return errors
 
 
@@ -4384,6 +4437,9 @@ def computed_trial_status(trial: dict, case: dict) -> str:
             result["result"] == "fail" for result in grade["assertions"]
         ):
             return "fail"
+        if calibration_evidence_errors(grade, trial):
+            # The calibration the grade cites no longer verifies: not measured.
+            return "error"
         if not grade["qualification"]["eligible"]:
             # Nothing failed, but a transport-only grade or an ungraded
             # judgement of meaning is not a measured pass.

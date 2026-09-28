@@ -423,7 +423,11 @@ fails its assertion as not gradable, never passes it.
   qualify no one. An assertion that read a judgement from any other judge is
   `ungraded`, and the grade's `qualification.eligible` is false. `score`
   never counts such a trial as a pass: with no failed assertion its status
-  is `error`, not measured; `grade` exits 1 for it. `--transport-only`
+  is `error`, not measured; `grade` exits 1 for it. The trial retains each
+  calibration file in its evidence by absolute path, and every consumer
+  (`score`, `validate-result`) reads it again: a file that is missing, whose
+  bytes no longer match the grade's digest, or that no longer qualifies the
+  judge the grade counted leaves the trial `error`. `--transport-only`
   grades uncalibrated judgements as recorded, to test that judgements reach
   the grade and fail closed, and marks the grade ineligible. A scripted or
   synthetic judge only exercises this plumbing; its passing runs are never
