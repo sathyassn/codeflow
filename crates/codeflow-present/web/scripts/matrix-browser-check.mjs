@@ -796,9 +796,15 @@ async function closeMarkers(page, width) {
     // holds that marker.
     const row = markers.filter((marker, i) => i >= 4 && !overflowed.includes(i));
     const bound = route ? route.right + 2 : (await page.evaluate(() => scrollX)) + 2;
+    // A text note's marker starts from its block, so the nine prose notes
+    // share one place, the row's first marker's (its right end is the row's;
+    // a wider marker in a gutter narrowed by the sections list ends nearer
+    // the line). Overflow continues from there, never at the row's far end.
+    const origin = Math.max(...row.map((marker) => marker.right));
     for (const i of overflowed) {
       const { what } = notes[i];
       assert.ok(i >= 4, where(`marker ${i + 1} (${what}) left its line's row`));
+      assert.ok(markers[i].right >= origin - 1 && (!gutter || markers[i].right <= anchors[i].left), where(`marker ${i + 1} (${what}) ${JSON.stringify(markers[i])} overflowed away from its own place, which ends at ${origin}`));
       const free = freeStretch(row, bound, markers[i].right, markers[i].right - markers[i].left);
       assert.ok(free === null, where(`marker ${i + 1} (${what}) left its row while ${JSON.stringify(free)} was free`));
       // An overflow chain starts at its line: each overflowed marker is just
