@@ -1141,12 +1141,30 @@ impl SessionStore {
     }
 
     pub fn update_document(&self, id: Uuid, parsed: ParsedDocument) -> Result<u64> {
+        self.update_document_expecting(id, parsed, None)
+    }
+
+    /// Writes the next revision. With `expected`, the update applies only
+    /// while that revision is current, checked under the session lock
+    /// (`present update --expected-revision`, SPC-014 I5).
+    pub fn update_document_expecting(
+        &self,
+        id: Uuid,
+        parsed: ParsedDocument,
+        expected: Option<u64>,
+    ) -> Result<u64> {
         let _project_lease = self.prepare_growth_mutation()?;
         let _lock = self.lock_session(id)?;
         self.reconcile_update_unlocked(id)?;
         let mut session = self.load(id)?;
         if session.status != SessionStatus::Active {
             return Err(PresentError::SessionClosed(id.to_string()));
+        }
+        if let Some(expected) = expected.filter(|expected| *expected != session.current_revision) {
+            return Err(PresentError::RevisionConflict {
+                expected,
+                current: session.current_revision,
+            });
         }
         let revision = session.current_revision.checked_add(1).ok_or_else(|| {
             PresentError::CorruptState("presentation revision overflow".to_string())

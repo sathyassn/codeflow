@@ -1628,3 +1628,56 @@ fn cli_input_errors_and_empty_clears_are_named() {
     assert!(empty.contains("nothing to clear"), "{empty}");
     close_and_clear(&fixture, &session_id);
 }
+
+/// TSK-119, SPC-014 I5: `present update --expected-revision N` applies only
+/// while N is current; otherwise it exits 8 with the exact conflict line on
+/// stderr and writes no revision. Without the flag, update is unchanged.
+#[test]
+fn update_with_an_expected_revision_refuses_a_stale_base() {
+    let fixture = setup_project();
+    let document = fixture.project.join("forms.json");
+    fs::write(&document, contract_fixture("documents/v2-forms.json")).unwrap();
+    let (session_id, _) = open_no_launch(&fixture, &document);
+    let revisions = || {
+        fs::read_dir(session_dir(&fixture, &session_id).join("revisions"))
+            .unwrap()
+            .count()
+    };
+    let update = |expected: Option<&str>| {
+        let mut args = vec!["present", "update", &session_id, document.to_str().unwrap()];
+        if let Some(expected) = expected {
+            args.extend(["--expected-revision", expected]);
+        }
+        codeflow(&fixture.project, &fixture.home, &args)
+    };
+
+    let applied = update(Some("1"));
+    assert_eq!(
+        require_success(&applied).trim(),
+        format!("updated {session_id} to revision 2")
+    );
+    assert_eq!(revisions(), 2);
+
+    for stale in ["1", "3", "0"] {
+        let refused = update(Some(stale));
+        assert_eq!(
+            refused.status.code(),
+            Some(8),
+            "--expected-revision {stale}"
+        );
+        assert_eq!(
+            String::from_utf8(refused.stderr).unwrap(),
+            format!("{{\"error\":\"revision_conflict\",\"expected\":{stale},\"current\":2}}\n")
+        );
+        assert!(refused.stdout.is_empty());
+        assert_eq!(revisions(), 2, "no revision is written");
+    }
+
+    let not_a_number = update(Some("two"));
+    assert_eq!(not_a_number.status.code(), Some(2), "usage error");
+    assert_eq!(revisions(), 2);
+
+    require_success(&update(None));
+    assert_eq!(revisions(), 3);
+    close_and_clear(&fixture, &session_id);
+}
