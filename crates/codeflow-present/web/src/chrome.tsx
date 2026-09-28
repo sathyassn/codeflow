@@ -103,7 +103,7 @@ function targetKindOf(target: Pick<PendingFeedback, "selector" | "element_select
 // One word per kind everywhere the reviewer reads it: float, composer, rail,
 // marker and status (the summaries in selection.ts start with the same word).
 const kindLabels: Readonly<Record<TargetKind, string>> = { text: "Text", element: "Element", region: "Area" };
-/** A press on one of these acts on the chrome; its release never pins a selection. */
+/** Outside the review text, a press on one of these acts on the chrome; its release never pins a selection. */
 const PRESS_OWNERS = "button, a, input, textarea, select, summary, label, [role=button], .cf-capture-tools, .cf-float, [data-testid=composer]";
 
 // The one instruction the hint, the empty rail and the status line share.
@@ -739,10 +739,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       dragGestureRef.current = null;
       if (!g) {
         // An untracked press pins its selection on release too: one begun in
-        // the page margin, or one begun before this effect was installed
-        // (just after the composer closed). A control's press does not.
+        // the page margin, on a link inside the review text, or before this
+        // effect was installed (just after the composer closed). A press on
+        // the chrome's own controls does not.
         const start = pressTargetRef.current;
-        if (start && !start.closest(PRESS_OWNERS)) onSelection();
+        if (start && (documentRoot.contains(start) || !start.closest(PRESS_OWNERS))) onSelection();
         return;
       }
       const w = Math.abs(event.clientX - g.x0);
