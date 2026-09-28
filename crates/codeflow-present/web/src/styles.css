@@ -1363,10 +1363,12 @@ code { font-family: var(--cf-font-mono); }
   border-radius: 4px;
   transition: outline-color 100ms ease;
 }
+/* The tint is an image layered over the target's own background colour, so
+   a crop taken while it is pinned reads that colour, not the tint. */
 .cf-hot-sel {
   outline: 2px solid var(--cf-accent);
   outline-offset: 3px;
-  background: color-mix(in srgb, var(--cf-accent) 14%, transparent);
+  background-image: linear-gradient(color-mix(in srgb, var(--cf-accent) 14%, transparent), color-mix(in srgb, var(--cf-accent) 14%, transparent));
 }
 
 /* SVG parts draw no outline: the highlight is a glow that follows the
@@ -1379,7 +1381,7 @@ svg.cf-hot {
 svg .cf-hot-sel,
 svg.cf-hot-sel {
   outline: none;
-  background: none;
+  background-image: none;
   filter: drop-shadow(0 0 1px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent)) drop-shadow(0 0 2.5px var(--cf-accent));
 }
 #cf-present-document[data-cf-capture-mode="element"] svg :is(g, path, line, polyline, polygon, rect, circle, ellipse, text):focus {

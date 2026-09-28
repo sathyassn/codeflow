@@ -85,8 +85,7 @@ export function intersectingVisibleText(root: HTMLElement, box: DOMRect): string
   // but is not document content — its digits must never enter an excerpt.
   const nodes = [...root.querySelectorAll(TEXT_CARRIERS)].filter((node) => {
     if (node.closest(".cf-marker-layer")) return false;
-    const style = getComputedStyle(node);
-    if (style.visibility === "hidden" || style.display === "none") return false;
+    if (undrawn(node, getComputedStyle(node))) return false;
     const rect = node.getBoundingClientRect();
     return rect.width >= 2 && rect.height >= 2 && intersects(rect, box);
   });
@@ -266,7 +265,7 @@ async function paintElementTree(
 
   for (const element of elements) {
     const style = getComputedStyle(element);
-    if (style.visibility === "hidden" || style.display === "none") continue;
+    if (undrawn(element, style)) continue;
     const rect = element.getBoundingClientRect();
     const x = (rect.left - box.left) * scale;
     const y = (rect.top - box.top) * scale;
@@ -284,13 +283,19 @@ async function paintElementTree(
       }
       painted += 1;
     }
-    const borderWidth = parseFloat(style.borderTopWidth) || 0;
-    if (borderWidth > 0 && !isTransparent(style.borderTopColor)) {
-      ctx.strokeStyle = style.borderTopColor;
-      ctx.lineWidth = Math.max(1, borderWidth * scale);
-      ctx.strokeRect(x + 0.5, y + 0.5, Math.max(0, w - 1), Math.max(0, h - 1));
+    // Each side with its own width and colour: a rule above a block is not
+    // a box around it.
+    const edge = (width: string, colour: string, rect: (thickness: number) => [number, number, number, number]): void => {
+      const css = parseFloat(width) || 0;
+      if (css <= 0 || isTransparent(colour)) return;
+      ctx.fillStyle = colour;
+      ctx.fillRect(...rect(Math.max(1, css * scale)));
       painted += 1;
-    }
+    };
+    edge(style.borderTopWidth, style.borderTopColor, (t) => [x, y, w, t]);
+    edge(style.borderRightWidth, style.borderRightColor, (t) => [x + w - t, y, t, h]);
+    edge(style.borderBottomWidth, style.borderBottomColor, (t) => [x, y + h - t, w, t]);
+    edge(style.borderLeftWidth, style.borderLeftColor, (t) => [x, y, t, h]);
     // Raster content: backgrounds and text alone leave an <img> excerpt blank.
     // CSP restricts img-src to self/data:/blob:, so drawImage cannot taint.
     if (element instanceof HTMLImageElement && element.complete && element.naturalWidth > 0) {
@@ -328,11 +333,19 @@ async function paintElementTree(
     if (parent.closest(".cf-marker-layer, style, script")) continue;
     if (parent.closest("svg") && !parent.closest("foreignObject")) continue;
     const style = getComputedStyle(parent);
-    if (style.visibility === "hidden" || style.display === "none" || Number(style.opacity) === 0) continue;
+    if (undrawn(parent, style) || Number(style.opacity) === 0) continue;
     if (clippedAway(parent, source)) continue;
     painted += paintTextNode(ctx, node, style, box, scale);
   }
   return painted;
+}
+
+// An element the page does not draw. The content of a closed <details> (a
+// tab that is not open) keeps its display, and can still report a rectangle,
+// so the computed style alone would paint it over the summary.
+function undrawn(element: Element, style: CSSStyleDeclaration): boolean {
+  if (style.visibility === "hidden" || style.display === "none") return true;
+  return typeof element.checkVisibility === "function" && !element.checkVisibility();
 }
 
 // Text a clipping box hides from sight, such as a screen-reader label (a
@@ -365,8 +378,16 @@ function paintTextNode(
   ctx.fillStyle = style.color || "#111111";
   const fontSize = Math.max(1, (parseFloat(style.fontSize) || 16) * scale);
   ctx.font = `${style.fontStyle} ${style.fontWeight} ${fontSize}px ${style.fontFamily}`;
-  ctx.textBaseline = "top";
   ctx.textAlign = "left";
+  // A text range's box can be taller than the font's own box, by the line's
+  // half-leading above and below. The baseline sits the font's ascent below
+  // the top of the font box, centred in the range's box; drawing from the
+  // range's top set every glyph about 4 px high in the annotation matrix.
+  ctx.textBaseline = "alphabetic";
+  const { fontBoundingBoxAscent: ascent, fontBoundingBoxDescent: descent } = ctx.measureText(value);
+  const fontBox = Number.isFinite(ascent) && Number.isFinite(descent) ? { ascent, descent } : null;
+  if (!fontBox) ctx.textBaseline = "top";
+  const decoration = style.textDecorationLine;
 
   let painted = 0;
   let index = 0;
@@ -374,18 +395,33 @@ function paintTextNode(
     probe.setStart(node, index);
     probe.setEnd(node, Math.min(value.length, index + 1));
     const lineTop = probe.getBoundingClientRect().top;
+    // A line ends where the next character starts lower. The union of a
+    // range that wraps keeps the first line's top, so each character is
+    // measured on its own; a collapsed space at a wrap has no box and stays
+    // on the line it ends.
     let end = index + 1;
     while (end < value.length) {
-      probe.setStart(node, index);
+      probe.setStart(node, end);
       probe.setEnd(node, end + 1);
-      if (Math.abs(probe.getBoundingClientRect().top - lineTop) > 1.5) break;
+      const next = probe.getBoundingClientRect();
+      if ((next.width > 0 || next.height > 0) && Math.abs(next.top - lineTop) > 1.5) break;
       end += 1;
     }
     probe.setStart(node, index);
     probe.setEnd(node, end);
     const lineRect = probe.getBoundingClientRect();
     if (intersects(lineRect, box) && lineRect.width > 0.5 && lineRect.height > 0.5) {
-      ctx.fillText(value.slice(index, end), (lineRect.left - box.left) * scale, (lineRect.top - box.top) * scale);
+      const top = (lineRect.top - box.top) * scale;
+      const y = fontBox ? top + (lineRect.height * scale - fontBox.ascent - fontBox.descent) / 2 + fontBox.ascent : top;
+      const left = (lineRect.left - box.left) * scale;
+      ctx.fillText(value.slice(index, end), left, y);
+      // An underline (a diff's added line) or a strike (a removed one).
+      if (fontBox) {
+        const thickness = Math.max(1, fontSize / 16);
+        const width = lineRect.width * scale;
+        if (decoration.includes("underline")) ctx.fillRect(left, y + Math.max(1, fontSize / 10), width, thickness);
+        if (decoration.includes("line-through")) ctx.fillRect(left, y - fontBox.ascent * 0.3, width, thickness);
+      }
       painted += 1;
     }
     index = end;
