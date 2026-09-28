@@ -2341,6 +2341,25 @@ fn responses_list_filters_never_consume_and_ack_is_recorded_once() {
             "delivered"
         ]
     );
+    // The schema root is closed, and a state line carries no answer field.
+    let state = lines
+        .lines()
+        .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+        .find(|line| line["event"] == "delivered")
+        .unwrap();
+    for (field, value) in [
+        ("note", serde_json::json!("x")),
+        ("answer_id", state["target"].clone()),
+    ] {
+        let mut invalid = state.clone();
+        invalid[field] = value;
+        assert!(
+            !registry
+                .errors("urn:codeflow:schema:present:session-responses:1", &invalid)
+                .is_empty(),
+            "{invalid}"
+        );
+    }
     close_and_clear(&fixture, &session_id);
 }
 

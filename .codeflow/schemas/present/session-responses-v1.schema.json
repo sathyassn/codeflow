@@ -3,172 +3,266 @@
   "$id": "urn:codeflow:schema:present:session-responses:1",
   "title": "CodeFlow presentation session responses v1",
   "type": "object",
-  "oneOf": [
-    {
-      "$ref": "#/$defs/answer_line"
-    },
-    {
-      "$ref": "#/$defs/state_line"
-    }
+  "additionalProperties": false,
+  "required": [
+    "event",
+    "sequence"
   ],
-  "$comment": "One line of responses.jsonl in the private local session store (SPC-014 I4): an answer or amendment, or the delivered or acknowledged state of an event. Each line is written with its newline in one write and synced, under the session lock. Sequences count from 1 across every line of the ledger.",
-  "$defs": {
-    "answer_line": {
+  "properties": {
+    "event": {
+      "enum": [
+        "answer",
+        "amendment",
+        "delivered",
+        "acknowledged"
+      ]
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 100000
+    },
+    "answer_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "request_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "payload_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "session_id": {
+      "$ref": "#/$defs/uuid"
+    },
+    "revision": {
+      "type": "integer",
+      "minimum": 1,
+      "maximum": 10000
+    },
+    "form_id": {
+      "type": "string",
+      "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
+    },
+    "form_digest": {
+      "$ref": "#/$defs/sha256"
+    },
+    "outcome": {
+      "enum": [
+        "submit",
+        "decline",
+        "cancel"
+      ]
+    },
+    "values": {
       "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "event",
-        "sequence",
-        "answer_id",
-        "request_id",
-        "payload_digest",
-        "session_id",
-        "revision",
-        "form_id",
-        "form_digest",
-        "outcome",
-        "values",
-        "rationales",
-        "question",
-        "actor",
-        "created_at_unix"
-      ],
-      "properties": {
-        "event": {
-          "enum": [
-            "answer",
-            "amendment"
-          ]
-        },
-        "sequence": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 100000
-        },
-        "answer_id": {
-          "$ref": "#/$defs/uuid"
-        },
-        "request_id": {
-          "$ref": "#/$defs/uuid"
-        },
-        "payload_digest": {
-          "$ref": "#/$defs/sha256"
-        },
-        "session_id": {
-          "$ref": "#/$defs/uuid"
-        },
-        "revision": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 10000
-        },
-        "form_id": {
-          "type": "string",
-          "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"
-        },
-        "form_digest": {
-          "$ref": "#/$defs/sha256"
-        },
-        "outcome": {
-          "enum": [
-            "submit",
-            "decline",
-            "cancel"
-          ]
-        },
-        "values": {
-          "type": "object",
-          "$comment": "Field id to value: a string for text and choice, a number for number and integer, a boolean for boolean, an array of option values for choices. A field left unanswered is absent. decline and cancel carry an empty object."
-        },
-        "rationales": {
-          "type": "object",
-          "$comment": "Field id to the reviewer's rationale string. decline and cancel carry an empty object."
-        },
-        "reason": {
-          "type": "string",
-          "maxLength": 4096,
-          "$comment": "A decline's reason; at most 4096 bytes. Only a decline carries it."
-        },
-        "question": {
-          "$ref": "#/$defs/question"
-        },
-        "actor": {
-          "const": "operator"
-        },
-        "created_at_unix": {
-          "type": "integer",
-          "minimum": 0
-        },
-        "amends": {
-          "$ref": "#/$defs/uuid",
-          "$comment": "The answer_id of an earlier answer (never an amendment) to the same form."
+      "$comment": "Field id to value: a string for text and choice, a number for number and integer, a boolean for boolean, an array of option values for choices. A field left unanswered is absent. decline and cancel carry an empty object."
+    },
+    "rationales": {
+      "type": "object",
+      "$comment": "Field id to the reviewer's rationale string. decline and cancel carry an empty object."
+    },
+    "reason": {
+      "type": "string",
+      "maxLength": 4096,
+      "$comment": "A decline's reason; at most 4096 bytes. Only a decline carries it."
+    },
+    "question": {
+      "$ref": "#/$defs/question"
+    },
+    "actor": {
+      "const": "operator"
+    },
+    "created_at_unix": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "amends": {
+      "$ref": "#/$defs/uuid",
+      "$comment": "The answer_id of an earlier answer (never an amendment) to the same form."
+    },
+    "target": {
+      "$ref": "#/$defs/uuid",
+      "$comment": "A delivered or acknowledged line: the id of the event whose state it records."
+    },
+    "at_unix": {
+      "type": "integer",
+      "minimum": 0
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "amendment"
+          }
         }
       },
-      "allOf": [
-        {
-          "if": {
-            "properties": {
-              "event": {
-                "const": "amendment"
-              }
-            }
-          },
-          "then": {
-            "required": [
-              "amends"
+      "then": {
+        "required": [
+          "amends"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "const": "answer"
+          }
+        }
+      },
+      "then": {
+        "not": {
+          "required": [
+            "amends"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "enum": [
+              "answer",
+              "amendment"
             ]
           }
-        },
-        {
-          "if": {
-            "properties": {
-              "event": {
-                "const": "answer"
-              }
+        }
+      },
+      "then": {
+        "required": [
+          "answer_id",
+          "request_id",
+          "payload_digest",
+          "session_id",
+          "revision",
+          "form_id",
+          "form_digest",
+          "outcome",
+          "values",
+          "rationales",
+          "question",
+          "actor",
+          "created_at_unix"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "target"
+              ]
+            },
+            {
+              "required": [
+                "at_unix"
+              ]
             }
-          },
-          "then": {
-            "not": {
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "event": {
+            "enum": [
+              "delivered",
+              "acknowledged"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "target",
+          "at_unix"
+        ],
+        "not": {
+          "anyOf": [
+            {
+              "required": [
+                "answer_id"
+              ]
+            },
+            {
+              "required": [
+                "request_id"
+              ]
+            },
+            {
+              "required": [
+                "payload_digest"
+              ]
+            },
+            {
+              "required": [
+                "session_id"
+              ]
+            },
+            {
+              "required": [
+                "revision"
+              ]
+            },
+            {
+              "required": [
+                "form_id"
+              ]
+            },
+            {
+              "required": [
+                "form_digest"
+              ]
+            },
+            {
+              "required": [
+                "outcome"
+              ]
+            },
+            {
+              "required": [
+                "values"
+              ]
+            },
+            {
+              "required": [
+                "rationales"
+              ]
+            },
+            {
+              "required": [
+                "question"
+              ]
+            },
+            {
+              "required": [
+                "actor"
+              ]
+            },
+            {
+              "required": [
+                "created_at_unix"
+              ]
+            },
+            {
+              "required": [
+                "reason"
+              ]
+            },
+            {
               "required": [
                 "amends"
               ]
             }
-          }
-        }
-      ],
-      "$comment": "An answer to a form or v2 decision, or an amendment of one. An amendment carries amends; an answer never does. The store also checks that each answer_id and request_id is used once and that an amendment names an earlier answer of its form."
-    },
-    "state_line": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": [
-        "event",
-        "sequence",
-        "target",
-        "at_unix"
-      ],
-      "properties": {
-        "event": {
-          "enum": [
-            "delivered",
-            "acknowledged"
           ]
-        },
-        "sequence": {
-          "type": "integer",
-          "minimum": 1,
-          "maximum": 100000
-        },
-        "target": {
-          "$ref": "#/$defs/uuid"
-        },
-        "at_unix": {
-          "type": "integer",
-          "minimum": 0
         }
-      },
-      "$comment": "The state an event reached, by its id in target. delivered names an answer or amendment of this ledger, once, after it was stored (a review's delivery stays in events.jsonl). acknowledged names a delivered answer, amendment or review, once."
-    },
+      }
+    }
+  ],
+  "$comment": "One line of responses.jsonl in the private local session store (SPC-014 I4). An answer or amendment carries the answer fields; an amendment carries amends and an answer never does. A delivered or acknowledged line carries only event, sequence, target and at_unix: delivered names an answer or amendment of this ledger, once, after it was stored (a review's delivery stays in events.jsonl); acknowledged names a delivered answer, amendment or review, once. Each line is written with its newline in one write and synced, under the session lock. Sequences count from 1 across every line; the store also checks that each answer_id and request_id is used once and that an amendment names an earlier answer of its form.",
+  "$defs": {
     "uuid": {
       "type": "string",
       "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
