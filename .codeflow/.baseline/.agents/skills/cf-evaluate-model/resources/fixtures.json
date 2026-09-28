@@ -2596,7 +2596,7 @@
       "id": "guide-release-flow-figure",
       "tier": "standard",
       "state": {
-        "branch": "fixture/release-guide",
+        "branch": "fixture/work",
         "peer": "available",
         "channel": "chat",
         "audience": "operator",
@@ -2613,7 +2613,7 @@
       "id": "app-search-dialog",
       "tier": "standard",
       "state": {
-        "branch": "fixture/search-dialog",
+        "branch": "fixture/work",
         "peer": "available",
         "channel": "chat",
         "audience": "operator",
@@ -2629,7 +2629,7 @@
       "id": "closeout-evidence-tsk-231",
       "tier": "full",
       "state": {
-        "branch": "fixture/retry-budget",
+        "branch": "fixture/work",
         "peer": "available",
         "channel": "chat",
         "audience": "operator",
@@ -2645,7 +2645,7 @@
       "id": "gate-evidence-tsk-231",
       "tier": "full",
       "state": {
-        "branch": "fixture/retry-budget",
+        "branch": "fixture/work",
         "peer": "available",
         "channel": "chat",
         "audience": "operator",
@@ -2661,7 +2661,7 @@
       "id": "skill-rollback-notes",
       "tier": "standard",
       "state": {
-        "branch": "fixture/rollback-skill",
+        "branch": "fixture/work",
         "peer": "available",
         "channel": "chat",
         "audience": "operator",
@@ -2677,7 +2677,7 @@
       "id": "adr-notes-figure-sheet",
       "tier": "standard",
       "state": {
-        "branch": "fixture/figure-sheet-adr",
+        "branch": "fixture/work",
         "peer": "available",
         "channel": "chat",
         "audience": "operator",
