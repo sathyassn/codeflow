@@ -382,24 +382,24 @@ publication date._
 <!-- codeflow:release-impact minor -->
 - **Evaluation grades file state and tool effects.** A model-evaluation case
   can now carry `expected.files` and `expected.effects`, and `eval_kit.py
-  grade` judges them after the session from evidence the subject cannot fake:
-  file content and frontmatter, reviews read only in the reviewer's verdict
-  format, from the verdict field alone and only when coherent and judged so,
-  claimed branches and their tracking, records the id registry issued, the
-  paths the session changed, meaning settled by recorded judgements bound to
-  the exact text, product checks run under confinement with their expected
-  output, and commit gates and acceptance blocks judged by the shipped
-  `codeflow` checkers, whose failure to finish fails the assertion. A
-  command's process record is reported beside the effect it names and never
-  decides it. Graded cases live in a graded suite outside the shipped kit
-  (`--graded-suite`); a qualification holdout stays outside the published
-  repository, and `holdout-check` fails when a holdout path, file, JSON object
-  or copied passage appears in the tracked tree. Subjects work in a separate
-  subjects root, the fixture boundary covers both roots at every depth, a
-  timed-out or errored session is kept and graded as a failure, and a pack
-  result must keep every trial.
-
-### Changed
+  grade` judges the work a session left: file content and frontmatter, reviews
+  read only in the reviewer's verdict format, from the verdict field alone and
+  only when a recorded judgement finds them coherent, claimed branches and
+  their tracking, records consistent with the id registry, the paths the
+  session changed, meaning settled by recorded judgements bound to the exact
+  text, product checks run under confinement with their expected output, and
+  commit gates and acceptance blocks judged by the shipped `codeflow`
+  checkers, whose failure to finish fails the assertion. It measures the
+  result, not how it was made: CLI use, readiness checks and review before
+  completion need the harness's own record of the session, and a command's
+  process record is only reported beside the effect it names. `judge-check`
+  qualifies a judge against labelled controls. Graded cases live in a graded
+  suite outside the shipped kit (`--graded-suite`); a qualification holdout
+  stays outside the published repository, and `holdout-check` fails when a
+  holdout path, file, JSON object or copied run of text appears in the tracked
+  tree. Subjects work in a separate subjects root, the fixture boundary covers
+  both roots at every depth, a timed-out or errored session is kept and graded
+  as a failure, and a pack result must keep every trial.
 
 <!-- codeflow:release-impact minor -->
 - **Reading is checked by structure; sizes are reported, not failed.** The

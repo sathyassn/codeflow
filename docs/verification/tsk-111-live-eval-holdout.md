@@ -44,18 +44,23 @@ never enters a line at all.
 - `evals/holdout.json` records the holdout's forbidden paths
   (`evals/live-delivery/` and `evals/model-artifacts/test_live_pack.py`, where
   it first lived on the task branch), the digests of its files and of every
-  JSON object in it, and fingerprints of its answers, never their content.
-  The answers are its JSON string values (prompts, fixture files,
-  expectations, rubrics) and the string literals of its code (scripted
-  solutions and reviews), fingerprinted as runs of 12 words; passages the
-  shipped scaffold under `assets/` also holds are left out.
+  JSON object in it, and fingerprints of its text, never its content. The
+  fingerprinted text is its JSON string values, the whole source and string
+  literals of its code, and any other file whole, but not its README, as runs
+  of 12 words; text `assets/` and `evals/model-artifacts/` already hold when
+  the manifest is written is left out.
 - `test_eval_kit.py` runs `holdout_leaks` over the tracked tree in every
   `codeflow test`, so CI fails on a holdout path, a copied holdout file, a
   holdout object nested anywhere in any file that parses as JSON whatever its
-  name, and a copied passage of 27 words or more (shorter ones are often
-  caught), escaped or not. With the checkout at hand it also fails on an id or
-  rubric opening only the holdout holds and on a manifest that no longer
+  name, and a copied run of 27 or more consecutive words of the fingerprinted
+  text, as written or as a JSON string (a lone JSON document, a value inside
+  one, or an escaped literal). With the checkout at hand it also fails on an
+  id or rubric opening only the holdout holds and on a manifest that no longer
   matches the holdout.
+- The holdout also keeps the labelled judge controls (`judge-controls.json`):
+  reviews whose free text reverses their verdict in paraphrase, with the
+  judgement a qualified judge must record. The holdout's scripted judge misses
+  them by design; it tests transport and fail-closed binding only.
 - After changing the holdout, run `eval_kit.py holdout-check --manifest
   evals/holdout.json --holdout <checkout> --update` and commit the manifest.
 
@@ -72,9 +77,12 @@ no rotation.
 
 - The check covers the tracked tree of the checkout it runs in, not other
   refs or history; the rewrite covers the task branch.
-- It catches exact copies: whole files, JSON objects, and passages of 27
-  words or more without the holdout; ids and rubric openings only with it. A
-  paraphrase, a passage split by edits into runs under 12 words, or a
-  re-encoding other than JSON escaping is not caught mechanically.
+- It promises exact copies only: whole files, JSON objects, and runs of 27 or
+  more consecutive words of the fingerprinted text without the holdout; ids
+  and rubric openings only with it. Shorter runs are often caught but not
+  promised. A paraphrase, a run broken by edits, or an encoding other than
+  JSON string escaping is not caught mechanically, and neither is text that
+  sat in `assets/` or `evals/model-artifacts/` when the manifest was written
+  (`--update` refuses a tree the current manifest finds a leak in).
 - Whether the sync from the archive publishes only `main` is the operator's
   arrangement; it was not verified here.
