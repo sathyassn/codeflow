@@ -141,10 +141,7 @@ git client plane carries five shims — `pre-commit`, `commit-msg`,
 `pre-merge-commit` (non-fast-forward merge commits onto protected),
 `reference-transaction` (the harness-agnostic backstop: fast-forward merges,
 `reset --hard`, and `branch -D` on protected, git ≥ 2.28), and `pre-push`
-(ADR-0007). A shim runs the `codeflow` binary whose command started git,
-which names itself in `CODEFLOW_HOOK_BINARY` for its git children only, and
-fails when that binary is missing; git run outside codeflow uses the
-`codeflow` on PATH (SPC-013 R-85). The in-session guard plane is two handlers — `git-guard` (git
+(ADR-0007). The in-session guard plane is two handlers — `git-guard` (git
 policy) and `exec-guard` (the `security` section: destructive commands block,
 privilege escalation warns) — wired for Claude in `.claude/settings.json` and,
 through a byte-compatible PreToolUse payload, for an interactive Codex session in
@@ -188,6 +185,12 @@ Build ignores these events' output, so it wires only the guards.
 PR-content checks (attribution/emoji,
 `gh pr merge` base) are git-guard/CI concerns by design — git hooks cannot see
 PR creation.
+
+A git-hook shim runs the `codeflow` binary whose command started git: that
+command names itself in `CODEFLOW_HOOK_BINARY` for its git children only, and
+the shim fails when the named binary is missing or not executable. Git run
+outside codeflow uses the `codeflow` on PATH, and the shim is a no-op when there
+is none (SPC-013 R-85).
 
 Delegation has two engine surfaces. The legacy `delegate-turn --result`
 adapter writes immutable `0600` terminal evidence and signals its scoped tmux
