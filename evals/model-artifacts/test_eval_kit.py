@@ -288,8 +288,11 @@ _SEARCHABLE = re.compile(r"\b(page|pages|title|titles|heading|headings|command|c
 
 
 def _empty_state_acts(s: dict) -> bool:
-    first = s["empty"].split()[0].lower().strip(",.") if s["empty"] else ""
-    return first in _ACTIONS and "!" not in s["empty"] and bool(_SEARCHABLE.search(s["empty"]))
+    # The verb and its object sit in the first sentence: "Search. No pages
+    # are available." names pages only after the action has ended.
+    sentence = re.split(r"[.?!]", s["empty"], maxsplit=1)[0] if s["empty"] else ""
+    first = sentence.split()[0].lower().strip(",") if sentence.split() else ""
+    return first in _ACTIONS and "!" not in s["empty"] and bool(_SEARCHABLE.search(sentence))
 
 
 # ------------------------------------------------------------ closeout case
@@ -1044,6 +1047,13 @@ class SuiteContractTests(unittest.TestCase):
         self.assertNotEqual(html, probe["files"]["app/search.html"])
         self.assertEqual("pass", eval_kit.computed_trial_status(control_trial(case, entry["signals"]), case))
         problems = copy_signal_problems(case, entry["signals"], probe, fixture)
+        self.assertIn("claimed but absent from the text: empty_state_says_what_to_type", problems)
+        self.assertIn("must_not unclaimed but shown: empty_state_without_action", problems)
+        # Codex confirm, finding 2: an action split from its object, the
+        # object named only in a later sentence, fails the same way.
+        split = copy.deepcopy(answer)
+        split["files"]["app/search.html"] = re.sub(r'(data-copy="empty">)[^<]*', r"\1Search. No pages are available.", html)
+        problems = copy_signal_problems(case, entry["signals"], split, fixture)
         self.assertIn("claimed but absent from the text: empty_state_says_what_to_type", problems)
         self.assertIn("must_not unclaimed but shown: empty_state_without_action", problems)
 
