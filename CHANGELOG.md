@@ -823,6 +823,14 @@ publication date._
   by path before it is read; the largest real record is about 100 KiB.
 
 <!-- codeflow:release-impact patch -->
+- **Work reads stay fast with thousands of stale branches.** `work next`,
+  `status` and `orient` read each task record once, and rule out in-process
+  the stale branches that cannot have landed, starting `git cherry` only for
+  the rest; a landing is still proven by `git cherry` alone. On 10,000
+  records with 3,000 stale task branches, `status` went from 358 s and 6,012
+  git processes to 49 s and 500, and `orient` from 281 s to 42 s.
+
+<!-- codeflow:release-impact patch -->
 - **The guide reads every dependency form a task record accepts.** A task
   that depends on a research or decision input, written
   `{id: TSK-NNN, kind: research, pin: "<commit sha>"}` or

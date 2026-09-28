@@ -298,7 +298,7 @@ fn landed(repo: &Repository, repo_root: &Path, tip: git2::Oid, target: git2::Oid
     if tip == target || repo.graph_descendant_of(target, tip).unwrap_or(false) {
         return on_first_parent_line(repo, target, tip) == Some(false);
     }
-    cherry_landed(repo_root, &target.to_string(), &tip.to_string())
+    cherry_landed_in(repo, repo_root, target, tip)
 }
 
 /// Whether every commit `tip` adds over `target` is patch-equivalent there.
@@ -308,6 +308,40 @@ pub(crate) fn cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
     if target.starts_with('-') || tip.starts_with('-') {
         return false;
     }
+    let resolved = Repository::open(repo_root).ok().and_then(|repo| {
+        let oid = |name: &str| {
+            repo.revparse_single(name)
+                .ok()?
+                .peel_to_commit()
+                .ok()
+                .map(|c| c.id())
+        };
+        Some((oid(target)?, oid(tip)?, repo))
+    });
+    match resolved {
+        Some((target, tip, repo)) => cherry_landed_in(&repo, repo_root, target, tip),
+        None => spawned_cherry_landed(repo_root, target, tip),
+    }
+}
+
+/// [`cherry_landed`] on resolved commits. Only `git cherry` proves a
+/// landing; an in-process read first rules out the ranges it could never
+/// prove, so thousands of stale branches cost no process each (R-103).
+fn cherry_landed_in(
+    repo: &Repository,
+    repo_root: &Path,
+    target: git2::Oid,
+    tip: git2::Oid,
+) -> bool {
+    let (target_name, tip_name) = (target.to_string(), tip.to_string());
+    match could_be_patch_equivalent(repo, target, tip) {
+        Some(false) => false,
+        Some(true) => cherry_all_equivalent(repo_root, &target_name, &tip_name),
+        None => spawned_cherry_landed(repo_root, &target_name, &tip_name),
+    }
+}
+
+fn spawned_cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
     let range = format!("{target}..{tip}");
     let merges = git(
         repo_root,
@@ -316,8 +350,98 @@ pub(crate) fn cherry_landed(repo_root: &Path, target: &str, tip: &str) -> bool {
     if !merges.is_ok_and(|out| out.trim().is_empty()) {
         return false;
     }
+    cherry_all_equivalent(repo_root, target, tip)
+}
+
+fn cherry_all_equivalent(repo_root: &Path, target: &str, tip: &str) -> bool {
     git(repo_root, &["cherry", target, tip])
         .is_ok_and(|out| !out.trim().is_empty() && out.lines().all(|line| line.starts_with("- ")))
+}
+
+/// Whether `git cherry target tip` could find every commit of `tip`
+/// patch-equivalent on `target`, from what each commit changes: equal patch
+/// ids need equal changed paths, so a `tip` commit whose paths no `target`
+/// commit changes can never be matched. `Some(false)` also covers a merge in
+/// the range and a range that adds nothing, where the spawned check says
+/// the same. `None` when the commits cannot be read here, or a commit changes
+/// nothing: the spawned check then decides alone.
+fn could_be_patch_equivalent(repo: &Repository, target: git2::Oid, tip: git2::Oid) -> Option<bool> {
+    let mut added = Vec::new();
+    let mut walk = repo.revwalk().ok()?;
+    walk.push(tip).ok()?;
+    walk.hide(target).ok()?;
+    for oid in walk {
+        let commit = repo.find_commit(oid.ok()?).ok()?;
+        if commit.parent_count() > 1 {
+            return Some(false);
+        }
+        added.push(changed_paths(repo, &commit)?);
+    }
+    if added.is_empty() {
+        return Some(false);
+    }
+    let mut upstream = std::collections::HashSet::new();
+    let mut walk = repo.revwalk().ok()?;
+    walk.push(target).ok()?;
+    walk.hide(tip).ok()?;
+    for oid in walk {
+        let commit = repo.find_commit(oid.ok()?).ok()?;
+        // `git cherry` compares against non-merge commits only.
+        if commit.parent_count() <= 1 {
+            if let Some(paths) = changed_paths(repo, &commit) {
+                upstream.insert(paths);
+            }
+        }
+    }
+    Some(added.iter().all(|paths| upstream.contains(paths)))
+}
+
+thread_local! {
+    /// Changed-path digests by commit id. A commit id names its content, so
+    /// the memo holds across repositories; it is cleared when large.
+    static CHANGED_PATHS: std::cell::RefCell<std::collections::HashMap<git2::Oid, Option<u64>>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+/// A digest of the paths `commit` changes against its first parent (the
+/// diff `git cherry` takes a patch id of), or `None` when it changes nothing
+/// or cannot be read.
+fn changed_paths(repo: &Repository, commit: &git2::Commit<'_>) -> Option<u64> {
+    use std::hash::{Hash, Hasher};
+    if let Some(known) = CHANGED_PATHS.with(|memo| memo.borrow().get(&commit.id()).copied()) {
+        return known;
+    }
+    let digest = (|| {
+        let tree = commit.tree().ok()?;
+        let parent = match commit.parent_count() {
+            0 => None,
+            _ => Some(commit.parent(0).ok()?.tree().ok()?),
+        };
+        let diff = repo
+            .diff_tree_to_tree(parent.as_ref(), Some(&tree), None)
+            .ok()?;
+        let mut paths: Vec<&[u8]> = diff
+            .deltas()
+            .flat_map(|delta| [delta.old_file().path_bytes(), delta.new_file().path_bytes()])
+            .flatten()
+            .collect();
+        if paths.is_empty() {
+            return None;
+        }
+        paths.sort_unstable();
+        paths.dedup();
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        paths.hash(&mut hasher);
+        Some(hasher.finish())
+    })();
+    CHANGED_PATHS.with(|memo| {
+        let mut memo = memo.borrow_mut();
+        if memo.len() > 200_000 {
+            memo.clear();
+        }
+        memo.insert(commit.id(), digest);
+    });
+    digest
 }
 
 /// Whether `tip` is on the first-parent line of `target`, by parent links
@@ -368,13 +492,18 @@ fn fetched_at(repo: &Repository) -> Option<String> {
 /// The declared targets of the task records in the working tree, as
 /// written, and the default target for records that declare none.
 fn declared_targets(repo_root: &Path) -> BTreeSet<String> {
+    // One listing; the first record of each id speaks for it, as
+    // `declared_work_target` finds it (R-103: no scan per record).
+    let mut ids = BTreeSet::new();
     let mut targets: BTreeSet<String> =
         crate::workgraph::layout::task_record_files(&repo_root.join("project-management"))
             .into_iter()
-            .filter_map(|path| {
-                let stem = path.file_stem()?.to_str()?.to_string();
-                super::declared_work_target(repo_root, &stem)
+            .filter(|path| {
+                path.file_stem()
+                    .and_then(|stem| stem.to_str())
+                    .is_some_and(|stem| ids.insert(stem.to_string()))
             })
+            .filter_map(|path| super::work_start::declared_work_target_at(&path))
             .collect();
     if let Some(default) = super::default_work_target(repo_root) {
         targets.insert(default);
@@ -1851,5 +1980,78 @@ mod tests {
             "{rendered}"
         );
         assert!(rendered.contains("active"), "{rendered}");
+    }
+
+    /// TSK-110 AC-2: the in-process read decides no landing by itself. On
+    /// each shape it agrees with `git cherry` alone, and it spares the
+    /// process only where `git cherry` could never prove a landing.
+    #[test]
+    fn the_in_process_landing_read_agrees_with_git_cherry() {
+        let dir = repo();
+        let root = dir.path();
+        fs::write(root.join("a.txt"), "1\n2\n3\n4\n5\n6\n7\n8\n9\n").unwrap();
+        commit(root, "base");
+        let branch = |name: &str, file: &str, text: &str| {
+            run(root, &["switch", "-q", "-c", name, "main"]);
+            fs::write(root.join(file), text).unwrap();
+            commit(root, name)
+        };
+        // Squash-landed: the same change is on main as a new commit.
+        let squashed = branch("task/TSK-001-squash", "s.txt", "s\n");
+        // Rebase-landed with shifted context: the patch still matches.
+        let shifted = branch(
+            "task/TSK-002-shift",
+            "a.txt",
+            "1\n2\n3\n4\n5\n6\n7\n8\nnine\n",
+        );
+        // Same path, another change: a candidate `git cherry` refuses.
+        branch("task/TSK-003-other", "s.txt", "other\n");
+        // Never landed, and partly landed.
+        branch("task/TSK-004-open", "open.txt", "open\n");
+        let part = branch("task/TSK-005-part", "p1.txt", "p1\n");
+        fs::write(root.join("p2.txt"), "p2\n").unwrap();
+        commit(root, "part two");
+        // A merge in the range, and a commit that changes nothing.
+        run(root, &["switch", "-q", "-c", "task/TSK-006-merge", "main"]);
+        run(
+            root,
+            &["merge", "-q", "--no-ff", "-m", "merge", "task/TSK-004-open"],
+        );
+        run(root, &["switch", "-q", "-c", "task/TSK-007-empty", "main"]);
+        run(root, &["commit", "-q", "--allow-empty", "-m", "empty"]);
+        run(root, &["switch", "-q", "main"]);
+        fs::write(root.join("a.txt"), "zero\n1\n2\n3\n4\n5\n6\n7\n8\n9\n").unwrap();
+        commit(root, "main moves");
+        run(root, &["cherry-pick", &squashed]);
+        run(root, &["cherry-pick", &shifted]);
+        run(root, &["cherry-pick", &part]);
+
+        let repo = Repository::open(root).unwrap();
+        let oid = |name: &str| {
+            repo.revparse_single(name)
+                .unwrap()
+                .peel_to_commit()
+                .unwrap()
+                .id()
+        };
+        let main = oid("main");
+        for (name, landed, spared) in [
+            ("task/TSK-001-squash", true, Some(true)),
+            ("task/TSK-002-shift", true, Some(true)),
+            ("task/TSK-003-other", false, Some(true)),
+            ("task/TSK-004-open", false, Some(false)),
+            ("task/TSK-005-part", false, Some(false)),
+            ("task/TSK-006-merge", false, Some(false)),
+            ("task/TSK-007-empty", false, None),
+        ] {
+            let alone = spawned_cherry_landed(root, "main", name);
+            assert_eq!(alone, landed, "{name}: git cherry alone");
+            assert_eq!(cherry_landed(root, "main", name), alone, "{name}");
+            assert_eq!(
+                could_be_patch_equivalent(&repo, main, oid(name)),
+                spared,
+                "{name}: in-process read"
+            );
+        }
     }
 }

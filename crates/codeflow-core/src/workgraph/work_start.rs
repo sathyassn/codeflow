@@ -639,7 +639,13 @@ pub fn declared_work_target(repo_root: &Path, task_id: &str) -> Option<String> {
                 .and_then(|stem| stem.to_str())
                 .is_some_and(|stem| stem == task_id)
         })
-        .and_then(|path| std::fs::read_to_string(path).ok())
+        .and_then(|path| declared_work_target_at(&path))
+}
+
+/// The `integration_target` the task record at `path` declares.
+pub(crate) fn declared_work_target_at(path: &Path) -> Option<String> {
+    std::fs::read_to_string(path)
+        .ok()
         .and_then(|content| parse_record(&content, RecordKind::Task).ok())
         .and_then(|record| record.integration_target)
         .filter(|target| !target.trim().is_empty())
