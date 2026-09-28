@@ -4127,6 +4127,8 @@ fn set_records_baseline(dir: &Path, commits: &[&str]) -> String {
 /// with no baseline list, and two lines, each adding a legacy task and then
 /// a list naming that commit. Returns (bare, local, line a's record commit,
 /// line b's record commit); the local checkout is on `stable`'s seed.
+const TWO_LINES_POLICY: &str = r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block", "work_records": "block"}}"#;
+
 fn two_lines_with_lists() -> (tempfile::TempDir, tempfile::TempDir, String, String) {
     let bare = tempfile::tempdir().unwrap();
     git(bare.path(), &["init", "--bare", "-q", "-b", "stable"]);
@@ -4134,7 +4136,14 @@ fn two_lines_with_lists() -> (tempfile::TempDir, tempfile::TempDir, String, Stri
     init_repo(local.path(), "main");
     std::fs::create_dir_all(local.path().join(".codeflow")).unwrap();
     std::fs::write(local.path().join(".codeflow/project.toml"), RECORDS_STATE).unwrap();
-    git(local.path(), &["add", ".codeflow/project.toml"]);
+    // The default target carries the policy, so its release pattern can be
+    // read (SPC-013 R-120: a tracked project whose default target has no
+    // policy fails closed).
+    write_policy(local.path(), TWO_LINES_POLICY);
+    git(
+        local.path(),
+        &["add", ".codeflow/project.toml", ".codeflow/policy.json"],
+    );
     git(local.path(), &["commit", "-q", "-m", "chore: full tier"]);
     receive(bare.path(), local.path(), "main:stable");
     git(
@@ -4160,10 +4169,6 @@ fn two_lines_with_lists() -> (tempfile::TempDir, tempfile::TempDir, String, Stri
         records.push(record);
     }
     git(local.path(), &["checkout", "-q", "main"]);
-    write_policy(
-        local.path(),
-        r#"{"git": {"protected_branches": ["stable"], "test_gate_on_push": "block", "work_records": "block"}}"#,
-    );
     let b = records.pop().unwrap();
     let a = records.pop().unwrap();
     (bare, local, a, b)

@@ -739,10 +739,13 @@ fn a_release_branch_from_two_lines_passes_on_a_fresh_project() {
     git(&root, &["switch", "-q", main]);
     let (pushed, said) = push(&root, &["origin", "integration/release-2"]);
     assert!(!pushed, "code after the completion pushed:\n{said}");
-    // The pushed range starts after the completion, so the task that held
-    // the role is no longer open there: the late code has no owner.
+    // The push is judged on everything the release branch adds to main, as
+    // its pull request is: the late code follows the owner's completion.
     assert!(
-        said.contains("changes src/late.rs directly: no release-integration task to own it"),
+        said.contains(&format!(
+            "TSK-003 (completed directly on the release line at {}): src/late.rs changed after the reviewed commit",
+            &completed[..9]
+        )),
         "{said}"
     );
     fails(

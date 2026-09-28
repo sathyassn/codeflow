@@ -906,9 +906,8 @@ fn a_new_release_branch_is_pushed_from_the_default_tip() {
     let judged = format!("codeflow ci --base {main} --head {head}");
     assert!(hook.1.contains(&judged), "{}", hook.1);
     assert!(
-        hook.1.contains(
-            "is a new release branch that meets the destination's history at several commits"
-        ),
+        hook.1
+            .contains("is a release branch: `codeflow ci` judges everything it adds to main"),
         "{}",
         hook.1
     );
@@ -917,7 +916,57 @@ fn a_new_release_branch_is_pushed_from_the_default_tip() {
 
     // An ordinary branch with the same shape keeps its boundary base.
     let hook = fx.pre_push("feat/two-lines", &head, zero);
-    assert!(!hook.1.contains("is a new release branch"), "{}", hook.1);
+    assert!(!hook.1.contains("is a release branch"), "{}", hook.1);
+}
+
+/// AC-5, AC-9 (Codex R145-R3-1): a release branch's push covers everything
+/// it adds to the default target, however the destination already holds
+/// its commits. A direct criteria weakening published under an ordinary
+/// branch is refused when a release branch is pushed at that commit, and
+/// when one more planning-only commit follows it.
+#[test]
+fn a_release_push_judges_all_it_adds_to_the_default_tip() {
+    let zero = "0000000000000000000000000000000000000000";
+    let fx = Fx::new(false);
+    fx.git(&["switch", "-q", "-C", "plan/ordinary", "main"]);
+    let text = std::fs::read_to_string(fx.root.join(path("TSK-001"))).unwrap();
+    assert!(text.contains(CRITERIA), "{text}");
+    fx.write(&path("TSK-001"), &text.replace(CRITERIA, LOOSER));
+    fx.commit("docs(records): weaken a criterion");
+    fx.git(&["push", "-q", "origin", "plan/ordinary"]);
+    let frozen = "TSK-001 changes its criteria directly on the release line";
+
+    // Already advertised under the ordinary name.
+    let head = fx.head();
+    let hook = fx.pre_push(RELEASE, &head, zero);
+    blocks(&hook, "a release push of advertised history", &[frozen]);
+    let ci = fx.ci("main", &head, RELEASE, Some("main"));
+    assert_eq!(findings(&ci), findings(&hook), "{}\n{}", ci.1, hook.1);
+
+    // One new commit after the advertised history.
+    fx.write("project-management/note.md", "release metadata\n");
+    let head = fx.commit("docs: a release note");
+    let hook = fx.pre_push(RELEASE, &head, zero);
+    blocks(
+        &hook,
+        "a release push one commit past advertised history",
+        &[frozen],
+    );
+
+    // The same push as an existing release branch the destination holds.
+    fx.git(&[
+        "push",
+        "-q",
+        "origin",
+        &format!("HEAD~1:refs/heads/{RELEASE}"),
+    ]);
+    let published = fx.git(&["rev-parse", "HEAD~1"]);
+    let hook = fx.pre_push(RELEASE, &head, &published);
+    blocks(&hook, "an update of a release branch holding it", &[frozen]);
+
+    // Control: the ordinary branch is judged from what the destination holds.
+    let hook = fx.pre_push("plan/ordinary-two", &head, zero);
+    assert!(!hook.1.contains(frozen), "{}", hook.1);
 }
 
 /// AC-5 (Codex R145-3): an existing default target with no policy file
@@ -1729,21 +1778,23 @@ fn a_clean_octopus_with_an_unverified_parent_is_direct_work() {
 fn callers_scope_by_name() {
     let zero = "0000000000000000000000000000000000000000";
 
-    // A new branch whose head is published as `feat/unrelated`.
+    // A new branch whose head is published as `feat/unrelated` is judged
+    // by its name, on everything it adds to main, as its pull request is
+    // (Codex R145-R3-1).
     let fx = Fx::new(false);
     fx.git(&["switch", "-q", "-C", "feat/unrelated", "main"]);
     fx.write("src/unrelated.rs", "// unrelated\n");
     let head = fx.commit("feat: unrelated");
     fx.git(&["push", "-q", "origin", "feat/unrelated"]);
     let hook = fx.pre_push(RELEASE, &head, zero);
-    passes(&hook, "a new release branch at a published head");
-    assert!(
-        hook.1.contains(SCOPE_LINE),
-        "judged by its name:\n{}",
-        hook.1
+    blocks(
+        &hook,
+        "a new release branch at a published head",
+        &[SCOPE_LINE, NO_OWNER],
     );
     let pull = fx.ci("main", &head, RELEASE, Some("main"));
     blocks(&pull, "its pull request into main", &[NO_OWNER]);
+    assert_eq!(findings(&pull), findings(&hook), "{}\n{}", pull.1, hook.1);
 
     // A non-fast-forward rewrite of the release branch.
     let fx = Fx::new(false);

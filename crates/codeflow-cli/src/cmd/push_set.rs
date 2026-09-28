@@ -161,9 +161,11 @@ fn violation(policy: &GitPolicy, message: String, remedy: String) -> Violation {
     )
 }
 
-/// Run `codeflow ci` over each pushed ref's range; a range the destination
-/// does not resolve is judged from the default target's tip, noted, or
-/// refused (see [`unresolved_base`]).
+/// Run `codeflow ci` over each pushed ref's range. A release branch is
+/// judged from the default target's tip, as its pull request is; another
+/// branch from the boundary of what the destination holds, or noted when
+/// that is unresolved; a push whose scope cannot be read is refused (see
+/// [`release_base`]).
 fn run_ci_ranges(
     exe: &Path,
     root: &Path,
@@ -175,19 +177,29 @@ fn run_ci_ranges(
 ) {
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
-        let base = match range_base(root, r, destination) {
-            Some(RangeBase {
-                base,
-                note,
-                several,
-            }) => {
-                report.notes.extend(note);
-                let release = several
-                    .then(|| release_tip(root, destination.url, branch, report))
-                    .flatten();
-                Some(release.unwrap_or(base))
+        let base = match release_base(root, r, branch, destination, policy, report) {
+            Scoped::Refused => None,
+            Scoped::Release(tip) => Some(tip),
+            Scoped::Ordinary(unanswered) => {
+                if let Some(RangeBase { base, note }) = range_base(root, r, destination) {
+                    report.notes.extend(note);
+                    Some(base)
+                } else if let Some(why) = unanswered {
+                    // Nothing bounds the range and the destination cannot
+                    // say whether the name is a release branch.
+                    report.violations.push(violation(
+                        policy,
+                        format!(
+                            "the range of '{branch}' is unresolved and the destination did not answer, so whether it is a release branch cannot be read; it is not pushed unjudged (SPC-013 R-120): {why}"
+                        ),
+                        "push again when the destination answers".to_string(),
+                    ));
+                    None
+                } else {
+                    report.notes.push(unresolved(branch, destination));
+                    None
+                }
             }
-            None => unresolved_base(root, destination.url, branch, destination, policy, report),
         };
         if let Some(base) = base {
             let mut args = vec![
@@ -372,52 +384,86 @@ fn fetches_from(root: &Path, name: &str, url: &str) -> bool {
     git(root, &["remote", "get-url", name]).is_some_and(|fetch| fetch.trim() == url)
 }
 
-/// The base for a pushed branch whose range the destination's tips do not
-/// resolve. The release scope never sits behind that discovery (SPC-013
-/// R-120): a release branch is judged from the default target's tip, which
-/// the scope check fetched; a release branch pushed where no default target
-/// exists yet, or to a destination that answers but whose scope cannot be
-/// read, is refused. When the destination does not answer, its policy
-/// cannot say which names are release branches, and a failed query does not
-/// prove the push itself fails, so every branch is refused. An ordinary
-/// branch whose scope was read keeps the note that CI checks it.
-fn unresolved_base(
+/// How a pushed branch's range is chosen, by its scope at the destination.
+enum Scoped {
+    /// A release branch, judged from the default target's tip.
+    Release(String),
+    /// Any other branch, judged from what the destination holds; with why
+    /// the destination did not answer, when it did not and durable work
+    /// tracking is off here.
+    Ordinary(Option<String>),
+    /// Not judged and refused; the violation is reported.
+    Refused,
+}
+
+/// The scope of a pushed branch under the policy at the destination's
+/// default target (SPC-013 R-120). A release branch's range is everything
+/// it adds to the default target's tip, the range its pull request is
+/// judged on, however the destination already holds its commits: history
+/// published under another name was never judged as release work, so no
+/// advertised boundary may hide it. When the destination does not answer,
+/// or its policy cannot say, the push is refused whatever its name: a
+/// failed query does not prove the push itself fails. A release branch
+/// pushed where no default target exists yet is refused. The release rules
+/// are acceptance rules, so they apply where durable work tracking is on,
+/// at the checkout, the pushed commit or the destination's default target,
+/// the same places `codeflow ci` looks; an unreadable tracking state counts
+/// as on.
+fn release_base(
     root: &Path,
-    url: Option<&str>,
+    pushed: &PushRef,
     branch: &str,
     destination: &Destination<'_>,
     policy: &GitPolicy,
     report: &mut StageReport,
-) -> Option<String> {
-    use codeflow_core::workgraph::release_line;
+) -> Scoped {
+    use codeflow_core::workgraph::{
+        durable_work_tracking_enabled, durable_work_tracking_enabled_at, release_line,
+    };
+    let tracked = durable_work_tracking_enabled(root).unwrap_or(true)
+        || durable_work_tracking_enabled_at(root, &pushed.local_sha).unwrap_or(true);
     // The push set's own query already failed: asking again only waits.
-    let asked = match destination
-        .failure()
-        .map_or_else(|| release_line::ask(root, url), |why| Err(why.to_string()))
-    {
+    let asked = match destination.failure().map_or_else(
+        || release_line::ask(root, destination.url),
+        |why| Err(why.to_string()),
+    ) {
         Ok(asked) => asked,
+        Err(why) if !tracked => return Scoped::Ordinary(Some(why)),
         Err(why) => {
             report.violations.push(violation(
                 policy,
                 format!(
-                    "the range of '{branch}' is unresolved and the destination did not answer, so whether it is a release branch cannot be read; it is not pushed unjudged (SPC-013 R-120): {why}"
+                    "the destination did not answer, so whether '{branch}' is a release branch cannot be read; it is not pushed unjudged (SPC-013 R-120): {why}"
                 ),
                 "push again when the destination answers".to_string(),
             ));
-            return None;
+            return Scoped::Refused;
         }
     };
+    // Not tracked here: the rules apply only when the default target
+    // tracks durable work, which can be read only once its tip is here.
+    let tracked = tracked
+        || asked.as_ref().is_ok_and(|asked| {
+            asked.default.as_ref().is_some_and(|(_, tip)| {
+                durable_work_tracking_enabled_at(root, &tip.to_string()).unwrap_or(false)
+            })
+        });
+    if !tracked {
+        return Scoped::Ordinary(None);
+    }
     let scoped = asked.and_then(|asked| {
         release_line::scope(root, &asked, branch, None).map(|scope| (asked, scope))
     });
     match scoped {
-        Ok((_, scope)) if !scope.release() => {
-            report.notes.push(unresolved(branch, destination));
-            None
-        }
+        Ok((_, scope)) if !scope.release() => Scoped::Ordinary(None),
         Ok((asked, _)) => {
-            if let Some((_, tip)) = asked.default {
-                return Some(tip.to_string());
+            if let Some((name, tip)) = asked.default {
+                let tip = tip.to_string();
+                report.notes.push(format!(
+                    "'{branch}' is a release branch: `codeflow ci` judges everything it adds to {name} at {}, as its pull request is",
+                    short(&tip)
+                ));
+                return Scoped::Release(tip);
             }
             report.violations.push(violation(
                 policy,
@@ -426,7 +472,7 @@ fn unresolved_base(
                 ),
                 "push the default branch first, then the release branch".to_string(),
             ));
-            None
+            Scoped::Refused
         }
         Err(why) => {
             report.violations.push(violation(
@@ -436,34 +482,9 @@ fn unresolved_base(
                 ),
                 "fix what the message names at the destination, then push again".to_string(),
             ));
-            None
+            Scoped::Refused
         }
     }
-}
-
-/// The default target's tip, for a new release branch whose commits meet
-/// the destination's history at several boundaries (it imports more than
-/// one line). Any one boundary would leave history the destination holds
-/// inside the range; the release branch's pull request is judged from the
-/// default target's tip, so its push is too (SPC-013 R-120). `None` for any
-/// other branch, or when the scope cannot be read here: `codeflow ci`
-/// reads it again and fails closed on its own.
-fn release_tip(
-    root: &Path,
-    url: Option<&str>,
-    branch: &str,
-    report: &mut StageReport,
-) -> Option<String> {
-    use codeflow_core::workgraph::release_line;
-    let asked = release_line::ask(root, url).ok()?.ok()?;
-    let scope = release_line::scope(root, &asked, branch, None).ok()?;
-    let (name, tip) = asked.default.filter(|_| scope.release())?;
-    let tip = tip.to_string();
-    report.notes.push(format!(
-        "'{branch}' is a new release branch that meets the destination's history at several commits; `codeflow ci` judges it from {name} at {}, as its pull request is",
-        short(&tip)
-    ));
-    Some(tip)
 }
 
 /// Why `codeflow ci` did not run for a pushed branch whose range has no base.
@@ -518,10 +539,6 @@ fn advertised_commits(root: &Path, url: &str) -> Advertised {
 struct RangeBase {
     base: String,
     note: Option<String>,
-    /// A new branch whose commits meet the destination's history at more
-    /// than one boundary: `base` is one of them, so the range can hold
-    /// history the destination already has.
-    several: bool,
 }
 
 /// The base of a pushed branch's range. Only history known to be on the
@@ -541,9 +558,7 @@ struct RangeBase {
 /// 3. a new branch: the same boundary against the advertised tips alone.
 ///    Those are exactly the commits the destination has, so a stale local
 ///    tracking ref neither hides nor adds anything. The pushed sha itself
-///    when nothing is new. When there are several boundaries, a release
-///    branch is judged from the default target's tip instead (see
-///    [`release_tip`]);
+///    when nothing is new;
 /// 4. a new branch when the destination cannot be asked, or none of its
 ///    tips is here: the same boundary against its protected branches'
 ///    tracking refs, when the remote fetches from the location pushed to.
@@ -557,12 +572,8 @@ fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option
     }
     let note = match destination.advertised(root) {
         Advertised::Tips(tips) if !tips.is_empty() => {
-            let found = boundaries(root, &r.local_sha, tips.iter())?;
-            return Some(RangeBase {
-                several: found.len() > 1,
-                base: found.into_iter().next()?,
-                note: None,
-            });
+            return bounded_by(root, &r.local_sha, tips.iter())
+                .map(|base| RangeBase { base, note: None });
         }
         Advertised::Tips(_) => None,
         Advertised::Failed(why) => Some(format!(
@@ -651,11 +662,7 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
             })
         }
     };
-    RangeBase {
-        base,
-        note,
-        several: false,
-    }
+    RangeBase { base, note }
 }
 
 /// The base of the commits in `local_sha` not reachable from `known`: see
@@ -666,17 +673,6 @@ fn bounded_by<'a>(
     local_sha: &str,
     known: impl Iterator<Item = &'a String>,
 ) -> Option<String> {
-    boundaries(root, local_sha, known)?.into_iter().next()
-}
-
-/// Every boundary commit of the commits in `local_sha` not reachable from
-/// `known`, in `rev-list` order, or the pushed sha itself when no commit is
-/// new. `None` when git fails or no boundary exists (no shared history).
-fn boundaries<'a>(
-    root: &Path,
-    local_sha: &str,
-    known: impl Iterator<Item = &'a String>,
-) -> Option<Vec<String>> {
     let mut input = format!("{local_sha}\n");
     for sha in known {
         input.push('^');
@@ -684,15 +680,7 @@ fn boundaries<'a>(
         input.push('\n');
     }
     let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
-    if listed.trim().is_empty() {
-        return Some(vec![local_sha.to_string()]);
-    }
-    let found: Vec<String> = listed
-        .lines()
-        .filter_map(|line| line.strip_prefix('-'))
-        .map(str::to_string)
-        .collect();
-    (!found.is_empty()).then_some(found)
+    boundary(&listed, local_sha, None).map(|found| found.base)
 }
 
 /// The base from `rev-list --boundary` output: its first boundary commit, or
@@ -702,7 +690,6 @@ fn boundary(listed: &str, local_sha: &str, note: Option<String>) -> Option<Range
         return Some(RangeBase {
             base: local_sha.to_string(),
             note,
-            several: false,
         });
     }
     listed
@@ -711,7 +698,6 @@ fn boundary(listed: &str, local_sha: &str, note: Option<String>) -> Option<Range
         .map(|base| RangeBase {
             base: base.to_string(),
             note,
-            several: false,
         })
 }
 
