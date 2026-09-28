@@ -815,6 +815,14 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **Work reads survive a partial clone and refuse an oversized record.**
+  `work next`, `work claim`, `work start`, `status` and `codeflow ci` read
+  the records on a branch tip from `project-management/` only, so a clone
+  that lacks unrelated trees (a treeless partial clone) still reads its
+  backlog instead of failing. A record on a tip larger than 4 MiB is refused
+  by path before it is read; the largest real record is about 100 KiB.
+
+<!-- codeflow:release-impact patch -->
 - **The guide reads every dependency form a task record accepts.** A task
   that depends on a research or decision input, written
   `{id: TSK-NNN, kind: research, pin: "<commit sha>"}` or
