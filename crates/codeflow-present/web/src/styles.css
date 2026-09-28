@@ -660,6 +660,8 @@ html:has(.cf-chrome-frame[data-commenting="true"]) #cf-present-document {
 .cf-field__error { margin: 0; color: var(--cf-danger); font-size: var(--cf-fs-caption); font-weight: 600; }
 .cf-field[data-cf-invalid] .cf-input { border-color: var(--cf-danger); }
 .cf-form__decline { display: grid; gap: var(--cf-space-1); max-inline-size: 36rem; }
+/* A display rule above would beat the user agent's [hidden]; hidden wins here. */
+.cf-form [hidden] { display: none; }
 .cf-form__actions { display: flex; flex-wrap: wrap; align-items: center; gap: var(--cf-space-2); }
 .cf-form__actions button { padding-inline: var(--cf-space-3); border: var(--cf-line) solid var(--cf-border-strong); border-radius: var(--cf-radius-ctl); background: var(--cf-surface); color: var(--cf-text); }
 .cf-form__actions .cf-form__submit, .cf-form__actions [data-cf-form-action="confirm"], .cf-form__actions [data-cf-form-action="resend"] { border-color: var(--cf-accent); background: var(--cf-accent); color: var(--cf-on-accent); }

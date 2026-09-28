@@ -15,7 +15,7 @@
   "service": {
     "entrypoints": {
       "present.app": "/app/assets/app-XWKR5PYQ.js",
-      "present.style": "/app/assets/app-63NSQAML.css"
+      "present.style": "/app/assets/app-P2N47LYS.css"
     },
     "inline": {
       "present.prepaint": {
@@ -26,14 +26,14 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-63NSQAML.css",
-        "stored_path": "service/app-63NSQAML.css.br",
+        "request_path": "/app/assets/app-P2N47LYS.css",
+        "stored_path": "service/app-P2N47LYS.css.br",
         "media_type": "text/css; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 57227,
-        "encoded_bytes": 10019,
-        "sha256": "0f2d58d72a3fbe5dd6caafc331672e803fa998065be66c795bfe7413dbb7d78e",
-        "etag": "\"sha256-Dy1Y1yo/vl3Wyq/DMWcugD+pmAZb5mx5W/50E9u3144=\"",
+        "raw_bytes": 57258,
+        "encoded_bytes": 10016,
+        "sha256": "bb4c02a28127ba0669acbf4d4fde829f14a1f97173538b606833aadafa9de6af",
+        "etag": "\"sha256-u0wCooEnugZprL9NT96CnxSh+XFzU4tgaDOq2vqd5q8=\"",
         "imports": [
           {
             "request_path": "/app/assets/svg%3E",
@@ -315,20 +315,20 @@
     ],
     "metrics": {
       "asset_count": 15,
-      "raw_corpus_bytes": 1054104,
-      "brotli_corpus_bytes": 276665,
+      "raw_corpus_bytes": 1054135,
+      "brotli_corpus_bytes": 276662,
       "largest_raw_chunk_bytes": 186275,
       "largest_brotli_chunk_bytes": 131206
     }
   },
   "export": {
     "present.export": {
-      "stored_path": "export/renderer-f6e3267686737b6c.js.gz",
+      "stored_path": "export/renderer-273ee9186b26f0db.js.gz",
       "media_type": "text/javascript; charset=utf-8",
       "content_encoding": "gzip",
-      "raw_bytes": 966596,
-      "encoded_bytes": 269908,
-      "sha256": "f6e3267686737b6c2f4a1084a551dc8b97c8733bef40a7721dc127e40d829b4e"
+      "raw_bytes": 966716,
+      "encoded_bytes": 269958,
+      "sha256": "273ee9186b26f0db0dea15ea4c3fe95c2051bef0bfde650a67e2d809030c570a"
     }
   },
   "budgets": {
@@ -338,5 +338,5 @@
     "largest_brotli_chunk_bytes": 145000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "85b40e898438393c0bfeae6b692cdd54d307830cde90a97e2fe17d63646296fc"
+  "corpus_sha256": "07fa85b639257cb9d209d05ba522a1d20d4b43dba6b1591bdfc5173865e5002d"
 }

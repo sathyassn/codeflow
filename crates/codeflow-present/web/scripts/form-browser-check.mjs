@@ -97,6 +97,11 @@ try {
     if (!path) return [];
     return (await readFile(path, "utf8")).split("\n").filter(Boolean).map((line) => JSON.parse(line));
   };
+  // A form's [hidden] parts must stay out of sight: a display rule in the
+  // stylesheet beats the user agent's [hidden] rule unless the form's own wins.
+  const hiddenShown = () => page.locator("[data-cf-form] [hidden]").evaluateAll((parts) => parts
+    .filter((part) => getComputedStyle(part).display !== "none")
+    .map((part) => part.className || part.getAttribute("data-cf-form-action") || part.tagName));
   const draftOf = () => form.evaluate((article) => [...article.querySelectorAll("[data-cf-value], [data-cf-rationale-input]")]
     .map((control) => (control.type === "radio" || control.type === "checkbox" ? `${control.id}:${control.checked}` : `${control.id}=${control.value}`)));
 
@@ -109,7 +114,9 @@ try {
     const recommended = await form.locator(".cf-recommended").evaluateAll((labels) => labels.map((label) => label.closest(".cf-option").querySelector("input").value));
     assert.deepEqual(recommended, ["local"], "render: the recommended label");
     assert.equal((await stateOf(form)).state, "editing");
-    passed.push("render: nothing preselected, 'Recommended' labels local only, the form starts in editing");
+    assert.deepEqual(await hiddenShown(), [], "render: a hidden part of a form shows");
+    assert.equal(await form.locator("[data-cf-decline-reason]").isVisible(), false, "render: the decline reason shows before Decline");
+    passed.push("render: nothing preselected, 'Recommended' labels local only, the form starts in editing with its hidden parts out of sight");
   }
 
   // A draft in page memory only, across a revision notice without a reload.
@@ -309,8 +316,11 @@ try {
 
   // A decline carries its reason.
   {
+    const reason = decision.locator("[data-cf-decline-reason]");
+    assert.equal(await reason.isVisible(), false, "decline: the reason shows before Decline");
     await decision.locator("[data-cf-form-action='decline']").click();
-    await decision.locator("[data-cf-decline-reason]").fill("Not my call.");
+    assert.equal(await reason.isVisible(), true, "decline: Decline does not show the reason");
+    await reason.fill("Not my call.");
     await decision.locator("[data-cf-form-action='decline']").click();
     // The decision still names revision 1: confirm it against revision 2.
     const stale = await waitState(decision, "stale");
@@ -322,7 +332,9 @@ try {
     assert.equal(line.outcome, "decline");
     assert.equal(line.reason, "Not my call.");
     assert.deepEqual(line.values, {});
-    passed.push("decline: stored with its reason and no values");
+    assert.equal(await reason.isVisible(), false, "decline: the reason shows after the decline is stored");
+    assert.deepEqual(await hiddenShown(), [], "decline: a hidden part of a form shows");
+    passed.push("decline: the reason box shows only after Decline, is stored with no values, and hides once stored");
   }
 
   // A closed session keeps the draft read only.
