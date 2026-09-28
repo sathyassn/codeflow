@@ -29,7 +29,7 @@ const ROOTS: [(&str, &str); 4] = [
 /// belongs here too, with the case that fails on it, and so does a grading
 /// signal or test that detects a Mermaid figure. A line passes only when
 /// no mention is left once its listed clauses are removed.
-const ALLOWED: [(&str, &str); 32] = [
+const ALLOWED: [(&str, &str); 33] = [
     (
         "cf-present/references/document-authoring.md",
         "The `diagram` block was removed with its Mermaid renderer, and Mermaid is",
@@ -151,6 +151,8 @@ const ALLOWED: [(&str, &str); 32] = [
         "evals/model-artifacts/test_eval_kit.py",
         "language.strip() == \"mermaid\"",
     ),
+    // TSK-073: the copy guide's reply rule says a reply figure is never Mermaid.
+    ("cf-editorial-review/references/copy-guide.md", "Never Mermaid."),
 ];
 
 /// A present block typed `diagram`, in a JSON file or quoted inside a string
