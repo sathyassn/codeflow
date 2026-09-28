@@ -886,20 +886,26 @@ fn remove_empty_ancestors(root: &Path, file: &Path) {
 
 #[cfg(test)]
 mod tests {
-    /// `CodeFlow`'s own workflow carries a release-impact job the shipped file
-    /// does not. The update proposal must keep it (TSK-107).
+    /// `CodeFlow`'s release jobs live in its own `codeflow-release.yml`, not
+    /// in its copy of the managed CI file (TSK-106, SPC-013 R-96), so an
+    /// update proposal for that file carries none of them (TSK-107 kept them
+    /// through the merge while they lived there).
     #[test]
-    fn dogfood_ci_proposal_keeps_the_release_impact_job() {
+    fn dogfood_ci_proposal_carries_no_release_job() {
         let base =
             include_str!("../../../../.codeflow/.baseline/.github/workflows/codeflow-ci.yml");
         let ours = include_str!("../../../../.github/workflows/codeflow-ci.yml");
         let theirs = include_str!("../../../../assets/base/ci/codeflow-ci.yml");
-        assert!(ours.contains("\n  release-impact:\n"));
+        let own = include_str!("../../../../.github/workflows/codeflow-release.yml");
         let proposal = match diffy::merge(base, ours, theirs) {
             Ok(merged) | Err(merged) => merged,
         };
-        assert!(proposal.contains("\n  release-impact:\n"), "{proposal}");
-        assert!(proposal.contains("scripts/release.py check-pr"));
+        for text in [ours, &proposal] {
+            assert!(!text.contains("\n  release-impact:\n"), "{text}");
+            assert!(!text.contains("scripts/release.py"), "{text}");
+        }
+        assert!(own.contains("\n  release-impact:\n"));
+        assert!(own.contains("scripts/release.py check-pr"));
     }
 
     #[test]

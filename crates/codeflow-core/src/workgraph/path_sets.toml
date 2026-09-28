@@ -61,15 +61,29 @@ member = "ci_workflows"
 patterns = [".github/workflows/**", ".gitlab-ci.yml", "bitbucket-pipelines.yml"]
 example = ".github/workflows/codeflow-ci.yml"
 
+# Release contract paths (TSK-106, R-114): the watched contract extended to
+# the record schema and the policy keys, which reach every adopter through
+# the records they write and the rules they enforce. The CLI flag surface is
+# the project's own product, named in its `git.product_paths`; CodeFlow's
+# release configuration (`.release/config.json`) watches its command tree
+# and these two members, and a test checks that it keeps doing so.
+
+[[adopter_facing]]
+member = "policy"
+patterns = [".codeflow/policy.json", ".codeflow/project.toml"]
+example = ".codeflow/policy.json"
+release_contract = true
+
+[[adopter_facing]]
+member = "record_schema"
+patterns = ["project-management/templates/**", ".codeflow/schemas/**"]
+example = "project-management/templates/task.md"
+release_contract = true
+
 # The rest of the direct-change floor of R-71. A direct change
 # (`Task: none: <reason>`) touching any adopter-facing member or any member
 # below is refused. A project can forbid direct changes entirely; it cannot
 # narrow this floor.
-
-[[direct_change_floor]]
-member = "policy"
-patterns = [".codeflow/policy.json", ".codeflow/project.toml"]
-example = ".codeflow/policy.json"
 
 [[direct_change_floor]]
 member = "dependency_manifests"
@@ -95,7 +109,30 @@ patterns = [
 ]
 example = "Cargo.lock"
 
-[[direct_change_floor]]
-member = "record_schema"
-patterns = ["project-management/templates/**", ".codeflow/schemas/**"]
-example = "project-management/templates/task.md"
+# Behaviour paths for the local release preflight (TSK-106, R-93, R-114):
+# every path outside the documentation, the records and the record
+# templates is behaviour (`docs/verification/` sits under `docs/`). The
+# skill trees are always behaviour: they change shipped agent behaviour,
+# whatever a later exclusion says. `scripts/release.py preflight` reads
+# these two sections; a range that touches behaviour without a pending
+# changelog entry or a `Release impact: none` intent warns before a push.
+
+[[not_behaviour]]
+member = "documentation"
+patterns = ["docs/**"]
+example = "docs/verification/tsk-106-release-integrity.md"
+
+[[not_behaviour]]
+member = "records"
+patterns = ["project-management/**"]
+example = "project-management/tasks/TSK-106.md"
+
+[[not_behaviour]]
+member = "record_templates"
+patterns = ["assets/base/pm/*.tmpl"]
+example = "assets/base/pm/task.md.tmpl"
+
+[[behaviour_always]]
+member = "skill_trees"
+patterns = [".claude/skills/**", ".agents/skills/**", "assets/base/*/skills/**"]
+example = ".agents/skills/cf-ship/references/release-policy.md"

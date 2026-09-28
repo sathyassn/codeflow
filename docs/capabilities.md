@@ -119,9 +119,9 @@ id: CAP-003
 name: git-policy-gates
 area: engine
 status: shipped
-verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs"]
+verified_by: ["cargo test hooks::git_hook", "cargo test hooks::git_guard", "cargo test hooks::policy", "cargo test hooks::policy_schema", "cargo test hooks::standards", "codeflow-cli tests/hooks_cli.rs", "codeflow-cli tests/policy_cli.rs", "codeflow-cli tests/ci_cli.rs", "cargo test release_local", "codeflow-cli tests/release_journey.rs", "scripts/test_release.py"]
 epics: [EPC-001, EPC-011, EPC-017, EPC-020]
-adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0067]
+adrs: [ADR-0002, ADR-0006, ADR-0007, ADR-0017, ADR-0062, ADR-0067]
 ```
 
 Git discipline enforced across four planes reading one config (the `git`
@@ -182,6 +182,16 @@ effective values and their source; and a present-but-invalid file fails
 loudly — naming each offending key, its value, and the valid set — at the
 commit-msg hook, `codeflow ci`, and `codeflow validate`, instead of silently
 reverting every key to the built-in defaults.
+A project that adopted CodeFlow's release calculator (`release.backend =
+"codeflow"` with `scripts/release.py`) also gets its release state checked
+locally: pre-push runs the preflight for each pushed branch (a warning for a
+behaviour change with no pending entry, a block only for a push that breaks a
+tree its base kept valid), and `codeflow integrate` runs the structural state
+check in its test stage. Both say what was not checked against the host; the
+pull request's `release impact` job stays the gate. `codeflow ci` reads the
+Release impact block with the calculator's parser, and both pass one shared
+fixture set. The release jobs live in the project's own workflow, never in
+the managed CI file.
 Secret scanning fails closed if libgit2 cannot traverse the complete staged
 diff. Hook stdin read failures remain advisory but print an explicit degraded
 ref-check warning instead of passing silently.

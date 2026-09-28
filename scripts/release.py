@@ -17,9 +17,14 @@ import tomllib
 from typing import Any, NoReturn
 
 ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_CONFIG = ROOT / ".release/config.json"
+CONFIG_PATH = ".release/config.json"
+DEFAULT_CONFIG = ROOT / CONFIG_PATH
+# The one path-set table (SPC-013 R-114): the adopter-facing set, the
+# direct-change floor and the behaviour paths of the local preflight (R-93).
+PATH_SETS = "crates/codeflow-core/src/workgraph/path_sets.toml"
+HOST_UNCHECKED = "not checked against the host"
 IMPACT_ORDER = {"none": 0, "patch": 1, "minor": 2, "major": 3}
-PLACEHOLDERS = {"", "n/a", "none", "todo", "tbd", "-"}
+PLACEHOLDERS = {"", "n/a", "na", "none", "todo", "tbd", "-"}
 CONTRACT_BREAKING = {"not-applicable": "no", "compatible": "no", "breaking": "yes"}
 # The PR template's Migration choice text; Impact and Breaking alternatives
 # already fail their value checks.
@@ -67,7 +72,19 @@ def load_json(path: Path) -> Any:
 
 
 def load_config(path: Path) -> dict[str, Any]:
-    value = load_json(path)
+    return validate_config(load_json(path))
+
+
+def config_at_ref(ref: str, *, cwd: Path) -> dict[str, Any]:
+    """The release configuration a commit carries."""
+    try:
+        value = json.loads(file_at_ref(ref, CONFIG_PATH, cwd=cwd))
+    except json.JSONDecodeError as error:
+        fail(f"cannot read {CONFIG_PATH} at {ref}: {error}")
+    return validate_config(value)
+
+
+def validate_config(value: Any) -> dict[str, Any]:
     if (
         not isinstance(value, dict)
         or value.get("schema_version") != 2
@@ -91,7 +108,7 @@ def normalize_value(value: str) -> str:
 
 
 def is_placeholder(value: str) -> bool:
-    return normalize_value(value).casefold() in PLACEHOLDERS
+    return not substantive_text(value, [])
 
 
 def guidance_text(value: str) -> str:
@@ -104,24 +121,130 @@ def is_unresolved_alternative(value: str) -> bool:
     return guidance_text(value) in UNRESOLVED_ALTERNATIVES
 
 
-def lacks_migration_guidance(value: str) -> bool:
+def substantive_text(value: str, rejected: list[str] | set[str]) -> bool:
+    """Real text: not empty, not a whole `<placeholder>`, not a placeholder
+    word, and not one of `rejected`. The Rust PR-body check applies the same
+    rule (`crates/codeflow-cli/src/cmd/ci/pr_body.rs`)."""
     normalized = guidance_text(value)
-    return normalized in PLACEHOLDERS or normalized in UNRESOLVED_ALTERNATIVES
+    whole_placeholder = (
+        normalized.startswith("<")
+        and normalized.endswith(">")
+        and not re.search(r"[<>]", normalized[1:-1])
+    )
+    return (
+        not whole_placeholder
+        and any(character.isalnum() for character in normalized)
+        and normalized not in PLACEHOLDERS
+        and normalized not in rejected
+    )
+
+
+def lacks_migration_guidance(value: str) -> bool:
+    return not substantive_text(value, UNRESOLVED_ALTERNATIVES | {"see breaking change"})
+
+
+# Markdown structure of a PR body, read the way the Rust PR-body check reads
+# it: fenced code and HTML comments are never fields, only ATX headings at
+# column zero open sections, and a section's fields end at its first
+# subsection. `scripts/fixtures/release_impact_cases.json` holds the cases
+# both parsers must agree on.
+FENCE_OPEN = re.compile(r"^ {0,3}(`{3,}|~{3,})")
+ATX_HEADING = re.compile(r"^(#{1,6})(?:[ \t]+(.*?))?(?:[ \t]+#+)?[ \t]*$")
+
+
+def markdown_lines(body: str, *, include_code: bool) -> list[tuple[str, tuple[int, str] | None]]:
+    """Visible lines, each with its (depth, name) when it is a heading."""
+    lines: list[tuple[str, tuple[int, str] | None]] = []
+    fence: str | None = None
+    in_comment = False
+    for raw in body.splitlines():
+        line = raw
+        if fence is not None:
+            closing = re.match(rf"^ {{0,3}}{re.escape(fence[0])}{{{len(fence)},}}[ \t]*$", line)
+            if closing:
+                fence = None
+            elif include_code:
+                lines.append((line, None))
+            continue
+        if in_comment:
+            end = line.find("-->")
+            if end < 0:
+                continue
+            line, in_comment = line[end + 3 :], False
+        while (start := line.find("<!--")) >= 0:
+            end = line.find("-->", start + 4)
+            if end < 0:
+                line, in_comment = line[:start], True
+                break
+            line = line[:start] + line[end + 3 :]
+        opening = FENCE_OPEN.match(line)
+        if opening:
+            fence = opening.group(1)
+            continue
+        heading = ATX_HEADING.match(line)
+        if heading:
+            name = re.sub(r"[*_`]", "", heading.group(2) or "").strip()
+            lines.append((line, (len(heading.group(1)), name)))
+        else:
+            lines.append((line, None))
+    return lines
+
+
+def markdown_section(body: str, name: str, *, include_code: bool, own_only: bool) -> list[list[str]]:
+    """Each section named `name` (at depth 2, else depth 3) as its lines.
+
+    `own_only` stops at the first subsection; otherwise a section runs to the
+    next heading at its depth or above.
+    """
+    lines = markdown_lines(body, include_code=include_code)
+    headings = [
+        (index, depth, title)
+        for index, (_, heading) in enumerate(lines)
+        if heading is not None
+        for depth, title in [heading]
+    ]
+    wanted = name.casefold()
+    depth = 2 if any(d == 2 and t.casefold() == wanted for _, d, t in headings) else 3
+    found = []
+    for index, heading_depth, title in headings:
+        if heading_depth != depth or title.casefold() != wanted:
+            continue
+        end = len(lines)
+        for next_index, next_depth, _ in headings:
+            if next_index > index and (own_only or next_depth <= depth):
+                end = next_index
+                break
+        found.append([line for line, heading in lines[index + 1 : end] if heading is None])
+    return found
+
+
+RELEASE_FIELDS = {
+    "unit", "impact", "breaking", "contract", "rationale", "migration", "evidence", "withdrawal",
+}
+FIELD_LINE = re.compile(r"^\s*(?:[-*+]|\d+[.)])?\s*([A-Za-z*_ ]+?)[*_]*\s*:[*_]*\s*(.*?)\s*$")
 
 
 def parse_release_impact(body: str) -> dict[str, str]:
-    sections = list(re.finditer(r"(?m)^## Release impact\s*$", body))
+    sections = markdown_section(body, "Release impact", include_code=False, own_only=True)
     if len(sections) != 1:
         fail("PR body must contain exactly one '## Release impact' section")
-    start = sections[0].end()
-    next_heading = re.search(r"(?m)^## ", body[start:])
-    section = body[start : start + next_heading.start()] if next_heading else body[start:]
     fields: dict[str, str] = {}
-    for match in re.finditer(r"(?m)^- ([A-Za-z ]+):[ \t]*(.*?)[ \t]*$", section):
-        key = match.group(1).strip().casefold().replace(" ", "_")
+    for line in sections[0]:
+        match = FIELD_LINE.match(line)
+        if not match:
+            continue
+        label = re.sub(r"[*_]", "", match.group(1)).strip()
+        if not label:
+            continue
+        key = label.casefold().replace(" ", "_")
         if key in fields:
-            fail(f"release impact field {match.group(1)} is duplicated")
-        fields[key] = normalize_value(match.group(2))
+            if key in RELEASE_FIELDS:
+                fail(f"release impact field {label} is duplicated")
+            continue
+        fields[key] = normalize_value(re.sub(r"^[*_]+|[*_]+$", "", match.group(2)))
+    for key in ["impact", "breaking"]:
+        if key in fields:
+            fields[key] = fields[key].casefold()
     for key in ["unit", "impact", "rationale", "evidence"]:
         if key not in fields or (
             key in {"rationale", "evidence"} and is_placeholder(fields[key])
@@ -140,17 +263,30 @@ def parse_release_impact(body: str) -> dict[str, str]:
             fail("release breaking must be yes or no")
         if "contract" in fields and CONTRACT_BREAKING[fields["contract"]] != fields["breaking"]:
             fail("legacy contract disagrees with breaking")
-        if "migration" not in fields:
+        if not fields.get("migration"):
             fail("release impact field migration is required")
     else:
         fields["breaking"] = CONTRACT_BREAKING[fields["contract"]]
     if "migration" in fields and is_unresolved_alternative(fields["migration"]):
         fail("release impact field migration still holds the template alternatives")
+    fields[MIGRATION_GUIDANCE] = "yes" if migration_guidance(body, fields.get("migration", "")) else "no"
     if (fields["breaking"] == "yes") != (fields["impact"] == "major"):
         fail("breaking must be yes if and only if impact is major")
-    if fields["breaking"] == "yes" and lacks_migration_guidance(fields.get("migration", "")):
+    if fields["breaking"] == "yes" and fields[MIGRATION_GUIDANCE] != "yes":
         fail("a breaking change requires migration guidance")
     return fields
+
+
+# Parsed, not declared: whether Migration gives real guidance, directly or by
+# pointing at one populated Breaking change section.
+MIGRATION_GUIDANCE = "_migration_guidance"
+
+
+def migration_guidance(body: str, migration: str) -> bool:
+    if guidance_text(migration) == "see breaking change":
+        sections = markdown_section(body, "Breaking change", include_code=True, own_only=False)
+        return len(sections) == 1 and substantive_text("\n".join(sections[0]), [])
+    return not lacks_migration_guidance(migration)
 
 
 def semver(value: str) -> tuple[int, int, int]:
@@ -335,7 +471,9 @@ class Baseline:
     comparison_commit: str
 
 
-def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
+def bootstrap_shape(config: dict[str, Any]) -> None:
+    """Fail when the bootstrap record is not in the shape this checker reads,
+    before anything is compared with the repository or the host."""
     published = config["bootstrap"].get("published")
     comparison = config["bootstrap"].get("comparison")
     if not isinstance(published, dict) or not isinstance(comparison, dict):
@@ -350,6 +488,15 @@ def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
     ):
         fail("bootstrap version, comparison tag, tree, and source are malformed")
     semver(version)
+    if not re.fullmatch(r"[0-9a-f]{64}", str(published.get("source_archive_sha256", ""))):
+        fail("bootstrap archive checksum must be 64 lowercase hex characters")
+
+
+def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
+    bootstrap_shape(config)
+    published, comparison = config["bootstrap"]["published"], config["bootstrap"]["comparison"]
+    version, tag = str(published["version"]), comparison["tag"]
+    tree, source = comparison["tree"], published["source_commit"]
     # The tag is identified by its content. A history rewrite that keeps the
     # tagged tree (the public repository's path filter) changes the commit
     # id, never the content every later check compares against.
@@ -357,9 +504,6 @@ def validate_bootstrap(config: dict[str, Any], *, cwd: Path) -> Baseline:
     actual_tree = git("rev-parse", f"{actual}^{{tree}}", cwd=cwd)
     if actual_tree != tree:
         fail(f"bootstrap tag {tag} resolves to tree {actual_tree}, expected {tree}; never move it")
-    checksum = str(published.get("source_archive_sha256", ""))
-    if not re.fullmatch(r"[0-9a-f]{64}", checksum):
-        fail("bootstrap archive checksum must be 64 lowercase hex characters")
     return Baseline(version, tag, source, actual)
 
 
@@ -549,6 +693,97 @@ def annotated_entries(section: ChangelogSection, config: dict[str, Any]) -> list
     return entries
 
 
+@dataclass(frozen=True)
+class PendingItem:
+    """One pending changelog item and its identity (R-92): the bold label of
+    an ordinary entry, or the legacy group's explicit id."""
+
+    key: str
+    label: str
+    impact: str
+    text: str
+
+
+ENTRY_LABEL = re.compile(r"- \*\*(.+?)\*\*", re.S)
+
+
+def entry_label(entry: str) -> str:
+    match = ENTRY_LABEL.match(entry)
+    label = " ".join(match.group(1).split()) if match else ""
+    if not label:
+        first = entry.splitlines()[0] if entry else ""
+        fail(f"a pending changelog entry needs a bold label (- **Label.** ...): {first[:72]}")
+    return label
+
+
+def label_key(label: str) -> str:
+    return label.rstrip(".").casefold()
+
+
+# A line that starts a new Markdown block, so it can never be a lazy
+# continuation of the entry's paragraph (CommonMark 0.31.2, 5.2).
+BLOCK_START = re.compile(
+    r"#{1,6}(?:\s|$)|[-*+](?:\s|$)|\d{1,9}[.)](?:\s|$)|>|<!--|```|~~~"
+    r"|(?:-[ \t]*){3,}$|(?:\*[ \t]*){3,}$|(?:_[ \t]*){3,}$"
+)
+
+
+def entry_extent(text: str) -> str:
+    """One bullet, as Markdown renders it: its first line, the indented or
+    blank lines after it, and lazy continuation lines of its paragraph. It
+    ends at a blank line followed by an unindented line, or at an unindented
+    line that starts a new block (a heading, list item, quote, fence, rule
+    or marker)."""
+    lines = text.splitlines()
+    kept = lines[:1]
+    for line in lines[1:]:
+        unindented = bool(line.strip()) and not line[0].isspace()
+        if unindented and (not kept[-1].strip() or BLOCK_START.match(line)):
+            break
+        kept.append(line)
+    return "\n".join(kept).strip()
+
+
+def pending_items(section: ChangelogSection, config: dict[str, Any]) -> dict[str, PendingItem]:
+    items: dict[str, PendingItem] = {}
+    for impact, text in annotated_entries(section, config):
+        if text.startswith("legacy:"):
+            # The group's bytes are pinned by its digest in the configuration.
+            key = label = body = "legacy:" + text.split(":")[1]
+        else:
+            label, body = entry_label(text), entry_extent(text)
+            key = label_key(label)
+        if key in items:
+            fail(f"pending entry label '{label}' is not unique; each pending entry needs its own label")
+        items[key] = PendingItem(key, label, impact, body)
+    return items
+
+
+def lenient_items(section: ChangelogSection) -> dict[str, PendingItem]:
+    """The labelled items of a pending section that fails validation, read
+    marker by marker, for assessing a typed repair against its broken base."""
+    items: dict[str, PendingItem] = {}
+    for marker in IMPACT_MARKER.finditer(section.body):
+        if marker.group(2):
+            key = "legacy:" + marker.group(2)
+            items.setdefault(key, PendingItem(key, key, marker.group(1), key))
+            continue
+        text = section.body[marker.end() :].lstrip()
+        match = ENTRY_LABEL.match(text)
+        if match:
+            label = " ".join(match.group(1).split())
+            body = entry_extent(text)
+            items.setdefault(label_key(label), PendingItem(label_key(label), label, marker.group(1), body))
+    return items
+
+
+def lenient_target(section: ChangelogSection, baseline: Baseline) -> str | None:
+    impacts = [match.group(1) for match in IMPACT_MARKER.finditer(section.body)]
+    if not impacts:
+        return None
+    return bump(baseline.version, max(impacts, key=lambda item: IMPACT_ORDER[item]))
+
+
 def expected_pending(
     text: str, baseline: Baseline, config: dict[str, Any], *, strict: bool = True
 ) -> tuple[str, ChangelogSection | None, list[str]]:
@@ -566,6 +801,7 @@ def expected_pending(
     if section.date is not None:
         fail("pending version heading must be undated")
     impacts = section_markers(section, config)
+    pending_items(section, config)
     highest = max(impacts, key=lambda item: IMPACT_ORDER[item], default="none")
     expected = bump(baseline.version, highest)
     if expected == baseline.version:
@@ -640,6 +876,7 @@ def validate_release_tree(
     baseline = resolve_baseline(config, state, cwd=cwd, allow_attempt=allow_attempt)
     changelog = file_at_ref(ref, "CHANGELOG.md", cwd=cwd).decode()
     validate_published_sections(changelog, baseline, config, cwd=cwd)
+    validate_errata(changelog)
     version, pending, impacts = expected_pending(
         changelog, baseline, config
     )
@@ -690,6 +927,34 @@ def published_snapshot(
     return "\n\n".join(sections)
 
 
+ERRATA_HEADING = re.compile(r"(?m)^## Errata[ \t]*$")
+ERRATUM = re.compile(r"- (\d{4}-\d{2}-\d{2}), (\d+\.\d+\.\d+): \S")
+
+
+def validate_errata(text: str) -> None:
+    """R-96: an erratum is a dated note in the `## Errata` block before the
+    first version section, outside every frozen byte. It names the published
+    version it corrects."""
+    headings = list(ERRATA_HEADING.finditer(text))
+    if not headings:
+        return
+    first = re.search(r"(?m)^## \[", text)
+    if len(headings) > 1 or first is None or headings[0].start() > first.start():
+        fail("CHANGELOG.md errata live in one `## Errata` block before the first version section")
+    block = text[headings[0].end() : first.start()]
+    published = {
+        section.version for section in changelog_sections(text) if section.date is not None
+    }
+    for line in block.splitlines():
+        if not line.startswith("- "):
+            continue
+        match = ERRATUM.match(line)
+        if not match:
+            fail(f"an erratum reads `- YYYY-MM-DD, X.Y.Z: note`: {line[:72]}")
+        if match.group(2) not in published:
+            fail(f"erratum names {match.group(2)}, which is not a published section")
+
+
 def validate_published_sections(
     text: str, baseline: Baseline, config: dict[str, Any], *, cwd: Path
 ) -> None:
@@ -724,7 +989,7 @@ def check_pr(args: argparse.Namespace) -> None:
     floor = commit_impact(base, head, cwd=args.root)
     if IMPACT_ORDER[fields["impact"]] < IMPACT_ORDER[floor]:
         changed = set(changed_paths(base, head, cwd=args.root))
-        metadata = set(VERSION_STAMP_PATHS) | {"CHANGELOG.md", ".release/config.json"}
+        metadata = set(VERSION_STAMP_PATHS) | {"CHANGELOG.md", CONFIG_PATH}
         if fields["impact"] != "none" or changed - metadata:
             fail(f"declared impact {fields['impact']} is below marker floor {floor}")
     paths = changed_paths(base, head, cwd=args.root)
@@ -734,80 +999,320 @@ def check_pr(args: argparse.Namespace) -> None:
     if watched and fields.get("contract") == "not-applicable":
         fail("watched contract changes require compatible or breaking assessment")
     proposed = merge_tree(base, head, cwd=args.root)
-    after = validate_release_tree(proposed, config, state, cwd=args.root)
-    baseline = resolve_baseline(config, state, cwd=args.root)
+    base_config, base_configuration = carried_config(base, config, cwd=args.root)
     before_text = file_at_ref(base, "CHANGELOG.md", cwd=args.root).decode()
     after_text = file_at_ref(proposed, "CHANGELOG.md", cwd=args.root).decode()
     adopting = bool(re.search(r"(?m)^## \[Unreleased\]\s*$", before_text)) and "legacy-group=" in after_text
+    repair: str | None = None
     if adopting:
-        before = {"version": after["version"]}
+        after = validate_release_tree(proposed, config, state, cwd=args.root)
+        before_version: str | None = after["version"]
         comparable_before = re.sub(r"(?m)^## \[Unreleased\]\s*$", "", before_text)
     else:
-        before = validate_release_tree(base, config, state, cwd=args.root)
+        try:
+            before_version = validate_release_tree(base, base_config, state, cwd=args.root)["version"]
+        except ReleaseError as error:
+            # R-95: a base that fails its own release state is repaired only
+            # by a typed repair, judged with the base's configuration.
+            config = base_config
+            repair = typed_repair(base, head, proposed, paths, config, str(error), cwd=args.root)
+            before_version = None
+        after = validate_release_tree(proposed, config, state, cwd=args.root)
+        if repair is not None:
+            repair_baselines(base, proposed, paths, after["version"], repair, cwd=args.root)
         comparable_before = before_text
-    for section in changelog_sections(comparable_before):
-        if (
-            semver(section.version) <= semver(baseline.version)
-            and section_bytes(comparable_before, section.version)
-            != section_bytes(after_text, section.version)
-        ):
-            fail("published changelog sections are frozen; label a true erratum outside them")
-    before_section = next(
-        (item for item in changelog_sections(comparable_before) if semver(item.version) > semver(baseline.version)),
-        None,
-    )
-    after_section = next(
-        (item for item in changelog_sections(after_text) if semver(item.version) > semver(baseline.version)),
-        None,
-    )
-    before_entries = annotated_entries(before_section, config) if before_section and not adopting else []
-    after_entries = annotated_entries(after_section, config) if after_section else []
-    removed, added = list(before_entries), list(after_entries)
-    for entry in after_entries:
-        if entry in removed:
-            removed.remove(entry)
-    for entry in before_entries:
-        if entry in added:
-            added.remove(entry)
-    declared_additions = [entry for entry in added if not (adopting and entry[1].startswith("legacy:"))]
-    added_impact = max(
-        (item[0] for item in declared_additions),
+    baseline = resolve_baseline(config, state, cwd=args.root)
+    if repair is None:
+        for section in changelog_sections(comparable_before):
+            if (
+                semver(section.version) <= semver(baseline.version)
+                and section_bytes(comparable_before, section.version)
+                != section_bytes(after_text, section.version)
+            ):
+                fail("published changelog sections are frozen; label a true erratum outside them")
+    # A repair's published sections are held to their exact public source by
+    # the proposed tree's own validation above, which lets a repair restore
+    # frozen bytes and never change them.
+    before_section = pending_section(comparable_before, baseline, repair=repair is not None)
+    after_section = pending_section(after_text, baseline, repair=False)
+    if before_section is None or adopting:
+        before_items: dict[str, PendingItem] = {}
+    elif repair is not None:
+        before_items = lenient_items(before_section)
+        if before_version is None:
+            before_version = lenient_target(before_section, baseline)
+    else:
+        before_items = pending_items(before_section, config)
+    after_items = pending_items(after_section, config) if after_section else {}
+    change = entry_change(before_items, after_items, adopting=adopting)
+    assessed_impact = max(
+        (item.impact for item in change.added + [after for _, after in change.edited]),
         key=lambda item: IMPACT_ORDER[item],
         default="none",
     )
-    removed_labels = Counter(item[0] for item in removed)
-    added_labels = Counter(item[0] for item in declared_additions)
-    labels_balanced = bool(removed) and removed_labels == added_labels
-    docs_only_refinement = (
-        fields["impact"] == "none"
-        and labels_balanced
-        and all(path == "CHANGELOG.md" or path.startswith("docs/") for path in paths)
-    )
-    if fields["impact"] != added_impact and not docs_only_refinement:
+    if repair is not None and change.edited:
+        # A repair restores the release state; it never rewrites what an
+        # existing entry says (R-95). Edits wait for their own pull request.
         fail(
-            f"declared impact {fields['impact']} must equal newly added changelog impact "
-            f"{added_impact}"
+            f"base release state is invalid ({repair}); a repair keeps every existing pending "
+            f"entry's text and impact, and this PR edits: "
+            f"{', '.join(after.label for _, after in change.edited)}"
         )
-    if added_impact == "major" and lacks_migration_guidance(fields.get("migration", "")):
-        fail("an added major entry requires migration guidance")
+    if fields["impact"] != assessed_impact:
+        fail(
+            f"declared impact {fields['impact']} must equal the impact of the pending entries "
+            f"this PR adds or edits ({assessed_impact}); an edit under an existing label is "
+            "assessed at its impact, and any change to its text is an edit"
+        )
+    if assessed_impact == "major" and fields[MIGRATION_GUIDANCE] != "yes":
+        fail("an added or edited major entry requires migration guidance")
     if fields["impact"] != "none":
         if "CHANGELOG.md" not in paths or "changelog" not in fields["evidence"].casefold():
             fail("non-none impact requires curated changelog change and evidence")
-    label_removed = any(removed_labels[label] > added_labels[label] for label in removed_labels)
-    if (label_removed or semver(after["version"]) < semver(before["version"])) and is_placeholder(
-        fields.get("withdrawal", "")
-    ):
+    lowered = [
+        after.label
+        for before, after in change.edited
+        if IMPACT_ORDER[after.impact] < IMPACT_ORDER[before.impact]
+    ]
+    target_lowered = before_version is not None and semver(after["version"]) < semver(before_version)
+    if (change.removed or lowered or target_lowered) and is_placeholder(fields.get("withdrawal", "")):
         fail("removing pending content or lowering target requires withdrawal rationale")
-    print(
-        json.dumps(
-            {
-                "status": "ok",
-                "declared": fields["impact"],
-                "version": after["version"],
-                "watched": watched,
-            },
-            sort_keys=True,
+    result = {
+        "status": "ok",
+        "declared": fields["impact"],
+        "version": after["version"],
+        "watched": watched,
+        "added": [item.label for item in change.added],
+        "edited": [after.label for _, after in change.edited],
+        "withdrawn": [item.label for item in change.removed],
+    }
+    if repair is not None:
+        result["repair"] = repair
+    if base_configuration is not None:
+        result["base_configuration"] = base_configuration
+    print(json.dumps(result, sort_keys=True))
+
+
+def carried_config(
+    base: str, config: dict[str, Any], *, cwd: Path
+) -> tuple[dict[str, Any], str | None]:
+    """The configuration the base is judged by (R-95): always the one it
+    carries, so a pull request never supplies the authority for the history
+    it is judged against. One older shape is read: a bootstrap record
+    without its comparison tree, whose tree is derived from the recorded
+    comparison commit once the tag corroborates it. Any other configuration
+    this checker cannot read refuses the pull request. A base with no
+    configuration has no authority to replace; the pull request adopts one."""
+    if file_at_optional(base, CONFIG_PATH, cwd=cwd) is None:
+        return config, "the pull request's; the base carries none, so this pull request adopts it"
+    try:
+        carried = config_at_ref(base, cwd=cwd)
+        note = None
+        comparison = carried["bootstrap"].get("comparison")
+        if isinstance(comparison, dict) and "tree" not in comparison:
+            carried = with_comparison_tree(carried, cwd=cwd)
+            note = "the base's, its comparison tree derived from the recorded comparison commit"
+        bootstrap_shape(carried)
+    except ReleaseError as error:
+        fail(f"the base's release configuration cannot be read, and a pull request never replaces it: {error}")
+    return carried, note
+
+
+def with_comparison_tree(config: dict[str, Any], *, cwd: Path) -> dict[str, Any]:
+    """`config` with the tree of its recorded comparison commit, when that
+    commit exists and the recorded tag carries the same tree."""
+    comparison = config["bootstrap"]["comparison"]
+    commit, tag = comparison.get("commit"), comparison.get("tag")
+    if not isinstance(commit, str) or not re.fullmatch(r"[0-9a-f]{40}", commit) or not isinstance(tag, str):
+        fail("bootstrap records neither a comparison tree nor a comparison commit and tag")
+    found = run(["git", "rev-parse", "--verify", "--quiet", f"{commit}^{{tree}}"], cwd=cwd, check=False)
+    tagged = run(["git", "rev-parse", "--verify", "--quiet", f"{tag}^{{tree}}"], cwd=cwd, check=False)
+    tree = found.stdout.strip()
+    if found.returncode != 0 or tagged.returncode != 0 or tagged.stdout.strip() != tree:
+        fail(f"bootstrap comparison commit {commit[:12]} does not corroborate tag {tag}")
+    migrated = json.loads(json.dumps(config))
+    migrated["bootstrap"]["comparison"]["tree"] = tree
+    return migrated
+
+
+def pending_section(text: str, baseline: Baseline, *, repair: bool) -> ChangelogSection | None:
+    """The section above the published baseline. A repaired base may hold a
+    malformed changelog; its first pending section is read as far as it can be."""
+    try:
+        sections = changelog_sections(text)
+    except ReleaseError:
+        if not repair:
+            raise
+        return None
+    return next(
+        (item for item in sections if semver(item.version) > semver(baseline.version)),
+        None,
+    )
+
+
+@dataclass(frozen=True)
+class EntryChange:
+    added: list[PendingItem]
+    removed: list[PendingItem]
+    edited: list[tuple[PendingItem, PendingItem]]
+
+
+def entry_change(
+    before: dict[str, PendingItem], after: dict[str, PendingItem], *, adopting: bool
+) -> EntryChange:
+    """Pending entries matched by identity (R-92): a label new to the section
+    is an addition, a label gone is a withdrawal, and a changed body or impact
+    under a kept label is an edit of that item. Entries compare byte for byte:
+    no whitespace change is treated as neutral, since in code and nested
+    Markdown it carries meaning."""
+    added = [
+        item
+        for key, item in after.items()
+        if key not in before and not (adopting and item.key.startswith("legacy:"))
+    ]
+    removed = [item for key, item in before.items() if key not in after]
+    edited = [
+        (before[key], item)
+        for key, item in after.items()
+        if key in before
+        and (before[key].impact, before[key].text) != (item.impact, item.text)
+    ]
+    return EntryChange(added, removed, edited)
+
+
+# The coupled files a typed repair may change, and only in their parsed stamp
+# fields. The managed baselines of AGENTS.md and CLAUDE.md, and their hashes in
+# the manifest, carry the same stamp: `codeflow update`, which `sync` runs,
+# writes them together.
+REPAIR_BASELINES = [".codeflow/.baseline/AGENTS.md", ".codeflow/.baseline/CLAUDE.md"]
+
+
+def typed_repair(
+    base: str,
+    head: str,
+    proposed: str,
+    paths: list[str],
+    config: dict[str, Any],
+    invariant: str,
+    *,
+    cwd: Path,
+) -> str:
+    """Accept a PR that repairs a base failing `validate_release_tree` (R-95),
+    or fail naming why it is not a repair. The caller then validates the
+    proposed tree with the base's configuration."""
+    if CONFIG_PATH in paths:
+        fail(
+            f"base release state is invalid ({invariant}); a repair cannot change "
+            f"{CONFIG_PATH}: the configuration is read from the base"
         )
+    if config != config_at_ref(head, cwd=cwd):
+        fail(f"base release state is invalid ({invariant}); the head's release configuration differs")
+    allowed = {"CHANGELOG.md", *VERSION_STAMP_PATHS, *REPAIR_BASELINES}
+    other = sorted(path for path in paths if path not in allowed)
+    if other:
+        fail(
+            f"base release state is invalid ({invariant}); a repair changes only CHANGELOG.md "
+            f"and coupled version stamps, and this PR also changes: {', '.join(other[:5])}"
+        )
+    for path in sorted(set(paths) - {"CHANGELOG.md"}):
+        before = stamp_neutral(path, file_at_optional(base, path, cwd=cwd))
+        after = stamp_neutral(path, file_at_optional(proposed, path, cwd=cwd))
+        if before != after:
+            fail(
+                f"base release state is invalid ({invariant}); a repair changes only the "
+                f"version stamp of {path}"
+            )
+    return invariant
+
+
+MANAGED_STAMP = re.compile(rb"<!-- codeflow:managed:begin scaffold=(\d+\.\d+\.\d+) -->")
+
+
+def repair_baselines(
+    base: str, proposed: str, paths: list[str], version: str, invariant: str, *, cwd: Path
+) -> None:
+    """A repair that touches a managed baseline or the manifest leaves the
+    three consistent, as `sync` writes them: each baseline carries the one
+    managed stamp of the release version, and the manifest records its exact
+    hash. Neither may drift from the other or from the live stamps."""
+    if not any(path in paths for path in [*REPAIR_BASELINES, ".codeflow/manifest.json"]):
+        return
+    manifest = json.loads(file_at_ref(proposed, ".codeflow/manifest.json", cwd=cwd))
+    files = manifest.get("files") if isinstance(manifest, dict) else None
+    for baseline in REPAIR_BASELINES:
+        name = baseline.removeprefix(".codeflow/.baseline/")
+        actual = file_at_optional(proposed, baseline, cwd=cwd)
+        if actual is None:
+            if file_at_optional(base, baseline, cwd=cwd) is not None:
+                fail(f"base release state is invalid ({invariant}); a repair cannot remove {baseline}")
+            continue
+        stamps = [stamp.decode() for stamp in MANAGED_STAMP.findall(actual)]
+        if stamps != [version]:
+            fail(
+                f"base release state is invalid ({invariant}); {baseline} must carry one "
+                f"managed stamp of the release version {version}, not {stamps}"
+            )
+        entry = files.get(name) if isinstance(files, dict) else None
+        recorded = entry.get("sha256") if isinstance(entry, dict) else None
+        if recorded != hashlib.sha256(actual).hexdigest():
+            fail(
+                f"base release state is invalid ({invariant}); the manifest hash of "
+                f"{name} must be its managed baseline's"
+            )
+
+
+def file_at_optional(ref: str, path: str, *, cwd: Path) -> bytes | None:
+    result = subprocess.run(
+        ["git", "show", f"{ref}:{path}"], cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.PIPE
+    )
+    return result.stdout if result.returncode == 0 else None
+
+
+STAMP = "<stamp>"
+
+
+def stamp_neutral(path: str, data: bytes | None) -> Any:
+    """`data` with its version stamp fields replaced, so two versions of a
+    coupled file compare equal exactly when only their stamps differ."""
+    if data is None:
+        return None
+    try:
+        text = data.decode()
+    except UnicodeDecodeError:
+        return data
+    if path == "Cargo.toml":
+        section = re.search(r"(?ms)^\[workspace\.package\]\s*$.*?(?=^\[|\Z)", text)
+        if section:
+            neutral = re.sub(r'(?m)^version\s*=\s*"[^"]*"\s*$', f'version = "{STAMP}"', section.group(0))
+            text = text[: section.start()] + neutral + text[section.end() :]
+        return text
+    if path == "Cargo.lock":
+        return re.sub(
+            r'(?m)^(name = "codeflow-(?:cli|core|present)"\nversion = )"[^"]*"$',
+            rf'\1"{STAMP}"',
+            text,
+        )
+    if path == ".codeflow/project.toml":
+        return re.sub(r'(?m)^(scaffold_version\s*=\s*)"[^"]*"', rf'\1"{STAMP}"', text)
+    if path == ".codeflow/manifest.json":
+        try:
+            value = json.loads(text)
+        except json.JSONDecodeError:
+            return text
+        if not isinstance(value, dict):
+            return text
+        value["scaffold_version"] = STAMP
+        files = value.get("files")
+        for name in ["AGENTS.md", "CLAUDE.md"]:
+            entry = files.get(name) if isinstance(files, dict) else None
+            if isinstance(entry, dict) and "sha256" in entry:
+                # Derived from the managed baseline, compared stamp-free there.
+                entry["sha256"] = STAMP
+        return value
+    return re.sub(
+        r"<!-- codeflow:managed:begin scaffold=\d+\.\d+\.\d+ -->",
+        f"<!-- codeflow:managed:begin scaffold={STAMP} -->",
+        text,
     )
 
 
@@ -877,10 +1382,175 @@ def sync(args: argparse.Namespace) -> None:
 
 
 def check_state(args: argparse.Namespace) -> None:
-    result = validate_release_tree(
-        args.ref, load_config(args.config), get_host_state(args), cwd=args.root
-    )
+    config = load_config(args.config)
+    if args.structural:
+        # R-94: `codeflow integrate` and the local preflight judge the tree
+        # against the recorded baseline and local tags only.
+        result = validate_release_tree(args.ref, config, structural_state(config, cwd=args.root), cwd=args.root)
+        result["host"] = HOST_UNCHECKED
+    else:
+        result = validate_release_tree(args.ref, config, get_host_state(args), cwd=args.root)
     print(json.dumps({"status": "ok", **result}, sort_keys=True))
+
+
+def structural_state(config: dict[str, Any], *, cwd: Path) -> dict[str, Any]:
+    """A host state built from the recorded bootstrap and the local stable
+    tags: enough to check the tree's structure, never publication. Every
+    local stable tag above the bootstrap counts as published, so a pending
+    version can never reuse one."""
+    bootstrap = validate_bootstrap(config, cwd=cwd)
+    tags: dict[str, str] = {}
+    for tag in git("tag", "--list", "v*", cwd=cwd).splitlines():
+        if STABLE_TAG.fullmatch(tag):
+            tags[tag] = git("rev-parse", f"{tag}^{{commit}}", cwd=cwd)
+    archive = config["bootstrap"]["published"].get("source_archive_sha256", "")
+    releases: list[dict[str, Any]] = [
+        {
+            "tag": bootstrap.tag,
+            "draft": False,
+            "prerelease": False,
+            "body": "",
+            "assets": [{"name": "source.tar.gz", "digest": f"sha256:{archive}"}],
+        }
+    ]
+    for tag, source in tags.items():
+        if semver(tag) > semver(bootstrap.version):
+            releases.append(
+                {
+                    "tag": tag,
+                    "draft": False,
+                    "prerelease": False,
+                    "body": SOURCE_MARKER.format(source=source),
+                    "assets": [{"name": "local-tag", "digest": "sha256:" + "0" * 64}],
+                }
+            )
+    return {"schema_version": 1, "drafts_visible": False, "tags": tags, "releases": releases}
+
+
+def load_path_sets(ref: str, *, cwd: Path) -> dict[str, Any]:
+    """The path-set table `ref` carries, else the one beside this script."""
+    data = file_at_optional(ref, PATH_SETS, cwd=cwd)
+    try:
+        return tomllib.loads((data or (ROOT / PATH_SETS).read_bytes()).decode())
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as error:
+        fail(f"cannot read the path sets {PATH_SETS}: {error}")
+
+
+def is_behaviour_path(path: str, sets: dict[str, Any]) -> bool:
+    """R-93, R-114: every path outside the documentation, the records and the
+    record templates is behaviour; the skill trees always are."""
+    def member_matches(section: str) -> bool:
+        return any(
+            matches_any(path, list(member.get("patterns", [])))
+            for member in sets.get(section, [])
+        )
+
+    return member_matches("behaviour_always") or not member_matches("not_behaviour")
+
+
+def target_for_branch(branch: str, head: str, config: dict[str, Any], *, cwd: Path) -> str:
+    """The branch a pull request from `branch` targets: a task branch's
+    recorded integration target, else the configured main branch."""
+    task = re.match(r"task/(TSK-\d+)-", branch or "")
+    if task:
+        record = file_at_optional(head, f"project-management/tasks/{task.group(1)}.md", cwd=cwd)
+        found = re.search(
+            r"(?m)^integration_target:\s*[\"']?([^\"'#\s]+)", (record or b"").decode(errors="replace")
+        )
+        if found:
+            return found.group(1)
+    return str(config["main_branch"])
+
+
+def resolve_pr_base(args: argparse.Namespace, head: str, config: dict[str, Any]) -> tuple[str | None, str]:
+    if args.base:
+        return git("rev-parse", f"{args.base}^{{commit}}", cwd=args.root), args.base
+    target = args.target or target_for_branch(args.branch, head, config, cwd=args.root)
+    for ref in [f"refs/remotes/{args.remote}/{target}", f"refs/heads/{target}"]:
+        if run(["git", "rev-parse", "--verify", "--quiet", f"{ref}^{{commit}}"], cwd=args.root, check=False).returncode == 0:
+            base = run(["git", "merge-base", ref, head], cwd=args.root, check=False).stdout.strip()
+            if base:
+                return base, ref
+    return None, target
+
+
+def tree_error(ref: str, config: dict[str, Any], state: dict[str, Any], *, cwd: Path) -> str | None:
+    try:
+        validate_release_tree(ref, config, state, cwd=cwd)
+    except ReleaseError as error:
+        return str(error)
+    return None
+
+
+def draft_intent(args: argparse.Namespace, notes: list[str]) -> str | None:
+    """The declared Impact of the local PR draft, when one is given."""
+    path = args.body_file or (Path(os.environ["CODEFLOW_PR_DRAFT"]) if os.getenv("CODEFLOW_PR_DRAFT") else None)
+    if path is None:
+        return None
+    try:
+        return parse_release_impact(path.read_text(encoding="utf-8"))["impact"]
+    except (OSError, ReleaseError) as error:
+        notes.append(f"the PR draft {path} gives no readable Release impact: {error}")
+        return None
+
+
+def preflight(args: argparse.Namespace) -> None:
+    """R-93: the cheap local release checks pre-push runs. It blocks only a
+    push that breaks a release tree its base kept valid; a missing entry only
+    warns, and the PR job's full `check-pr` stays the gate."""
+    config = load_config(args.config)
+    head = git("rev-parse", f"{args.head}^{{commit}}", cwd=args.root)
+    notes: list[str] = []
+    status = "ok"
+    try:
+        state = structural_state(config, cwd=args.root)
+    except ReleaseError as error:
+        print(json.dumps({"status": "warn", "notes": [
+            f"release preflight could not read the recorded baseline ({error}); CI checks it"
+        ]}, sort_keys=True))
+        return
+    base, target = resolve_pr_base(args, head, config)
+    if base is None:
+        notes.append(f"release range unresolved: no local or {args.remote} ref for {target}; CI checks it")
+    head_error = tree_error(head, config, state, cwd=args.root)
+    if head_error is None:
+        notes.append(f"release tree valid at {head[:12]} against the recorded baseline ({HOST_UNCHECKED})")
+    elif base is not None and tree_error(base, config, state, cwd=args.root) is None:
+        status = "blocked"
+        notes.append(f"this push breaks the release tree its base kept valid ({HOST_UNCHECKED}): {head_error}")
+    else:
+        status = "warn"
+        notes.append(
+            f"release tree invalid at {head[:12]} and at its base ({HOST_UNCHECKED}): {head_error}; "
+            "repair it with a typed repair (docs/releasing.md)"
+        )
+    if base is not None:
+        sets = load_path_sets(head, cwd=args.root)
+        behaviour = [path for path in changed_paths(base, head, cwd=args.root) if is_behaviour_path(path, sets)]
+        intent = draft_intent(args, notes)
+        if behaviour and intent != "none" and not entry_changed(base, head, config, state, cwd=args.root):
+            status = "blocked" if status == "blocked" else "warn"
+            shown = ", ".join(behaviour[:3]) + (f" and {len(behaviour) - 3} more" if len(behaviour) > 3 else "")
+            notes.append(
+                f"behaviour paths changed ({shown}) with no pending changelog entry added or edited "
+                "and no `Impact: none` in the PR draft (CODEFLOW_PR_DRAFT); add a labelled entry "
+                "or declare the intent. This warning never blocks; the PR job does"
+            )
+    print(json.dumps({"status": status, "notes": notes, "host": HOST_UNCHECKED}, sort_keys=True))
+    if status == "blocked":
+        args.exit_code = 1
+
+
+def entry_changed(base: str, head: str, config: dict[str, Any], state: dict[str, Any], *, cwd: Path) -> bool:
+    """Whether `head` adds or edits a pending entry relative to `base`."""
+    baseline = resolve_baseline(config, state, cwd=cwd)
+    items = []
+    for ref in [base, head]:
+        text = file_at_ref(ref, "CHANGELOG.md", cwd=cwd).decode()
+        section = pending_section(text, baseline, repair=True)
+        items.append(lenient_items(section) if section else {})
+    change = entry_change(items[0], items[1], adopting=False)
+    return bool(change.added or change.edited)
 
 
 def show_host_state(args: argparse.Namespace) -> None:
@@ -924,16 +1594,25 @@ def write_release_notes(args: argparse.Namespace) -> None:
     print(json.dumps({"status": "prepared", "output": str(args.output)}))
 
 
+DEFAULT_PUBLICATION_WORKFLOWS = [".github/workflows/codeflow-ci.yml"]
+
+
 def verify_checks(args: argparse.Namespace) -> None:
     pages = load_json(args.state)
-    run_pages = load_json(args.runs_state)
-    required = load_config(args.config).get("required_publication_checks")
+    run_files = args.runs_state if isinstance(args.runs_state, list) else [args.runs_state]
+    config = load_config(args.config)
+    required = config.get("required_publication_checks")
+    workflows = config.get("publication_workflows", DEFAULT_PUBLICATION_WORKFLOWS)
     if (
         not isinstance(pages, list)
         or not isinstance(required, list)
         or not required
         or len(set(required)) != len(required)
         or any(not isinstance(name, str) or not name for name in required)
+        or not isinstance(workflows, list)
+        or not workflows
+        or len(set(workflows)) != len(workflows)
+        or any(not isinstance(path, str) or not path for path in workflows)
     ):
         fail("publication check inventory or configured requirements are malformed")
     runs: list[Any] = []
@@ -942,34 +1621,41 @@ def verify_checks(args: argparse.Namespace) -> None:
             fail("publication check page is malformed")
         runs.extend(page["check_runs"])
     workflow_runs: list[Any] = []
-    if not isinstance(run_pages, list):
-        fail("publication workflow-run inventory is malformed")
-    for page in run_pages:
-        if not isinstance(page, dict) or not isinstance(page.get("workflow_runs"), list):
-            fail("publication workflow-run page is malformed")
-        workflow_runs.extend(page["workflow_runs"])
-    candidates = [
-        run
-        for run in workflow_runs
-        if isinstance(run, dict)
-        and run.get("event") == "push"
-        and run.get("head_branch") == "main"
-        and run.get("head_sha") == args.source
-        and run.get("path") == ".github/workflows/codeflow-ci.yml"
-        and isinstance(run.get("id"), int)
-        and isinstance(run.get("run_number"), int)
-        and isinstance(run.get("run_attempt"), int)
-        and isinstance(run.get("check_suite_id"), int)
-    ]
-    if not candidates:
-        fail("selected source lacks its codeflow-ci main-push workflow run")
-    selected = max(
-        candidates,
-        key=lambda run: (run["run_number"], run["run_attempt"], run["id"]),
-    )
-    if selected.get("status") != "completed" or selected.get("conclusion") != "success":
-        fail("latest codeflow-ci main-push workflow run is not successful")
-    suite_id = selected["check_suite_id"]
+    for run_file in run_files:
+        run_pages = load_json(run_file)
+        if not isinstance(run_pages, list):
+            fail("publication workflow-run inventory is malformed")
+        for page in run_pages:
+            if not isinstance(page, dict) or not isinstance(page.get("workflow_runs"), list):
+                fail("publication workflow-run page is malformed")
+            workflow_runs.extend(page["workflow_runs"])
+    # Each configured workflow's latest main-push run of the source must have
+    # succeeded; the required checks are read only from those runs' suites.
+    suites: set[int] = set()
+    for workflow in workflows:
+        candidates = [
+            run
+            for run in workflow_runs
+            if isinstance(run, dict)
+            and run.get("event") == "push"
+            and run.get("head_branch") == "main"
+            and run.get("head_sha") == args.source
+            and run.get("path") == workflow
+            and isinstance(run.get("id"), int)
+            and isinstance(run.get("run_number"), int)
+            and isinstance(run.get("run_attempt"), int)
+            and isinstance(run.get("check_suite_id"), int)
+        ]
+        name = Path(workflow).stem
+        if not candidates:
+            fail(f"selected source lacks its {name} main-push workflow run")
+        selected = max(
+            candidates,
+            key=lambda run: (run["run_number"], run["run_attempt"], run["id"]),
+        )
+        if selected.get("status") != "completed" or selected.get("conclusion") != "success":
+            fail(f"latest {name} main-push workflow run is not successful")
+        suites.add(selected["check_suite_id"])
     latest: dict[str, dict[str, Any]] = {}
     for run in runs:
         if (
@@ -977,7 +1663,7 @@ def verify_checks(args: argparse.Namespace) -> None:
             or run.get("name") not in required
             or run.get("head_sha") != args.source
             or (run.get("app") or {}).get("slug") != "github-actions"
-            or (run.get("check_suite") or {}).get("id") != suite_id
+            or (run.get("check_suite") or {}).get("id") not in suites
             or not isinstance(run.get("id"), int)
         ):
             continue
@@ -1177,8 +1863,22 @@ def parser() -> argparse.ArgumentParser:
 
     state = sub.add_parser("check-state")
     state.add_argument("--ref", default="HEAD")
+    state.add_argument(
+        "--structural",
+        action="store_true",
+        help=f"check against the recorded baseline and local tags ({HOST_UNCHECKED})",
+    )
     add_host_args(state)
     state.set_defaults(func=check_state)
+
+    local = sub.add_parser("preflight", help="the local release checks pre-push runs")
+    local.add_argument("--head", default="HEAD")
+    local.add_argument("--branch", default="")
+    local.add_argument("--remote", default="origin")
+    local.add_argument("--target", default="")
+    local.add_argument("--base", default="")
+    local.add_argument("--body-file", type=Path)
+    local.set_defaults(func=preflight)
 
     inventory = sub.add_parser("host-state")
     add_host_args(inventory)
@@ -1195,7 +1895,7 @@ def parser() -> argparse.ArgumentParser:
 
     checks = sub.add_parser("verify-checks")
     checks.add_argument("--state", type=Path, required=True)
-    checks.add_argument("--runs-state", type=Path, required=True)
+    checks.add_argument("--runs-state", type=Path, action="append", required=True)
     checks.add_argument("--source", required=True)
     checks.set_defaults(func=verify_checks)
 
@@ -1241,7 +1941,7 @@ def main() -> int:
     except (ReleaseError, OSError, ValueError, KeyError, TypeError) as error:
         print(f"release error: {error}", file=sys.stderr)
         return 2
-    return 0
+    return int(getattr(args, "exit_code", 0))
 
 
 if __name__ == "__main__":

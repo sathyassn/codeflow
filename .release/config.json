@@ -20,6 +20,10 @@
     "version": "3.0.0"
   },
   "main_branch": "main",
+  "publication_workflows": [
+    ".github/workflows/codeflow-ci.yml",
+    ".github/workflows/codeflow-release.yml"
+  ],
   "release_unit": "codeflow",
   "required_publication_checks": [
     "release state",
@@ -41,6 +45,7 @@
     "crates/codeflow-core/src/**",
     "dist-workspace.toml",
     "docs/adoption.md",
-    "docs/releasing.md"
+    "docs/releasing.md",
+    "project-management/templates/**"
   ]
 }

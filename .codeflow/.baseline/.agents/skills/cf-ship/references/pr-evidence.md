@@ -71,8 +71,12 @@ PR's Release impact states:
 - `Breaking`: `yes` or `no`; in stable SemVer yes exactly when Impact is
   major. Never prefill it on a watched contract path.
 - `Rationale`: the consumer-visible effect and the evidence for the level.
-- `Migration`: always present; `none` when nonbreaking, otherwise steps or a
-  pointer to Breaking change.
+- `Migration`: always present; normally `none` when nonbreaking, otherwise
+  steps or a pointer to Breaking change. A nonbreaking PR that refines or
+  reconciles a pending breaking entry, such as a wording-only edit declared
+  `none`, still carries that entry's migration reference. A checker that
+  assesses edits at the entry's impact, as CodeFlow's does, also requires
+  the break to be declared.
 
 Declare what this PR's own entries add, not the cumulative pending version.
 Read [release-policy.md](release-policy.md) when the impact may be minor or

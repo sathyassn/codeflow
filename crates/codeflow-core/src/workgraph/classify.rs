@@ -26,6 +26,10 @@ pub struct PathMember {
     /// One path of this member, classified by the tests and journeys.
     #[serde(default)]
     pub example: Option<String>,
+    /// A release contract path (TSK-106): `.release/config.json` watches it
+    /// too, so a release impact assessment names it.
+    #[serde(default)]
+    pub release_contract: bool,
 }
 
 /// The path sets of `path_sets.toml`.
@@ -35,6 +39,13 @@ pub struct PathSets {
     pub adopter_facing: Vec<PathMember>,
     /// The rest of the direct-change floor (R-71).
     pub direct_change_floor: Vec<PathMember>,
+    /// Paths that are not behaviour for the local release preflight (R-93).
+    #[serde(default)]
+    pub not_behaviour: Vec<PathMember>,
+    /// Paths that are behaviour whatever `not_behaviour` says: the skill
+    /// trees, which change shipped agent behaviour.
+    #[serde(default)]
+    pub behaviour_always: Vec<PathMember>,
 }
 
 /// The embedded path-set table, as shipped.
@@ -149,6 +160,23 @@ impl PathSets {
                 .find(|member| member_matches(member, path, project))
                 .map(|member| member.member.as_str())
         })
+    }
+}
+
+impl PathSets {
+    /// Whether `path` is behaviour for the local release preflight (R-93,
+    /// R-114): every path outside the documentation, the records and the
+    /// record templates, and the skill trees always. `scripts/release.py`
+    /// reads the same two sections of the table.
+    #[must_use]
+    pub fn is_behaviour(&self, path: &str) -> bool {
+        let none = ProjectPaths::default();
+        let within = |members: &[PathMember]| {
+            members
+                .iter()
+                .any(|member| member_matches(member, path, &none))
+        };
+        within(&self.behaviour_always) || !within(&self.not_behaviour)
     }
 }
 
@@ -285,6 +313,85 @@ mod tests {
                 Some(member),
                 "{path}"
             );
+        }
+    }
+
+    /// TSK-106 AC-10: each release contract member is adopter-facing, is
+    /// refused as a direct change, and is watched by the release
+    /// configuration, so a range touching it is flagged by all three.
+    #[test]
+    fn release_contract_members_are_adopter_facing_and_watched() {
+        let sets = path_sets();
+        let project = codeflow_paths();
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../../../../.release/config.json")).unwrap();
+        let watched: Vec<&str> = config["watched_contract_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect();
+        let members: Vec<&PathMember> = sets
+            .adopter_facing
+            .iter()
+            .filter(|member| member.release_contract)
+            .collect();
+        let names: Vec<&str> = members.iter().map(|m| m.member.as_str()).collect();
+        assert_eq!(names, ["policy", "record_schema"]);
+        for member in members {
+            let example = member.example.as_deref().unwrap();
+            for path in member
+                .patterns
+                .iter()
+                .map(|glob| glob.replace("**", "x/y.md"))
+                .chain([example.to_string()])
+            {
+                assert_eq!(
+                    sets.adopter_facing_member(&path, &project),
+                    Some(member.member.as_str()),
+                    "{path}"
+                );
+                assert!(
+                    sets.direct_change_refusal(&path, &project).is_some(),
+                    "{path}"
+                );
+                assert!(
+                    watched.iter().any(|glob| glob_matches(glob, &path)),
+                    "{path} is not in .release/config.json watched_contract_paths"
+                );
+            }
+        }
+    }
+
+    /// TSK-106 AC-10: the behaviour paths of the local preflight, checked on
+    /// every member's example (the fixture `scripts/test_release.py` reads
+    /// too) and on the paths R-114 names.
+    #[test]
+    fn behaviour_paths_follow_the_table() {
+        let sets = path_sets();
+        assert!(!sets.not_behaviour.is_empty() && !sets.behaviour_always.is_empty());
+        for member in &sets.not_behaviour {
+            let example = member.example.as_deref().unwrap();
+            assert!(!sets.is_behaviour(example), "{example}");
+        }
+        for member in &sets.behaviour_always {
+            let example = member.example.as_deref().unwrap();
+            assert!(sets.is_behaviour(example), "{example}");
+        }
+        for (path, behaviour) in [
+            ("crates/codeflow-core/src/lib.rs", true),
+            ("scripts/release.py", true),
+            ("README.md", true),
+            ("assets/base/ci/codeflow-ci.yml", true),
+            ("assets/base/agents/skills/cf-ship/SKILL.md", true),
+            (".claude/skills/cf-plan/SKILL.md", true),
+            ("docs/releasing.md", false),
+            ("docs/verification/evidence/tsk-106/journey.txt", false),
+            ("project-management/tasks/TSK-106.md", false),
+            ("project-management/templates/task.md", false),
+            ("assets/base/pm/spec.md.tmpl", false),
+        ] {
+            assert_eq!(sets.is_behaviour(path), behaviour, "{path}");
         }
     }
 
