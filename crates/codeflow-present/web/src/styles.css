@@ -665,6 +665,7 @@ th { color: var(--cf-text-muted); font-size: 0.78rem; letter-spacing: 0.04em; te
 /* Visually hidden but available to AT (figure status). */
 /* A diff line's marker is seen, never selected or quoted. */
 [data-cf-review-skip] { user-select: none; -webkit-user-select: none; }
+[data-cf-label-read] [data-cf-review-skip] { display: none !important; }
 .sr-only {
   position: absolute;
   inline-size: 1px;

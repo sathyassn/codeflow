@@ -249,6 +249,8 @@ try {
     if (cell.gesture === "element") {
       assert.ok(note.element_selector?.element_path, `${cell.where}, delivery: no element selector`);
       assert.ok(note.element_selector.label.includes(cell.recipe.label), `${cell.where}, delivery: label ${JSON.stringify(note.element_selector.label)}`);
+      // A diff line is named by its words, without its label or marker.
+      assert.doesNotMatch(note.element_selector.label, /Added|Removed|(^|: )[+-] /u, `${cell.where}, delivery: label ${JSON.stringify(note.element_selector.label)}`);
     } else {
       assert.ok(note.region_selector, `${cell.where}, delivery: no region selector`);
       assert.equal(note.region_selector.scope, cell.gesture === "document" ? "document" : "block", `${cell.where}, delivery: region scope`);
@@ -506,7 +508,7 @@ async function gesture(page, cell) {
     if (!box) throw new Error(`${cell.recipe.click} has no box`);
     await page.mouse.click(box.x + Math.min(box.width / 2, 40), box.y + box.height / 2);
     const summary = await chip(page, "Element");
-    if (!summary.includes(cell.recipe.label.slice(0, 40))) throw new Error(`the chip names ${JSON.stringify(summary)}`);
+    if (!summary.includes(cell.recipe.label.slice(0, 40)) || /Added|Removed|: [+-] /u.test(summary)) throw new Error(`the chip names ${JSON.stringify(summary)}`);
     return { summary };
   }
   // Area: a drag inside the block, or inside a named part of it. A block

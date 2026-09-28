@@ -51,9 +51,24 @@ export function visibleTextOf(element: Element): string {
  */
 export function labelTextOf(element: Element): string {
   if (!(element instanceof HTMLElement) || element.querySelector("text, tspan")) return visibleTextOf(element);
-  const parts = element.innerText.split(/[\n\t]+/u).map(collapse).filter(Boolean);
-  // A part that ends in a colon introduces the next ("Added: + let ...").
+  const parts = readableText(element).split(/[\n\t]+/u).map(collapse).filter(Boolean);
+  // A part that ends in a colon introduces the next.
   return parts.reduce((label, part) => (!label ? part : label.endsWith(":") ? `${label} ${part}` : `${label} · ${part}`), "") || visibleTextOf(element);
+}
+
+/**
+ * The element's text as laid out, without a diff line's screen-reader label
+ * and marker, which are not part of what the line says. They are hidden only
+ * while the text is read, so nothing is painted without them.
+ */
+function readableText(element: HTMLElement): string {
+  if (!element.querySelector("[data-cf-review-skip]")) return element.innerText;
+  element.setAttribute("data-cf-label-read", "");
+  try {
+    return element.innerText;
+  } finally {
+    element.removeAttribute("data-cf-label-read");
+  }
 }
 
 export function quoteFromRange(range: Range): string {
