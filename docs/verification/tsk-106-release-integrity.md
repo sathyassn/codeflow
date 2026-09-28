@@ -74,8 +74,10 @@ breaking.
 
 Each check was removed in turn, and the typed repair, entry edit, entry
 identity and pull request tests (61) were run against the mutant from a
-snapshot of the script. Rows M7 to M13 came with review round 1 and M14 to
-M20 with round 2.
+snapshot of the script, most recently on round 3's code. Rows M7 to M13
+came with review round 1 and M14 to M16 with round 2. Round 3 turned M13
+into collapsing whitespace before the comparison and retired round 2's prose
+rows (M17 to M20) with the rule they tested.
 
 | Mutant | Result | Killed by |
 |---|---|---|
@@ -90,16 +92,12 @@ M20 with round 2.
 | M8 baseline consistency never checked | killed | five baseline tests |
 | M9 baselines checked only when the manifest changes | killed | `test_a_baseline_changed_without_the_manifest_is_refused` |
 | M10 lazy continuation dropped from an entry | killed | the continuation and extent tests |
-| M11 a repair may edit an entry | killed | the repair rewrite and code reindent tests |
-| M12 `none` turns a same-impact rewrite into wording | killed | eight edit tests |
-| M13 rewrapping counted as an edit | killed | the three rewrap tests |
+| M11 a repair may edit an entry | killed | the repair rewrite, rewrap and code reindent tests |
+| M12 `none` turns a same-impact rewrite into wording | killed | thirteen edit tests |
+| M13 whitespace collapsed before comparing | killed | the rewrap, code indentation and meaningful whitespace tests |
 | M14 base judged by the pull request's configuration | killed | the base configuration and frozen pin tests |
 | M15 an unreadable base configuration yields to the PR's | killed | the unreadable and corroboration tests |
 | M16 a derived tree without the tag's corroboration | killed | `test_a_derived_tree_needs_the_tag_to_corroborate_the_commit` |
-| M17 code compared as prose | killed | the code indentation tests |
-| M18 spacing inside a code span collapsed | killed | `test_only_prose_rewrapping_is_not_an_edit` |
-| M19 paragraph breaks ignored | killed | `test_only_prose_rewrapping_is_not_an_edit` |
-| M20 hard line breaks compared as prose | killed | `test_only_prose_rewrapping_is_not_an_edit` |
 
 M9 first survived in round 1: every baseline test also changed the
 manifest. The baseline-only test was added, and the rerun killed it.
@@ -114,8 +112,9 @@ Codex requested four changes; the fixes are in the checker and its tests.
 - **Wording (F4).** A `none` declaration no longer turns a same-impact
   rewrite into wording. The checker cannot prove that changed words keep
   their meaning, so only rewrapping (every word, the label and the impact
-  kept) is not an edit; any other change is assessed at the entry's impact.
-  A repair may not edit an existing entry at all.
+  kept) was not an edit; any other change is assessed at the entry's impact.
+  A repair may not edit an existing entry at all. Round 3 removed the
+  rewrap exemption (see below).
 - **Baselines (F2).** When a repair touches a managed baseline or the
   manifest, each baseline must carry the one managed stamp of the release
   version and the manifest must record its exact hash.
@@ -146,6 +145,32 @@ two remaining gaps.
   its paragraphs with spacing collapsed outside code spans, and an entry
   that holds code, nested structure or a hard break is compared byte for
   byte. Codex's probe is a failing fixture for an ordinary PR and a repair.
+  Round 3 replaced this rule (see below).
+
+## Review round 3
+
+Codex confirmed F5 and raised the rewrap exemption for a third time. Three
+rounds on one exemption pointed at the exemption itself, so the question
+became whether any real change needs it.
+
+- **The real repair needs no rewrap.** In `702d51d52`, the only repair this
+  line makes, every line it removes is added back unchanged; it adds only
+  two headings and two blank lines. All 50 labelled pending entries parse
+  to the same text and impact before and after.
+- **Entries compare byte for byte (F4 closed).** The rewrap exemption and
+  its prose normalizer are removed. Any change to an entry's text,
+  whitespace included, is an edit assessed at the entry's impact, and a
+  repair may not make one. The code span, fenced code, HTML block and table
+  cases are each a failing fixture for a `none` declaration, and a rewrap is
+  refused in a repair.
+- **Restored guidance (byte-cut audit Q52).** An earlier size cut made the
+  always-read `Migration` rule in cf-ship's `pr-evidence.md` say `none` for
+  all nonbreaking work, dropping the exception kept in `release-policy.md`.
+  The rule says "normally" again and carries the original exception
+  sentence in full: a nonbreaking PR that refines or reconciles a pending
+  breaking entry still carries that entry's migration reference. One added
+  sentence ties it to this task's checker, which requires the break to be
+  declared for such an edit.
 
 ## Landing replay (F1)
 
