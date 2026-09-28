@@ -815,6 +815,16 @@ publication date._
 ### Fixed
 
 <!-- codeflow:release-impact patch -->
+- **Herdr delivery confirms a started turn.** `cf-herdr` delivers through
+  `scripts/deliver.py`. For a Codex or Grok seat it confirms within 20 s
+  that the seat started working, sends Enter at most once more while the
+  prompt still waits in the input, and otherwise reports that the prompt was
+  not submitted, naming the pane. It sends nothing to a seat whose working
+  folder is gone and names the relaunch step, and cleanup keeps a worktree
+  that a live seat uses. The Claude lane keeps its `accepted` wait. Run
+  `codeflow update` to install the script.
+
+<!-- codeflow:release-impact patch -->
 - **Work reads survive a partial clone and refuse an oversized record.**
   `work next`, `work claim`, `work start`, `status` and `codeflow ci` read
   the records on a branch tip from `project-management/` only, so a clone

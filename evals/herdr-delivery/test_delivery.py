@@ -1,4 +1,11 @@
-"""Prove the Herdr armed-prompt recipe is executable, not documentation-only."""
+"""Prove the Herdr armed-prompt recipe is executable, not documentation-only.
+
+The stub cases drive cf-herdr's delivery script against a stand-in `herdr`
+whose replies follow the bundled API schema (`herdr api schema`, herdr
+0.9.0): `pane get` answers `.result.pane`, `agent get` answers
+`.result.agent` with `agent_status` and `state_change_seq`. Point
+`CF_HERDR_SKILL_DIR` at an installed `cf-herdr` to test that copy.
+"""
 
 from __future__ import annotations
 
@@ -6,18 +13,151 @@ import json
 import os
 import shutil
 import subprocess
+import sys
+import tempfile
 import time
 import unittest
 import uuid
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
-HERDR_SKILL = ROOT / "assets/base/agents/skills/cf-herdr/SKILL.md"
+SKILL_DIR = Path(
+    os.environ.get("CF_HERDR_SKILL_DIR") or ROOT / "assets/base/agents/skills/cf-herdr"
+)
+HERDR_SKILL = SKILL_DIR / "SKILL.md"
+DELIVER = SKILL_DIR / "scripts/deliver.py"
+PANE = "w1:p7"
 
 
 def herdr(*args: str) -> dict:
     raw = subprocess.check_output(["herdr", *args], text=True)
     return json.loads(raw)
+
+
+def words(text: str) -> str:
+    return " ".join(text.split())
+
+
+STUB = r"""
+import json, os, sys
+
+path = os.environ["HERDR_STUB_STATE"]
+with open(path, encoding="utf-8") as handle:
+    state = json.load(handle)
+args = sys.argv[1:]
+state["calls"].append(args)
+pane = state["pane"]
+code = 0
+
+
+def reply(result):
+    print(json.dumps({"id": "stub", "result": result}))
+
+
+verb = tuple(args[:2])
+if verb == ("pane", "get"):
+    reply({"type": "pane_info", "pane": pane})
+elif verb == ("agent", "get"):
+    reply({"type": "agent_info",
+           "agent": dict(pane, state_change_seq=state["seq"])})
+elif verb == ("pane", "send-text"):
+    state["input"] += args[3]
+    reply({"type": "ok"})
+elif verb == ("pane", "send-keys"):
+    if "Enter" in args[3:]:
+        state["enters"] += 1
+        start = state["start_on_enter"]
+        if start is not None and state["enters"] >= start:
+            pane["agent_status"] = state["started_status"]
+            state["seq"] += 1
+            state["input"] = ""
+        elif state["clear_on_enter"]:
+            state["input"] = ""
+    reply({"type": "ok"})
+elif verb == ("pane", "wait-output"):
+    needle = args[args.index("--match") + 1]
+    if needle in state["input"]:
+        reply({"type": "wait_matched", "event": {}})
+    else:
+        sys.stderr.write(json.dumps({"error": {"code": "timeout"}}))
+        code = 1
+else:
+    sys.stderr.write("stub herdr: unsupported " + " ".join(args))
+    code = 2
+with open(path, "w", encoding="utf-8") as handle:
+    json.dump(state, handle)
+sys.exit(code)
+"""
+
+
+class StubSeat:
+    """A stand-in `herdr` on PATH and the seat state it answers from."""
+
+    def __init__(self, tmp: Path, **scenario: object) -> None:
+        self.tmp = tmp
+        folder = tmp / "worktree"
+        folder.mkdir()
+        self.folder = folder
+        bin_dir = tmp / "bin"
+        bin_dir.mkdir()
+        stub = bin_dir / "herdr"
+        stub.write_text(f"#!{sys.executable}\n{STUB}", encoding="utf-8")
+        stub.chmod(0o755)
+        self.bin_dir = bin_dir
+        self.state_path = tmp / "state.json"
+        state = {
+            "pane": {
+                "pane_id": PANE,
+                "cwd": str(folder),
+                "foreground_cwd": str(folder),
+                "agent_status": scenario.pop("status", "idle"),
+            },
+            "seq": 4,
+            "input": "",
+            "enters": 0,
+            "calls": [],
+            "start_on_enter": scenario.pop("start_on_enter", 1),
+            "started_status": scenario.pop("started_status", "working"),
+            "clear_on_enter": scenario.pop("clear_on_enter", False),
+        }
+        assert not scenario, scenario
+        self.state_path.write_text(json.dumps(state), encoding="utf-8")
+        self.prompt = tmp / "prompt.md"
+        self.prompt.write_text(
+            "Review the diff.\nReply with the single word ok.\n", encoding="utf-8"
+        )
+
+    def deliver(self, *extra: str) -> subprocess.CompletedProcess[str]:
+        env = dict(os.environ)
+        env["PATH"] = f"{self.bin_dir}{os.pathsep}{env.get('PATH', '')}"
+        env["HERDR_STUB_STATE"] = str(self.state_path)
+        env["PYTHONDONTWRITEBYTECODE"] = "1"
+        return subprocess.run(
+            [
+                sys.executable,
+                "-B",
+                str(DELIVER),
+                "--pane",
+                PANE,
+                "--file",
+                str(self.prompt),
+                "--settle",
+                "0",
+                "--start-timeout",
+                "1",
+                *extra,
+            ],
+            env=env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+
+    def state(self) -> dict:
+        return json.loads(self.state_path.read_text(encoding="utf-8"))
+
+    def sent(self, verb: str) -> list[list[str]]:
+        return [call for call in self.state()["calls"] if call[:2] == ["pane", verb]]
 
 
 class HerdrDeliveryTests(unittest.TestCase):
@@ -29,6 +169,7 @@ class HerdrDeliveryTests(unittest.TestCase):
             "Enter",
             "256 KiB",
             "codeflow delegate arm",
+            "scripts/deliver.py",
         ):
             self.assertIn(marker, text, f"cf-herdr lost delivery marker {marker!r}")
 
@@ -71,20 +212,7 @@ class HerdrDeliveryTests(unittest.TestCase):
                 caller,
                 "tab create stole focus from the caller pane",
             )
-            deadline = time.time() + 10
-            while time.time() < deadline:
-                info = herdr("pane", "process-info", "--pane", pane_id)
-                names = [
-                    proc.get("name", "")
-                    for proc in info["result"]["process_info"].get(
-                        "foreground_processes", []
-                    )
-                ]
-                if any(name in {"zsh", "bash", "sh"} for name in names):
-                    break
-                time.sleep(0.2)
-            else:
-                self.fail("new pane never reached a shell prompt")
+            wait_for_shell(self, pane_id)
             subprocess.check_call(["herdr", "pane", "send-text", pane_id, f"echo {token}"])
             time.sleep(0.3)
             subprocess.check_call(["herdr", "pane", "send-keys", pane_id, "Enter"])
@@ -106,6 +234,158 @@ class HerdrDeliveryTests(unittest.TestCase):
             )
         finally:
             subprocess.call(["herdr", "tab", "close", tab_id])
+
+    def test_live_delivery_confirms_a_started_turn(self) -> None:
+        """AC-3: deliver to a real seat and observe its confirmed start.
+
+        The seat kind is `CF_HERDR_CANARY_KIND` (default codex); its native
+        arguments after `--` come from `CF_HERDR_CANARY_ARGS`, split on
+        spaces. The canary prints the tab, agent and pane it used.
+        """
+        if os.environ.get("HERDR_ENV") != "1":
+            self.skipTest("not inside Herdr (HERDR_ENV is not 1)")
+        if shutil.which("herdr") is None:
+            self.skipTest("herdr not on PATH")
+        workspace = os.environ.get("HERDR_WORKSPACE_ID")
+        if not workspace or not os.environ.get("HERDR_PANE_ID"):
+            self.skipTest("missing HERDR_WORKSPACE_ID or HERDR_PANE_ID")
+        kind = os.environ.get("CF_HERDR_CANARY_KIND", "codex")
+        native = os.environ.get("CF_HERDR_CANARY_ARGS", "").split()
+        nonce = uuid.uuid4().hex[:6]
+        label = f"cf/codeflow/tsk144/canary/{nonce[:2]}"
+        name = f"cf-codeflow-tsk144-canary-{nonce}"
+        created = herdr(
+            "tab", "create", "--workspace", workspace, "--label", label,
+            "--cwd", str(ROOT), "--no-focus",
+        )
+        tab_id = created["result"]["tab"]["tab_id"]
+        pane_id = created["result"]["root_pane"]["pane_id"]
+        print(f"\ncanary: tab {label} ({tab_id}), agent {name}, pane {pane_id}")
+        try:
+            wait_for_shell(self, pane_id)
+            subprocess.check_call(
+                ["herdr", "agent", "start", name, "--kind", kind, "--pane", pane_id,
+                 "--", *native]
+            )
+            with tempfile.TemporaryDirectory() as tmp:
+                prompt = Path(tmp) / "canary.md"
+                prompt.write_text("Reply with the single word ok.\n", encoding="utf-8")
+                done = subprocess.run(
+                    [sys.executable, "-B", str(DELIVER), "--pane", pane_id,
+                     "--file", str(prompt)],
+                    capture_output=True, text=True, timeout=180,
+                )
+            print(done.stdout + done.stderr)
+            self.assertEqual(done.returncode, 0, done.stdout + done.stderr)
+            self.assertIn("started", done.stdout)
+        finally:
+            subprocess.call(["herdr", "tab", "close", tab_id])
+
+
+def wait_for_shell(case: unittest.TestCase, pane_id: str) -> None:
+    deadline = time.time() + 10
+    while time.time() < deadline:
+        info = herdr("pane", "process-info", "--pane", pane_id)
+        names = [
+            proc.get("name", "")
+            for proc in info["result"]["process_info"].get("foreground_processes", [])
+        ]
+        if any(name in {"zsh", "bash", "sh"} for name in names):
+            return
+        time.sleep(0.2)
+    case.fail("new pane never reached a shell prompt")
+
+
+class StubDeliveryTests(unittest.TestCase):
+    """AC-1 and AC-2 against a stand-in `herdr`."""
+
+    def seat(self, **scenario: object) -> StubSeat:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        return StubSeat(Path(tmp.name), **scenario)
+
+    def test_a_seat_that_starts_is_confirmed_after_one_enter(self) -> None:
+        seat = self.seat(start_on_enter=1)
+        done = seat.deliver()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(seat.state()["enters"], 1)
+        self.assertIn(f"pane {PANE} started", done.stdout)
+        [text] = seat.sent("send-text")
+        self.assertEqual(text[3], seat.prompt.read_text(encoding="utf-8"))
+
+    def test_a_seat_that_starts_after_one_more_enter(self) -> None:
+        seat = self.seat(start_on_enter=2)
+        done = seat.deliver()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(seat.state()["enters"], 2)
+        self.assertIn("after one more Enter", done.stdout)
+
+    def test_a_seat_that_never_starts_is_reported_by_pane(self) -> None:
+        seat = self.seat(start_on_enter=None)
+        done = seat.deliver()
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertEqual(seat.state()["enters"], 2, "at most one more Enter")
+        self.assertEqual(len(seat.sent("send-text")), 1, "the prompt is never resent")
+        self.assertIn(f"prompt not submitted to pane {PANE}", done.stderr)
+
+    def test_a_prompt_gone_from_the_input_gets_no_blind_enter(self) -> None:
+        seat = self.seat(start_on_enter=None, clear_on_enter=True)
+        done = seat.deliver()
+        self.assertEqual(done.returncode, 4, done.stdout + done.stderr)
+        self.assertEqual(seat.state()["enters"], 1)
+        self.assertIn(f"pane {PANE}", done.stderr)
+        self.assertIn("herdr agent read", done.stderr)
+
+    def test_a_turn_that_already_finished_counts_as_started(self) -> None:
+        seat = self.seat(start_on_enter=1, started_status="done")
+        done = seat.deliver()
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(seat.state()["enters"], 1)
+
+    def test_a_working_seat_gets_nothing(self) -> None:
+        seat = self.seat(status="working")
+        done = seat.deliver()
+        self.assertEqual(done.returncode, 5, done.stdout + done.stderr)
+        self.assertEqual(seat.sent("send-text") + seat.sent("send-keys"), [])
+
+    def test_the_lifecycle_lane_keeps_its_accepted_wait(self) -> None:
+        seat = self.seat(start_on_enter=None)
+        done = seat.deliver("--lifecycle")
+        self.assertEqual(done.returncode, 0, done.stderr)
+        self.assertEqual(seat.state()["enters"], 1)
+        calls = seat.state()["calls"]
+        self.assertFalse([c for c in calls if c[:2] == ["agent", "get"]])
+        self.assertIn("--until accepted", done.stdout)
+        skill = words(HERDR_SKILL.read_text(encoding="utf-8"))
+        self.assertIn("--until accepted", skill)
+
+    def test_a_seat_whose_folder_is_gone_gets_nothing(self) -> None:
+        for lane in ((), ("--lifecycle",)):
+            seat = self.seat()
+            shutil.rmtree(seat.folder)
+            done = seat.deliver(*lane)
+            self.assertEqual(done.returncode, 3, f"{lane}: {done.stdout}{done.stderr}")
+            self.assertEqual(seat.sent("send-text") + seat.sent("send-keys"), [], lane)
+            self.assertIn(str(seat.folder), done.stderr)
+            self.assertIn("nothing was sent", done.stderr)
+            self.assertIn("relaunch", done.stderr)
+
+    def test_an_oversized_prompt_takes_the_degraded_path(self) -> None:
+        seat = self.seat()
+        seat.prompt.write_text("x" * (256 * 1024 + 1), encoding="utf-8")
+        done = seat.deliver()
+        self.assertEqual(done.returncode, 2, done.stdout + done.stderr)
+        self.assertEqual(seat.sent("send-text"), [])
+        self.assertIn("256 KiB", done.stderr)
+
+    def test_resume_and_cleanup_name_the_seat_folder(self) -> None:
+        skill = words(HERDR_SKILL.read_text(encoding="utf-8"))
+        for marker in (
+            "Resume delivers through the same script",
+            "keep a worktree that a live seat uses as its folder until that seat's tab is closed",
+            "herdr agent list",
+        ):
+            self.assertIn(marker, skill, f"cf-herdr lost {marker!r}")
 
 
 if __name__ == "__main__":

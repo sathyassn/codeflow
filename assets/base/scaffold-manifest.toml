@@ -420,6 +420,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-herdr/scripts/deliver.py"
+dest = ".claude/skills/cf-herdr/scripts/deliver.py"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-model-orchestrator/SKILL.md"
 dest = ".claude/skills/cf-model-orchestrator/SKILL.md"
 ownership = "managed"
@@ -1047,6 +1053,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-herdr/SKILL.md"
 dest = ".agents/skills/cf-herdr/SKILL.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-herdr/scripts/deliver.py"
+dest = ".agents/skills/cf-herdr/scripts/deliver.py"
 ownership = "managed"
 tiers = ["standard", "full"]
 

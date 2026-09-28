@@ -317,7 +317,13 @@
     ".agents/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "d1a47692c8b58922eb5c2a13833529553096bca2742259e1f022dc049ad189f2",
+      "sha256": "3ffcc7b1a8dfe80c357840f1e3a0de6f11851ddd6980ca0b90d3a3f40713f621",
+      "exec": false
+    },
+    ".agents/skills/cf-herdr/scripts/deliver.py": {
+      "src": "agents/skills/cf-herdr/scripts/deliver.py",
+      "ownership": "managed",
+      "sha256": "9d6b741eb42b8d5eacbb40b013eb005d0149835ab268bcf5bf55087b17d714c1",
       "exec": false
     },
     ".agents/skills/cf-method/SKILL.md": {
@@ -995,7 +1001,13 @@
     ".claude/skills/cf-herdr/SKILL.md": {
       "src": "agents/skills/cf-herdr/SKILL.md",
       "ownership": "managed",
-      "sha256": "d1a47692c8b58922eb5c2a13833529553096bca2742259e1f022dc049ad189f2",
+      "sha256": "3ffcc7b1a8dfe80c357840f1e3a0de6f11851ddd6980ca0b90d3a3f40713f621",
+      "exec": false
+    },
+    ".claude/skills/cf-herdr/scripts/deliver.py": {
+      "src": "agents/skills/cf-herdr/scripts/deliver.py",
+      "ownership": "managed",
+      "sha256": "9d6b741eb42b8d5eacbb40b013eb005d0149835ab268bcf5bf55087b17d714c1",
       "exec": false
     },
     ".claude/skills/cf-method/SKILL.md": {
