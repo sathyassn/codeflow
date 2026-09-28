@@ -481,7 +481,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     return { left: rect.left, right: rect.right, y: rect.top + rect.height / 2 };
   }, [from, to]);
   // Each pin reopens the notes panel, which covers the prose at this width.
-  async function proseDrag(label, { from, to, hold = 0, steps = 10, quote }) {
+  async function proseDrag(label, { from, to, hold = 0, steps = 10, quote, pause }) {
     await revealDocumentForGestures();
     const end = await glyphs(0, to);
     const target = { x: end.right, y: end.y };
@@ -498,6 +498,17 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
     if (hold) await page.waitForTimeout(hold);
+    if (pause) {
+      // Hold the drag still partway, past the selection pin's settle delay:
+      // a drag pins on release only, so no chip may open under it (TSK-160).
+      const mid = await glyphs(0, pause.at);
+      await page.mouse.move(mid.right, mid.y, { steps: 4 });
+      const partial = await page.evaluate(() => String(getSelection()));
+      if (partial !== pause.quote) throw new Error(`${label} held ${JSON.stringify(partial)}, expected the partial ${pause.quote}`);
+      await page.waitForTimeout(pause.ms);
+      const early = await page.getByTestId("float-chip").count();
+      if (early !== 0) throw new Error(`${label} opened a chip while the drag was held`);
+    }
     await page.mouse.move(target.x, target.y, { steps });
     const marquee = await page.locator(".cf-region-draft").count();
     await page.mouse.up();
@@ -562,6 +573,19 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   for (const steps of [1, 10]) {
     const { padding } = await prepareProse();
     await proseDrag(`Prose drag (${steps} steps)`, { from: padding, steps, to: 6, quote: "Review" });
+    await dismissChip();
+  }
+  // A reader who pauses mid-drag gets one Text pin of the final selection,
+  // made on release (TSK-160).
+  {
+    const { padding } = await prepareProse();
+    await proseDrag("Prose drag held for 400 ms partway", { from: padding, to: 6, quote: "Review", pause: { at: 3, ms: 400, quote: "Rev" } });
+    await dismissChip();
+  }
+  // A one-character drag is a Text pin, made on release like any other.
+  {
+    const { padding } = await prepareProse();
+    await proseDrag("One-character prose drag", { from: padding, to: 1, quote: "R" });
     await dismissChip();
   }
 
