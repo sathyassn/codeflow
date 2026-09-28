@@ -660,8 +660,19 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     }
     await box.fill(body, { force: true });
     await assertPrimary(page.getByTestId("composer-save"));
-    await page.getByTestId("composer-save").click({ force: true });
-    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10000 });
+    // An unforced click waits until the button can take it: a forced one
+    // lands wherever the button was measured, and a miss leaves the note unsaved.
+    await page.getByTestId("composer-save").click();
+    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10000 }).catch(async (error) => {
+      // Name what the composer held when a save did not close it.
+      const state = await page.evaluate(() => ({
+        text: document.querySelector("[data-testid=composer-text]")?.value,
+        saveDisabled: document.querySelector("[data-testid=composer-save]")?.disabled,
+        status: [...document.querySelectorAll("[role=status], [aria-live]")].map((node) => node.textContent?.trim()).filter(Boolean),
+        active: document.activeElement?.getAttribute("data-testid") ?? document.activeElement?.tagName,
+      })).catch(() => "unreadable");
+      throw new Error(`Saving "${body}" left the composer open: ${JSON.stringify(state)}\n${error.message}`);
+    });
   }
 
   // Text note (tools open composer directly)
