@@ -14,7 +14,7 @@
   },
   "service": {
     "entrypoints": {
-      "present.app": "/app/assets/app-EENTLRV7.js",
+      "present.app": "/app/assets/app-H6VYZYUZ.js",
       "present.style": "/app/assets/app-HLPORNRZ.css"
     },
     "inline": {
@@ -26,14 +26,14 @@
     },
     "assets": [
       {
-        "request_path": "/app/assets/app-EENTLRV7.js",
-        "stored_path": "service/app-EENTLRV7.js.br",
+        "request_path": "/app/assets/app-H6VYZYUZ.js",
+        "stored_path": "service/app-H6VYZYUZ.js.br",
         "media_type": "text/javascript; charset=utf-8",
         "content_encoding": "br",
-        "raw_bytes": 108786,
-        "encoded_bytes": 32533,
-        "sha256": "81f5c140b622e77918213521d8ead2c5ac0ba0af5973879904507a8073111830",
-        "etag": "\"sha256-gfXBQLYi53kYITUh2OrSxawLoK9Zc4eZBFB6gHMRGDA=\"",
+        "raw_bytes": 108795,
+        "encoded_bytes": 32519,
+        "sha256": "4b59a35c9cd10eb12808dbe2e7bd801b483b173f4af372c420db23a376efdaf1",
+        "etag": "\"sha256-S1mjXJzRDrEoCNvi572AG0g7Fz9K83LEINsjo3bv2vE=\"",
         "imports": [
           {
             "request_path": "/app/assets/chunk-chunk-GOL67HMX.js",
@@ -315,8 +315,8 @@
     ],
     "metrics": {
       "asset_count": 15,
-      "raw_corpus_bytes": 1058946,
-      "brotli_corpus_bytes": 277693,
+      "raw_corpus_bytes": 1058955,
+      "brotli_corpus_bytes": 277679,
       "largest_raw_chunk_bytes": 186275,
       "largest_brotli_chunk_bytes": 131206
     }
@@ -338,5 +338,5 @@
     "largest_brotli_chunk_bytes": 145000,
     "export_gzip_bytes": 295000
   },
-  "corpus_sha256": "6aac9a963625642383c619ba90b93979953fbbeac817721c587da33dcd2c74a3"
+  "corpus_sha256": "2f66d6c2e31c1d9773201f92a6354d37c1d8bf49a01a5c5266588834a384707b"
 }

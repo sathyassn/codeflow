@@ -1586,7 +1586,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                   <div class="cf-history-meta">
                     <strong>{item.verdict.replaceAll("_", " ")}</strong>
                     <span>{item.lifecycle}</span>
-                    {item.acknowledged ? <span data-testid="feedback-acknowledged">acknowledged</span> : null}
+                    {item.acknowledged ? <span data-testid="feedback-acknowledged">acknowledged by agent</span> : null}
                     <span>Revision {item.source_revision}</span>
                     <span>Version {item.event_version}</span>
                   </div>

@@ -232,8 +232,8 @@ try {
       .filter((item) => item.querySelector(".cf-history-meta"))
       .map((item) => [...item.querySelector(".cf-history-meta").children].map((part) => part.textContent.trim())));
     assert.equal(rail.length, 2, `rail: ${JSON.stringify(rail)}`);
-    assert.ok(rail[0].includes("delivered") && rail[0].includes("acknowledged"), `rail: the acknowledged review shows ${JSON.stringify(rail[0])}`);
-    assert.ok(rail[1].includes("delivered") && !rail[1].includes("acknowledged"), `rail: the delivered review shows ${JSON.stringify(rail[1])}`);
+    assert.ok(rail[0].includes("delivered") && rail[0].includes("acknowledged by agent"), `rail: the acknowledged review shows ${JSON.stringify(rail[0])}`);
+    assert.ok(rail[1].includes("delivered") && !rail[1].includes("acknowledged by agent"), `rail: the delivered review shows ${JSON.stringify(rail[1])}`);
     passed.push(`rail: a delivered review reads ${JSON.stringify(rail[1].slice(0, 2))} and an acknowledged one ${JSON.stringify(rail[0].slice(0, 3))}`);
   }
 
