@@ -419,10 +419,14 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       const index = stops().indexOf(outer);
       if (index >= 0) activeIndex = index;
     };
+    // A pick opens the composer, which takes focus; leaving the mode then
+    // must not hand focus back to the tool that started it.
+    let pinned = false;
     const complete = (target: Element): void => {
       const captured = captureElement(documentRoot, target);
       if (captured) {
         const r = target.getBoundingClientRect();
+        pinned = true;
         pinCaptureRef.current(captured, r.left, r.top, { openComposer: true });
       } else setStatus("That element cannot be anchored. Choose content inside one review block.");
       setHot(null);
@@ -475,7 +479,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
         else el.setAttribute("tabindex", prev);
       });
       setHot(null);
-      if (previousFocus?.isConnected) previousFocus.focus();
+      if (!pinned && previousFocus?.isConnected) previousFocus.focus();
     };
   }, [captureMode, documentRoot, notes.length]);
 

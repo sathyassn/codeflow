@@ -862,7 +862,20 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await clickTool("tool-pick-element");
   await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
   await page.locator("#cf-present-document[data-cf-capture-mode='element'] :focus").waitFor();
+  await page.evaluate(() => {
+    window.__pickFocus = [];
+    window.__pickFocusLog = (event) => window.__pickFocus.push(event.target?.getAttribute?.("data-testid") ?? event.target?.tagName);
+    document.addEventListener("focusin", window.__pickFocusLog, true);
+  });
   await page.keyboard.press("Enter");
+  // The composer takes focus from the pick, and leaving the mode never hands
+  // it back to the tool: text typed at once would otherwise be lost (TSK-096).
+  await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "composer-text");
+  const pickFocus = await page.evaluate(() => {
+    document.removeEventListener("focusin", window.__pickFocusLog, true);
+    return window.__pickFocus;
+  });
+  if (pickFocus.includes("tool-pick-element")) throw new Error(`An element pick handed focus back to its tool: ${pickFocus.join(" > ")}`);
   await saveComposerNote("Element excerpt body.");
   await page.waitForFunction(() =>
     !document.querySelector('[data-testid="composer"]')
