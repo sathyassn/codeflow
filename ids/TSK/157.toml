@@ -1,0 +1,11 @@
+id = "TSK-157"
+uid = "cb14cbaf-8e9b-4ceb-9693-bf34b99005ce"
+kind = "TSK"
+title = "portal relationships read every depends_on form"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T03:53:33Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
