@@ -1,0 +1,11 @@
+id = "TSK-171"
+uid = "748f3533-3ad0-4dea-9f94-551fb85376b6"
+kind = "TSK"
+title = "permission presets from one action table"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T23:25:08Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
