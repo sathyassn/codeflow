@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { access, readFile } from "node:fs/promises";
+import { access, mkdtemp, readdir, readFile, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import axe from "axe-core";
@@ -107,6 +108,17 @@ await new Promise((resolve, reject) => {
 const address = server.address();
 if (!address || typeof address === "string") throw new Error("Browser-check server did not bind TCP");
 const origin = `http://127.0.0.1:${address.port}`;
+// Every browser this check launches keeps its profile in a directory the
+// check owns, never the operator's, and each close must empty its part
+// (TSK-096 AC-4). Playwright makes the profiles under the temp directory.
+const browserHome = await mkdtemp(join(tmpdir(), "cf-present-browsers-"));
+process.env.TMPDIR = browserHome;
+async function closeOwned(name, instance) {
+  await instance.close();
+  const left = (await readdir(browserHome)).filter((entry) => entry.startsWith(`playwright_${name}dev_profile`));
+  if (left.length) throw new Error(`${name}: its profile outlived the browser: ${left.join(", ")}`);
+  process.stdout.write(`${name}: teardown passed: headless browser closed, its own profile under ${browserHome} removed\n`);
+}
 const executablePath = await findBrowser();
 const browser = await chromium.launch({ executablePath, headless: true });
 
@@ -114,7 +126,7 @@ try {
   for (const [name, engine] of [['chromium', chromium], ['firefox', firefox], ['webkit', webkit]]) {
     const chromeBrowser = name === 'chromium' ? browser : await engine.launch();
     try { await checkSavedAppearance(chromeBrowser, origin, name); }
-    finally { if (chromeBrowser !== browser) await chromeBrowser.close(); }
+    finally { if (chromeBrowser !== browser) await closeOwned(name, chromeBrowser); }
   }
   await checkSelectionOccurrences(browser);
   await checkResolverRules(browser);
@@ -126,10 +138,23 @@ try {
   await checkIframeComments(browser, origin);
   await checkSubmitRace(browser, origin, reviewPosts);
   await checkInteractiveSurface(browser, origin, reviewPosts);
+  // TSK-096: the same interactive cases, chip included, in other engines on
+  // request (CF_PRESENT_CHIP_ENGINES=firefox,webkit), each in its own browser.
+  for (const name of (process.env.CF_PRESENT_CHIP_ENGINES ?? "").split(",").filter(Boolean)) {
+    const engine = { firefox, webkit }[name];
+    if (!engine) throw new Error(`Unknown engine ${name}`);
+    const other = await engine.launch();
+    try {
+      reviewPosts.length = 0;
+      await checkInteractiveSurface(other, origin, reviewPosts);
+      process.stdout.write(`${name}: interactive surface and comment chip cases passed\n`);
+    } finally { await closeOwned(name, other); }
+  }
   await checkStaticExportModes(browser, origin);
   process.stdout.write("cf-present browser checks passed: lazy paths, interactive and no-script modes, selection, figure blocks, zero CSP violations, axe, and 320 px reflow\n");
 } finally {
-  await browser.close();
+  await closeOwned("chromium", browser);
+  await rm(browserHome, { recursive: true, force: true });
   await new Promise((resolve) => server.close(resolve));
 }
 
@@ -451,7 +476,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     return { left: rect.left, right: rect.right, y: rect.top + rect.height / 2 };
   }, [from, to]);
   // Each pin reopens the notes panel, which covers the prose at this width.
-  async function proseDrag(label, { from, to, steps = 10, quote }) {
+  async function proseDrag(label, { from, to, hold = 0, steps = 10, quote }) {
     await revealDocumentForGestures();
     const end = await glyphs(0, to);
     const target = { x: end.right, y: end.y };
@@ -461,17 +486,19 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       startElement: document.elementFromPoint(from.x, from.y)?.outerHTML.slice(0, 200),
       endElement: document.elementFromPoint(target.x, target.y)?.outerHTML.slice(0, 200),
     }), { from, target });
-    if (hits.start !== "gesture-root" || hits.end !== "gesture-target") {
+    const expectedStart = from.onGlyph ? "gesture-target" : "gesture-root";
+    if (hits.start !== expectedStart || hits.end !== "gesture-target") {
       throw new Error(`${label} is obscured or off-screen: ${JSON.stringify({ from, target, hits })}`);
     }
     await page.mouse.move(from.x, from.y);
     await page.mouse.down();
+    if (hold) await page.waitForTimeout(hold);
     await page.mouse.move(target.x, target.y, { steps });
     const marquee = await page.locator(".cf-region-draft").count();
     await page.mouse.up();
     const selected = await page.evaluate(() => String(getSelection()));
     if (selected !== quote) throw new Error(`${label} selected ${JSON.stringify(selected)}, expected ${quote}`);
-    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    await waitForTextChip(page, label);
     await page.waitForFunction(
       (quote) => document.querySelector("[data-testid=float-chip] .q")?.textContent === quote,
       quote,
@@ -490,7 +517,38 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     const box = await prose.boundingBox();
     if (!box) throw new Error("Prose review-text-root has no box");
     const review = await glyphs(0, 6);
-    return { padding: { x: box.x + 4, y: review.y } };
+    // Inside the "e" of "Review": a press there lands on the captured highlight
+    // and a drag from it starts a new selection at offset 1.
+    const e = await glyphs(1, 2);
+    return {
+      padding: { x: box.x + 4, y: review.y },
+      glyph: { x: e.left + 1, y: e.y, onGlyph: true },
+    };
+  }
+  // The press under test must meet a live highlight with its chip showing.
+  async function expectHighlighted(label) {
+    await revealDocumentForGestures();
+    const live = await page.evaluate(() => String(getSelection()));
+    const chips = await page.getByTestId("float-chip").count();
+    if (live !== "Review" || chips !== 1) {
+      throw new Error(`${label} has no live capture: ${JSON.stringify({ live, chips })}`);
+    }
+  }
+  // The rail names no pin once the pin is gone.
+  async function expectNoPinnedStatus(label) {
+    const status = await page.waitForFunction(
+      () => {
+        const text = document.querySelector(".cf-status")?.textContent?.trim() ?? "";
+        return text.startsWith("Pinned:") ? false : text || "(empty)";
+      },
+      undefined,
+      { timeout: 2000 },
+    ).catch(async () => (await page.locator(".cf-status").first().textContent())?.trim());
+    if (typeof status === "string") throw new Error(`${label} left the status naming a dropped pin: ${JSON.stringify(status)}`);
+  }
+  async function expectReleased(label) {
+    const kept = await page.evaluate(() => String(getSelection()));
+    if (kept) throw new Error(`${label} kept the discarded capture highlighted: ${JSON.stringify(kept)}`);
   }
   async function dismissChip() {
     await page.keyboard.press("Escape");
@@ -500,6 +558,80 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     const { padding } = await prepareProse();
     await proseDrag(`Prose drag (${steps} steps)`, { from: padding, steps, to: 6, quote: "Review" });
     await dismissChip();
+  }
+
+  // Dropping a text capture must release its highlight. Chromium turns a press
+  // on a live highlight into a native text drag, not a new selection: at once
+  // on Linux and Windows, after 150 ms on macOS. The 200 ms holds below take
+  // that path on every platform. Presses start inside the "e" of the captured
+  // "Review", and the new selection must read "eview me", which a leftover
+  // "Review" cannot satisfy.
+  {
+    const { padding, glyph } = await prepareProse();
+    const reselect = (label) => proseDrag(label, { from: padding, to: 6, quote: "Review" });
+
+    // A held press on the highlight while its chip shows selects anew.
+    await reselect("Prose drag before a held press on the chip's highlight");
+    await expectHighlighted("Held press on the chip's highlight");
+    await proseDrag("Held press on the chip's highlight", { from: glyph, to: 9, hold: 200, quote: "eview me" });
+    await dismissChip();
+    await expectReleased("Escape");
+
+    // Escape releases the highlight, so a held press on those glyphs selects.
+    await reselect("Prose drag before Escape");
+    await dismissChip();
+    await expectReleased("Escape");
+    await expectNoPinnedStatus("Escape");
+    await proseDrag("Held press after Escape", { from: glyph, to: 9, hold: 200, quote: "eview me" });
+    await dismissChip();
+
+    // A click on the highlight only dismisses its Text chip. It must not fall
+    // through to an Element pin once the press has cleared the highlight.
+    await reselect("Prose drag before a click on its highlight");
+    await expectHighlighted("Click on the captured highlight");
+    const clicked = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.id, glyph);
+    if (clicked !== "gesture-target") throw new Error(`The highlight click would land on ${clicked}`);
+    await page.mouse.click(glyph.x, glyph.y);
+    await page.waitForTimeout(400);
+    const chip = page.getByTestId("float-chip");
+    if (await chip.count()) {
+      const kind = (await chip.locator(".lab").innerText()).trim();
+      throw new Error(`A click on the captured highlight opened ${kind}, expected no chip`);
+    }
+    await expectNoPinnedStatus("A click on the captured highlight");
+
+    // TSK-096 edge rule: the painted highlight decides. A click just past
+    // its last glyph, in the same line box, is a click on the paragraph:
+    // it drops the text pin and pins the element, as any other click does.
+    await reselect("Prose drag before a click past its last glyph");
+    await expectHighlighted("Click past the captured highlight");
+    const edge = await glyphs(0, 6);
+    const past = { x: edge.right + 2, y: edge.y };
+    const pastTarget = await page.evaluate(({ x, y }) => document.elementFromPoint(x, y)?.id, past);
+    if (pastTarget !== "gesture-target") throw new Error(`The edge click would land on ${pastTarget}`);
+    await page.mouse.click(past.x, past.y);
+    await page.getByTestId("float-chip").waitFor({ timeout: 5000 });
+    const edgeKind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
+    if (edgeKind !== "Element") throw new Error(`A click past the highlight opened ${edgeKind}, expected Element`);
+    await expectReleased("A click past the highlight");
+    await dismissChip();
+
+    // Composer Cancel leaves no highlight. Chromium already moves the
+    // selection into the focused composer, so this locks the outcome only.
+    await reselect("Prose drag before composer Cancel");
+    await page.getByTestId("float-comment").click();
+    await page.getByTestId("composer").waitFor();
+    await page.getByTestId("composer-cancel").click();
+    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 5000 });
+    await expectReleased("Composer Cancel");
+    // Gesture listeners remount in an effect after the composer closes.
+    await page.evaluate(() => new Promise((done) => requestAnimationFrame(() => setTimeout(done, 50))));
+    // The chip's esc button must release the highlight itself.
+    await reselect("Prose drag before the chip esc button");
+    await page.getByTestId("float-esc").click();
+    await page.getByTestId("float-chip").waitFor({ state: "detached", timeout: 5000 });
+    await expectReleased("The chip esc button");
+    await expectNoPinnedStatus("The chip esc button");
   }
 
   // Words on an authored SVG stage must pin as Text (same as HTML prose).
@@ -513,7 +645,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       selection?.removeAllRanges();
       selection?.addRange(range);
     });
-    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+    await waitForTextChip(page, "Stage label selection");
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
     if (kind !== "Text") throw new Error(`Stage label selection opened ${kind}, expected Text`);
     await page.keyboard.press("Escape");
@@ -543,8 +675,19 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     }
     await box.fill(body, { force: true });
     await assertPrimary(page.getByTestId("composer-save"));
-    await page.getByTestId("composer-save").click({ force: true });
-    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10000 });
+    // An unforced click waits until the button can take it: a forced one
+    // lands wherever the button was measured, and a miss leaves the note unsaved.
+    await page.getByTestId("composer-save").click();
+    await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10000 }).catch(async (error) => {
+      // Name what the composer held when a save did not close it.
+      const state = await page.evaluate(() => ({
+        text: document.querySelector("[data-testid=composer-text]")?.value,
+        saveDisabled: document.querySelector("[data-testid=composer-save]")?.disabled,
+        status: [...document.querySelectorAll("[role=status], [aria-live]")].map((node) => node.textContent?.trim()).filter(Boolean),
+        active: document.activeElement?.getAttribute("data-testid") ?? document.activeElement?.tagName,
+      })).catch(() => "unreadable");
+      throw new Error(`Saving "${body}" left the composer open: ${JSON.stringify(state)}\n${error.message}`);
+    });
   }
 
   // Text note (tools open composer directly)
@@ -734,7 +877,20 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await clickTool("tool-pick-element");
   await page.locator("#cf-present-document[data-cf-capture-mode='element']").waitFor();
   await page.locator("#cf-present-document[data-cf-capture-mode='element'] :focus").waitFor();
+  await page.evaluate(() => {
+    window.__pickFocus = [];
+    window.__pickFocusLog = (event) => window.__pickFocus.push(event.target?.getAttribute?.("data-testid") ?? event.target?.tagName);
+    document.addEventListener("focusin", window.__pickFocusLog, true);
+  });
   await page.keyboard.press("Enter");
+  // The composer takes focus from the pick, and leaving the mode never hands
+  // it back to the tool: text typed at once would otherwise be lost (TSK-096).
+  await page.waitForFunction(() => document.activeElement?.getAttribute("data-testid") === "composer-text");
+  const pickFocus = await page.evaluate(() => {
+    document.removeEventListener("focusin", window.__pickFocusLog, true);
+    return window.__pickFocus;
+  });
+  if (pickFocus.includes("tool-pick-element")) throw new Error(`An element pick handed focus back to its tool: ${pickFocus.join(" > ")}`);
   await saveComposerNote("Element excerpt body.");
   await page.waitForFunction(() =>
     !document.querySelector('[data-testid="composer"]')
@@ -841,6 +997,14 @@ async function selectFixtureText(page) {
 function isExpectedAttackConsoleError(message, origin) {
   const location = message.location().url;
   const text = message.text();
+  // Firefox reports its own favicon request against the page CSP, and the
+  // automation layer's messages to the sandboxed (null-origin) frames; the
+  // page itself posts no messages and requests no favicon.
+  if (text.includes("FaviconLoader.sys.mjs") || (text.includes("postMessage") && text.includes("recipient window’s origin (‘null’)"))) return true;
+  // WebKit words the attack frame's refusals differently and reports them
+  // without the frame's location.
+  if (text.includes("https://example.invalid/") || text.includes("/sandbox/1/attack' because the document's frame is sandboxed")
+    || text === "Unable to do meta refresh due to sandboxing" || text.includes("Recipient has origin null")) return true;
   return text.startsWith("Refused to execute the redirect specified via '<meta http-equiv='refresh'")
     || location.startsWith(`${origin}/sandbox/1/attack`)
     && (text.includes("example.invalid")
@@ -1031,8 +1195,38 @@ function exportFixture(mode) {
 }
 
 function assertLoopbackOnly(requests) {
-  const remote = requests.find((request) => request.hostname !== "127.0.0.1");
+  // WebKit lists the page's own blob: URLs (crops) as responses; a blob
+  // belongs to the origin inside it.
+  const host = (request) => (request.protocol === "blob:" ? new URL(request.pathname).hostname : request.hostname);
+  const remote = requests.find((request) => host(request) !== "127.0.0.1");
   if (remote) throw new Error(`Non-loopback request observed: ${remote.href}`);
+}
+
+// A text selection opens the chip only after the page maps it into one review
+// text root. Name the selection and the page's status when that never happens.
+async function waitForTextChip(page, label) {
+  try {
+    await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
+  } catch (error) {
+    const state = await page.evaluate(() => {
+      const selection = getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      const where = (node, offset) => {
+        const element = node?.nodeType === Node.ELEMENT_NODE ? node : node?.parentElement;
+        const textRoot = element?.closest("[data-cf-review-text-root]");
+        return { node: node?.nodeName, id: element?.id || null, offset, textRoot: textRoot?.id ?? null };
+      };
+      return {
+        quote: String(selection),
+        ranges: selection?.rangeCount ?? 0,
+        start: range && where(range.startContainer, range.startOffset),
+        end: range && where(range.endContainer, range.endOffset),
+        status: document.querySelector(".cf-status")?.textContent?.trim() ?? null,
+        hint: document.querySelector("[data-testid=comment-hint]")?.textContent?.trim() ?? null,
+      };
+    });
+    throw new Error(`${label} opened no comment chip; page state ${JSON.stringify(state)}`, { cause: error });
+  }
 }
 
 async function findBrowser() {
