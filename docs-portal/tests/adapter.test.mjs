@@ -430,6 +430,12 @@ test("every depends_on form validate accepts is one depends-on relationship to i
     assert.throws(() => pairs({ id: "TSK-101", depends_on: [entry] }), /depends_on relationship is invalid/, JSON.stringify(entry));
   }
   assert.throws(() => pairs({ id: "TSK-101", depends_on: ["TSK-100"], dependencies: ["TSK-100"] }), /keep only depends_on/);
+  // A task depends only on tasks, in either form, as validate --docs requires.
+  for (const entry of [{ id: "CAP-100", kind: "research" }, "CAP-100"]) {
+    assert.throws(() => pairs({ id: "TSK-101", depends_on: [entry] }), /depends_on relationship is invalid/, JSON.stringify(entry));
+  }
+  assert.throws(() => pairs({ id: "TSK-101", dependencies: ["SPC-100"] }), /dependencies relationship is invalid/);
+  assert.deepEqual(pairs({ id: "SPC-102", depends_on: [{ id: "SPC-100", kind: "research" }] }), [["depends_on", "SPC-100"]]);
   // `dependencies` is a task-record key; any other page keeps its own meaning for it.
   assert.deepEqual(pairs({ id: "SPC-101", dependencies: ["serde"] }), []);
   assert.deepEqual(extractPageRelationships({ title: "Guide", dependencies: ["serde"] }, "", "docs/guide.md"), []);

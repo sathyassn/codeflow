@@ -498,7 +498,8 @@ const relationshipFields = [
 // A record's depends_on entry is an id, or a research or decision input written
 // as a mapping whose `id` names it; validate --docs owns the other keys (kind,
 // pin), so they are not read here. Legacy `dependencies` is a task-record key:
-// it reads as depends_on only on a record whose id is a task id.
+// it reads as depends_on only on a record whose id is a task id. A task depends
+// only on tasks, as validate --docs requires.
 const recordDependencyField = ["dependencies", "depends_on"];
 
 function dependencyTarget(item) {
@@ -517,7 +518,8 @@ export function extractRelationships(frontmatter, sourcePath = "frontmatter", { 
     if (value === null) return [];
     const values = Array.isArray(value) ? value : [value];
     const targets = record && kind === "depends_on" && Array.isArray(value) ? values.map(dependencyTarget) : values;
-    if (targets.some((item) => typeof item !== "string" || !strictId(item))) throw new Error(`${sourcePath}: declared ${field} relationship is invalid`);
+    const allowed = (item) => typeof item === "string" && strictId(item) && !(task && kind === "depends_on" && !item.startsWith("TSK-"));
+    if (!targets.every(allowed)) throw new Error(`${sourcePath}: declared ${field} relationship is invalid`);
     return targets.map((target) => ({ type: kind, target }));
   });
 }
