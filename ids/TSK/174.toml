@@ -1,0 +1,11 @@
+id = "TSK-174"
+uid = "ead8a8a4-0842-493c-b3ef-6821fb4631f3"
+kind = "TSK"
+title = "the one permitted sandbox exit"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T23:25:59Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
