@@ -1150,6 +1150,150 @@ fn a_direct_completion_binds_to_the_release_head() {
     assert!(!again.1.contains("work.acceptance_binding"), "{}", again.1);
 }
 
+/// How a line repairs a completion it landed without a valid binding.
+#[derive(Clone, Copy, PartialEq)]
+enum Repair {
+    /// Reopened by a planning pull request and completed again at the
+    /// reviewed head of a task pull request.
+    Valid,
+    /// The same, with the new block naming a reviewed commit that code
+    /// follows.
+    Invalid,
+    /// The valid repair, reaching the release only through another line
+    /// that synced it.
+    ThroughAnotherLine,
+}
+
+/// `codeflow` with `args` in the fixture.
+fn verb(fx: &Fx, args: &[&str]) -> (i32, String) {
+    let out = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .args(args)
+        .current_dir(&fx.root)
+        .output()
+        .unwrap();
+    output(&out)
+}
+
+/// The release judged after line A landed TSK-001 completed with code
+/// between its reviewed commit and the completion, the release imported
+/// that, and line A then repaired it as `repair` says; returns the release
+/// pull request's result.
+fn after_a_brought_repair(repair: Repair) -> (i32, String) {
+    let fx = Fx::new(false);
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-work", LINE_A]);
+    fx.write("src/one.rs", "// one\n");
+    let reviewed = fx.commit("feat: build the work");
+    fx.write("src/late.rs", "// late\n");
+    fx.commit("feat: a late change");
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "complete", CRITERIA, &block(&reviewed)),
+    );
+    fx.commit("docs(records): complete the task");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.cut_release();
+    fx.import(LINE_A);
+    let first = fx.ci("main", "HEAD", RELEASE, Some("main"));
+    blocks(
+        &first,
+        "the brought completion with a late change",
+        &["TSK-001", "src/late.rs changed after the reviewed commit"],
+    );
+
+    // Line A reopens the task by a planning pull request, then completes
+    // it again at the reviewed head of a task pull request.
+    fx.git(&["switch", "-q", "-C", "plan/reopen-TSK-001", LINE_A]);
+    let reopened = verb(
+        &fx,
+        &[
+            "task",
+            "status",
+            "TSK-001",
+            "todo",
+            "--reason",
+            "late change",
+        ],
+    );
+    passes(&reopened, "the reopen verb");
+    fx.commit("docs(records): reopen TSK-001");
+    fx.land(LINE_A, "plan/reopen-TSK-001");
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-again", LINE_A]);
+    let before = fx.head();
+    fx.write("src/late.rs", "// late, reviewed\n");
+    let again = fx.commit("fix: review the late change");
+    let yaml = fx.root.parent().unwrap().join("again.yaml");
+    std::fs::write(
+        &yaml,
+        format!(
+            "acceptance:\n  reviewed: {again}\n  review: https://example.test/pr/2#review\n  criteria:\n    AC-1: verified | cargo test | 3 passed\n    AC-2: verified | journey ran\n  journey: verified | tests/journey.rs\n  not_verified: none\n  follow_ups: none: nothing deferred\n  verdict: approved\n"
+        ),
+    )
+    .unwrap();
+    let completed = verb(
+        &fx,
+        &[
+            "task",
+            "status",
+            "TSK-001",
+            "complete",
+            "--acceptance",
+            yaml.to_str().unwrap(),
+        ],
+    );
+    passes(&completed, "the re-completion verb");
+    fx.commit("docs(records): complete TSK-001 again");
+    if repair == Repair::Invalid {
+        let file = fx.root.join(path("TSK-001"));
+        let text = std::fs::read_to_string(&file).unwrap();
+        let named = format!("reviewed: {again}");
+        assert!(text.contains(&named), "{text}");
+        std::fs::write(&file, text.replace(&named, &format!("reviewed: {before}"))).unwrap();
+        fx.commit("docs(records): name the earlier reviewed commit");
+    }
+    fx.land(LINE_A, "task/TSK-001-again");
+    let line = if repair == Repair::ThroughAnotherLine {
+        fx.git(&["switch", "-q", LINE_B]);
+        fx.merge(LINE_A);
+        fx.git(&["push", "-q", "origin", LINE_B]);
+        LINE_B
+    } else {
+        LINE_A
+    };
+    fx.import(line);
+    fx.ci("main", "HEAD", RELEASE, Some("main"))
+}
+
+/// AC-1, AC-11: a later completion brought from the task's own line that
+/// binds where it was introduced there supersedes an earlier brought
+/// completion; the earlier one is never accepted. An invalid later one, or
+/// one reaching the release through another line, leaves the refusal.
+#[test]
+fn a_valid_re_completion_from_its_line_supersedes_a_brought_one() {
+    let old = "src/late.rs changed after the reviewed commit";
+    let count = |result: &(i32, String)| {
+        findings(result)
+            .iter()
+            .filter(|found| found.contains("TSK-001") && found.contains(old))
+            .count()
+    };
+    let valid = after_a_brought_repair(Repair::Valid);
+    passes(&valid, "a valid re-completion from its own line");
+    assert_eq!(count(&valid), 0, "{}", valid.1);
+
+    // The old completion's finding stays beside the new one's.
+    let invalid = after_a_brought_repair(Repair::Invalid);
+    blocks(
+        &invalid,
+        "an invalid re-completion from its own line",
+        &[old],
+    );
+    assert_eq!(count(&invalid), 2, "{}", invalid.1);
+
+    let other = after_a_brought_repair(Repair::ThroughAnotherLine);
+    blocks(&other, "a re-completion through another line", &[old]);
+    assert_eq!(count(&other), 1, "{}", other.1);
+}
+
 /// AC-1, AC-6: a completion made on the release line and later brought,
 /// block and all, from the task's own line is judged where the line landed
 /// it; the earlier direct completion no longer stands at the head.

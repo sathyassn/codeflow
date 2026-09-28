@@ -140,9 +140,10 @@ publication date._
   merge resolution, is direct work: it may not change criteria (removing
   or re-creating a task record counts as a change), and code
   needs the one open task marked `role: release-integration`, completed at
-  the release head. A completion made on the release branch and later
-  brought whole from the task's own line is judged where the line landed
-  it. The policy check refuses a pattern that matches the
+  the release head. A completion made on the release branch, or brought
+  earlier, is superseded by a later one brought from the task's own line
+  that binds where the line landed it; the earlier one is never accepted.
+  The policy check refuses a pattern that matches the
   default branch or an epic line, and the validator refuses a second open
   holder of the role. When the default branch's policy file is missing or
   unreadable, or the destination names a default branch it does not have,

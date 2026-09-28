@@ -616,7 +616,9 @@ its pull request into the default target, pre-push, `codeflow ci` and
 `task status complete` judge each change where it was introduced. A merge
 whose other parents lie on a verified epic line's or the default target's
 first-parent chain is an import: a path equal to the expected import's
-tree entry is brought, and its completions bind where they were introduced;
+tree entry is brought, and its completions bind where they were introduced
+(a later completion from the task's own line that binds there supersedes
+an earlier one);
 a brought criteria change is judged again where it landed on its line,
 unless that landing is at or before the cutoff of the line the task
 targets, on that line's first-parent chain, in the project-config table

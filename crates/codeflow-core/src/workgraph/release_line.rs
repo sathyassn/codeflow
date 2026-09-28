@@ -826,6 +826,11 @@ pub fn release_findings(
     let mut work: Vec<Work> = Vec::new();
     // Each task completed directly, with the commit that made it.
     let mut direct_completions: BTreeMap<String, Oid> = BTreeMap::new();
+    // The findings of each task's brought completions. A later completion
+    // brought from the task's own line that binds where it was introduced
+    // there becomes the completion in force: an earlier brought one's
+    // findings no longer stand, and nothing earlier is accepted.
+    let mut brought_completions: BTreeMap<String, Vec<Finding>> = BTreeMap::new();
     let mut report = Vec::new();
 
     for commit_oid in &path {
@@ -979,13 +984,25 @@ pub fn release_findings(
                             // no longer stands at the head.
                             direct_completions.remove(&now.id);
                             let introduced = introduced_at(&repo, &now, &block, source);
-                            findings.extend(bind_completion(
+                            let bound = bind_completion(
                                 &repo,
                                 &now,
                                 &graph,
                                 Landing::Commit(introduced),
                                 default_tip,
-                            ));
+                            );
+                            let own_line = match now.integration_target.as_deref() {
+                                Some(target) => {
+                                    lines.line_of(source)?.as_deref() == Some(target.trim())
+                                }
+                                None => false,
+                            };
+                            let in_force = brought_completions.entry(now.id.clone()).or_default();
+                            if own_line && bound.is_empty() {
+                                in_force.clear();
+                            } else {
+                                in_force.extend(bound);
+                            }
                         }
                         _ => {
                             direct_completions.insert(now.id.clone(), *commit_oid);
@@ -1159,6 +1176,7 @@ pub fn release_findings(
             }
         }
     }
+    findings.extend(brought_completions.into_values().flatten());
     let mut seen = HashSet::new();
     findings.retain(|found| seen.insert((found.rule, found.message.clone())));
     Ok(Judgement {
