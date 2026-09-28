@@ -3541,10 +3541,10 @@ fn push_set_blocks_a_rewrite_that_drops_a_commit_and_adds_a_bad_one() {
 }
 
 #[test]
-fn push_set_falls_back_to_the_old_sha_when_ls_remote_fails_for_a_rewrite() {
-    // The destination cannot be asked: a rewrite of an existing branch is
-    // bounded by its advertised sha alone, the line's new commit is checked
-    // again, and the hook says so.
+fn push_set_refuses_a_rewrite_when_ls_remote_fails() {
+    // The destination cannot be asked, so whether the release rules apply
+    // cannot be read there (SPC-013 R-120, Codex R145-R4-1): the rewrite is
+    // refused, never judged from its advertised sha alone.
     let (bare, local) = stable_destination("chore: legacy base");
     let old = task_on_moved_line(bare.path(), local.path(), &[("t.txt", "feat: add t")]);
     git(local.path(), &["rebase", "-q", "dest/integration/line"]);
@@ -3556,15 +3556,13 @@ fn push_set_falls_back_to_the_old_sha_when_ls_remote_fails_for_a_rewrite() {
     );
     let (code, err) = push_hook_onto(local.path(), "dest", "task/t", &rebased, &old);
     assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("Legacy line subject two."), "{err}");
     assert!(
-        err.contains("asking the destination for its branches failed")
-            && err.contains(&format!(
-                "the range of 'task/t' is bounded by its advertised {} alone",
-                &old[..9]
-            ))
-            && err.contains("checks all 2 commit(s) not on it"),
+        err.contains("the destination did not answer, so whether 'task/t' is a release branch cannot be read"),
         "{err}"
+    );
+    assert!(
+        !err.contains("`codeflow ci --base"),
+        "no range is judged: {err}"
     );
 }
 
@@ -3671,9 +3669,10 @@ fn push_set_ignores_a_tracking_ref_the_destination_deleted() {
 }
 
 #[test]
-fn push_set_falls_back_to_protected_refs_when_ls_remote_fails() {
-    // The destination cannot be asked: the range of a new branch is bounded
-    // by the tracked protected branches, and the hook says so.
+fn push_set_refuses_a_new_branch_when_ls_remote_fails() {
+    // The destination cannot be asked: a new branch is refused rather than
+    // bounded by the tracked protected branches, since whether the release
+    // rules apply there cannot be read (Codex R145-R4-1).
     let (bare, local) = stable_destination("Legacy subject.");
     integration_line(bare.path(), local.path());
     let gone = local.path().join("no-such-destination");
@@ -3688,20 +3687,12 @@ fn push_set_falls_back_to_protected_refs_when_ls_remote_fails() {
     );
     let good = commit_file(local.path(), "f.txt", "f\n", "feat: add f");
     let (code, err) = push_hook(local.path(), "dest", &[("feat/f", &good)]);
-    assert_eq!(code, Some(0), "{err}");
+    assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.contains("asking the destination for its branches failed")
-            && err.contains("the range of new branch 'feat/f' is bounded by its tracked"),
+        err.contains("the destination did not answer, so whether 'feat/f' is a release branch cannot be read"),
         "{err}"
     );
-    assert!(!err.contains("range unresolved"), "{err}");
-
-    // Bounded by `stable` alone, the line's legacy commit is in range.
-    git(local.path(), &["checkout", "-q", "-b", "feat/g", "line"]);
-    let head = commit_file(local.path(), "g.txt", "g\n", "feat: add g");
-    let (code, err) = push_hook(local.path(), "dest", &[("feat/g", &head)]);
-    assert_eq!(code, Some(1), "{err}");
-    assert!(err.contains("Legacy line subject."), "{err}");
+    assert!(!err.contains("is bounded by its tracked"), "{err}");
 }
 
 #[test]
@@ -3755,7 +3746,7 @@ fn push_set_asks_the_push_location_not_the_fetch_location() {
     let (code, err) = push_hook(local.path(), "dest", &[("feat/new", &head)]);
     assert_eq!(code, Some(1), "{err}");
     assert!(
-        err.contains("the range of 'feat/new' is unresolved and the destination did not answer")
+        err.contains("the destination did not answer, so whether 'feat/new' is a release branch cannot be read")
             && err.contains("`git ls-remote` failed"),
         "{err}"
     );
@@ -3908,6 +3899,8 @@ fn push_set_blocks_an_unrelated_base_and_notes_an_unresolved_one() {
     let dir = tempfile::tempdir().unwrap();
     init_repo(dir.path(), "main");
     let main = rev(dir.path(), "main");
+    answering_destination(dir.path(), "origin");
+    git(dir.path(), &["push", "-q", "origin", "main"]);
     git(dir.path(), &["checkout", "-q", "--orphan", "feat/orphan"]);
     let orphan = commit_file(dir.path(), "o.txt", "o\n", "chore: start an orphan");
     let (code, err) = push_hook_onto(dir.path(), "origin", "feat/orphan", &orphan, &main);

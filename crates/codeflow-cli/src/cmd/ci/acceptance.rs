@@ -67,7 +67,11 @@ fn judge(
     range: &Range<'_>,
     names: &super::Names<'_>,
 ) -> Option<Result<Vec<Finding>, String>> {
-    let destination = match release_line::ask_destination(root, names.destination) {
+    let asked = match (names.destination, names.advertisement) {
+        (Some(url), Some(listed)) => release_line::from_advertisement(url, listed),
+        _ => release_line::ask_destination(root, names.destination),
+    };
+    let destination = match asked {
         Ok(destination) => destination,
         Err(error) => return Some(Err(unscoped(&error))),
     };

@@ -127,13 +127,31 @@ pub fn ask(repo_root: &Path, url: Option<&str>) -> Result<Result<Destination, St
     let Some(url) = url else {
         return Ok(Ok(Destination::default()));
     };
-    let listed =
-        crate::git::remote_query::ls_remote(repo_root, &["--symref", url, "HEAD", "refs/heads/*"])
-            .map_err(|why| format!("asking the destination {url} for its default branch: {why}"))?;
-    Ok(parse_destination(url, &listed))
+    Ok(from_advertisement(url, &advertisement(repo_root, url)?))
 }
 
-fn parse_destination(url: &str, listed: &str) -> Result<Destination, String> {
+/// What `url` advertises: its default branch, branches and tags (peeled),
+/// in one bounded `git ls-remote --symref`. A caller that already holds
+/// it, such as the pre-push hook, passes it on instead of asking again.
+///
+/// # Errors
+///
+/// Returns why the destination could not be asked.
+pub fn advertisement(repo_root: &Path, url: &str) -> Result<String, String> {
+    crate::git::remote_query::ls_remote(
+        repo_root,
+        &["--symref", url, "HEAD", "refs/heads/*", "refs/tags/*"],
+    )
+    .map_err(|why| format!("asking the destination {url} for its default branch: {why}"))
+}
+
+/// The destination `url` is, read from its [`advertisement`].
+///
+/// # Errors
+///
+/// Returns why the answer names no usable default target: it has branches
+/// but its HEAD names none it has.
+pub fn from_advertisement(url: &str, listed: &str) -> Result<Destination, String> {
     let mut symref = None;
     let mut heads = Vec::new();
     for line in listed.lines() {
@@ -172,6 +190,26 @@ fn parse_destination(url: &str, listed: &str) -> Result<Destination, String> {
         default,
         heads,
     })
+}
+
+/// Whether durable work tracking is on at the destination's default
+/// target, read at its tip, which is fetched when this clone lacks it.
+/// `false` only for a destination with no default target yet, or one
+/// whose tip is readable and does not track durable work.
+///
+/// # Errors
+///
+/// Returns why the state cannot be read: the tip cannot be fetched, or
+/// the project state there does not parse. A caller refuses then; an
+/// unreadable state never counts as off.
+pub fn default_tracks_work(repo_root: &Path, destination: &Destination) -> Result<bool, String> {
+    let Some((name, tip)) = &destination.default else {
+        return Ok(false);
+    };
+    let repo = Repository::discover(repo_root).map_err(|error| error.message().to_string())?;
+    ensure_objects(repo_root, &repo, destination, &[(name.as_str(), *tip)])?;
+    crate::workgraph::durable_work_tracking_enabled_at(repo_root, &tip.to_string())
+        .map_err(|why| format!("durable work tracking at the default target {name}: {why}"))
 }
 
 /// Whether a range is a release range, and under which pattern.
@@ -711,16 +749,23 @@ impl<'a> Lines<'a> {
             order
         });
         // A commit on the chain holds itself first; otherwise holding
-        // `commit` is monotone along the chain.
+        // `commit` is monotone along the chain. A walk that fails gives no
+        // position, so nothing can supersede on it.
+        let mut failed = false;
         let at = order
             .iter()
             .position(|chain| *chain == commit)
             .unwrap_or_else(|| {
                 order.partition_point(|chain| {
-                    !repo.graph_descendant_of(*chain, commit).unwrap_or(false)
+                    if let Ok(descends) = repo.graph_descendant_of(*chain, commit) {
+                        !descends
+                    } else {
+                        failed = true;
+                        true
+                    }
                 })
             });
-        let found = (at < order.len()).then_some(at);
+        let found = (!failed && at < order.len()).then_some(at);
         self.positions.insert((tip, commit), found);
         found
     }

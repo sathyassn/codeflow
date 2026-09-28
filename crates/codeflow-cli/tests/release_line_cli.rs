@@ -971,6 +971,185 @@ fn a_release_push_judges_all_it_adds_to_the_default_tip() {
 
 /// AC-5 (Codex R145-3): an existing default target with no policy file
 /// cannot say what its release branches are, so the check fails closed.
+/// The pre-push hook in `dir` for a new branch `branch` at `local`,
+/// pushed to `url`.
+fn pre_push_new(dir: &Path, url: &str, branch: &str, local: &str) -> (i32, String) {
+    let mut child = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .args(["git-hook", "pre-push", url, url])
+        .current_dir(dir)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let zeros = "0".repeat(40);
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("refs/heads/{branch} {local} refs/heads/{branch} {zeros}\n").as_bytes())
+        .unwrap();
+    output(&child.wait_with_output().unwrap())
+}
+
+/// AC-5 (Codex round 4): a push of three branches asks the destination
+/// once. The hook reads one advertisement and hands it to each `codeflow
+/// ci` it runs, which does not ask again. A `git` shim on `PATH` counts the
+/// `ls-remote` calls.
+#[cfg(unix)]
+#[test]
+fn a_push_asks_the_destination_once() {
+    use std::fmt::Write as _;
+    use std::os::unix::fs::PermissionsExt as _;
+    let fx = Fx::new(true);
+    let shim = fx.root.parent().unwrap().join("shim");
+    std::fs::create_dir_all(&shim).unwrap();
+    let log = fx.root.parent().unwrap().join("git-calls.log");
+    let real = String::from_utf8(
+        Command::new("sh")
+            .args(["-c", "command -v git"])
+            .output()
+            .unwrap()
+            .stdout,
+    )
+    .unwrap();
+    let wrapper = shim.join("git");
+    std::fs::write(
+        &wrapper,
+        format!(
+            "#!/bin/sh\nprintf '%s\\n' \"$*\" >> '{}'\nexec '{}' \"$@\"\n",
+            log.display(),
+            real.trim()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&wrapper, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let head = fx.git(&["rev-parse", "main"]);
+    let zeros = "0".repeat(40);
+    let mut refs = String::new();
+    for i in 0..3 {
+        writeln!(
+            refs,
+            "refs/heads/main {head} refs/heads/feat/count-{i} {zeros}"
+        )
+        .unwrap();
+    }
+    let url = fx.origin.to_str().unwrap();
+    let path = format!("{}:{}", shim.display(), std::env::var("PATH").unwrap());
+    let mut child = clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+        .args(["git-hook", "pre-push", url, url])
+        .env("PATH", path)
+        .current_dir(&fx.root)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(refs.as_bytes())
+        .unwrap();
+    let result = output(&child.wait_with_output().unwrap());
+    passes(&result, "three ordinary branches");
+    let calls = std::fs::read_to_string(&log).unwrap();
+    let asked: Vec<&str> = calls
+        .lines()
+        .filter(|line| line.contains("ls-remote"))
+        .collect();
+    assert_eq!(asked.len(), 1, "{asked:#?}\n{}", result.1);
+}
+
+/// AC-5 (Codex R145-R4-1): whether the release rules apply is read at the
+/// destination's default tip even when this clone predates it. A clone cut
+/// before `main` adopted durable work publishes an unowned code commit as
+/// an ordinary branch, then pushes that head as a release branch without
+/// fetching: the hook fetches the default tip, reads tracking there and
+/// refuses. Where the project state there does not parse, the push is
+/// refused too: an unreadable state never counts as off. Where `main`
+/// never adopted durable work, the same push is ordinary.
+#[test]
+fn a_release_push_reads_tracking_at_a_default_tip_it_lacks() {
+    for (adopted, readable) in [(true, true), (true, false), (false, true)] {
+        let dir = tempfile::tempdir().unwrap();
+        let origin = dir.path().join("origin.git");
+        let url = origin.to_str().unwrap();
+        run_git(
+            dir.path(),
+            &["init", "-q", "--bare", "-b", "main", "origin.git"],
+        );
+        let up = dir.path().join("up");
+        std::fs::create_dir_all(&up).unwrap();
+        let write = |root: &Path, relative: &str, content: &str| {
+            let full = root.join(relative);
+            std::fs::create_dir_all(full.parent().unwrap()).unwrap();
+            std::fs::write(full, content).unwrap();
+        };
+        run_git(&up, &["init", "-q", "-b", "main"]);
+        write(
+            &up,
+            ".codeflow/policy.json",
+            "{\n  \"schema_version\": 1,\n  \"git\": {\"product_paths\": [\"src/**\"]}\n}\n",
+        );
+        write(&up, "src/lib.rs", "pub fn base() {}\n");
+        run_git(&up, &["add", "-A"]);
+        run_git(&up, &["commit", "-q", "-m", "chore: start"]);
+        run_git(&up, &["push", "-q", url, "main"]);
+        run_git(dir.path(), &["clone", "-q", url, "client"]);
+        let client = dir.path().join("client");
+        if adopted && !readable {
+            write(&up, ".codeflow/project.toml", "tier = \"full\"\ntier = [\n");
+            run_git(&up, &["add", "-A"]);
+            run_git(&up, &["commit", "-q", "-m", "chore: break the state"]);
+            run_git(&up, &["push", "-q", url, "main"]);
+        } else if adopted {
+            write(&up, "project-management/epics/EPC-001.md", &epic("EPC-001"));
+            write(
+                &up,
+                &path("TSK-001"),
+                &record("TSK-001", "todo", CRITERIA, "Pending.\n"),
+            );
+            run_git(&up, &["add", "-A"]);
+            run_git(&up, &["commit", "-q", "-m", "docs: plan the work"]);
+            run_git(&up, &["push", "-q", url, "main"]);
+        }
+        let tip = run_git(&up, &["rev-parse", "HEAD"]);
+
+        run_git(&client, &["switch", "-q", "-c", "feat/unowned"]);
+        write(&client, "src/unowned.rs", "// unowned\n");
+        run_git(&client, &["add", "-A"]);
+        run_git(&client, &["commit", "-q", "-m", "feat: unowned change"]);
+        run_git(&client, &["push", "-q", "origin", "feat/unowned"]);
+        let head = run_git(&client, &["rev-parse", "HEAD"]);
+        assert_eq!(
+            run_git_status(&client, &["cat-file", "-e", &format!("{tip}^{{commit}}")]),
+            !adopted,
+            "the clone must lack the adopted default tip"
+        );
+
+        let pushed = pre_push_new(&client, url, "integration/release-unseen", &head);
+        if !readable {
+            blocks(
+                &pushed,
+                "an unreadable state at the default tip",
+                &["whether the release rules apply to 'integration/release-unseen' cannot be read"],
+            );
+        } else if adopted {
+            blocks(
+                &pushed,
+                "a release push past an unseen adoption",
+                &[NO_OWNER],
+            );
+        } else {
+            passes(
+                &pushed,
+                "a release push where main never adopted durable work",
+            );
+        }
+    }
+}
+
 #[test]
 fn a_default_target_without_a_policy_fails_closed() {
     let fx = Fx::new(false);

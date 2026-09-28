@@ -94,6 +94,12 @@ pub struct CiArgs {
     /// hook passes the location pushed to.
     #[arg(long, value_name = "URL", hide = true)]
     pub destination: Option<String>,
+
+    /// Read the destination's advertisement (`git ls-remote --symref` of
+    /// its HEAD, branches and tags) from stdin instead of asking it again.
+    /// The pre-push hook passes what it already asked.
+    #[arg(long, hide = true, requires = "destination")]
+    pub advertisement_stdin: bool,
 }
 
 /// Environment variable holding the PR/MR body, consulted when neither
@@ -291,6 +297,18 @@ pub fn run(args: &CiArgs) -> i32 {
         .or_else(|| detect_target(|k| std::env::var(k).ok().filter(|v| !v.is_empty())))
         .or_else(|| args.base.as_deref().and_then(named_branch));
     let destination = args.destination.clone().or_else(|| origin_url(&root));
+    let advertisement = if args.advertisement_stdin {
+        let mut listed = String::new();
+        if let Err(error) = std::io::Read::read_to_string(&mut std::io::stdin(), &mut listed) {
+            eprintln!(
+                "codeflow ci: cannot read the destination's advertisement from stdin: {error}"
+            );
+            return 2;
+        }
+        Some(listed)
+    } else {
+        None
+    };
     let tracked_claim = work_checks(
         &root,
         git,
@@ -299,6 +317,7 @@ pub fn run(args: &CiArgs) -> i32 {
             branch: &branch,
             into: into.as_deref(),
             destination: destination.as_deref(),
+            advertisement: advertisement.as_deref(),
         },
         &base_candidates,
         &head,
@@ -1169,6 +1188,8 @@ pub(super) struct Names<'a> {
     pub branch: &'a str,
     pub into: Option<&'a str>,
     pub destination: Option<&'a str>,
+    /// The destination's advertisement, when the caller already asked it.
+    pub advertisement: Option<&'a str>,
 }
 
 /// Auto-detect the target branch NAME of a pull request. Verified variable

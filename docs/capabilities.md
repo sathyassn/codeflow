@@ -618,7 +618,8 @@ whose other parents lie on a verified epic line's or the default target's
 first-parent chain is an import: a path equal to the expected import's
 tree entry is brought, and its completions bind where they were introduced
 (only a later completion from the task's own line that binds there, and
-that the line landed after the earlier ones, supersedes them);
+that the line landed after the earlier ones, supersedes them; a direct
+completion is judged as it was made);
 a brought criteria change is judged again where it landed on its line,
 unless that landing is at or before the cutoff of the line the task
 targets, on that line's first-parent chain, in the project-config table
@@ -628,8 +629,12 @@ Anything else is direct work: it freezes criteria, and beyond planning
 records it belongs to the one open task with `role: release-integration`,
 whose completion binds to the release head. Pre-push judges a push to a
 release branch on everything it adds to the default target's tip, as its
-pull request is. When the default target's
-policy or objects cannot be read, the check fails closed. The check states that it proves structure and
+pull request is. Whether the release rules apply is read at the checkout,
+the pushed commit and the default target's tip, fetched when missing; a
+push is refused when the destination does not answer or any of these
+cannot be read. The hook asks the destination once per push. When the
+default target's policy or objects cannot be read, the check fails
+closed. The check states that it proves structure and
 binding only, and cf-reviewer, cf-consult and cf-ship ask whether each
 criterion is supported on this source and achieves the outcome.
 Review-relevant bounded discoveries persist at task closeout; closeout cannot

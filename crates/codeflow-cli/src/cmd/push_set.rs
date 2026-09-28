@@ -12,13 +12,16 @@
 //!   and can influence a quick target, which the pass line says.
 //! - The hook blocks on what it can see and never claims more: the range
 //!   leaves out only history known to be on the destination: the branch and
-//!   tag tips the push location advertises now (`git ls-remote`, never
-//!   interactive, bounded in time and size, fetching nothing), plus the sha
-//!   it advertised for an existing branch. When it cannot be asked, an
-//!   existing branch falls back to that sha alone, and a new branch to its
-//!   protected branches' tracking refs when those refs describe the same
-//!   location. When nothing gives a base, the range is reported unresolved
-//!   and left to CI, never compared with a local branch.
+//!   tag tips the push location advertises now (one `git ls-remote`, never
+//!   interactive, bounded in time and size, fetching nothing, passed on to
+//!   each `codeflow ci` it runs), plus the sha it advertised for an
+//!   existing branch. A destination that cannot be asked cannot say whether
+//!   the release rules apply, so the push is refused (SPC-013 R-120). With
+//!   no destination given, an existing branch falls back to its advertised
+//!   sha alone, and a new branch to its protected branches' tracking refs
+//!   when those refs describe the same location. When nothing gives a base,
+//!   the range is reported unresolved and left to CI, never compared with a
+//!   local branch.
 //! - For a push to an existing branch, the work-record check reads the
 //!   governing `work_records_baseline` from the destination's current tip of
 //!   that branch, the push's target, not from the range's base, which can be
@@ -37,10 +40,10 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 use std::time::Instant;
 
-use codeflow_core::git::remote_query;
 use codeflow_core::hooks::git_hook::{self, PushRef, PushStep, StageReport};
 use codeflow_core::hooks::policy::GitPolicy;
 use codeflow_core::hooks::Violation;
+use codeflow_core::workgraph::release_line;
 
 /// Run the push set for `refs` into `report`. `remote` and `url` are the
 /// pre-push hook's arguments: a configured remote name (or the URL or path
@@ -86,11 +89,16 @@ pub(super) fn run(
     let namespace = remote
         .filter(|name| url.is_some_and(|url| fetches_from(root, name, url)))
         .and_then(|name| tracking_namespace(root, name));
-    // Asked once, on first use.
+    // Asked once, on first use, for every pushed branch and each
+    // `codeflow ci` the push set runs.
+    let listing: OnceCell<Result<String, String>> = OnceCell::new();
     let advertised: OnceCell<Advertised> = OnceCell::new();
+    let answer: OnceCell<Result<release_line::Destination, String>> = OnceCell::new();
     let destination = Destination {
         url,
+        listing: &listing,
         advertised: &advertised,
+        answer: &answer,
         namespace: namespace.as_deref(),
         protected: &policy.protected_branches,
     };
@@ -180,21 +188,10 @@ fn run_ci_ranges(
         let base = match release_base(root, r, branch, destination, policy, report) {
             Scoped::Refused => None,
             Scoped::Release(tip) => Some(tip),
-            Scoped::Ordinary(unanswered) => {
+            Scoped::Ordinary => {
                 if let Some(RangeBase { base, note }) = range_base(root, r, destination) {
                     report.notes.extend(note);
                     Some(base)
-                } else if let Some(why) = unanswered {
-                    // Nothing bounds the range and the destination cannot
-                    // say whether the name is a release branch.
-                    report.violations.push(violation(
-                        policy,
-                        format!(
-                            "the range of '{branch}' is unresolved and the destination did not answer, so whether it is a release branch cannot be read; it is not pushed unjudged (SPC-013 R-120): {why}"
-                        ),
-                        "push again when the destination answers".to_string(),
-                    ));
-                    None
                 } else {
                     report.notes.push(unresolved(branch, destination));
                     None
@@ -218,11 +215,17 @@ fn run_ci_ranges(
                 args.extend(["--baseline-from", tip]);
             }
             // The release scope reads the policy at this destination's
-            // default target (SPC-013 R-120).
+            // default target (SPC-013 R-120), from the advertisement the
+            // hook already holds.
+            let mut input = None;
             if let Some(url) = destination.url {
                 args.extend(["--destination", url]);
+                if let Ok(listed) = destination.listing(root) {
+                    args.push("--advertisement-stdin");
+                    input = Some(listed);
+                }
             }
-            run_check(exe, root, &args, policy, report, steps);
+            run_check_with(exe, root, &args, input, policy, report, steps);
         }
     }
 }
@@ -281,13 +284,41 @@ fn run_check(
     report: &mut StageReport,
     steps: &mut Vec<PushStep>,
 ) {
+    run_check_with(exe, root, args, None, policy, report, steps);
+}
+
+/// As [`run_check`], with `input` on the check's stdin.
+fn run_check_with(
+    exe: &Path,
+    root: &Path,
+    args: &[&str],
+    input: Option<&str>,
+    policy: &GitPolicy,
+    report: &mut StageReport,
+    steps: &mut Vec<PushStep>,
+) {
     let shown = format!("codeflow {}", args.join(" "));
     let started = Instant::now();
     let output = Command::new(exe)
         .args(args)
         .current_dir(root)
         .env_remove("CODEFLOW_PR_BODY")
-        .output();
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .and_then(|mut child| {
+            let stdin = child.stdin.take();
+            let input = input.unwrap_or_default().to_string();
+            // Written from its own thread so a large output cannot
+            // deadlock the pipes; closing stdin ends the input.
+            let writer = std::thread::spawn(move || {
+                stdin.map_or(Ok(()), |mut stdin| stdin.write_all(input.as_bytes()))
+            });
+            let out = child.wait_with_output();
+            let _ = writer.join();
+            out
+        });
     steps.push(PushStep {
         name: shown.clone(),
         duration: started.elapsed(),
@@ -343,8 +374,14 @@ fn tracking_namespace(root: &Path, remote: &str) -> Option<String> {
 struct Destination<'a> {
     /// Where the push goes: the hook's URL argument, else its remote name.
     url: Option<&'a str>,
-    /// What the destination advertises now. Filled on first use.
+    /// The destination's one advertisement (see
+    /// [`release_line::advertisement`]), or why it could not be asked.
+    /// Filled on first use.
+    listing: &'a OnceCell<Result<String, String>>,
+    /// The advertised commits that exist here, from `listing`.
     advertised: &'a OnceCell<Advertised>,
+    /// The destination's default target and branches, from `listing`.
+    answer: &'a OnceCell<Result<release_line::Destination, String>>,
     /// The tracking namespace of a remote that fetches from `url`, for the
     /// protected-branch fallback; `None` when no tracking refs describe it.
     namespace: Option<&'a str>,
@@ -360,21 +397,44 @@ enum Advertised {
 }
 
 impl Destination<'_> {
+    /// The advertisement, asked on first use.
+    fn listing(&self, root: &Path) -> Result<&str, &str> {
+        self.listing
+            .get_or_init(|| {
+                self.url.map_or_else(
+                    || Err("no destination given".to_string()),
+                    |url| release_line::advertisement(root, url),
+                )
+            })
+            .as_deref()
+            .map_err(String::as_str)
+    }
+
     fn advertised(&self, root: &Path) -> &Advertised {
-        self.advertised.get_or_init(|| {
-            self.url.map_or_else(
-                || Advertised::Failed("no destination given".to_string()),
-                |url| advertised_commits(root, url),
-            )
+        self.advertised.get_or_init(|| match self.listing(root) {
+            Ok(listed) => advertised_commits(root, listed),
+            Err(why) => Advertised::Failed(why.to_string()),
         })
+    }
+
+    /// The destination's default target and branches: `Err` when it did
+    /// not answer, `Ok(Err)` when its answer names no usable default
+    /// target. With no destination given it is empty.
+    fn answer(&self, root: &Path) -> Result<&Result<release_line::Destination, String>, &str> {
+        let Some(url) = self.url else {
+            return Ok(self
+                .answer
+                .get_or_init(|| Ok(release_line::Destination::default())));
+        };
+        let listed = self.listing(root)?;
+        Ok(self
+            .answer
+            .get_or_init(|| release_line::from_advertisement(url, listed)))
     }
 
     /// Why the destination could not be asked, once it was tried.
     fn failure(&self) -> Option<&str> {
-        match self.advertised.get()? {
-            Advertised::Failed(why) => Some(why),
-            Advertised::Tips(_) => None,
-        }
+        self.listing.get()?.as_ref().err().map(String::as_str)
     }
 }
 
@@ -388,10 +448,8 @@ fn fetches_from(root: &Path, name: &str, url: &str) -> bool {
 enum Scoped {
     /// A release branch, judged from the default target's tip.
     Release(String),
-    /// Any other branch, judged from what the destination holds; with why
-    /// the destination did not answer, when it did not and durable work
-    /// tracking is off here.
-    Ordinary(Option<String>),
+    /// Any other branch, judged from what the destination holds.
+    Ordinary,
     /// Not judged and refused; the violation is reported.
     Refused,
 }
@@ -401,14 +459,16 @@ enum Scoped {
 /// it adds to the default target's tip, the range its pull request is
 /// judged on, however the destination already holds its commits: history
 /// published under another name was never judged as release work, so no
-/// advertised boundary may hide it. When the destination does not answer,
-/// or its policy cannot say, the push is refused whatever its name: a
-/// failed query does not prove the push itself fails. A release branch
-/// pushed where no default target exists yet is refused. The release rules
-/// are acceptance rules, so they apply where durable work tracking is on,
-/// at the checkout, the pushed commit or the destination's default target,
-/// the same places `codeflow ci` looks; an unreadable tracking state counts
-/// as on.
+/// advertised boundary may hide it. The release rules are acceptance
+/// rules, so they apply where durable work tracking is on at the checkout,
+/// the pushed commit or the destination's default target, the same places
+/// `codeflow ci` looks. Each is read, never assumed: the default target's
+/// tip is fetched when this clone lacks it, and a push is ordinary only
+/// when all three are read and none tracks durable work. A destination
+/// that does not answer, an answer with no usable default target, or a
+/// state that cannot be read refuses the push whatever its name: a failed
+/// query does not prove the push itself fails. A release branch pushed
+/// where no default target exists yet is refused.
 fn release_base(
     root: &Path,
     pushed: &PushRef,
@@ -418,72 +478,64 @@ fn release_base(
     report: &mut StageReport,
 ) -> Scoped {
     use codeflow_core::workgraph::{
-        durable_work_tracking_enabled, durable_work_tracking_enabled_at, release_line,
+        durable_work_tracking_enabled, durable_work_tracking_enabled_at,
+    };
+    let mut refuse = |message: String, remedy: &str| {
+        report
+            .violations
+            .push(violation(policy, message, remedy.to_string()));
+        Scoped::Refused
+    };
+    let asked = match destination.answer(root) {
+        Ok(Ok(asked)) => asked,
+        Ok(Err(why)) => {
+            return refuse(
+                format!("whether '{branch}' is a release branch cannot be decided, so it is not pushed unjudged (SPC-013 R-120): {why}"),
+                "fix what the message names at the destination, then push again",
+            )
+        }
+        Err(why) => {
+            return refuse(
+                format!("the destination did not answer, so whether '{branch}' is a release branch cannot be read; it is not pushed unjudged (SPC-013 R-120): {why}"),
+                "push again when the destination answers",
+            )
+        }
     };
     let tracked = durable_work_tracking_enabled(root).unwrap_or(true)
         || durable_work_tracking_enabled_at(root, &pushed.local_sha).unwrap_or(true);
-    // The push set's own query already failed: asking again only waits.
-    let asked = match destination.failure().map_or_else(
-        || release_line::ask(root, destination.url),
-        |why| Err(why.to_string()),
-    ) {
-        Ok(asked) => asked,
-        Err(why) if !tracked => return Scoped::Ordinary(Some(why)),
-        Err(why) => {
-            report.violations.push(violation(
-                policy,
-                format!(
-                    "the destination did not answer, so whether '{branch}' is a release branch cannot be read; it is not pushed unjudged (SPC-013 R-120): {why}"
-                ),
-                "push again when the destination answers".to_string(),
-            ));
-            return Scoped::Refused;
-        }
-    };
-    // Not tracked here: the rules apply only when the default target
-    // tracks durable work, which can be read only once its tip is here.
     let tracked = tracked
-        || asked.as_ref().is_ok_and(|asked| {
-            asked.default.as_ref().is_some_and(|(_, tip)| {
-                durable_work_tracking_enabled_at(root, &tip.to_string()).unwrap_or(false)
-            })
-        });
+        || match release_line::default_tracks_work(root, asked) {
+            Ok(on) => on,
+            Err(why) => {
+                return refuse(
+                    format!("whether the release rules apply to '{branch}' cannot be read, so it is not pushed unjudged (SPC-013 R-120): {why}"),
+                    "fix what the message names, then push again",
+                )
+            }
+        };
     if !tracked {
-        return Scoped::Ordinary(None);
+        return Scoped::Ordinary;
     }
-    let scoped = asked.and_then(|asked| {
-        release_line::scope(root, &asked, branch, None).map(|scope| (asked, scope))
-    });
-    match scoped {
-        Ok((_, scope)) if !scope.release() => Scoped::Ordinary(None),
-        Ok((asked, _)) => {
-            if let Some((name, tip)) = asked.default {
+    match release_line::scope(root, asked, branch, None) {
+        Ok(scope) if !scope.release() => Scoped::Ordinary,
+        Ok(_) => match &asked.default {
+            Some((name, tip)) => {
                 let tip = tip.to_string();
                 report.notes.push(format!(
                     "'{branch}' is a release branch: `codeflow ci` judges everything it adds to {name} at {}, as its pull request is",
                     short(&tip)
                 ));
-                return Scoped::Release(tip);
+                Scoped::Release(tip)
             }
-            report.violations.push(violation(
-                policy,
-                format!(
-                    "'{branch}' is a release branch, and the destination has no default target yet to judge it against (SPC-013 R-120)"
-                ),
-                "push the default branch first, then the release branch".to_string(),
-            ));
-            Scoped::Refused
-        }
-        Err(why) => {
-            report.violations.push(violation(
-                policy,
-                format!(
-                    "whether '{branch}' is a release branch cannot be decided, so it is not pushed unjudged (SPC-013 R-120): {why}"
-                ),
-                "fix what the message names at the destination, then push again".to_string(),
-            ));
-            Scoped::Refused
-        }
+            None => refuse(
+                format!("'{branch}' is a release branch, and the destination has no default target yet to judge it against (SPC-013 R-120)"),
+                "push the default branch first, then the release branch",
+            ),
+        },
+        Err(why) => refuse(
+            format!("whether '{branch}' is a release branch cannot be decided, so it is not pushed unjudged (SPC-013 R-120): {why}"),
+            "fix what the message names at the destination, then push again",
+        ),
     }
 }
 
@@ -500,13 +552,10 @@ fn unresolved(branch: &str, destination: &Destination<'_>) -> String {
     )
 }
 
-/// The branch and tag tips `url` advertises now (tags peeled), kept when the
-/// commit already exists here; nothing is fetched, even in a partial clone.
-fn advertised_commits(root: &Path, url: &str) -> Advertised {
-    let listed = match remote_query::ls_remote(root, &["--heads", "--tags", url]) {
-        Ok(listed) => listed,
-        Err(why) => return Advertised::Failed(why),
-    };
+/// The branch and tag tips the destination advertises now (tags peeled),
+/// from its advertisement `listed`, kept when the commit already exists
+/// here; nothing is fetched, even in a partial clone.
+fn advertised_commits(root: &Path, listed: &str) -> Advertised {
     let shas: Vec<&str> = listed
         .lines()
         .filter_map(|line| line.split_whitespace().next())

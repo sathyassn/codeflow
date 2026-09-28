@@ -143,7 +143,8 @@ publication date._
   the release head. A completion made on the release branch, or brought
   earlier, is superseded only by a later one brought from the task's own
   line that binds where the line landed it, ordered by where that line
-  landed each; the earlier one is never accepted. An octopus import is
+  landed each; the earlier one is never accepted, and a direct completion
+  is judged as it was made, whatever a later import writes. An octopus import is
   judged as git merges it, so an older parent of a line adds nothing.
   The policy check refuses a pattern that matches the
   default branch or an epic line, and the validator refuses a second open
@@ -152,10 +153,14 @@ publication date._
   the check fails closed instead of using the ordinary rules. A push
   to a release branch is judged on everything it adds to the default
   branch's tip, as its pull request is, however much of it the destination
-  already holds under other names. Where durable work is tracked, a push
-  whose scope the destination cannot say, because it does not answer or
-  its default branch has no readable policy, is refused, and so is any
-  push with an unresolved range to a destination that does not answer. `task status
+  already holds under other names. Whether durable work is tracked is
+  read at the checkout, the pushed commit and the destination's default
+  tip, fetched when missing; a push is ordinary only when all three are
+  read and none tracks. Pre-push now needs the destination to answer: a
+  push is refused when it does not, when its default branch has no
+  readable policy or project state, or when its HEAD names no branch it
+  has, in every project, tracked or not. The hook asks the destination
+  once per push and passes the answer to each check it runs. `task status
   complete` judges a completion whose task targets a release branch as CI
   judges that pull request. `codeflow ci` gains `--into`.
 
