@@ -1178,6 +1178,21 @@ mod tests {
         }
     }
 
+    // TSK-141 AC-1 (amended): this row was allowed, commented "== /home/user,
+    // not protected". It resolves to a home directory, so it is refused as
+    // its `rm -rf /home/user` equivalent is.
+    #[test]
+    fn test_rm_home_directory_through_dot_dot_blocked() {
+        let form = DangerousModule
+            .check(&ctx("rm -rf /home/user/proj/.."))
+            .expect("refused");
+        let equivalent = DangerousModule
+            .check(&ctx("rm -rf /home/user"))
+            .expect("refused");
+        assert_eq!(form.pattern, equivalent.pattern);
+        assert_eq!(form.pattern, "home directory");
+    }
+
     // Recursive rm of a non-protected path stays allowed (no false positives).
     #[test]
     fn test_rm_recursive_safe_paths_allowed() {
@@ -1186,11 +1201,9 @@ mod tests {
             "rm -r /tmp/scratch",
             "rm -rf target",
             "rm -rf node_modules",
-            "rm -f /etc/hosts.bak", // not recursive
-            // == /home/user/proj, a project; `/home/user` itself is a home
-            // directory, refused since TSK-141 (security/deletion.rs).
-            "rm -rf /home/user/proj/target/..",
-            "rm -rf ./scratch/..", // relative, not protected
+            "rm -f /etc/hosts.bak",             // not recursive
+            "rm -rf /home/user/proj/target/..", // == /home/user/proj, a project
+            "rm -rf ./scratch/..",              // relative, not protected
             "rm -rf ~/code/app/target",
             "rm -rf $HOME/code/app/build",
             "rm -rf ${HOME}/work/project/node_modules",

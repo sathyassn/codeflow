@@ -688,49 +688,9 @@ fn is_assignment(token: &str) -> bool {
     })
 }
 
-/// Each help or version invocation beside the same tokens given as a
-/// prompt, after `--`, or as an option's value (TSK-141 AC-3, seeded
-/// from the plan review's `followups-help-probe.log`).
-#[cfg(test)]
-pub(crate) const HELP_PAIRS: &[(&str, &str)] = &[
-    ("claude --help -p", "claude -p -- --help"),
-    ("claude -p --help", "claude -p -- help"),
-    ("claude -p hi --help", "claude -p hi"),
-    ("claude -h -p", "claude -p -- -h"),
-    ("claude -ph", "claude --model help -p x"),
-    (
-        "claude --version --print",
-        "claude --print --name version x",
-    ),
-    ("claude -v -p", "claude -p x -- -v"),
-    ("codex exec --help", "codex exec -- --help"),
-    ("codex exec -h", "codex exec -m help x"),
-    ("codex exec --version", "codex exec --color help x"),
-    ("codex exec -V", "codex exec -- -V"),
-    ("codex --help exec x", "codex -m help exec x"),
-    ("codex exec x --help", "codex exec x"),
-    ("codex review --help", "codex review --title help"),
-    ("codex e -h", "codex e -o help x"),
-    ("grok --help -p x", "grok -p help"),
-    ("grok -h --single x", "grok --single help"),
-    ("grok --version agent", "grok agent -- --version"),
-    ("grok -v -p x", "grok -m help -p x"),
-    (
-        "grok wrap claude --help -p",
-        "grok wrap claude -p -- --help",
-    ),
-    (
-        "timeout 5 codex exec --help",
-        "timeout 5 codex exec -- --help",
-    ),
-    (
-        "codex exec --help; echo done",
-        "codex exec --help; claude -p hi",
-    ),
-];
-
 #[cfg(test)]
 mod tests {
+    use super::super::guard_forms::HELP_PAIRS;
     use super::*;
 
     fn found(command: &str) -> Option<HeadlessRun> {

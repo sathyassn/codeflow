@@ -191,7 +191,7 @@ mod tests {
                 headless_peer_runs: level,
                 ..SecuritySection::default()
             };
-            for (help, twin) in crate::security::headless::HELP_PAIRS {
+            for (help, twin) in crate::security::guard_forms::HELP_PAIRS {
                 assert!(evaluate(help, &section).is_empty(), "{level:?}: {help}");
                 let v = evaluate(twin, &section);
                 assert_eq!(v.len(), 1, "{level:?}: {twin}");
@@ -207,7 +207,7 @@ mod tests {
     /// project deletion raises nothing (TSK-141 AC-1, AC-2).
     #[test]
     fn a_composed_deletion_is_refused_as_its_rm_equivalent() {
-        use crate::security::deletion::{COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS};
+        use crate::security::guard_forms::{COMPOSED_PAIRS, NESTINGS, PROJECT_DELETIONS};
         let section = SecuritySection::default();
         for (form, equivalent) in COMPOSED_PAIRS {
             let expected = evaluate(equivalent, &section);
