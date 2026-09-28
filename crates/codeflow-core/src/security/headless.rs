@@ -159,10 +159,81 @@ fn classify(argv: &[String], depth: usize) -> Found {
                 ],
             ),
             "find" => return find_exec(rest, depth),
+            // A package runner starts the package's binary (TSK-141 AC-6).
+            "npx" | "bunx" => return package_run(rest, depth),
+            "pnpm" | "yarn" => {
+                let after = skip_options(rest, &["-C", "--dir", "--cwd", "-F", "--filter"]);
+                return match after.split_first() {
+                    Some((sub, tail)) if sub == "dlx" => package_run(tail, depth),
+                    _ => Found::Nothing,
+                };
+            }
             _ => return Found::Nothing,
         };
     }
     Found::Unresolved
+}
+
+/// A package runner's command (`npx`, `bunx`, `pnpm dlx`, `yarn dlx`):
+/// after its options, the package's binary, or with `--package` the
+/// command named after it; `-c` runs a shell string.
+fn package_run(args: &[String], depth: usize) -> Found {
+    if depth > 4 {
+        return Found::Unresolved;
+    }
+    let mut at = 0;
+    let mut package_given = false;
+    while let Some(arg) = args.get(at) {
+        if arg == "--" {
+            at += 1;
+            break;
+        }
+        if !arg.starts_with('-') {
+            break;
+        }
+        match arg.as_str() {
+            "-p" | "--package" => {
+                package_given = true;
+                at += 2;
+            }
+            "-c" | "--call" => {
+                return match args.get(at + 1) {
+                    Some(script) => find(script, depth + 1).map_or(Found::Nothing, Found::Run),
+                    None => Found::Nothing,
+                };
+            }
+            _ => {
+                package_given |= arg.starts_with("--package=");
+                at += 1;
+            }
+        }
+    }
+    let Some((spec, rest)) = args.get(at..).and_then(<[String]>::split_first) else {
+        return Found::Nothing;
+    };
+    let program = if package_given {
+        spec.clone()
+    } else {
+        package_bin(spec)
+    };
+    let mut command = vec![program];
+    command.extend(rest.iter().cloned());
+    classify(&command, depth + 1)
+}
+
+/// The binary a package spec runs: its name without scope or version,
+/// with the peers' package names read as their commands.
+fn package_bin(spec: &str) -> String {
+    let unversioned = match spec.strip_prefix('@') {
+        Some(scoped) => format!("@{}", scoped.split('@').next().unwrap_or(scoped)),
+        None => spec.split('@').next().unwrap_or(spec).to_string(),
+    };
+    let name = unversioned.rsplit('/').next().unwrap_or(&unversioned);
+    match name {
+        "claude-code" => "claude".to_string(),
+        "grok-cli" => "grok".to_string(),
+        other => other.to_string(),
+    }
 }
 
 /// The commands `find` runs with `-exec`, `-execdir`, `-ok` or `-okdir`.
@@ -690,7 +761,7 @@ fn is_assignment(token: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::guard_forms::HELP_PAIRS;
+    use super::super::guard_forms::{HELP_PAIRS, PACKAGE_RUNNER_PAIRS};
     use super::*;
 
     fn found(command: &str) -> Option<HeadlessRun> {
@@ -817,5 +888,25 @@ mod tests {
         // An unresolved line without a peer marker is not a run.
         assert_eq!(found("$(printf ls) -la"), None);
         assert_eq!(found("bash <<< 'echo claude'"), None);
+    }
+
+    /// TSK-141 AC-6: a peer started through `npx`, `bunx`, `pnpm dlx` or
+    /// `yarn dlx` is judged as its direct invocation, headless run and help
+    /// alike.
+    #[test]
+    fn a_package_runner_is_judged_as_its_direct_invocation() {
+        for (direct, runner) in PACKAGE_RUNNER_PAIRS {
+            assert_eq!(
+                headless_peer_run(runner),
+                headless_peer_run(direct),
+                "{runner} as {direct}"
+            );
+        }
+        assert_eq!(package_bin("@anthropic-ai/claude-code@2.1.283"), "claude");
+        assert_eq!(package_bin("@openai/codex"), "codex");
+        assert_eq!(package_bin("grok@latest"), "grok");
+        // A runner of anything else is no peer run.
+        assert_eq!(headless_peer_run("npx prettier -p x"), None);
+        assert_eq!(headless_peer_run("pnpm install -p"), None);
     }
 }

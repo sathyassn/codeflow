@@ -261,6 +261,36 @@ pub const REVIEW_SYMLINK_PROBES: &[(&str, &str)] = &[
     ("symlink-cd", "cd root-link && rm -rf *"),
 ];
 
+/// A peer run started through a package runner beside its direct form:
+/// both are judged alike (TSK-141 AC-6).
+pub const PACKAGE_RUNNER_PAIRS: &[(&str, &str)] = &[
+    ("claude -p hi", "npx @anthropic-ai/claude-code -p hi"),
+    (
+        "claude -p hi",
+        "npx -y @anthropic-ai/claude-code@latest -p hi",
+    ),
+    (
+        "claude -p hi",
+        "npx --package @anthropic-ai/claude-code claude -p hi",
+    ),
+    ("claude -p hi", "bunx @anthropic-ai/claude-code -p hi"),
+    ("codex exec x", "npx @openai/codex exec x"),
+    ("codex exec x", "bunx @openai/codex@0.157.1 exec x"),
+    ("codex exec x", "pnpm dlx @openai/codex exec x"),
+    ("codex exec x", "yarn dlx @openai/codex exec x"),
+    ("grok -p x", "pnpm --silent dlx @vibe-kit/grok-cli -p x"),
+    ("grok -p x", "yarn dlx -q grok -p x"),
+    (
+        "claude --help -p",
+        "npx @anthropic-ai/claude-code --help -p",
+    ),
+    ("codex exec --help", "pnpm dlx @openai/codex exec --help"),
+    (
+        "claude -p -- --help",
+        "yarn dlx @anthropic-ai/claude-code -p -- --help",
+    ),
+];
+
 /// The control structures and sequences a form is nested in: each `{}` is
 /// replaced by the form.
 pub const NESTINGS: &[&str] = &[

@@ -202,6 +202,28 @@ mod tests {
         }
     }
 
+    /// A peer run through a package runner is reported as its direct form
+    /// at `warn` and `block`, and its help passes (TSK-141 AC-6).
+    #[test]
+    fn a_package_runner_peer_run_is_reported_as_its_direct_form_at_every_level() {
+        for level in [PolicyLevel::Warn, PolicyLevel::Block] {
+            let section = SecuritySection {
+                headless_peer_runs: level,
+                ..SecuritySection::default()
+            };
+            for (direct, runner) in crate::security::guard_forms::PACKAGE_RUNNER_PAIRS {
+                let expected = evaluate(direct, &section);
+                let v = evaluate(runner, &section);
+                assert_eq!(v.len(), expected.len(), "{level:?}: {runner}");
+                for (got, want) in v.iter().zip(&expected) {
+                    assert_eq!(got.rule, want.rule, "{runner}");
+                    assert_eq!(got.level, level, "{runner}");
+                }
+                assert_eq!(any_blocking(&v), any_blocking(&expected), "{runner}");
+            }
+        }
+    }
+
     /// Each composed deletion is refused under `security.dangerous_commands`
     /// with the message its `rm -rf` equivalent gets, alone and nested; a
     /// project deletion raises nothing (TSK-141 AC-1, AC-2).
