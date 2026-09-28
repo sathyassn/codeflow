@@ -5,7 +5,10 @@ Runs every deterministic journey that crates/codeflow-cli/tests/journey_gate.tom
 maps from R-104: each journey's passing control and fault tests. Tests of one
 cargo target run in one `cargo test ... -- --exact <names>` call, and the gate
 fails unless exactly that many tests ran and passed, so a renamed or vanished
-journey test cannot pass silently. The benchmark runs in release mode with
+journey test cannot pass silently. Python classes run verbosely: the gate
+fails on any skipped test or expected failure, and unless every listed class
+ran at least one test, so a skip never counts as a passing journey. The
+controls for this are scripts/test_journey_gate.py. The benchmark runs in release mode with
 `--include-ignored`, so its budget check runs beside it. A journey marked
 `platform = "unix"` is skipped on Windows and said so; a `pending` journey is
 reported with the task that ships it.
@@ -31,7 +34,11 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 MAP = ROOT / "crates" / "codeflow-cli" / "tests" / "journey_gate.toml"
 RESULT = re.compile(r"test result: (\w+)\. (\d+) passed; (\d+) failed")
-RAN = re.compile(r"^Ran (\d+) tests? in ", re.MULTILINE)
+# A verbose unittest line: `test_name (module.Class.test_name)`, or
+# `(module.Class)` before Python 3.11. A docstring puts the status on the
+# next line, so only the name is matched.
+VERBOSE = re.compile(r"^(test\w*) \(([\w.]+)\)", re.MULTILINE)
+SUMMARY = re.compile(r"^(OK|FAILED|NO TESTS RAN)(?: \((.*)\))?$", re.MULTILINE)
 
 
 def load_journeys() -> list[dict]:
@@ -74,7 +81,7 @@ def plan(journeys: list[dict], on_unix: bool, with_benchmark: bool):
 
 def command(key: tuple, names: list[str], test_threads: str | None) -> list[str]:
     if key[0] == "python":
-        return [sys.executable, "-B", key[1], *names]
+        return [sys.executable, "-B", key[1], "-v", *names]
     _, package, kind, target, benchmark = key
     cmd = ["cargo", "test"]
     if benchmark:
@@ -102,10 +109,10 @@ def run(key: tuple, names: list[str], test_threads: str | None) -> str | None:
         sys.stdout.write(output)
         return f"{' '.join(cmd[:6])}: exit {done.returncode}"
     if key[0] == "python":
-        ran = sum(int(count) for count in RAN.findall(output))
-        if ran == 0:
+        failure = python_failure(names, output)
+        if failure:
             sys.stdout.write(output)
-            return f"{key[1]} {' '.join(names)}: no test ran"
+            return f"{key[1]}: {failure}"
         return None
     results = RESULT.findall(output)
     passed = sum(int(count) for _, count, _ in results)
@@ -116,6 +123,25 @@ def run(key: tuple, names: list[str], test_threads: str | None) -> str | None:
             f"{' '.join(cmd[:6])}: {passed} of {len(names)} listed tests ran and passed; "
             "a journey test was renamed or removed"
         )
+    return None
+
+
+def python_failure(names: list[str], output: str) -> str | None:
+    """Why a verbose unittest run does not prove every listed class, or None."""
+    summaries = SUMMARY.findall(output)
+    if not summaries:
+        return "no unittest summary"
+    status, detail = summaries[-1]
+    if status != "OK" or detail:
+        shown = f"{status} ({detail})" if detail else status
+        return f"{shown}; a skipped or expected-failing test is not a passing journey"
+    ran = set()
+    for method, dotted in VERBOSE.findall(output):
+        parts = dotted.split(".")
+        ran.add(parts[-2] if parts[-1] == method and len(parts) > 1 else parts[-1])
+    missing = [name for name in names if name not in ran]
+    if missing:
+        return f"no test ran in {', '.join(missing)}"
     return None
 
 

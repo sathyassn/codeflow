@@ -111,7 +111,7 @@ jobs:
       # runs here too, so each new command is proven on Windows. Journeys
       # whose tests are unix-only are named as skipped, never passed.
       - name: journey gate
-        run: python scripts/journey-gate.py --skip-benchmark
+        run: python scripts/test_journey_gate.py && python scripts/journey-gate.py --skip-benchmark
 
       - uses: actions/setup-node@v6
         with:
