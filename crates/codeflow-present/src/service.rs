@@ -1821,10 +1821,16 @@ mod tests {
             "{receipt}"
         );
 
-        // A project bound below the control reserve alone: no answer fits.
+        // A project bound that holds the project as it is, but is below one
+        // line and the control reserve (the shared check's other refusal).
         let small = answer_body(&state, |_| {});
         let before = ledger_bytes(&state);
-        state.store.set_max_project_bytes(1024);
+        let held = crate::state::directory_size_bounded(state.store.root(), u64::MAX).unwrap();
+        assert!(
+            held < limits::MAX_SESSION_STATE_BYTES,
+            "the project already holds {held} bytes"
+        );
+        state.store.set_max_project_bytes(held);
         let (status, answer) = post_answer(&state, headers.clone(), small).await;
         refused(status, &answer, "out of capacity");
         state
