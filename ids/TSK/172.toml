@@ -1,0 +1,11 @@
+id = "TSK-172"
+uid = "953bd1de-d59a-4476-9bd4-991e7bb4ac57"
+kind = "TSK"
+title = "guard families, the enforcement baseline and repository binding"
+issuer = "26560960+sathyassn@users.noreply.github.com"
+created = "2026-09-28T23:25:33Z"
+target = "integration/EPC-020-delivery-system"
+introduced = "none"
+landed = "none"
+mapped = []
+mapped_by = "none"
