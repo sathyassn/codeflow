@@ -251,11 +251,40 @@ pub fn introductions(git: &Git, rev: &str) -> Result<BTreeMap<RegId, String>, Id
 /// Returns [`IdsError::Shallow`] on a shallow clone, and an error when git
 /// fails.
 pub fn introduction(git: &Git, rev: &str, id: &RegId) -> Result<Option<String>, IdsError> {
-    complete_history(git)?;
-    let Some((shas, paths)) = add_log(git, rev)?.remove(id) else {
-        return Ok(None);
-    };
-    resolve(git, rev, id, &shas, &paths, &mut None).map(Some)
+    Introductions::default().of(git, rev, id)
+}
+
+/// [`introduction`] for many ids and revisions: each revision's add log
+/// and held ids are read once, however many ids are asked about it.
+#[derive(Default)]
+pub struct Introductions {
+    checked: bool,
+    logs: HashMap<String, AddLog>,
+    held: HashMap<String, Option<BTreeSet<RegId>>>,
+}
+
+impl Introductions {
+    /// The introduction of `id` in `rev`'s history, as [`introduction`]
+    /// gives it.
+    ///
+    /// # Errors
+    ///
+    /// Returns [`IdsError::Shallow`] on a shallow clone, and an error when
+    /// git fails.
+    pub fn of(&mut self, git: &Git, rev: &str, id: &RegId) -> Result<Option<String>, IdsError> {
+        if !self.checked {
+            complete_history(git)?;
+            self.checked = true;
+        }
+        if !self.logs.contains_key(rev) {
+            self.logs.insert(rev.to_string(), add_log(git, rev)?);
+        }
+        let Some((shas, paths)) = self.logs[rev].get(id) else {
+            return Ok(None);
+        };
+        let held = self.held.entry(rev.to_string()).or_default();
+        resolve(git, rev, id, shas, paths, held).map(Some)
+    }
 }
 
 fn resolve(
@@ -500,11 +529,12 @@ pub(crate) fn landed_among(
 /// Returns an error when git fails.
 pub fn is_replica(
     git: &Git,
+    intros: &mut Introductions,
     entry: &super::Entry,
     rev: &str,
     id: &RegId,
 ) -> Result<bool, IdsError> {
-    let Some(intro) = introduction(git, rev, id)? else {
+    let Some(intro) = intros.of(git, rev, id)? else {
         return Ok(false);
     };
     let known = entry.introduced_sha() == Some(intro.as_str()) || entry.mapped.contains(&intro);

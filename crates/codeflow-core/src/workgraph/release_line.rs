@@ -564,6 +564,8 @@ struct Lines<'a> {
     chains: HashMap<Oid, HashSet<Oid>>,
     /// First-parent chains in order, oldest first.
     ordered: HashMap<Oid, Vec<Oid>>,
+    /// Answers of `position`, by line tip and commit.
+    positions: HashMap<(Oid, Oid), Option<usize>>,
     verified: HashMap<String, bool>,
     fetched: bool,
 }
@@ -583,6 +585,7 @@ impl<'a> Lines<'a> {
             candidates,
             chains: HashMap::new(),
             ordered: HashMap::new(),
+            positions: HashMap::new(),
             verified: HashMap::new(),
             fetched: false,
         }
@@ -690,6 +693,9 @@ impl<'a> Lines<'a> {
             .chain(self.destination.default.iter())
             .find(|(name, _)| name == line)
             .map(|(_, tip)| *tip)?;
+        if let Some(known) = self.positions.get(&(tip, commit)) {
+            return *known;
+        }
         let repo = self.repo;
         let order = self.ordered.entry(tip).or_insert_with(|| {
             let mut order = Vec::new();
@@ -704,11 +710,19 @@ impl<'a> Lines<'a> {
             order.reverse();
             order
         });
-        // Holding `commit` is monotone along the chain.
-        let at = order.partition_point(|chain| {
-            *chain != commit && !repo.graph_descendant_of(*chain, commit).unwrap_or(false)
-        });
-        (at < order.len()).then_some(at)
+        // A commit on the chain holds itself first; otherwise holding
+        // `commit` is monotone along the chain.
+        let at = order
+            .iter()
+            .position(|chain| *chain == commit)
+            .unwrap_or_else(|| {
+                order.partition_point(|chain| {
+                    !repo.graph_descendant_of(*chain, commit).unwrap_or(false)
+                })
+            });
+        let found = (at < order.len()).then_some(at);
+        self.positions.insert((tip, commit), found);
+        found
     }
 
     /// The line whose first-parent chain holds `commit`: the default

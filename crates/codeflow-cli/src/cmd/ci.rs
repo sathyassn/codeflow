@@ -1289,9 +1289,15 @@ fn enumerate_commits(root: &Path, base: &str, head: &str) -> Result<Vec<CommitRe
     }
     let mut records = parse_log(&String::from_utf8_lossy(&out.stdout));
     // Populate each commit's touched files for the contract-surface tripwire
-    // (ADR-0020); a per-commit call keeps the -z log parse unambiguous.
+    // (ADR-0020), read apart from the log so its -z parse stays unambiguous.
+    let singles: Vec<&str> = records
+        .iter()
+        .filter(|rec| !rec.is_merge)
+        .map(|rec| rec.sha.as_str())
+        .collect();
+    let mut files = commit_files(root, &singles);
     for rec in records.iter_mut().filter(|rec| !rec.is_merge) {
-        rec.files = commit_files(root, &rec.sha);
+        rec.files = files.remove(&rec.sha).unwrap_or_default();
     }
     Ok(records)
 }
@@ -1337,17 +1343,28 @@ fn added_lines(root: &Path, base: &str, head: &str) -> Result<Vec<AddedLine>, St
     let blobs: BTreeSet<&str> = lines.iter().filter_map(|l| l.blob.as_deref()).collect();
     let contents = read_blobs(root, &blobs.into_iter().collect::<Vec<_>>())?;
     let shipped = shipped_scaffold();
+    // Decided once per file, not per line: the shipped asset is read and
+    // compared once.
+    let mut scanned: BTreeMap<(String, String), bool> = BTreeMap::new();
     // A line without a blob id cannot be classified, so it is scanned.
     Ok(lines
         .into_iter()
         .filter(|added| {
-            let Some(content) = added.blob.as_ref().and_then(|b| contents.get(b)) else {
+            let Some((blob, content)) = added
+                .blob
+                .as_ref()
+                .and_then(|b| contents.get(b).map(|content| (b, content)))
+            else {
                 return true;
             };
-            !is_binary(content)
-                && !shipped
-                    .as_ref()
-                    .is_some_and(|m| m.installs_verbatim(&EmbeddedAssets, &added.path, content))
+            *scanned
+                .entry((added.path.clone(), blob.clone()))
+                .or_insert_with(|| {
+                    !is_binary(content)
+                        && !shipped.as_ref().is_some_and(|m| {
+                            m.installs_verbatim(&EmbeddedAssets, &added.path, content)
+                        })
+                })
         })
         .collect())
 }
@@ -1381,31 +1398,43 @@ fn read_blobs(root: &Path, blobs: &[&str]) -> Result<BTreeMap<String, Vec<u8>>, 
     if blobs.is_empty() {
         return Ok(BTreeMap::new());
     }
-    let mut child = Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["cat-file", "--batch"])
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .map_err(|e| e.to_string())?;
-    let mut stdin = child.stdin.take().ok_or("git cat-file: no stdin")?;
     let mut input = String::new();
     for blob in blobs {
         input.push_str(blob);
         input.push('\n');
     }
+    let out = git_with_stdin(root, &["cat-file", "--batch"], input)?;
+    parse_batch(&out, blobs)
+}
+
+/// Run `git <args>` in `root` with `input` on stdin and return its stdout.
+/// The input is written from its own thread, so a large output cannot
+/// deadlock the pipes.
+fn git_with_stdin(root: &Path, args: &[&str], input: String) -> Result<Vec<u8>, String> {
+    let name = args.first().copied().unwrap_or_default();
+    let mut child = Command::new("git")
+        .arg("-C")
+        .arg(root)
+        .args(args)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|e| e.to_string())?;
+    let mut stdin = child
+        .stdin
+        .take()
+        .ok_or_else(|| format!("git {name}: no stdin"))?;
     let writer = std::thread::spawn(move || stdin.write_all(input.as_bytes()));
     let out = child.wait_with_output().map_err(|e| e.to_string())?;
     writer
         .join()
-        .map_err(|_| "git cat-file: input writer panicked".to_string())?
+        .map_err(|_| format!("git {name}: input writer panicked"))?
         .map_err(|e| e.to_string())?;
     if !out.status.success() {
         return Err(String::from_utf8_lossy(&out.stderr).trim().to_string());
     }
-    parse_batch(&out.stdout, blobs)
+    Ok(out.stdout)
 }
 
 /// Read `git cat-file --batch` output for `queried` blob ids, in order.
@@ -1571,25 +1600,42 @@ fn hunk_header(header: &str) -> Option<(usize, usize, usize)> {
     Some((old_count, new_start, new_count))
 }
 
-/// Files a single commit touches (`git diff-tree --no-commit-id --name-only -r`).
-/// Empty on any error — the tripwire is advisory, so an unavailable list means
-/// no nudge.
-fn commit_files(root: &Path, sha: &str) -> Vec<String> {
-    Command::new("git")
-        .arg("-C")
-        .arg(root)
-        .args(["diff-tree", "--no-commit-id", "--name-only", "-r", sha])
-        .output()
-        .ok()
-        .filter(|o| o.status.success())
-        .map(|o| {
-            String::from_utf8_lossy(&o.stdout)
-                .lines()
-                .filter(|l| !l.is_empty())
-                .map(str::to_string)
-                .collect()
-        })
-        .unwrap_or_default()
+/// Files each of `shas` (non-merge commits) touches against its parent, read
+/// in one `git diff-tree --stdin -r` instead of a process per commit. A root
+/// commit, as before, lists none. `--raw -z` keeps the parse unambiguous: a
+/// path always follows a `:` status field, so any other field is the next
+/// commit's id. Empty on any error: the tripwire is advisory, so an
+/// unavailable list means no nudge.
+fn commit_files(root: &Path, shas: &[&str]) -> BTreeMap<String, Vec<String>> {
+    let mut files: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    if shas.is_empty() {
+        return files;
+    }
+    let mut input = String::new();
+    for sha in shas {
+        input.push_str(sha);
+        input.push('\n');
+    }
+    let Ok(out) = git_with_stdin(root, &["diff-tree", "--stdin", "-r", "--raw", "-z"], input)
+    else {
+        return files;
+    };
+    let text = String::from_utf8_lossy(&out);
+    let mut fields = text.split('\0');
+    let mut commit: Option<&str> = None;
+    while let Some(field) = fields.next() {
+        if field.starts_with(':') {
+            if let (Some(path), Some(sha)) = (fields.next(), commit) {
+                files
+                    .entry(sha.to_string())
+                    .or_default()
+                    .push(path.to_string());
+            }
+        } else if !field.trim().is_empty() {
+            commit = Some(field.trim());
+        }
+    }
+    files
 }
 
 /// Parse the NUL-delimited `git log --format=%H %P%n%B` output into records;
@@ -2644,6 +2690,62 @@ mod tests {
     fn parse_log_empty_is_empty() {
         assert!(parse_log("").is_empty());
         assert!(parse_log("\0").is_empty());
+    }
+
+    /// One batched read gives each commit its own files: a root commit and
+    /// an empty commit list none, a deletion and an unusual name are kept,
+    /// and a file named like another commit's id stays a file.
+    #[test]
+    fn commit_files_reads_every_commit_in_one_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let run = |args: &[&str]| {
+            let out = Command::new("git")
+                .args(["-c", "user.name=t", "-c", "user.email=t@example.test"])
+                .args(args)
+                .current_dir(dir.path())
+                .env("GIT_CONFIG_GLOBAL", "/dev/null")
+                .env("GIT_CONFIG_NOSYSTEM", "1")
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "{args:?}");
+            String::from_utf8_lossy(&out.stdout).trim().to_string()
+        };
+        let write = |path: &str| {
+            let file = dir.path().join(path);
+            std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+            std::fs::write(file, path).unwrap();
+        };
+        run(&["init", "-q", "-b", "main"]);
+        write("a.md");
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "root"]);
+        let root = run(&["rev-parse", "HEAD"]);
+        write("d/b.md");
+        write("sp ace.md");
+        run(&["rm", "-q", "a.md"]);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "one"]);
+        let one = run(&["rev-parse", "HEAD"]);
+        run(&["commit", "-q", "--allow-empty", "-m", "empty"]);
+        let empty = run(&["rev-parse", "HEAD"]);
+        write(&one);
+        run(&["add", "."]);
+        run(&["commit", "-q", "-m", "named"]);
+        let named = run(&["rev-parse", "HEAD"]);
+
+        let files = commit_files(dir.path(), &[&named, &empty, &one, &root]);
+        assert_eq!(files.get(&named), Some(&vec![one.clone()]));
+        assert_eq!(
+            files.get(&one),
+            Some(&vec![
+                "a.md".to_string(),
+                "d/b.md".to_string(),
+                "sp ace.md".to_string()
+            ])
+        );
+        assert_eq!(files.get(&empty), None);
+        assert_eq!(files.get(&root), None);
+        assert_eq!(files.len(), 2);
     }
 
     #[test]

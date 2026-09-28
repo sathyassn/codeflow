@@ -18,7 +18,7 @@
 //! a range whose base predates it judges older records from their baseline
 //! blobs.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 
 use git2::{Repository, TreeWalkMode, TreeWalkResult};
@@ -1541,22 +1541,30 @@ fn reopened_in_range(
     if walk.push(tip).is_err() || walk.hide(base).is_err() {
         return reopened;
     }
+    // A record's blob repeats across most commits, so each is parsed once.
+    let mut statuses: HashMap<(git2::Oid, &str), Option<String>> = HashMap::new();
     for oid in walk.flatten() {
         let Ok(tree) = repo.find_commit(oid).and_then(|commit| commit.tree()) else {
             continue;
         };
         for record in &candidates {
-            let status = tree
-                .get_path(Path::new(&record.path))
-                .and_then(|entry| entry.to_object(repo))
-                .ok()
-                .and_then(|object| object.into_blob().ok())
-                .and_then(|blob| {
-                    let text = String::from_utf8_lossy(blob.content()).into_owned();
-                    RecordView::parse(record.kind, &record.path, &text).ok()
-                })
-                .map(|view| view.status);
-            if status.is_some_and(|status| status != "complete") {
+            let Ok(entry) = tree.get_path(Path::new(&record.path)) else {
+                continue;
+            };
+            let status = statuses
+                .entry((entry.id(), record.path.as_str()))
+                .or_insert_with(|| {
+                    entry
+                        .to_object(repo)
+                        .ok()
+                        .and_then(|object| object.into_blob().ok())
+                        .and_then(|blob| {
+                            let text = String::from_utf8_lossy(blob.content()).into_owned();
+                            RecordView::parse(record.kind, &record.path, &text).ok()
+                        })
+                        .map(|view| view.status)
+                });
+            if status.as_deref().is_some_and(|status| status != "complete") {
                 reopened.insert(record.id.clone());
             }
         }
