@@ -11,6 +11,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
+use std::rc::Rc;
 
 use git2::{BranchType, Repository};
 
@@ -551,11 +552,13 @@ impl<'a> Targets<'a> {
 }
 
 /// One target tip read: the declared target, the resolved ref, its tip and
-/// the records there.
-type Tip = (String, String, git2::Oid, BTreeMap<String, Record>);
+/// the records there, shared with every other tip on the same tree.
+type Tip = (String, String, git2::Oid, Rc<BTreeMap<String, Record>>);
 
 /// Read each declared target's tip once (two spellings of one ref are one
 /// tip) and name every snapshot, including the ones that cannot be read.
+/// Each distinct tree is parsed once (R-103): refs on one tree keep their
+/// own identity and are judged apart, over one shared set of records.
 fn read_tips(
     repo: &Repository,
     targets: &mut Targets<'_>,
@@ -563,6 +566,7 @@ fn read_tips(
     snapshots: &mut Vec<Snapshot>,
 ) -> Result<Vec<Tip>, String> {
     let mut tips: Vec<Tip> = Vec::new();
+    let mut parsed: BTreeMap<git2::Oid, Rc<BTreeMap<String, Record>>> = BTreeMap::new();
     for target in declared {
         let (reference, tip, problem) = match targets.resolve(&target) {
             Ok(Some((reference, oid))) => (Some(reference), Some(oid), None),
@@ -580,7 +584,14 @@ fn read_tips(
                 .find_commit(oid)
                 .and_then(|commit| commit.tree())
                 .map_err(|error| error.to_string())?;
-            let records = records_from_tree(repo, &tree).map_err(|error| error.to_string())?;
+            let records = if let Some(records) = parsed.get(&tree.id()) {
+                Rc::clone(records)
+            } else {
+                let records =
+                    Rc::new(records_from_tree(repo, &tree).map_err(|error| error.to_string())?);
+                parsed.insert(tree.id(), Rc::clone(&records));
+                records
+            };
             tips.push((target.clone(), reference.clone(), oid, records));
         }
         snapshots.push(Snapshot {
@@ -2068,6 +2079,46 @@ mod tests {
                 "{name}: in-process read"
             );
         }
+    }
+
+    /// Lines cut at one tree, as one commit or as commits that differ only
+    /// in metadata, are parsed once and still judged each on its own line.
+    #[test]
+    fn refs_on_one_tree_parse_it_once() {
+        let dir = repo();
+        let root = dir.path();
+        task(root, "TSK-001", "todo", "[]", "");
+        for (id, line) in [
+            ("TSK-002", "integration/EPC-001-a"),
+            ("TSK-003", "integration/EPC-001-b"),
+        ] {
+            task_in(root, id, Some("EPC-001"), line, "todo", "[]", "");
+        }
+        commit(root, "plan");
+        run(root, &["branch", "integration/EPC-001-a"]);
+        run(root, &["switch", "-q", "-c", "integration/EPC-001-b"]);
+        run(root, &["commit", "-q", "--allow-empty", "-m", "cut"]);
+        run(root, &["switch", "-q", "main"]);
+
+        super::super::work_start::TREE_PARSES.with(|parses| parses.set(0));
+        let backlog = backlog(root).unwrap();
+        let parses = super::super::work_start::TREE_PARSES.with(std::cell::Cell::get);
+        assert_eq!(parses, 1, "three refs on one tree");
+        let judged: Vec<(&str, &str, State)> = backlog
+            .entries
+            .iter()
+            .map(|entry| (entry.task_id.as_str(), entry.target.as_str(), entry.state))
+            .collect();
+        assert_eq!(
+            judged,
+            [
+                ("TSK-001", "main", State::Ready),
+                ("TSK-002", "integration/EPC-001-a", State::Ready),
+                ("TSK-003", "integration/EPC-001-b", State::Ready),
+            ]
+        );
+        let tips: BTreeSet<_> = backlog.snapshots.iter().map(|shot| &shot.tip).collect();
+        assert_eq!(tips.len(), 2, "each line keeps its own tip");
     }
 
     /// Renames, copies and mode changes are where changed paths could part

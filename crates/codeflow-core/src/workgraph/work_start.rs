@@ -1158,10 +1158,18 @@ const RECORDS_ROOT: &str = "project-management";
 /// about 100 KiB; the bound matches the portal's per-file source limit.
 const MAX_RECORD_BYTES: u64 = 4 * 1024 * 1024;
 
+#[cfg(test)]
+thread_local! {
+    /// How many trees `records_from_tree` has parsed on this thread.
+    pub(crate) static TREE_PARSES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 pub(crate) fn records_from_tree(
     repo: &Repository,
     tree: &git2::Tree<'_>,
 ) -> Result<BTreeMap<String, Record>, WorkStartError> {
+    #[cfg(test)]
+    TREE_PARSES.with(|parses| parses.set(parses.get() + 1));
     let mut records = BTreeMap::new();
     let mut failure = None;
     let odb = repo
