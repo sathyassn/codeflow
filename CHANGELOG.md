@@ -958,6 +958,14 @@ publication date._
   subshell such as `(cd <repo> && git commit)`.
 
 <!-- codeflow:release-impact patch -->
+- **A killed full gate on Windows ends its targets.** When a
+  `codeflow test --mode full` process was killed on Windows, its running
+  target kept going while the gate lock was freed, so a second full gate
+  could start beside it. Each target now runs in a job object that ends
+  the target's whole process tree when the gate exits, however it exits.
+  On Unix the lock still stays held until a killed gate's target exits.
+
+<!-- codeflow:release-impact patch -->
 - **Presentation cleanup on macOS no longer fails on a busy machine.**
   Closing a presentation lists processes with `ps` to prove its browser is
   gone. One process of any user caught mid-start could list bytes that are

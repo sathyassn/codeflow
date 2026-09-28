@@ -223,6 +223,9 @@ ref, a dirty, sparse or submodule-incomplete checkout); the test suite belongs
 to the full gate. One full gate runs at a time on a machine (a second refuses,
 naming the holder), a gate that runs cargo warns about a `CARGO_TARGET_DIR`
 outside the worktree, and each target prints a start line on stderr as it begins.
+A killed gate never lets a second one run beside its target: on Unix the lock
+stays held until the target's process group exits, and on Windows the target's
+job object ends its process tree with the gate.
 File and aggregate coverage thresholds all contribute to the gate
 verdict; `changed_files` rules are rejected until an explicit comparison base is
 available (ADR-0021). Captured stdout/stderr is bounded and reports truncation.
@@ -1068,10 +1071,10 @@ adrs: [ADR-0048, ADR-0058]
 
 `codeflow portal setup --path <repository-relative-directory>` explicitly
 adopts the exact-pinned Starlight and Pagefind repository-guide utility. The
-portal build requires Node 22.19.0 or newer. The aggregate CI gate runs on Node
-26.4.0, and its full strict target installs, checks, builds, and validates the
-dogfood portal; the portal-local `.node-version` and the Windows adapter-test
-lane pin Node 24.18.0.
+portal build requires Node 22.19.0 or newer. The full strict gate installs,
+checks, builds, and validates the dogfood portal on the Node 24.18.0 its
+`.node-version` pins, as the Windows adapter-test lane does, and runs the
+presentation renderer's target on the 26.4.0 its own `.node-version` pins.
 The starter is absent from ordinary initialization, materializes offline once at
 the selected root, preserves user-owned configuration, and participates in
 replace-only updates without pristine runtime copies or source merges. Runtime
