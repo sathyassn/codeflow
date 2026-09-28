@@ -3024,7 +3024,7 @@ type VisualEntry = (
     &'static [&'static str],
 );
 
-const VISUAL_INVENTORY: [VisualEntry; 19] = [
+const VISUAL_INVENTORY: [VisualEntry; 20] = [
     (
         "visual-doctrine",
         "checks-page-figure-matches-its-question",
@@ -3194,6 +3194,16 @@ const VISUAL_INVENTORY: [VisualEntry; 19] = [
         "visuals_as_decorative_text_cards",
         false,
         &[],
+    ),
+    // TSK-073: the EPC-017 flow reply case joins the method pack unchanged.
+    // It is blind and not a canary, so its prompt is checked like a new one.
+    (
+        "explanation-method",
+        "flow-reply-carries-figure",
+        "CF-OUT-003",
+        "prose_only_flow_explanation",
+        true,
+        &["figure", "diagram", "draw", "drawn", "picture", "chart"],
     ),
 ];
 
@@ -3365,4 +3375,467 @@ fn visual_requirements_are_hard_and_owned_by_the_grammar_and_method() {
     };
     assert_eq!(owned("CF-FIG-", "/resources/figure-grammar.md"), 8);
     assert_eq!(owned("CF-METH-", "/resources/explanation-method.md"), 4);
+}
+
+/// The copy-guide grading inventory (TSK-073, EPC-016): (case, owning
+/// requirement, faulty control, case added by this task, words that would
+/// name this case's rule in its prompt). The two EPC-017 cases join the pack
+/// unchanged; the operating-doctrine test checks their blind prompts.
+type CopyGuideEntry = (
+    &'static str,
+    &'static str,
+    &'static str,
+    bool,
+    &'static [&'static str],
+);
+
+const COPY_GUIDE_INVENTORY: [CopyGuideEntry; 9] = [
+    (
+        "lead-and-caption-around-a-figure",
+        "CF-COPY-001",
+        "lead_restates_caption",
+        true,
+        &[
+            "key",
+            "keys",
+            "restate",
+            "takeaway",
+            "describe",
+            "describes",
+            "explain",
+            "explains",
+            "shows",
+            "orient",
+            "above",
+            "below",
+            "around",
+        ],
+    ),
+    (
+        "search-dialog-microcopy",
+        "CF-COPY-002",
+        "exclamation_mark",
+        true,
+        &[
+            "label",
+            "labels",
+            "case",
+            "tooltip",
+            "digit",
+            "digits",
+            "cheerful",
+            "friendly",
+            "empty",
+            "error",
+            "errors",
+            "placeholder",
+            "state",
+            "states",
+            "action",
+            "actions",
+            "fun",
+            "joke",
+            "jokes",
+            "polite",
+            "welcoming",
+            "exclaim",
+        ],
+    ),
+    (
+        "task-closeout-from-evidence",
+        "CF-COPY-003",
+        "bullets_only_closeout",
+        true,
+        &[
+            "wall", "prose", "count", "counts", "opening", "opener", "overview",
+        ],
+    ),
+    (
+        "short-answer-stays-one-line",
+        "CF-COPY-003",
+        "lead_before_short_answer",
+        true,
+        &[
+            "one-line",
+            "line",
+            "answer",
+            "directly",
+            "just",
+            "only",
+            "padding",
+            "elaborate",
+            "detail",
+            "details",
+        ],
+    ),
+    (
+        "first-section-of-a-new-skill",
+        "CF-COPY-004",
+        "slogan_kept",
+        true,
+        &[
+            "register",
+            "motto",
+            "contrast",
+            "triplet",
+            "motivate",
+            "motivational",
+            "personality",
+            "narrate",
+            "self-narration",
+            "actor",
+            "instruction",
+            "instructions",
+            "policy",
+            "character",
+            "characters",
+            "confidence",
+            "calm",
+        ],
+    ),
+    (
+        "adr-for-a-byte-pinned-sheet",
+        "CF-COPY-005",
+        "context_is_history",
+        true,
+        &[
+            "constraint",
+            "history",
+            "consequences",
+            "cost",
+            "costs",
+            "fact",
+            "hedged",
+            "alternatives",
+            "shape",
+            "shaped",
+            "one-paragraph",
+            "forced",
+            "forces",
+            "spread",
+            "plainly",
+            "present-tense",
+            "tense",
+        ],
+    ),
+    (
+        "operator-reply-is-plain-prose-and-bullets",
+        "CF-OUT-002",
+        "policy_character_in_reply",
+        false,
+        &[],
+    ),
+    (
+        "operator-reply-is-plain-prose-and-bullets",
+        "CF-OUT-002",
+        "summary_carries_details",
+        false,
+        &[],
+    ),
+    (
+        "identifier-only-title-gets-words",
+        "CF-OUT-005",
+        "identifier_only_title_kept",
+        false,
+        &[],
+    ),
+];
+
+/// Words that would name a copy guide rule inside any new blind prompt.
+const COPY_GUIDE_PROMPT_LEAKS: [&str; 62] = [
+    "copy",
+    "copywriting",
+    "lead",
+    "caption",
+    "legend",
+    "summary",
+    "summarize",
+    "summarise",
+    "microcopy",
+    "exclamation",
+    "sentence",
+    "sentences",
+    "voice",
+    "tone",
+    "plain",
+    "imperative",
+    "slogan",
+    "slogans",
+    "dash",
+    "dashes",
+    "concise",
+    "short",
+    "verb-first",
+    "guide",
+    "rule",
+    "rules",
+    "style",
+    "wording",
+    "phrase",
+    "phrasing",
+    "noun",
+    "verb",
+    "heading",
+    "headings",
+    "title",
+    "titles",
+    "bullet",
+    "bullets",
+    "table",
+    "paragraph",
+    "context",
+    "recap",
+    "format",
+    "grammar",
+    "readable",
+    "polish",
+    "clear",
+    "clearly",
+    "crisp",
+    "punchy",
+    "tight",
+    "tighten",
+    "wordy",
+    "terse",
+    "brevity",
+    "brief",
+    "briefly",
+    "quick",
+    "mannered",
+    "hedge",
+    "hedges",
+    "emoji",
+];
+
+/// TSK-073. The copy-guide pack registers exactly its graded inventory and
+/// says that registration is not behavioural evidence; native trials are.
+#[test]
+fn copy_guide_pack_registers_the_graded_inventory_and_disclaims_proof() {
+    let packs = json("assets/base/agents/skills/cf-evaluate-model/resources/packs.json");
+    let pack = packs["packs"]
+        .as_array()
+        .expect("packs")
+        .iter()
+        .find(|pack| pack["id"] == "copy-guide")
+        .expect("copy-guide pack");
+    let registered: BTreeSet<&str> = pack["cases"]
+        .as_array()
+        .expect("pack cases")
+        .iter()
+        .map(|case| case.as_str().expect("case id"))
+        .collect();
+    let graded: BTreeSet<&str> = COPY_GUIDE_INVENTORY.iter().map(|entry| entry.0).collect();
+    assert_eq!(registered, graded, "copy-guide: pack and inventory drifted");
+    assert!(
+        pack["description"]
+            .as_str()
+            .expect("pack description")
+            .contains("Registration proves nothing about live behaviour"),
+        "copy-guide must say registration is not behavioural evidence"
+    );
+}
+
+/// TSK-073. Each copy-guide case keeps its owning requirement and faulty
+/// control; a case this task adds is not a canary and its prompt names
+/// neither a copy guide rule nor its own rule.
+#[test]
+fn copy_guide_cases_keep_controls_and_blind_prompts() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    for (case_id, requirement, faulty, added, leaks) in COPY_GUIDE_INVENTORY {
+        let case = indexed
+            .get(case_id)
+            .unwrap_or_else(|| panic!("missing case {case_id}"));
+        assert!(
+            case["requirements"]
+                .as_array()
+                .expect("case requirements")
+                .iter()
+                .any(|linked| linked == requirement),
+            "{case_id} lost {requirement}"
+        );
+        assert!(
+            case["expected"]["must_not"]
+                .as_array()
+                .expect("must_not")
+                .iter()
+                .any(|guard| guard == faulty),
+            "{case_id} lost its faulty control {faulty}"
+        );
+        if added {
+            assert_eq!(case["canary"], false, "{case_id} is not a canary");
+            let prompt = case["prompt"].as_str().expect("prompt").to_lowercase();
+            for word in prompt.split(|c: char| !(c.is_alphanumeric() || c == '-')) {
+                assert!(
+                    !COPY_GUIDE_PROMPT_LEAKS.contains(&word) && !leaks.contains(&word),
+                    "{case_id} prompt names the rule under test: {word}"
+                );
+            }
+        }
+    }
+}
+
+/// Fixture files that must carry a word on a copy-guide leak list, each with
+/// the reason the file needs it: (fixture, file, [(word, reason)]). A word
+/// here is data or structure the file must hold, never a statement of a rule.
+type CopyGuideAllowance = (
+    &'static str,
+    &'static str,
+    &'static [(&'static str, &'static str)],
+);
+
+const COPY_GUIDE_FIXTURE_ALLOWANCE: [CopyGuideAllowance; 6] = [
+    (
+        "guide-release-flow-figure",
+        "docs/figures/release-flow.json",
+        &[
+            ("caption", "declaration schema field name"),
+            ("title", "declaration schema field name"),
+            ("style", "declaration schema field name of a draw item"),
+            ("rule", "declaration deco kind, a drawn horizontal rule"),
+        ],
+    ),
+    (
+        "app-search-dialog",
+        "app/search.html",
+        &[
+            (
+                "empty",
+                "data-copy slot of the empty state and the kit class",
+            ),
+            ("placeholder", "HTML attribute name"),
+        ],
+    ),
+    (
+        "app-search-dialog",
+        "app/README.md",
+        &[
+            ("title", "a thing the dialog searches by"),
+            ("heading", "a thing the dialog searches by"),
+        ],
+    ),
+    (
+        "closeout-evidence-tsk-231",
+        "project-management/tasks/TSK-231.md",
+        &[("title", "task frontmatter key")],
+    ),
+    (
+        "gate-evidence-tsk-231",
+        "project-management/tasks/TSK-231.md",
+        &[("title", "task frontmatter key")],
+    ),
+    (
+        "adr-notes-figure-sheet",
+        "docs/decisions/template.md",
+        &[
+            ("title", "ADR frontmatter key"),
+            ("context", "ADR section heading the shape requires"),
+            ("consequences", "ADR section heading the shape requires"),
+        ],
+    ),
+];
+
+/// TSK-073, leakage review. A subject reads the fixture as well as the
+/// prompt, so every file materialized for a case this task adds, and
+/// TASK.md, which is the prompt, passes the prompt test's word check. The
+/// grading note in state.grading is never materialized, so it is not
+/// scanned. A listed word fails unless the allowance names it for that file,
+/// and every allowance must still be needed.
+#[test]
+fn copy_guide_fixtures_do_not_name_the_rule_under_test() {
+    let cases = json("assets/base/agents/skills/cf-evaluate-model/resources/cases.json");
+    let indexed: BTreeMap<&str, &Value> = cases["cases"]
+        .as_array()
+        .expect("cases array")
+        .iter()
+        .map(|case| (case["id"].as_str().expect("case id"), case))
+        .collect();
+    let mut leaked = Vec::new();
+    let mut used = BTreeSet::new();
+    for (case_id, _, _, added, leaks) in COPY_GUIDE_INVENTORY {
+        if !added {
+            continue;
+        }
+        let case = indexed
+            .get(case_id)
+            .unwrap_or_else(|| panic!("missing case {case_id}"));
+        let fixture = case["fixture"].as_str().expect("case fixture");
+        let mut files = fixture_overlay(fixture);
+        let prompt = case["prompt"].as_str().expect("prompt").trim_end();
+        files.insert("TASK.md".to_string(), format!("{prompt}\n"));
+        for (path, text) in &files {
+            let allowed = COPY_GUIDE_FIXTURE_ALLOWANCE
+                .iter()
+                .find(|(id, file, _)| *id == fixture && file == path)
+                .map_or(&[][..], |entry| entry.2);
+            let lowered = text.to_lowercase();
+            let words: BTreeSet<&str> = lowered
+                .split(|c: char| !(c.is_alphanumeric() || c == '-'))
+                .filter(|word| COPY_GUIDE_PROMPT_LEAKS.contains(word) || leaks.contains(word))
+                .collect();
+            for word in words {
+                if allowed.iter().any(|(name, _)| *name == word) {
+                    used.insert((fixture, path.clone(), word.to_string()));
+                } else {
+                    leaked.push(format!("{case_id}: {fixture}/{path}: {word}"));
+                }
+            }
+        }
+    }
+    assert!(
+        leaked.is_empty(),
+        "fixture names the rule under test:\n{}",
+        leaked.join("\n")
+    );
+    for (fixture, path, words) in COPY_GUIDE_FIXTURE_ALLOWANCE {
+        for (word, _) in words {
+            assert!(
+                used.contains(&(fixture, path.to_string(), word.to_string())),
+                "stale allowance {fixture}/{path}: {word}"
+            );
+        }
+    }
+}
+
+/// TSK-073. The copy guide requirements are hard, owned by the guide, and
+/// each is read by a case of the copy-guide pack.
+#[test]
+fn copy_guide_requirements_are_hard_and_owned_by_the_guide() {
+    let requirements =
+        json("assets/base/agents/skills/cf-evaluate-model/resources/requirements.json");
+    let owned: Vec<&Value> = requirements["requirements"]
+        .as_array()
+        .expect("requirements")
+        .iter()
+        .filter(|entry| entry["id"].as_str().expect("id").starts_with("CF-COPY-"))
+        .collect();
+    assert_eq!(owned.len(), 5, "one requirement per graded copy guide case");
+    for entry in &owned {
+        assert_eq!(entry["level"], "hard", "{} must be hard", entry["id"]);
+        assert!(
+            entry["sources"]
+                .as_array()
+                .expect("sources")
+                .iter()
+                .all(|source| source["path"]
+                    .as_str()
+                    .expect("path")
+                    .ends_with("cf-editorial-review/references/copy-guide.md")),
+            "{} is not owned by the copy guide",
+            entry["id"]
+        );
+    }
+    let graded: BTreeSet<&str> = COPY_GUIDE_INVENTORY.iter().map(|entry| entry.1).collect();
+    for entry in &owned {
+        assert!(
+            graded.contains(entry["id"].as_str().expect("id")),
+            "{} has no copy-guide case",
+            entry["id"]
+        );
+    }
 }

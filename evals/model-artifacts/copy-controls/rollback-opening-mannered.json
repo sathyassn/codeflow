@@ -1,0 +1,5 @@
+{
+  "files": {
+    ".agents/skills/cf-rollback/SKILL.md#opening": "# cf-rollback: roll back with confidence\n\nRollback is not a panic button, it is a procedure. When a post-deploy\ncheck fails, this skill takes the release back \u2014 calmly, safely and\ncompletely. Let me walk you through how it works.\n\n1. Find the previous release tag in the release ledger.\n2. Verify the artifact hash of that tag.\n3. Run `deploy --to <tag>` in staging.\n4. Hand the production command to the operator; the agent never rolls back\n   production on its own.\n5. Record the rollback in the release ledger with the reason and the\n   failing check.\n\nDatabase migrations are out of scope: use cf-migrate.\n"
+  }
+}

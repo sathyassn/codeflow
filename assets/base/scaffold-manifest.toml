@@ -702,6 +702,12 @@ ownership = "managed"
 tiers = ["standard", "full"]
 
 [[entry]]
+src = "agents/skills/cf-editorial-review/references/copy-guide.md"
+dest = ".claude/skills/cf-editorial-review/references/copy-guide.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
 src = "agents/skills/cf-editorial-review/agents/openai.yaml"
 dest = ".claude/skills/cf-editorial-review/agents/openai.yaml"
 ownership = "managed"
@@ -1248,6 +1254,12 @@ tiers = ["standard", "full"]
 [[entry]]
 src = "agents/skills/cf-editorial-review/references/editorial-smells.md"
 dest = ".agents/skills/cf-editorial-review/references/editorial-smells.md"
+ownership = "managed"
+tiers = ["standard", "full"]
+
+[[entry]]
+src = "agents/skills/cf-editorial-review/references/copy-guide.md"
+dest = ".agents/skills/cf-editorial-review/references/copy-guide.md"
 ownership = "managed"
 tiers = ["standard", "full"]
 

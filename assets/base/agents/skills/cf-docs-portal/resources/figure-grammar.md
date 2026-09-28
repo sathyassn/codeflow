@@ -77,12 +77,10 @@ repeat Concept's.
 | Technical | what exactly holds, in what order, and how far | sequence, state, coverage, extent | minimal; tables and evidence blocks carry the lookup |
 | How-to section | what do I do, in what order, and what tells me it worked | sequence, state or extent | one lead sentence, the steps as a list, the figure between them |
 
-Prose around a figure follows the written content policy (ADR-0067): short
-plain sentences, bullets or a table where they carry facts better than a
-sentence, no em or en dash, no slogans, contrast turns, rhetorical triplets,
-colon reveals or paragraph walls. The lead sentence says what the reader is
-looking at; it does not restate the caption. A Technical altitude carries at
-most 1500 words of prose outside its tables.
+Prose around a figure follows the written content policy (ADR-0067); the copy
+guide (`cf-editorial-review/references/copy-guide.md`) says how to write its
+lead, caption and legend. A Technical altitude carries at most 1500 words of
+prose outside its tables.
 
 ## 4. Tokens and marks
 

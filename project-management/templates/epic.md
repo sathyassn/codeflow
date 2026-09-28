@@ -14,7 +14,10 @@ created: {{DATE}}
 
 ## Summary
 
-<!-- 2-4 sentences: the problem, who it serves, and what done looks like.
+<!-- One to three short sentences of context: the problem, who it serves,
+     and what done looks like.
+     Write it by the copy guide
+     (`cf-editorial-review/references/copy-guide.md`).
      Research repository and authoritative-source facts first. Ask only when
      the remaining ambiguity is a consequential operator-owned choice under
      the cf-plan clarity gate. -->

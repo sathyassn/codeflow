@@ -114,16 +114,18 @@ notes of stages 1 to 3.
 | Part | Drafted for | What it is |
 |---|---|---|
 | Declaration | a figure on the portal or in present | the stage 1 question is the figure's `question` and its one-sentence answer the `idea`; states, facts with their sources, the narrow composition and the twin follow `figure-grammar.md` section 6 |
-| Lead | every answer | one sentence saying what the reader is looking at, above the carrier when there is one |
+| Lead | an answer with a carrier | one sentence saying what the reader is looking at, above the carrier |
 | Figure | a figure | drawn in the stage 3 family, one idea, every mark keyed |
-| Caption | a figure or a screenshot | one sentence saying what the reader takes from it; it never repeats the title |
+| Caption | a figure or a screenshot | one sentence saying what the reader takes from it |
 | Acting text | every answer | the sentences, steps or bullets the reader acts on |
 | Twin | a figure on the portal or in present | the same facts as a table, inline or derived from the declaration |
 
-A chat form has no declaration file or twin, so its idea, states and facts
-stay in the notes. A table is its own carrier and needs no twin; a screenshot
-also takes the doctrine's capture rules and alt text. An answer with no
-carrier drafts only the lead and the acting text.
+The copy guide (`cf-editorial-review/references/copy-guide.md`) says how to
+write the words of each part. A chat form has no declaration file or twin, so
+its idea, states and facts stay in the notes. A table is its own carrier and
+needs no twin; a screenshot also takes the doctrine's capture rules and alt
+text. An answer with no carrier drafts its summary, when it leads into a list,
+and the acting text; a short answer drafts only the answer.
 
 ## 5. Check
 
@@ -133,7 +135,7 @@ every answer; the figure checks hold only for a figure.
 | Check | Applies to | Passes when |
 |---|---|---|
 | Sources | every answer | every fact names a repository source, and that source says it today |
-| Copy | every answer | the prose around the carrier is short and plain under the written content policy (ADR-0067); substantial prose passes `cf-editorial-review` |
+| Copy | every answer | the prose around the carrier follows the copy guide under the written content policy (ADR-0067); substantial prose passes `cf-editorial-review` |
 | Policy characters | every answer | no em or en dash and no emoji; a chat form is also printable ASCII and under 78 columns |
 | Masked title | a figure | with kicker, title, caption and legend masked, an observer names the idea in five seconds and decodes every keyed pair |
 | Removal | a figure | with every sentence removed, the carrier still states the relationship |

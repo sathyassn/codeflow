@@ -1841,11 +1841,19 @@ fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
     let universal_parts = named(&parts, "every answer");
     let universal_checks = named(&checks, "every answer");
     // An answer with no figure and a table lookup take only the universal rows.
+    // TSK-073: the lead is drafted only for an answer with a carrier, so a
+    // short answer, its own summary under the copy guide, takes no lead.
+    assert!(
+        parts.iter().any(|row| row[0] == "Lead"
+            && row[1] == "an answer with a carrier"
+            && row[2] == "one sentence saying what the reader is looking at, above the carrier"),
+        "the lead is drafted only for an answer with a carrier"
+    );
     for carrier in ["an answer with no figure", "a table lookup"] {
         assert_eq!(
             universal_parts,
-            BTreeSet::from(["Lead".to_string(), "Acting text".to_string()]),
-            "{carrier} must draft only the lead and the acting text"
+            BTreeSet::from(["Acting text".to_string()]),
+            "{carrier} takes only the acting text as a universal part"
         );
         assert_eq!(
             universal_checks,
@@ -1877,6 +1885,7 @@ fn explanation_method_lets_a_figureless_answer_and_a_table_lookup_pass() {
     let normalized = normalized_whitespace(&method);
     for marker in [
         "An answer with no figure, a table lookup included, passes on the universal checks alone",
+        "An answer with no carrier drafts its summary, when it leads into a list, and the acting text; a short answer drafts only the answer.",
         "a chat form: every pair of marks differs in glyph and each is keyed in the legend line",
         "A chat form has no declaration file or twin",
     ] {
@@ -2457,4 +2466,610 @@ fn portal_utility_tokens_match_present_skins() {
         );
         assert!(default.contains_key(role));
     }
+}
+
+/// The copy guide (TSK-073): one section per string type, the home of the
+/// writing rules that other skill files point at.
+const COPY_GUIDE: &str = "assets/base/agents/skills/cf-editorial-review/references/copy-guide.md";
+
+/// The thirteen sections of the copy guide, in order (TSK-073 AC-2).
+const COPY_GUIDE_SECTIONS: [&str; 13] = [
+    "Voice",
+    "Sentences",
+    "Words",
+    "Titles and headings",
+    "Leads",
+    "Captions",
+    "Legend keys and descriptions",
+    "Summaries",
+    "Bullets and tables",
+    "Microcopy",
+    "Replies",
+    "Skill prose",
+    "ADR and PR shapes",
+];
+
+fn repo_text(relative: &str) -> String {
+    std::fs::read_to_string(repo_root().join(relative))
+        .unwrap_or_else(|error| panic!("{relative} is readable: {error}"))
+}
+
+/// The `## ` sections of a Markdown file, each as (heading, body).
+fn level_two_sections(text: &str) -> Vec<(String, String)> {
+    let mut sections: Vec<(String, String)> = Vec::new();
+    for line in text.lines() {
+        if let Some(heading) = line.strip_prefix("## ") {
+            sections.push((heading.trim().to_string(), String::new()));
+        } else if let Some((_, body)) = sections.last_mut() {
+            body.push_str(line);
+            body.push('\n');
+        }
+    }
+    sections
+}
+
+/// The examples in one guide section. Each is a line
+/// ``Example, <label> (source: `<path>`):`` (the label is optional) followed
+/// by one or more `> ` lines that hold the exact string. Returns the
+/// (source path, whitespace-folded example text) pairs and the problems: a
+/// line that starts with "Example" but does not parse, a heading with no
+/// quotation, and a quotation with no parsed heading above it.
+fn copy_guide_examples(body: &str) -> (Vec<(String, String)>, Vec<String>) {
+    let heading = regex::Regex::new(r"^Example(?:, .+?)? \(source: `([^`]+)`\):$")
+        .expect("valid example heading pattern");
+    let mut examples = Vec::new();
+    let mut problems = Vec::new();
+    let mut lines = body.lines().peekable();
+    while let Some(line) = lines.next() {
+        let trimmed = line.trim();
+        if trimmed.starts_with('>') {
+            problems.push(format!("quotation with no example heading: {trimmed}"));
+            continue;
+        }
+        if !trimmed.starts_with("Example") {
+            continue;
+        }
+        let Some(source) = heading.captures(trimmed).map(|found| found[1].to_string()) else {
+            problems.push(format!("example heading that does not parse: {trimmed}"));
+            continue;
+        };
+        while lines.peek().is_some_and(|next| next.trim().is_empty()) {
+            lines.next();
+        }
+        let mut quoted = Vec::new();
+        while let Some(next) = lines.peek() {
+            let Some(text) = next.trim_start().strip_prefix('>') else {
+                break;
+            };
+            quoted.push(text.trim().to_string());
+            lines.next();
+        }
+        if quoted.is_empty() {
+            problems.push(format!("example heading with no quotation: {trimmed}"));
+        }
+        examples.push((source, normalized_whitespace(&quoted.join(" "))));
+    }
+    (examples, problems)
+}
+
+/// Where a named example source lives: a path starting with `cf-` is inside
+/// the shipped skill trees, anything else is relative to the repository root.
+fn copy_guide_source(path: &str) -> PathBuf {
+    if path.starts_with("cf-") {
+        for tree in ["assets/base/agents/skills", "assets/base/claude/skills"] {
+            let candidate = repo_root().join(tree).join(path);
+            if candidate.is_file() {
+                return candidate;
+            }
+        }
+    }
+    repo_root().join(path)
+}
+
+/// The visible text of an HTML source: tags dropped, the common entities
+/// unescaped, whitespace normalized.
+fn html_visible_text(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for character in html.chars() {
+        match character {
+            '<' => {
+                in_tag = true;
+                text.push(' ');
+            }
+            '>' if in_tag => in_tag = false,
+            _ if !in_tag => text.push(character),
+            _ => {}
+        }
+    }
+    let text = text
+        .replace("&nbsp;", " ")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&rsquo;", "\u{2019}")
+        .replace("&amp;", "&");
+    normalized_whitespace(&text)
+}
+
+/// Whether `example` appears verbatim in the source at `path`.
+fn example_resolves(path: &str, example: &str) -> Result<bool, String> {
+    let file = copy_guide_source(path);
+    let source = std::fs::read_to_string(&file)
+        .map_err(|error| format!("{path}: source is not readable: {error}"))?;
+    let is_html = file
+        .extension()
+        .is_some_and(|extension| extension == "html");
+    Ok(normalized_whitespace(&source).contains(example)
+        || (is_html && html_visible_text(&source).contains(example)))
+}
+
+/// TSK-073 AC-2. The guide carries its thirteen sections in order.
+#[test]
+fn copy_guide_carries_its_thirteen_sections_in_order() {
+    let headings: Vec<String> = level_two_sections(&repo_text(COPY_GUIDE))
+        .into_iter()
+        .map(|(heading, _)| heading)
+        .collect();
+    assert_eq!(
+        headings, COPY_GUIDE_SECTIONS,
+        "copy guide sections drifted from the thirteen in TSK-073"
+    );
+}
+
+/// TSK-073 AC-3. Every section carries at least one example, and every
+/// example is found verbatim in the source it names. A string that is not
+/// in its source fails the check.
+#[test]
+fn copy_guide_examples_resolve_verbatim_in_their_named_sources() {
+    let mut problems = Vec::new();
+    let mut first = None;
+    for (heading, body) in level_two_sections(&repo_text(COPY_GUIDE)) {
+        let (examples, malformed) = copy_guide_examples(&body);
+        problems.extend(
+            malformed
+                .into_iter()
+                .map(|problem| format!("{heading}: {problem}")),
+        );
+        if examples.is_empty() {
+            problems.push(format!("{heading}: no example"));
+        }
+        for (source, example) in examples {
+            if example.is_empty() {
+                problems.push(format!("{heading}: empty example from {source}"));
+                continue;
+            }
+            match example_resolves(&source, &example) {
+                Ok(true) => {
+                    first.get_or_insert((source, example));
+                }
+                Ok(false) => problems.push(format!("{heading}: not in {source}: {example}")),
+                Err(error) => problems.push(format!("{heading}: {error}")),
+            }
+        }
+    }
+    assert!(
+        problems.is_empty(),
+        "copy guide examples must resolve verbatim:\n  {}",
+        problems.join("\n  ")
+    );
+    // The check fails on a string its source does not hold.
+    let (source, example) = first.expect("the guide carries at least one example");
+    assert_eq!(
+        example_resolves(&source, &format!("{example} TSK-073 absent")),
+        Ok(false),
+        "the resolution check must fail on a missing string"
+    );
+    // Negative controls (Codex review R1, finding 3): an example heading the
+    // parser cannot read and a quotation with no heading both fail, even
+    // beside a well-formed example; a labelled heading parses.
+    let (parsed, malformed) = copy_guide_examples(
+        "Example, a label (source: `cf-present/SKILL.md`):\n> text\n\n\
+         Example from `cf-present/SKILL.md`:\n> stale text\n\n> orphan quotation\n",
+    );
+    assert_eq!(
+        parsed,
+        vec![("cf-present/SKILL.md".to_string(), "text".to_string())]
+    );
+    assert_eq!(
+        malformed,
+        vec![
+            "example heading that does not parse: Example from `cf-present/SKILL.md`:".to_string(),
+            "quotation with no example heading: > stale text".to_string(),
+            "quotation with no example heading: > orphan quotation".to_string(),
+        ]
+    );
+}
+
+/// The words of the lifecycle reply rule that make a short answer its own
+/// summary: no lead, no heading, no recap.
+const SHORT_ANSWER_EXCEPTION: [&str; 2] = [
+    "A simple answer stays simple",
+    "a one-line answer stays one line",
+];
+
+/// TSK-073 AC-4. The Summaries and Replies sections carry the short-answer
+/// exception in the words of the lifecycle reply rule.
+#[test]
+fn copy_guide_keeps_the_short_answer_exception_in_summaries_and_replies() {
+    let lifecycle = normalized_whitespace(&repo_text(
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+    ));
+    let sections: BTreeMap<String, String> = level_two_sections(&repo_text(COPY_GUIDE))
+        .into_iter()
+        .map(|(heading, body)| (heading, normalized_whitespace(&body)))
+        .collect();
+    for marker in SHORT_ANSWER_EXCEPTION {
+        assert!(
+            lifecycle.contains(marker),
+            "the lifecycle reply rule lost: {marker}"
+        );
+        for section in ["Summaries", "Replies"] {
+            let body = sections
+                .get(section)
+                .unwrap_or_else(|| panic!("copy guide lost its {section} section"));
+            assert!(
+                body.contains(marker),
+                "copy guide {section} lost the short-answer exception: {marker}"
+            );
+        }
+    }
+}
+
+/// The writing bullets of the design-system kit README, whitespace
+/// normalized, from its `## Writing rules` section.
+fn kit_readme_writing_bullets(readme: &str) -> Vec<String> {
+    let section = readme
+        .split("## Writing rules")
+        .nth(1)
+        .expect("kit README keeps its Writing rules section");
+    let section = section.split("\n## ").next().unwrap_or(section);
+    let mut bullets: Vec<String> = Vec::new();
+    for line in section.lines() {
+        if let Some(bullet) = line.strip_prefix("- ") {
+            bullets.push(bullet.to_string());
+        } else if line.starts_with("  ") && !line.trim().is_empty() {
+            if let Some(last) = bullets.last_mut() {
+                last.push(' ');
+                last.push_str(line.trim());
+            }
+        }
+    }
+    bullets
+        .iter()
+        .map(|bullet| normalized_whitespace(bullet))
+        .collect()
+}
+
+/// TSK-073 AC-5. The kit README keeps its six writing bullets and names the
+/// guide, and the guide carries the six bullets verbatim; the README copies
+/// stay byte-identical across the two skills.
+#[test]
+fn kit_readme_writing_bullets_are_carried_verbatim_by_the_copy_guide() {
+    let present =
+        repo_text("assets/base/agents/skills/cf-present/resources/design-system/README.md");
+    let portal =
+        repo_text("assets/base/agents/skills/cf-docs-portal/resources/design-system/README.md");
+    assert_eq!(present, portal, "kit README drifted between the skills");
+    let bullets = kit_readme_writing_bullets(&present);
+    assert_eq!(bullets.len(), 6, "kit README keeps six writing bullets");
+    assert!(
+        normalized_whitespace(&present).contains("`cf-editorial-review/references/copy-guide.md`"),
+        "kit README must name the copy guide"
+    );
+    let guide = normalized_whitespace(&repo_text(COPY_GUIDE));
+    for bullet in &bullets {
+        assert!(
+            guide.contains(bullet.as_str()),
+            "copy guide lost the kit README bullet: {bullet}"
+        );
+    }
+}
+
+/// Sentences that restated the writing rules outside their homes before
+/// TSK-073, and the six kit README bullets. A paraphrase that avoids these
+/// words is not detected; review owns that case.
+const WRITING_RULE_RESTATEMENTS: [&str; 16] = [
+    "short plain sentences, bullets or a table where they carry facts better than a sentence",
+    "The lead sentence says what the reader is looking at; it does not restate the caption",
+    "one sentence saying what the reader takes from it; it never repeats the title",
+    "the prose around the carrier is short and plain",
+    "Keep language plain, direct, calm",
+    "Prefer plain language, descriptive titles",
+    "otherwise use calm, direct, third-person documentation language",
+    "Avoid cryptic headings, invented personality",
+    "Keep titles literal and findable",
+    "Utility language remains neutral when no project voice is established",
+    "Visuals first: a lead sentence above each figure, the acting sentences below.",
+    "Short plain sentences; bullets or a table where they carry facts better than prose.",
+    "No em or en dash; use a comma, colon, full stop or hyphen.",
+    "Titles name the subject in words, never a bare identifier.",
+    "Sentence case, except the uppercase mono kicker.",
+    "No slogans, no \"not X but Y\" turns, no rhetorical triplets.",
+];
+
+/// The three homes that state the writing rules in full.
+fn is_writing_rule_home(path: &str) -> bool {
+    path.ends_with("cf-editorial-review/references/copy-guide.md")
+        || path.ends_with("cf-editorial-review/references/editorial-smells.md")
+        || path.ends_with("resources/design-system/README.md")
+}
+
+/// The skill files TSK-073 turns into pointers, relative to the shipped
+/// skill trees under `assets/base`.
+const COPY_GUIDE_POINTER_FILES: [&str; 12] = [
+    "agents/skills/cf-present/resources/explanation-method.md",
+    "agents/skills/cf-docs-portal/resources/explanation-method.md",
+    "agents/skills/cf-present/resources/utility-presentation-system.md",
+    "agents/skills/cf-docs-portal/resources/utility-presentation-system.md",
+    "agents/skills/cf-present/resources/figure-grammar.md",
+    "agents/skills/cf-docs-portal/resources/figure-grammar.md",
+    "agents/skills/cf-present/SKILL.md",
+    "agents/skills/cf-docs-portal/SKILL.md",
+    "agents/skills/cf-present/references/document-authoring.md",
+    "agents/skills/cf-editorial-review/SKILL.md",
+    "claude/skills/cf-method/references/workflow-lifecycle.md",
+    "agents/skills/cf-ship/SKILL.md",
+];
+
+/// TSK-073 AC-6. The writing rules are stated in full only in the copy
+/// guide, the editorial smells and the kit README; every other skill file
+/// named in the task points at the guide instead.
+#[test]
+fn writing_rules_are_stated_in_full_only_in_their_three_homes() {
+    let base = repo_root().join("assets/base");
+    let mut restated = Vec::new();
+    for tree in ["agents/skills", "claude/skills"] {
+        for path in walk_files(&base.join(tree)) {
+            if path.extension().is_none_or(|extension| extension != "md") {
+                continue;
+            }
+            let relative = rel(&base, &path);
+            if is_writing_rule_home(&relative) {
+                continue;
+            }
+            let text = normalized_whitespace(
+                &std::fs::read_to_string(&path)
+                    .unwrap_or_else(|error| panic!("{relative} is readable: {error}")),
+            );
+            for rule in WRITING_RULE_RESTATEMENTS {
+                if text.contains(&normalized_whitespace(rule)) {
+                    restated.push(format!("{relative}: {rule}"));
+                }
+            }
+        }
+    }
+    assert!(
+        restated.is_empty(),
+        "writing rules restated outside their homes; point at the copy guide instead:\n  {}",
+        restated.join("\n  ")
+    );
+    let mut unpointed = Vec::new();
+    for file in COPY_GUIDE_POINTER_FILES {
+        let text = normalized_whitespace(&repo_text(&format!("assets/base/{file}")));
+        if !text.contains("copy-guide.md") && !text.contains("copy guide") {
+            unpointed.push(file);
+        }
+    }
+    assert!(
+        unpointed.is_empty(),
+        "skill files must point at the copy guide: {unpointed:?}"
+    );
+}
+
+/// TSK-073 AC-7. The lifecycle "Shape deliverables" text keeps the nine
+/// families, the reply rule, the link rule and the pointer to the method and
+/// the guide; the editorial skill names the guide and points its figure line
+/// at the nine families; cf-ship step 5 and the ADR and epic templates name
+/// the guide.
+#[test]
+fn copy_guide_pointers_and_shape_deliverables_markers_stay_pinned() {
+    let lifecycle = normalized_whitespace(&repo_text(
+        "assets/base/claude/skills/cf-method/references/workflow-lifecycle.md",
+    ));
+    let start = lifecycle
+        .find("Shape deliverables for their audience and medium")
+        .expect("lifecycle keeps Shape deliverables");
+    let end = lifecycle[start..]
+        .find("state an unknown link as unknown.")
+        .map(|offset| start + offset)
+        .expect("Shape deliverables keeps the link rule");
+    let shape = &lifecycle[start..end];
+    let mut missing = Vec::new();
+    for marker in [
+        "(flow, structure, layering, sequence, state, coverage, extent, derivation, graph)",
+        "When a relationship carries the point, the reply carries a figure. Match the form to the surface.",
+        "Never use Mermaid for a reply figure.",
+        "A simple answer stays simple: no figure, no headings, no recap, and a one-line answer stays one line.",
+        "give the exact link the tool printed or one you verified",
+        "To explain, follow the explanation method (`cf-present/resources/explanation-method.md`); to write each string, follow the copy guide (`cf-editorial-review/references/copy-guide.md`).",
+    ] {
+        if !shape.contains(marker) {
+            missing.push(format!("workflow-lifecycle.md: {marker}"));
+        }
+    }
+    for (file, markers) in [
+        (
+            "assets/base/agents/skills/cf-editorial-review/SKILL.md",
+            &[
+                "This skill, its copy guide and its contextual-smells reference are the canonical CodeFlow home",
+                "Load [references/copy-guide.md](references/copy-guide.md) when writing and [references/editorial-smells.md](references/editorial-smells.md) when reviewing.",
+                "in one of the nine families of the explanation method (`cf-present/resources/explanation-method.md`)",
+            ][..],
+        ),
+        (
+            "assets/base/agents/skills/cf-ship/SKILL.md",
+            &["5. Apply `cf-editorial-review` and its copy guide to substantial changed docs"][..],
+        ),
+        (
+            "assets/base/docs/decisions/template.md",
+            &["The copy guide (`cf-editorial-review/references/copy-guide.md`) has the ADR shape."][..],
+        ),
+        (
+            "docs/decisions/template.md",
+            &["The copy guide (`cf-editorial-review/references/copy-guide.md`) has the ADR shape."][..],
+        ),
+        (
+            "assets/base/pm/epic.md.tmpl",
+            &["Write it by the copy guide (`cf-editorial-review/references/copy-guide.md`)."][..],
+        ),
+        (
+            "assets/base/agents/skills/cf-present/resources/figure-grammar.md",
+            &["Prose around a figure follows the written content policy (ADR-0067); the copy guide (`cf-editorial-review/references/copy-guide.md`)"][..],
+        ),
+    ] {
+        let text = normalized_whitespace(&repo_text(file));
+        for marker in markers {
+            if !text.contains(marker) {
+                missing.push(format!("{file}: {marker}"));
+            }
+        }
+    }
+    assert!(
+        missing.is_empty(),
+        "copy guide pointers lost:\n  {}",
+        missing.join("\n  ")
+    );
+}
+
+/// The Summary section of a pull request template: from `## Summary` up to
+/// the next `## ` heading.
+fn pr_summary_block(text: &str) -> String {
+    let start = text
+        .find("## Summary\n")
+        .expect("template keeps ## Summary");
+    let rest = &text[start..];
+    let end = rest[1..]
+        .find("\n## ")
+        .map_or(rest.len(), |offset| offset + 1);
+    rest[..end].to_string()
+}
+
+/// TSK-073 AC-8. The Summary comment is the same block in the shipped
+/// template, this repository's live template and its baseline; the live
+/// template keeps its changelog impact lines and every Release impact field
+/// and instruction inside that section, and the shipped template and the
+/// baseline stay equal.
+#[test]
+fn pr_template_summary_block_is_identical_across_its_three_copies() {
+    let shipped = repo_text("assets/base/ci/pull_request_template.md");
+    let live = repo_text(".github/pull_request_template.md");
+    let baseline = repo_text(".codeflow/.baseline/.github/pull_request_template.md");
+    let summary = pr_summary_block(&shipped);
+    assert!(
+        summary.contains("copy guide"),
+        "the Summary comment names the copy guide"
+    );
+    assert_eq!(
+        summary,
+        pr_summary_block(&live),
+        "live Summary block drifted"
+    );
+    assert_eq!(
+        summary,
+        pr_summary_block(&baseline),
+        "baseline Summary block drifted"
+    );
+    assert_eq!(shipped, baseline, "shipped template and baseline differ");
+    let problems = release_impact_problems(&live);
+    assert!(
+        problems.is_empty(),
+        "live template lost its Release impact contract:\n  {}",
+        problems.join("\n  ")
+    );
+    // Negative control (Codex review R1, finding 1): a section gutted to its
+    // heading, the Unit line and a comment that still names the release
+    // script and the changelog marker fails.
+    let start = live
+        .find("## Release impact\n")
+        .expect("live template keeps ## Release impact");
+    let end = live[start..]
+        .find("<!-- Conditional sections")
+        .map_or(live.len(), |offset| start + offset);
+    let gutted = format!(
+        "{}## Release impact\n\n- Unit: `codeflow`\n\n<!-- Read by `scripts/release.py`. Put a \
+         codeflow:release-impact patch|minor|major HTML marker before each entry. -->\n\n{}",
+        &live[..start],
+        &live[end..]
+    );
+    let gutted_problems = release_impact_problems(&gutted);
+    for lost in [
+        "- Impact:",
+        "- Breaking:",
+        "- Migration:",
+        "add a Withdrawal field",
+    ] {
+        assert!(
+            gutted_problems.iter().any(|problem| problem.contains(lost)),
+            "a gutted Release impact section must fail on {lost}: {gutted_problems:?}"
+        );
+    }
+    // Negative control (Codex confirm, finding 1): a sibling heading right
+    // under the Release impact heading moves every field out of the section
+    // the release script reads, so the fields count as missing.
+    let split = live.replacen("## Release impact\n", "## Release impact\n\n## Other\n", 1);
+    let split_problems = release_impact_problems(&split);
+    assert!(
+        split_problems
+            .iter()
+            .any(|problem| problem.contains("- Impact:")),
+        "a heading inside Release impact must hide its fields: {split_problems:?}"
+    );
+}
+
+/// The Release impact contract of this repository's live PR template:
+/// every field line `scripts/release.py` reads and the instructions around
+/// them, each inside the Release impact section (from its heading to the
+/// next level-two heading or the conditional-sections comment, whichever
+/// comes first), not anywhere in the file.
+fn release_impact_problems(template: &str) -> Vec<String> {
+    let Some(start) = template.find("## Release impact\n") else {
+        return vec!["no ## Release impact section".to_string()];
+    };
+    let rest = &template[start..];
+    // The section ends at whichever comes first, as `scripts/release.py`
+    // stops at the next level-two heading.
+    let end = [
+        rest.find("<!-- Conditional sections"),
+        rest[1..].find("\n## ").map(|offset| offset + 1),
+    ]
+    .into_iter()
+    .flatten()
+    .min()
+    .unwrap_or(rest.len());
+    let section = &rest[..end];
+    let lines: BTreeSet<&str> = section.lines().map(str::trim_end).collect();
+    let prose = normalized_whitespace(section);
+    let mut problems = Vec::new();
+    for field in [
+        "- Impact: `none | patch | minor | major`",
+        "- Breaking: `yes | no`",
+        "- Rationale:",
+        "- Migration: `none`, steps, or \"see Breaking change\"",
+        "- Unit: `codeflow`",
+        "- Evidence:",
+    ] {
+        if !lines.contains(field) {
+            problems.push(format!("field line missing from the section: {field}"));
+        }
+    }
+    for instruction in [
+        "Impact is the change level a consumer sees",
+        "Breaking states compatibility",
+        "Choose each value; never leave the alternatives",
+        "Migration is normally `none` for nonbreaking work",
+        "Read by `scripts/release.py` with the fields above",
+        "Breaking is yes if and only if Impact is major",
+        "put a codeflow:release-impact patch|minor|major HTML marker directly before each new pending changelog entry",
+        "Impact must equal the highest one added",
+        "Declared impact cannot be below conventional commit markers",
+        "add a Withdrawal field that says what was removed and why the remaining net contract permits it",
+        "do not add Withdrawal to ordinary PRs",
+    ] {
+        if !prose.contains(instruction) {
+            problems.push(format!("instruction missing from the section: {instruction}"));
+        }
+    }
+    problems
 }
