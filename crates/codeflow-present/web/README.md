@@ -46,7 +46,12 @@ npm run check:figures
 operator's active browser. Set `CF_PRESENT_BROWSER` when the qualified browser
 is not in one of the explicit platform locations in the script.
 
-`check:figures` needs a built `target/debug/codeflow`. It opens a document of
+The checks that drive the real binary (`check:entities`, `check:figures`,
+`check:forms`, `check:matrix` and `check:real-browser`) use
+`CF_PRESENT_CODEFLOW` when it is set, else the debug build in
+`CARGO_TARGET_DIR`, else `target/debug/codeflow` in the repository.
+
+`check:figures` needs that built binary. It opens a document of
 the figure specimens through the real binary, exports it in light and dark, and
 reads each drawn figure with the portal's figure probe at 1280 and 390 px. The
 rule outcomes must equal the portal's specimen table. `src/figure-grammar.mjs`

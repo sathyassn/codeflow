@@ -18,10 +18,11 @@ import { build } from "esbuild";
 import { chromium } from "playwright-core";
 import { assertNoPolicyViolations, recordPolicyViolations } from "./csp-violations.mjs";
 import { canonicalJson, checkFacts, composeFigure, figureRuleFailures, probeFigures, renderFigure, THRESHOLDS, validateDeclaration } from "../src/figure-grammar.mjs";
+import { codeflowBinary } from "./codeflow-binary.mjs";
 
 const webRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const repoRoot = resolve(webRoot, "../../..");
-const codeflow = resolve(process.env.CF_PRESENT_CODEFLOW ?? join(repoRoot, "target/debug/codeflow"));
+const codeflow = codeflowBinary(repoRoot);
 const specimenRoot = join(repoRoot, "docs-portal/tests/fixtures/figures");
 const screenshotIndex = process.argv.indexOf("--screenshots");
 const screenshots = screenshotIndex > 0 ? resolve(process.argv[screenshotIndex + 1]) : null;
