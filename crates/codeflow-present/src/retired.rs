@@ -11,6 +11,7 @@
 use serde_json::{Map, Value};
 
 use crate::error::{PresentError, Result};
+use crate::limits;
 
 /// Where the conversion from a diagram block is taught.
 pub const CONVERSION_GUIDE: &str =
@@ -147,14 +148,19 @@ pub fn refuse_retired_blocks(document: &Value) -> Result<()> {
     )))
 }
 
-/// A stored document whose diagram blocks all keep their pre-removal shape:
-/// the document with each diagram replaced by an empty narrative of the same
-/// id, so typed parsing can check everything else, and the diagram ids.
-/// `None` when the document has no diagram block or one is malformed.
+/// A stored document whose diagram blocks all keep their pre-removal shape
+/// and limits: the document with each diagram replaced by an empty narrative
+/// of the same id, so typed parsing can check everything else, and the
+/// diagram ids. `None` when the document has no diagram block, or one the
+/// pre-removal validator would have refused: a corrupt record is never
+/// presented as a retired one.
 #[must_use]
 pub fn legacy_document(document: &Value) -> Option<(Value, Vec<String>)> {
     let found = retired_blocks(document);
-    if found.is_empty() || !found.iter().all(well_formed) {
+    if found.is_empty()
+        || found.len() > limits::MAX_DIAGRAM_BLOCKS
+        || !found.iter().all(well_formed)
+    {
         return None;
     }
     let ids: Vec<String> = found
@@ -166,7 +172,15 @@ pub fn legacy_document(document: &Value) -> Option<(Value, Vec<String>)> {
     Some((substituted, ids))
 }
 
+/// A diagram as the pre-removal validator admitted it: its six string
+/// fields, a known kind, a source within its bound, and an accessible title
+/// and description that are present and within theirs.
 fn well_formed(block: &RetiredBlock<'_>) -> bool {
+    let within = |field: &str, max: usize, required: bool| {
+        block
+            .text(field)
+            .is_some_and(|text| text.len() <= max && !(required && text.trim().is_empty()))
+    };
     block.block.len() == DIAGRAM_FIELDS.len()
         && DIAGRAM_FIELDS
             .iter()
@@ -174,6 +188,9 @@ fn well_formed(block: &RetiredBlock<'_>) -> bool {
         && block
             .kind()
             .is_some_and(|kind| CONVERSIONS.iter().any(|(name, _)| *name == kind))
+        && within("source", limits::MAX_DIAGRAM_BYTES, false)
+        && within("acc_title", limits::MAX_TITLE_BYTES, true)
+        && within("acc_description", limits::MAX_PROSE_BYTES, true)
 }
 
 fn substitute(blocks: Option<&mut Value>) {
@@ -225,6 +242,58 @@ mod tests {
         refuse_retired_blocks(document)
             .expect_err("a diagram block is refused")
             .to_string()
+    }
+
+    /// A stored diagram is retired only within the pre-removal admission
+    /// limits (T114-2); at the limits it still is.
+    #[test]
+    fn a_legacy_diagram_is_admitted_only_within_the_old_limits() {
+        use crate::limits::{
+            MAX_DIAGRAM_BLOCKS, MAX_DIAGRAM_BYTES, MAX_PROSE_BYTES, MAX_TITLE_BYTES,
+        };
+        let with = |field: &str, value: String| {
+            let mut block = diagram(Some("d"), "flowchart");
+            block[field] = value.into();
+            document(vec![block])
+        };
+        let many = |count: usize| {
+            document(
+                (0..count)
+                    .map(|index| diagram(Some(&format!("d{index}")), "flowchart"))
+                    .collect(),
+            )
+        };
+        for admitted in [
+            with("acc_title", "t".repeat(MAX_TITLE_BYTES)),
+            with("acc_description", "d".repeat(MAX_PROSE_BYTES)),
+            with("source", "s".repeat(MAX_DIAGRAM_BYTES)),
+            many(MAX_DIAGRAM_BLOCKS),
+        ] {
+            assert!(legacy_document(&admitted).is_some());
+        }
+        for (name, refused) in [
+            ("empty title", with("acc_title", String::new())),
+            ("blank title", with("acc_title", " \t".to_string())),
+            (
+                "long title",
+                with("acc_title", "t".repeat(MAX_TITLE_BYTES + 1)),
+            ),
+            (
+                "empty description",
+                with("acc_description", "  ".to_string()),
+            ),
+            (
+                "long description",
+                with("acc_description", "d".repeat(MAX_PROSE_BYTES + 1)),
+            ),
+            (
+                "long source",
+                with("source", "s".repeat(MAX_DIAGRAM_BYTES + 1)),
+            ),
+            ("too many", many(MAX_DIAGRAM_BLOCKS + 1)),
+        ] {
+            assert!(legacy_document(&refused).is_none(), "{name}");
+        }
     }
 
     #[test]
