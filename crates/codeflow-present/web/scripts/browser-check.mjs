@@ -503,6 +503,8 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
       // a drag pins on release only, so no chip may open under it (TSK-160).
       const mid = await glyphs(0, pause.at);
       await page.mouse.move(mid.right, mid.y, { steps: 4 });
+      const partial = await page.evaluate(() => String(getSelection()));
+      if (partial !== pause.quote) throw new Error(`${label} held ${JSON.stringify(partial)}, expected the partial ${pause.quote}`);
       await page.waitForTimeout(pause.ms);
       const early = await page.getByTestId("float-chip").count();
       if (early !== 0) throw new Error(`${label} opened a chip while the drag was held`);
@@ -577,7 +579,13 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // made on release (TSK-160).
   {
     const { padding } = await prepareProse();
-    await proseDrag("Prose drag held for 400 ms partway", { from: padding, to: 6, quote: "Review", pause: { at: 3, ms: 400 } });
+    await proseDrag("Prose drag held for 400 ms partway", { from: padding, to: 6, quote: "Review", pause: { at: 3, ms: 400, quote: "Rev" } });
+    await dismissChip();
+  }
+  // A one-character drag is a Text pin, made on release like any other.
+  {
+    const { padding } = await prepareProse();
+    await proseDrag("One-character prose drag", { from: padding, to: 1, quote: "R" });
     await dismissChip();
   }
 

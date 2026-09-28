@@ -224,6 +224,39 @@ try {
     await page.keyboard.press("Escape");
     await page.getByTestId("composer").waitFor({ state: "detached", timeout: 10_000 }).catch(() => undefined);
     assert.deepEqual(await controls(), pristine, "form control, an area: a control changed");
+    // A selection made just before a press on a form control arms the pin;
+    // the press cancels it, nothing opens while the button is held, and the
+    // selection pins on release (TSK-160).
+    {
+      await armComment(page);
+      const option = page.locator("[data-cf-block-id='survey'] input[value='repo']").first();
+      await option.evaluate((element) => element.scrollIntoView({ block: "center", behavior: "instant" }));
+      const box = await option.boundingBox();
+      assert.ok(box, "form control, a held press after a selection: no box");
+      await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+      const selected = await page.evaluate(() => {
+        const paragraph = document.querySelector("[data-cf-block-id='prose'] p");
+        const walker = document.createTreeWalker(paragraph, NodeFilter.SHOW_TEXT);
+        for (let node = walker.nextNode(); node; node = walker.nextNode()) {
+          const at = node.data.indexOf("runtime draws");
+          if (at < 0) continue;
+          const range = document.createRange();
+          range.setStart(node, at);
+          range.setEnd(node, at + "runtime draws".length);
+          getSelection().removeAllRanges();
+          getSelection().addRange(range);
+          document.dispatchEvent(new Event("selectionchange"));
+          return String(getSelection());
+        }
+        return "";
+      });
+      assert.equal(selected, "runtime draws", "form control, a held press after a selection: the selection was not made");
+      await page.mouse.down();
+      await page.waitForTimeout(400);
+      assert.equal(await page.getByTestId("float-chip").count(), 0, "form control, a held press after a selection: a chip opened while the button was held");
+      await page.mouse.up();
+      await discard("a held press after a selection");
+    }
     assert.ok(await choice.locator("[data-cf-decline-reason]").isVisible(), "form control: the decline box closed");
     assert.deepEqual(answerRequests, [], "form control: an answer was sent");
     assert.equal(await findFile(root, "responses.jsonl"), null, "form control: the answer store was written");
@@ -256,6 +289,8 @@ try {
     // The reader pauses on the middle line past the pin's settle delay. A
     // drag pins on release only, so no chip opens under it (TSK-160).
     await page.mouse.move(drag.hold.x, drag.hold.y, { steps: 6 });
+    const partial = await page.evaluate(() => String(getSelection()));
+    assert.ok(partial.includes("256 * 1024") && !partial.includes("bytes <= limit"), `diff whitespace: the held drag has no partial selection: ${JSON.stringify(partial)}`);
     await page.waitForTimeout(400);
     assert.equal(await page.getByTestId("float-chip").count(), 0, "diff whitespace: a chip opened while the drag was held");
     await page.mouse.move(drag.to.x, drag.to.y, { steps: 6 });
