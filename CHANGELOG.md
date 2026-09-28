@@ -608,6 +608,27 @@ publication date._
   `.codeflow/policy.json`.
 
 <!-- codeflow:release-impact minor -->
+- **Every warning names the step that clears it.** Public behaviour change:
+  with `git.test_gate_on_push` at `warn`, a push whose `codeflow ci` finds an
+  always-blocking rule (such as the id registry) or a rule the project set
+  to `block` is now stopped; before, the hook printed `BLOCKED` and let the
+  push through. Other findings print at the push gate's level, and the
+  closing line of each hook says whether the commit or push was stopped.
+  Each warning and note from `codeflow ci`, `validate --docs`, `doctor`, the
+  git hooks and the session guards now names the step that clears it: a
+  `codeflow` command, a named `git` command or a file edit; a test fails on
+  one printed without. `validate --docs` no longer warns for an approved spec
+  whose consumers are all accepted, its healthy derived `implemented` state,
+  and prints no note for a layer the project's tier does not install.
+  `doctor` reads Codex hook trust from `~/.codex/config.toml` (or
+  `$CODEX_HOME`) and Grok folder trust from `~/.grok/trusted_folders.toml`,
+  so each passes once trusted; where the state cannot be read it prints a
+  note naming the manual step and saying doctor cannot verify it. A commit on
+  a `git.breaking_watch_paths` surface now prints a note, not a warning,
+  pointing at the pull request's Release impact, and `codeflow ci` given a
+  body that states `Breaking: no` with a `Rationale` reports nothing for it.
+
+<!-- codeflow:release-impact minor -->
 - **One full gate at a time, running the suite once.** Public behaviour
   change: `codeflow test --mode full` takes a gate lock before any target
   runs, and a second full gate on the machine refuses, naming the holder's
