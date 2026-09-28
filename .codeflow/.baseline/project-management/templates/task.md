@@ -7,7 +7,7 @@ title: {{TITLE_YAML}}
 status: todo             # todo | blocked | complete | cancelled; change it with `codeflow task status`
 work_type: feat          # feat | fix | docs | refactor | test | chore | ci | hotfix | plan | spike | experiment
 specs: []                # task-specific SPC-### inputs; epic specs are inherited
-depends_on: []           # every direct structural predecessor; [] only for a true root
+depends_on: []           # every direct structural predecessor; [] only for a true root; a research or decision input is {id: TSK-NNN, kind: research, pin: "<commit sha>"}, the pin quoted
 integration_target: {{TARGET_BRANCH}} # main/master or integration/EPC-NNN-<slug>
 external_refs: []        # opaque links/ids only; never mirror external status
 created: {{DATE}}
