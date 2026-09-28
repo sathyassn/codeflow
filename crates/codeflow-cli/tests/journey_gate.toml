@@ -1,0 +1,315 @@
+# The journey gate (TSK-110 AC-1, SPC-013 R-104, R-107): every deterministic
+# journey R-104 lists, mapped to the tests that run its passing control and
+# its fault. `scripts/journey-gate.py` runs exactly these tests and fails when
+# one does not run; `journey_gate.rs` checks this map against R-104 and the
+# code. Each task that produces a behaviour ships its journey; this file only
+# names them. A test is `<package> --test <target> <fn>`,
+# `<package> --lib <module path>` or `python <script> <TestCase class>`.
+#
+# `pending` names the task that ships a journey not yet on this line; the map
+# check refuses a pending entry once that task is complete. `platform = "unix"`
+# marks a journey whose tests exist only on unix, so the Windows job skips it.
+
+[[journey]]
+text = "concurrent issue from two worktrees and from two clones"
+control = [
+  "codeflow-core --test id_registry concurrent_issuers_in_two_clones_and_two_worktrees_never_share_a_number",
+  "codeflow-core --test id_registry property_issued_numbers_exceed_every_number_ever_added_and_never_repeat",
+]
+fault = ["codeflow-core --test id_registry a_tip_that_keeps_moving_stops_after_the_bounded_retries"]
+
+[[journey]]
+text = "lost acknowledgement read back by `uid`"
+control = ["codeflow-core --test id_registry a_lost_acknowledgement_is_reserved_only_when_read_back_binds_our_uid"]
+fault = ["codeflow-core --test id_registry a_lost_acknowledgement_is_reserved_only_when_read_back_binds_our_uid"]
+
+[[journey]]
+text = "offline issue, sync and retarget"
+control = ["codeflow-core --test id_registry offline_issue_is_pending_and_sync_publishes_or_names_retarget"]
+fault = ["codeflow-core --test id_registry offline_issue_is_pending_and_sync_publishes_or_names_retarget"]
+
+[[journey]]
+text = "a fork record admitted before merge"
+control = ["codeflow-core --test id_registry admit_reserves_a_forks_number_or_the_next_one_and_never_reissues"]
+fault = ["codeflow-core --test id_registry the_merge_rule_binds_added_records_and_the_scan_catches_other_lines"]
+
+[[journey]]
+text = "the registry moving between the PR check and the merge"
+control = ["codeflow-core --test id_registry the_merge_rule_binds_added_records_and_the_scan_catches_other_lines"]
+fault = ["codeflow-core --test id_registry the_merge_rule_binds_added_records_and_the_scan_catches_other_lines"]
+
+[[journey]]
+text = "two integration lines taking the same number"
+control = ["codeflow-core --test id_registry the_merge_rule_binds_added_records_and_the_scan_catches_other_lines"]
+fault = ["codeflow-core --test id_registry the_merge_rule_binds_added_records_and_the_scan_catches_other_lines"]
+
+[[journey]]
+text = "a deleted top reservation not reissued"
+control = ["codeflow-core --test id_registry damage_refuses_issue_until_a_typed_restore_and_never_reissues_the_top"]
+fault = ["codeflow-core --test id_registry damage_refuses_issue_until_a_typed_restore_and_never_reissues_the_top"]
+
+[[journey]]
+text = "registry deletion, modification and force refused"
+control = [
+  "codeflow-cli --test id_registry_journey a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only",
+  "codeflow-core --lib hooks::git_guard::registry_guard_tests::plain_registry_pushes_and_other_branches_pass",
+]
+fault = [
+  "codeflow-core --test id_registry damage_refuses_issue_until_a_typed_restore_and_never_reissues_the_top",
+  "codeflow-core --lib hooks::git_guard::registry_guard_tests::registry_deletion_force_and_no_verify_are_refused",
+]
+
+[[journey]]
+text = "a registry rewrite on a host without rules detected"
+control = ["codeflow-core --test id_registry a_rewritten_registry_is_detected_against_the_last_verified_tip"]
+fault = [
+  "codeflow-core --test id_registry a_rewritten_registry_is_detected_against_the_last_verified_tip",
+  "codeflow-core --test id_registry a_deleted_and_pruned_registry_is_never_replaced",
+]
+
+[[journey]]
+text = "crash between reserve and write"
+control = [
+  "codeflow-core --test id_registry resume_writes_only_the_callers_own_reservation",
+  "codeflow-cli --test id_registry_journey task_new_resume_writes_an_interrupted_reservation_once",
+]
+fault = ["codeflow-core --test id_registry resume_writes_only_the_callers_own_reservation"]
+
+[[journey]]
+text = "a cross-line code dependency absent locally"
+control = ["codeflow-core --lib workgraph::readiness::tests::a_code_dependency_on_another_line_waits_for_the_change_here"]
+fault = ["codeflow-core --lib workgraph::readiness::tests::a_code_dependency_on_another_line_waits_for_the_change_here"]
+
+[[journey]]
+text = "a cancelled unselected alternative"
+control = ["codeflow-cli --test readiness_journey the_three_contexts_judge_one_task_the_same_way"]
+fault = ["codeflow-cli --test readiness_journey the_three_contexts_judge_one_task_the_same_way"]
+
+[[journey]]
+text = "a join awaiting selection stays blocked"
+control = [
+  "codeflow-core --lib validate::tests::a_join_awaiting_selection_validates_only_when_held_by_it",
+  "codeflow-core --lib workgraph::readiness::tests::a_selection_removed_in_the_range_is_named",
+]
+fault = ["codeflow-cli --test readiness_journey work_next_and_claim_pick_the_ready_task_and_status_agrees"]
+
+[[journey]]
+text = "every transition, including partial and stacked PRs, cancel and reopen"
+control = [
+  "codeflow-cli --test record_lifecycle_journey every_transition_runs_through_verbs_and_hand_edits_with_one_verdict",
+  "codeflow-core --lib workgraph::lifecycle::tests::partial_and_stacked_slices_leave_the_task_open_until_the_last",
+]
+fault = ["codeflow-cli --test record_lifecycle_journey every_transition_runs_through_verbs_and_hand_edits_with_one_verdict"]
+
+[[journey]]
+text = "criteria changed on a task branch"
+control = ["codeflow-cli --test acceptance_journey a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project"]
+fault = [
+  "codeflow-cli --test acceptance_cli criteria_are_frozen_on_a_task_branch",
+  "codeflow-cli --test acceptance_cli the_freeze_follows_the_class_not_the_prefix",
+]
+
+[[journey]]
+text = "a stale acceptance block"
+control = ["codeflow-cli --test acceptance_journey a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project"]
+fault = ["codeflow-cli --test acceptance_cli a_completion_binds_to_the_reviewed_commit"]
+
+[[journey]]
+text = "a waiver without an amendment"
+control = ["codeflow-cli --test acceptance_journey a_completion_is_bound_to_the_reviewed_commit_on_a_fresh_project"]
+fault = ["codeflow-cli --test acceptance_cli a_waiver_names_its_amendment_on_the_target"]
+
+[[journey]]
+text = "`Task: none` on a refused surface"
+control = ["codeflow-cli --test classification_cli each_class_passes_and_an_unclassified_pull_request_blocks"]
+fault = ["codeflow-cli --test classification_cli a_direct_change_blocks_on_every_protected_surface"]
+
+[[journey]]
+text = "a product PR with no classification"
+control = ["codeflow-cli --test classification_cli each_class_passes_and_an_unclassified_pull_request_blocks"]
+fault = ["codeflow-cli --test classification_cli each_class_passes_and_an_unclassified_pull_request_blocks"]
+
+[[journey]]
+text = "a `fix/` PR naming a task runs the preflight"
+control = ["codeflow-core --lib workgraph::work_start::tests::preflight_runs_on_every_work_prefix_carrying_the_id"]
+fault = ["codeflow-cli --test classification_cli the_preflight_runs_on_any_branch_and_a_mismatch_blocks"]
+
+[[journey]]
+text = "a real Dependabot and a real Changesets PR body"
+control = [
+  "codeflow-cli --test adopter_fit trusted_dependabot_pr_passes_with_profile_sections",
+  "codeflow-cli --test adopter_fit trusted_changesets_pr_passes_with_profile_sections",
+]
+fault = [
+  "codeflow-cli --test adopter_fit spoofed_and_unknown_actors_get_no_exemption_or_supplied_content",
+  "codeflow-cli --test adopter_fit a_bot_body_missing_a_section_fails_for_every_actor",
+]
+
+[[journey]]
+text = "entry identity, typed repair of a stale stamp, a repair that tries to change the baseline configuration, a behaviour change with no entry"
+control = [
+  "python scripts/test_release.py EntryIdentityTests",
+  "python scripts/test_release.py TypedRepairTests",
+]
+fault = [
+  "python scripts/test_release.py TypedRepairTests",
+  "codeflow-cli --test release_journey a_behaviour_change_without_an_entry_warns_locally_and_blocks_in_the_pr_job",
+]
+
+[[journey]]
+text = "an automation profile with a spoofed branch, an unknown actor and a planted secret"
+control = ["codeflow-cli --test adopter_fit trusted_dependabot_pr_passes_with_profile_sections"]
+fault = [
+  "codeflow-cli --test adopter_fit spoofed_and_unknown_actors_get_no_exemption_or_supplied_content",
+  "codeflow-cli --test adopter_fit a_bot_name_is_trusted_only_from_a_same_repository_event",
+  "codeflow-cli --test adopter_fit a_planted_secret_is_blocked_on_a_bot_branch",
+  "codeflow-cli --test adopter_fit a_profile_added_by_the_head_itself_is_not_trusted",
+]
+
+[[journey]]
+text = "a kept brownfield template on first install and on upgrade in each mapping state"
+control = [
+  "codeflow-cli --test adopter_fit accepted_mapping_checks_the_template_headings_at_block",
+  "codeflow-cli --test adopter_fit refused_mapping_appends_the_headings_and_checks_the_shipped_ones",
+  "codeflow-cli --test adopter_fit custom_mapping_checks_the_policy_list_the_project_sets",
+  "codeflow-cli --test adopter_fit upgrade_keeps_an_explicit_block_equal_to_the_default",
+  "codeflow-cli --test adopter_fit each_mapping_state_survives_an_upgrade",
+]
+fault = ["codeflow-cli --test adopter_fit first_install_diagnoses_the_kept_template_and_warns_until_decided"]
+
+[[journey]]
+text = "project templates rendered under `block`"
+control = ["codeflow-cli --test adopter_fit project_templates_are_used_when_valid_and_fall_back_when_not"]
+fault = ["codeflow-cli --test adopter_fit project_templates_are_used_when_valid_and_fall_back_when_not"]
+
+[[journey]]
+text = "standard tier without records"
+control = [
+  "codeflow-cli --test record_lifecycle_journey a_standard_tier_project_without_records_sees_no_record_rule",
+  "codeflow-cli --test installed_cli_journey a_standard_tier_project_meets_no_record_rule_until_it_keeps_records",
+]
+fault = ["codeflow-cli --test installed_cli_journey a_standard_tier_project_meets_no_record_rule_until_it_keeps_records"]
+
+[[journey]]
+text = "repeated `codeflow update`"
+control = [
+  "codeflow-cli --test installed_cli_journey repeated_update_changes_nothing_and_restores_a_managed_file_changed_out_of_band",
+  "codeflow-core --test repository_update_noop codeflow_update_is_a_no_op_on_this_repository",
+]
+fault = ["codeflow-cli --test installed_cli_journey repeated_update_changes_nothing_and_restores_a_managed_file_changed_out_of_band"]
+
+[[journey]]
+text = "a no-remote project end to end"
+control = ["codeflow-cli --test installed_cli_journey a_project_without_a_remote_runs_from_plan_to_a_green_ci_offline"]
+fault = ["codeflow-cli --test installed_cli_journey a_project_without_a_remote_runs_from_plan_to_a_green_ci_offline"]
+
+[[journey]]
+text = "read commands making no network call"
+control = [
+  "codeflow-cli --test read_commands_offline read_commands_make_no_network_call_and_a_claim_is_seen_fetching",
+  "codeflow-cli --test read_commands_offline read_commands_start_the_same_git_processes_for_three_records_or_thirty",
+]
+fault = [
+  "codeflow-cli --test read_commands_offline read_commands_make_no_network_call_and_a_claim_is_seen_fetching",
+  "codeflow-cli --test read_commands_offline a_missing_tree_outside_the_records_does_not_stop_the_reads",
+  "codeflow-cli --test read_commands_offline an_oversized_record_on_a_tip_is_refused_by_name",
+]
+
+[[journey]]
+text = "a spike PR that adds product code"
+control = ["codeflow-cli --test classification_cli a_spike_lands_only_findings_and_its_record"]
+fault = ["codeflow-cli --test classification_cli a_spike_lands_only_findings_and_its_record"]
+
+[[journey]]
+text = "the full positive journey of R-110 (claim, start, build, complete, CI green) and a competing task branch"
+control = ["codeflow-cli --test readiness_journey the_three_contexts_judge_one_task_the_same_way"]
+fault = ["codeflow-cli --test readiness_journey the_three_contexts_judge_one_task_the_same_way"]
+
+[[journey]]
+text = "a typed restore accepted and a rebinding restore refused through the pre-push, guard and CI paths"
+control = [
+  "codeflow-cli --test id_registry_journey a_fresh_project_issues_unique_ids_and_its_hooks_keep_the_registry_append_only",
+  "codeflow-core --test id_registry damage_refuses_issue_until_a_typed_restore_and_never_reissues_the_top",
+]
+fault = [
+  "codeflow-core --test id_registry a_rebinding_restore_is_refused_by_the_ledger_rule",
+  "codeflow-cli --test id_registry_journey a_rebinding_restore_is_refused_by_pre_push_the_guard_and_ci",
+]
+
+[[journey]]
+text = "a legacy id seeded, checked, backfilled and admitted"
+control = ["codeflow-core --test id_registry seed_decides_replicas_by_commit_stops_on_the_undecidable_and_accepts_a_map"]
+fault = ["codeflow-core --test id_registry seed_decides_replicas_by_commit_stops_on_the_undecidable_and_accepts_a_map"]
+
+[[journey]]
+text = "a join awaiting selection that validates and cannot start"
+control = ["codeflow-core --lib validate::tests::a_join_awaiting_selection_validates_only_when_held_by_it"]
+fault = ["codeflow-cli --test readiness_journey a_join_awaiting_selection_validates_and_cannot_start"]
+
+[[journey]]
+text = "one final consumer, mixed complete and cancelled consumers, and a superseding spec revision"
+control = [
+  "codeflow-core --lib workgraph::lifecycle::tests::spec_state_is_derived_from_its_consumers",
+  "codeflow-core --lib workgraph::lifecycle::tests::epic_close_counts_the_closing_epic_as_the_last_spec_consumer",
+  "codeflow-core --lib workgraph::lifecycle::tests::a_spec_is_superseded_only_by_a_revision_that_lists_it",
+]
+fault = [
+  "codeflow-core --lib workgraph::lifecycle::tests::epic_close_refuses_a_spec_whose_other_consumer_is_terminal_and_incomplete",
+  "codeflow-core --lib workgraph::lifecycle::tests::completing_against_a_superseded_spec_is_refused",
+]
+
+[[journey]]
+text = "a PR that lowers the enforcing binary while touching a protected surface"
+platform = "unix"
+control = ["codeflow-cli --test ci_pin the_enforcing_job_runs_the_target_workflow_and_reads_the_head_as_data"]
+fault = [
+  "codeflow-cli --test ci_pin a_pr_editing_the_workflow_changes_neither_the_pin_nor_the_verdict",
+  "codeflow-cli --test ci_pin a_pr_lowering_the_pin_is_still_judged_by_the_target_binary",
+]
+
+[[journey]]
+text = "the effective PR-section level in each mapping state, and a default-equal explicit `block` kept on upgrade"
+control = [
+  "codeflow-cli --test adopter_fit accepted_mapping_checks_the_template_headings_at_block",
+  "codeflow-cli --test adopter_fit refused_mapping_appends_the_headings_and_checks_the_shipped_ones",
+  "codeflow-cli --test adopter_fit custom_mapping_checks_the_policy_list_the_project_sets",
+  "codeflow-cli --test adopter_fit upgrade_keeps_an_explicit_block_equal_to_the_default",
+]
+fault = ["codeflow-cli --test adopter_fit first_install_diagnoses_the_kept_template_and_warns_until_decided"]
+
+[[journey]]
+text = "own-branch journeys on `fix/`, `feat/` and `spike/` branches carrying the task id and a PR whose `Task:` line names another task than its branch"
+control = ["codeflow-cli --test readiness_journey the_three_contexts_judge_one_task_the_same_way"]
+fault = [
+  "codeflow-cli --test readiness_journey the_three_contexts_judge_one_task_the_same_way",
+  "codeflow-cli --test classification_cli the_preflight_runs_on_any_branch_and_a_mismatch_blocks",
+]
+
+[[journey]]
+text = "one bot body missing a section, judged for a trusted, a spoofed and an unknown actor"
+control = ["codeflow-cli --test adopter_fit trusted_dependabot_pr_passes_with_profile_sections"]
+fault = ["codeflow-cli --test adopter_fit a_bot_body_missing_a_section_fails_for_every_actor"]
+
+[[journey]]
+text = "two unrelated unlanded records with the same id judged a collision, and a mapped squash or cherry-pick recognised from the registry by a fresh CI checkout before backfill"
+control = [
+  "codeflow-core --test id_registry seed_decides_replicas_by_commit_stops_on_the_undecidable_and_accepts_a_map",
+  "codeflow-core --test id_registry check_accepts_an_unlanded_copy_whose_landing_is_the_registered_one",
+]
+fault = [
+  "codeflow-cli --test id_registry_journey ci_refuses_a_different_record_that_reuses_a_registered_number",
+  "codeflow-cli --test id_registry_journey a_shallow_clone_is_refused_and_ids_check_judges_copies_by_their_landing",
+]
+
+[[journey]]
+text = "the live pack graded with zero, one and two available primaries"
+pending = "TSK-116"
+control = []
+fault = []
+
+[[journey]]
+text = "a benchmark of 10,000 records across ten lines and thousands of stale branches with a recorded baseline"
+platform = "unix"
+benchmark = true
+control = ["codeflow-cli --test read_benchmark read_commands_on_ten_thousand_records_stay_within_their_budgets"]
+fault = ["codeflow-cli --test read_benchmark the_budget_check_flags_a_run_over_its_baseline"]
