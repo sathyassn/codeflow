@@ -44,6 +44,18 @@ export function visibleTextOf(element: Element): string {
   return live || aria;
 }
 
+/**
+ * An element's name from its text: the parts it draws on their own lines or
+ * in their own cells (a status row's label and detail, a table row's cells)
+ * read with a separator, never run together as one sentence (QA defect 8).
+ */
+export function labelTextOf(element: Element): string {
+  if (!(element instanceof HTMLElement) || element.querySelector("text, tspan")) return visibleTextOf(element);
+  const parts = element.innerText.split(/[\n\t]+/u).map(collapse).filter(Boolean);
+  // A part that ends in a colon introduces the next ("Added: + let ...").
+  return parts.reduce((label, part) => (!label ? part : label.endsWith(":") ? `${label} ${part}` : `${label} · ${part}`), "") || visibleTextOf(element);
+}
+
 export function quoteFromRange(range: Range): string {
   const fragment = range.cloneContents();
   const svgParts = svgTextParts(fragment);

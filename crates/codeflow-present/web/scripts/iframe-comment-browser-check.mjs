@@ -56,7 +56,7 @@ export async function checkIframeComments(browser, origin) {
     await page.mouse.up();
     await page.keyboard.up("Shift");
     await page.getByTestId("float-chip").waitFor();
-    assert.equal((await page.getByTestId("float-chip").locator(".lab").innerText()).trim(), "Region");
+    assert.equal((await page.getByTestId("float-chip").locator(".lab").innerText()).trim(), "Area");
     await page.keyboard.press("Escape");
     await page.getByTestId("float-chip").waitFor({ state: "detached" });
     if (await page.locator(".cf-feedback-close").isVisible()) await page.locator(".cf-feedback-close").click();

@@ -90,7 +90,13 @@ function targetKindOf(target: Pick<PendingFeedback, "selector" | "element_select
   return "element";
 }
 
-const kindLabels: Readonly<Record<TargetKind, string>> = { text: "Text", element: "Element", region: "Region" };
+// One word per kind everywhere the reviewer reads it: float, composer, rail,
+// marker and status (the summaries in selection.ts start with the same word).
+const kindLabels: Readonly<Record<TargetKind, string>> = { text: "Text", element: "Element", region: "Area" };
+
+// The one instruction the hint, the empty rail and the status line share.
+const COMMENT_INSTRUCTION = "Select words, click any part, or drag a box; hold Shift to start a box on words.";
+
 
 /** Short float/composer quote: the summary minus its "Text:/Element:/Area:" prefix. */
 function captureQuote(captured: CapturedTarget): string {
@@ -154,9 +160,11 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   // notices; timed for confirmations.
   const [toast, setToast] = useState<string | null>(null);
   const toastTimerRef = useRef(0);
+  const toastStickyRef = useRef(false);
   const showToast = (message: string, opts?: { sticky?: boolean }): void => {
     window.clearTimeout(toastTimerRef.current);
     setToast(message);
+    toastStickyRef.current = Boolean(opts?.sticky);
     if (!opts?.sticky) toastTimerRef.current = window.setTimeout(() => setToast(null), 3400);
   };
 
@@ -208,6 +216,13 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
   }, [pendingPin, composerOpen]);
   settingsOpenRef.current = settingsOpen;
   const railVisible = commentMode && panelOpen;
+  // A timed hint about the sheet ("the Comment button opens your notes") is
+  // stale once the sheet is open; a sticky notice stays.
+  useEffect(() => {
+    if (!railVisible || !sheetLayout() || toastStickyRef.current) return;
+    window.clearTimeout(toastTimerRef.current);
+    setToast(null);
+  }, [railVisible]);
 
   const clearHot = (): void => {
     hotRef.current?.classList.remove("cf-hot");
@@ -251,7 +266,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       // the Comment button opens it on request (QA defect 7).
       setPanelOpen(!sheetLayout());
       setHintMode("element");
-      setStatus("Comment on: select text, click a figure, or drag an area.");
+      setStatus(COMMENT_INSTRUCTION);
     }
   };
 
@@ -1070,8 +1085,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                     class="cf-marker"
                     data-testid="note-marker"
                     style={`left:${at.left}px;top:${at.top}px;width:${38 + 8 * (String(index + 1).length - 1)}px`}
-                    aria-label={`Note ${index + 1} on ${targetKindOf(note)}: ${note.target_summary ?? note.block_label}`}
-                    title={`#${index + 1} ${targetKindOf(note)}: ${noteQuote(note)}`}
+                    aria-label={`Note ${index + 1}, ${kindLabels[targetKindOf(note)]}: ${noteQuote(note)}`}
+                    title={`#${index + 1} ${kindLabels[targetKindOf(note)]}: ${noteQuote(note)}`}
                     onClick={(e) => openNoteEditor(note, { x: e.clientX, y: e.clientY })}
                   >
                     <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -1238,7 +1253,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       {commentMode ? (
         <div class="cf-hint on" data-testid="comment-hint" data-capture-mode={hintMode}>
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 5.5h14a1.5 1.5 0 0 1 1.5 1.5v8a1.5 1.5 0 0 1-1.5 1.5h-7l-4.5 3.5v-3.5H5A1.5 1.5 0 0 1 3.5 15V7A1.5 1.5 0 0 1 5 5.5Z" /></svg>
-          <span role="status">Comment: select words, click a figure part, or drag a box. Esc leaves.</span>
+          <span role="status">{COMMENT_INSTRUCTION} Esc leaves.</span>
           <button type="button" class="cf-hint-leave" data-testid="comment-leave" onClick={() => armComment(false)}>
             Done
           </button>
@@ -1306,8 +1321,8 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           <div class="q">
             {(() => {
               const editing = editingId ? notes.find((n) => n.client_id === editingId) : null;
-              if (editing) return `${targetKindOf(editing)} · ${noteQuote(editing)}`;
-              if (pendingPin) return `${targetKindOf(pendingPin.captured)} · ${captureQuote(pendingPin.captured)}`;
+              if (editing) return `${kindLabels[targetKindOf(editing)]} · ${noteQuote(editing)}`;
+              if (pendingPin) return `${kindLabels[targetKindOf(pendingPin.captured)]} · ${captureQuote(pendingPin.captured)}`;
               return "";
             })()}
           </div>
@@ -1377,7 +1392,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
           {!notes.length ? (
             <div class="empty" data-testid="notes-empty">
               <span class="t">Nothing noted yet</span>
-              <span class="h">Select words, click a figure, or drag a box on the stage or empty canvas. Hold Shift only if the drag starts on text.</span>
+              <span class="h">{COMMENT_INSTRUCTION}</span>
             </div>
           ) : (
             notes.map((note, index) => (
@@ -1403,7 +1418,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                 </span>
                 <div>
                   <div class="k">
-                    {targetKindOf(note)} · #{index + 1}
+                    {kindLabels[targetKindOf(note)]} · #{index + 1}
                     <button
                       type="button"
                       class="cf-text-action"
@@ -1451,7 +1466,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
                         <li key={note.id} data-anchor-state={note.anchor.state}>
                           <div class="cf-note-heading">
                             <strong>{note.block_label}</strong>
-                            <span>{note.anchor.state}</span>
+                            <span>{anchorWords(note.anchor)}</span>
                           </div>
                           {note.quote ? <blockquote>{note.quote}</blockquote> : null}
                           <p>{note.body}</p>
@@ -1645,6 +1660,20 @@ function targetRect(documentRoot: HTMLElement, note: PendingFeedback, _markerEpo
   return (
     documentRoot.querySelector<HTMLElement>(`[data-cf-block-id="${CSS.escape(note.block_id)}"]`)?.getBoundingClientRect() ?? null
   );
+}
+
+// The state of an earlier note in words, never its enum value (the detail
+// line below it, `anchorNotice`, says why).
+function anchorWords(anchor: FeedbackAnchor): string {
+  switch (anchor.state) {
+    case "orphaned": return "unpositioned";
+    case "block_fallback": return "on the block";
+    case "reanchored":
+    case "element_reanchored":
+    case "entity_reanchored":
+    case "region_reanchored": return "moved";
+    default: return "anchored";
+  }
 }
 
 // What the rail says about where an earlier note now sits (SPC-014 B1): a

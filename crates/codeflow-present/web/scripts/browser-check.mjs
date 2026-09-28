@@ -361,6 +361,11 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   await page.getByTestId("feedback-history").locator("summary").click();
   await page.getByText("Matched uniquely in this revision.").waitFor();
   await page.getByText("Unpositioned: the referenced block is absent").waitFor();
+  // Each earlier note names its block and its state in words, set apart (P2-1).
+  const headings = await page.getByTestId("feedback-history").locator(".cf-note-heading").evaluateAll((nodes) =>
+    nodes.map((node) => ({ parts: [...node.children].map((child) => child.textContent), gap: parseFloat(getComputedStyle(node).columnGap) || 0 })));
+  assert.deepEqual(headings.map((heading) => heading.parts), [["Summary", "moved"], ["Removed detail", "unpositioned"]]);
+  assert.ok(headings.every((heading) => heading.gap > 0), `an earlier note heading runs its parts together: ${JSON.stringify(headings)}`);
   await page.getByRole("button", { name: "Close" }).click();
   const code = page.locator("code[data-cf-language='rust']");
   await code.scrollIntoViewIfNeeded();
@@ -425,9 +430,13 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
   // Pass10 Comment SM: arm → pin → float → composer → rail → speech markers
   await page.getByRole("button", { name: /Comment/ }).click();
   await page.locator(".cf-hint.on").waitFor();
-  assert.equal(await page.locator(".cf-hint.on [role=status]").innerText(), "Comment: select words, click a figure part, or drag a box. Esc leaves.");
+  // One instruction in the hint, the empty rail and the status line (P3-2).
+  const instruction = "Select words, click any part, or drag a box; hold Shift to start a box on words.";
+  assert.equal(await page.locator(".cf-hint.on [role=status]").innerText(), `${instruction} Esc leaves.`);
   await openSheet();
   await page.getByText("Nothing noted yet").waitFor();
+  assert.equal(await page.getByTestId("notes-empty").locator(".h").innerText(), instruction);
+  assert.equal(await page.locator(".cf-dock .cf-status").innerText(), instruction);
 
   // Drag starting on the prose wrapper (padding around the paragraph) must stay
   // Text. Missing that hit-test is how region marquees steal text selection.
@@ -710,7 +719,7 @@ async function checkInteractiveSurface(browser, origin, capturedReviews) {
     }
     await page.getByTestId("float-chip").waitFor({ state: "attached", timeout: 5000 });
     const kind = (await page.getByTestId("float-chip").locator(".lab").innerText()).trim();
-    if (kind !== "Region") throw new Error(`Shift+drag on prose opened ${kind}, expected Region`);
+    if (kind !== "Area") throw new Error(`Shift+drag on prose opened ${kind}, expected Area`);
     return kind;
   }
 

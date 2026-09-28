@@ -1316,14 +1316,14 @@ code { font-family: var(--cf-font-mono); }
 .cf-feedback-history > summary span { font-weight: 500; }
 .cf-feedback-history[open] { max-height: 28vh; overflow: auto; }
 .cf-feedback-history[open] > ol { padding: 0 14px 10px; }
-.cf-history-heading, .cf-history-meta {
+.cf-history-heading, .cf-history-meta, .cf-note-heading {
   display: flex;
   flex-wrap: wrap;
   align-items: baseline;
   gap: 8px;
 }
 .cf-history-heading h3 { margin: 0; font-size: 0.9rem; }
-.cf-history-heading span, .cf-history-meta span, .cf-anchor-note, .cf-anchor-warning {
+.cf-history-heading span, .cf-history-meta span, .cf-note-heading span, .cf-anchor-note, .cf-anchor-warning {
   color: var(--cf-text-muted);
   font-size: 0.72rem;
 }

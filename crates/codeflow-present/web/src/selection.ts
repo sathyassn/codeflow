@@ -1,7 +1,7 @@
 import type { ElementSelector, EntitySelector, RegionSelector, TextSelector } from "./contracts";
 // Explicit .ts: check.mjs loads this module under Node type stripping, which
 // does not resolve extensionless relative value imports.
-import { intersectingVisibleText, quoteFromRange, visibleTextOf } from "./excerpt.ts";
+import { intersectingVisibleText, labelTextOf, quoteFromRange } from "./excerpt.ts";
 
 const CONTEXT_UNITS = 32;
 const REGION_SCALE = 1_000_000;
@@ -166,7 +166,7 @@ function ownLabel(block: HTMLElement, element: Element, withText = true): string
   if (aria?.trim()) return collapseLabel(aria);
   if (element instanceof HTMLImageElement && element.alt.trim()) return collapseLabel(element.alt);
   if (element === block || !withText) return "";
-  return collapseLabel(visibleTextOf(element));
+  return collapseLabel(labelTextOf(element));
 }
 
 /** SPC-014 B2: whitespace runs collapse to one space; cut to 120 characters. */
@@ -372,7 +372,7 @@ export function captureResolution(resolution: Resolution): CapturedTarget | null
   if (!blockId || !blockDigest) return null;
   // HTML prose keeps its full visible text as the element label, as in v1;
   // a drawing part carries the resolver's label.
-  const prose = resolution.via === "shape" && element instanceof HTMLElement ? truncate(visibleTextOf(element), 2048) : "";
+  const prose = resolution.via === "shape" && element instanceof HTMLElement ? truncate(labelTextOf(element), 2048) : "";
   const label = prose || resolution.label;
   const variant = element.closest("svg[data-cf-variant]")?.getAttribute("data-cf-variant");
   return {
