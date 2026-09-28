@@ -624,7 +624,8 @@ targets, on that line's first-parent chain, in the project-config table
 information.
 Anything else is direct work: it freezes criteria, and beyond planning
 records it belongs to the one open task with `role: release-integration`,
-whose completion binds to the release head. When the default target's
+whose completion binds to the release head. Pre-push judges a new release
+branch from the default target's tip, as its pull request is. When the default target's
 policy or objects cannot be read, the check fails closed. The check states that it proves structure and
 binding only, and cf-reviewer, cf-consult and cf-ship ask whether each
 criterion is supported on this source and achieves the outcome.

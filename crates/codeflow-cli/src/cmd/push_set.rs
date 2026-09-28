@@ -176,9 +176,16 @@ fn run_ci_ranges(
     for r in pushed {
         let branch = r.remote_branch().unwrap_or_default();
         let base = match range_base(root, r, destination) {
-            Some(RangeBase { base, note }) => {
+            Some(RangeBase {
+                base,
+                note,
+                several,
+            }) => {
                 report.notes.extend(note);
-                Some(base)
+                let release = several
+                    .then(|| release_tip(root, destination.url, branch, report))
+                    .flatten();
+                Some(release.unwrap_or(base))
             }
             None => unresolved_base(root, destination.url, branch, destination, policy, report),
         };
@@ -434,6 +441,31 @@ fn unresolved_base(
     }
 }
 
+/// The default target's tip, for a new release branch whose commits meet
+/// the destination's history at several boundaries (it imports more than
+/// one line). Any one boundary would leave history the destination holds
+/// inside the range; the release branch's pull request is judged from the
+/// default target's tip, so its push is too (SPC-013 R-120). `None` for any
+/// other branch, or when the scope cannot be read here: `codeflow ci`
+/// reads it again and fails closed on its own.
+fn release_tip(
+    root: &Path,
+    url: Option<&str>,
+    branch: &str,
+    report: &mut StageReport,
+) -> Option<String> {
+    use codeflow_core::workgraph::release_line;
+    let asked = release_line::ask(root, url).ok()?.ok()?;
+    let scope = release_line::scope(root, &asked, branch, None).ok()?;
+    let (name, tip) = asked.default.filter(|_| scope.release())?;
+    let tip = tip.to_string();
+    report.notes.push(format!(
+        "'{branch}' is a new release branch that meets the destination's history at several commits; `codeflow ci` judges it from {name} at {}, as its pull request is",
+        short(&tip)
+    ));
+    Some(tip)
+}
+
 /// Why `codeflow ci` did not run for a pushed branch whose range has no base.
 fn unresolved(branch: &str, destination: &Destination<'_>) -> String {
     let why = destination
@@ -486,6 +518,10 @@ fn advertised_commits(root: &Path, url: &str) -> Advertised {
 struct RangeBase {
     base: String,
     note: Option<String>,
+    /// A new branch whose commits meet the destination's history at more
+    /// than one boundary: `base` is one of them, so the range can hold
+    /// history the destination already has.
+    several: bool,
 }
 
 /// The base of a pushed branch's range. Only history known to be on the
@@ -505,7 +541,9 @@ struct RangeBase {
 /// 3. a new branch: the same boundary against the advertised tips alone.
 ///    Those are exactly the commits the destination has, so a stale local
 ///    tracking ref neither hides nor adds anything. The pushed sha itself
-///    when nothing is new;
+///    when nothing is new. When there are several boundaries, a release
+///    branch is judged from the default target's tip instead (see
+///    [`release_tip`]);
 /// 4. a new branch when the destination cannot be asked, or none of its
 ///    tips is here: the same boundary against its protected branches'
 ///    tracking refs, when the remote fetches from the location pushed to.
@@ -519,8 +557,12 @@ fn range_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Option
     }
     let note = match destination.advertised(root) {
         Advertised::Tips(tips) if !tips.is_empty() => {
-            return bounded_by(root, &r.local_sha, tips.iter())
-                .map(|base| RangeBase { base, note: None });
+            let found = boundaries(root, &r.local_sha, tips.iter())?;
+            return Some(RangeBase {
+                several: found.len() > 1,
+                base: found.into_iter().next()?,
+                note: None,
+            });
         }
         Advertised::Tips(_) => None,
         Advertised::Failed(why) => Some(format!(
@@ -609,7 +651,11 @@ fn existing_base(root: &Path, r: &PushRef, destination: &Destination<'_>) -> Ran
             })
         }
     };
-    RangeBase { base, note }
+    RangeBase {
+        base,
+        note,
+        several: false,
+    }
 }
 
 /// The base of the commits in `local_sha` not reachable from `known`: see
@@ -620,6 +666,17 @@ fn bounded_by<'a>(
     local_sha: &str,
     known: impl Iterator<Item = &'a String>,
 ) -> Option<String> {
+    boundaries(root, local_sha, known)?.into_iter().next()
+}
+
+/// Every boundary commit of the commits in `local_sha` not reachable from
+/// `known`, in `rev-list` order, or the pushed sha itself when no commit is
+/// new. `None` when git fails or no boundary exists (no shared history).
+fn boundaries<'a>(
+    root: &Path,
+    local_sha: &str,
+    known: impl Iterator<Item = &'a String>,
+) -> Option<Vec<String>> {
     let mut input = format!("{local_sha}\n");
     for sha in known {
         input.push('^');
@@ -627,7 +684,15 @@ fn bounded_by<'a>(
         input.push('\n');
     }
     let listed = git_input(root, &["rev-list", "--boundary", "--stdin"], &input)?;
-    boundary(&listed, local_sha, None).map(|found| found.base)
+    if listed.trim().is_empty() {
+        return Some(vec![local_sha.to_string()]);
+    }
+    let found: Vec<String> = listed
+        .lines()
+        .filter_map(|line| line.strip_prefix('-'))
+        .map(str::to_string)
+        .collect();
+    (!found.is_empty()).then_some(found)
 }
 
 /// The base from `rev-list --boundary` output: its first boundary commit, or
@@ -637,6 +702,7 @@ fn boundary(listed: &str, local_sha: &str, note: Option<String>) -> Option<Range
         return Some(RangeBase {
             base: local_sha.to_string(),
             note,
+            several: false,
         });
     }
     listed
@@ -645,6 +711,7 @@ fn boundary(listed: &str, local_sha: &str, note: Option<String>) -> Option<Range
         .map(|base| RangeBase {
             base: base.to_string(),
             note,
+            several: false,
         })
 }
 

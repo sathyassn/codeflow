@@ -146,12 +146,13 @@ publication date._
   default branch or an epic line, and the validator refuses a second open
   holder of the role. When the default branch's policy file is missing or
   unreadable, or the destination names a default branch it does not have,
-  the check fails closed instead of using the ordinary rules. A pushed
-  branch whose range the destination's tips do not resolve is judged from
-  the default branch's tip when it is a release branch, and refused when
-  the destination does not answer. `task status complete` judges a
-  completion whose task targets a release branch as CI judges that pull
-  request. `codeflow ci` gains `--into`.
+  the check fails closed instead of using the ordinary rules. A new
+  release branch that imports several lines, and a pushed branch whose
+  range the destination's tips do not resolve, are judged from the default
+  branch's tip when they are release branches, as their pull request is; a
+  push the destination does not answer for is refused. `task status
+  complete` judges a completion whose task targets a release branch as CI
+  judges that pull request. `codeflow ci` gains `--into`.
 
 <!-- codeflow:release-impact minor -->
 - **Shared id registry.** With tracking on, `epic new`, `spec new` and

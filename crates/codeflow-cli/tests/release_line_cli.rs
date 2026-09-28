@@ -879,6 +879,47 @@ fn an_unresolved_new_release_branch_is_not_pushed_unjudged() {
     }
 }
 
+/// AC-6, AC-9: a new release branch cut from the default target and
+/// importing two lines meets the destination's history at several commits.
+/// Its push is judged from the default target's tip, as its pull request
+/// is, never from one line's tip, which would leave the default target's
+/// own later history inside the range.
+#[test]
+fn a_new_release_branch_is_pushed_from_the_default_tip() {
+    let zero = "0000000000000000000000000000000000000000";
+    let fx = Fx::new(false);
+    fx.build_and_complete(LINE_A, "TSK-001", "src/one.rs");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.build_and_complete(LINE_B, "TSK-002", "src/two.rs");
+    fx.land(LINE_B, "task/TSK-002-work");
+    // The default target moves on after both lines were cut.
+    fx.git(&["switch", "-q", "main"]);
+    fx.write("docs/later.md", "later\n");
+    let main = fx.commit("docs: a later page");
+    fx.git(&["push", "-q", "origin", "main"]);
+    fx.git(&["switch", "-q", "-C", RELEASE, "main"]);
+    fx.import(LINE_A);
+    fx.import(LINE_B);
+    let head = fx.head();
+    let hook = fx.pre_push(RELEASE, &head, zero);
+    passes(&hook, "a new release branch of two imports");
+    let judged = format!("codeflow ci --base {main} --head {head}");
+    assert!(hook.1.contains(&judged), "{}", hook.1);
+    assert!(
+        hook.1.contains(
+            "is a new release branch that meets the destination's history at several commits"
+        ),
+        "{}",
+        hook.1
+    );
+    let ci = fx.ci("main", &head, RELEASE, Some("main"));
+    assert_eq!(findings(&ci), findings(&hook), "{}\n{}", ci.1, hook.1);
+
+    // An ordinary branch with the same shape keeps its boundary base.
+    let hook = fx.pre_push("feat/two-lines", &head, zero);
+    assert!(!hook.1.contains("is a new release branch"), "{}", hook.1);
+}
+
 /// AC-5 (Codex R145-3): an existing default target with no policy file
 /// cannot say what its release branches are, so the check fails closed.
 #[test]
