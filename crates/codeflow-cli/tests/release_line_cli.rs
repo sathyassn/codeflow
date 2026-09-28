@@ -1543,6 +1543,63 @@ fn a_foreign_import_never_clears_a_direct_completion() {
     }
 }
 
+/// AC-2, AC-11 (Codex R145-R4-2): a completion made directly on the
+/// release line is judged as it was made, not as a later foreign import
+/// rewrites it. Line A lands TSK-001's valid completion; the release line
+/// replaces its block with a stale one; line B takes that state and lands a
+/// completion of TSK-001 reviewed at its own head; the release imports B.
+/// The direct completion's finding stands, since only the task's own line
+/// supersedes it.
+#[test]
+fn a_foreign_completion_never_replaces_a_direct_one() {
+    let fx = Fx::new(false);
+    fx.build_and_complete(LINE_A, "TSK-001", "src/work.rs");
+    fx.land(LINE_A, "task/TSK-001-work");
+    fx.cut_release();
+    fx.import(LINE_A);
+    let main = fx.git(&["rev-parse", "main"]);
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "complete", CRITERIA, &block(&main)),
+    );
+    let direct = fx.commit("docs(records): replace the completion");
+    let stale = format!(
+        "TSK-001 (completed directly on the release line at {}): src/work.rs changed after the reviewed commit",
+        &direct[..9]
+    );
+    let before = fx.ci("main", "HEAD", RELEASE, Some("main"));
+    blocks(&before, "the stale direct completion", &[&stale]);
+
+    // Line B takes the release state and completes TSK-001 at its head.
+    fx.git(&["switch", "-q", LINE_B]);
+    let synced = fx.merge(RELEASE);
+    fx.git(&["switch", "-q", "-C", "task/TSK-001-foreign", LINE_B]);
+    fx.write(
+        &path("TSK-001"),
+        &record("TSK-001", "complete", CRITERIA, &block(&synced)),
+    );
+    fx.commit("docs(records): complete TSK-001 through line B");
+    fx.land(LINE_B, "task/TSK-001-foreign");
+    let import = fx.import(LINE_B);
+
+    let after = fx.ci("main", "HEAD", RELEASE, Some("main"));
+    assert!(
+        after
+            .1
+            .contains(&format!("release path: {}: import", &import[..9])),
+        "{}",
+        after.1
+    );
+    blocks(
+        &after,
+        "a foreign completion after the direct one",
+        &[&stale],
+    );
+    let pushed = fx.pre_push_release();
+    assert_eq!(findings(&pushed), findings(&after), "{}", pushed.1);
+    assert_eq!(pushed.0, 1, "{}", pushed.1);
+}
+
 /// AC-1, AC-6: a completion made on the release line and later brought,
 /// block and all, from the task's own line is judged where the line landed
 /// it; the earlier direct completion no longer stands at the head.

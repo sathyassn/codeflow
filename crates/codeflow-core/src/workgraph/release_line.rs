@@ -936,8 +936,11 @@ pub fn release_findings(
     let mut lines = Lines::new(repo_root, &repo, destination);
     let mut findings = Vec::new();
     let mut work: Vec<Work> = Vec::new();
-    // Each task completed directly, with the commit that made it.
-    let mut direct_completions: BTreeMap<String, Oid> = BTreeMap::new();
+    // Each task completed directly: the commit that made it and the record
+    // as it made it. The finding is the one that record earns at the head,
+    // whatever a later import writes, until the task's own line supersedes
+    // it.
+    let mut direct_completions: BTreeMap<String, (Oid, RecordView)> = BTreeMap::new();
     // Each task's brought completions: see [`Held`].
     let mut brought_completions: BTreeMap<String, Held> = BTreeMap::new();
     let mut report = Vec::new();
@@ -1003,7 +1006,7 @@ pub fn release_findings(
                 }
                 if let Some(now) = &now {
                     if completion_changed(then.as_ref(), now) {
-                        direct_completions.insert(now.id.clone(), *commit_oid);
+                        direct_completions.insert(now.id.clone(), (*commit_oid, now.clone()));
                     }
                 }
             }
@@ -1127,7 +1130,7 @@ pub fn release_findings(
                             }
                         }
                         _ => {
-                            direct_completions.insert(now.id.clone(), *commit_oid);
+                            direct_completions.insert(now.id.clone(), (*commit_oid, now.clone()));
                         }
                     }
                 }
@@ -1162,7 +1165,7 @@ pub fn release_findings(
             }
             if let Some(now) = &now {
                 if completion_changed(then.as_ref(), now) {
-                    direct_completions.insert(now.id.clone(), *commit_oid);
+                    direct_completions.insert(now.id.clone(), (*commit_oid, now.clone()));
                 }
             }
         }
@@ -1190,8 +1193,9 @@ pub fn release_findings(
             .get(id)
             .filter(|task| task.kind == RecordKind::Task)
     };
-    for (id, made) in &direct_completions {
-        if let Some(task) = at_head(id).filter(|task| task.status == "complete") {
+    for (id, (made, task)) in &direct_completions {
+        // A task the head no longer holds complete carries no completion.
+        if at_head(id).is_some_and(|task| task.status == "complete") {
             let prefix = format!("{id}: ");
             findings.extend(
                 bind_completion_at_head(
