@@ -495,10 +495,25 @@ try {
     assert.doesNotMatch(html, chrome, `lifecycle, export: carries ${chrome}`);
   }
   assert.ok(html.includes("data-cf-block-id=\"prose\""), "lifecycle, export: lost the document");
+  // An unsent note is kept in this tab's session storage until the service
+  // reports the session closed; then the draft is dropped (B6 as amended).
+  // close stops the service, so no page of the closed session can load again;
+  // the dropped key is what a reload would read.
+  await page.bringToFront();
+  await armComment(page);
+  await reveal(page, "points");
+  await gesture(page, { type: "bullets", gesture: "text", block: "points", recipe: RECIPES.bullets.text });
+  await saveNote(page, "draft: dropped when the session closes");
+  const draftKey = `cf-present-draft:${sessionId}`;
+  const keptDraft = await page.evaluate((key) => sessionStorage.getItem(key), draftKey);
+  assert.ok(keptDraft?.includes("draft: dropped when the session closes"), "lifecycle, close: the unsent note is not in session storage");
   // close then clear leave no session state behind.
+  run(["present", "close", sessionId]);
+  await page.getByTestId("toast").getByText(/This review session is closed\./u).waitFor({ timeout: 30_000 });
+  assert.equal(await page.evaluate((key) => sessionStorage.getItem(key), draftKey), null, "lifecycle, close: the draft outlived the session");
+  assert.deepEqual(await page.evaluate(() => Object.keys(sessionStorage)), [], "lifecycle, close: session storage still holds a draft");
   await context.close();
   context = null;
-  run(["present", "close", sessionId]);
   // close returns only once the service has exited, so clear right after it
   // finds nothing running.
   run(["present", "clear", sessionId, "--older-than", "0d"]);
@@ -506,7 +521,7 @@ try {
   assert.throws(() => run(["present", "history", sessionId]), "lifecycle, clear: history still readable");
   const cleared = sessionId;
   sessionId = null;
-  process.stdout.write(`lifecycle passed: an approval with no notes, an unsent note kept across update and reload, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, close and clear of ${cleared}\n`);
+  process.stdout.write(`lifecycle passed: an approval with no notes, an unsent note kept across update and reload, update re-anchors and orphans with reasons, resolve, history of 2 revisions and 3 reviews, export without chrome, an unsent note dropped from session storage when the session closes, close and clear of ${cleared}\n`);
   process.stdout.write(`cf-present annotation matrix passed: ${cells.length} cells and a whole-document note over ${matrix.size} block types (${cells.filter((cell) => cell.gesture === "text").length} text, ${cells.filter((cell) => cell.gesture === "element").length} element, ${cells.filter((cell) => cell.gesture === "area").length} area), each delivered with its kind and selector; ${decoded.length} JPEG crops sized to the rectangle each note reloads, not one colour, and ${decoded.filter((crop) => crop.inside !== undefined).length} of them at least ${LIKENESS_FLOOR} like the page inside that rectangle, more like it than just outside, and in register with the same rectangle moved 4 or 12 px\n`);
   for (const cell of expected) {
     const crop = decoded.find((item) => item.where === cell.where);

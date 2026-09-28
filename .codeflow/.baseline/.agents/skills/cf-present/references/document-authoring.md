@@ -341,6 +341,8 @@ A `decision` row is the schema_version 2 decision, which is a form; the
 renders as before. Marking a form or a decision never answers it: with
 Comment on, a click on a field pins a note on the field and leaves its value,
 the draft and the stored answers as they were, and nothing is sent.
+Unsent review notes survive a reload of the tab until the session closes; a
+form's unsent answer does not.
 
 Revision updates change document content only. Feedback lifecycle changes
 through review events. Accepted decisions are summarized to their canonical

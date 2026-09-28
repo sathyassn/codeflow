@@ -143,8 +143,14 @@ const SPEECH_PATH =
 export function Chrome({ config, documentRoot }: ChromeProps) {
   const [appearance, setAppearance] = useState(initialAppearance);
   // Unsent notes survive a reload of this tab (QA defect 4), until a submit
-  // succeeds. They stay in this browser's session storage for this session.
+  // succeeds. They stay in this browser's session storage for this session,
+  // and are dropped once the service reports the session closed (B6).
   const [draft] = useState(() => readDraft(config.session_id));
+  const closedRef = useRef(false);
+  const dropClosedDraft = (): void => {
+    closedRef.current = true;
+    clearDraft(config.session_id);
+  };
   const [notes, setNotes] = useState<readonly PendingFeedback[]>(draft?.notes ?? []);
   const [verdict, setVerdict] = useState<ReviewVerdict>(draft?.verdict ?? "approve_with_notes");
   const [instruction, setInstruction] = useState(draft?.instruction ?? "");
@@ -328,7 +334,9 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
     return undefined;
   }, [appearance, settingsOpen]);
 
-  useEffect(() => writeDraft(config.session_id, config.revision, notes, verdict, instruction), [notes, verdict, instruction]);
+  useEffect(() => {
+    if (!closedRef.current) writeDraft(config.session_id, config.revision, notes, verdict, instruction);
+  }, [notes, verdict, instruction]);
   useEffect(() => {
     const notice = draftNotice(draft, config.revision);
     if (notice) showToast(notice, { sticky: true });
@@ -1062,6 +1070,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       // SPC-014 I3: a refused review names its reason; the pending notes stay
       // for every refusal, so the reviewer can correct and resend them.
       const refusal = error instanceof PresentRequestError ? parseServiceError(error.message) : null;
+      if (refusal?.error === "session_closed") dropClosedDraft();
       const reason = refusal?.message ?? (error instanceof Error ? error.message : String(error));
       const notice = `Review was not submitted: ${reason} Your pending notes are unchanged.`;
       setStatus(notice);
@@ -1150,6 +1159,7 @@ export function Chrome({ config, documentRoot }: ChromeProps) {
       setStatus(notice);
       showToast(notice, { sticky: true });
     } else if (event.kind === "session_closed") {
+      dropClosedDraft();
       const notice = "This review session is closed.";
       setStatus(notice);
       showToast(notice, { sticky: true });
