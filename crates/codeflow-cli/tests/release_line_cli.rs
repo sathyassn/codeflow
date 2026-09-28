@@ -897,6 +897,103 @@ fn the_adoption_marker_is_written_once() {
     );
 }
 
+/// `codeflow ci` on an empty release range at `dir`'s HEAD, asking `url`.
+fn ci_empty_at(dir: &Path, url: &str) -> (i32, String) {
+    let tip = run_git(dir, &["rev-parse", "HEAD"]);
+    output(
+        &clean_env(&mut Command::new(env!("CARGO_BIN_EXE_codeflow")))
+            .args([
+                "ci",
+                "--base",
+                &tip,
+                "--head",
+                &tip,
+                "--branch",
+                RELEASE,
+                "--destination",
+                url,
+            ])
+            .current_dir(dir)
+            .output()
+            .unwrap(),
+    )
+}
+
+/// AC-13, Codex R145-R5b-1: a shallow clone of a default target that
+/// adopted the marker and later removed it cannot read adoption from its
+/// truncated history, so CI and pre-push refuse and say how to fetch it;
+/// never-adopted is not inferred either. Unshallowed, the same clone
+/// names the removal.
+#[test]
+fn a_shallow_default_history_is_never_read_as_unadopted() {
+    let fx = Fx::new(false);
+    set_marker(&fx, "release_rules = 1\n");
+    let removal = set_marker(&fx, "");
+    let parent = fx.root.parent().unwrap();
+    let url = format!("file://{}", fx.origin.display());
+    run_git(parent, &["clone", "-q", "--depth", "1", &url, "shallow"]);
+    let shallow = parent.join("shallow");
+    let cut = [
+        "this clone's history is shallow at",
+        "git fetch --unshallow",
+    ];
+    blocks(&ci_empty_at(&shallow, &url), "shallow CI", &cut);
+    let tip = run_git(&shallow, &["rev-parse", "HEAD"]);
+    run_git(
+        &shallow,
+        &["commit", "-q", "--allow-empty", "-m", "docs: move off"],
+    );
+    blocks(
+        &pre_push_new(&shallow, &url, RELEASE, &tip),
+        "shallow pre-push",
+        &cut,
+    );
+    run_git(&shallow, &["reset", "-q", "--hard", &tip]);
+    run_git(&shallow, &["fetch", "-q", "--unshallow", "origin"]);
+    blocks(
+        &ci_empty_at(&shallow, &url),
+        "unshallowed CI",
+        &[&format!("is removed at {} on main", &removal[..9])],
+    );
+}
+
+/// AC-13, Codex R145-R5b-1: a config object on the default target's
+/// history that this clone lacks is never read as no marker. With the
+/// adoption blob gone CI refuses as unreadable; with the exact bytes back
+/// it names the removal.
+#[test]
+fn a_missing_config_object_is_never_read_as_absent() {
+    let fx = Fx::new(false);
+    let adopted = set_marker(&fx, "release_rules = 1\n");
+    let removal = set_marker(&fx, "");
+    let blob = fx.git(&["rev-parse", &format!("{adopted}:.codeflow/project.toml")]);
+    let object = fx
+        .root
+        .join(".git/objects")
+        .join(&blob[..2])
+        .join(&blob[2..]);
+    let saved = std::fs::read(&object).unwrap();
+    std::fs::remove_file(&object).unwrap();
+    let url = fx.origin.to_str().unwrap().to_string();
+    blocks(
+        &ci_empty_at(&fx.root, &url),
+        "a missing adoption blob",
+        &[
+            &format!(
+                ".codeflow/project.toml at {} is not in this clone",
+                &adopted[..9]
+            ),
+            "cannot be read",
+        ],
+    );
+    std::fs::write(&object, saved).unwrap();
+    blocks(
+        &ci_empty_at(&fx.root, &url),
+        "the adoption blob restored",
+        &[&format!("is removed at {} on main", &removal[..9])],
+    );
+}
+
 /// AC-3 (Codex R145-1): the freeze follows the record's identity, so
 /// deleting a task record and re-creating it with looser criteria in a
 /// later commit is refused, and so is the deletion alone.

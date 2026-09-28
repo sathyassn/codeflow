@@ -139,7 +139,9 @@ publication date._
   which lists it as information. The adoption marker `release_rules = 1`
   in project config never decides whether these rules apply; once the
   default branch carries it, removing it or changing its value makes
-  every release check refuse. Everything else, including a
+  every release check refuse. A shallow clone or a missing config object
+  on that history refuses too, since adoption cannot be read from it.
+  Everything else, including a
   merge resolution, is direct work: it may not change criteria (removing
   or re-creating a task record counts as a change), and code
   needs the one open task marked `role: release-integration`, completed at

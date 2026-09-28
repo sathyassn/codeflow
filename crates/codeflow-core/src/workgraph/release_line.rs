@@ -1436,13 +1436,17 @@ fn landed_criteria(repo: &Repository, now: &RecordView, path: &str, source: Oid)
     }
 }
 
-/// What a commit's project config says of [`MARKER_KEY`].
+/// What a commit's project config says of [`MARKER_KEY`]. Only config
+/// that was read counts: an object this clone lacks is an error, never
+/// [`Marker::Absent`].
 #[derive(Clone, PartialEq, Eq)]
 enum Marker {
+    /// No project config, or config without the key.
     Absent,
     Adopted,
     Changed(String),
-    Unreadable(String),
+    /// Config that was read but is not valid TOML, so it carries no key.
+    Invalid(String),
 }
 
 impl Marker {
@@ -1451,40 +1455,87 @@ impl Marker {
             Self::Absent => "removed".to_string(),
             Self::Adopted => format!("{MARKER_KEY} = 1"),
             Self::Changed(value) => format!("changed to `{MARKER_KEY} = {value}`"),
-            Self::Unreadable(why) => format!("unreadable ({why})"),
+            Self::Invalid(why) => format!("unreadable ({why})"),
         }
     }
 }
 
 /// The marker a commit's project config carries, memoized by blob.
+///
+/// # Errors
+///
+/// Returns a message when the commit, a tree on the config's path or the
+/// config blob is not in this clone: whether the marker was there cannot
+/// be read, so it is never taken as absent.
 fn marker_at(
     repo: &Repository,
     commit: Oid,
     blobs: &mut HashMap<Oid, Marker>,
 ) -> Result<Marker, String> {
+    let unavailable = |what: &str, error: &git2::Error| {
+        format!(
+            "{what} at {} is not in this clone ({}), so whether it carries {MARKER_KEY} cannot be read; fetch the default target's full history, then retry (SPC-013 R-120)",
+            short(commit),
+            error.message()
+        )
+    };
     let tree = repo
         .find_commit(commit)
         .and_then(|commit| commit.tree())
-        .map_err(|error| error.message().to_string())?;
-    let Ok(entry) = tree.get_path(Path::new(".codeflow/project.toml")) else {
+        .map_err(|error| unavailable("the commit's tree", &error))?;
+    let Some(folder) = tree.get_name(".codeflow") else {
         return Ok(Marker::Absent);
     };
+    if folder.kind() != Some(git2::ObjectType::Tree) {
+        return Ok(Marker::Absent);
+    }
+    let folder = repo
+        .find_tree(folder.id())
+        .map_err(|error| unavailable(".codeflow", &error))?;
+    let Some(entry) = folder.get_name("project.toml") else {
+        return Ok(Marker::Absent);
+    };
+    if entry.kind() != Some(git2::ObjectType::Blob) {
+        return Ok(Marker::Absent);
+    }
     if let Some(known) = blobs.get(&entry.id()) {
         return Ok(known.clone());
     }
-    let marker = match repo.find_blob(entry.id()) {
-        Err(error) => Marker::Unreadable(error.message().to_string()),
-        Ok(blob) => match String::from_utf8_lossy(blob.content()).parse::<toml::Value>() {
-            Err(error) => Marker::Unreadable(format!("not valid TOML: {error}")),
-            Ok(config) => match config.get(MARKER_KEY) {
-                None => Marker::Absent,
-                Some(toml::Value::Integer(1)) => Marker::Adopted,
-                Some(value) => Marker::Changed(value.to_string()),
-            },
+    let blob = repo
+        .find_blob(entry.id())
+        .map_err(|error| unavailable(".codeflow/project.toml", &error))?;
+    let marker = match String::from_utf8_lossy(blob.content()).parse::<toml::Value>() {
+        Err(error) => Marker::Invalid(format!("not valid TOML: {error}")),
+        Ok(config) => match config.get(MARKER_KEY) {
+            None => Marker::Absent,
+            Some(toml::Value::Integer(1)) => Marker::Adopted,
+            Some(value) => Marker::Changed(value.to_string()),
         },
     };
     blobs.insert(entry.id(), marker.clone());
     Ok(marker)
+}
+
+/// The commits this clone's history is cut at (`.git/shallow`): each looks
+/// parentless though it has parents, so a walk reaching one is truncated.
+///
+/// # Errors
+///
+/// Returns a message when the clone is shallow but its boundary list
+/// cannot be read.
+fn shallow_boundary(repo: &Repository) -> Result<HashSet<Oid>, String> {
+    if !repo.is_shallow() {
+        return Ok(HashSet::new());
+    }
+    let listed = std::fs::read_to_string(repo.path().join("shallow")).map_err(|error| {
+        format!("this clone is shallow and its boundary cannot be read: {error}")
+    })?;
+    listed
+        .lines()
+        .map(str::trim)
+        .filter(|line| !line.is_empty())
+        .map(|line| Oid::from_str(line).map_err(|error| error.message().to_string()))
+        .collect()
 }
 
 /// [`MARKER_KEY`] is written once: from the first commit on the default
@@ -1499,6 +1550,17 @@ fn marker_at(
 /// Returns a message naming the commit that removed, changed or broke the
 /// marker, so every release check refuses.
 fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Result<(), String> {
+    // A walk that stops at a shallow boundary is not the start of history:
+    // adoption before the cut cannot be seen, so nothing is inferred.
+    let boundary = shallow_boundary(repo)?;
+    let truncated = |commit: Oid| {
+        boundary.contains(&commit).then(|| {
+            format!(
+                "this clone's history is shallow at {}, so whether {default} adopted {MARKER_KEY} before it cannot be read; run `git fetch --unshallow`, then retry (SPC-013 R-120)",
+                short(commit)
+            )
+        })
+    };
     let mut walk = repo.revwalk().map_err(|error| error.to_string())?;
     walk.push(tip)
         .and_then(|()| walk.simplify_first_parent())
@@ -1516,11 +1578,13 @@ fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Res
             short(at)
         )
     };
+    if let Some(why) = chain.first().copied().and_then(truncated) {
+        return Err(why);
+    }
     let mut adopted = None;
     for commit in chain {
         let marker = marker_at(repo, commit, &mut blobs)?;
         match (adopted, &marker) {
-            (None, Marker::Absent | Marker::Unreadable(_)) => {}
             (None, Marker::Adopted) => adopted = Some(commit),
             (None, Marker::Changed(value)) => {
                 return Err(format!(
@@ -1528,8 +1592,12 @@ fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Res
                     short(commit)
                 ))
             }
-            (Some(_), Marker::Adopted) => {}
-            (Some(first), _) => return Err(refuse(first, commit, &marker, &format!("on {default}"))),
+            (Some(first), Marker::Absent | Marker::Changed(_) | Marker::Invalid(_)) => {
+                return Err(refuse(first, commit, &marker, &format!("on {default}")))
+            }
+            // Before adoption, config without the key or that is not TOML
+            // carries no marker; after it, the marker kept is the rule.
+            (None, Marker::Absent | Marker::Invalid(_)) | (Some(_), Marker::Adopted) => {}
         }
     }
     let Some(first) = adopted else {
@@ -1541,7 +1609,12 @@ fn marker_holds(repo: &Repository, default: &str, tip: Oid, path: &[Oid]) -> Res
             .map_err(|error| error.message().to_string())?
             .parent_id(0)
             .ok();
-        let Some(parent) = parent else { continue };
+        let Some(parent) = parent else {
+            if let Some(why) = truncated(*commit) {
+                return Err(why);
+            }
+            continue;
+        };
         if marker_at(repo, parent, &mut blobs)? != Marker::Adopted {
             continue;
         }

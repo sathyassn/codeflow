@@ -627,7 +627,9 @@ targets, on that line's first-parent chain, in the project-config table
 information. The adoption marker `release_rules = 1` in project config
 never decides whether these rules apply; once the default target carries
 it, removing it or changing its value, there or in the judged range,
-makes every release check refuse.
+makes every release check refuse. History that cannot be read in full, a
+shallow clone or a missing config object, refuses as well: adoption is
+never inferred absent from it.
 Anything else is direct work: it freezes criteria, and beyond planning
 records it belongs to the one open task with `role: release-integration`,
 whose completion binds to the release head. Pre-push judges a push to a
