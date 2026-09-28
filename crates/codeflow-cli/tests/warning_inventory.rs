@@ -89,6 +89,13 @@ fn every_catalogued_remedy_names_a_step_that_exists() {
                 });
                 assert!(known, "{}: `{command}` is not a git command", clearing.name);
             }
+            Step::Manual(_) => {
+                assert!(
+                    clearing.name.starts_with("DOCTOR_") && clearing.text.contains("cannot verify"),
+                    "{}: a manual step is only for a doctor note that says doctor cannot verify it",
+                    clearing.name
+                );
+            }
             Step::Edit(path) => {
                 assert!(
                     path == "{path}"

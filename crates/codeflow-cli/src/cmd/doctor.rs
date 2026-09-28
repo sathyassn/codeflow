@@ -62,6 +62,7 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
         let badge = match r.status {
             Status::Pass => "ok  ",
             Status::Warn(_) => "warn",
+            Status::Note(_) => "note",
             Status::Fail => {
                 failed = true;
                 "FAIL"
@@ -73,8 +74,14 @@ fn run_with(args: &DoctorArgs, opts: &Options, out: &mut dyn Write) -> i32 {
             name = r.name,
             message = r.message
         );
-        if let Status::Warn(remedy) = &r.status {
-            let _ = writeln!(out, "      clear it: {remedy}");
+        match &r.status {
+            Status::Warn(remedy) => {
+                let _ = writeln!(out, "      clear it: {remedy}");
+            }
+            Status::Note(remedy) => {
+                let _ = writeln!(out, "      confirm: {remedy}");
+            }
+            Status::Pass | Status::Fail => {}
         }
     }
     i32::from(failed)
@@ -111,6 +118,7 @@ mod tests {
             exec_command: Some(|_, _| Ok(String::new())),
             exec_command_stdin: Some(|_, _, _| Ok(String::new())),
             qualification_dir: None,
+            harness_home: Some(dir.path().join("home")),
         };
         (dir, opts)
     }

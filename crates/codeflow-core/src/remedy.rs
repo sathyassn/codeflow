@@ -21,6 +21,9 @@ pub enum Step {
     /// Edit a named file, as a path from the project root. `{path}` stands
     /// for the file the message itself names.
     Edit(&'static str),
+    /// Confirm by hand, only in a doctor note about a state doctor cannot
+    /// read; its text says doctor cannot verify it (TSK-147 AC-1).
+    Manual(&'static str),
 }
 
 impl Step {
@@ -30,6 +33,7 @@ impl Step {
         match self {
             Self::Codeflow(command) | Self::Git(command) => command,
             Self::Edit(path) => path,
+            Self::Manual(step) => step,
         }
     }
 }
@@ -438,9 +442,9 @@ catalog! {
     /// A prerequisite outside the project, which doctor can observe.
     DOCTOR_EXTERNAL = Step::Codeflow("codeflow doctor"),
         "{step}, then `codeflow doctor --check {check}` confirms it";
-    /// A step doctor cannot observe, so its warning stays after the step.
-    DOCTOR_UNSEEN = Step::Codeflow("codeflow doctor"),
-        "{step}; `codeflow doctor` cannot observe the result, so this warning stays after it";
+    /// A state doctor cannot read: the manual confirmation.
+    DOCTOR_UNSEEN = Step::Manual("{step}"),
+        "{step}; `codeflow doctor` cannot verify it";
     /// A policy or release setting that awaits a project decision.
     DOCTOR_POLICY_DECISION = Step::Edit(".codeflow/policy.json"),
         "record the decision in .codeflow/policy.json ({decision}), then `codeflow doctor --check adopter-fit` confirms it";

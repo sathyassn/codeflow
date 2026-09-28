@@ -30,6 +30,9 @@ pub enum Status {
     Fail,
     /// A warning, with the step that clears it (SPC-013 R-80).
     Warn(Remedy),
+    /// A state doctor cannot read, with the manual step that confirms it
+    /// (TSK-147 AC-1). Never fails and never warns.
+    Note(Remedy),
 }
 
 impl Status {
@@ -61,6 +64,14 @@ mod duration_millis {
     }
 }
 
+/// The user's home directory (`HOME`, else `USERPROFILE`), or the current
+/// directory when neither is set.
+fn user_home() -> PathBuf {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map_or_else(|| PathBuf::from("."), PathBuf::from)
+}
+
 /// Callback to locate an executable by name.
 type LookPathFn = fn(&str) -> Result<String, String>;
 
@@ -84,9 +95,30 @@ pub struct Options {
     /// User-owned qualified-binding directory. `None` disables the optional
     /// check; the CLI supplies `CODEFLOW_HOME/qualified-bindings`.
     pub qualification_dir: Option<PathBuf>,
+    /// The home directory whose `.codex/` and `.grok/` hold the harnesses'
+    /// trust records. `None` is the user's home (Codex honours
+    /// `CODEX_HOME`); tests pass a directory of their own.
+    pub harness_home: Option<PathBuf>,
 }
 
 impl Options {
+    /// Where Codex keeps its state: `CODEX_HOME`, else `~/.codex`.
+    fn codex_home(&self) -> PathBuf {
+        match &self.harness_home {
+            Some(home) => home.join(".codex"),
+            None => std::env::var_os("CODEX_HOME")
+                .map_or_else(|| user_home().join(".codex"), PathBuf::from),
+        }
+    }
+
+    /// Where Grok keeps its state: `~/.grok`.
+    fn grok_home(&self) -> PathBuf {
+        self.harness_home
+            .clone()
+            .unwrap_or_else(user_home)
+            .join(".grok")
+    }
+
     fn do_look_path(&self, name: &str) -> Result<String, String> {
         if let Some(f) = self.look_path {
             f(name)
@@ -452,26 +484,165 @@ fn check_codex(opts: &Options) -> CheckResult {
     } else {
         "codex CLI not found in PATH"
     };
+    let approve = "run `/hooks` inside interactive codex once and approve the CodeFlow hooks";
+    let (status, message) = match codex_hook_trust(&hooks_json, &opts.codex_home()) {
+        Ok((trusted, total)) if trusted == total => (
+            Status::Pass,
+            format!(
+                ".codex/hooks.json present, {presence}: codex trust recorded for {trusted} of {total} hooks"
+            ),
+        ),
+        Ok((trusted, total)) => (
+            Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[("step", approve), ("check", "codex")])),
+            format!(
+                ".codex/hooks.json present, {presence}: codex trust recorded for {trusted} of {total} hooks; an untrusted or changed hook does not run (git hooks and CI enforce regardless)"
+            ),
+        ),
+        Err(why) => (
+            Status::Note(remedy::DOCTOR_UNSEEN.with(&[("step", approve)])),
+            format!(".codex/hooks.json present, {presence}: codex trust not read ({why})"),
+        ),
+    };
     CheckResult {
         name: "codex".into(),
-        status: Status::Warn(remedy::DOCTOR_UNSEEN.with(&[(
-            "step",
-            "run `/hooks` inside interactive codex once and approve the CodeFlow hooks",
-        )])),
-        message: format!(
-            ".codex/hooks.json present, {presence}: in-session guards are wired structurally; trust is a one-time in-codex step that is not inspectable from here (git hooks and CI enforce regardless)"
-        ),
+        status,
+        message,
         duration: start.elapsed(),
     }
 }
 
+/// How many of the project's Codex hooks Codex trusts as they are now, of
+/// how many. Codex runs a project hook only when its `config.toml` holds
+/// `hooks.state."<hooks.json>:<event>:<group>:<handler>".trusted_hash`
+/// equal to `sha256:` and the SHA-256 of the sorted-key JSON of
+/// `{event_name, matcher, hooks: [handler]}`, the handler normalized to
+/// `type`, `command`, `timeout` and `async` (checked against the hashes
+/// Codex 0.157.1 recorded; an absent matcher is left out, as the TOML value
+/// Codex builds the identity through cannot hold it).
+/// `Err` when a hook has a shape that hash does not cover, or the files do
+/// not read.
+fn codex_hook_trust(hooks_json: &Path, codex_home: &Path) -> Result<(usize, usize), String> {
+    let text = std::fs::read_to_string(hooks_json).map_err(|e| format!("hooks.json: {e}"))?;
+    let hooks: serde_json::Value =
+        serde_json::from_str(&text).map_err(|e| format!("hooks.json: {e}"))?;
+    let config = match std::fs::read_to_string(codex_home.join("config.toml")) {
+        Ok(text) => text
+            .parse::<toml::Table>()
+            .map_err(|e| format!("codex config.toml: {e}"))?,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => toml::Table::new(),
+        Err(e) => return Err(format!("codex config.toml: {e}")),
+    };
+    let state = config
+        .get("hooks")
+        .and_then(|hooks| hooks.get("state"))
+        .and_then(toml::Value::as_table);
+    let paths: BTreeSet<String> = [
+        hooks_json.display().to_string(),
+        hooks_json.canonicalize().map_or_else(
+            |_| hooks_json.display().to_string(),
+            |p| p.display().to_string(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    let events = hooks
+        .get("hooks")
+        .and_then(serde_json::Value::as_object)
+        .ok_or("hooks.json has no `hooks` object")?;
+    let (mut trusted, mut total) = (0, 0);
+    for (event, groups) in events {
+        let event_name = snake_case(event);
+        for (g, group) in groups.as_array().into_iter().flatten().enumerate() {
+            // Codex builds the identity through a TOML value, which cannot
+            // hold an absent matcher: the key is left out (discovery.rs).
+            let matcher =
+                match group.get("matcher") {
+                    None => None,
+                    Some(value) => Some(value.as_str().ok_or_else(|| {
+                        format!("{event} group {g} has a matcher that is not text")
+                    })?),
+                };
+            for (h, handler) in group
+                .get("hooks")
+                .and_then(serde_json::Value::as_array)
+                .into_iter()
+                .flatten()
+                .enumerate()
+            {
+                total += 1;
+                let normalized = normalized_codex_handler(handler).ok_or_else(|| {
+                    format!("{event} hook {g}:{h} has a shape doctor cannot hash")
+                })?;
+                let matcher = matcher.map_or_else(String::new, |matcher| {
+                    format!(",\"matcher\":{}", serde_json::Value::from(matcher))
+                });
+                let identity = format!(
+                    "{{\"event_name\":{},\"hooks\":[{normalized}]{matcher}}}",
+                    serde_json::Value::from(event_name.as_str()),
+                );
+                let hash = format!("sha256:{}", sha256_hex(identity.as_bytes()));
+                let recorded = paths.iter().any(|path| {
+                    state
+                        .and_then(|table| table.get(&format!("{path}:{event_name}:{g}:{h}")))
+                        .and_then(|entry| entry.get("trusted_hash"))
+                        .and_then(toml::Value::as_str)
+                        == Some(hash.as_str())
+                });
+                trusted += usize::from(recorded);
+            }
+        }
+    }
+    Ok((trusted, total))
+}
+
+/// A Codex command handler as its trust hash sees it, in sorted-key JSON;
+/// `None` for any other shape.
+fn normalized_codex_handler(handler: &serde_json::Value) -> Option<String> {
+    let object = handler.as_object()?;
+    if object
+        .keys()
+        .any(|key| !matches!(key.as_str(), "type" | "command" | "timeout" | "async"))
+        || object.get("type")?.as_str()? != "command"
+    {
+        return None;
+    }
+    let command = object.get("command")?.as_str()?;
+    let timeout = object.get("timeout")?.as_u64()?;
+    let asynchronous = match object.get("async") {
+        None => false,
+        Some(value) => value.as_bool()?,
+    };
+    Some(format!(
+        "{{\"async\":{asynchronous},\"command\":{},\"timeout\":{timeout},\"type\":\"command\"}}",
+        serde_json::Value::from(command)
+    ))
+}
+
+/// `PreToolUse` as Codex keys it: `pre_tool_use`.
+fn snake_case(name: &str) -> String {
+    let mut out = String::new();
+    for (i, c) in name.chars().enumerate() {
+        if c.is_ascii_uppercase() {
+            if i > 0 {
+                out.push('_');
+            }
+            out.push(c.to_ascii_lowercase());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
 /// Grok Build in-session wiring. Project hooks live in `.grok/hooks/*.json`
-/// (Grok also scans `.claude/settings.json` when compat is on). Trust is a
-/// one-time `/hooks-trust` (or `--trust`); it is not inspectable here. Warn,
-/// not fail: git hooks + CI bind a Grok session regardless.
+/// (Grok also scans `.claude/settings.json` when compat is on) and load
+/// only in a trusted folder: `/hooks-trust` (or `--trust`) records it in
+/// `~/.grok/trusted_folders.toml`, which this check reads. Warn, not fail:
+/// git hooks + CI bind a Grok session regardless.
 fn check_grok(opts: &Options) -> CheckResult {
     let start = Instant::now();
-    let hooks_dir = Path::new(&opts.project_dir).join(".grok").join("hooks");
+    let root = Path::new(&opts.project_dir);
+    let hooks_dir = root.join(".grok").join("hooks");
     let has_project_hooks = hooks_dir.is_dir()
         && std::fs::read_dir(&hooks_dir).is_ok_and(|entries| {
             entries.flatten().any(|entry| {
@@ -496,17 +667,90 @@ fn check_grok(opts: &Options) -> CheckResult {
     } else {
         "grok CLI not found in PATH"
     };
+    let trust =
+        "run `/hooks-trust` in grok inside this project once (or start grok with `--trust`)";
+    let (status, message) = match grok_folder_trust(root, &opts.grok_home()) {
+        Ok(GrokTrust::Trusted) => (
+            Status::Pass,
+            format!(".grok/hooks present, {presence}: grok trusts this folder, so project hooks load"),
+        ),
+        Ok(GrokTrust::Ungated) => (
+            Status::Pass,
+            format!(".grok/hooks present, {presence}: grok folder trust is off, so project hooks load ungated"),
+        ),
+        Ok(GrokTrust::Untrusted) => (
+            Status::Warn(remedy::DOCTOR_EXTERNAL.with(&[("step", trust), ("check", "grok")])),
+            format!(
+                ".grok/hooks present, {presence}: grok does not trust this folder, so its project hooks are skipped (git hooks and CI enforce regardless)"
+            ),
+        ),
+        Err(why) => (
+            Status::Note(remedy::DOCTOR_UNSEEN.with(&[("step", trust)])),
+            format!(".grok/hooks present, {presence}: grok folder trust not read ({why})"),
+        ),
+    };
     CheckResult {
         name: "grok".into(),
-        status: Status::Warn(remedy::DOCTOR_UNSEEN.with(&[(
-            "step",
-            "run `/hooks-trust` (or start grok with `--trust`) once so project hooks load",
-        )])),
-        message: format!(
-            ".grok/hooks present, {presence}: in-session guards are wired structurally; trust is a one-time in-grok step that is not inspectable from here (git hooks and CI enforce regardless)"
-        ),
+        status,
+        message,
         duration: start.elapsed(),
     }
+}
+
+/// Grok's decision for a project folder.
+enum GrokTrust {
+    Trusted,
+    Untrusted,
+    /// Folder trust is turned off (`GROK_FOLDER_TRUST=0` or
+    /// `[folder_trust] enabled = false`).
+    Ungated,
+}
+
+/// Read Grok's folder trust for `root`: an entry for the folder itself in
+/// `trusted_folders.toml` with `trusted = true`. A grant also covers
+/// subdirectories of the same repository, never a nested checkout, and
+/// `root` is the repository's top, so only its own entry counts.
+fn grok_folder_trust(root: &Path, grok_home: &Path) -> Result<GrokTrust, String> {
+    if std::env::var("GROK_FOLDER_TRUST").is_ok_and(|value| value == "0") {
+        return Ok(GrokTrust::Ungated);
+    }
+    let read = |name: &str| -> Result<toml::Table, String> {
+        match std::fs::read_to_string(grok_home.join(name)) {
+            Ok(text) => text
+                .parse::<toml::Table>()
+                .map_err(|e| format!("{name}: {e}")),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(toml::Table::new()),
+            Err(e) => Err(format!("{name}: {e}")),
+        }
+    };
+    let config = read("config.toml")?;
+    if config
+        .get("folder_trust")
+        .and_then(|table| table.get("enabled"))
+        .and_then(toml::Value::as_bool)
+        == Some(false)
+    {
+        return Ok(GrokTrust::Ungated);
+    }
+    let store = read("trusted_folders.toml")?;
+    let folders = store.get("folders").and_then(toml::Value::as_table);
+    let candidates = [
+        root.display().to_string(),
+        root.canonicalize()
+            .map_or_else(|_| root.display().to_string(), |p| p.display().to_string()),
+    ];
+    let trusted = candidates.iter().any(|path| {
+        folders
+            .and_then(|table| table.get(path))
+            .and_then(|entry| entry.get("trusted"))
+            .and_then(toml::Value::as_bool)
+            == Some(true)
+    });
+    Ok(if trusted {
+        GrokTrust::Trusted
+    } else {
+        GrokTrust::Untrusted
+    })
 }
 
 fn check_config(opts: &Options) -> CheckResult {
@@ -648,9 +892,9 @@ fn check_promoted_model_bindings(
     if !unobservable.is_empty() {
         return model_binding_result(
             start,
-            Status::Warn(remedy::DOCTOR_UNSEEN.with(&[(
+            Status::Note(remedy::DOCTOR_UNSEEN.with(&[(
                 "step",
-                "re-run a native canary of each binding named (/cf-evaluate-model) when freshness matters",
+                "confirm each binding named with a native canary (/cf-evaluate-model) when freshness matters",
             )])),
             format!(
                 "{} approved binding(s) are structurally valid; {}",
@@ -2124,6 +2368,8 @@ mod tests {
         Options {
             look_path: Some(|_| Err("not found".into())),
             exec_command: Some(|_, _| Err("not available".into())),
+            // Never the real user's harness state.
+            harness_home: Some(PathBuf::from("/nonexistent/codeflow-test-home")),
             ..Options::default()
         }
     }
@@ -2278,6 +2524,45 @@ mod tests {
         let result = check_model_bindings(&opts);
         assert_eq!(result.status, Status::Pass, "got: {}", result.message);
         assert!(result.message.contains("live model/effort"));
+    }
+
+    #[test]
+    fn a_binding_whose_harness_has_no_version_probe_is_a_note() {
+        // TSK-147: doctor cannot observe the codex-app version, so this is a
+        // note naming the manual confirmation, never a warning that stays.
+        let directory = tempfile::tempdir().unwrap();
+        write_binding(directory.path(), "high");
+        let path = directory.path().join("claude-fable-high.json");
+        let mut record: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        record["binding_id"] = "codex-app-sol-high".into();
+        record["provider"] = "openai".into();
+        record["lineage"] = "codex".into();
+        record["requested"]["model"] = "gpt-6-sol".into();
+        record["requested"]["harness"] = "codex-app".into();
+        record["requested"]["harness_version"] = "1.0.0".into();
+        record["observed"]["model"] = "gpt-6-sol".into();
+        std::fs::remove_file(&path).unwrap();
+        std::fs::write(
+            directory.path().join("codex-app-sol-high.json"),
+            serde_json::to_vec_pretty(&record).unwrap(),
+        )
+        .unwrap();
+        let mut opts = test_opts();
+        opts.qualification_dir = Some(directory.path().to_path_buf());
+        let result = check_model_bindings(&opts);
+        let Status::Note(remedy) = &result.status else {
+            panic!("expected a note: {:?}: {}", result.status, result.message);
+        };
+        assert!(
+            result.message.contains("no external probe"),
+            "{}",
+            result.message
+        );
+        assert!(
+            remedy.contains("native canary") && remedy.contains("cannot verify"),
+            "{remedy}"
+        );
     }
 
     fn write_project_selection(root: &Path, binding_id: &str) {
@@ -2513,60 +2798,116 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_check_codex_wired_warns_with_trust_step() {
-        // Trust state is codex-internal — the check must name the one-time
-        // /hooks step and never claim the guards are live.
+    /// The shipped `.codex/hooks.json`, and the `trusted_hash` values Codex
+    /// 0.157.1 recorded in `~/.codex/config.toml` for it after `/hooks`
+    /// approval (observed 2026-09-28; the hash does not depend on the path).
+    const SHIPPED_CODEX_HOOKS: &str = include_str!("../../../../assets/base/codex/hooks.json");
+    /// The shipped file as Codex 0.157.1 trusted it, before TSK-128 added
+    /// the prompt hook.
+    const OBSERVED_CODEX_HOOKS: &str = r#"{"hooks": {
+      "PreToolUse": [{"matcher": "^(Bash|PowerShell)$", "hooks": [
+        {"type": "command", "command": "codeflow hook git-guard", "timeout": 10},
+        {"type": "command", "command": "codeflow hook exec-guard", "timeout": 10}]}],
+      "SessionStart": [{"matcher": "startup|resume|clear|compact", "hooks": [
+        {"type": "command", "command": "codeflow hook session-orient", "timeout": 10}]}]}}"#;
+    const CODEX_TRUSTED: [(&str, &str); 3] = [
+        (
+            "pre_tool_use:0:0",
+            "sha256:42d1067865f6352ae0975d92a473334f58d7748b8afb7a27e36b7dc834d204d3",
+        ),
+        (
+            "pre_tool_use:0:1",
+            "sha256:02d37e4136d171ce43056b705e61eade1ae3c7d97bfd1f497197413be24a42ce",
+        ),
+        (
+            "session_start:0:0",
+            "sha256:261fbd3855b8f99f89ac885329096492c3635babbedd779a4526fc46a586bf66",
+        ),
+    ];
+
+    /// A project with `hooks` as its `.codex/hooks.json`, and a harness home
+    /// whose Codex config trusts `trusted` handler keys at their hashes.
+    fn codex_project(hooks: &str, trusted: &[(&str, &str)]) -> (tempfile::TempDir, Options) {
+        use std::fmt::Write as _;
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
-        std::fs::write(dir.path().join(".codex/hooks.json"), "{}").unwrap();
-        let mut opts = test_opts(); // look_path errs → codex CLI absent
-        opts.project_dir = dir.path().to_string_lossy().into_owned();
-        let r = check_codex(&opts);
-        assert!(r.status.is_warn());
-        assert!(
-            r.message.contains("wired structurally"),
-            "got: {}",
-            r.message
-        );
-        assert!(
-            warn_remedy(&r).contains("`/hooks` inside interactive codex"),
-            "names the one-time step: {}",
-            warn_remedy(&r)
-        );
-        assert!(
-            r.message.contains("not inspectable"),
-            "must not pretend to read trust state: {}",
-            r.message
-        );
-        assert!(
-            r.message.contains("codex CLI not found"),
-            "got: {}",
-            r.message
-        );
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".codex")).unwrap();
+        std::fs::write(project.join(".codex/hooks.json"), hooks).unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".codex")).unwrap();
+        let hooks_path = project.join(".codex/hooks.json").canonicalize().unwrap();
+        let mut config = String::new();
+        for (key, hash) in trusted {
+            let _ = writeln!(
+                config,
+                "[hooks.state.\"{}:{key}\"]\ntrusted_hash = \"{hash}\"\n",
+                hooks_path.display()
+            );
+        }
+        std::fs::write(home.join(".codex/config.toml"), config).unwrap();
+        let mut opts = test_opts();
+        opts.project_dir = project.to_string_lossy().into_owned();
+        opts.harness_home = Some(home);
+        (dir, opts)
     }
 
     #[test]
-    fn test_check_codex_reports_cli_presence() {
-        let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".codex")).unwrap();
-        std::fs::write(dir.path().join(".codex/hooks.json"), "{}").unwrap();
-        let mut opts = test_opts();
-        opts.project_dir = dir.path().to_string_lossy().into_owned();
-        opts.look_path = Some(|name| {
-            if name == "codex" {
-                Ok("/usr/local/bin/codex".into())
-            } else {
-                Err("not found".into())
-            }
-        });
+    fn codex_trust_recorded_for_every_hook_passes() {
+        // TSK-147: doctor reads the trust Codex records instead of warning
+        // that it cannot; the hashes are Codex's own.
+        let (_dir, opts) = codex_project(OBSERVED_CODEX_HOOKS, &CODEX_TRUSTED);
         let r = check_codex(&opts);
+        assert_eq!(r.status, Status::Pass, "{}", r.message);
+        assert!(r.message.contains("3 of 3"), "{}", r.message);
+    }
+
+    #[test]
+    fn the_shipped_codex_hooks_are_all_hashable() {
+        // The shipped file adds a matcherless UserPromptSubmit hook, which
+        // no Codex record here has trusted yet: it counts, untrusted.
+        let (_dir, opts) = codex_project(SHIPPED_CODEX_HOOKS, &CODEX_TRUSTED);
+        let r = check_codex(&opts);
+        assert!(r.status.is_warn(), "{}", r.message);
+        assert!(r.message.contains("3 of 4"), "{}", r.message);
+    }
+
+    #[test]
+    fn codex_hooks_without_recorded_trust_warn_with_the_approval_step() {
+        let (_dir, opts) = codex_project(OBSERVED_CODEX_HOOKS, &CODEX_TRUSTED[..1]);
+        let r = check_codex(&opts);
+        assert!(r.status.is_warn(), "{}", r.message);
+        assert!(r.message.contains("1 of 3"), "{}", r.message);
         assert!(
-            r.status.is_warn(),
-            "presence never upgrades to pass: {}",
-            r.message
+            warn_remedy(&r).contains("`/hooks` inside interactive codex")
+                && warn_remedy(&r).contains("codeflow doctor --check codex"),
+            "{}",
+            warn_remedy(&r)
         );
-        assert!(r.message.contains("codex CLI found"), "got: {}", r.message);
+        // No Codex config at all: nothing trusted.
+        let (dir, mut opts) = codex_project(SHIPPED_CODEX_HOOKS, &[]);
+        opts.harness_home = Some(dir.path().join("elsewhere"));
+        assert!(check_codex(&opts).status.is_warn());
+    }
+
+    #[test]
+    fn a_codex_hook_changed_since_approval_warns() {
+        let changed = OBSERVED_CODEX_HOOKS.replacen("\"timeout\": 10", "\"timeout\": 20", 1);
+        let (_dir, opts) = codex_project(&changed, &CODEX_TRUSTED);
+        let r = check_codex(&opts);
+        assert!(r.status.is_warn(), "{}", r.message);
+        assert!(r.message.contains("2 of 3"), "{}", r.message);
+    }
+
+    #[test]
+    fn a_codex_hook_shape_doctor_cannot_hash_is_a_note() {
+        let odd = r#"{"hooks": {"Stop": [{"matcher": "", "hooks": [{"type": "command", "command": "x", "timeout": 5, "statusMessage": "s"}]}]}}"#;
+        let (_dir, opts) = codex_project(odd, &[]);
+        let r = check_codex(&opts);
+        let Status::Note(remedy) = &r.status else {
+            panic!("expected a note: {:?}", r.status);
+        };
+        assert!(remedy.contains("cannot verify"), "{remedy}");
+        assert!(remedy.contains("`/hooks`"), "{remedy}");
     }
 
     #[test]
@@ -2583,30 +2924,74 @@ mod tests {
         );
     }
 
-    #[test]
-    fn test_check_grok_wired_warns_with_trust_step() {
+    /// A project with a Grok hook file, and a harness home whose folder
+    /// trust store is `store` (none when `None`).
+    fn grok_project(store: Option<&str>) -> (tempfile::TempDir, Options, PathBuf) {
         let dir = tempfile::tempdir().unwrap();
-        std::fs::create_dir_all(dir.path().join(".grok/hooks")).unwrap();
-        std::fs::write(dir.path().join(".grok/hooks/codeflow.json"), "{}").unwrap();
+        let project = dir.path().join("project");
+        std::fs::create_dir_all(project.join(".grok/hooks")).unwrap();
+        std::fs::write(project.join(".grok/hooks/codeflow.json"), "{}").unwrap();
+        let home = dir.path().join("home");
+        std::fs::create_dir_all(home.join(".grok")).unwrap();
+        let root = project.canonicalize().unwrap();
+        if let Some(store) = store {
+            let text = store.replace("<root>", &root.display().to_string());
+            std::fs::write(home.join(".grok/trusted_folders.toml"), text).unwrap();
+        }
         let mut opts = test_opts();
-        opts.project_dir = dir.path().to_string_lossy().into_owned();
+        opts.project_dir = project.to_string_lossy().into_owned();
+        opts.harness_home = Some(home.clone());
+        (dir, opts, home)
+    }
+
+    #[test]
+    fn a_grok_folder_trusted_in_the_store_passes() {
+        let (_dir, opts, _) = grok_project(Some(
+            "[folders.\"<root>\"]\ntrusted = true\ndecided_at = 1\n",
+        ));
         let r = check_grok(&opts);
-        assert!(r.status.is_warn());
-        assert!(
-            r.message.contains("wired structurally"),
-            "got: {}",
-            r.message
-        );
-        assert!(
-            warn_remedy(&r).contains("/hooks-trust"),
-            "names the one-time step: {}",
-            warn_remedy(&r)
-        );
-        assert!(
-            r.message.contains("grok CLI not found"),
-            "got: {}",
-            r.message
-        );
+        assert_eq!(r.status, Status::Pass, "{}", r.message);
+    }
+
+    #[test]
+    fn an_untrusted_grok_folder_warns_with_the_trust_step() {
+        for store in [
+            None,
+            Some("[folders.\"<root>\"]\ntrusted = false\ndecided_at = 1\n"),
+            Some("[folders.\"/somewhere/else\"]\ntrusted = true\n"),
+        ] {
+            let (_dir, opts, _) = grok_project(store);
+            let r = check_grok(&opts);
+            assert!(r.status.is_warn(), "{store:?}: {}", r.message);
+            assert!(
+                warn_remedy(&r).contains("/hooks-trust")
+                    && warn_remedy(&r).contains("codeflow doctor --check grok"),
+                "{}",
+                warn_remedy(&r)
+            );
+        }
+    }
+
+    #[test]
+    fn grok_folder_trust_turned_off_passes() {
+        let (_dir, opts, home) = grok_project(None);
+        std::fs::write(
+            home.join(".grok/config.toml"),
+            "[folder_trust]\nenabled = false\n",
+        )
+        .unwrap();
+        let r = check_grok(&opts);
+        assert_eq!(r.status, Status::Pass, "{}", r.message);
+    }
+
+    #[test]
+    fn an_unreadable_grok_trust_store_is_a_note() {
+        let (_dir, opts, _) = grok_project(Some("not = [toml"));
+        let r = check_grok(&opts);
+        let Status::Note(remedy) = &r.status else {
+            panic!("expected a note: {:?}", r.status);
+        };
+        assert!(remedy.contains("cannot verify"), "{remedy}");
     }
 
     #[test]
