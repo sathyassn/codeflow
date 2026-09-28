@@ -6907,7 +6907,7 @@
       "requirements": [
         "CF-COPY-002"
       ],
-      "prompt": "The guide's search dialog in app/search.html ships next week with its strings still empty. Fill them in.",
+      "prompt": "The search dialog in app/search.html ships next week and its strings are not written yet. Write them.",
       "expected": {
         "routes": [
           "direct",

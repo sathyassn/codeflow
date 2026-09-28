@@ -652,12 +652,14 @@ class SuiteContractTests(unittest.TestCase):
         new_cases = set(eval_kit.resolve_pack("copy-guide")) - {
             "operator-reply-is-plain-prose-and-bullets", "identifier-only-title-gets-words"}
         self.assertEqual(new_cases, set(controls["cases"]))
-        self.assertEqual({"passing"}, {entry["role"] for entry in controls["cases"]["short-answer-stays-one-line"]}
-                         - {"faulty"})
         texts = {}
         for case_id, entries in controls["cases"].items():
             case = cases[case_id]
-            self.assertIn("faulty", {entry["role"] for entry in entries}, case_id)
+            # Every new case has a faulty control and a passing one, except
+            # the closeout case, whose positive control is the one-line
+            # answer on its companion's own prompt.
+            roles = {"faulty"} if case_id == "task-closeout-from-evidence" else {"passing", "faulty"}
+            self.assertEqual(roles, {entry["role"] for entry in entries}, case_id)
             for entry in entries:
                 with self.subTest(case=case_id, answer=entry["answer"]):
                     trial = control_trial(case, entry["signals"])
@@ -677,8 +679,14 @@ class SuiteContractTests(unittest.TestCase):
             with self.subTest(answer=name):
                 if "policy_character" in signals or entry["role"] == "passing":
                     self.assertEqual(bool(dash.search(text)), "policy_character" in signals)
-                if name.startswith("adr-"):
+                if name.startswith("adr-") and entry["role"] == "faulty":
                     self.assertTrue(dash.search(text), "the mannered ADR control keeps its dash")
+                if name.startswith("adr-"):
+                    adr = answer["files"]["docs/decisions/ADR-0104.md"]
+                    decision = adr.split("## Decision", 1)[1].split("\n## ", 1)[0].strip()
+                    self.assertEqual("\n\n" in decision, "decision_spread_over_paragraphs" in signals)
+                    self.assertEqual("one_decision_paragraph_as_fact" in signals,
+                                     "\n\n" not in decision and not re.search(r"\b(probably|seems|we think)\b", decision))
                 if name.startswith("search-"):
                     strings = re.findall(r">([^<]+)<", text) + re.findall(r'(?:aria-label|placeholder)="([^"]+)"', text)
                     self.assertEqual(any("!" in s for s in strings), "exclamation_mark" in signals)

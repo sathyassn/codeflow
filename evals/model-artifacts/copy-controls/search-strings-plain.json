@@ -1,0 +1,5 @@
+{
+  "files": {
+    "app/search.html": "<dialog class=\"cf-dialog\" id=\"search\" aria-label=\"Search the guide\">\n  <button class=\"cf-btn\" data-copy=\"open\">Search the guide</button>\n  <input class=\"cf-input\" type=\"search\" data-copy=\"placeholder\" placeholder=\"Search pages, commands and IDs\">\n  <p class=\"cf-dialog-empty\" data-copy=\"empty\">Type a page title, a heading, a command name or a record ID.</p>\n  <p class=\"cf-dialog-status\" data-copy=\"count\" data-example-count=\"3\">3 results</p>\n  <p class=\"cf-dialog-status\" data-copy=\"no-results\">No results. Try a command name or a record ID.</p>\n  <button class=\"cf-btn\" data-copy=\"close\">Close</button>\n</dialog>\n"
+  }
+}

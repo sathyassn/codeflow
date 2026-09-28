@@ -1,8 +1,21 @@
 {
   "schema_version": 1,
-  "about": "Committed control answers for the new cases of the copy-guide pack (TSK-073), written by the design primary. Each answer is a JSON file: files maps a path (with #section for a part of a file) to the text the subject would leave, declaration carries the declaration strings a figure answer writes, and reply is a chat answer. Policy characters in the two mannered controls are stored as JSON escapes so no committed line carries one; the grader reads the decoded text. Each entry records the signals a grader reads off the answer and the decision the kit must compute from them; test_eval_kit.py checks the decision and ties the form signals to the decoded text. Every new case carries a faulty control, and the short-answer companion carries the positive control that must pass. Controls prove the cases are well formed, not how a model behaves.",
+  "about": "Committed control answers for the new cases of the copy-guide pack (TSK-073), written by the design primary. Each answer is a JSON file: files maps a path (with #section for a part of a file) to the text the subject would leave, declaration carries the declaration strings a figure answer writes, and reply is a chat answer. Policy characters in the two mannered controls are stored as JSON escapes so no committed line carries one; the grader reads the decoded text. Each entry records the signals a grader reads off the answer and the decision the kit must compute from them; test_eval_kit.py checks the decision and ties the form signals to the decoded text. Every new case carries a faulty control and a passing one, except the closeout case, whose positive control is the one-line answer with no lead on the short-answer companion's own prompt. Controls prove the cases are well formed, not how a model behaves.",
   "cases": {
     "lead-and-caption-around-a-figure": [
+      {
+        "role": "passing",
+        "answer": "release-flow-plain.json",
+        "surface": "file",
+        "signals": [
+          "lead_says_what_the_reader_looks_at",
+          "caption_is_one_sentence_takeaway",
+          "caption_differs_from_title_and_lead",
+          "legend_keys_are_noun_phrases",
+          "no_sentence_explains_the_legend"
+        ],
+        "decision": "pass"
+      },
       {
         "role": "faulty",
         "answer": "release-flow-restated.json",
@@ -18,6 +31,20 @@
       }
     ],
     "search-dialog-microcopy": [
+      {
+        "role": "passing",
+        "answer": "search-strings-plain.json",
+        "surface": "file",
+        "signals": [
+          "labels_verb_first",
+          "labels_in_sentence_case",
+          "empty_state_says_what_to_type",
+          "no_results_message_names_next_step",
+          "no_exclamation_mark",
+          "counts_as_digits"
+        ],
+        "decision": "pass"
+      },
       {
         "role": "faulty",
         "answer": "search-strings-cheerful.json",
@@ -79,6 +106,19 @@
     ],
     "first-section-of-a-new-skill": [
       {
+        "role": "passing",
+        "answer": "rollback-opening-plain.json",
+        "surface": "file",
+        "signals": [
+          "imperative_plain_sentences",
+          "actor_named_when_not_reader",
+          "no_slogan",
+          "no_contrast_turn",
+          "no_policy_character"
+        ],
+        "decision": "pass"
+      },
+      {
         "role": "faulty",
         "answer": "rollback-opening-mannered.json",
         "surface": "file",
@@ -93,6 +133,18 @@
       }
     ],
     "adr-for-a-byte-pinned-sheet": [
+      {
+        "role": "passing",
+        "answer": "adr-0104-shaped.json",
+        "surface": "file",
+        "signals": [
+          "context_two_to_five_sentences",
+          "context_names_constraint",
+          "one_decision_paragraph_as_fact",
+          "consequences_name_a_cost"
+        ],
+        "decision": "pass"
+      },
       {
         "role": "faulty",
         "answer": "adr-0104-history.json",

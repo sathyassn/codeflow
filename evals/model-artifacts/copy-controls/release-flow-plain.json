@@ -1,0 +1,17 @@
+{
+  "files": {
+    "docs/release-flow.md": "# How a release ships\n\nA tagged release and a hotfix take different paths to the same approval.\n\n<!-- cf-figure: figures/release-flow.json -->\n\nEvery step after the tag runs in CI. The person who approves the release\nis the maintainer on call.\n"
+  },
+  "declaration": {
+    "caption": "Both paths stop at a red check and end with the maintainer on call publishing.",
+    "description": "Four columns: start, build, gate, publish. Path A runs from a release tag to build and tests, to required checks, to approve and publish, all travelled. Path B runs from a hotfix branch to a merge into the release branch, to the release branch's checks, then along a path not yet travelled to the same approve and publish step. A red check that stops the release sits in the gate column on both paths.",
+    "states": [
+      { "name": "done", "means": "Step already run" },
+      { "name": "todo", "means": "Step not yet run" },
+      { "name": "agent", "means": "Step CI runs" },
+      { "name": "merge", "means": "Merge into the release branch" },
+      { "name": "human", "means": "Approval by the maintainer on call" },
+      { "name": "stop", "means": "Red check that stops the release" }
+    ]
+  }
+}
