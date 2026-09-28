@@ -2910,8 +2910,9 @@ fn pr_summary_block(text: &str) -> String {
 
 /// TSK-073 AC-8. The Summary comment is the same block in the shipped
 /// template, this repository's live template and its baseline; the live
-/// template keeps its changelog impact lines and Release impact section, and
-/// the shipped template and the baseline stay equal.
+/// template keeps its changelog impact lines and every Release impact field
+/// and instruction inside that section, and the shipped template and the
+/// baseline stay equal.
 #[test]
 fn pr_template_summary_block_is_identical_across_its_three_copies() {
     let shipped = repo_text("assets/base/ci/pull_request_template.md");
@@ -2933,15 +2934,86 @@ fn pr_template_summary_block_is_identical_across_its_three_copies() {
         "baseline Summary block drifted"
     );
     assert_eq!(shipped, baseline, "shipped template and baseline differ");
-    for kept in [
-        "## Release impact",
-        "- Unit: `codeflow`",
-        "codeflow:release-impact patch|minor|major HTML marker",
-        "Read by `scripts/release.py`",
+    let problems = release_impact_problems(&live);
+    assert!(
+        problems.is_empty(),
+        "live template lost its Release impact contract:\n  {}",
+        problems.join("\n  ")
+    );
+    // Negative control (Codex review R1, finding 1): a section gutted to its
+    // heading, the Unit line and a comment that still names the release
+    // script and the changelog marker fails.
+    let start = live
+        .find("## Release impact\n")
+        .expect("live template keeps ## Release impact");
+    let end = live[start..]
+        .find("<!-- Conditional sections")
+        .map_or(live.len(), |offset| start + offset);
+    let gutted = format!(
+        "{}## Release impact\n\n- Unit: `codeflow`\n\n<!-- Read by `scripts/release.py`. Put a \
+         codeflow:release-impact patch|minor|major HTML marker before each entry. -->\n\n{}",
+        &live[..start],
+        &live[end..]
+    );
+    let gutted_problems = release_impact_problems(&gutted);
+    for lost in [
+        "- Impact:",
+        "- Breaking:",
+        "- Migration:",
+        "add a Withdrawal field",
     ] {
         assert!(
-            live.contains(kept),
-            "live template lost its release lines: {kept}"
+            gutted_problems.iter().any(|problem| problem.contains(lost)),
+            "a gutted Release impact section must fail on {lost}: {gutted_problems:?}"
         );
     }
+}
+
+/// The Release impact contract of this repository's live PR template:
+/// every field line `scripts/release.py` reads and the instructions around
+/// them, each inside the Release impact section (from its heading to the
+/// conditional-sections comment), not anywhere in the file.
+fn release_impact_problems(template: &str) -> Vec<String> {
+    let Some(start) = template.find("## Release impact\n") else {
+        return vec!["no ## Release impact section".to_string()];
+    };
+    let rest = &template[start..];
+    let end = rest
+        .find("<!-- Conditional sections")
+        .or_else(|| rest[1..].find("\n## ").map(|offset| offset + 1))
+        .unwrap_or(rest.len());
+    let section = &rest[..end];
+    let lines: BTreeSet<&str> = section.lines().map(str::trim_end).collect();
+    let prose = normalized_whitespace(section);
+    let mut problems = Vec::new();
+    for field in [
+        "- Impact: `none | patch | minor | major`",
+        "- Breaking: `yes | no`",
+        "- Rationale:",
+        "- Migration: `none`, steps, or \"see Breaking change\"",
+        "- Unit: `codeflow`",
+        "- Evidence:",
+    ] {
+        if !lines.contains(field) {
+            problems.push(format!("field line missing from the section: {field}"));
+        }
+    }
+    for instruction in [
+        "Impact is the change level a consumer sees",
+        "Breaking states compatibility",
+        "Choose each value; never leave the alternatives",
+        "Migration is normally `none` for nonbreaking work",
+        "Read by `scripts/release.py` with the fields above",
+        "Breaking is yes if and only if Impact is major",
+        "put a codeflow:release-impact patch|minor|major HTML marker directly before each new pending changelog entry",
+        "Impact must equal the highest one added",
+        "Declared impact cannot be below conventional commit markers",
+        "add a Withdrawal field that says what was removed and why the remaining net contract permits it",
+        "do not add Withdrawal to ordinary PRs",
+    ] {
+        if !prose.contains(instruction) {
+            problems.push(format!("instruction missing from the section: {instruction}"));
+        }
+    }
+    problems
 }
