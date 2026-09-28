@@ -11,13 +11,14 @@
 // - the page refuses what the server would, before sending; a body the
 //   server refuses as malformed or over 64 KiB is refused with its typed
 //   error and the store is unchanged;
-// - a failed request, and one whose response was lost after the store
-//   took it, are resent with the same request id and stored once;
+// - a failed request, one whose response was lost after the store took
+//   it, and one the store could not take (a typed 503) are resent with the
+//   same request id and stored once;
 // - a correction is an amendment naming the original answer;
 // - a decline carries its reason; a closed session keeps the draft read only.
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { access, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
+import { access, chmod, mkdir, mkdtemp, readdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -252,7 +253,7 @@ try {
     await page.route(`**${ANSWERS}`, (route) => route.abort("connectionreset"), { times: 1 });
     await form.locator("[data-cf-form-action='submit']").click();
     const failed = await waitState(form, "failed");
-    assert.match(failed.says, /Not sent/u);
+    assert.match(failed.says, /Not confirmed as stored/u);
     assert.equal((await ledger()).length, before, "failed: something was stored");
     const first = sent.at(-1);
     await page.route(`**${ANSWERS}`, async (route) => {
@@ -271,6 +272,39 @@ try {
     assert.equal(after.length, before + 1, "lost response: stored twice");
     assert.equal(after.at(-1).request_id, JSON.parse(first).request_id);
     passed.push("failed and lost responses: a reset request shows Resend; the same bytes are resent, and when the store took them before the response was lost, the resend returns the original receipt and the answer is stored once");
+  }
+
+  // The store is unavailable (the ledger cannot be opened): a typed 503.
+  // The page keeps the draft and offers the same request again; once the
+  // store is back, the resend stores the answer once.
+  {
+    const path = await find(root, "responses.jsonl");
+    const before = await ledger();
+    await form.locator("[data-cf-form-action='amend']").click();
+    await field("keep-days").locator("input").fill("21");
+    const kept = await draftOf();
+    await chmod(path, 0o400);
+    let failed;
+    try {
+      await form.locator("[data-cf-form-action='submit']").click();
+      failed = await waitState(form, "failed");
+    } finally {
+      await chmod(path, 0o600);
+    }
+    assert.match(failed.says, /Not confirmed as stored/u, `store unavailable: ${failed.says}`);
+    assert.doesNotMatch(failed.says, /Not stored|was not stored/u);
+    assert.ok(await form.locator("[data-cf-form-action='resend']").isVisible(), "store unavailable: no resend offer");
+    assert.deepEqual(await draftOf(), kept, "store unavailable: the draft changed");
+    assert.deepEqual(await ledger(), before, "store unavailable: the store changed");
+    const refused = sent.at(-1);
+    await form.locator("[data-cf-form-action='resend']").click();
+    await waitState(form, "stored");
+    assert.equal(sent.at(-1), refused, "store unavailable: the resend differs");
+    const after = await ledger();
+    assert.equal(after.length, before.length + 1);
+    assert.equal(after.at(-1).request_id, JSON.parse(refused).request_id);
+    assert.equal(after.at(-1).values["keep-days"], 21);
+    passed.push(`store unavailable: a 503 keeps the draft and offers the same request again ("${failed.says}"); the resend stores it once`);
   }
 
   // A decline carries its reason.

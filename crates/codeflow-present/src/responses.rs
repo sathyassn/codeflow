@@ -17,6 +17,7 @@
 
 use std::{
     collections::{BTreeMap, HashSet},
+    fs::File,
     io::{Read as _, Write as _},
     path::{Path, PathBuf},
 };
@@ -126,6 +127,9 @@ struct Ledger {
     path: PathBuf,
     events: Vec<ResponseEvent>,
     length: u64,
+    /// Whether the file exists; a failed first append removes the file it
+    /// created, so the store is as it was.
+    exists: bool,
 }
 
 impl Ledger {
@@ -138,6 +142,7 @@ impl Ledger {
                     path,
                     events: Vec::new(),
                     length: 0,
+                    exists: false,
                 });
             }
             Err(error) => return Err(PresentError::io(&path, error)),
@@ -177,6 +182,7 @@ impl Ledger {
             path,
             events,
             length: keep,
+            exists: true,
         })
     }
 
@@ -215,7 +221,10 @@ impl Ledger {
     }
 
     /// Writes one event with its newline in one write at the end of the
-    /// ledger and syncs; on a failure the ledger is cut back.
+    /// ledger and syncs; on a failure the ledger is cut back. When the cut
+    /// fails too, the line stays whole or torn: no receipt was given, the
+    /// next open cuts a torn line, and a resend with the same request id
+    /// replays a whole one, so a resend is always safe.
     fn append(&mut self, store: &SessionStore, event: ResponseEvent) -> Result<()> {
         if self.events.len() >= limits::MAX_RESPONSE_EVENTS {
             return Err(PresentError::InvalidDocument(format!(
@@ -243,15 +252,33 @@ impl Ledger {
         let mut file = open_private_append(&self.path)?;
         #[cfg(test)]
         crash::interrupt(&mut file, &line);
-        let written = file.write_all(&line).and_then(|()| file.sync_data());
-        if let Err(error) = written {
-            let _ = file.set_len(self.length).and_then(|()| file.sync_data());
+        if let Err(error) = write_line(&mut file, &line) {
+            if cut_back(&file, self.length).is_ok() && !self.exists {
+                let _ = std::fs::remove_file(&self.path);
+            }
             return Err(PresentError::io(&self.path, error));
         }
+        self.exists = true;
         self.length = grown;
         self.events.push(event);
         Ok(())
     }
+}
+
+fn write_line(file: &mut File, line: &[u8]) -> std::io::Result<()> {
+    #[cfg(test)]
+    if let Some(error) = fault::on_write(file, line) {
+        return Err(error);
+    }
+    file.write_all(line).and_then(|()| file.sync_data())
+}
+
+fn cut_back(file: &File, length: u64) -> std::io::Result<()> {
+    #[cfg(test)]
+    if fault::cut_back_fails() {
+        return Err(std::io::Error::other("injected cut-back failure"));
+    }
+    file.set_len(length).and_then(|()| file.sync_data())
 }
 
 /// Splits the ledger into its events and the byte length to keep. A final
@@ -482,6 +509,48 @@ fn current_form<'a>(
 /// A test-only interruption of an append: with `CF_PRESENT_TEST_CRASH_AT`
 /// set to a byte count, the append writes that many bytes of its line,
 /// syncs them and aborts the process, as a crash mid-write would.
+/// Test-only store faults for the next append on this thread: a write
+/// that fails part way, or a sync that fails after the whole line was
+/// written and whose cut back fails too, leaving the line in the file.
+#[cfg(test)]
+pub(crate) mod fault {
+    use std::cell::Cell;
+
+    #[derive(Debug, Clone, Copy)]
+    pub(crate) enum Fault {
+        WriteFails { written: usize },
+        SyncFailsLineStays,
+    }
+
+    thread_local! {
+        static NEXT: Cell<Option<Fault>> = const { Cell::new(None) };
+        static CUT_BACK_FAILS: Cell<bool> = const { Cell::new(false) };
+    }
+
+    pub(crate) fn inject(fault: Fault) {
+        NEXT.set(Some(fault));
+    }
+
+    pub(super) fn on_write(file: &mut std::fs::File, line: &[u8]) -> Option<std::io::Error> {
+        use std::io::Write as _;
+        match NEXT.take()? {
+            Fault::WriteFails { written } => {
+                let _ = file.write_all(&line[..written.min(line.len())]);
+                Some(std::io::Error::other("injected write failure"))
+            }
+            Fault::SyncFailsLineStays => {
+                let _ = file.write_all(line);
+                CUT_BACK_FAILS.set(true);
+                Some(std::io::Error::other("injected sync failure"))
+            }
+        }
+    }
+
+    pub(super) fn cut_back_fails() -> bool {
+        CUT_BACK_FAILS.take()
+    }
+}
+
 #[cfg(test)]
 mod crash {
     pub(super) const CRASH_AT: &str = "CF_PRESENT_TEST_CRASH_AT";

@@ -738,8 +738,16 @@ async fn submit_answer(
             message,
             details,
         }) => typed_error(review_status(code), code, &message, &details),
-        // Not a refusal of the answer: the store could not take it. The
-        // page keeps the draft and resends the same request.
+        // The store could not be locked, read, written or synced: no receipt
+        // was given. The page keeps the draft and offers the same request
+        // again, which appends the answer once or returns the receipt of a
+        // line that did reach the store.
+        Err(PresentError::Io { .. }) => typed_error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "store_unavailable",
+            "the answer store could not be locked, read, written or synced; no receipt was given, and a resend with the same request_id is safe",
+            &serde_json::json!({}),
+        ),
         Err(error) => plain(
             StatusCode::INTERNAL_SERVER_ERROR,
             &format!("the answer was not stored: {error}"),
@@ -1630,6 +1638,107 @@ mod tests {
             (StatusCode::GONE, Some("session_closed"))
         );
         assert_eq!(ledger_bytes(&state).unwrap(), stored);
+    }
+
+    /// I3 `store_unavailable`: when the store cannot be locked, opened,
+    /// written or synced, the route answers 503 with no receipt, and a
+    /// resend with the same request id is safe. A failure before the line
+    /// is whole leaves the store as it was and the resend appends it once;
+    /// a sync failure that leaves the whole line in the file makes the
+    /// resend return the original receipt.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn answers_route_answers_503_when_the_store_fails_and_a_resend_is_safe() {
+        use crate::responses::fault::{inject, Fault};
+        use std::os::unix::fs::PermissionsExt as _;
+
+        let forms = crate::contract_tests::fixture_bytes("documents/v2-forms.json");
+        let (_temp, state) = app_state_with(crate::document::parse_document(&forms).unwrap());
+        let headers = application_headers(&state, true);
+        let session_dir = state.store.session_dir(state.session_id);
+        let lines = |state: &AppState| {
+            ledger_bytes(state).map_or(0, |bytes| String::from_utf8_lossy(&bytes).lines().count())
+        };
+        let unavailable = |status: StatusCode, body: &serde_json::Value, case: &str| {
+            assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE, "{case}: {body}");
+            assert_eq!(body["error"], "store_unavailable", "{case}");
+            assert!(body["message"].is_string(), "{case}");
+            assert_eq!(body["details"], serde_json::json!({}), "{case}");
+        };
+        let chmod = |path: &std::path::Path, mode: u32| {
+            std::fs::set_permissions(path, std::fs::Permissions::from_mode(mode)).unwrap();
+        };
+
+        // A write that fails part way on the first answer: nothing stays,
+        // not even the file it created.
+        let first = answer_body(&state, |_| {});
+        inject(Fault::WriteFails { written: 40 });
+        let (status, body) = post_answer(&state, headers.clone(), first.clone()).await;
+        unavailable(status, &body, "write fails");
+        assert_eq!(ledger_bytes(&state), None, "write fails: the store changed");
+        let (status, receipt) = post_answer(&state, headers.clone(), first).await;
+        assert_eq!(
+            (
+                status,
+                receipt["replayed"].as_bool(),
+                receipt["sequence"].as_u64()
+            ),
+            (StatusCode::OK, Some(false), Some(1))
+        );
+        assert_eq!(lines(&state), 1);
+
+        // The ledger cannot be opened, then the session lock cannot be
+        // taken: both before any write.
+        for (case, path) in [
+            (
+                "open fails",
+                session_dir.join(crate::responses::RESPONSES_FILE),
+            ),
+            ("lock fails", session_dir.join(".lock")),
+        ] {
+            let before = ledger_bytes(&state);
+            let body = answer_body(&state, |_| {});
+            chmod(&path, 0o400);
+            let (status, refused) = post_answer(&state, headers.clone(), body.clone()).await;
+            chmod(&path, 0o600);
+            unavailable(status, &refused, case);
+            assert_eq!(ledger_bytes(&state), before, "{case}: the store changed");
+            let (status, receipt) = post_answer(&state, headers.clone(), body).await;
+            assert_eq!(
+                (status, receipt["replayed"].as_bool()),
+                (StatusCode::OK, Some(false)),
+                "{case}: {receipt}"
+            );
+            assert_eq!(
+                lines(&state),
+                usize::try_from(receipt["sequence"].as_u64().unwrap()).unwrap(),
+                "{case}"
+            );
+        }
+
+        // A sync that fails after the whole line was written, and whose cut
+        // back fails too: the line stays, and the resend is its receipt.
+        let count = lines(&state);
+        let late = answer_body(&state, |_| {});
+        inject(Fault::SyncFailsLineStays);
+        let (status, body) = post_answer(&state, headers.clone(), late.clone()).await;
+        unavailable(status, &body, "sync fails");
+        assert_eq!(lines(&state), count + 1, "sync fails: the whole line stays");
+        let (status, receipt) = post_answer(&state, headers, late).await;
+        assert_eq!(
+            (status, receipt["replayed"].as_bool()),
+            (StatusCode::OK, Some(true)),
+            "{receipt}"
+        );
+        assert_eq!(
+            receipt["sequence"].as_u64(),
+            Some(u64::try_from(count + 1).unwrap())
+        );
+        assert_eq!(
+            lines(&state),
+            count + 1,
+            "sync fails: the resend appended again"
+        );
     }
 
     #[test]

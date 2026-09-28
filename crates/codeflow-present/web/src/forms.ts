@@ -121,7 +121,7 @@ class FormController {
     this.newer = true;
     if (this.state === "editing" || this.state === "failed") {
       this.render(this.state === "failed"
-        ? "A newer revision exists. Your answer is kept; resend it, and the service checks it against the current revision."
+        ? "A newer revision exists. Your answer is kept; send it again, and the service checks it against the current revision."
         : "A newer revision exists. Your draft is kept; sending it checks it against the current revision.", this.state === "failed" ? "failed" : "stale");
     }
   }
@@ -211,11 +211,11 @@ class FormController {
       status = response.status;
       text = await response.text();
     } catch {
-      this.render("Not sent: the connection failed. Your answer is kept; resend it.", "failed");
+      this.render("Not confirmed as stored: the connection failed. Your answer is kept; send it again.", "failed");
       return;
     }
     if (text.length > MAX_RESPONSE_BYTES) {
-      this.render("Not sent: the reply was too large. Your answer is kept; resend it.", "failed");
+      this.render("Not confirmed as stored: the reply was too large. Your answer is kept; send it again.", "failed");
       return;
     }
     if (status === 200) {
@@ -230,11 +230,11 @@ class FormController {
     try {
       receipt = JSON.parse(text) as Receipt;
     } catch {
-      this.render("Not sent: the reply was not understood. Your answer is kept; resend it.", "failed");
+      this.render("Not confirmed as stored: the reply was not understood. Your answer is kept; send it again.", "failed");
       return;
     }
     if (receipt.state !== "stored" || typeof receipt.answer_id !== "string") {
-      this.render("Not sent: the reply was not understood. Your answer is kept; resend it.", "failed");
+      this.render("Not confirmed as stored: the reply was not understood. Your answer is kept; send it again.", "failed");
       return;
     }
     if (target) {
@@ -268,6 +268,11 @@ class FormController {
           : `This question is not in revision ${revision}. Your draft is kept here; it cannot be sent.`, "stale");
         return;
       }
+      case "store_unavailable":
+        // No receipt: the same request is safe to send again, and the
+        // service stores it once or returns its receipt.
+        this.render("Not confirmed as stored: the answer store was unavailable. Your answer is kept; send it again.", "failed");
+        return;
       case "request_id_conflict":
         this.sent = null;
         this.render("That request was already used for a different answer. Send again to make a new request.", "editing");
@@ -290,7 +295,7 @@ class FormController {
         this.render(`Not stored: ${error?.message ?? "refused"}`, "editing");
         return;
     }
-    this.render(`Not sent (${status}). Your answer is kept; resend it.`, "failed");
+    this.render(`Not confirmed as stored (${status}). Your answer is kept; send it again.`, "failed");
   }
 
   // The answer the controls hold now; a decline or cancel carries no values.
