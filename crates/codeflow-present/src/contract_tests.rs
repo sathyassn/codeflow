@@ -943,7 +943,7 @@ fn a_whole_document_note_survives_a_revision() {
 
 /// SPC-014 B1 and C1 across the TSK-071 separator change: a review stored
 /// before the parts of a block were joined with a line break carries offsets
-/// into the old review text ("FirstSecond"). Reopening that same revision
+/// into the old review text (`FirstSecond`). Reopening that same revision
 /// never trusts them blindly: a quote inside one part is found at its new
 /// place, and a quote across two parts is found near it or falls back to its
 /// block, never at stale offsets that select other text.
