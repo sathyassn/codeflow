@@ -113,6 +113,11 @@ pub enum RevisionContent {
     Retired {
         document: serde_json::Value,
         diagram_ids: Vec<String>,
+        /// The stored document with each diagram replaced by an empty
+        /// narrative of its id, as typed parsing checked it; the renderer
+        /// draws every other block from it and each diagram in its place.
+        #[serde(skip_serializing)]
+        readable: PresentationDocument,
     },
 }
 
@@ -3251,12 +3256,18 @@ fn read_revision_record(path: &Path) -> Result<RevisionRecord> {
     let mut candidate = stored.clone();
     candidate["content"]["document"] = substituted;
     let checked: RevisionRecord = serde_json::from_value(candidate)?;
+    let RevisionContent::Supported { document: readable } = checked.content else {
+        return Err(error);
+    };
     Ok(RevisionRecord {
+        state_schema_version: checked.state_schema_version,
+        revision: checked.revision,
+        created_at_unix: checked.created_at_unix,
         content: RevisionContent::Retired {
             document: document.clone(),
             diagram_ids,
+            readable,
         },
-        ..checked
     })
 }
 
@@ -4909,6 +4920,7 @@ mod tests {
         let RevisionContent::Retired {
             document,
             diagram_ids,
+            ..
         } = &record.content
         else {
             panic!("expected the retired kind, got {:?}", record.content);
@@ -5085,6 +5097,78 @@ mod tests {
             );
             assert!(store.history(id).is_err(), "{name}");
             assert!(store.feedback_snapshot(id).is_err(), "{name}");
+        }
+    }
+
+    /// T114-2: a diagram the pre-removal validator would have refused is a
+    /// corrupt record, never a retired one.
+    #[test]
+    fn a_diagram_outside_the_old_limits_never_loads_as_retired() {
+        let stored: serde_json::Value = serde_json::from_str(retired_fixture::REVISION).unwrap();
+        let variant = |change: &dyn Fn(&mut serde_json::Value)| {
+            let mut record = stored.clone();
+            change(&mut record);
+            serde_json::to_string_pretty(&record).unwrap()
+        };
+        let diagram_field = |field: &'static str, value: serde_json::Value| {
+            variant(&move |record| {
+                record["content"]["document"]["blocks"][1][field] = value.clone();
+            })
+        };
+        let too_many = variant(&|record| {
+            let diagram = record["content"]["document"]["blocks"][1].clone();
+            record["content"]["document"]["blocks"] = (0..=limits::MAX_DIAGRAM_BLOCKS)
+                .map(|index| {
+                    let mut block = diagram.clone();
+                    block["id"] = format!("diagram-{index}").into();
+                    block
+                })
+                .collect::<Vec<_>>()
+                .into();
+        });
+        for (name, revision, expected) in [
+            (
+                "empty accessible title",
+                diagram_field("acc_title", " ".into()),
+                "unknown variant `diagram`",
+            ),
+            (
+                "oversized accessible title",
+                diagram_field("acc_title", "t".repeat(limits::MAX_TITLE_BYTES + 1).into()),
+                "unknown variant `diagram`",
+            ),
+            (
+                "empty accessible description",
+                diagram_field("acc_description", "".into()),
+                "unknown variant `diagram`",
+            ),
+            (
+                "oversized accessible description",
+                diagram_field(
+                    "acc_description",
+                    "d".repeat(limits::MAX_PROSE_BYTES + 1).into(),
+                ),
+                "unknown variant `diagram`",
+            ),
+            (
+                "oversized source",
+                diagram_field("source", "s".repeat(limits::MAX_DIAGRAM_BYTES + 1).into()),
+                "unknown variant `diagram`",
+            ),
+            (
+                "more diagrams than the old limit",
+                too_many,
+                "unknown variant `diagram`",
+            ),
+        ] {
+            let (_temp, store) = store();
+            let id = retired_fixture::install(&store, &revision);
+            let error = store.current_revision(id).unwrap_err();
+            assert!(
+                matches!(error, PresentError::Json(_)) && error.to_string().contains(expected),
+                "{name}: {error}"
+            );
+            assert!(store.history(id).is_err(), "{name}");
         }
     }
 }

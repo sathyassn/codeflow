@@ -149,9 +149,9 @@ HTML, and never make ASCII stand in for a stage the claim deserves.
 The `diagram` block was removed with its Mermaid renderer, and Mermaid is
 not supported. `codeflow present open` and `update` refuse a document that
 holds one and name its replacement from this table. A session that a
-pre-release build stored with one still opens, read only: it shows each
-diagram's source beside its replacement until `codeflow present update` sends
-the converted document.
+pre-release build stored with one still opens, read only: every other block
+renders as before, and each diagram shows its source beside its replacement
+until `codeflow present update` sends the converted document.
 
 | Former kind | Replacement |
 |---|---|

@@ -531,13 +531,16 @@ async fn application(State(state): State<AppState>, headers: HeaderMap) -> Respo
                 feedback: Some(&feedback),
                 read_only_warning: None,
                 interactive: true,
+                retired: None,
             },
         ),
         RevisionContent::Unsupported {
             schema_version,
             raw,
         } => render_unsupported(&raw, schema_version),
-        RevisionContent::Retired { document, .. } => render_retired(&document),
+        RevisionContent::Retired {
+            document, readable, ..
+        } => render_retired(&document, &readable, revision.revision),
     };
     let prepaint_hash = prepaint
         .map(|asset| format!("'{}'", asset.csp_sha256))

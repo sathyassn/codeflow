@@ -921,6 +921,9 @@ fn assert_retired_page(html: &str) {
     );
     assert!(html
         .contains("<pre><code>flowchart LR\n  Input --&gt; Review --&gt; Evidence</code></pre>"));
+    // T114-1: the rest of the document renders as it always did.
+    assert!(html.contains("The qualification path before the diagram block was retired."));
+    assert!(html.contains("Message order"));
     assert!(html.contains(
         "Former sequence diagram; convert it to an html block holding an inline SVG, or a table of the messages in order."
     ));
@@ -1310,4 +1313,170 @@ fn the_conversion_section_matches_the_runtime_refusal() {
         "the conversion section lost its complete example"
     );
     assert!(!text.contains("| diagram |") && !text.contains("\"type\": \"diagram\""));
+}
+
+/// Write `document` as a JSON file under the project and return its path.
+fn write_document(fixture: &TestProject, name: &str, document: &serde_json::Value) -> PathBuf {
+    let path = fixture.project.join(name);
+    fs::write(&path, serde_json::to_vec(document).unwrap()).unwrap();
+    path
+}
+
+fn export_html(fixture: &TestProject, session_id: &str, name: &str) -> String {
+    let out = fixture.project.join(name);
+    require_success(&codeflow(
+        &fixture.project,
+        &fixture.home,
+        &[
+            "present",
+            "export",
+            session_id,
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    ));
+    fs::read_to_string(out).unwrap()
+}
+
+/// A page's first attribute `name` after `after`, decoded as the browser
+/// reads it.
+fn decoded_attribute(html: &str, after: &str, name: &str) -> String {
+    let start = html.find(after).unwrap_or_else(|| panic!("no {after}"));
+    let value = between(&html[start..], &format!("{name}=\""), "\"");
+    value
+        .replace("&quot;", "\"")
+        .replace("&#39;", "'")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&amp;", "&")
+}
+
+/// T114-3: each block a refusal names renders its content in a built-CLI
+/// export: the table's cells, the tree's nodes and the SVG inside the html
+/// block's sandboxed iframe.
+#[test]
+fn each_named_conversion_renders_its_content_in_an_export() {
+    let fixture = setup_project();
+    let document = serde_json::json!({
+        "schema_version": 1,
+        "title": "Converted",
+        "blocks": [
+            {"type": "html", "id": "flow", "title": "Flow",
+             "html": "<figure role='img' aria-label='A flow'><svg viewBox='0 0 10 10'><rect width='4' height='4'></rect></svg></figure>"},
+            {"type": "table", "id": "transitions", "columns": ["From", "To"],
+             "rows": [["Open", "Closed"], ["Closed", "Archived"]]},
+            {"type": "tree", "id": "topics", "label": "Topics",
+             "nodes": [{"label": "Root", "children": [{"label": "Leaf"}]}]}
+        ]
+    });
+    let path = write_document(&fixture, "converted.json", &document);
+    let (session_id, _) = open_no_launch(&fixture, &path);
+    let html = export_html(&fixture, &session_id, "converted.html");
+
+    let srcdoc = decoded_attribute(&html, "<iframe sandbox", "srcdoc");
+    assert!(
+        srcdoc.contains("<svg viewBox='0 0 10 10'><rect width='4' height='4'></rect></svg>"),
+        "{srcdoc}"
+    );
+    for header in ["<th scope=\"col\">From</th>", "<th scope=\"col\">To</th>"] {
+        assert!(html.contains(header), "{header}");
+    }
+    let body = between(&html, "<tbody>", "</tbody>");
+    let cells: Vec<&str> = body.split("<td>").skip(1).collect();
+    assert_eq!(cells.len(), 4, "{body}");
+    for (cell, text) in cells.iter().zip(["Open", "Closed", "Closed", "Archived"]) {
+        assert!(cell.contains(text), "{cell} holds {text}");
+    }
+    let tree = between(&html, "<ul class=\"tree\">", "</section>");
+    assert!(
+        tree.contains("<li><span>Root</span><ul><li><span>Leaf</span></li></ul></li>"),
+        "{tree}"
+    );
+    close_and_clear(&fixture, &session_id);
+}
+
+/// T114-1: a pre-release session too large for `present history` still
+/// shows its whole current document. Five revisions of about 6.75 MiB put
+/// the session over the one-shot history limit; the export of the retired
+/// current revision carries every narrative block and the diagram's source.
+#[test]
+fn a_large_retired_session_exports_its_whole_document() {
+    let fixture = setup_project();
+    let padding = "p".repeat(460 * 1024);
+    let narratives = |marker: &str| -> Vec<serde_json::Value> {
+        (0..15)
+            .map(|index| {
+                serde_json::json!({
+                    "type": "narrative",
+                    "id": format!("part-{index}"),
+                    "markdown": format!("{marker} part {index}.\n\n{padding}")
+                })
+            })
+            .collect()
+    };
+    let document = |marker: &str| serde_json::json!({"schema_version": 1, "title": "Large review", "blocks": narratives(marker)});
+    let first = write_document(&fixture, "large-1.json", &document("Revision 1"));
+    let (session_id, _) = open_no_launch(&fixture, &first);
+    for revision in 2..=5 {
+        let path = write_document(
+            &fixture,
+            &format!("large-{revision}.json"),
+            &document(&format!("Revision {revision}")),
+        );
+        require_success(&codeflow(
+            &fixture.project,
+            &fixture.home,
+            &["present", "update", &session_id, path.to_str().unwrap()],
+        ));
+    }
+
+    // A pre-release build stored the current revision with a diagram.
+    let current = session_dir(&fixture, &session_id).join("revisions/00000000000000000005.json");
+    let mut record: serde_json::Value =
+        serde_json::from_slice(&fs::read(&current).unwrap()).unwrap();
+    let mut blocks = narratives("Retired narrative");
+    blocks.insert(
+        7,
+        serde_json::json!({
+            "type": "diagram", "id": "flow", "kind": "flowchart",
+            "source": "flowchart LR\n  Input --> Review",
+            "acc_title": "Review flow", "acc_description": "Input reaches review."
+        }),
+    );
+    record["content"]["document"]["blocks"] = blocks.into();
+    fs::write(&current, serde_json::to_vec(&record).unwrap()).unwrap();
+
+    let history = codeflow(
+        &fixture.project,
+        &fixture.home,
+        &["present", "history", &session_id],
+    );
+    assert_eq!(history.status.code(), Some(4), "{history:?}");
+    assert!(
+        String::from_utf8_lossy(&history.stderr).contains("one-shot history output is limited"),
+        "{history:?}"
+    );
+
+    let html = export_html(&fixture, &session_id, "large.html");
+    for index in 0..15 {
+        assert!(
+            html.contains(&format!("Retired narrative part {index}.")),
+            "the export lost narrative {index}"
+        );
+    }
+    assert!(
+        html.contains("flowchart LR\n  Input --&gt; Review"),
+        "diagram source"
+    );
+    assert!(
+        html.contains(
+            "Former flowchart diagram; convert it to an html block holding an inline SVG."
+        ),
+        "conversion"
+    );
+    assert!(
+        !html.contains("Revision 5 part"),
+        "an older document leaked"
+    );
+    close_and_clear(&fixture, &session_id);
 }

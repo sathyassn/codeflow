@@ -105,8 +105,9 @@ handle used for size and repair decisions; aggregate history,
 records, revisions, media, and state entries have explicit limits. The
 `diagram` block was removed with Mermaid (ADR-0049, update of 2026-09-28): new
 `open` and `update` input with one is refused with its conversion named, and a
-revision stored with one loads read only, as the `retired` history kind, with a
-notice and its escaped source, and is never rewritten.
+revision stored with one loads read only, as the `retired` history kind: every
+other block renders as before, each diagram shows a notice and its escaped
+source in its place, and the revision is never rewritten.
 
 ### Platform boundaries
 

@@ -52,6 +52,7 @@ pub fn export_session(
                     feedback: None,
                     read_only_warning: None,
                     interactive: false,
+                    retired: None,
                 },
             );
             let base_bytes = static_html.len();
@@ -75,7 +76,9 @@ pub fn export_session(
             schema_version,
             raw,
         } => render_unsupported(&raw, schema_version),
-        RevisionContent::Retired { document, .. } => render_retired(&document),
+        RevisionContent::Retired {
+            document, readable, ..
+        } => render_retired(&document, &readable, revision.revision),
     };
     write_new_private(output, html.as_bytes())
 }

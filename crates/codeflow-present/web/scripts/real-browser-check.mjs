@@ -645,13 +645,18 @@ async function findRevisionFile(root, id, revision) {
 
 async function assertRetiredPage(page, label) {
   const evidence = await page.evaluate(() => ({
-    notice: document.querySelector("[role='note']")?.textContent ?? "",
+    notice: document.querySelector("aside.version-warning")?.textContent ?? "",
+    kept: document.querySelector("main")?.textContent ?? "",
     sources: [...document.querySelectorAll("main pre code")].map((code) => code.textContent),
     hooks: document.querySelectorAll("[data-cf-diagram], template").length,
     scripts: document.querySelectorAll("script").length,
   }));
   if (!evidence.notice.includes("This revision holds a diagram block, which was removed with Mermaid")) {
     throw new Error(`${label} omitted the conversion notice: ${JSON.stringify(evidence)}`);
+  }
+  // T114-1: every other block renders as it always did.
+  for (const kept of [retiredRevision.content.document.blocks[0].markdown, retiredRevision.content.document.blocks[2].summary]) {
+    if (!evidence.kept.includes(kept)) throw new Error(`${label} omitted ${JSON.stringify(kept)}: ${JSON.stringify(evidence)}`);
   }
   const expected = [retiredRevision.content.document.blocks[1].source, retiredRevision.content.document.blocks[2].blocks[0].source];
   if (JSON.stringify(evidence.sources) !== JSON.stringify(expected)) {

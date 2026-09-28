@@ -389,8 +389,9 @@ publication date._
   name the block that replaces it on this release: an html block holding an
   inline SVG, a table or a tree block, as the conversion section of the
   `cf-present` authoring reference shows. A session a pre-release build stored
-  with a diagram block still opens, read only, with each diagram's source and
-  its conversion, until `present update` stores the converted document. The
+  with a diagram block still opens, read only: every other block renders as
+  before, and each diagram shows its source and its conversion in its place,
+  until `present update` stores the converted document. The
   web bundle, its licence list and SBOM no longer carry Mermaid.
 
 <!-- codeflow:release-impact minor -->

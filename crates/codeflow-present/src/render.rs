@@ -21,6 +21,9 @@ pub struct RenderOptions<'a> {
     pub feedback: Option<&'a FeedbackSnapshot>,
     pub read_only_warning: Option<&'a str>,
     pub interactive: bool,
+    /// The stored document of a retired revision: an empty narrative whose
+    /// id names one of its diagrams is drawn as that diagram's source.
+    pub retired: Option<&'a serde_json::Value>,
 }
 
 #[derive(Clone, Copy)]
@@ -132,48 +135,72 @@ pub fn render_unsupported(raw: &str, schema_version: u32) -> String {
     html
 }
 
-/// A revision stored with the removed diagram block.
-/// It renders read only: the conversion notice, then each diagram's source,
-/// escaped, beside its replacement. Nothing is drawn and no script loads.
+/// The notice a retired revision opens with.
+const RETIRED_NOTICE: &str = "This revision holds a diagram block, which was removed with Mermaid, so it is shown read only, with each diagram's source in its place. Convert each diagram in your document as the \"Converting a diagram block\" section of cf-present/references/document-authoring.md shows, then run `codeflow present update` with the converted document.";
+
+/// A revision stored with the removed diagram block, read only: every other
+/// block renders as it always did (TSK-114, T114-1), and each diagram shows
+/// its source, escaped, beside its replacement. Nothing is drawn and no
+/// script loads. `document` is the stored document and `readable` its typed
+/// form with each diagram replaced by an empty narrative of the same id.
 #[must_use]
-pub fn render_retired(document: &serde_json::Value) -> String {
-    let title = document
-        .get("title")
-        .and_then(serde_json::Value::as_str)
-        .filter(|title| !title.trim().is_empty())
-        .unwrap_or("Retired presentation revision");
-    let mut html = String::new();
-    html.push_str("<!doctype html><html><head><meta charset=\"utf-8\"><meta name=\"viewport\" content=\"width=device-width,initial-scale=1\"><title>");
-    escape_html_to(title, &mut html);
-    html.push_str("</title></head><body><main data-cf-retired-revision><h1>");
-    escape_html_to(title, &mut html);
-    html.push_str("</h1><p role=\"note\">This revision holds a diagram block, which was removed with Mermaid, so it is shown read only: this page shows only the diagram sources, and the rest of the document is kept unchanged, as <code>codeflow present history</code> prints it. Convert each diagram in your document as ");
-    escape_html_to(crate::retired::CONVERSION_GUIDE, &mut html);
-    html.push_str(
-        " shows, then run <code>codeflow present update</code> with the converted document.</p>",
-    );
-    for block in crate::retired::retired_blocks(document) {
-        let kind = block.kind().unwrap_or_default();
-        html.push_str("<section><h2>");
-        escape_html_to(block.id().unwrap_or(&block.position), &mut html);
-        if let Some(title) = block.text("acc_title") {
-            html.push_str(": ");
-            escape_html_to(title, &mut html);
-        }
-        html.push_str("</h2><p>Former ");
-        escape_html_to(kind, &mut html);
-        html.push_str(" diagram; convert it to ");
-        escape_html_to(crate::retired::replacement(Some(kind)), &mut html);
-        html.push_str(".</p><pre><code>");
-        escape_html_to(block.text("source").unwrap_or_default(), &mut html);
-        html.push_str("</code></pre></section>");
+pub fn render_retired(
+    document: &serde_json::Value,
+    readable: &PresentationDocument,
+    revision: u64,
+) -> String {
+    render_document(
+        readable,
+        &RenderOptions {
+            session_id: "retired",
+            revision,
+            event_sequence: 0,
+            script_path: None,
+            style_path: None,
+            prepaint_source: None,
+            utility_style: None,
+            identity: None,
+            feedback: None,
+            read_only_warning: Some(RETIRED_NOTICE),
+            interactive: false,
+            retired: Some(document),
+        },
+    )
+}
+
+/// The former diagram a retired revision's placeholder stands for.
+fn render_retired_diagram(block: &crate::retired::RetiredBlock<'_>, output: &mut String) {
+    let kind = block.kind().unwrap_or_default();
+    output.push_str("<section class=\"block block--retired\" id=\"");
+    escape_attr_to(block.id().unwrap_or(&block.position), output);
+    output.push_str("\"><h2>");
+    escape_html_to(block.id().unwrap_or(&block.position), output);
+    if let Some(title) = block.text("acc_title") {
+        output.push_str(": ");
+        escape_html_to(title, output);
     }
-    html.push_str("</main></body></html>");
-    html
+    output.push_str("</h2><p>Former ");
+    escape_html_to(kind, output);
+    output.push_str(" diagram; convert it to ");
+    escape_html_to(crate::retired::replacement(Some(kind)), output);
+    output.push_str(".</p><pre><code>");
+    escape_html_to(block.text("source").unwrap_or_default(), output);
+    output.push_str("</code></pre></section>");
 }
 
 #[allow(clippy::too_many_lines)]
 fn render_block(block: &Block, options: &RenderOptions<'_>, output: &mut String) {
+    if let (Some(stored), Block::Narrative { id, markdown }) = (options.retired, block) {
+        let diagram = markdown.is_empty().then(|| {
+            crate::retired::retired_blocks(stored)
+                .into_iter()
+                .find(|diagram| diagram.id() == Some(id.as_str()))
+        });
+        if let Some(Some(diagram)) = diagram {
+            render_retired_diagram(&diagram, output);
+            return;
+        }
+    }
     output.push_str("<section class=\"block block--");
     output.push_str(block_kind(block));
     output.push_str("\" id=\"");
@@ -575,10 +602,14 @@ pub(crate) mod tests {
             html.contains("This revision holds a diagram block, which was removed with Mermaid"),
             "{html}"
         );
-        assert!(
-            html.contains("the rest of the document is kept unchanged, as <code>codeflow present history</code> prints it"),
-            "{html}"
-        );
+        // T114-1: every other block renders as it always did.
+        for kept in [
+            "The qualification path before the diagram block was retired.",
+            "<summary><span data-cf-review-text-root>Message order</span></summary>",
+        ] {
+            assert!(html.contains(kept), "{kept}: {html}");
+        }
+        assert!(!html.contains("present history"), "{html}");
         assert!(html.contains(
             crate::retired::CONVERSION_GUIDE
                 .replace('"', "&quot;")
@@ -619,17 +650,22 @@ pub(crate) mod tests {
 
     #[test]
     fn a_retired_revision_renders_its_notice_and_escaped_sources_and_draws_nothing() {
+        let page = |stored: &serde_json::Value| {
+            let (substituted, _) = crate::retired::legacy_document(stored).unwrap();
+            let readable: PresentationDocument = serde_json::from_value(substituted).unwrap();
+            render_retired(stored, &readable, 1)
+        };
         let stored: serde_json::Value =
             serde_json::from_str(crate::state::retired_fixture::REVISION).unwrap();
-        let html = render_retired(&stored["content"]["document"]);
+        let html = page(&stored["content"]["document"]);
         assert_retired_page(&html);
         assert!(html.contains("<title>Qualification review</title>"));
 
-        let hostile = serde_json::json!({"title": "<b>x</b>", "blocks": [{
+        let hostile = serde_json::json!({"schema_version": 1, "title": "<b>x</b>", "blocks": [{
             "type": "diagram", "id": "d", "kind": "flowchart",
             "source": "</code><script>alert(1)</script>", "acc_title": "<i>t</i>", "acc_description": "d"
         }]});
-        let html = render_retired(&hostile);
+        let html = page(&hostile);
         assert!(!html.contains("<script>") && !html.contains("<b>") && !html.contains("<i>"));
         assert!(html.contains("&lt;/code&gt;&lt;script&gt;alert(1)&lt;/script&gt;"));
     }
@@ -660,6 +696,7 @@ pub(crate) mod tests {
                 feedback: None,
                 read_only_warning: None,
                 interactive: true,
+                retired: None,
             },
         );
         assert!(!rendered.contains("<script>alert"));
@@ -742,6 +779,7 @@ pub(crate) mod tests {
                 feedback: None,
                 read_only_warning: None,
                 interactive: true,
+                retired: None,
             },
         );
         let parsed = Html::parse_document(&rendered);
