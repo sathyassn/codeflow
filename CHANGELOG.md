@@ -382,6 +382,18 @@ publication date._
 ### Changed
 
 <!-- codeflow:release-impact minor -->
+- **Present no longer draws Mermaid diagrams.** The `diagram` block leaves
+  the 3.0.0 document schema with its Mermaid renderer, so the review document
+  entry above no longer caps diagram count, source or enhancement.
+  `codeflow present open` and `update` refuse a document that holds one and
+  name the block that replaces it on this release: an html block holding an
+  inline SVG, a table or a tree block, as the conversion section of the
+  `cf-present` authoring reference shows. A session a pre-release build stored
+  with a diagram block still opens, read only, with each diagram's source and
+  its conversion, until `present update` stores the converted document. The
+  web bundle, its licence list and SBOM no longer carry Mermaid.
+
+<!-- codeflow:release-impact minor -->
 - **Reading is checked by structure; sizes are reported, not failed.** The
   shipped instruction files load progressively: a small kernel (the managed
   `AGENTS.md` block) at session start, and everything else through an index
